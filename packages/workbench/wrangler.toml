@@ -1,0 +1,33 @@
+# Cloudflare Pages config for the component workbench (WB-1, ol-with).
+#
+# THIS LANE DOES NOT DEPLOY. Nothing here is run by an implementer; the WB-1
+# report carries the exact commands and dashboard settings for David.
+#
+# Two deploy routes, both valid, deliberately not chosen here:
+#
+#   (a) Pages Git integration — Cloudflare builds on push to `main`. Preferred
+#       right now because ol-ciquota has GitHub Actions disabled pending a quota
+#       reset, and this route needs no workflow file at all. Project settings are
+#       in the WB-1 report.
+#
+#   (b) Direct upload — `wrangler pages deploy` against a locally-built `dist/`.
+#       `wrangler` is deliberately NOT a devDependency of this package: adding it
+#       would put a large dependency and a lockfile change into the public repo for
+#       a command only David runs. The service repo already has a repo-local
+#       wrangler (and a globally installed one is broken on linux/aarch64 — see
+#       olea-service/CLAUDE.md), so invoke it from there.
+#
+# TOKEN SCOPE — read before the first deploy. The existing CLOUDFLARE_API_TOKEN is
+# account-scoped **Workers Scripts: Edit**. Pages needs **Cloudflare Pages: Edit**,
+# which that scope does not include. Extending the token is deployed-infrastructure
+# state and therefore a stop, never a lane's action (standing rule, ol-4eq4). See
+# ol-cftoken, which already covers creating a dedicated Olea token.
+
+# NOT `olea-workbench`. That name is burned: a deployment from 2026-08-14, made before the INV-3
+# bundle guard existed, carried one of her note titles and is still served under it. Deleting the
+# deployment did not remove it and deleting the project only worked while no project of that name
+# existed — recreating one brought the old assets straight back (ol-j6jy). The npm package is
+# still called olea-workbench; only the Pages project moved.
+name = "olea-workbench-app"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-08-10"

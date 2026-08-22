@@ -1,0 +1,408 @@
+/**
+ * Every string the session builder shows her (F4.6, F4.7, F4.8, F4.9;
+ * `ol-p5t06b` [P5-T06b]).
+ *
+ * **Why a copy module and not strings in the view.** The same reason
+ * `gap/copy.ts` exists (`ol-09kf`): product copy assembled in a DOM builder is
+ * copy nothing can assert on. On this surface the exposure is sharper than on
+ * the gap view, because a session builder makes two claims the gap view does
+ * not — *how long this will take you* and *what your next assessment is* — and
+ * both are the kind of sentence that reads as knowledge whether or not it is.
+ *
+ * **F4.9, clause by clause, and where each is discharged here.**
+ *
+ *  - *Likelihood not prophecy.* {@link SESSION_ATTRIBUTION} puts the asking in
+ *    the past tense and attributes it to her prior papers, exactly as
+ *    `gap/copy.ts`'s `rankingAttribution` does. Nothing here says an assessment
+ *    *will* ask anything. {@link countdownLine} states a date and a number of
+ *    days — both facts from her own assignments table — and nothing about what
+ *    the paper will contain.
+ *  - *Always advises covering the full syllabus.* {@link sessionFraming} emits
+ *    `gap/copy.ts`'s own {@link FULL_SYLLABUS_ADVICE}, imported rather than
+ *    re-worded. Two wordings of one promise drift; one string cannot. And it is
+ *    emitted from the session state, so a ranking cannot be drawn without it.
+ *  - *Never implies knowledge of a real paper.* The format line says her next
+ *    assessment is a quiz — a fact from the `type` column of her own
+ *    assignments Base — and never that the questions will look like the ones
+ *    Olea picked.
+ *
+ * **Principle 12: information and consequence, never verdict.** A session
+ * builder is the easiest surface in this product on which to scold: it knows
+ * how far behind a plan she is and how much it had to leave out. So
+ * {@link leftOutLines} reports counts and reasons and stops there. Nothing here
+ * evaluates her effort, her position or her pace — {@link durationBasisLine}
+ * talks about the *estimate's* provenance, never about how fast she is.
+ *
+ * **The honesty the duration model forces onto this layer.** `olea-core`'s
+ * `study-session/duration.ts` reports whether each number was measured from her
+ * review log or assumed by Olea, and {@link durationBasisLine} is the reason
+ * that field exists rather than a comment. A timing claim built on three
+ * guessed constants must not read like a measurement of her.
+ *
+ * **INV-1.** No `obsidian` import here — this module is unit-tested, which is
+ * the entire point of it being separate from `view.ts`.
+ */
+
+import type {
+  DurationModelBasis,
+  SessionAssessmentCountdown,
+  StudySessionItem,
+  StudySessionModel,
+  StudySessionOmission,
+} from 'olea-core';
+import { FULL_SYLLABUS_ADVICE } from '../gap/copy.js';
+
+// ---------------------------------------------------------------------------
+// Titles, budgets and the unavailable state
+// ---------------------------------------------------------------------------
+
+export const SESSION_VIEW_TITLE = 'Build a session';
+
+/**
+ * The budgets the view offers as one tap.
+ *
+ * Three, spanning "before a lecture", "an evening block" and "a real sitting".
+ * F4.6 names twenty minutes outright ("Build a 20-minute session") and says
+ * nothing about the others, so 45 and 90 are a Class B default — reversible,
+ * and reversible from the outside: `SessionBuilderViewDeps.budgetOptions`
+ * overrides the list without a code change.
+ */
+export const SESSION_BUDGET_OPTIONS: readonly number[] = [20, 45, 90];
+
+export const DEFAULT_SESSION_BUDGET_MINUTES = 20;
+
+export function budgetOptionLabel(minutes: number): string {
+  return `${minutes} min`;
+}
+
+/**
+ * What the screen says when it could not build a session at all — a vault it
+ * could not walk, an extraction pass that threw.
+ *
+ * Same statement, same voice as `gap/copy.ts`'s `GAP_UNAVAILABLE_*` and
+ * `today/copy.ts`'s `DUE_UNAVAILABLE`: it does not read as a crash, it does not
+ * blame her, and it does not say a feature is missing. It says what happened.
+ */
+export const SESSION_UNAVAILABLE_TITLE = 'Olea could not read your sources just now.';
+export const SESSION_UNAVAILABLE_BODY =
+  'So there is no session to build here. This is not a claim about what you have left to study — try again in a moment.';
+
+// ---------------------------------------------------------------------------
+// F4.9 — the framing that governs every ranked surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Where this order came from — F4.9's first clause on this surface.
+ *
+ * Past tense, and the subject is her prior papers, never the assessment ahead.
+ * The second half names the other input honestly: the countdown is a fact about
+ * her assignments table, and it does move the order (that is F4.7), which is
+ * worth saying rather than leaving her to infer.
+ */
+export const SESSION_ATTRIBUTION =
+  'Ordered by what your past papers have asked, and by how soon each assessment falls.';
+
+/**
+ * The framing shown above any built session, in order.
+ *
+ * `FULL_SYLLABUS_ADVICE` is `gap/copy.ts`'s string, imported. One promise, one
+ * wording, in one place — the alternative is two sentences that agree today.
+ */
+export function sessionFraming(): readonly string[] {
+  return [SESSION_ATTRIBUTION, FULL_SYLLABUS_ADVICE];
+}
+
+// ---------------------------------------------------------------------------
+// F4.7 — the countdown
+// ---------------------------------------------------------------------------
+
+/** The assessment's own file name, without folder or extension. Her words, unchanged (R1/R2) — nothing here retitles a note of hers. */
+export function assessmentName(countdown: SessionAssessmentCountdown): string {
+  const last = countdown.assessmentPath.split('/').pop() ?? countdown.assessmentPath;
+  return last.endsWith('.md') ? last.slice(0, -3) : last;
+}
+
+/**
+ * The countdown sentence (F4.7), or `null` when there is no assessment to
+ * count to.
+ *
+ * **An unreadable date says so instead of counting.** `SessionAssessmentCountdown.
+ * daysUntil` is `null` — not `0` — when the `due` field is absent or is not a
+ * calendar day, and this function renders that as a sentence about the missing
+ * date rather than as an urgent "today". A false deadline is the most
+ * expensive small lie this surface could tell.
+ */
+export function countdownLine(model: StudySessionModel): string | null {
+  const next = model.nextAssessment;
+  if (next === null) return null;
+  const name = assessmentName(next);
+  if (next.daysUntil === null) {
+    return `Next up: ${name}. Olea could not read a date on it, so there is no countdown here.`;
+  }
+  if (next.daysUntil === 0) return `${name} is dated today.`;
+  if (next.daysUntil === 1) return `${name} is dated tomorrow.`;
+  return `${name} is dated ${next.daysUntil} days from now.`;
+}
+
+// ---------------------------------------------------------------------------
+// F4.8 — format matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Why multiple-choice came first, or `null` when no format preference applied.
+ *
+ * `null` far more often than not, and that is correct rather than a gap:
+ * `assessmentFormatOf` maps one assessment type (`quiz -> mcq`) and widening it
+ * is a decision-bead matter, so most sessions express no preference and say
+ * nothing about format at all. A sentence offered for a preference that did not
+ * fire would be a reason for something that did not happen.
+ */
+export function formatPreferenceLine(model: StudySessionModel): string | null {
+  if (model.formatPreference !== 'mcq') return null;
+  if (!model.items.some((item) => item.formatMatch === 'preferred-format')) return null;
+  return 'Multiple-choice questions come first here, because your next assessment is a quiz.';
+}
+
+// ---------------------------------------------------------------------------
+// The times, and whose estimate they are
+// ---------------------------------------------------------------------------
+
+const DURATION_BASIS_LINES: Readonly<Record<DurationModelBasis, string>> = {
+  measured: 'Times are estimated from how long your own reviews have taken.',
+  mixed:
+    'Times are part estimated from your own reviews, part Olea’s assumption for the kinds it has not seen you do yet.',
+  assumed: 'Times are Olea’s assumption — it has not seen enough of your reviews to estimate yet.',
+};
+
+/**
+ * Whose estimate the minutes on this screen are.
+ *
+ * Three sentences for the model's three states, and the distinction is
+ * load-bearing rather than pedantic: two of the three durations behind a
+ * cold-start session are constants nobody measured (`duration.ts`'s own
+ * doc says so outright), and presenting those as "about eighteen minutes"
+ * without qualification is a measurement claim Olea has not earned.
+ */
+export function durationBasisLine(model: StudySessionModel): string {
+  return DURATION_BASIS_LINES[model.durationBasis];
+}
+
+/** Whole minutes, rounded up, of a duration in seconds — never "0 minutes" for work that exists. */
+export function minutesLabel(seconds: number): string {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes === 1 ? '1 min' : `${minutes} min`;
+}
+
+// ---------------------------------------------------------------------------
+// The session itself
+// ---------------------------------------------------------------------------
+
+const INSTRUMENT_TYPE_LABELS: Readonly<Record<StudySessionItem['instrumentType'], string>> = {
+  qa: 'question and answer',
+  cloze: 'fill in the blank',
+  mcq: 'multiple choice',
+};
+
+export function instrumentTypeLabel(instrumentType: StudySessionItem['instrumentType']): string {
+  return INSTRUMENT_TYPE_LABELS[instrumentType];
+}
+
+/** One item's line: what it practises, in what shape, and roughly how long. */
+export function sessionItemLine(item: StudySessionItem): string {
+  return `${instrumentTypeLabel(item.instrumentType)} · about ${minutesLabel(item.estimatedSeconds)}`;
+}
+
+/**
+ * The one-line summary of what was built.
+ *
+ * Reports the count and the time and stops. It does not congratulate her on
+ * the session and it does not say the session is enough — the first is noise
+ * and the second is a claim F4.9's full-syllabus clause forbids.
+ */
+export function sessionSummaryLine(model: StudySessionModel): string {
+  const n = model.items.length;
+  const cards = n === 1 ? '1 card' : `${n} cards`;
+  return `${cards}, about ${minutesLabel(model.plannedSeconds)} of the ${model.budgetMinutes} you asked for.`;
+}
+
+/**
+ * What she asked to start from, when the gap view's `build-session` affordance
+ * sent her here. `null` when the session was built from the whole ranking, and
+ * a distinct sentence when the concept could not be found — a request silently
+ * dropped is worse than one that says it was not honoured.
+ */
+export function focusLine(model: StudySessionModel): string | null {
+  const focus = model.focusConcept;
+  if (focus === null) return null;
+  const honoured =
+    model.items.some((item) => item.conceptName === focus) ||
+    model.leftOut.some((omission) => omission.conceptName === focus);
+  return honoured
+    ? `Started from ${focus}.`
+    : `Olea could not find ${focus} in the current ranking, so this session is built from the whole of it.`;
+}
+
+// ---------------------------------------------------------------------------
+// What was left out — information, not a verdict
+// ---------------------------------------------------------------------------
+
+function countOf(
+  omissions: readonly StudySessionOmission[],
+  test: (o: StudySessionOmission) => boolean,
+): number {
+  return omissions.filter(test).length;
+}
+
+/**
+ * What the session does not contain, and why — one line per reason, counts
+ * only.
+ *
+ * This is `ol-cvsc`'s rule applied one screen over: a shortened list she cannot
+ * see the edge of is a claim about her material that nothing established. The
+ * three reasons stay three sentences because their consequences differ — a
+ * longer session fixes the first, drafting cards fixes the second, and the
+ * third is already handled.
+ */
+export function leftOutLines(model: StudySessionModel): readonly string[] {
+  if (model.leftOut.length === 0) return [];
+  const lines: string[] = [];
+
+  const didNotFit = countOf(model.leftOut, (o) => o.reason === 'did-not-fit');
+  if (didNotFit > 0) {
+    lines.push(
+      didNotFit === 1
+        ? `1 more ranked concept did not fit in ${model.budgetMinutes} minutes.`
+        : `${didNotFit} more ranked concepts did not fit in ${model.budgetMinutes} minutes.`,
+    );
+  }
+
+  const noCards = countOf(
+    model.leftOut,
+    (o) => o.reason === 'no-instruments' && o.gapClass === 'coverage-gap',
+  );
+  if (noCards > 0) {
+    lines.push(
+      noCards === 1
+        ? '1 has notes but no cards yet, so there was nothing to practise.'
+        : `${noCards} have notes but no cards yet, so there was nothing to practise.`,
+    );
+  }
+
+  const noMaterial = countOf(
+    model.leftOut,
+    (o) => o.reason === 'no-instruments' && o.gapClass === 'material-gap',
+  );
+  if (noMaterial > 0) {
+    lines.push(
+      noMaterial === 1
+        ? '1 is named by your past papers and is not in your materials.'
+        : `${noMaterial} are named by your past papers and are not in your materials.`,
+    );
+  }
+
+  const otherNoCards = countOf(
+    model.leftOut,
+    (o) => o.reason === 'no-instruments' && o.gapClass === 'mastery-gap',
+  );
+  if (otherNoCards > 0) {
+    lines.push(
+      otherNoCards === 1
+        ? '1 has cards Olea could not reach on this pass.'
+        : `${otherNoCards} have cards Olea could not reach on this pass.`,
+    );
+  }
+
+  const already = countOf(model.leftOut, (o) => o.reason === 'already-in-session');
+  if (already > 0) {
+    lines.push(
+      already === 1
+        ? '1 is already covered by a card in this session.'
+        : `${already} are already covered by cards in this session.`,
+    );
+  }
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// The two emptinesses, which are not the same sentence
+// ---------------------------------------------------------------------------
+
+/**
+ * What the screen says when the session has no items.
+ *
+ * **Two states, deliberately not one.** "Olea has nothing ranked" is a
+ * statement about what the pipeline read; "nothing fits in twenty minutes" is
+ * a statement about the budget. `StudySessionModel.consideredRowCount` is the
+ * field that tells them apart, and it exists for exactly this branch — the
+ * same distinction `gap/copy.ts` draws between "we read and found nothing" and
+ * "we read nothing". Returning a bare "no session" for both is unreachable
+ * through this function.
+ */
+export function emptySessionLines(model: StudySessionModel): readonly string[] {
+  if (model.items.length > 0) return [];
+  if (model.consideredRowCount === 0) {
+    return [
+      'Olea has nothing ranked to build a session from yet.',
+      'That is a statement about what it has read of your past papers, not about what you have left to study.',
+    ];
+  }
+  return [
+    `Nothing Olea has cards for fits in ${model.budgetMinutes} minutes.`,
+    'A longer session, or cards for the concepts below, would give it something to work with.',
+  ];
+}
+
+/**
+ * The whole screen's non-item copy, in render order.
+ *
+ * The view renders items itself (it needs per-item elements), and everything
+ * else comes from here — so "the framing is present wherever a session is
+ * shown" is a property of this function rather than of a caller's diligence.
+ */
+export function sessionScreenCopy(model: StudySessionModel): readonly string[] {
+  const lines: string[] = [];
+  if (model.items.length > 0) lines.push(sessionSummaryLine(model));
+  lines.push(...emptySessionLines(model));
+
+  const focus = focusLine(model);
+  if (focus !== null) lines.push(focus);
+
+  lines.push(...sessionFraming());
+
+  const countdown = countdownLine(model);
+  if (countdown !== null) lines.push(countdown);
+
+  const format = formatPreferenceLine(model);
+  if (format !== null) lines.push(format);
+
+  if (model.items.length > 0) lines.push(durationBasisLine(model));
+  lines.push(...leftOutLines(model));
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// The enumeration David reviews, and the F4.9 audit runs over
+// ---------------------------------------------------------------------------
+
+/**
+ * Every fixed string and label this module can produce.
+ *
+ * Derived sentences are not enumerable in the abstract, so `copy.spec.ts`
+ * exercises those against representative models and audits the results with the
+ * same rules — `ol-f49h`'s point stands here as it does for the gap view: the
+ * list is where strings are recorded, not where they are checked.
+ */
+export function allSessionBuilderStrings(): readonly string[] {
+  return [
+    SESSION_VIEW_TITLE,
+    SESSION_UNAVAILABLE_TITLE,
+    SESSION_UNAVAILABLE_BODY,
+    SESSION_ATTRIBUTION,
+    FULL_SYLLABUS_ADVICE,
+    ...Object.values(DURATION_BASIS_LINES),
+    ...Object.values(INSTRUMENT_TYPE_LABELS),
+    ...SESSION_BUDGET_OPTIONS.map(budgetOptionLabel),
+  ];
+}

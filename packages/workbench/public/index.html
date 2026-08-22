@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en" data-wb-ready="false">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Olea component workbench — dev tooling</title>
+
+    <!-- Workbench chrome ONLY. Since ol-mioe there is deliberately no theme
+         stylesheet and no plugin stylesheet in this document: both are loaded
+         into the host pane's own document by src/host-frame.ts, so a vendored
+         theme's bare-element rules cannot reach the sidebar, the inspector or
+         the notices. The isolation is a property of the document boundary, not
+         of a CSS reset that a higher-specificity theme rule can beat. -->
+    <link rel="stylesheet" href="./workbench.css" />
+  </head>
+  <body>
+    <div class="wb">
+      <aside class="wb-sidebar">
+        <div class="wb-brand">
+          <strong class="wb-brand-name">Olea component workbench</strong>
+          <span class="wb-badge">dev tooling</span>
+        </div>
+        <p class="wb-blurb">
+          The product's own screens, running outside Obsidian against an invented practice
+          vault.
+        </p>
+
+        <div class="wb-honesty">
+          <h2 class="wb-nav-heading">What this shows</h2>
+          <p class="wb-blurb">
+            Everything below is the real product code — the same screens a student would see
+            and answer, driven end to end. Two things about it are not real:
+          </p>
+          <ul class="wb-caveats">
+            <li>
+              <strong>The material is invented.</strong> Coined words and made-up courses.
+              Never a real student's notes.
+            </li>
+            <li>
+              <strong>The answers are pre-recorded.</strong> Real model calls, made once and
+              saved. Every render since replays them, so clicking around costs nothing.
+            </li>
+          </ul>
+          <p class="wb-blurb">
+            One consequence worth holding on to: because the material is nonsense by design,
+            none of the numbers here — rankings, match scores, generated questions — say
+            anything about how <em>well</em> Olea works. They show that it works at all.
+          </p>
+
+          <h2 class="wb-nav-heading">Nothing reaches these yet</h2>
+          <p class="wb-blurb">
+            These two are not missing, and saying they were would be the easy version. The
+            logic exists and is tested. What does not exist is any way for her to arrive at
+            it — no screen, and nothing she can do that calls it. They are listed here
+            because a capability nobody can reach is, to her, the same as one you never
+            built; this project has found that defect five times by going looking for it.
+          </p>
+          <ul class="wb-not-built">
+            <li>
+              <strong>Explain-back</strong> — she explains a concept in her own words and
+              the AI grades the answer. The grading pipeline is built and wired into the
+              plugin; the method that runs it has no caller.
+              <span class="wb-phase">Phase 4</span>
+            </li>
+            <li>
+              <strong>Misconceptions</strong> — the AI notices patterns in what she keeps
+              getting wrong. Ten tested modules; nothing calls the matcher, and the seam it
+              needs has no implementation.
+              <span class="wb-phase">Phase 4</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- The walkthrough (ol-c48c): an additional entry point, never a
+             replacement for the flat state list below — see this section's
+             own note once you switch modes. Two real, reloadable links, not
+             a client-side-only toggle. -->
+        <h2 class="wb-nav-heading">Mode</h2>
+        <nav class="wb-nav" data-wb-mode-switch></nav>
+
+        <div data-wb-flat-nav>
+          <h2 class="wb-nav-heading">Review states</h2>
+          <nav class="wb-nav" data-wb-states></nav>
+
+          <h2 class="wb-nav-heading">Today panel states</h2>
+          <p class="wb-nav-note">
+            Due summary, per-course counts and streak (F6.1) only. The mastery overview and
+            insights on this same pane (F6.2, F6.5) do not render here — this surface is never
+            given a trends source. See "Trends states" below for those, on the same real
+            <code>TodayView</code>.
+          </p>
+          <nav class="wb-nav" data-wb-today-states></nav>
+
+          <h2 class="wb-nav-heading">Oracle states</h2>
+          <p class="wb-nav-note">
+            The ranking, study-plan and gap/coverage chain (F4.2, F4.3, F4.5, F4.9, F4.10), driven
+            by a synthetic curriculum and corpus over the same coined vocabulary a persona's stream
+            already uses — never the fixture vault. Dev tooling only (D-021); zero model spend.
+            (The walkthrough's own oracle steps are the one deliberate exception — D-041 — and
+            live in "Mode" above, not here.)
+          </p>
+          <nav class="wb-nav" data-wb-oracle-states></nav>
+
+          <h2 class="wb-nav-heading">Retrieval states</h2>
+          <p class="wb-nav-note">
+            Query -&gt; hybrid retrieve -&gt; grounded context or refusal (C4.7, INV-5), replaying a
+            pre-computed embedding cassette over a synthetic corpus — zero model spend at render
+            time. No product view exists for raw retrieval results, so this surface reports through
+            the inspector only; see its own note there.
+          </p>
+          <nav class="wb-nav" data-wb-retrieve-states></nav>
+
+          <h2 class="wb-nav-heading">Generation states</h2>
+          <p class="wb-nav-note">
+            Retrieve -&gt; generate -&gt; accept (C4.7, INV-5, INV-6), replaying a pre-computed
+            generation cassette over a synthetic corpus — zero model spend at render time. The
+            "Accept" control is a REAL gate: nothing becomes vault-ready `McqFields` until it is
+            clicked. No product view exists yet for reviewing a generated card (P3-T07b's accept
+            step is still open in the product), so this surface reports through the inspector plus
+            one live control; see its own note there.
+          </p>
+          <nav class="wb-nav" data-wb-generate-states></nav>
+
+          <h2 class="wb-nav-heading">Timeline states</h2>
+          <p class="wb-nav-note">
+            The day loop (`ol-opmb.5` [TB-4]): the SAME <code>mastery -&gt; rank -&gt; plan -&gt; gap
+            -&gt; queue</code> chain as the oracle states above, replayed across a simulated semester
+            rather than at one fixed instant. Time is an axis, not another state — scrub the day
+            with the controls at the top of the inspector. Zero model spend; dev tooling only
+            (D-021).
+          </p>
+          <nav class="wb-nav" data-wb-timeline-states></nav>
+
+          <h2 class="wb-nav-heading">Explain states</h2>
+          <p class="wb-nav-note">
+            The passages an explanation would be built from, found by the product's own
+            retrieval over the invented student's notes. The explanation itself is not written
+            yet: the Worker does not serve the explain task. What you can see working here is
+            the grounding and the refusal.
+          </p>
+          <nav class="wb-nav" data-wb-explain-states></nav>
+
+          <h2 class="wb-nav-heading">Session states</h2>
+          <p class="wb-nav-note">
+            A time-bounded study session assembled from the highest-priority gaps, with the exam
+            countdown and format preference matching folded in. Two states show what an empty
+            session honestly looks like.
+          </p>
+          <nav class="wb-nav" data-wb-session-states></nav>
+
+          <h2 class="wb-nav-heading">Trends states</h2>
+          <p class="wb-nav-note">
+            Mastery per course, and the patterns the review log will support. The two neutralised
+            states are negative controls: same seed, planted pattern removed. They are here so
+            the detector's claim is checkable rather than asserted.
+          </p>
+          <nav class="wb-nav" data-wb-trends-states></nav>
+        </div>
+
+        <div data-wb-walk-nav hidden>
+          <h2 class="wb-nav-heading">Walkthrough steps</h2>
+          <p class="wb-nav-note">
+            One student, one fortnight, twelve steps — every dot below is live (the real screen),
+            partial (real screen, no way there yet in Obsidian) or a gap (nothing built yet). Left
+            and right arrow keys step through it too.
+          </p>
+          <nav class="wb-nav" data-wb-walk-steps></nav>
+        </div>
+
+        <h2 class="wb-nav-heading">Variable set</h2>
+        <nav class="wb-nav" data-wb-sets></nav>
+
+        <!-- SYN-1's personas. The history behind every surface that has one. -->
+        <h2 class="wb-nav-heading">Persona history</h2>
+        <nav class="wb-nav" data-wb-personas></nav>
+
+        <p class="wb-counts" data-wb-counts></p>
+      </aside>
+
+      <main class="wb-main">
+        <div class="wb-walk-chrome" data-wb-walk-chrome hidden>
+          <div class="wb-walk-chrome-top">
+            <span class="wb-walk-counter" data-wb-walk-counter></span>
+            <span class="wb-walk-status" data-wb-walk-status></span>
+          </div>
+          <h1 class="wb-walk-title" data-wb-walk-title>Walkthrough</h1>
+          <p class="wb-walk-copy" data-wb-walk-copy></p>
+          <div class="wb-walk-controls">
+            <button type="button" class="wb-walk-nav-button" data-wb-walk-prev>← Previous</button>
+            <button type="button" class="wb-walk-nav-button" data-wb-walk-next>Next →</button>
+          </div>
+        </div>
+        <div class="wb-stage">
+          <!-- Screenshot target, and since ol-mioe a real boundary rather than a
+               conventional one: the product's document. Its <body> carries
+               theme-dark/theme-light, exactly as Obsidian puts one of those on
+               <body>. WB-2 reaches inside it with frameLocator. -->
+          <iframe
+            class="wb-host"
+            data-wb-surface
+            title="Olea review view, in its own document"
+          ></iframe>
+        </div>
+        <section class="wb-inspector" data-wb-inspector></section>
+      </main>
+
+      <div class="wb-notices" data-wb-notices></div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

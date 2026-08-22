@@ -1,0 +1,31 @@
+{
+  "name": "olea",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Olea monorepo — olea-core, olea-plugin, olea-contracts.",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24.18.0 <25"
+  },
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "inv1": "node scripts/check-inv1.mjs",
+    "wiring-register": "node scripts/check-wiring-register.mjs",
+    "wiring-register:test": "node --test scripts/check-wiring-register.test.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

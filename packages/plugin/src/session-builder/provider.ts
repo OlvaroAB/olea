@@ -1,0 +1,163 @@
+/**
+ * `createLocalSessionBuilderProvider` — the production `SessionBuilderViewDeps`
+ * (`ol-p5t06b` [P5-T06b], F4.6/F4.7/F4.8).
+ *
+ * The gap view's twin, one layer on. `gap/provider.ts` composes the oracle
+ * chain into a `GapViewModel`; this composes the same chain and then selects a
+ * time-bounded prefix of it. The three extra things it needs, and where each
+ * comes from:
+ *
+ *  - **the instruments themselves** — `enumerateVaultInstruments`, which
+ *    `gap/provider.ts` already walks for its per-note counts. Here the records
+ *    are indexed by concept (`buildConceptInstrumentIndex`) instead of counted
+ *    by note.
+ *  - **the assessments** — `composeOracleRanking`'s own
+ *    `edges.assessmentsRead.records`, passed through unmodified. This is what
+ *    turns `GapRow.targetAssessmentPath` into a date, which is F4.7's countdown.
+ *  - **her review history** — already read here for the mastery join, and now
+ *    read a second time for something new: `durationMs`. The plugin has been
+ *    writing that field since `review/session.ts` landed and nothing has ever
+ *    read it (`study-session/duration.ts`'s module doc). This is its first
+ *    production reader.
+ *
+ * ## The history window, and why the durations use a longer one
+ *
+ * `gap/provider.ts` probes `SCHEDULING_HISTORY_PROBE_DAYS` of review-log files
+ * because that is the window scheduling state needs. Duration estimates want as
+ * much history as is cheaply available and are indifferent to its recency — the
+ * question is "how long does a cloze take her", not "what is due". They are
+ * computed from the same `readReviewLogHistory` result rather than from a
+ * second, wider read: a second walk of the log for a cold-start estimate would
+ * pay real I/O for a number that is about to be superseded by the first few
+ * days of use anyway. Named here rather than left for someone to discover —
+ * with a short probe window the model reads `'assumed'` for longer than it
+ * strictly must, and the surface says so.
+ *
+ * ## No cache, for the reason `gap/provider.ts` gives
+ *
+ * `load()` recomputes on every call. Caching the model would be a new persisted
+ * blob with nothing in the contract naming it — a Class C stop (C6; D-002,
+ * D-004, D-005 and D-008 already decide every case where the convenience
+ * tempts).
+ */
+
+import type { ConceptMaterialPresence, VaultPath, VaultSource } from 'olea-core';
+import {
+  allGapRows,
+  buildConceptInstrumentIndex,
+  buildGapView,
+  buildMaterialPresence,
+  buildStudySession,
+  calendarDaysEndingOn,
+  composeOracleRanking,
+  enumerateVaultInstruments,
+  estimateInstrumentDurations,
+  readReviewLogHistory,
+  reviewLogPath,
+} from 'olea-core';
+import {
+  isStudyPlanConfigured,
+  type ObsidianDataHost,
+  ObsidianStudyPlanSettingsStore,
+} from '../plan/settings-store.js';
+import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import type { SessionBuilderRequest, SessionBuilderState, SessionBuilderViewDeps } from './view.js';
+
+export interface CreateLocalSessionBuilderProviderDeps {
+  readonly vault: VaultSource;
+  /** Names this device's own review-log files for the probe — same discipline as `gap/provider.ts` (C5.2). */
+  readonly deviceId: string;
+  readonly settingsHost: ObsidianDataHost;
+  /** Injected for determinism under test; production passes `() => new Date()`. */
+  readonly now: () => Date;
+  readonly probeDays?: number;
+}
+
+/** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
+function instrumentCountsByNotePath(
+  records: readonly { readonly notePath: VaultPath }[],
+): ReadonlyMap<VaultPath, number> {
+  const counts = new Map<VaultPath, number>();
+  for (const record of records) {
+    counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * A `SessionBuilderViewDeps` whose `load` composes a fresh session from the
+ * vault and the review log, entirely on-device, no Worker call.
+ */
+export function createLocalSessionBuilderProvider(
+  deps: CreateLocalSessionBuilderProviderDeps,
+): SessionBuilderViewDeps {
+  const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
+
+  return {
+    async load(request: SessionBuilderRequest): Promise<SessionBuilderState> {
+      try {
+        const config = await settingsStore.load();
+        if (!isStudyPlanConfigured(config)) return { kind: 'unavailable' };
+
+        const now = deps.now();
+        const today = localToday(now);
+        const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+        const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
+          reviewLogPath(day, deps.deviceId),
+        );
+
+        // Neither walk depends on the other's result and both read the same
+        // read-only vault — the same concurrency `gap/provider.ts` uses, for
+        // the same reason.
+        const [{ entries }, enumeration] = await Promise.all([
+          readReviewLogHistory(deps.vault, { additionalPaths }),
+          enumerateVaultInstruments(deps.vault),
+        ]);
+
+        const { ranking, edges, mastery } = await composeOracleRanking({
+          vault: deps.vault,
+          basePath: config.assignmentsBasePath,
+          reviewLog: entries,
+          asOf: today,
+        });
+
+        const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> =
+          buildMaterialPresence(
+            enumeration.concepts,
+            instrumentCountsByNotePath(enumeration.records),
+          );
+
+        const gap = buildGapView({
+          ranking,
+          assessments: edges.assessmentsRead.records,
+          mastery,
+          materialPresence,
+          sourceCoverage: edges.tier3.sourceCoverage,
+        });
+
+        const model = buildStudySession({
+          rows: allGapRows(gap),
+          instruments: buildConceptInstrumentIndex(enumeration.records),
+          budgetMinutes: request.budgetMinutes,
+          // The first production read of the review log's `durationMs` (INV-4:
+          // the discipline went in ahead of the feature, and this is the
+          // feature).
+          durations: estimateInstrumentDurations(entries),
+          asOf: today,
+          // Unmodified — the countdown (F4.7) is only as honest as this
+          // pass-through, and re-reading the Base separately would let the
+          // ranking and the countdown disagree about the same assessment.
+          assessments: edges.assessmentsRead.records,
+          ...(request.focusConceptName !== undefined
+            ? { focusConceptName: request.focusConceptName }
+            : {}),
+        });
+
+        return { kind: 'model', model };
+      } catch (error) {
+        console.error('Olea: could not build a study session', error);
+        return { kind: 'unavailable' };
+      }
+    },
+  };
+}

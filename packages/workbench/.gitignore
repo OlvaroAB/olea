@@ -1,0 +1,10 @@
+# The pre-computed embedding cassette (ol-opmb.2 [TB-2]) — a local, derived
+# artifact written by scripts/precompute-embeddings.mjs and copied into
+# dist/ verbatim by build.mjs. Never committed: it is reproducible from
+# olea-synthetic's retrieval-corpus.ts + queries.ts plus one priced,
+# spend-guarded model pass, and re-generating it costs nothing once cached.
+.embedding-cassette/
+
+# The pre-computed generation cassette (ol-opmb.3 [TB-3]) — same reasoning as
+# .embedding-cassette/ above, written by scripts/precompute-generation.mjs.
+.generation-cassette/

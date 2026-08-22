@@ -1,0 +1,24 @@
+{
+  "name": "olea-plugin",
+  "version": "0.9.0",
+  "private": true,
+  "description": "olea-plugin — Obsidian views, commands, settings, ObsidianSource. The only package allowed to import `obsidian` (INV-1).",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json && node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
+  },
+  "dependencies": {
+    "olea-contracts": "workspace:*",
+    "olea-core": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.13.1"
+  }
+}

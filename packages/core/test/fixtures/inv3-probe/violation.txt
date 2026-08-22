@@ -1,0 +1,3 @@
+this file deliberately contains a synthetic, fake marker for the check-inv3.mjs test suite,
+in its inflected form: zqxplorb77s (never a real course code, note title or concept name)
+but a marker glued onto a preceding letter must never fire: xzqxplorb77 should not match

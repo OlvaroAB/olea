@@ -1,0 +1,1513 @@
+/*
+This CSS file is included with the Olea plugin and available in the app
+while the plugin is enabled.
+
+The review view (P2-T08) is the first consumer; the Today panel (F6.1,
+P2-T09) is the second, appended as its own section near the end of this
+file — see the Today panel section near the end of this file for what it
+deliberately does differently. Everything under `.olea-review-root` follows
+`docs/design/pass1/tokens/theme-host.css`'s (DP-1, approved) split:
+
+  - "Read from the host": every ground/text/border/font role is
+    `var(--obsidian-variable, …)`. The host's variable is the source of
+    truth wherever the host actually declares one. No color below is an
+    owned Olea palette pretending to be a role.
+  - "Owned by Olea": honey attention, the four rating hues, correct/
+    incorrect, and olive brand are constant in every host theme, and DP-1's
+    acceptance record (ol-dp1, §8.2(c)) checked that this list is the
+    complete inventory of Olea-owned colour on this surface — nothing else
+    is smuggled in dressed as a role.
+
+---- What this file assumes about host themes (ol-ro57) ----
+
+`.olea-review-root` carries Obsidian's own `theme-dark` class (set in
+`view.ts`), so a `var(--background-primary, …)` read below resolves through
+the *dark* branch of her actual installed theme — F2.4's "dark review view",
+without Olea inventing a dark palette.
+
+**The assumption that used to be written here, and that was wrong.** It said
+a theme declares the same set of variables in both its `.theme-dark` and
+`.theme-light` blocks. Real themes do not. When the host body is
+`.theme-light` and a theme declares a variable in only its light branch,
+this root — a `.theme-dark` element nested inside a `.theme-light` body —
+has no declaration of its own for that variable and therefore *inherits the
+light value*, while every variable the theme does declare in both resolves
+dark. Half of one palette and half of the other, and neither branch was
+designed to be half of one. Found by rendering, not by inspection: Things
+2.2.4 declares `--background-modifier-hover: #e2e5e9` only under
+`.theme-light`, which painted every `.olea-review-keycap` as light-grey
+`--text-muted` on a light-grey chip at 1.37:1 — every keyboard hint, rating
+digit and MCQ option letter, i.e. exactly the affordances Q6.5 exists to
+guarantee are discoverable (ol-ro57).
+
+**The assumption now: none.** Nothing is assumed about which variables a
+host declares in which branch. The `olea-host-fallback` cascade layer below
+gives this root its own dark value for every *branch-varying* colour
+variable this file reads. Because it is a **layer**, any unlayered
+declaration matching this element — i.e. the host's own `.theme-dark { … }`
+rules, which is how both Obsidian and every theme scope a dark branch — wins
+over it regardless of specificity, so her real theme's dark colours are
+still used wherever the theme actually supplies them. The layer is reached
+only where the host's dark branch is silent, which is exactly the case that
+used to leak a light value in. It is a floor under the palette, not a
+replacement for it.
+
+Two limits, stated rather than assumed:
+
+  - **Branch-invariant variables are deliberately NOT in the layer.**
+    `--font-interface`/`--font-text`/`--font-monospace` and
+    `--interactive-accent` do not differ between a theme's two branches —
+    a typeface and her chosen accent are not a light/dark decision — so
+    hosts declare them once, on `body`, rather than per branch. A
+    declaration on *this* element beats an inherited one whether it is
+    layered or not, so baselining those would silently override her real
+    font and her real accent colour. They keep an inline `var(…, fallback)`
+    instead, and a wrong-branch value for either cannot make anything
+    illegible: a typeface has no contrast, and the accent is only ever drawn
+    as an outline.
+  - A rendering engine with no `@layer` support (pre-2022) drops the block
+    whole and falls through to the inline `var(…, var(--olea-dark-*))`
+    fallbacks, which carry the same values. That is the pre-fix behaviour —
+    no worse, not fixed.
+
+`--olea-dark-*` is the single home for those values: they are read twice,
+once by the layer and once by the inline fallbacks, and must never be typed
+a second time. Unlike the old hex fallbacks — which never executed, because
+a host always supplied *something* — these are reached in practice (Things
+declares only 2 of the 8), so they are load-bearing and are checked by eye
+across every variable set in the workbench.
+
+---- --olea-host-faint is not painted as text anywhere in this file (ol-nrrm) ----
+
+`--text-faint` is the host's own de-emphasis token, and real measurement
+(WCAG relative luminance, composited backgrounds) found it sits at 2.6–3.1:1
+against the grounds this file uses it on, in *every* variable set measured —
+both Obsidian defaults and Things' both branches, under both a "theme
+replaces the baseline" and an "app.css always underneath" load-order model.
+Below the 4.5:1 text floor, uniformly, so it is the faint role's own value
+rather than a branch-mixing defect. `--olea-host-faint` still exists as a
+role (some host themes' own chrome uses text-faint for genuinely
+sub-floor-contrast decoration, and a future non-text use may want it), but
+every role in this file that paints *text* with it has been moved to
+`--olea-host-muted` (5.8–9.7:1 in the same sweep), which is already the tier
+used for equivalent secondary text elsewhere here. The one remaining reader
+is `.olea-review-meta-dot`, a decorative separator with no text content —
+`background`, not `color`. `styles-contrast.spec.ts` asserts this holds:
+no selector reads `color: var(--olea-host-faint)` unless it is on that
+file's documented exemption list.
+*/
+
+/*
+The dark floor. Layered on purpose: an unlayered host rule that matches this
+element always wins, so this is reached only where the host's dark branch
+declares nothing at all. See the header.
+*/
+@layer olea-host-fallback {
+  .olea-review-root {
+    --background-primary: var(--olea-dark-bg);
+    --background-primary-alt: var(--olea-dark-elev);
+    --text-normal: var(--olea-dark-text);
+    --text-muted: var(--olea-dark-muted);
+    --text-faint: var(--olea-dark-faint);
+    --background-modifier-border: var(--olea-dark-line);
+    --background-modifier-border-hover: var(--olea-dark-line-hover);
+    --background-modifier-hover: var(--olea-dark-wash);
+  }
+}
+
+.olea-review-root {
+  /* ---- The dark floor's values — one home, read by the layer above and by
+     the inline fallbacks below. Never retype these. ---- */
+  --olea-dark-bg: #1e1e1e;
+  --olea-dark-elev: #242424;
+  --olea-dark-text: #dadada;
+  --olea-dark-muted: #9e9e9e;
+  --olea-dark-faint: #6b6b6b;
+  --olea-dark-line: #2e2e2e;
+  --olea-dark-line-hover: #3d3d3d;
+  --olea-dark-wash: rgba(255, 255, 255, 0.055);
+
+  /* ---- Read from the host (theme-host.css, ported) ---- */
+  --olea-host-bg: var(--background-primary, var(--olea-dark-bg));
+  --olea-host-elev: var(--background-primary-alt, var(--olea-dark-elev));
+  --olea-host-text: var(--text-normal, var(--olea-dark-text));
+  --olea-host-muted: var(--text-muted, var(--olea-dark-muted));
+  --olea-host-faint: var(--text-faint, var(--olea-dark-faint));
+  --olea-host-line: var(--background-modifier-border, var(--olea-dark-line));
+  --olea-host-line-hover: var(--background-modifier-border-hover, var(--olea-dark-line-hover));
+  --olea-host-wash: var(--background-modifier-hover, var(--olea-dark-wash));
+  --olea-host-accent: var(
+    --interactive-accent,
+    #8a5cf6
+  ); /* focus ring only — never painted with otherwise; branch-invariant, so not in the layer (see the header) */
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-content-font: var(--font-text, sans-serif);
+  --olea-host-mono: var(--font-monospace, monospace);
+
+  /* ---- Owned by Olea — constant in every host theme (DP-1) ---- */
+  --olea-host-brand: #8a9a63; /* olive */
+  --olea-host-question-font: var(
+    --font-text,
+    Georgia,
+    serif
+  ); /* Fraunces, when bundled — falls back to the host's content font, never to a system default (see the "unproven" note in the P2-T08 report) */
+  --olea-again: #d97c66;
+  --olea-hard: #e0bc7a;
+  --olea-good: #c3d19b;
+  --olea-easy: #8fbda0;
+  --olea-cloze-bg: rgba(224, 169, 78, 0.16);
+  --olea-cloze-line: #e0a94e;
+  --olea-correct: #8fbda0;
+  --olea-wrong: #d97c66;
+
+  background: var(--olea-host-bg);
+  color: var(--olea-host-text);
+  font-family: var(--olea-host-ui-font);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  outline: none;
+}
+
+.olea-review-root :focus-visible {
+  outline: 2px solid var(--olea-host-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---- Header: progress · Edit note · Suspend ---- */
+
+.olea-review-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-review-progress {
+  font: 400 12px / 1 var(--olea-host-mono);
+  color: var(--olea-host-muted);
+  letter-spacing: 0.04em;
+}
+
+.olea-review-header-spacer {
+  flex: 1;
+}
+
+.olea-review-ghost-action,
+.olea-review-primary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 9px;
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--olea-host-muted);
+  font: 400 13px / 1 var(--olea-host-ui-font);
+  cursor: pointer;
+}
+
+.olea-review-ghost-action:hover {
+  background: var(--olea-host-wash);
+}
+
+.olea-review-ghost-action--active {
+  color: var(--olea-host-text);
+  border-color: var(--olea-host-line-hover);
+  background: var(--olea-host-wash);
+}
+
+.olea-review-primary-action {
+  background: var(--olea-host-elev);
+  color: var(--olea-host-text);
+  font-weight: 500;
+}
+
+.olea-review-primary-action:hover {
+  border-color: var(--olea-host-line-hover);
+}
+
+.olea-review-keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--olea-host-line);
+  background: var(--olea-host-wash);
+  font: 500 10.5px / 1 var(--olea-host-mono);
+  color: var(--olea-host-muted);
+}
+
+/* ---- Body: the question column ---- */
+
+.olea-review-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 44px 24px;
+  text-align: center;
+}
+
+.olea-review-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 26px;
+}
+
+.olea-review-meta-course {
+  font: 500 10.5px / 1 var(--olea-host-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-review-meta-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--olea-host-faint);
+}
+
+.olea-review-meta-note {
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  /* --olea-host-faint reads the host's own --text-faint, which every measured
+     variable set (both Obsidian defaults and Things, all branches) ships at
+     2.7-3.1:1 against this row's ground -- below Q6.5's accessibility floor,
+     and uniformly so, which is what marks it as the faint role's own value
+     rather than a branch-mixing defect (ol-ro57). --olea-host-muted is the
+     next tier up and already used for equivalent secondary text elsewhere in
+     this file (progress counter, ghost actions, meta-course label); it
+     measures 5.8-9.7:1 in every set. ol-nrrm. */
+  color: var(--olea-host-muted);
+}
+
+.olea-review-question {
+  font-family: var(--olea-host-question-font);
+  font-weight: 500;
+  font-size: 30px;
+  line-height: 1.32;
+  color: var(--olea-host-text);
+  margin: 0 0 30px;
+  max-width: 640px;
+}
+
+.olea-review-question--small {
+  font-size: 25px;
+  margin-bottom: 24px;
+}
+
+.olea-review-divider {
+  width: 44px;
+  height: 1px;
+  background: var(--olea-host-line);
+  margin: 4px 0 30px;
+}
+
+.olea-review-hints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 26px;
+}
+
+.olea-review-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  /* --olea-host-muted, not -faint: this row is the keyboard-hint affordance
+     Q6.5 exists to guarantee is discoverable, and --olea-host-faint measured
+     2.7-3.1:1 here in every variable set (ol-nrrm). See the longer note on
+     .olea-review-meta-note. */
+  color: var(--olea-host-muted);
+}
+
+.olea-review-answer-block {
+  width: 100%;
+  text-align: left;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 14px;
+  padding: 22px 26px;
+  margin-bottom: 26px;
+}
+
+.olea-review-eyebrow {
+  font: 500 10px / 1 var(--olea-host-mono);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+  margin-bottom: 12px;
+}
+
+.olea-review-answer-block p {
+  font: 400 17px / 1.65 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  margin: 0;
+}
+
+.olea-review-note-context {
+  font: 400 14px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  margin: 12px 0 0;
+}
+
+.olea-cloze-answer {
+  background: var(--olea-cloze-bg);
+  border-bottom: 2px solid var(--olea-cloze-line);
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+/* ---- Q&A / cloze ratings ---- */
+
+.olea-review-ratings {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 24px;
+}
+
+.olea-review-rating-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 13px 10px;
+  border-radius: 10px;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-bottom-width: 2px;
+  cursor: pointer;
+  font-family: var(--olea-host-ui-font);
+}
+
+.olea-review-rating-btn:hover {
+  background: var(--olea-host-wash);
+}
+
+.olea-review-rating-btn--again {
+  border-bottom-color: var(--olea-again);
+}
+.olea-review-rating-btn--hard {
+  border-bottom-color: var(--olea-hard);
+}
+.olea-review-rating-btn--good {
+  border-bottom-color: var(--olea-good);
+}
+.olea-review-rating-btn--easy {
+  border-bottom-color: var(--olea-easy);
+}
+
+.olea-review-rating-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.olea-review-rating-label {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.olea-review-rating-btn--again .olea-review-rating-label {
+  color: var(--olea-again);
+}
+.olea-review-rating-btn--hard .olea-review-rating-label {
+  color: var(--olea-hard);
+}
+.olea-review-rating-btn--good .olea-review-rating-label {
+  color: var(--olea-good);
+}
+.olea-review-rating-btn--easy .olea-review-rating-label {
+  color: var(--olea-easy);
+}
+
+.olea-review-rating-interval {
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  /* --olea-host-muted, not -faint: this is "the information" under each
+     rating button (ReviewStates.jsx's own doc), not chrome, and
+     --olea-host-faint measured 2.6-2.9:1 here in every variable set
+     (ol-nrrm). See the longer note on .olea-review-meta-note. */
+  color: var(--olea-host-muted);
+}
+
+/* ---- MCQ ---- */
+
+.olea-review-mcq-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 22px;
+}
+
+.olea-review-mcq-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 18px;
+  border-radius: 11px;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  color: var(--olea-host-text);
+  font: 400 16px / 1.4 var(--olea-host-content-font);
+  cursor: pointer;
+  text-align: left;
+}
+
+button.olea-review-mcq-option:hover {
+  background: var(--olea-host-wash);
+}
+
+.olea-review-mcq-option--correct {
+  border-color: var(--olea-correct);
+  border-width: 1.5px;
+  background: color-mix(in srgb, var(--olea-correct) 12%, var(--olea-host-elev));
+}
+
+.olea-review-mcq-option--wrong {
+  border-color: var(--olea-wrong);
+  border-width: 1.5px;
+  background: color-mix(in srgb, var(--olea-wrong) 12%, var(--olea-host-elev));
+}
+
+.olea-review-mcq-option--dim {
+  opacity: 0.55;
+}
+
+.olea-review-mcq-option-label {
+  flex: 1;
+}
+
+.olea-review-mcq-option-tag {
+  font: 400 11px / 1 var(--olea-host-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-review-mcq-option--correct .olea-review-mcq-option-tag {
+  color: var(--olea-correct);
+}
+.olea-review-mcq-option--wrong .olea-review-mcq-option-tag {
+  color: var(--olea-wrong);
+}
+
+.olea-review-mcq-feedback p {
+  font: 400 14.5px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  margin: 0 0 20px;
+  text-align: left;
+}
+
+.olea-review-mcq-footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+/* ---- Note missing / empty / complete ---- */
+
+.olea-review-note-missing .olea-review-question,
+.olea-review-empty .olea-review-question,
+.olea-review-complete .olea-review-question {
+  font-size: 26px;
+}
+
+.olea-review-note-missing-body {
+  font: 400 14.5px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  max-width: 440px;
+  margin: 0 0 26px;
+}
+
+.olea-review-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.olea-review-complete .olea-review-note-context {
+  max-width: 440px;
+  margin-bottom: 26px;
+}
+
+.olea-review-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* --olea-host-muted, not -faint: same defect and same fix as
+     .olea-review-hint (ol-nrrm) — found one selector later and filed as
+     ol-n2yx, fixed in the same pass rather than left as a fifth undocumented
+     reader for the regression guard to trip over. */
+  color: var(--olea-host-muted);
+  font: 400 13px / 1 var(--olea-host-ui-font);
+}
+
+/* ---- Mobile (Obsidian mobile / F2.13): thumb-sized targets, no key hints ---- */
+
+@media (max-width: 480px) {
+  .olea-review-body {
+    padding: 24px 18px;
+  }
+
+  .olea-review-question {
+    font-size: 22px;
+  }
+
+  .olea-review-ratings {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .olea-review-rating-btn {
+    min-height: 64px;
+  }
+
+  .olea-review-hints {
+    display: none;
+  }
+
+  .olea-review-keycap {
+    display: none;
+  }
+}
+
+/* ============================================================
+   ---- Today panel (F6.1, P2-T09) ----
+   ============================================================
+
+   Merged in from `src/today/today.css` (formerly staged there while
+   `ol-ro57`'s cascade-layer repair above had this file; that repair
+   landed as `a3c49f1` and this section is the sequenced change that
+   followed). `test/today/styles.spec.ts` still asserts every class
+   `view.ts` emits has a rule in this section, so it cannot drift from
+   the view now that it ships.
+
+   WHAT IT ASSUMES ABOUT HOST THEMES — deliberately much less than the
+   review view above, and NOT covered by the `olea-host-fallback` layer.
+
+   `.olea-today-root` is a sidebar pane. It does not carry `theme-dark`
+   (`view.ts` puts nothing on this root), so every
+   `var(--background-primary, …)` below resolves through whichever branch
+   of her real theme is actually active — the branch the rest of her
+   sidebar is using. That sidesteps `ol-ro57` entirely: the mixed-palette
+   failure needs a `.theme-dark` element nested in a `.theme-light` body,
+   and there is none here. The inline fallbacks are true fallbacks —
+   reached only outside Obsidian — and are neutral greys rather than a
+   dark floor, because a floor would be wrong half the time on a surface
+   that follows the host. Do not "tidy" these into the
+   `olea-host-fallback` layer above: that would force a dark floor onto a
+   pane that is often correctly light, reintroducing `ol-ro57`'s failure
+   shape one level down. `test/today/styles.spec.ts` asserts this section
+   declares no cascade layer of its own and reads none of the review
+   view's dark-floor tokens.
+
+   TWO OWNED COLOURS, AND NO MORE. Honey attention on the due count and
+   the today mark, olive brand on a studied day. Both are Olea's in every
+   theme, per DP-1's role table ("attention: Honey. Due count, cloze
+   term, start review, today in the streak. Nothing else."). Everything
+   else on this pane is the host's.
+
+   DUPLICATION, KNOWINGLY KEPT. The `--olea-host-*` reads below duplicate
+   the block `.olea-review-root` already declares above. That duplication
+   is the reason to lift the shared role reads to a common `.olea-root`
+   (or `:is(.olea-review-root, .olea-today-root)`) rather than paste a
+   second copy — noted in the original P2-T09 report and still true; not
+   done here because it is a separate refactor with its own risk (two
+   selectors currently guarded independently by `styles-host-vars.spec.ts`
+   and `styles-contrast.spec.ts`), filed rather than folded into this
+   merge.
+
+   `--olea-host-faint` (`--text-faint`, ol-nrrm): measured 2.6-3.1:1
+   against every ground it is used on in this file, in every variable set
+   swept — sub-floor uniformly, the same finding that moved the review
+   view's equivalent text roles to `--olea-host-muted`. The two text
+   readers below (`.olea-today-course-name`, `.olea-today-week-day`) use
+   `--olea-host-muted` for that reason; `.olea-today-course-dot` is the
+   one remaining reader, and paints `background`, not `color`, matching
+   `.olea-review-meta-dot`'s exemption above.
+*/
+
+.olea-today-root {
+  --olea-host-bg: var(--background-primary, #ffffff);
+  --olea-host-text: var(--text-normal, #202020);
+  --olea-host-muted: var(--text-muted, #6b6b6b);
+  --olea-host-faint: var(--text-faint, #999999);
+  --olea-host-line: var(--background-modifier-border, #d8d8d8);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+
+  /* Owned by Olea — constant in every host theme. */
+  --olea-host-attention: #e0a94e;
+  --olea-host-brand: #8a9a63;
+
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+}
+
+.olea-today-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-today-header-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+}
+
+/* The "nothing due" and "cannot count yet" lines. Same treatment: neither is
+   an error, and neither should read as one. */
+.olea-today-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+  margin-bottom: 18px;
+}
+
+.olea-today-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 16px;
+}
+
+.olea-today-count {
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 500;
+  color: var(--olea-host-attention);
+}
+
+.olea-today-count-label {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--olea-host-text);
+}
+
+/* How many of the due count she has never seen. Muted and small: it qualifies
+   the headline above it, it is not a second headline, and it must not compete
+   with the one attention colour on this pane. */
+.olea-today-new {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--olea-host-muted);
+  margin-top: -10px;
+  margin-bottom: 16px;
+}
+
+.olea-today-courses {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 18px;
+}
+
+.olea-today-course {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-today-course:first-child {
+  border-top: none;
+}
+
+.olea-today-course-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--olea-host-faint);
+}
+
+.olea-today-course-code {
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+}
+
+.olea-today-course-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  /* --olea-host-muted, not -faint: --text-faint measured 2.6-3.1:1 against
+     this row's ground in every variable set swept, below the 4.5:1 text
+     floor and uniformly so — the same finding as ol-nrrm on the review
+     view, applied here on first use rather than after the fact. */
+  color: var(--olea-host-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olea-today-course-count {
+  font-family: var(--olea-host-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-primary-action {
+  width: 100%;
+  min-height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: var(--olea-host-attention);
+  color: #3b2c0a;
+  font-family: var(--olea-host-ui-font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.olea-today-streak {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-today-streak-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.olea-today-streak-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+}
+
+.olea-today-streak-value {
+  font-size: 12.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.olea-today-week-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The neutral. A day she missed and a day that has not happened yet both land
+   here, and there is deliberately no third state between them (F6.1). */
+.olea-today-week-mark {
+  width: 100%;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--olea-host-line);
+}
+
+.olea-today-week-mark.is-studied {
+  background: var(--olea-host-brand);
+}
+
+.olea-today-week-mark.is-today {
+  background: var(--olea-host-attention);
+}
+
+.olea-today-week-day {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  /* --olea-host-muted, not -faint: same finding as .olea-today-course-name
+     above (ol-nrrm). */
+  color: var(--olea-host-muted);
+}
+
+/* ---- The trends half: F6.2 mastery overview, F6.5 insights (ol-lohq,
+   ol-p6t04). Appended inside the Today section, ahead of the streak in the
+   DOM, because `.olea-today-streak` above is pinned to the bottom by
+   `margin-top: auto`.
+
+   NO NEW OWNED COLOUR. Everything below reads `--olea-host-brand`,
+   `--olea-host-line` or `--olea-host-muted`, all already declared on
+   `.olea-today-root`; `test/today/styles.spec.ts` asserts this section
+   declares exactly two hex values and this block adds none.
+
+   THE STRIP IS DECORATIVE, AND THAT IS WHY IT MAY FADE. `view.ts` marks it
+   `aria-hidden` and states every count as text in `.olea-today-mastery-counts`
+   directly beneath, so no meaning rides on a segment's colour and the
+   per-`data-leaves` opacity below carries no contrast obligation. A version
+   that put the number inside the segment would owe 4.5:1 at every opacity, and
+   could not have had one. */
+
+.olea-today-mastery {
+  padding-top: 18px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-today-mastery-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+  margin-bottom: 10px;
+}
+
+.olea-today-mastery-course {
+  margin-bottom: 14px;
+}
+
+.olea-today-mastery-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.olea-today-mastery-code {
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+}
+
+.olea-today-mastery-total {
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-mastery-strip {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin-bottom: 6px;
+}
+
+.olea-today-mastery-seg {
+  flex-basis: 0;
+  min-width: 3px;
+  border-radius: 2px;
+  background: var(--olea-host-brand);
+}
+
+/* One leaf is "no practice recorded yet" (F2.11). It reads as the absence of
+   evidence rather than as a weak grade, so it takes the neutral line colour
+   and not a faded brand — a pale green still says "a little bit grown", which
+   is a claim the state does not make. */
+.olea-today-mastery-seg[data-leaves="1"] {
+  background: var(--olea-host-line);
+}
+
+.olea-today-mastery-seg[data-leaves="2"] {
+  opacity: 0.35;
+}
+
+.olea-today-mastery-seg[data-leaves="3"] {
+  opacity: 0.55;
+}
+
+.olea-today-mastery-seg[data-leaves="4"] {
+  opacity: 0.78;
+}
+
+.olea-today-mastery-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-mastery-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.olea-today-insights {
+  padding-top: 16px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-today-insights-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+  margin-bottom: 10px;
+}
+
+.olea-today-insight {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--olea-host-text);
+  margin-bottom: 10px;
+}
+
+.olea-today-insight-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.olea-today-insight-scope {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--olea-host-muted);
+}
+
+/* ============================================================
+   ---- Gap and coverage views (F4.3, F4.5, F4.9, F4.10; ol-2tyj) ----
+   ============================================================
+
+   `gap/view.ts`'s module doc says "the pane renders on host defaults
+   meanwhile" — this section is that later pass. `test/gap/styles.spec.ts`
+   asserts every class `view.ts` emits (including its three dynamic
+   suffixes: `olea-gap-row-<gapClass>`, `olea-gap-action-<affordance>`,
+   `olea-gap-scope-source-<readState>`) has a rule here, the same
+   drift guard `today/styles.spec.ts` runs for the Today panel.
+
+   Same theme posture as the Today panel, for the same reason: `revealGap
+   View` (`main.ts`) puts this in the sidebar, not a tab, so it carries no
+   `theme-dark` and forces no branch — no `ol-ro57` exposure, no
+   `olea-host-fallback` layer needed.
+
+   OWNED COLOUR: reuses the Today panel's two constants rather than
+   inventing a third and a fourth for the three gap classes. A mastery-gap
+   row (F4.3, "you know this badly") gets the same attention colour the
+   due count already carries — both mean "this wants her attention now".
+   A coverage-gap row (F4.5, "you have notes, no cards") gets the brand
+   colour — building the cards is normal forward progress, not alarm. A
+   material-gap row (F4.10) gets neither: nothing here is a state to feel
+   good or urgent about, it is a fact about what her material does not
+   have, so it stays on host-muted like ordinary text. Extending DP-1's
+   two-colour budget to a third surface is a Class B default, reversible
+   by a real design pass; not claiming the "complete inventory" audit
+   `ol-dp1` performed for the review view.
+*/
+
+.olea-gap-root {
+  --olea-host-bg: var(--background-primary, #ffffff);
+  --olea-host-text: var(--text-normal, #202020);
+  --olea-host-muted: var(--text-muted, #6b6b6b);
+  --olea-host-faint: var(--text-faint, #999999);
+  --olea-host-line: var(--background-modifier-border, #d8d8d8);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+
+  /* Owned by Olea — the same two constants the Today panel declares. */
+  --olea-host-attention: #e0a94e;
+  --olea-host-brand: #8a9a63;
+
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 20px;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+}
+
+.olea-gap-unavailable {
+  padding: 12px 0;
+}
+
+.olea-gap-unavailable-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--olea-host-text);
+  margin-bottom: 6px;
+}
+
+.olea-gap-unavailable-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-course {
+  padding: 14px 0;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-gap-course:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.olea-gap-course-name {
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--olea-host-text);
+  margin-bottom: 8px;
+}
+
+.olea-gap-abstain {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-framing {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+  margin-bottom: 6px;
+}
+
+.olea-gap-rows {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.olea-gap-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  column-gap: 8px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--olea-host-line);
+  border-left: 3px solid transparent;
+  padding-left: 8px;
+}
+
+.olea-gap-row:first-child {
+  border-top: none;
+}
+
+/* F4.3 — "you know this badly": the same attention colour the due count
+   carries elsewhere on this pane. */
+.olea-gap-row-mastery-gap {
+  border-left-color: var(--olea-host-attention);
+}
+
+/* F4.5 — "you have notes, no cards yet": ordinary forward progress. */
+.olea-gap-row-coverage-gap {
+  border-left-color: var(--olea-host-brand);
+}
+
+/* F4.10 — "your material does not have it": a fact, not a state to
+   colour as urgent or as progress. */
+.olea-gap-row-material-gap {
+  border-left-color: transparent;
+}
+
+.olea-gap-rank {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  /* --olea-host-muted, not -faint: ol-nrrm's floor (below) forbids
+     painting text with --olea-host-faint at all in this file. */
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-concept {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+  grid-column: 3;
+}
+
+.olea-gap-mastery {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--olea-host-muted);
+  grid-column: 2;
+}
+
+.olea-gap-line {
+  grid-column: 3;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--olea-host-muted);
+  margin-top: 2px;
+}
+
+.olea-gap-readiness {
+  grid-column: 3;
+  font-size: 11.5px;
+  line-height: 1.4;
+  /* --olea-host-muted, not -faint: same ol-nrrm floor as .olea-gap-rank above. */
+  color: var(--olea-host-muted);
+  margin-top: 2px;
+}
+
+.olea-gap-actions {
+  grid-column: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.olea-gap-action {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--olea-host-brand);
+  cursor: pointer;
+}
+
+/* F4.10, structurally rather than by a colour alone: `affordancesFor`
+   (`olea-core`) never emits `draft-cards` for a material-gap row, so this
+   rule exists for the three affordances that reach a coverage-gap or
+   mastery-gap row and never for the fourth. */
+.olea-gap-action-draft-cards {
+  color: var(--olea-host-attention);
+}
+
+.olea-gap-action-open-concept,
+.olea-gap-action-build-session,
+.olea-gap-action-find-source {
+  color: var(--olea-host-brand);
+}
+
+.olea-gap-coverage {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-gap-heading {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin: 10px 0 4px;
+}
+
+/* ol-cvsc: the scope statement. Deliberately no attention or brand colour
+   here — this is provenance, not a call to action, and must not compete
+   with the rows above it. */
+.olea-gap-scope {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-scope-line {
+  margin-bottom: 2px;
+}
+
+.olea-gap-scope-sources {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--olea-host-line);
+}
+
+.olea-gap-scope-source {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  /* --olea-host-muted, not -faint: same ol-nrrm floor as .olea-gap-rank above. */
+  color: var(--olea-host-muted);
+  padding: 1px 0;
+}
+
+/* The unremarkable state: a fully-read source, on the same muted colour
+   `.olea-gap-scope-source` already sets. A rule of its own rather than
+   relying on inheritance, so `test/gap/styles.spec.ts`'s coverage check
+   (every state `view.ts` can emit has a rule) has one to find. */
+.olea-gap-scope-source-read {
+  color: var(--olea-host-muted);
+}
+
+/* The three non-`'read'` states are the ones `ol-cvsc` exists to keep
+   visible rather than let read silently. */
+.olea-gap-scope-source-read-yielded-nothing,
+.olea-gap-scope-source-unreadable,
+.olea-gap-scope-source-not-attempted {
+  color: var(--olea-host-muted);
+}
+
+/* ============================================================
+   ---- Session builder (F4.6, F4.7, F4.8, F4.9; ol-p5t06b) ----
+   ============================================================
+
+   `test/session-builder/styles.spec.ts` asserts every class
+   `session-builder/view.ts` emits (including its one dynamic suffix,
+   `olea-session-item-<formatMatch>`) has a rule here — the same drift
+   guard `today/styles.spec.ts` and `test/gap/styles.spec.ts` run for
+   their own panes.
+
+   Same theme posture as the gap view and the Today panel, for the same
+   reason: `revealSessionBuilderView` (`main.ts`) puts this in the
+   sidebar, not a tab, so it carries no `theme-dark` and forces no
+   branch.
+
+   OWNED COLOUR: the same two constants the Today panel and the gap view
+   declare, and no third. The brand colour marks the active budget and the
+   items that match the format of her next assessment (F4.8) — "this is
+   the shape your quiz will use" is forward progress, not alarm. The
+   attention colour is deliberately NOT used on this surface at all: a
+   session builder that flags anything amber is one step from telling her
+   she is behind, which is the principle-12 line `copy.ts` holds in prose
+   and this holds in pixels.
+*/
+
+.olea-session-root {
+  --olea-host-bg: var(--background-primary, #ffffff);
+  --olea-host-text: var(--text-normal, #202020);
+  --olea-host-muted: var(--text-muted, #6b6b6b);
+  --olea-host-faint: var(--text-faint, #999999);
+  --olea-host-line: var(--background-modifier-border, #d8d8d8);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+
+  /* Owned by Olea — the same brand constant the Today panel declares. */
+  --olea-host-brand: #8a9a63;
+
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 20px;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+}
+
+.olea-session-budgets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-session-budget {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 3px;
+  /* --olea-host-muted, not -faint: the same ol-nrrm contrast floor the gap
+     view's own small type holds. */
+  color: var(--olea-host-muted);
+  cursor: pointer;
+}
+
+.olea-session-budget-active {
+  color: var(--olea-host-brand);
+  border-color: var(--olea-host-brand);
+}
+
+.olea-session-unavailable {
+  padding: 12px 0;
+}
+
+.olea-session-unavailable-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--olea-host-text);
+  margin-bottom: 6px;
+}
+
+.olea-session-unavailable-body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+/* Every sentence on this screen, from `copy.ts` and nowhere else. Muted
+   throughout: the framing and the left-out lines are provenance, and must
+   not compete with the session itself. */
+.olea-session-copy {
+  padding: 12px 0 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+.olea-session-line {
+  margin-bottom: 4px;
+}
+
+.olea-session-items {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-session-item {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-session-item:first-child {
+  border-top: none;
+}
+
+.olea-session-position {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  color: var(--olea-host-muted);
+  grid-column: 1;
+}
+
+.olea-session-concept {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+  grid-column: 2;
+}
+
+.olea-session-course {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--olea-host-muted);
+  grid-column: 3;
+}
+
+.olea-session-item-line {
+  grid-column: 2 / span 2;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+  margin-top: 2px;
+}
+
+.olea-session-note {
+  grid-column: 2 / span 2;
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-muted);
+  margin-top: 2px;
+}
+
+/* F4.8, made visible: an item chosen because it matches the format of her
+   next assessment reads as such. The other two states are the ordinary
+   ones and carry no colour — "we have no format preference" must not look
+   like a downgrade of anything. */
+.olea-session-item-preferred-format .olea-session-course {
+  color: var(--olea-host-brand);
+}
+
+.olea-session-item-other-format,
+.olea-session-item-no-preference {
+  color: var(--olea-host-text);
+}
+
+/* ============================================================
+   ---- Brand: the sprig (F2.3, F2.11; ol-t1hc) ----
+   ============================================================
+
+   The one progress indicator Olea has (docs/Olea.dc.html, service repo, calls it "the only
+   progress bar in the whole thing"). `packages/plugin/src/sprig/render-sprig.ts` builds the SVG
+   DOM — a stem and five fixed leaf positions, some filled; this section only paints it. Used
+   inline inside `.olea-today-mastery-count` (Today panel, above) and `.olea-gap-mastery` (gap
+   view, above) — appended here rather than in either of those sections because neither view's own
+   drift-guard test (`test/today/styles.spec.ts`, `test/gap/styles.spec.ts`) expects a rule for a
+   class its own `cls:`/`addClass` literals never emit, and these classes are only ever set from
+   inside `render-sprig.ts`, never spelled out as a string in either view file.
+
+   OWNED COLOUR: none of its own — deliberately. The design system's own geometry note
+   (`docs/design/components/brand/SPRIG-GEOMETRY.md`) names two dedicated tokens for the filled
+   and empty leaf, as "already present" in this file; they are not — grepping this file before
+   this section existed found neither. Rather than invent them as a third owned colour on top of
+   this file's existing DP-1 budget (the honey and olive constants declared per-root above), the
+   filled leaf and stem reuse the same olive brand variable already declared by both
+   `.olea-today-root` and `.olea-gap-root`, and the empty leaf's outline reuses the same neutral,
+   host-adaptive line colour `.olea-today-mastery-seg[data-leaves="1"]` already uses for "no
+   evidence yet". Both values resolve correctly wherever a sprig is mounted purely through CSS
+   custom-property inheritance from whichever root contains it — the rules below never need their
+   own copy of either variable. (Deliberately not named by their literal token here: this section
+   lands inside `test/session-builder/styles.spec.ts`'s unbounded read of everything after its own
+   banner, which asserts that file's slice never contains the honey token's name at all.)
+
+   NO MOTION HERE. The growth transition (a new leaf drawing itself once, stem-side end first, on
+   evidence change) is deferred — see `render-sprig.ts`'s own module doc and `ol-t1hc`'s closing
+   report for why. Nothing below animates, so there is nothing to gate behind
+   `prefers-reduced-motion` yet.
+*/
+
+.olea-sprig {
+  display: block;
+  flex: none;
+}
+
+.olea-sprig-stem {
+  fill: none;
+  stroke: var(--olea-host-brand);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.olea-sprig-leaf-filled {
+  fill: var(--olea-host-brand);
+  stroke: none;
+}
+
+.olea-sprig-leaf-empty {
+  fill: none;
+  stroke: var(--olea-host-line);
+  stroke-width: 1;
+}

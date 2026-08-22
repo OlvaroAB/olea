@@ -1,0 +1,36 @@
+# dependencies
+node_modules
+
+# build output
+dist
+main.js
+*.js.map
+
+# workbench: throwaway e2e build artifact (WB_DIST) and Playwright's own
+# run output — never the deployable dist/, see playwright.config.ts
+packages/workbench/dist-e2e
+packages/workbench/playwright-report
+packages/workbench/test-results
+
+# workbench: single-file bundle assembled from dist/ by bundle-single-file.mjs
+# for a private review link — a derived artifact, not the deployable dist/
+packages/workbench/dist-single
+
+# obsidian plugin dev artifact
+data.json
+
+# logs
+*.log
+
+# env / secrets
+.env
+.env.*
+.dev.vars
+
+# OS
+.DS_Store
+
+# editors
+.vscode
+*.iml
+.idea

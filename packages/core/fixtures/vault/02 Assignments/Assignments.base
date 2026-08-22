@@ -1,0 +1,38 @@
+filters:
+  and:
+    - file.inFolder("02 Assignments")
+    - file.ext == "md"
+
+formulas:
+  daysLeft: "(date(due) - today()) / 86400000"
+
+properties:
+  class:
+    displayName: Class
+  type:
+    displayName: Type
+  weight:
+    displayName: Weight
+  due:
+    displayName: Due
+  status:
+    displayName: Status
+  formula.daysLeft:
+    displayName: Days left
+
+views:
+  - type: table
+    name: "Assignments"
+    groupBy:
+      property: note.class
+      direction: ASC
+    order:
+      - note.class
+      - file.name
+      - note.type
+      - note.weight
+      - note.due
+      - formula.daysLeft
+      - note.status
+    summaries:
+      note.weight: Sum

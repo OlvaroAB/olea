@@ -1,0 +1,21 @@
+{
+  "name": "olea-contracts",
+  "version": "0.9.0",
+  "private": true,
+  "description": "olea-contracts — zod validation for everything crossing the wire, plus the frozen JSON examples that pin it. No Obsidian import, ever (INV-1).",
+  "type": "module",
+  "//main": "Source, not dist, deliberately — same rule as `types` below. This package is private and never published; the only shipped artifact is the esbuild plugin bundle, which bundles TS source directly. Pointing `main` at dist made every workspace consumer's vitest run depend on olea-contracts having been built first, so `pnpm -r test` failed on a clean clone (CI runs test before build). dist/ remains a build output; nothing in the workspace resolves through it.",
+  "main": "./src/index.ts",
+  "//types": "Points at source, not dist, deliberately — same rule as olea-core. Consumers in this workspace must typecheck without olea-contracts having been built first: CI runs typecheck before build on a fresh clone, and a warm local dist/ hides the breakage. Source types are also never stale.",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

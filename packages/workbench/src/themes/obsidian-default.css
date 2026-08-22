@@ -1,0 +1,132 @@
+/* Obsidian's DEFAULT theme, as a variable set.
+   ------------------------------------------------------------------------
+   PROVENANCE, because a colour with no source is an invention:
+
+   • The `--color-base-*` and accent values below are copied from Obsidian's own
+     developer documentation, "Reference / CSS variables / Foundations / Colors",
+     which publishes a default-value column for light and dark mode:
+     https://docs.obsidian.md/Reference/CSS+variables/Foundations/Colors
+     (source markdown: obsidianmd/obsidian-developer-docs,
+     en/Reference/CSS variables/Foundations/Colors.md — fetched 2026-08-10.)
+
+   • The SEMANTIC MAPPING (which base step each `--background-*`/`--text-*` role
+     resolves to) is NOT published. Obsidian derives it inside app.css, which is
+     not distributed. Everything under "semantic roles" is therefore this
+     workbench's reconstruction of that mapping, checked for plausibility against
+     how community themes redefine the same roles — it is a close approximation
+     of Obsidian's default appearance, not a byte-for-byte copy of it, and it is
+     labelled that way here rather than in a commit message nobody re-reads.
+
+   • The font stacks are likewise approximations of Obsidian's defaults.
+
+   Scoping is Obsidian's own convention: a theme declares its values under
+   `.theme-dark` / `.theme-light`, and Obsidian puts one of those classes on
+   <body>. `ReviewView` adds `theme-dark` to its OWN root (F2.4, "dark by default
+   regardless of her theme"), which is why selecting the light set below leaves
+   the review surface dark — that is the feature, not a bug in the switcher.
+
+   ------------------------------------------------------------------------
+   THIS FILE IS LOADED AS A BASELINE, NOT AS AN ALTERNATIVE (`ol-itiu`).
+
+   Obsidian's app.css is always loaded and cannot be disabled; a community theme
+   layers on top of it and overrides selectively. So the switcher loads this file
+   UNDERNEATH the selected community theme rather than instead of it, and the
+   `*-no-baseline` sets — which do strip it — exist to exercise Olea's own
+   fallbacks on purpose rather than by accident. `src/themes/index.ts` carries the
+   argument.
+
+   ONE PIECE OF THE RECONSTRUCTION IS LOAD-BEARING FOR THAT, AND IS A GUESS.
+
+   The semantic roles below are declared under BARE `.theme-dark` / `.theme-light`
+   selectors. Real app.css may instead alias them in a `body` block from
+   per-branch `--color-base-*` values. Which of the two it does is not published
+   and has not been checked against an installed copy of Obsidian, so it is
+   recorded here as an open question rather than smoothed over.
+
+   It is not academic: F2.4 nests a `theme-dark` review root inside a
+   `theme-light` <body>.
+     • Bare-`.theme-dark` scoping (what this file does): the root matches this
+       block directly, so it takes DARK values for every role the community theme
+       on top is silent about.
+     • `body`-alias scoping: nothing here would match the root at all, so those
+       roles would fall through to `styles.css`'s own `@layer olea-host-fallback`
+       floor instead.
+   Both are dark, which is why `ol-ro57`'s fix holds either way. The exact colours
+   differ, so a screenshot taken from this file is faithful only under the first
+   model — say so wherever one is cited.  */
+
+.theme-light {
+  color-scheme: light;
+
+  /* base palette — documented defaults */
+  --color-base-00: #ffffff;
+  --color-base-05: #fcfcfc;
+  --color-base-10: #fafafa;
+  --color-base-20: #f6f6f6;
+  --color-base-25: #efefef;
+  --color-base-30: #e4e4e4;
+  --color-base-35: #dadada;
+  --color-base-40: #bdbdbd;
+  --color-base-50: #ababab;
+  --color-base-60: #707070;
+  --color-base-70: #5c5c5c;
+  --color-base-100: #222222;
+  --color-accent: hsl(258, 88%, 66%);
+
+  /* semantic roles — reconstructed mapping, see the header */
+  --background-primary: var(--color-base-00);
+  --background-primary-alt: var(--color-base-10);
+  --background-secondary: var(--color-base-20);
+  --background-secondary-alt: var(--color-base-25);
+  --background-modifier-hover: rgba(0, 0, 0, 0.075);
+  --background-modifier-border: var(--color-base-30);
+  --background-modifier-border-hover: var(--color-base-35);
+  --background-modifier-border-focus: var(--color-base-40);
+  --text-normal: var(--color-base-100);
+  --text-muted: var(--color-base-70);
+  --text-faint: var(--color-base-50);
+  --interactive-accent: var(--color-accent);
+
+  --font-interface:
+    -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-text: var(--font-interface);
+  --font-monospace: "Fira Code", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.theme-dark {
+  color-scheme: dark;
+
+  --color-base-00: #1c1c1c;
+  --color-base-05: #212121;
+  --color-base-10: #232323;
+  --color-base-20: #282828;
+  --color-base-25: #2e2e2e;
+  --color-base-30: #333333;
+  --color-base-35: #3f3f3f;
+  --color-base-40: #555555;
+  --color-base-50: #666666;
+  --color-base-60: #999999;
+  --color-base-70: #b3b3b3;
+  --color-base-100: #dadada;
+  --color-accent: hsl(258, 88%, 66%);
+
+  --background-primary: var(--color-base-00);
+  --background-primary-alt: var(--color-base-10);
+  --background-secondary: var(--color-base-20);
+  --background-secondary-alt: var(--color-base-25);
+  --background-modifier-hover: rgba(255, 255, 255, 0.075);
+  --background-modifier-border: var(--color-base-30);
+  --background-modifier-border-hover: var(--color-base-35);
+  --background-modifier-border-focus: var(--color-base-40);
+  --text-normal: var(--color-base-100);
+  --text-muted: var(--color-base-70);
+  --text-faint: var(--color-base-50);
+  --interactive-accent: var(--color-accent);
+
+  --font-interface:
+    -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-text: var(--font-interface);
+  --font-monospace: "Fira Code", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+}

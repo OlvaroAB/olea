@@ -1,0 +1,109 @@
+name: Release
+
+# plan §2.6 + P0-T05 define the release path: a `0.9.x[-alpha.N]` tag cuts a
+# GitHub Release carrying manifest.json, main.js and styles.css — the artifact
+# set BRAT reads straight off this repo, so cutting a tag is what ships to the
+# alpha user. `0.9.*` matches
+# `0.9.0-alpha.1` (and any other 0.9.x / 0.9.x-alpha.N tag) but not a future
+# `0.10.x` — this workflow is scoped to the v0.9 build.
+#
+# THIS WORKFLOW HAS NEVER FIRED. The only published release, 0.9.0-alpha.1
+# (2026-08-09), was produced before this file existed and its main.js asset is
+# 799 BYTES — the original scaffolding build, not the plugin. A release that
+# installs cleanly and does nothing is worse than no release, so the FIRST
+# THING to check after this workflow runs is the byte size of the published
+# main.js. A real bundle is ~443 KB. Verified 2026-08-15 in a clean clone:
+# `pnpm install --frozen-lockfile && pnpm run build` produces main.js at
+# 443119 bytes, and `packages/plugin/test/bundle-install.spec.ts` loads that
+# artifact and confirms it registers both views, all commands and the settings
+# tab. So the build path below is sound; it had simply never been exercised.
+#
+# It stays armed while the account is out of Actions credits (2026-08-15 →
+# 2026-09-01) for the same reason ci.yml does: `OlvaroAB/olea` is PUBLIC and
+# public repos are not billed on standard runners. See ci.yml's header and
+# `ol-ciquota`.
+on:
+  push:
+    tags:
+      - "0.9.*"
+
+permissions:
+  contents: write # required to create a GitHub Release
+
+jobs:
+  release:
+    name: Build plugin & publish GitHub Release (BRAT artifact set)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable corepack (pins pnpm via packageManager)
+        run: corepack enable
+
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # main.js is gitignored (build artifact only); this produces it fresh.
+      - name: Build
+        run: pnpm run build
+
+      # Modern BRAT (>=1.1.0) ignores manifest-beta.json entirely: it reads
+      # manifest.json / main.js / styles.css straight off the GitHub
+      # Release's assets and normalises semver prerelease tags like
+      # `0.9.0-alpha.1` via the `semver` library. If the manifest attached to
+      # the Release still says the pre-tag version, BRAT installs a manifest
+      # that disagrees with the release it just fetched. So the tag's
+      # version must be stamped into manifest.json before it's attached —
+      # this reuses packages/plugin/version-bump.mjs (hoisted from the
+      # obsidian-sample-plugin convention) exactly as it's meant to be
+      # invoked: `npm_package_version` in the environment, so no hand-rolled
+      # stamping logic here.
+      - name: Stamp release version into manifest.json
+        working-directory: packages/plugin
+        env:
+          npm_package_version: ${{ github.ref_name }}
+        run: node version-bump.mjs
+
+      - name: Verify manifest.json version matches the tag
+        working-directory: packages/plugin
+        run: |
+          set -euo pipefail
+          MANIFEST_VERSION="$(node -p "require('./manifest.json').version")"
+          if [ "$MANIFEST_VERSION" != "${{ github.ref_name }}" ]; then
+            echo "::error::manifest.json version ($MANIFEST_VERSION) does not match tag (${{ github.ref_name }}) after stamping — refusing to release a disagreeing manifest."
+            exit 1
+          fi
+          echo "manifest.json version matches tag: $MANIFEST_VERSION"
+
+      # Uses the `gh` CLI (preinstalled on GitHub-hosted runners) with the
+      # workflow's own GITHUB_TOKEN rather than a third-party release
+      # action — one fewer external trust dependency in the release path
+      # (in the spirit of §2.8's "zero publishing infrastructure" and
+      # D-011's caution about what gets trusted to run). Prerelease
+      # whenever the tag has a hyphen (e.g. 0.9.0-alpha.1); a plain 0.9.0
+      # tag ships as a full release. Exactly three files attached — no zip,
+      # nothing else.
+      - name: Create GitHub Release (exactly manifest.json, main.js, styles.css — no zip)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          PRERELEASE_FLAGS=()
+          case "$TAG" in
+            *-*) PRERELEASE_FLAGS=(--prerelease) ;;
+          esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Olea $TAG — BRAT artifact set (manifest.json, main.js, styles.css)." \
+            "${PRERELEASE_FLAGS[@]}" \
+            packages/plugin/manifest.json \
+            packages/plugin/main.js \
+            packages/plugin/styles.css

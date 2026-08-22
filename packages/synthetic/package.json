@@ -1,0 +1,21 @@
+{
+  "name": "olea-synthetic",
+  "version": "0.9.0",
+  "private": true,
+  "type": "module",
+  "description": "olea-synthetic — DEV TOOLING (SYN-1 / ol-6vyi, N-015). A seeded, deterministic generator of contracts-valid D7.1 review-log streams from behavioural personas with known ground truth. Every record carries a synthetic-provenance stamp and no stream may be written to a real vault log path. Not a product surface, and never evidence about the alpha user.",
+  "//main": "Source, not dist, deliberately — matches `types` below and the same field in olea-core/olea-contracts. Dev tooling, private, never published; nothing resolves through dist/.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "olea-contracts": "workspace:*",
+    "olea-core": "workspace:*"
+  }
+}

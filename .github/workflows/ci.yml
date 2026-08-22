@@ -1,0 +1,197 @@
+name: CI
+
+# plan §2.6 sets this repo's CI job list: lint, typecheck, the INV-1 check,
+# unit tests and the plugin build, on both PR and push. Running it on
+# unrestricted push (not just `main`) is deliberate: it also
+# covers tag pushes, so a release tag gets the exact same verification as
+# every other push before release.yml ever runs.
+#
+# THIS WORKFLOW STAYS ON WHILE THE ACCOUNT IS OUT OF ACTIONS CREDITS
+# (2026-08-15 → 2026-09-01), and that is deliberate rather than an oversight.
+# `OlvaroAB/olea` is a PUBLIC repository, and GitHub does not bill public repos
+# on standard runners — only the two private repos (`olea-service`,
+# `lifebylove`) draw from the monthly minutes. `ol-ciquota` records the same
+# finding. Verified 2026-08-15: repo Actions permissions report enabled=true
+# here and enabled=false on olea-service. Switching this off would save nothing
+# and would remove the only automated verification of the repo the alpha
+# release is cut from.
+#
+# HISTORY WORTH KEEPING: this workflow was RED on all 15 runs from 2026-08-10
+# to 2026-08-14 — `packages/core` typecheck could not resolve `olea-contracts`,
+# because contracts/core/synthetic advertised `main`/`types` into `dist/`,
+# which does not exist on a clean clone, and typecheck ran before build. Fixed
+# by pointing those three package.json entry fields at `./src/index.ts`. The
+# release path was never affected: `pnpm -r build` is topologically ordered.
+on:
+  pull_request:
+  push:
+
+jobs:
+  ci:
+    name: Lint, typecheck, invariants, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable corepack (pins pnpm via packageManager)
+        run: corepack enable
+
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (Biome)
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # INV-1 (plan §0.5, A2.1/A2.2): no `obsidian` import outside
+      # packages/plugin. Biome's noRestrictedImports override is the first
+      # layer (see biome.json); this is the second, independent layer — a
+      # deliberately separate, clearly-named step so the invariant tripwire
+      # never gets buried inside a generic "lint" line in the run log.
+      - name: "INV-1 — no obsidian import outside packages/plugin"
+        run: node scripts/check-inv1.mjs
+
+      # INV-3 (plan §0.5): the public repo greps for known real-content
+      # markers as a tripwire. The marker list is never committed (that
+      # would leak the real course codes it exists to catch); it comes from
+      # the INV3_MARKERS repo secret, populated by David. Until then this
+      # step warns loudly rather than silently "passing" with nothing to
+      # check — see scripts/check-inv3.mjs for the exact contract.
+      - name: "INV-3 — real-content marker tripwire"
+        env:
+          INV3_MARKERS: ${{ secrets.INV3_MARKERS }}
+        run: node scripts/check-inv3.mjs
+
+      # Wiring register (ol-1ek8, olea-service beads database): every injected port must trace
+      # to a real production caller by the phase its owning task claims to have delivered it,
+      # unless the register marks a cited, deliberate deferral — see
+      # scripts/check-wiring-register.mjs's own docblock for the full contract. The self-test
+      # runs FIRST and must pass before the gate step is trusted at all; a broken checker
+      # reporting green is worse than no checker (N-013). This repo's own CI has no sibling
+      # ../olea-service checkout, so the gate step falls back to the hardcoded, dated snapshot
+      # documented in that script's header rather than the live `bd` query it prefers locally —
+      # by design, not a gap.
+      #
+      # The gate step is a RATCHET, not a plain pass/fail: KNOWN_FINDINGS in that script names
+      # every currently-accepted, bead-tracked finding (5 today), and it prints every one of them
+      # on every run — green here does not mean silent. It fails the moment the findings this run
+      # computes differ from KNOWN_FINDINGS in EITHER direction: a new, unrecorded finding, or a
+      # known one that has quietly stopped reproducing (a fix nobody removed the exemption for).
+      - name: "Wiring register — self-test (must pass before the gate is trusted)"
+        run: pnpm run wiring-register:test
+
+      - name: "Wiring register — every port traced to a caller, a cited deferral, or KNOWN_FINDINGS"
+        run: pnpm run wiring-register
+
+      # BUILD BEFORE TEST — deliberate, and the order is load-bearing.
+      # `packages/plugin/test/bundle-install.spec.ts` loads the ACTUAL built main.js
+      # and asserts it is valid CommonJS default-exporting a Plugin subclass that
+      # registers both views, all commands and the settings tab. It is the only check
+      # that distinguishes a real bundle from scaffolding — and it used to be
+      # `describe.skipIf(!bundleBuilt)`, so with test running first main.js did not
+      # exist yet and it SILENTLY SKIPPED, reporting green on every run this workflow
+      # ever made. That is the N-013 defect class exactly: a check that cannot fail
+      # reports green forever.
+      #
+      # Run 11 removed the `skipIf` and added `bundle-freshness.spec.ts`, so the
+      # ordering is now ENFORCED rather than merely observed: put `test` back before
+      # `build` and the plugin suite goes red naming the remedy, instead of skipping.
+      # That file also fails when main.js exists but is OLDER than any source bundled
+      # into it, which the ordering alone never covered — a cached or restored dist
+      # would otherwise let bundle-install.spec.ts certify a superseded build.
+      # The plugin suite must report all-passed with nothing skipped; a line reading
+      # "| 1 skipped" means the bundle check has gone vacuous again.
+      - name: Build (plugin bundle via esbuild; core + contracts)
+        run: pnpm run build
+
+      - name: Unit tests
+        run: pnpm run test
+
+  workbench-e2e:
+    # WB-2 (`ol-z6x2`): `@auto-web` scenarios (features/*.md) and per-state ×
+    # per-variable-set visual regression, driven with Playwright against a
+    # built `packages/workbench`. Chromium only, deliberately: the alpha
+    # user's actual runtime is Obsidian, which is Electron, which is
+    # Chromium — see `packages/workbench/playwright.config.ts`'s header for
+    # the full argument. Kept as its OWN job (not a step in `ci` above)
+    # because plan §2.6's job list for `ci` is lint/typecheck/INV-1/test/build
+    # and this is none of those; it runs in parallel with `ci` rather than
+    # inside it.
+    #
+    # NEVER MAKE THIS CONDITIONAL ON THE BROWSER BEING PRESENT. A step that
+    # skips when Chromium is missing is the N-013 shape `bundle-install.spec.ts`
+    # already hit once in the `ci` job above — a check that cannot fail
+    # reports green forever. If the Playwright install step fails, this job
+    # fails, loudly, rather than quietly reporting nothing to check.
+    name: Workbench — @auto-web + visual regression (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable corepack (pins pnpm via packageManager)
+        run: corepack enable
+
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Caches ~/.cache/ms-playwright by lockfile hash. On a cache hit this
+      # skips the ~300MB Chromium + headless-shell download AND the
+      # --with-deps apt-get pass (see the next step); on a miss it costs
+      # both, once, until the lockfile's Playwright version changes.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright's Chromium
+        working-directory: packages/workbench
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm exec playwright install chromium
+          else
+            pnpm exec playwright install --with-deps chromium
+          fi
+
+      # BUILD BEFORE TEST, same discipline as the `ci` job above — and
+      # VERIFIED, not merely built: `e2e:build` writes a throwaway production
+      # artifact to `./dist-e2e` (via `WB_DIST`), never the deployable
+      # `dist/`, and `e2e:verify` refuses to proceed unless that artifact's
+      # own build stamp says complete + production (exit 0). See
+      # `playwright.config.ts`'s header and the package README's "build
+      # stamp" section for why this is a hard-earned discipline, not
+      # boilerplate.
+      - name: Build the workbench's throwaway e2e artifact and verify it
+        working-directory: packages/workbench
+        run: |
+          pnpm run e2e:build
+          pnpm run e2e:verify
+
+      - name: "@auto-web scenarios + visual regression"
+        working-directory: packages/workbench
+        run: pnpm exec playwright test
+
+      - name: Upload Playwright report (on failure, for the trace + screenshot diffs)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-playwright-report
+          path: packages/workbench/playwright-report
+          retention-days: 7

@@ -1,0 +1,227 @@
+/**
+ * `GapView` — the gap and coverage panes (F4.3, F4.5, F4.9, F4.10; P5-T06a),
+ * with `ol-cvsc`'s scope statement rendered rather than assumed.
+ *
+ * **Thin by design, and on this surface that is a safety property rather than
+ * a style preference.** Everything this screen *decides* is in `olea-core`'s
+ * `gap/` — which rows exist, which class each is, which affordances each may
+ * carry, and whether an exhaustiveness claim is available at all. Everything it
+ * *says* is in `./copy.ts`. What is left here is DOM. `ol-09kf` is the reason
+ * the split is drawn this hard: product copy assembled in a DOM builder is copy
+ * nothing can assert on, and every sentence on this screen is a claim about
+ * what the pipeline read.
+ *
+ * So there is no test file for this module and none is expected — `obsidian`
+ * has no runtime outside a real host (its `package.json` `main` is empty, so it
+ * cannot even be imported under Vitest), which is exactly why the logic worth
+ * testing is deliberately somewhere it can run. `test/gap/copy.spec.ts` is
+ * where the honesty properties are asserted.
+ *
+ * **The one rule this file must not break.** It renders `model.scope` on every
+ * path — gaps or no gaps, complete or not — and it renders
+ * `coverageClosingLine`'s result only when that function returns one. It never
+ * writes an exhaustiveness sentence of its own. A bare "no gaps found" is
+ * unreachable through `coverageScreenCopy`, and this file's job is to not route
+ * around it.
+ *
+ * **Styles.** `packages/plugin/styles.css` is not this lane's file, so this
+ * view's section is not added there; the classes below are emitted for a later
+ * styling pass and the pane renders on host defaults meanwhile. Named in the
+ * task report rather than left for someone to discover.
+ */
+
+import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import type { GapCourseView, GapRow, GapViewModel } from 'olea-core';
+import { renderSprig } from '../sprig/render-sprig.js';
+import {
+  abstainedCourseSentence,
+  affordanceLabel,
+  COVERAGE_GAP_HEADING,
+  coverageScreenCopy,
+  GAP_UNAVAILABLE_BODY,
+  GAP_UNAVAILABLE_TITLE,
+  GAP_VIEW_TITLE,
+  gapRowLine,
+  MATERIAL_GAP_HEADING,
+  rankedCourseFraming,
+  readinessNote,
+  scopeSourceLine,
+} from './copy.js';
+
+export const VIEW_TYPE_OLEA_GAP = 'olea-gap';
+
+/**
+ * What the view was handed.
+ *
+ * `'unavailable'` is a state and not a `null` model, for the reason
+ * `today/panel.ts` gives about its own due count: "we could not read your
+ * vault" and "your materials cover everything" are different sentences, and a
+ * nullable model invites a caller to render the second when it means the first.
+ */
+export type GapViewState =
+  | { readonly kind: 'model'; readonly model: GapViewModel }
+  | { readonly kind: 'unavailable' };
+
+export interface GapViewDeps {
+  /** Loads the view state. Async because building it reads the vault and runs extraction. */
+  readonly load: () => Promise<GapViewState>;
+  /**
+   * What the `'build-session'` affordance does (`ol-p5t06b`, F4.6).
+   *
+   * **Optional, and the optionality is the point.** `'build-session'` has been
+   * a `GapAffordance` value and a copy string since P5-T06a with nothing behind
+   * it — an inert label, which is the wiring defect the reachability rule
+   * exists for. A host that supplies this gets a live action; one that does not
+   * (the workbench mounts this view with `load` alone) renders the label
+   * exactly as before rather than a dead button that looks live.
+   */
+  readonly buildSession?: (row: GapRow) => void;
+}
+
+export class GapView extends ItemView {
+  private readonly deps: GapViewDeps;
+
+  constructor(leaf: WorkspaceLeaf, deps: GapViewDeps) {
+    super(leaf);
+    this.deps = deps;
+  }
+
+  override getViewType(): string {
+    return VIEW_TYPE_OLEA_GAP;
+  }
+
+  override getDisplayText(): string {
+    return GAP_VIEW_TITLE;
+  }
+
+  override getIcon(): string {
+    return 'list-ordered';
+  }
+
+  override async onOpen(): Promise<void> {
+    this.contentEl.addClass('olea-gap-root');
+    await this.refresh();
+  }
+
+  override async onClose(): Promise<void> {
+    this.contentEl.empty();
+  }
+
+  /** Re-reads and redraws. Public so a host can refresh the pane after her material changes. */
+  async refresh(): Promise<void> {
+    this.render(await this.deps.load());
+  }
+
+  private render(state: GapViewState): void {
+    const root = this.contentEl;
+    root.empty();
+
+    if (state.kind === 'unavailable') {
+      const box = root.createDiv({ cls: 'olea-gap-unavailable' });
+      box.createDiv({ cls: 'olea-gap-unavailable-title', text: GAP_UNAVAILABLE_TITLE });
+      box.createDiv({ cls: 'olea-gap-unavailable-body', text: GAP_UNAVAILABLE_BODY });
+      return;
+    }
+
+    const { model } = state;
+    for (const course of model.courses) this.renderCourse(root, course);
+    this.renderCoverage(root, model);
+  }
+
+  private renderCourse(parent: HTMLElement, course: GapCourseView): void {
+    const section = parent.createDiv({ cls: 'olea-gap-course' });
+    section.createDiv({ cls: 'olea-gap-course-name', text: course.course });
+
+    if (course.status === 'abstained') {
+      // No ranking, so no ranking framing — the abstention states its own
+      // scope in its own sentence instead.
+      section.createDiv({ cls: 'olea-gap-abstain', text: abstainedCourseSentence(course) });
+      return;
+    }
+
+    // F4.9, structurally: the framing (including the full-syllabus advice) is
+    // produced from the ranked state, so a ranking cannot be drawn without it.
+    for (const line of rankedCourseFraming(course.rows)) {
+      section.createDiv({ cls: 'olea-gap-framing', text: line });
+    }
+
+    const list = section.createDiv({ cls: 'olea-gap-rows' });
+    for (const row of course.rows) this.renderRow(list, row);
+  }
+
+  private renderRow(parent: HTMLElement, row: GapRow): void {
+    const el = parent.createDiv({ cls: `olea-gap-row olea-gap-row-${row.gapClass}` });
+    el.createSpan({ cls: 'olea-gap-rank', text: String(row.rank) });
+    el.createSpan({ cls: 'olea-gap-concept', text: row.conceptName });
+    // The mastery word mastery computed, unchanged by the readiness weighting.
+    const masteryEl = el.createSpan({ cls: 'olea-gap-mastery' });
+    if (row.masteryState === 'unknown') {
+      // The oracle's own escape hatch (`OracleMasteryState = MasteryState | 'unknown'`) — there
+      // is no `MASTERY_DISPLAY` entry for it, so no sprig, same as before this task: the word
+      // alone.
+      masteryEl.setText(row.masteryState);
+    } else {
+      masteryEl.appendChild(renderSprig({ state: row.masteryState, size: 12 }));
+      masteryEl.createSpan({ text: row.masteryState });
+    }
+    el.createDiv({ cls: 'olea-gap-line', text: gapRowLine(row) });
+
+    const note = readinessNote(row);
+    if (note !== null) el.createDiv({ cls: 'olea-gap-readiness', text: note });
+
+    const actions = el.createDiv({ cls: 'olea-gap-actions' });
+    // The affordance list comes from core, which is where F4.10's
+    // no-draft-on-a-material-gap rule is enforced. This loop must never add to
+    // it: a button written here is a button no test can see.
+    for (const affordance of row.affordances) {
+      const action = actions.createSpan({
+        cls: `olea-gap-action olea-gap-action-${affordance}`,
+        text: affordanceLabel(affordance),
+      });
+      // `ol-p5t06b`: the one affordance that now does something. The others
+      // stay labels until their own beads wire them — a click handler that
+      // opens nothing is worse than a label that never claimed to.
+      const buildSession = this.deps.buildSession;
+      if (affordance === 'build-session' && buildSession !== undefined) {
+        action.addEventListener('click', () => {
+          buildSession(row);
+        });
+      }
+    }
+  }
+
+  private renderCoverage(parent: HTMLElement, model: GapViewModel): void {
+    const rows = model.courses.flatMap((c) => (c.status === 'ranked' ? c.rows : []));
+    const coverage = rows.filter((r) => r.gapClass === 'coverage-gap');
+    const material = rows.filter((r) => r.gapClass === 'material-gap');
+
+    const section = parent.createDiv({ cls: 'olea-gap-coverage' });
+    if (coverage.length > 0) {
+      section.createDiv({ cls: 'olea-gap-heading', text: COVERAGE_GAP_HEADING });
+    }
+    if (material.length > 0) {
+      section.createDiv({ cls: 'olea-gap-heading', text: MATERIAL_GAP_HEADING });
+    }
+
+    // The scope, always — this is the whole of ol-cvsc at the render layer, and
+    // the closing line appears only if `coverageScreenCopy` produced one.
+    const scopeBox = section.createDiv({ cls: 'olea-gap-scope' });
+    for (const line of coverageScreenCopy({
+      scope: model.scope,
+      gapRowCount: coverage.length + material.length,
+    })) {
+      scopeBox.createDiv({ cls: 'olea-gap-scope-line', text: line });
+    }
+
+    // Every source, by name and by what happened to it: the denominator, made
+    // visible. A source that yielded nothing gets a visible row of its own —
+    // ol-cvsc's required surface state, verbatim.
+    const list = scopeBox.createDiv({ cls: 'olea-gap-scope-sources' });
+    for (const source of model.scope.sources) {
+      list.createDiv({
+        cls: `olea-gap-scope-source olea-gap-scope-source-${source.readState}`,
+        text: scopeSourceLine(source),
+      });
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "olea-core",
+  "version": "0.9.0",
+  "private": true,
+  "description": "olea-core — the Obsidian-free half: markdown and block handling, indexing, FSRS scheduling, session assembly, mastery. No Obsidian import, ever (INV-1).",
+  "type": "module",
+  "//main": "Source, not dist, deliberately — the same reasoning as `types` below, extended to runtime resolution. vitest/Vite resolve the *entry* through `main`, not `types`, so a dist-pointing `main` made `pnpm -r test` fail on a clean clone (olea-synthetic and olea-plugin could not resolve olea-core before it was built). This package is private and never published; the shipped plugin bundle is produced by esbuild from TS source.",
+  "main": "./src/index.ts",
+  "//types": "Points at source, not dist, deliberately. Consumers in this workspace must typecheck without olea-core having been built first — CI runs typecheck before build on a fresh clone, and a warm local dist/ hides the breakage. Source types are also never stale.",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "olea-contracts": "workspace:*",
+    "ts-fsrs": "^5.4.1"
+  }
+}

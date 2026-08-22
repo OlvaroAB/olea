@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    /* `paths` is INV-1's whole trick for this package. The workbench imports the
+       REAL view sources out of packages/plugin; those sources import `obsidian`,
+       and this mapping redirects that specifier — for this compilation only — to
+       the shim. No file under packages/workbench ever writes `from 'obsidian'`,
+       so scripts/check-inv1.mjs (which scans every packages/* except plugin,
+       this package included) stays green, and the shim's type surface is forced
+       to be exactly the chrome the views actually touch. packages/plugin keeps
+       typechecking against the real obsidian typings under its own tsconfig, so
+       the two are cross-checked. */
+    "paths": {
+      "obsidian": ["./src/obsidian-shim/index.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "test/**/*.ts",
+    "vitest.config.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts"
+  ]
+}
