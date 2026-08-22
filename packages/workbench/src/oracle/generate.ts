@@ -45,8 +45,11 @@
  * `quizGenerateRequestPayload` below builds `{courseCode, conceptName,
  * sourceChunks, questionCount}` from purely synthetic vocabulary
  * (`../synthetic-bridge.js`'s `COURSES`/`CONCEPTS`) — never a real course
- * code, never `olea-service`'s own E3 scaffolding values (`PSYCH305` etc,
- * which live in the PRIVATE repo's task definitions and stay there). This
+ * code, never `olea-service`'s own E3 scaffolding values, which live in the
+ * PRIVATE repo's task definitions and stay there. (This sentence deliberately
+ * names no example: it once carried a real course code, which is exactly the
+ * leak shape it exists to warn about -- prose explaining a control is where
+ * this project's leaks have actually come from.) This
  * file has no dependency on `olea-service` at all, by construction: it
  * cannot import a private prompt file even by accident, because nothing here
  * ever resolves a specifier that could reach one.
