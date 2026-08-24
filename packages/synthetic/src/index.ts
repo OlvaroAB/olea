@@ -33,6 +33,16 @@ export {
   readCassette,
   toSerialisableCassette,
 } from './embedding-cassette.js';
+export type {
+  FixtureConceptGroundTruth,
+  FixtureVaultGroundTruth,
+  FixtureVaultShapeId,
+} from './fixture-vaults.js';
+export {
+  buildFixtureVault,
+  FIXTURE_VAULT_SHAPES,
+  fixtureVaultGroundTruth,
+} from './fixture-vaults.js';
 export type { DeclaredGroundTruth, StreamSpec, SyntheticStream } from './generate.js';
 export { generateStream, MASTERY_STABILITY_BANDS, SPEC_DEFAULTS, streamSpec } from './generate.js';
 export type {
