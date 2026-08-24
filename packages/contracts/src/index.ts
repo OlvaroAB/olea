@@ -3,6 +3,54 @@
 // INV-1: this package (and every file under it) MUST NEVER import `obsidian`.
 // See scripts/check-inv1.mjs and packages/core/test/inv1.probe.spec.ts.
 
+// The versioned-artifact envelope (BND-3) — the one shape every delivered
+// result travels inside: version stamp, cache lifetime, evidentiary basis, and
+// an explicit statement of what must never ride in it. The study plan and the
+// two delivered thresholds the component register names are expressed against
+// it here.
+export {
+  ARTIFACT_ENVELOPE_VERSION,
+  type ArtifactEnvelopeHeader,
+  artifactEnvelope,
+  type ClaimBasis,
+  claim,
+  claimBasis,
+  type EnvelopeReadResult,
+  type EnvelopeState,
+  type EnvelopeUnreadableReason,
+  type EvidenceRef,
+  envelopeFreshness,
+  envelopeState,
+  evidenceRef,
+  GOVERNING_FRESH_FOR_SECONDS,
+  GOVERNING_GOVERNS_FOR_SECONDS,
+  MISCONCEPTION_MERGE_BODY_VERSION,
+  MISCONCEPTION_MERGE_CONTRACT_ID,
+  MISCONCEPTION_MERGE_KIND,
+  type MisconceptionMergeBody,
+  type MisconceptionMergeEnvelope,
+  misconceptionMergeBody,
+  misconceptionMergeEnvelope,
+  OPERATING_FRESH_FOR_SECONDS,
+  OPERATING_GOVERNS_FOR_SECONDS,
+  plannedConceptBasis,
+  READABLE_ENVELOPE_VERSIONS,
+  readArtifactEnvelope,
+  STUDY_PLAN_BODY_VERSION,
+  STUDY_PLAN_ENVELOPE_CONTRACT_ID,
+  STUDY_PLAN_KIND,
+  type StudyPlanBody,
+  type StudyPlanEnvelope,
+  studyPlanBody,
+  studyPlanEnvelope,
+  VISION_ROUTE_BODY_VERSION,
+  VISION_ROUTE_CONTRACT_ID,
+  VISION_ROUTE_KIND,
+  type VisionRouteBody,
+  type VisionRouteEnvelope,
+  visionRouteBody,
+  visionRouteEnvelope,
+} from './artifact-envelope.js';
 export { type ContractEntry, type ContractId, contracts, SchemaRegistry } from './registry.js';
 
 // Frozen schemas (orchestrator-owned, per plan §0.3). Task payloads land in
