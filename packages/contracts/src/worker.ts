@@ -1,10 +1,23 @@
 /**
- * The Worker API envelope — FROZEN before Lane B forks (P3-T01, P3-T02, D-011).
+ * The Worker API envelope.
  *
- * This file freezes the *envelope*, not the task payloads. Task-specific
- * request/response shapes land per task id in P3-T02 and after; what must not
- * move underneath two parallel lanes is how every request is versioned,
- * authenticated, stamped, and refused. Those are the seams.
+ * "FROZEN before Lane B forks (P3-T01, P3-T02)" used to stand here. That was a
+ * lane-coordination device — an orchestrator holding two parallel lanes off
+ * this file for the duration of one run — and those lanes forked and finished
+ * long ago; it read as a standing constraint on this file long after it
+ * stopped being one (ol-jnt0).
+ *
+ * What is real and current is D-011's versioning discipline: every request
+ * carries the version it was built against, the Worker serves two versions at
+ * once (current and current−1), and dropping the older one means deleting its
+ * golden fixtures in the same commit. Changing this envelope's shape costs a
+ * `CONTRACT_VERSION` bump with N/N−1 serving — a real, payable cost, not a
+ * prohibition on touching the file.
+ *
+ * This file fixes the *envelope*, not the task payloads — task-specific
+ * request/response shapes land per task id in `tasks.ts` and after. What the
+ * envelope covers is how every request is versioned, authenticated, stamped,
+ * and refused. Those are the seams.
  *
  * Three contract requirements are encoded here rather than left to convention:
  *

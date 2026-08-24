@@ -1,4 +1,5 @@
-// PERMANENT GUARD — the frozen task-id catalogue (P3-T02, C4.1–C4.3).
+// PERMANENT GUARD — the closed task-id catalogue (C4.1–C4.3; see tasks.ts's
+// header for why "frozen" no longer describes it — ol-jnt0).
 //
 // A task id is the join key between the client call site, the Worker's routing
 // table, the versioned prompt directory (C4.3) and the D-005 telemetry record.
@@ -9,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
-describe('the frozen task-id catalogue', () => {
+describe('the closed task-id catalogue', () => {
   it('is exactly these nine ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.

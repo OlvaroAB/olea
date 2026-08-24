@@ -1,9 +1,16 @@
 /**
- * The task-id catalogue — FROZEN (P3-T02, C4.1–C4.3, D-011).
+ * The task-id catalogue — a closed vocabulary, by design (C4.1–C4.3).
  *
- * `worker.ts` freezes the *envelope*: how every call is versioned, stamped and
- * refused. This file freezes the *vocabulary*: which task ids exist at all.
- * They are separate freezes because they fail differently — an envelope change
+ * "FROZEN (P3-T02, ... D-011)" used to stand here. That was a
+ * lane-coordination device from when P3-T01/P3-T02 forked in parallel; those
+ * lanes finished long ago, and D-011 governs the envelope's version discipline
+ * in `worker.ts`, not this file's vocabulary (ol-jnt0). What actually keeps
+ * this catalogue closed is the argument below, and it is a real, ongoing
+ * design rule rather than a lane-era leftover.
+ *
+ * `worker.ts` fixes the *envelope*: how every call is versioned, stamped and
+ * refused. This file fixes the *vocabulary*: which task ids exist at all.
+ * They are separate rules because they fail differently — an envelope change
  * breaks every call at once, while a task-id change breaks exactly the feature
  * that owns it.
  *
@@ -80,13 +87,13 @@ export const TASK_IDS = {
   GROUNDING_JUDGE: 'grounding.judge.v1',
 } as const;
 
-/** The frozen catalogue as a value, sorted for stable diffs and golden output. */
+/** The closed catalogue as a value, sorted for stable diffs and golden output. */
 export const ALL_TASK_IDS = Object.values(TASK_IDS).slice().sort() as readonly KnownTaskId[];
 
 export type KnownTaskId = (typeof TASK_IDS)[keyof typeof TASK_IDS];
 
 /**
- * Validator for a task id drawn from the frozen catalogue.
+ * Validator for a task id drawn from the closed catalogue.
  *
  * Deliberately **not** substituted into `requestEnvelope.taskId`, which stays a
  * permissive string. The distinction is worth keeping: a malformed envelope is
@@ -98,7 +105,7 @@ export type KnownTaskId = (typeof TASK_IDS)[keyof typeof TASK_IDS];
  */
 export const knownTaskId = z.enum(ALL_TASK_IDS as unknown as [KnownTaskId, ...KnownTaskId[]]);
 
-/** Is this id in the frozen catalogue? Cheap guard for routing tables. */
+/** Is this id in the closed catalogue? Cheap guard for routing tables. */
 export function isKnownTaskId(id: string): id is KnownTaskId {
   return (ALL_TASK_IDS as readonly string[]).includes(id);
 }

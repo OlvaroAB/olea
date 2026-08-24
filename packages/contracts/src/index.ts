@@ -53,9 +53,15 @@ export {
 } from './artifact-envelope.js';
 export { type ContractEntry, type ContractId, contracts, SchemaRegistry } from './registry.js';
 
-// Frozen schemas (orchestrator-owned, per plan §0.3). Task payloads land in
-// P3-T02; what is frozen here is what two parallel lanes must not move
-// underneath each other: the D7.1 review-log record and the Worker envelope.
+// The D7.1 review-log record and the Worker envelope, re-exported together.
+// "Frozen schemas... what two parallel lanes must not move underneath each
+// other" used to describe this grouping; that was P3-T01/P3-T02
+// lane-coordination, and those lanes forked and finished long ago (ol-jnt0).
+// What is actually load-bearing about each export is documented at its own
+// definition: review-log.ts's header explains D-020's per-version freeze (a
+// shipped version's shape never changes; that is the real, standing rule),
+// and worker.ts's header explains D-011's versioning discipline for the
+// envelope.
 export {
   type InstrumentType,
   instrumentType,
