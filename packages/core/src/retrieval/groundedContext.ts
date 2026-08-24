@@ -30,6 +30,7 @@ import type { VaultPath } from '../vault/types.js';
 import {
   type CompositeGroundingSignals,
   type CompositeGroundingThresholds,
+  isCompositeSemanticSignalAvailable,
   meetsCompositeThreshold,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
 } from './compositeSignals.js';
@@ -48,13 +49,33 @@ export type GroundingRefusalReason =
   /** Retrieval produced hits, but none cleared the relevance bar — present in the index, but not actually about the query. Confabulation's actual failure mode: a model handed these chunks would have "context," just not relevant context. */
   | 'below-relevance-threshold'
   /**
-   * `options.requireComposite` was set and the query's `CompositeGroundingSignals`
-   * (`compositeSignals.ts`) did not clear every clause of `options.compositeThresholds`
-   * — `ol-azo7`. Distinct from `below-relevance-threshold`: that reason is about
-   * individual hits failing a per-hit filter; this one is a single whole-query
-   * gate, evaluated before per-hit filtering runs at all.
+   * `options.requireComposite` was set, the semantic signal WAS computed, and
+   * the query's `CompositeGroundingSignals` (`compositeSignals.ts`) still did
+   * not clear every clause of `options.compositeThresholds` — `ol-azo7`.
+   * "Checked and found nothing": her material genuinely does not support
+   * this query at the ratified operating point. Distinct from
+   * `below-relevance-threshold`, which is about individual hits failing a
+   * per-hit filter rather than a single whole-query gate evaluated before
+   * per-hit filtering runs at all — and distinct from
+   * `composite-check-unavailable`, below, which is about the check never
+   * having run at all.
    */
-  | 'below-composite-threshold';
+  | 'below-composite-threshold'
+  /**
+   * `options.requireComposite` was set, but the semantic half of the
+   * composite signal could not be computed at all — no query embedding
+   * (offline, provider failure) or nothing in the corpus is embedded yet, so
+   * `computeCompositeGroundingSignals` returned a null `top1`
+   * (`compositeSignals.ts`) — or a caller passed `requireComposite: true`
+   * without ever computing `compositeSignals` in the first place. `ol-riwn`
+   * (`[D-089]`): "we could not check just now", never "her notes do not
+   * cover this" — the two are different facts and this reason is what keeps
+   * a caller from conflating them the way `below-composite-threshold` alone
+   * would. `lexBest` failing on its own is NOT this reason: it never depends
+   * on the embedding provider, so its shortfall alone still means
+   * `below-composite-threshold`, not this.
+   */
+  | 'composite-check-unavailable';
 
 export type GroundingResult =
   | { readonly status: 'grounded'; readonly chunks: readonly GroundedChunk[] }
@@ -98,9 +119,9 @@ export interface AssembleGroundedContextOptions {
    * default (a Class C, "changes what the alpha user experiences" call —
    * run charter). No caller in this codebase sets this true today. When it
    * is true but `compositeSignals` is absent, this refuses conservatively
-   * (`below-composite-threshold`) rather than silently skipping the check —
-   * an opt-in gate a caller forgot to wire the signals for is exactly the
-   * kind of gate INV-5 does not get to fail open.
+   * (`composite-check-unavailable`, `ol-riwn` — an opt-in gate a caller
+   * forgot to wire the signals for genuinely never ran the check) rather
+   * than silently skipping it — INV-5 does not get to fail open either way.
    */
   readonly requireComposite?: boolean;
 }
@@ -154,11 +175,18 @@ export function assembleGroundedContext(
   }
 
   if (options.requireComposite) {
-    const thresholds = options.compositeThresholds ?? RECOMMENDED_COMPOSITE_THRESHOLDS;
+    // No signals at all: the caller opted into the gate but never wired the
+    // computation (or is offline in a way that stopped it happening).
+    // Either way, the check never ran — that's the same fact as the null-
+    // semantic-signal case below, so it gets the same reason (`ol-riwn`).
     if (
       !options.compositeSignals ||
-      !meetsCompositeThreshold(options.compositeSignals, thresholds)
+      !isCompositeSemanticSignalAvailable(options.compositeSignals)
     ) {
+      return { status: 'refused', reason: 'composite-check-unavailable' };
+    }
+    const thresholds = options.compositeThresholds ?? RECOMMENDED_COMPOSITE_THRESHOLDS;
+    if (!meetsCompositeThreshold(options.compositeSignals, thresholds)) {
       return { status: 'refused', reason: 'below-composite-threshold' };
     }
   }

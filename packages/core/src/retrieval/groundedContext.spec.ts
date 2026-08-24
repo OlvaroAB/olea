@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CompositeGroundingSignals } from './compositeSignals.js';
 import { assembleGroundedContext } from './groundedContext.js';
 import type { HybridHit } from './hybrid.js';
 
@@ -183,5 +184,80 @@ describe('assembleGroundedContext — INV-5 adversarial empty-context refusal (C
     if (result.status === 'grounded') {
       expect(Object.keys(result.chunks[0] ?? {}).sort()).toEqual(['blockIndex', 'path', 'text']);
     }
+  });
+});
+
+/**
+ * `ol-riwn` (`[D-089]`): with `requireComposite: true` and a null query
+ * embedding (offline, provider failure), `computeCompositeGroundingSignals`
+ * returns `top1: null` — the semantic check literally could not run. The bug
+ * was that this collapsed onto `below-composite-threshold`, the reason that
+ * means "we checked and her material does not support it" — the exact
+ * opposite of the truth, and a UI rendering it faithfully tells her that her
+ * notes do not cover something they may well cover. This block reproduces
+ * the bead's probe (a real-shaped fixture query and gibberish, both hitting
+ * the same mislabel before the fix) and asserts the two are now
+ * distinguishable at the type level, per the acceptance criteria.
+ */
+describe('assembleGroundedContext — requireComposite distinguishes could-not-check from checked-and-found-nothing (ol-riwn, C4.7)', () => {
+  const thresholds = { lex: 0.18, top1: 0.545, marginP99: 0.055 };
+
+  function signals(overrides: Partial<CompositeGroundingSignals> = {}): CompositeGroundingSignals {
+    return { lexBest: 0.3, top1: 0.6, marginP99: 0.1, ...overrides };
+  }
+
+  it('refuses as composite-check-unavailable, not below-composite-threshold, when the query embedding was unavailable (offline) — real-shaped fixture query', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: 3, cosineScore: null })];
+    // `computeCompositeGroundingSignals` under a null query vector: top1 and
+    // marginP99 are null, lexBest is still computed from keyword overlap
+    // alone (it never depends on the embedding provider).
+    const result = assembleGroundedContext(hits, {
+      requireComposite: true,
+      compositeThresholds: thresholds,
+      compositeSignals: signals({ lexBest: 0.4, top1: null, marginP99: null }),
+    });
+    expect(result).toEqual({ status: 'refused', reason: 'composite-check-unavailable' });
+  });
+
+  it('refuses as composite-check-unavailable for gibberish too — the mislabel did not depend on query content, only on the missing embedding', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: null, cosineScore: null })];
+    const result = assembleGroundedContext(hits, {
+      requireComposite: true,
+      compositeThresholds: thresholds,
+      compositeSignals: signals({ lexBest: 0, top1: null, marginP99: null }),
+    });
+    expect(result).toEqual({ status: 'refused', reason: 'composite-check-unavailable' });
+  });
+
+  it('refuses as composite-check-unavailable when compositeSignals was never computed at all (caller forgot to wire it)', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: 3 })];
+    const result = assembleGroundedContext(hits, { requireComposite: true });
+    expect(result).toEqual({ status: 'refused', reason: 'composite-check-unavailable' });
+  });
+
+  it('still refuses as below-composite-threshold when the semantic check DID run and genuinely found nothing (checked-and-found-nothing is preserved)', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: 3 })];
+    const result = assembleGroundedContext(hits, {
+      requireComposite: true,
+      compositeThresholds: thresholds,
+      compositeSignals: signals({ top1: 0.3, marginP99: 0.01 }),
+    });
+    expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+  });
+
+  it('grounds when the semantic check ran and every clause clears the bar', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: 3 })];
+    const result = assembleGroundedContext(hits, {
+      requireComposite: true,
+      compositeThresholds: thresholds,
+      compositeSignals: signals(),
+    });
+    expect(result.status).toBe('grounded');
+  });
+
+  it('requireComposite false/unset leaves existing behaviour unchanged — no composite reason ever appears', () => {
+    const hits: HybridHit[] = [hit({ keywordScore: null, cosineScore: null })];
+    const result = assembleGroundedContext(hits);
+    expect(result).toEqual({ status: 'refused', reason: 'below-relevance-threshold' });
   });
 });

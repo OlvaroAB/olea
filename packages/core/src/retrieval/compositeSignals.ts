@@ -116,3 +116,21 @@ export function meetsCompositeThreshold(
     signals.marginP99 >= thresholds.marginP99
   );
 }
+
+/**
+ * True only when the semantic half of the composite signal was actually
+ * computed — `top1`/`marginP99` both non-null. `ol-riwn` (`[D-089]`): this is
+ * the distinction `meetsCompositeThreshold` alone cannot make. That function
+ * folds "no query vector, so `top1` is null" and "a query vector, and the
+ * best match still isn't close enough" into the same `false`, because both
+ * legitimately fail the conjunction. A caller that needs to tell a student
+ * *why* a query didn't ground needs the difference: the first is "we could
+ * not check just now" (offline, or a provider failure — an EXCEPTION state
+ * per `[D-044]`/`[D-089]`, not the product's normal one), the second is "we
+ * checked and her material does not support it". `lexBest` is not part of
+ * this test — it never depends on the embedding provider, so its own
+ * shortfall never means the check could not run.
+ */
+export function isCompositeSemanticSignalAvailable(signals: CompositeGroundingSignals): boolean {
+  return signals.top1 !== null && signals.marginP99 !== null;
+}
