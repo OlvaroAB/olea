@@ -31,10 +31,12 @@ import {
   type ConceptReaderPort,
   ConceptReaderUnavailableError,
   type ConceptReadRequest,
+  type ConceptReadResponse,
   gatherPassages,
   type ProposedConcept,
   readConcepts,
 } from './read.js';
+import type { ProposedRelation } from './relation.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — an in-memory vault and a scriptable reader.
@@ -74,10 +76,17 @@ class MemoryVault implements VaultSource {
 /** A reader that returns a fixed set and records every request it was handed. */
 class ScriptedReader implements ConceptReaderPort {
   readonly requests: ConceptReadRequest[] = [];
-  constructor(private readonly concepts: readonly ProposedConcept[]) {}
-  read(request: ConceptReadRequest): Promise<{ concepts: readonly ProposedConcept[] }> {
+  constructor(
+    private readonly concepts: readonly ProposedConcept[],
+    private readonly relations?: readonly ProposedRelation[],
+  ) {}
+  read(request: ConceptReadRequest): Promise<ConceptReadResponse> {
     this.requests.push(request);
-    return Promise.resolve({ concepts: this.concepts });
+    return Promise.resolve(
+      this.relations !== undefined
+        ? { concepts: this.concepts, relations: this.relations }
+        : { concepts: this.concepts },
+    );
   }
 }
 
@@ -500,5 +509,122 @@ describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', (
     const loose = passages.filter((p) => p.anchor.sourcePath.startsWith('Loose/'));
     expect(inCourse.every((p) => p.course === 'ABCD101')).toBe(true);
     expect(loose.every((p) => p.course === undefined)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [REL-1] / [EXT-6] — relations recovered as part of extraction itself,
+// reconciled against the concepts the same read returned.
+// ---------------------------------------------------------------------------
+
+describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
+  it('a port that supplies no relations field reads exactly as before it existed', async () => {
+    const reader = new ScriptedReader([
+      proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+    ]);
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.relations).toEqual([]);
+    expect(result.relationsDropped).toBe(0);
+  });
+
+  it('an is-a / part-of relation between two concepts the same read returned is emitted', async () => {
+    const reader = new ScriptedReader(
+      [
+        proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+      ],
+      [{ type: 'part-of', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 }],
+    );
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]).toMatchObject({
+      type: 'part-of',
+      from: 'Ormathel',
+      to: 'Quintaris',
+    });
+    expect(result.relationsDropped).toBe(0);
+  });
+
+  it('a relation naming a concept the concept call never returned is dropped and counted, never minted', async () => {
+    const reader = new ScriptedReader(
+      [proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md'))],
+      [{ type: 'part-of', from: 'Ormathel', to: 'A name nothing proposed', confidence: 0.9 }],
+    );
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.relations).toEqual([]);
+    expect(result.relationsDropped).toBe(1);
+    // The concept set is authoritative: no second concept appeared.
+    expect(result.concepts.map((c) => c.name)).toEqual(['Ormathel']);
+  });
+
+  it('contrasts-with and prerequisite never reach the emitted set from the per-document stage, even if proposed', async () => {
+    const reader = new ScriptedReader(
+      [
+        proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+      ],
+      [
+        { type: 'contrasts-with', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 },
+        { type: 'prerequisite', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 },
+      ],
+    );
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.relations).toEqual([]);
+    expect(result.relationsDropped).toBe(2);
+  });
+
+  it("part-of's named reader: the container concept's size is refined toward coarse", async () => {
+    const reader = new ScriptedReader(
+      [
+        // A single anchor each — on measured extent alone, both are 'fine'.
+        proposal('Part', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+        proposal('Whole', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+      ],
+      [{ type: 'part-of', from: 'Part', to: 'Whole', confidence: 0.9 }],
+    );
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const whole = result.concepts.find((c) => c.name === 'Whole');
+    const part = result.concepts.find((c) => c.name === 'Part');
+    expect(whole?.size.band).toBe('coarse');
+    expect(whole?.size.extent.containmentEvidence).toBe(true);
+    // The contained concept itself is not touched by this edge.
+    expect(part?.size.band).toBe('fine');
+  });
+
+  it('a relation whose endpoint is filing-only (no passage anchor) is dropped for missing passage-grain provenance', async () => {
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Lecture One.md':
+        '---\ntopic: Ormathel\ncourse: ABCD101\n---\n\n# Opening\n\nUnrelated body text.\n',
+    });
+    // The reader never surfaces Ormathel from a passage — it is returned
+    // un-anchored purely from her `topic` convention (see the "her
+    // conventions never lose a concept" describe block above).
+    const reader = new ScriptedReader(
+      [proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture One.md'))],
+      [{ type: 'part-of', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 }],
+    );
+    const result = await readConcepts(vault, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const ormathel = result.concepts.find((c) => c.name === 'Ormathel');
+    expect(ormathel?.anchor).toBeUndefined();
+    expect(result.relations).toEqual([]);
+    expect(result.relationsDropped).toBe(1);
   });
 });

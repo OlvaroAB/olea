@@ -79,6 +79,22 @@ export interface ConceptMaterialExtent {
    * required of it."
    */
   readonly structureCorroborated: boolean;
+  /**
+   * Whether an `is-a` or `part-of` edge (C7.10, `./relation.js`) names this
+   * concept as the broader side — is-a's target (a kind-of is "evidence for
+   * containment, not a substitute for it") or part-of's target (what it is
+   * made of). This is the "structural refinement by counting children over
+   * returned edges" the component register's row 1.3 describes, wired here
+   * as the named reader `[REL-1]` requires (`./read.js`'s
+   * `applyContainmentEvidence`). **Only ever pushes the band toward
+   * `'coarse'`** (`deriveConceptSize` below), matching C7.9's merge-upward
+   * asymmetry: an edge is new material evidence, so it can strengthen a
+   * containment reading but never override the measured extent downward.
+   * `undefined` (never `false`) for a source that carries no relation data
+   * at all — the same "not tracked" vs "measured, found none" distinction
+   * `passageCount` already draws.
+   */
+  readonly containmentEvidence?: boolean;
 }
 
 /** A concept's size: the band a consumer reads, plus the extent it was read from. */
@@ -121,7 +137,8 @@ export const COARSE_EXTENT_FLOOR = 2;
  */
 export function deriveConceptSize(extent: ConceptMaterialExtent): ConceptSize {
   const measure = extent.passageCount ?? extent.noteCount;
-  const band: ConceptSizeBand = measure > COARSE_EXTENT_FLOOR ? 'coarse' : 'fine';
+  const band: ConceptSizeBand =
+    measure > COARSE_EXTENT_FLOOR || extent.containmentEvidence === true ? 'coarse' : 'fine';
   return { band, extent };
 }
 
@@ -156,6 +173,8 @@ export interface ReadConceptExtentInput {
   readonly alsoIn: readonly Provenance[];
   readonly sourcePaths: readonly VaultPath[];
   readonly boundNotePath?: VaultPath;
+  /** See `ConceptMaterialExtent.containmentEvidence`. Absent when the caller carries no relation data. */
+  readonly containmentEvidence?: boolean;
 }
 
 /**
@@ -173,6 +192,9 @@ export function readConceptExtent(concept: ReadConceptExtentInput): ConceptMater
     noteCount: notePaths.size,
     passageCount,
     structureCorroborated: concept.boundNotePath !== undefined,
+    ...(concept.containmentEvidence !== undefined
+      ? { containmentEvidence: concept.containmentEvidence }
+      : {}),
   };
 }
 

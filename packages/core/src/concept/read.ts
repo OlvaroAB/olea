@@ -60,6 +60,8 @@ import { readList } from '../frontmatter/read.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts } from './extract.js';
+import { reconcileRelations, totalDropped } from './reconcile.js';
+import type { ConceptRelation, ProposedRelation } from './relation.js';
 import type { ConceptSize } from './size.js';
 import { readConceptSize } from './size.js';
 import type { ConceptRecord, ConceptTier } from './types.js';
@@ -114,6 +116,20 @@ export interface ConceptReadRequest {
 
 export interface ConceptReadResponse {
   readonly concepts: readonly ProposedConcept[];
+  /**
+   * `is-a` and `part-of` proposals — the two relation types C7.10 rules
+   * visible inside a single document (`./relation.js`'s
+   * `PER_DOCUMENT_EMITTABLE_TYPES`). **Optional, not defaulted to empty by
+   * this type**, because no production `ConceptReaderPort` emits this field
+   * yet: `concepts.extract.v1`'s prompt does not ask for relations today,
+   * and changing that is service-side work this module does not own (see
+   * `../../../../../olea-service/prompts/concepts.extract/` and the
+   * discovered-from bead filed against it). `readConcepts` treats an absent
+   * `relations` field exactly like an empty one — this stage is ready to
+   * reconcile relations the moment a port supplies them, with no further
+   * change here.
+   */
+  readonly relations?: readonly ProposedRelation[];
 }
 
 /**
@@ -245,6 +261,24 @@ interface ConceptReadBase {
 export interface ConceptsRead extends ConceptReadBase {
   readonly outcome: 'read';
   readonly concepts: readonly ReadConcept[];
+  /**
+   * `is-a` / `part-of` edges reconciled against `concepts` (`./reconcile.js`
+   * — `[EXT-6]`). Always present, always `[]` when the port supplied no
+   * `relations` or every proposal was dropped — never absent, so a caller
+   * cannot mistake "the port emits none yet" for "this field does not
+   * exist." `contrasts-with` and `prerequisite` never appear here: C7.10
+   * scopes them to the corpus-level stage (`[EXT-5]`, `ol-2zfj.7`), which
+   * this stage is not. `causes` and `related` never appear here either — not
+   * emitted in v0.9 per `./relation.js`'s emission table.
+   */
+  readonly relations: readonly ConceptRelation[];
+  /**
+   * How many proposed relations this read dropped, summed across every
+   * reason (`./reconcile.js`'s `totalDropped`) — the health signal D-005
+   * permits: a count, never a name. `0` when the port supplied no
+   * `relations` at all, same as an empty `relations` field above.
+   */
+  readonly relationsDropped: number;
 }
 
 /** The vault was **not** read. F1.4: reported, never returned as a silent empty list. */
@@ -482,6 +516,41 @@ function buildCoverage(
 const NO_CONCEPTS: ReadonlyMap<VaultPath, number> = new Map();
 
 /**
+ * `is-a` and `part-of`'s named reader (C7.10): concept size (`./size.js`).
+ * A concept named as the broader side of either edge — `is-a`'s target (the
+ * kind-of it names, evidence for containment, "not a substitute for it") or
+ * `part-of`'s target (what it is made of) — gets that fact folded into its
+ * `size` as `containmentEvidence`, which only ever pushes the band toward
+ * `'coarse'` (`./size.js`'s `deriveConceptSize`), never the reverse — the
+ * same merge-upward asymmetry C7.9 rules for size generally. A concept named
+ * on neither edge's broader side is returned unchanged.
+ */
+function applyContainmentEvidence(
+  concepts: readonly ReadConcept[],
+  relations: readonly ConceptRelation[],
+): readonly ReadConcept[] {
+  const containers = new Set<string>();
+  for (const relation of relations) containers.add(relation.to);
+  if (containers.size === 0) return concepts;
+
+  return concepts.map((concept) => {
+    if (!containers.has(concept.name) || concept.size.extent.containmentEvidence === true) {
+      return concept;
+    }
+    return {
+      ...concept,
+      size: readConceptSize({
+        anchor: concept.anchor,
+        alsoIn: concept.alsoIn,
+        sourcePaths: concept.sourcePaths,
+        ...(concept.boundNotePath !== undefined ? { boundNotePath: concept.boundNotePath } : {}),
+        containmentEvidence: true,
+      }),
+    };
+  });
+}
+
+/**
  * Read her material and return the concepts inside it, corroborated by her
  * conventions where she keeps any.
  *
@@ -530,11 +599,13 @@ export async function readConcepts(
 
   const perCall = Math.max(budget.passagesPerCall ?? budgeted.length, 1);
   const proposals: ProposedConcept[] = [];
+  const proposedRelations: ProposedRelation[] = [];
   try {
     for (let i = 0; i < budgeted.length; i += perCall) {
       const batch = budgeted.slice(i, i + perCall);
       const response = await reader.read({ passages: batch });
       proposals.push(...response.concepts);
+      if (response.relations !== undefined) proposedRelations.push(...response.relations);
     }
   } catch (error) {
     if (error instanceof ConceptReaderUnavailableError) {
@@ -621,6 +692,20 @@ export async function readConcepts(
     found.set(path, (found.get(path) ?? 0) + 1);
   }
 
-  concepts.sort((a, b) => byCodeUnit(a.name, b.name));
-  return { outcome: 'read', concepts, coverage: buildCoverage(all, budgeted, found), ...base };
+  // [EXT-6] / ol-2zfj.8: reconcile every proposed relation against the
+  // concepts this same read actually returned. The concept set is
+  // authoritative — a relation naming one it did not return is dropped and
+  // counted, never used to mint one.
+  const reconciled = reconcileRelations(proposedRelations, concepts);
+  const withContainment = applyContainmentEvidence(concepts, reconciled.relations);
+
+  const sorted = [...withContainment].sort((a, b) => byCodeUnit(a.name, b.name));
+  return {
+    outcome: 'read',
+    concepts: sorted,
+    relations: reconciled.relations,
+    relationsDropped: totalDropped(reconciled.dropped),
+    coverage: buildCoverage(all, budgeted, found),
+    ...base,
+  };
 }

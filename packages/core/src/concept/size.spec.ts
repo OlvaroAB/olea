@@ -80,6 +80,45 @@ describe('deriveConceptSize', () => {
     const extent = { noteCount: 3, passageCount: 4, structureCorroborated: true };
     expect(deriveConceptSize(extent)).toEqual({ band: 'coarse', extent });
   });
+
+  // [REL-1] — is-a / part-of's named reader: `containmentEvidence` folds an
+  // edge into the size verdict, only ever pushing toward 'coarse' (C7.9's
+  // merge-upward asymmetry).
+  describe('containmentEvidence (is-a / part-of, C7.10)', () => {
+    it('pushes a thin concept from fine to coarse', () => {
+      const size = deriveConceptSize({
+        noteCount: 1,
+        structureCorroborated: false,
+        containmentEvidence: true,
+      });
+      expect(size.band).toBe('coarse');
+    });
+
+    it('never downgrades a concept the measured extent already put at coarse', () => {
+      const size = deriveConceptSize({
+        noteCount: COARSE_EXTENT_FLOOR + 1,
+        structureCorroborated: false,
+        containmentEvidence: false,
+      });
+      expect(size.band).toBe('coarse');
+    });
+
+    it('absent containmentEvidence never moves the band — undefined is "no relation data", not "no evidence"', () => {
+      const withField = deriveConceptSize({ noteCount: 1, structureCorroborated: false });
+      expect(withField.extent.containmentEvidence).toBeUndefined();
+      expect(withField.band).toBe('fine');
+    });
+
+    it('containmentEvidence: false is distinguishable from undefined but behaves identically on the band', () => {
+      const size = deriveConceptSize({
+        noteCount: 1,
+        structureCorroborated: false,
+        containmentEvidence: false,
+      });
+      expect(size.band).toBe('fine');
+      expect(size.extent.containmentEvidence).toBe(false);
+    });
+  });
 });
 
 describe('conceptRecordExtent / conceptRecordSize — the extract.ts proxy (whole-note grounding)', () => {
@@ -167,5 +206,16 @@ describe('readConceptExtent / readConceptSize — the read.ts proxy (passage gra
       sourcePaths: ['Note A.md', 'Note B.md', 'Note C.md', 'Note D.md'],
     });
     expect(size.band).toBe('fine');
+  });
+
+  it('threads containmentEvidence through to the extent and the band', () => {
+    const size = readConceptSize({
+      anchor: anchor('Lecture 1.md'),
+      alsoIn: [],
+      sourcePaths: [],
+      containmentEvidence: true,
+    });
+    expect(size.band).toBe('coarse');
+    expect(size.extent.containmentEvidence).toBe(true);
   });
 });
