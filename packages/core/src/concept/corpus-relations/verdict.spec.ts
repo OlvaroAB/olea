@@ -24,8 +24,12 @@ function concept(name: string, overrides: Partial<CorpusConcept> = {}): CorpusCo
   return { name, aliases: [], anchor: anchor('Lecture 1.md'), ...overrides };
 }
 
-function candidate(a: CorpusConcept, b: CorpusConcept): CorpusRelationCandidate {
-  return { a, b, signals: ['embedding-proximity'] };
+function candidate(
+  a: CorpusConcept,
+  b: CorpusConcept,
+  signals: CorpusRelationCandidate['signals'] = ['embedding-proximity'],
+): CorpusRelationCandidate {
+  return { a, b, signals };
 }
 
 function verdict(overrides: Partial<CorpusVerdict> = {}): CorpusVerdict {
@@ -135,6 +139,58 @@ describe('reconcileCorpusVerdicts — every emitted edge carries both endpoints�
     const serialised = JSON.stringify(result.dropped);
     expect(serialised).not.toContain('unknown concept name');
     expect(serialised).not.toContain('Osmosis');
+  });
+
+  it('[D-070/ol-9qwy] a candidate her own wikilink nominated reconciles to the strongest provenance tier (`hers`)', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const result = reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion, ['her-link'])],
+    );
+    expect(result.relations[0]?.provenance).toBe('hers');
+  });
+
+  it('[D-070/ol-9qwy] `hers` wins even when another cheap signal ALSO nominated the same pair', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const result = reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion, ['embedding-proximity', 'her-link'])],
+    );
+    expect(result.relations[0]?.provenance).toBe('hers');
+  });
+
+  it('[D-070/ol-9qwy] a candidate with no her-link signal stays `model-proposed` — the type may still be model-inferred either way', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const result = reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion, ['assessment-cooccurrence'])],
+    );
+    expect(result.relations[0]?.provenance).toBe('model-proposed');
+    expect(result.relations[0]?.type).toBe('prerequisite'); // still model-typed, only provenance differs
+  });
+
+  it('[D-070/ol-9qwy] provenance is looked up per PAIR, not leaked across two unrelated candidates in the same batch', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const typeI = concept('Type I error');
+    const typeII = concept('Type II error');
+    const result = reconcileCorpusVerdicts(
+      [
+        verdict({ a: 'Osmosis', b: 'Diffusion basics' }),
+        { a: 'Type I error', b: 'Type II error', type: 'contrasts-with', confidence: 0.5 },
+      ],
+      [
+        candidate(osmosis, diffusion, ['her-link']),
+        candidate(typeI, typeII, ['embedding-proximity']),
+      ],
+    );
+    expect(result.relations).toHaveLength(2);
+    const byType = new Map(result.relations.map((r) => [r.type, r.provenance]));
+    expect(byType.get('prerequisite')).toBe('hers');
+    expect(byType.get('contrasts-with')).toBe('model-proposed');
   });
 
   it('an empty verdict list reconciles to no edges and no drops', () => {

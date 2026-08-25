@@ -86,11 +86,16 @@ export interface CorpusConcept {
  *   concepts close together.
  * - `'her-link'` — she linked the two concept notes herself. Component
  *   register row 1.2a calls this "usefully, human-asserted" — strong
- *   nomination evidence — but it is still only nomination: `[D-082]`'s text
- *   is explicit that "the verdict on each candidate must come from reading
- *   the combined passages" for every candidate, hers included. See
- *   `./verdict.js`'s doc for why this stage does not mint
- *   `RelationProvenanceKind: 'hers'` from this signal alone.
+ *   nomination evidence. It is still only nomination for the purpose of
+ *   `[D-082]`'s combined-passage rule: "the verdict on each candidate must
+ *   come from reading the combined passages" applies to every candidate,
+ *   hers included, so this signal never skips the port call or invents a
+ *   type/direction from the two names alone. What it DOES change,
+ *   post-verdict (`[D-070]`, `ol-9qwy`): a candidate this signal nominated
+ *   reconciles to `RelationProvenanceKind: 'hers'` rather than
+ *   `'model-proposed'` — see `./verdict.js`'s doc for the reconciliation
+ *   rule and why that is a separate question from what the verdict types
+ *   the relation as.
  */
 export type NominationSignalKind = 'assessment-cooccurrence' | 'embedding-proximity' | 'her-link';
 

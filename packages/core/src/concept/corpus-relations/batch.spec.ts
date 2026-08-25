@@ -49,6 +49,58 @@ describe('runCorpusRelationBatch', () => {
     expect(result.relations[0]?.introducingPassages.to).toEqual(anchor('Lecture 1.md'));
   });
 
+  it('[D-070/ol-9qwy] a `her-link` nomination signal reconciles to the strongest provenance tier, end to end', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({
+        verdicts: [
+          {
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            type: 'prerequisite',
+            direction: 'b-to-a',
+            confidence: 0.9,
+          },
+        ],
+      }),
+    };
+
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'her-link', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.provenance).toBe('hers');
+  });
+
+  it('[D-070/ol-9qwy] no her-link signal in the batch means every emitted edge stays `model-proposed` — breaks nothing where her links are absent', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({
+        verdicts: [
+          {
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            type: 'prerequisite',
+            direction: 'b-to-a',
+            confidence: 0.9,
+          },
+        ],
+      }),
+    };
+
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.provenance).toBe('model-proposed');
+  });
+
   it('never calls the port when nothing is nominated (INV-5, one level up from ../read.js)', async () => {
     const verdict = vi.fn();
     const port: CorpusRelationVerdictPort = { verdict };

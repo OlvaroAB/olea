@@ -9,7 +9,26 @@
  * relation from label adjacency. Written this way the filter is
  * clause-compliant by construction rather than by discipline (the bead's
  * own phrase for this, and the reason this module's request shape below
- * has no "name-only" path at all).
+ * has no "name-only" path at all). This holds for a `her-link`-nominated
+ * pair exactly as much as any other: her link says the two ideas belong
+ * together, never what the relationship IS, so the port still reads both
+ * passages to decide `type`/`direction`/`confidence` — see the provenance
+ * note below for the one thing that DOES change for such a pair.
+ *
+ * **Provenance is stamped from the nomination signal, not from the model
+ * (`[D-070]`, `ol-9qwy`).** A candidate nominated (at least in part) by her
+ * own wikilink between the two concept notes reconciles to
+ * `RelationProvenanceKind: 'hers'` — the strongest provenance tier the
+ * system has, because the expensive judgement ("these two ideas belong
+ * together") is a link she authored, not an inference from adjacency. Every
+ * other candidate still reconciles to `'model-proposed'`. The TYPE
+ * (`prerequisite` / `contrasts-with`) is model-inferred from the sentence
+ * either way — provenance answers "who vouches this pair is related", type
+ * answers "what the relation is", and this module keeps the two answers
+ * separate rather than letting one imply the other. This is `reconcileCorpusVerdicts`
+ * reading `CorpusRelationCandidate.signals`, computed after the port
+ * returns — the port itself never sees a signal kind and cannot be asked to
+ * self-report authorship it has no way to know.
  *
  * **The boundary compliance argument lives in this shape, not only in a
  * document.** `CorpusRelationVerdictPort.verdict` takes a transient batch
@@ -39,7 +58,7 @@
  */
 
 import type { Provenance } from '../../extract/types.js';
-import type { ConceptRelation, RelationType } from '../relation.js';
+import type { ConceptRelation, RelationProvenanceKind, RelationType } from '../relation.js';
 import type { CorpusConcept, CorpusRelationCandidate, CorpusRelationDropReason } from './types.js';
 import { CORPUS_STAGE_EMITTABLE_TYPES } from './types.js';
 
@@ -115,6 +134,40 @@ function anchorOf(concept: CorpusConcept): Provenance {
   return concept.anchor;
 }
 
+/** Unordered, same key shape `./nominate.js` uses — restated rather than
+ * imported across a module boundary for one string-joining helper (that
+ * module's own `pairKey` is not exported, and this file already duplicates
+ * `./nominate.js`'s reconciliation posture deliberately; see this file's
+ * own doc). */
+function pairKey(a: string, b: string): string {
+  return a < b ? `${a} ${b}` : `${b} ${a}`;
+}
+
+/**
+ * Which nomination signal kinds backed each candidate pair — the input
+ * `reconcileCorpusVerdicts` needs to decide provenance, since a verdict
+ * itself carries only two concept names and never a signal kind.
+ */
+function signalsByPair(
+  candidates: readonly CorpusRelationCandidate[],
+): ReadonlyMap<string, CorpusRelationCandidate['signals']> {
+  const index = new Map<string, CorpusRelationCandidate['signals']>();
+  for (const candidate of candidates) {
+    index.set(pairKey(candidate.a.name, candidate.b.name), candidate.signals);
+  }
+  return index;
+}
+
+/**
+ * `[D-070]`: a pair nominated (in part or wholly) by her own wikilink
+ * reconciles at the strongest provenance tier, regardless of what else also
+ * nominated it — the type may still be model-inferred; provenance answers a
+ * different question (`./types.js`'s `NominationSignalKind` doc).
+ */
+function provenanceFor(signals: CorpusRelationCandidate['signals']): RelationProvenanceKind {
+  return signals.includes('her-link') ? 'hers' : 'model-proposed';
+}
+
 /**
  * Turn a port's verdicts into real edges, against the SAME candidate set
  * that was sent — never against a wider concept universe. A verdict naming
@@ -129,6 +182,7 @@ export function reconcileCorpusVerdicts(
   candidates: readonly CorpusRelationCandidate[],
 ): ReconcileCorpusVerdictsResult {
   const known = byName(candidates);
+  const signalsIndex = signalsByPair(candidates);
   const dropped: Partial<Record<CorpusRelationDropReason, number>> = {};
   const bump = (reason: CorpusRelationDropReason) => {
     dropped[reason] = (dropped[reason] ?? 0) + 1;
@@ -168,15 +222,21 @@ export function reconcileCorpusVerdicts(
 
     const [from, to] = !directed || verdict.direction === 'a-to-b' ? [a, b] : [b, a];
 
+    // `[D-082]`'s own text scopes "the verdict must come from reading the
+    // combined passages" to EVERY candidate, hers included — the port was
+    // called and both passages were read regardless of provenance. What
+    // `[D-070]` (`ol-9qwy`) changes is what happens AFTER: a pair her own
+    // wikilink nominated stamps as `'hers'`, the strongest provenance tier,
+    // rather than being flattened to `'model-proposed'` like every other
+    // candidate. Signals are looked up by pair, not by endpoint, since a
+    // signal kind belongs to the CANDIDATE, not to either concept alone.
+    const signals = signalsIndex.get(pairKey(a.name, b.name)) ?? [];
+
     relations.push({
       type: verdict.type,
       from: from.name,
       to: to.name,
-      // `[D-082]`'s own text scopes "the verdict must come from reading the
-      // combined passages" to EVERY candidate, hers included — this stage
-      // never mints `RelationProvenanceKind: 'hers'` from a nomination
-      // signal alone; see `./types.js`'s `NominationSignalKind` doc.
-      provenance: 'model-proposed',
+      provenance: provenanceFor(signals),
       confidence: verdict.confidence,
       introducingPassages: { from: anchorOf(from), to: anchorOf(to) },
     });
