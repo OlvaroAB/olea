@@ -335,14 +335,30 @@ export async function classifyKnowledgeKind(
 // implemented."
 // ---------------------------------------------------------------------------
 
+/**
+ * Any of the four buckets `DOMINANT_KIND_SHARE_CEILING`'s defence argues
+ * from: the three real labels, or `'unclassified'` itself. Named so
+ * `dominantKind` below can say in its type what the defence already says in
+ * prose — a classifier that collapses onto declining everything has still
+ * collapsed onto *one bucket*, and that bucket must be nominatable
+ * (`ol-byw0`: before this type existed, `dominantKind` could only ever be a
+ * real label, so a decline-everything collapse drove `dominantShare` toward
+ * zero and the ceiling below could never fire on it).
+ */
+export type DominantKnowledgeBucket = KnowledgeKind | 'unclassified';
+
 /** One row per real label, plus the totals a health check needs. */
 export interface KnowledgeKindDistribution {
   readonly total: number;
   readonly unclassifiedCount: number;
   readonly countsByKind: Readonly<Record<KnowledgeKind, number>>;
-  /** The most common real label, or `undefined` when no classification committed to one. */
-  readonly dominantKind: KnowledgeKind | undefined;
-  /** `countsByKind[dominantKind] / total` — share of *every* classification, unclassified included, matching `ol-m5wp`'s "exceeds a stated share of all classifications." `0` when `total` is `0`. */
+  /**
+   * The largest of the four buckets — one of the three real labels, or
+   * `'unclassified'` when unclassified itself is the largest. `undefined`
+   * only when `total` is `0`, the one case with nothing to be dominant.
+   */
+  readonly dominantKind: DominantKnowledgeBucket | undefined;
+  /** The dominant bucket's count divided by `total` — share of *every* classification, matching `ol-m5wp`'s "exceeds a stated share of all classifications." `0` when `total` is `0`. */
   readonly dominantShare: number;
   /** `unclassifiedCount / total`. `0` when `total` is `0`. */
   readonly unclassifiedShare: number;
@@ -369,7 +385,7 @@ export function summariseKnowledgeKindDistribution(
   }
 
   const total = classifications.length;
-  let dominantKind: KnowledgeKind | undefined;
+  let dominantKind: DominantKnowledgeBucket | undefined;
   let dominantCount = 0;
   for (const kind of KNOWLEDGE_KINDS) {
     const count = countsByKind[kind];
@@ -377,6 +393,18 @@ export function summariseKnowledgeKindDistribution(
       dominantCount = count;
       dominantKind = kind;
     }
+  }
+  // Unclassified is the fourth bucket the ceiling's defence argues from
+  // (ol-byw0) — nominate it too, on equal footing with the three real
+  // labels, so a classifier that collapses onto declining everything
+  // nominates a dominant bucket instead of silently driving dominantShare
+  // toward zero. Ties go to whichever real label was seen first, same as
+  // ties among the real labels themselves — the tie-break never changes
+  // dominantCount, only which name is attached to it, so it never changes
+  // whether the ceiling fires.
+  if (unclassifiedCount > dominantCount) {
+    dominantCount = unclassifiedCount;
+    dominantKind = 'unclassified';
   }
 
   return {
@@ -404,6 +432,18 @@ export function summariseKnowledgeKindDistribution(
  * check; the finer question — *whether the labels usefully carve her
  * particular material* — is explicitly a judgement on the vault snapshot
  * per the register's own "Tuning" line, not a number this module fits.
+ *
+ * **The nomination now matches this defence** (`ol-byw0`): all four buckets,
+ * unclassified included, are candidates for `dominantKind` in
+ * `summariseKnowledgeKindDistribution` above, so a classifier that
+ * collapses onto declining everything is caught the same way one that
+ * collapses onto a real label is — the two are the same failure with
+ * different symptoms, not two different failures needing two different
+ * flags. The value itself is unchanged: KCT-3 measured real classifier
+ * output against the vault snapshot and found this ceiling would not have
+ * fired anywhere at any confidence floor tried, and kept it as declared
+ * rather than deriving a replacement (`findings/KCT-3-confidence-floor.md`
+ * in olea-service).
  */
 export const DOMINANT_KIND_SHARE_CEILING = 0.9;
 
@@ -424,7 +464,7 @@ export interface KnowledgeKindHealthCheck {
   readonly distribution: KnowledgeKindDistribution;
   /** `true` when the sample is too small for either flag below to mean anything. Neither flag is ever `true` while this is. */
   readonly sampleTooSmall: boolean;
-  /** One label captured `>= DOMINANT_KIND_SHARE_CEILING` of the sample. */
+  /** One bucket — a real label, or unclassified itself — captured `>= DOMINANT_KIND_SHARE_CEILING` of the sample. */
   readonly dominantKindTooHigh: boolean;
   /** Zero unclassified across a sample large enough that a working floor would be expected to decline at least one. */
   readonly zeroUnclassifiedSuspicious: boolean;

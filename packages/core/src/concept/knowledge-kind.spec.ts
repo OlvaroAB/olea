@@ -195,10 +195,32 @@ describe('summariseKnowledgeKindDistribution', () => {
     expect(dist.unclassifiedShare).toBe(0.25);
   });
 
-  it('reports no dominant kind when every classification is unclassified', () => {
+  it('nominates unclassified itself as the dominant bucket when every classification declines (ol-byw0)', () => {
     const dist = summariseKnowledgeKindDistribution([unclassified, unclassified]);
+    expect(dist.dominantKind).toBe('unclassified');
+    expect(dist.dominantShare).toBe(1);
+  });
+
+  it('reports no dominant kind only when there is nothing to be dominant at all', () => {
+    const dist = summariseKnowledgeKindDistribution([]);
     expect(dist.dominantKind).toBeUndefined();
     expect(dist.dominantShare).toBe(0);
+  });
+
+  it('a small real-label count never outranks a larger unclassified count (ol-byw0)', () => {
+    // Ties among the real labels still resolve the way they always did —
+    // this just confirms unclassified is weighed on equal footing, not
+    // given priority it should not have.
+    const sample = [
+      classified('fact'),
+      classified('category'),
+      unclassified,
+      unclassified,
+      unclassified,
+    ];
+    const dist = summariseKnowledgeKindDistribution(sample);
+    expect(dist.dominantKind).toBe('unclassified');
+    expect(dist.dominantShare).toBe(0.6);
   });
 });
 
@@ -280,5 +302,70 @@ describe('assessKnowledgeKindDistribution', () => {
     expect(check.dominantKindTooHigh).toBe(false);
     expect(check.zeroUnclassifiedSuspicious).toBe(false);
     expect(check.healthy).toBe(true);
+  });
+
+  // ol-byw0: the defence for DOMINANT_KIND_SHARE_CEILING argues from four
+  // buckets (three real labels plus unclassified), but the nomination used
+  // to iterate the three real labels only, so a classifier that collapses
+  // onto declining everything could never be reported as dominated by
+  // anything — dominantShare was computed from whichever real label was
+  // largest, not from the true (unclassified) majority. KCT-3 measured
+  // exactly this shape against real classifier output: a sample of 102
+  // classifications with 87 unclassified read as healthy, because the
+  // three real-label counts split the remaining 15 too thinly for any of
+  // them to look dominant. Reproduced here with coined labels and coined
+  // counts, not the real data (INV-3, N-015).
+  describe('the collapsed-classifier shape (ol-byw0, KCT-3)', () => {
+    const REAL_LABELS = ['fact', 'category', 'principle'] as const;
+
+    function coinedSample(unclassifiedCount: number, total: number): KnowledgeKindClassification[] {
+      const sample: KnowledgeKindClassification[] = [];
+      for (let i = 0; i < unclassifiedCount; i++) sample.push(unclassified);
+      const remaining = total - unclassifiedCount;
+      for (let i = 0; i < remaining; i++) {
+        sample.push(classified(REAL_LABELS[i % REAL_LABELS.length] ?? 'fact'));
+      }
+      return sample;
+    }
+
+    it('87/102 unclassified: dominantKind and dominantShare now report the true majority, not the largest real label', () => {
+      const sample = coinedSample(87, 102);
+      const dist = summariseKnowledgeKindDistribution(sample);
+
+      // Before the fix, dominantKind could only ever be a real label, and
+      // the 15 non-unclassified items split 5/5/5 across fact/category/
+      // principle — so dominantShare would have reported 5/102 ≈ 0.049,
+      // "unremarkable," while 87/102 ≈ 0.853 of the sample was in fact one
+      // bucket. That misrepresentation is what this test guards against,
+      // independent of whether this particular ratio crosses the ceiling.
+      expect(dist.dominantKind).toBe('unclassified');
+      expect(dist.dominantShare).toBeCloseTo(87 / 102, 10);
+      expect(dist.dominantShare).not.toBeCloseTo(5 / 102, 2);
+
+      const check = assessKnowledgeKindDistribution(sample);
+      // At this exact ratio (~85.3%) the sample is genuinely below the 90%
+      // ceiling, so healthy is the correct verdict here — the fix is about
+      // the check being ABLE to see this bucket, not about flagging every
+      // occurrence of it.
+      expect(check.sampleTooSmall).toBe(false);
+      expect(check.dominantKindTooHigh).toBe(false);
+      expect(check.healthy).toBe(true);
+    });
+
+    it('CAN FAIL: raise the same shape past the ceiling and the collapse is now caught (structurally impossible before ol-byw0)', () => {
+      // 95/102 unclassified crosses DOMINANT_KIND_SHARE_CEILING (0.9). Before
+      // the fix this was unreachable: the real-label counts (here 7, split
+      // 3/2/2) can never sum to more than total - unclassifiedCount, so
+      // dominantShare was capped at (102 - 95) / 102 ≈ 0.069 regardless of
+      // how extreme the decline-everything collapse got.
+      const sample = coinedSample(95, 102);
+      const dist = summariseKnowledgeKindDistribution(sample);
+      expect(dist.dominantKind).toBe('unclassified');
+      expect(dist.dominantShare).toBeGreaterThanOrEqual(DOMINANT_KIND_SHARE_CEILING);
+
+      const check = assessKnowledgeKindDistribution(sample);
+      expect(check.dominantKindTooHigh).toBe(true);
+      expect(check.healthy).toBe(false);
+    });
   });
 });
