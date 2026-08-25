@@ -101,7 +101,20 @@ function edge(
   confidence: number,
   citations: readonly EvidenceQuestionCitation[],
 ): ConceptAssessmentEdge {
-  return { conceptName, assessmentPath, course, yieldRank, confidence, citations };
+  // `ol-63e1`: mirrors `conceptName` — this package's own concept "names" are
+  // already opaque synthetic ids by construction (`vocabulary.ts`'s
+  // `SYNTHETIC_ID_PREFIX`), so `conceptKey` and `conceptName` are the same
+  // string here, matching how `oracle/compose.ts` behaves whenever a
+  // vocabulary term's display name and derived key happen to coincide.
+  return {
+    conceptName,
+    conceptKey: conceptName,
+    assessmentPath,
+    course,
+    yieldRank,
+    confidence,
+    citations,
+  };
 }
 
 /**

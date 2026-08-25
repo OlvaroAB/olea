@@ -2,8 +2,21 @@
 // her vault, not fabricated" — @auto:core/session/enumerate.spec
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
+import { provisionalConceptKey } from '../concept/concept-key.js';
 import { extractConcepts } from '../concept/extract.js';
 import { enumerateVaultInstruments } from './enumerate.js';
+
+/**
+ * `ol-63e1`: `VaultInstrumentRecord.conceptIds` now carries the opaque key
+ * (`ConceptRecord.key`), never the display name — computed the same way
+ * production does (`provisionalConceptKey`), rather than a hardcoded string,
+ * so this suite does not silently drift from the real derivation. Every
+ * concept below is unbound (tier 2 — no matching Zettelkasten note in these
+ * fixture vaults) unless noted otherwise.
+ */
+function unboundKey(name: string): string {
+  return provisionalConceptKey({ name, boundNotePath: null });
+}
 
 const FRONTMATTER = (topic: string, course = 'TEST101') =>
   ['---', `topic: ${topic}`, `course: ${course}`, '---', ''].join('\n');
@@ -161,7 +174,13 @@ describe('the concept binding follows her `topic:` property', () => {
       'Notes/linked.md': [FRONTMATTER('[[[Alpha]]]'), 'Linked front::back', ''].join('\n'),
     });
     const found = await enumerateVaultInstruments(vault);
-    expect(found.records.map((r) => r.conceptIds)).toEqual([['Alpha'], ['Alpha']]);
+    // Tier 1 — bound to the real Zettelkasten note — so the key derives from
+    // its path, not from the bare name.
+    const alphaKey = provisionalConceptKey({
+      name: 'Alpha',
+      boundNotePath: '05 Zettelkasten/Alpha.md',
+    });
+    expect(found.records.map((r) => r.conceptIds)).toEqual([[alphaKey], [alphaKey]]);
   });
 
   it('carries the concept course list verbatim, and it is the concept’s, not the note’s', async () => {
@@ -183,8 +202,9 @@ describe('the concept binding follows her `topic:` property', () => {
     const found = await enumerateVaultInstruments(vault);
     // Her order, not ours: alphabetical would have put Alpha first. The order
     // no longer *selects* anything — every value is bound — but it is still
-    // hers and is carried verbatim (R1/R2).
-    expect(found.records[0]?.conceptIds).toEqual(['Beta', 'Alpha']);
+    // hers and is carried through as the opaque key derived from each name
+    // (R1/R2 governs the display name, not this join key — `ol-63e1`).
+    expect(found.records[0]?.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha')]);
   });
 
   // D-031 (`ol-4ekt`), superseded by `ol-t3sd`. D-031 bound an instrument to
@@ -203,7 +223,7 @@ describe('the concept binding follows her `topic:` property', () => {
     expect(found.records).toHaveLength(1);
     // One instrument, one record — never one record per (instrument, concept)
     // pair, which would offer the same instrument to her twice in a session.
-    expect(found.records[0]?.conceptIds).toEqual(['Beta', 'Alpha']);
+    expect(found.records[0]?.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha')]);
 
     const concepts = await extractConcepts(vault);
     const beta = concepts.find((c) => c.name === 'Beta');
@@ -212,7 +232,7 @@ describe('the concept binding follows her `topic:` property', () => {
     // Alpha has a note that produced an instrument, and now has the instrument
     // to show for it: the record names Alpha as well as Beta.
     expect(alpha?.sourcePaths).toEqual(['Notes/one.md']);
-    expect(found.records[0]?.conceptIds).toContain('Alpha');
+    expect(found.records[0]?.conceptIds).toContain(unboundKey('Alpha'));
     // And the field that existed only to report the loss is gone from both.
     expect(alpha).not.toHaveProperty('ambiguousTopicPaths');
     expect(beta).not.toHaveProperty('ambiguousTopicPaths');
@@ -224,7 +244,7 @@ describe('the concept binding follows her `topic:` property', () => {
     });
 
     const found = await enumerateVaultInstruments(vault);
-    expect(found.records[0]?.conceptIds).toEqual(['Beta']);
+    expect(found.records[0]?.conceptIds).toEqual([unboundKey('Beta')]);
     const concepts = await extractConcepts(vault);
     expect(concepts.every((c) => !('ambiguousTopicPaths' in c))).toBe(true);
   });
@@ -238,7 +258,7 @@ describe('the concept binding follows her `topic:` property', () => {
     });
     const found = await enumerateVaultInstruments(vault);
     const multi = found.records.find((r) => r.notePath === 'Notes/one.md');
-    expect(multi?.conceptIds).toEqual(['Beta', 'Alpha']);
+    expect(multi?.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha')]);
     expect(multi?.courses).toEqual(['MUSTH104', 'geol204']);
   });
 });

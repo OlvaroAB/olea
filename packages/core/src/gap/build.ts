@@ -100,7 +100,10 @@ export interface ConceptMaterialPresence {
 
 /** One row of the gap view. */
 export interface GapRow {
+  /** Display only (R2, verbatim) — never a join key; use {@link conceptKey}. */
   readonly conceptName: string;
+  /** The opaque join key (`ol-63e1`, `[D-088]`/`[D-109]`) — restated from `ConceptPriority.conceptKey`. What a downstream instrument lookup (`study-session/instrument-index.ts`) or a study-plan `conceptId` joins on, never `conceptName`. */
+  readonly conceptKey: string;
   readonly course: string;
   readonly gapClass: GapClass;
   /** 1-based position in this view, after the readiness re-sort. */
@@ -164,9 +167,9 @@ export interface BuildGapViewInput {
   readonly ranking: RankOracleResult;
   /** The assessments Base, for `type` → format (F4.8). Records this map does not cover resolve to an unknown format, which weights nothing. */
   readonly assessments: readonly AssessmentRecord[];
-  /** Per-concept mastery (P4-T06), keyed as `rankOracle` keys it. Omitted entirely means no recognition evidence anywhere, which weights nothing. */
+  /** Per-concept mastery (P4-T06), keyed by the opaque join key exactly as `rankOracle`/`composeOracleRanking` key it (`ol-63e1`). Omitted entirely means no recognition evidence anywhere, which weights nothing. */
   readonly mastery?: ReadonlyMap<string, ConceptMasteryResult>;
-  /** What her own material holds, per concept name. A concept absent from this map is a material gap (F4.10). */
+  /** What her own material holds, per concept KEY (`ol-63e1` — see {@link buildMaterialPresence}). A concept absent from this map is a material gap (F4.10). */
   readonly materialPresence: ReadonlyMap<string, ConceptMaterialPresence>;
   /** `extractTier3Evidence`'s own `sourceCoverage`, unmodified. */
   readonly sourceCoverage: readonly SourceCoverage[];
@@ -213,6 +216,11 @@ export function classifyGap(presence: ConceptMaterialPresence | undefined): GapC
  * attributed away from anything. Notes the count map does not mention
  * contribute zero, which is the honest reading: the caller found no instruments
  * there.
+ *
+ * **Keyed by `concept.key`, not `concept.name`** (`ol-63e1`) — a caller looks
+ * this map up with `ConceptPriority.conceptKey`/`GapRow.conceptKey`, the same
+ * opaque identity a review-log entry now carries, so a display-name key here
+ * would silently never match.
  */
 export function buildMaterialPresence(
   concepts: readonly ConceptRecord[],
@@ -225,7 +233,7 @@ export function buildMaterialPresence(
       (total, path) => total + (instrumentCountsByNotePath.get(path) ?? 0),
       0,
     );
-    presence.set(concept.name, { notePaths, instrumentCount });
+    presence.set(concept.key, { notePaths, instrumentCount });
   }
   return presence;
 }
@@ -253,16 +261,17 @@ function buildRow(
     targetAssessmentPath === null ? 'unknown' : assessmentFormatOf(types.get(targetAssessmentPath));
 
   const readiness = readinessFactorsFor(
-    input.mastery?.get(entry.conceptName),
+    input.mastery?.get(entry.conceptKey),
     assessmentFormat,
     input.readiness ?? {},
   );
 
-  const presence = input.materialPresence.get(entry.conceptName);
+  const presence = input.materialPresence.get(entry.conceptKey);
   const gapClass = classifyGap(presence);
 
   return {
     conceptName: entry.conceptName,
+    conceptKey: entry.conceptKey,
     course: entry.course,
     gapClass,
     oracleRank: entry.rank,

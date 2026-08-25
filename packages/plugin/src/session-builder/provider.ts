@@ -119,6 +119,10 @@ export function createLocalSessionBuilderProvider(
           basePath: config.assignmentsBasePath,
           reviewLog: entries,
           asOf: today,
+          // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
+          // (`ol-63e1`) — already extracted by the instrument walk above, so
+          // this pays no second walk.
+          concepts: enumeration.concepts,
         });
 
         const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> =

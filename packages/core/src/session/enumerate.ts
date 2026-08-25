@@ -265,18 +265,16 @@ export async function enumerateVaultInstruments(
     const headings = doc.blocks.filter((block): block is HeadingBlock => block.kind === 'heading');
     const noteUid = uidOf(source);
     const title = noteTitle(notePath);
-    // DELIBERATELY still `.name`, not `.key` (`ol-il6m`, C7.11, `[D-109]`).
-    // `ConceptRecord.key` exists now, but flipping this mint site alone would
-    // silently break every reader that still joins review-log `conceptIds`
-    // against a display name — `../oracle/compose.ts`'s `conceptNames`
-    // (sourced from `ConceptAssessmentEdge.conceptName`, itself a display
-    // name), and through it `plugin/src/gap/provider.ts`,
-    // `plugin/src/session-builder/provider.ts` and `plugin/src/plan/provider.ts`
-    // in production. That is a coordinated, cross-package flip (evidence-edge,
-    // oracle, gap, plan all key on the same string today) tracked on a
-    // follow-up bead, not a mechanical rename — see that bead for the full
-    // list of sites that have to move together.
-    const conceptIds = ordered.map((concept) => concept.name);
+    // `.key`, not `.name` — the coordinated flip (`ol-63e1`, `[D-088]`/
+    // `[D-109]`). Every reader that joins review-log `conceptIds` moved in the
+    // same change: `evidence-edge/build.ts` (`ConceptAssessmentEdge.conceptKey`),
+    // `oracle/compose.ts`'s mastery join, `gap/build.ts` (`GapRow.conceptKey`,
+    // `buildMaterialPresence`), `plan/build.ts` (`PlannedConcept.conceptId`),
+    // `plugin/src/today/data-source.ts` (`listConceptCourses`), and
+    // `study-session/build.ts`'s instrument-index lookup. `concept.name`
+    // remains available on `ConceptRecord` for display; nothing here renders
+    // `conceptIds` to her, so the flip changes no student-visible surface.
+    const conceptIds = ordered.map((concept) => concept.key);
     // F2.5's course membership follows concept membership: the instrument
     // belongs to every course any of its concepts belongs to (M:N, R1/R2 —
     // verbatim strings, never case-folded). Sorted for a deterministic result,

@@ -43,8 +43,14 @@ function contribution(overrides: Partial<OracleEdgeContribution> = {}): OracleEd
 
 function conceptPriority(overrides: Partial<ConceptPriority> = {}): ConceptPriority {
   const citations = overrides.citations ?? [citation('papers/2024.md', 'Q1')];
+  const conceptName = overrides.conceptName ?? 'concept-alpha';
   return {
-    conceptName: 'concept-alpha',
+    conceptName,
+    // `ol-63e1`: `PlannedConcept.conceptId` is now `entry.conceptKey`, never
+    // `entry.conceptName` — mirrors `conceptName` here (never overridden
+    // across this suite), the honest case where the two coincide.
+    // `oracle/compose.spec.ts` covers the case where they diverge.
+    conceptKey: conceptName,
     course: 'COURSE-A',
     rank: 1,
     priorityScore: 0.16,

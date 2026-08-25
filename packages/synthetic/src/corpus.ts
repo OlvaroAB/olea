@@ -64,7 +64,6 @@ import {
   type ConceptMaterialPresence,
   type ConceptRecord,
   conceptRecordSize,
-  provisionalConceptKey,
   type SourceCoverage,
   type VaultPath,
 } from 'olea-core';
@@ -242,7 +241,18 @@ export function buildCorpus(): SyntheticCorpus {
   const concepts: ConceptRecord[] = NOTES.map((note) => {
     const sourcePaths: readonly VaultPath[] = [note.path];
     return {
-      key: provisionalConceptKey({ name: note.conceptName, boundNotePath: null }),
+      // `ol-63e1`: the RAW synthetic id, never wrapped through
+      // `provisionalConceptKey` — `curriculum.ts`'s module doc states this
+      // package's self-consistency rule explicitly: every `syn:concept:…` id
+      // IS already opaque by construction (`vocabulary.ts`'s
+      // `SYNTHETIC_ID_PREFIX`) and a synthetic stream's
+      // `ReviewLogRecord.conceptIds` carries it verbatim (`generate.ts`'s
+      // `perConceptMastery`). Wrapping it here would silently diverge this
+      // corpus's `materialPresence` (keyed by `.key`) from
+      // `curriculum.ts`'s edges (`ConceptAssessmentEdge.conceptKey`, also the
+      // raw id) — exactly the cross-module mismatch `buildGapView` needs both
+      // to agree on.
+      key: note.conceptName,
       name: note.conceptName,
       tier: 3,
       courses: [COURSE_VANTREL],

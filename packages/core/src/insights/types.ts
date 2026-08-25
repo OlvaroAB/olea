@@ -63,8 +63,9 @@ export type InsightStatus = 'observed' | 'not-observed' | 'not-enough-history';
  * lighter source — the workbench's synthetic curriculum, a test — is not made
  * to fabricate tiers, source paths and binding targets it has no opinion
  * about. A real `ConceptRecord` maps across as
- * `{ conceptId: record.name, courses: record.courses }`; in this product a
- * concept's id **is** its name (`mastery/rollup.ts`, `oracle/rank.ts`).
+ * `{ conceptId: record.key, courses: record.courses }` — `conceptId` is the
+ * opaque join key (`ol-63e1`, `[D-088]`/`[D-109]`), the same identity a
+ * review-log `conceptIds` entry carries, never the display name.
  */
 export interface ConceptCourses {
   readonly conceptId: string;

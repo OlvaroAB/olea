@@ -82,10 +82,11 @@ export interface ComposeOracleRankingResult {
   /**
    * The mastery map this composition already builds for `rankOracle`,
    * passed through — `buildGapView`'s `mastery` input is keyed exactly the
-   * same way (by `ConceptAssessmentEdge.conceptName`), and re-deriving it a
-   * second time from the same review log would be a second, possibly
-   * inconsistent, computation of the same thing. Additive: existing callers
-   * that only read `ranking`/`edges` are unaffected.
+   * same way (by `ConceptAssessmentEdge.conceptKey`, the opaque join key —
+   * `ol-63e1`), and re-deriving it a second time from the same review log
+   * would be a second, possibly inconsistent, computation of the same thing.
+   * Additive: existing callers that only read `ranking`/`edges` are
+   * unaffected.
    */
   readonly mastery: ReadonlyMap<string, ConceptMasteryResult>;
 }
@@ -104,8 +105,12 @@ export async function composeOracleRanking(
   const { vault, reviewLog, asOf, options, ...edgeOptions } = input;
   const edges = await buildConceptAssessmentEdges(vault, edgeOptions);
 
-  const conceptNames = [...new Set(edges.edges.map((edge) => edge.conceptName))].sort();
-  const mastery = computeAllConceptMastery(reviewLog, conceptNames);
+  // Keyed by the opaque join key, not the display name (`ol-63e1`) — this is
+  // exactly the value `session/enumerate.ts` now mints into a review-log
+  // record's `conceptIds`, so this is the join that used to silently miss
+  // every entry before the coordinated flip.
+  const conceptKeys = [...new Set(edges.edges.map((edge) => edge.conceptKey))].sort();
+  const mastery = computeAllConceptMastery(reviewLog, conceptKeys);
 
   const ranking = rankOracle({
     evidence: {

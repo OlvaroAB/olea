@@ -159,6 +159,10 @@ describe('claim: a concept failed three times outranks one passed three times (e
     const assessmentPath = 'syn:assessment:test:midterm';
     const edge = (conceptName: string) => ({
       conceptName,
+      // `ol-63e1`: mirrors `conceptName` — this suite's concept "names" are
+      // already opaque synthetic ids (`syn:concept:...`), the honest case
+      // where the two coincide.
+      conceptKey: conceptName,
       assessmentPath,
       course,
       yieldRank: 1,

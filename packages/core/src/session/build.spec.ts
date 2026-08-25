@@ -3,11 +3,22 @@
 import type { ReviewLogEntry, SelectionContextV4 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
+import { provisionalConceptKey } from '../concept/concept-key.js';
 import { reviewLogPath } from '../review-log/path.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import { buildReviewSession } from './build.js';
 import { toDueInstruments } from './due-instruments.js';
 import { readReviewLogHistory } from './history.js';
+
+/**
+ * `ol-63e1`: every concept in `smallVault()` below is unbound (tier 2 — no
+ * matching Zettelkasten note), so `VaultInstrumentRecord.conceptIds` and a
+ * review-log record's `conceptIds` both carry this derived opaque key, never
+ * the bare display name ('Alpha', 'Beta', 'Gamma').
+ */
+function unboundKey(name: string): string {
+  return provisionalConceptKey({ name, boundNotePath: null });
+}
 
 const CONTEXT: SelectionContextV4 = {
   dueState: 'new',
@@ -86,8 +97,12 @@ describe('one entry point, both halves returned', () => {
       now: NOW,
     });
 
-    const alphaItems = session.queue.items.filter((i) => i.conceptIds.includes('Alpha'));
-    const alphaDeferred = session.queue.deferred.filter((d) => d.conceptIds.includes('Alpha'));
+    const alphaItems = session.queue.items.filter((i) =>
+      i.conceptIds.includes(unboundKey('Alpha')),
+    );
+    const alphaDeferred = session.queue.deferred.filter((d) =>
+      d.conceptIds.includes(unboundKey('Alpha')),
+    );
     expect(alphaItems).toHaveLength(1);
     expect(alphaDeferred).toHaveLength(1);
     expect(alphaDeferred[0]?.deferredBehind).toBe(alphaItems[0]?.instrumentId);
@@ -115,14 +130,18 @@ describe('one entry point, both halves returned', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const gamma = enumeration.instruments.records.find((r) => r.conceptIds.includes('Gamma'));
+    const gamma = enumeration.instruments.records.find((r) =>
+      r.conceptIds.includes(unboundKey('Gamma')),
+    );
     if (gamma === undefined) throw new Error('expected a Gamma instrument');
 
     const session = await buildReviewSession({
       vault,
       scheduler: createFsrsScheduler(),
       now: NOW,
-      entries: [reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, 'Gamma')],
+      entries: [
+        reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')),
+      ],
     });
 
     const item = session.queue.items.find((i) => i.instrumentId === gamma.instrumentId);
@@ -135,7 +154,9 @@ describe('one entry point, both halves returned', () => {
       vault,
       scheduler: createFsrsScheduler(),
       now: new Date('2027-08-20T12:00:00Z'),
-      entries: [reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, 'Gamma')],
+      entries: [
+        reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')),
+      ],
     });
     const overdue = later.queue.items.find((i) => i.instrumentId === gamma.instrumentId);
     expect(overdue?.selectionContext.dueState).toBe('overdue');
@@ -151,7 +172,7 @@ describe('suspension, read from the whole log', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const gamma = base.instruments.records.find((r) => r.conceptIds.includes('Gamma'));
+    const gamma = base.instruments.records.find((r) => r.conceptIds.includes(unboundKey('Gamma')));
     if (gamma === undefined) throw new Error('expected a Gamma instrument');
 
     const suspended = await buildReviewSession({
@@ -165,7 +186,7 @@ describe('suspension, read from the whole log', () => {
           eventId: 's1',
           timestamp: '2026-08-01T09:00:00+00:00',
           instrumentId: gamma.instrumentId,
-          conceptIds: ['Gamma'],
+          conceptIds: [unboundKey('Gamma')],
         },
       ],
     });
@@ -184,7 +205,7 @@ describe('suspension, read from the whole log', () => {
           eventId: 's1',
           timestamp: '2026-08-01T09:00:00+00:00',
           instrumentId: gamma.instrumentId,
-          conceptIds: ['Gamma'],
+          conceptIds: [unboundKey('Gamma')],
         },
         {
           schemaVersion: 4,
@@ -192,7 +213,7 @@ describe('suspension, read from the whole log', () => {
           eventId: 's2',
           timestamp: '2026-08-02T09:00:00+00:00',
           instrumentId: gamma.instrumentId,
-          conceptIds: ['Gamma'],
+          conceptIds: [unboundKey('Gamma')],
         },
       ],
     });
@@ -215,7 +236,9 @@ describe('the filter narrows a real-vault session the same way it narrows a synt
       filter: { courses: ['GEO101'] },
     });
 
-    expect(filtered.queue.items.flatMap((i) => i.conceptIds).sort()).toEqual(['Alpha', 'Beta']);
+    expect(filtered.queue.items.flatMap((i) => i.conceptIds).sort()).toEqual(
+      [unboundKey('Alpha'), unboundKey('Beta')].sort(),
+    );
     const unfilteredIds = unfiltered.queue.items.map((i) => i.instrumentId);
     const filteredIds = filtered.queue.items.map((i) => i.instrumentId);
     // Subsequence: same items, same order, fewer of them.
@@ -227,9 +250,9 @@ describe('the filter narrows a real-vault session the same way it narrows a synt
       vault: smallVault(),
       scheduler: createFsrsScheduler(),
       now: NOW,
-      filter: { conceptIds: ['Gamma'] },
+      filter: { conceptIds: [unboundKey('Gamma')] },
     });
-    expect(session.queue.items.flatMap((i) => i.conceptIds)).toEqual(['Gamma']);
+    expect(session.queue.items.flatMap((i) => i.conceptIds)).toEqual([unboundKey('Gamma')]);
   });
 });
 
@@ -241,17 +264,19 @@ describe('the log is read from the vault when the caller does not supply it', ()
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const gamma = enumeration.instruments.records.find((r) => r.conceptIds.includes('Gamma'));
+    const gamma = enumeration.instruments.records.find((r) =>
+      r.conceptIds.includes(unboundKey('Gamma')),
+    );
     if (gamma === undefined) throw new Error('expected a Gamma instrument');
 
     await vault.write(
       reviewLogPath('2026-08-19', 'device-a'),
-      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, 'Gamma'))}\n`,
+      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')))}\n`,
     );
     await vault.write(
       reviewLogPath('2026-08-19', 'device-b'),
       // The same event from a second device — merged by eventId, not doubled.
-      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, 'Gamma'))}\n`,
+      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')))}\n`,
     );
 
     const history = await readReviewLogHistory(vault);
@@ -270,7 +295,7 @@ describe('the log is read from the vault when the caller does not supply it', ()
     const vault = smallVault();
     await vault.write(
       reviewLogPath('2026-08-19', 'device-a'),
-      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', 'x', 'Gamma'))}\n{"schemaVer`,
+      `${JSON.stringify(reviewOf('e1', '2026-08-19T09:00:00+00:00', 'x', unboundKey('Gamma')))}\n{"schemaVer`,
     );
     const history = await readReviewLogHistory(vault);
     expect(history.entries).toHaveLength(1);

@@ -69,7 +69,10 @@ export interface OracleConceptFactors {
 
 /** One ranked concept within a course. */
 export interface ConceptPriority {
+  /** Display only (R2, verbatim) — see {@link ConceptAssessmentEdge.conceptName}. Never a join key; use {@link conceptKey}. */
   readonly conceptName: string;
+  /** The opaque join key (`ol-63e1`, `[D-088]`/`[D-109]`) — what a review-log `conceptIds` entry, `GapRow`, and a study plan's `PlannedConcept.conceptId` all key on. */
+  readonly conceptKey: string;
   readonly course: string;
   /** 1-based, within this course's ranking only. */
   readonly rank: number;
@@ -170,14 +173,13 @@ export interface RankOracleInput {
    * `./rank.ts`'s `resolveMasteryState` for why those two absences are
    * deliberately not the same value.
    *
-   * Keyed on the assumption that a concept's `conceptName`
-   * (`ConceptAssessmentEdge.conceptName`, R2's verbatim display name) IS
-   * the review log's `conceptId` — v0.9 has no separate canonical-id layer
-   * (knowledge model §4's "leave the rest null, key nothing on them"; R1/R2
-   * name display identity as the only identity concepts have). This is a
-   * Class B reading of a contract silence, reversible if a canonical id
-   * layer ever lands — flagged in the task report rather than assumed
-   * silently.
+   * **Keyed by `ConceptAssessmentEdge.conceptKey` — the opaque, stable id
+   * (`ol-il6m`, `[D-088]`/`[D-109]`), never `conceptName`.** The canonical-id
+   * layer this module's earlier doc flagged as a future reversal has now
+   * landed: `session/enumerate.ts` mints review-log `conceptIds` from
+   * `ConceptRecord.key`, so a mastery map still keyed by display name would
+   * silently miss every join (`ol-63e1`, the coordinated flip that corrected
+   * this).
    */
   readonly mastery?: ReadonlyMap<string, ConceptMasteryResult>;
   /**

@@ -26,6 +26,15 @@ import {
 import type { ConceptAssessmentEdge } from './types.js';
 
 const BASE_PATH = '02 Assignments/Assignments.base';
+/**
+ * `ol-63e1`: `BuildConceptAssessmentEdgesOptions.concepts` is required, but
+ * this suite asserts on `conceptName`/edge shape only, never on the opaque
+ * `conceptKey` — an empty list is deliberate here, exercising the documented
+ * fallback (`conceptKey` defaults to the matched vocabulary name) rather than
+ * running a full concept extraction this suite has no other use for.
+ * `conceptKey.spec.ts` covers the real resolution path.
+ */
+const NO_CONCEPTS: readonly never[] = [];
 
 describe('buildConceptAssessmentEdges — synthetic vault covering the acceptance criteria', () => {
   let root: string;
@@ -166,20 +175,29 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('ACCEPTANCE: an assessment whose course has zero registered/citing past papers gets zero edges — not implied ones', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     const labEdges = result.edges.filter((e) => e.assessmentPath === '02 Assignments/Lab 1.md');
     expect(labEdges).toEqual([]);
     expect(result.assessmentsWithNoEvidence).toEqual(['02 Assignments/Lab 1.md']);
   });
 
   it('never manufactures an edge for a zettel concept that no past paper ever cites', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     const names = new Set(result.edges.map((e) => e.conceptName));
     expect(names.has('Reagent titration')).toBe(false);
   });
 
   it('excludes objectives-only evidence — a concept cited only by the objectives document gets no edge, even in a course with real past-paper evidence', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     // TESTC101 legitimately has edges (Widget theory, Gadget assembly), so
     // this is not the zero-evidence-course case — it isolates the citation
     // KIND filter specifically.
@@ -191,7 +209,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('an assessment with no `class` value is never guessed into a course, and never receives an edge', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     expect(result.assessmentsWithoutCourse).toEqual(['02 Assignments/Mystery Task.md']);
     expect(result.edges.some((e) => e.assessmentPath === '02 Assignments/Mystery Task.md')).toBe(
       false,
@@ -199,7 +220,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('partial evidence: only the concepts actually cited get edges, not every zettel concept in the course', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     const testc101Concepts = new Set(
       result.edges.filter((e) => e.course === 'TESTC101').map((e) => e.conceptName),
     );
@@ -207,7 +231,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('confidence is the fraction of a course’s distinct past papers that cite the concept, and yield rank orders by citation breadth', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     const quiz1 = result.edges.filter((e) => e.assessmentPath === '02 Assignments/Quiz 1.md');
 
     const widget = quiz1.find((e) => e.conceptName === 'Widget theory');
@@ -235,7 +262,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('course-level broadcast (documented Class B call): every assessment sharing a course gets the identical edge set, differing only by assessmentPath', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     const strip = (e: ConceptAssessmentEdge) => {
       const { assessmentPath: _assessmentPath, ...rest } = e;
       return rest;
@@ -253,7 +283,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('every citation carried on an edge is real: sourcePath + questionLabel resolve to what segmentPastPaper actually produced', async () => {
-    const result = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     for (const edge of result.edges) {
       for (const citation of edge.citations) {
         expect(citation.sourcePath).toMatch(/^03 Research\//);
@@ -264,8 +297,14 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
   });
 
   it('rebuild-from-source equivalence: calling it twice against the same vault yields identical output', async () => {
-    const first = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
-    const second = await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    const first = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
+    const second = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
     expect(second).toEqual(first);
   });
 
@@ -274,7 +313,7 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     const before = new Map(
       await Promise.all(allPaths.map(async (p) => [p, await source.read(p)] as const)),
     );
-    await buildConceptAssessmentEdges(source, { basePath: BASE_PATH });
+    await buildConceptAssessmentEdges(source, { basePath: BASE_PATH, concepts: NO_CONCEPTS });
     const after = new Map(
       await Promise.all(allPaths.map(async (p) => [p, await source.read(p)] as const)),
     );

@@ -270,13 +270,17 @@ function unionCitations(
  * `mastery` supplied but this concept has no entry in it reads as `'seed'`
  * — P4-T06's own contract for zero scored evidence, which is a real,
  * contract-backed answer rather than an absence this module invented.
+ *
+ * Looked up by `conceptKey` — the opaque join key (`ol-63e1`) — never by the
+ * display name; `mastery` is `RankOracleInput.mastery`, which is keyed the
+ * same way (see that field's doc).
  */
 function resolveMasteryState(
   mastery: ReadonlyMap<string, { readonly state: MasteryState }> | undefined,
-  conceptName: string,
+  conceptKey: string,
 ): OracleMasteryState {
   if (mastery === undefined) return 'unknown';
-  return mastery.get(conceptName)?.state ?? 'seed';
+  return mastery.get(conceptKey)?.state ?? 'seed';
 }
 
 function buildEdgeContribution(
@@ -379,22 +383,32 @@ function rankOneCourse(
     };
   }
 
+  // Grouped by the opaque join key (`ol-63e1`), never by display name — two
+  // edges naming the SAME concept always share one `conceptKey` by
+  // construction (`evidence-edge/build.ts` resolves it from the same
+  // `ConceptRecord`), so grouping by key or by name partitions identically in
+  // the honest case; grouping by key is what stays correct if two distinct
+  // vocabulary strings ever resolved to the same record (never today, but the
+  // key is the actual identity and the name is not).
   const edgesByConcept = new Map<string, ConceptAssessmentEdge[]>();
   for (const edge of edgesForCourse) {
-    const list = edgesByConcept.get(edge.conceptName);
-    if (list === undefined) edgesByConcept.set(edge.conceptName, [edge]);
+    const list = edgesByConcept.get(edge.conceptKey);
+    if (list === undefined) edgesByConcept.set(edge.conceptKey, [edge]);
     else list.push(edge);
   }
 
   const entries: ConceptPriority[] = [];
-  for (const [conceptName, edges] of edgesByConcept) {
+  for (const [conceptKey, edges] of edgesByConcept) {
+    // Every edge in this group shares one conceptName by construction (see
+    // above) — restated from the first for display purposes only.
+    const conceptName = edges[0]?.conceptName ?? conceptKey;
     const contributions = edges
       .map((edge) =>
         buildEdgeContribution(edge, assessmentsByPath.get(edge.assessmentPath), asOf, resolved),
       )
       .sort(compareContributions);
     const preMasteryScore = contributions.reduce((sum, c) => sum + c.contribution, 0);
-    const masteryState = resolveMasteryState(mastery, conceptName);
+    const masteryState = resolveMasteryState(mastery, conceptKey);
     const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
     const citations = unionCitations(edges);
     const distinctSourceCount = new Set(citations.map((c) => c.sourcePath)).size;
@@ -411,6 +425,7 @@ function rankOneCourse(
 
     entries.push({
       conceptName,
+      conceptKey,
       course,
       rank: 0, // assigned below, after sorting
       priorityScore: factors.priorityScore,

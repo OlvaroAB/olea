@@ -111,7 +111,14 @@ function nearestFutureDueDays(entry: ConceptPriority): number | null {
 
 function toPlannedConcept(entry: ConceptPriority): PlannedConcept {
   return {
-    conceptId: entry.conceptName,
+    // The opaque join key (`ol-63e1`, `[D-088]`/`[D-109]`), not the display
+    // name — `plan/execute.ts`'s `indexPlan` is joined against a queue item's
+    // `conceptIds`, which a review-log-derived instrument now carries as the
+    // same opaque key (`session/enumerate.ts`). The display name she reads
+    // stays available in `reasoning` below, mechanically assembled from the
+    // same entry (`oracle/rank.ts`'s `buildReasoning`) — this field itself was
+    // never rendered to her.
+    conceptId: entry.conceptKey,
     rank: entry.rank,
     weight: entry.priorityScore,
     examProximityDays: nearestFutureDueDays(entry),

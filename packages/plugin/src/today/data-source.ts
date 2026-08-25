@@ -322,11 +322,12 @@ export interface VaultTrendsSourceDeps {
  * already gives: a vault that throws mid-walk is not a vault with nothing in
  * it, and the panel is the wrong place to surface a read error at her.
  *
- * **A concept's id is its name.** `extractConcepts` returns `ConceptRecord`s
- * keyed by `name`, and that is exactly the string a review-log record's
- * `conceptIds` carries (`mastery/rollup.ts`, `oracle/rank.ts`). The mapping is
- * one line and is written here rather than inside core so that the assumption
- * is visible at the seam where it could stop being true.
+ * **A concept's id is its opaque key, not its name** (`ol-63e1`, `[D-088]`/
+ * `[D-109]`). `extractConcepts` returns `ConceptRecord`s carrying both — `key`
+ * is the identity a review-log record's `conceptIds` now carries
+ * (`session/enumerate.ts`), `name` is her verbatim display string. The mapping
+ * is one line and is written here rather than inside core so that the seam
+ * where it could stop matching is visible.
  */
 export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrendsSource {
   return {
@@ -334,7 +335,7 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
       try {
         const records = await extractConcepts(deps.vault, deps.conceptOptions ?? {});
         return records.map((record) => ({
-          conceptId: record.name,
+          conceptId: record.key,
           courses: record.courses,
         }));
       } catch {

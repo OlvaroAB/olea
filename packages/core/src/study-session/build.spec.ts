@@ -39,6 +39,12 @@ interface RowSpec {
 function row(spec: RowSpec): GapRow {
   return {
     conceptName: spec.conceptName,
+    // `ol-63e1`: `instrumentsFor` is now looked up by `conceptKey`
+    // (`build.ts`'s fill loop), so this fixture's key mirrors its name —
+    // matching the `qa(...)`/`mcq(...)` fixtures' own `conceptIds`, which are
+    // plain letters like `'A'` throughout this suite. This file is about the
+    // fill algorithm, not the name/key split.
+    conceptKey: spec.conceptName,
     course: spec.course ?? 'CRS101',
     gapClass: spec.gapClass ?? 'mastery-gap',
     rank: spec.rank ?? 1,

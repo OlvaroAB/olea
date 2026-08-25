@@ -42,6 +42,7 @@ import {
   buildStudyPlan,
   calendarDaysEndingOn,
   composeOracleRanking,
+  extractConcepts,
   readReviewLogHistory,
   reviewLogPath,
 } from 'olea-core';
@@ -89,13 +90,23 @@ export function createLocalStudyPlanProvider(
         reviewLogPath(day, deps.deviceId),
       );
 
-      const { entries } = await readReviewLogHistory(deps.vault, { additionalPaths });
+      // Neither walk depends on the other's result — both read the same
+      // read-only vault — so they run concurrently, same discipline as
+      // `gap/provider.ts`/`session-builder/provider.ts`. `extractConcepts`
+      // (not the heavier `enumerateVaultInstruments`, which this provider has
+      // no other use for) is the name→opaque-key source for
+      // `ConceptAssessmentEdge.conceptKey` (`ol-63e1`).
+      const [{ entries }, concepts] = await Promise.all([
+        readReviewLogHistory(deps.vault, { additionalPaths }),
+        extractConcepts(deps.vault, {}),
+      ]);
 
       const { ranking } = await composeOracleRanking({
         vault: deps.vault,
         basePath: config.assignmentsBasePath,
         reviewLog: entries,
         asOf: today,
+        concepts,
       });
 
       return buildStudyPlan({ ranking, computedAt: now.toISOString() });

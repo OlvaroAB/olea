@@ -62,6 +62,10 @@ function entry(conceptName: string, rank: number, assessmentPath: VaultPath): Co
   };
   return {
     conceptName,
+    // `ol-63e1`: mirrors `conceptName` deliberately — this suite's
+    // `masteryMap`/`PRESENCE` fixtures are keyed by the same literal strings,
+    // and this file is about the readiness weighting, not the name/key split.
+    conceptKey: conceptName,
     course: 'CRS101',
     rank,
     // Identical scores: the ONLY thing that can reorder these two is readiness.

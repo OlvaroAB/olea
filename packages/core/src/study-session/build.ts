@@ -406,7 +406,11 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   // repeated lookup.
   const queues = ordered.map((row) => ({
     row,
-    records: orderedForFormat(instruments.instrumentsFor(row.conceptName), formatPreference),
+    // `row.conceptKey`, not `row.conceptName` (`ol-63e1`) — `instruments`
+    // indexes `VaultInstrumentRecord.conceptIds`, which `session/enumerate.ts`
+    // now mints as the opaque key; a display-name lookup here would silently
+    // find nothing for every row.
+    records: orderedForFormat(instruments.instrumentsFor(row.conceptKey), formatPreference),
     at: 0,
     chose: false,
     /** Set when a row still had instruments left that the remaining budget could not take. */

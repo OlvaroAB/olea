@@ -61,6 +61,7 @@ import type {
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
 } from '../concept/evidence.js';
+import type { ConceptRecord } from '../concept/types.js';
 import type { Provenance } from '../extract/types.js';
 import type { VaultPath } from '../vault/types.js';
 
@@ -91,8 +92,28 @@ export interface EvidenceQuestionCitation {
  * for it.
  */
 export interface ConceptAssessmentEdge {
-  /** Exactly the vocabulary/concept name the citations matched (R2 — verbatim, never re-cased). */
+  /**
+   * Exactly the vocabulary/concept name the citations matched (R2 — verbatim,
+   * never re-cased). **Display only, never a join key** (`ol-63e1`,
+   * `[D-088]`/`[D-109]`) — a renderer reads this; a mastery or review-log join
+   * reads {@link conceptKey} instead. Kept because `citations`/`reasoning`
+   * consumers still need her own wording, and R2 forbids re-deriving it from
+   * anything else.
+   */
   readonly conceptName: string;
+  /**
+   * The opaque, stable join key (`ConceptRecord.key`, `ol-il6m`) for the same
+   * concept `conceptName` names — resolved from
+   * `BuildConceptAssessmentEdgesOptions.concepts` by exact name match.
+   * **This is the identity a review-log `conceptIds` entry now carries**
+   * (`ol-63e1`'s coordinated flip): `oracle/compose.ts` joins mastery on this
+   * field, never on `conceptName`. Falls back to `conceptName` itself only
+   * when no matching `ConceptRecord` is found (a vocabulary term with no
+   * corresponding record — should not happen against a consistent vault
+   * snapshot; documented rather than thrown, matching this package's "degrade
+   * to a named, inspectable value" discipline elsewhere).
+   */
+  readonly conceptKey: string;
   /** The `AssessmentRecord.path` this edge targets — the natural key, matching how the rest of this package identifies a note-backed record. */
   readonly assessmentPath: VaultPath;
   /** The course this edge's evidence and its target assessment agree on (never guessed — see `build.ts`). */
@@ -120,6 +141,18 @@ export interface ConceptAssessmentEdge {
 export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3EvidenceOptions {
   /** The `.base` file `readAssessments` scans — required; F7.9 leaves no default to guess (`../assessment/read.js`). */
   readonly basePath: VaultPath;
+  /**
+   * Every `ConceptRecord` this vault snapshot extracted — the source of
+   * {@link ConceptAssessmentEdge.conceptKey} (`ol-63e1`). Required rather than
+   * optional: an edge built without a real name→key map would either fabricate
+   * a key or silently fall back to the display name for every entry, which is
+   * exactly the half-flipped state that zeroes the mastery join this bead
+   * exists to fix. The caller already extracts this list for another purpose
+   * in every production path today (`enumerateVaultInstruments`'s
+   * `VaultInstrumentEnumeration.concepts`, or a direct `extractConcepts` call)
+   * — this module does no extraction of its own, it only reads the mapping.
+   */
+  readonly concepts: readonly ConceptRecord[];
 }
 
 export interface BuildConceptAssessmentEdgesResult {

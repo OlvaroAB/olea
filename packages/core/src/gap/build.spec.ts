@@ -28,6 +28,12 @@ function entry(conceptName: string, rank: number, priorityScore: number): Concep
   };
   return {
     conceptName,
+    // `ol-63e1`: this suite is about gap classification, not the name/key
+    // distinction, so `conceptKey` deliberately mirrors `conceptName` here —
+    // it matches the literal string keys the `materialPresence` maps below
+    // use ('Alpha', 'Beta', ...). `buildMaterialPresence`'s own describe
+    // block (below) is what tests the real opaque-key derivation.
+    conceptKey: conceptName,
     course: 'CRS101',
     rank,
     priorityScore,
@@ -217,6 +223,12 @@ describe('buildGapView', () => {
 });
 
 describe('buildMaterialPresence', () => {
+  // `ol-63e1`: keyed by `concept.key` now, not `concept.name` — every lookup
+  // below goes through the same key the record itself carries, rather than
+  // the display string, so this suite proves the actual (opaque) join key
+  // rather than one that happens to read the same as the name.
+  const ALPHA_KEY = provisionalConceptKey({ name: 'Alpha', boundNotePath: null });
+
   function concept(name: string, sourcePaths: readonly string[]): ConceptRecord {
     return {
       key: provisionalConceptKey({ name, boundNotePath: null }),
@@ -235,7 +247,7 @@ describe('buildMaterialPresence', () => {
         ['01 Courses/CRS101/w2.md' as VaultPath, 2],
       ]),
     );
-    expect(presence.get('Alpha')?.instrumentCount).toBe(5);
+    expect(presence.get(ALPHA_KEY)?.instrumentCount).toBe(5);
   });
 
   it('counts a note the caller found no instruments in as zero, not as absent', () => {
@@ -244,10 +256,10 @@ describe('buildMaterialPresence', () => {
       new Map(),
     );
     // Notes exist, cards do not — F4.5, and specifically NOT F4.10.
-    expect(presence.get('Alpha')).toEqual({
+    expect(presence.get(ALPHA_KEY)).toEqual({
       notePaths: ['01 Courses/CRS101/w1.md'],
       instrumentCount: 0,
     });
-    expect(classifyGap(presence.get('Alpha'))).toBe('coverage-gap');
+    expect(classifyGap(presence.get(ALPHA_KEY))).toBe('coverage-gap');
   });
 });

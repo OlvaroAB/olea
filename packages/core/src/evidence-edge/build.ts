@@ -159,6 +159,11 @@ export async function buildConceptAssessmentEdges(
     extractTier3Evidence(vault, options),
   ]);
 
+  // `ol-63e1`: the opaque join key for each vocabulary/concept name matched
+  // against tier-3 material — see `./types.js`'s `ConceptAssessmentEdge.conceptKey`
+  // doc for why a missing entry falls back to the name rather than throwing.
+  const conceptKeyByName = new Map(options.concepts.map((concept) => [concept.name, concept.key]));
+
   const questionIndex = await buildQuestionIndex(vault, tier3.sourcesReport.sources);
   resolveCitations(tier3.citations, questionIndex);
 
@@ -261,6 +266,7 @@ export async function buildConceptAssessmentEdges(
     evidence.forEach((entry, index) => {
       edges.push({
         conceptName: entry.conceptName,
+        conceptKey: conceptKeyByName.get(entry.conceptName) ?? entry.conceptName,
         assessmentPath: record.path,
         course,
         yieldRank: index + 1,

@@ -27,8 +27,16 @@ function citation(overrides: Partial<EvidenceQuestionCitation> = {}): EvidenceQu
 }
 
 function edge(overrides: Partial<ConceptAssessmentEdge> = {}): ConceptAssessmentEdge {
+  const conceptName = overrides.conceptName ?? 'concept-a';
   return {
-    conceptName: 'concept-a',
+    conceptName,
+    // `ol-63e1`: mirrors `conceptName` by default (never overridden across
+    // this suite) — this file's `mastery` maps are keyed by the same literal
+    // strings ('concept-a', 'concept-b', ...), the honest case where a
+    // vocabulary term's display name and derived key root happen to
+    // coincide. `evidence-edge/build.spec.ts` and `oracle/compose.spec.ts`
+    // cover the case where they diverge.
+    conceptKey: conceptName,
     assessmentPath: 'Assessments/Quiz1.md',
     course: 'COURSEA',
     yieldRank: 1,

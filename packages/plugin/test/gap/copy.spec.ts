@@ -70,6 +70,7 @@ function row(overrides: Partial<GapRow> = {}): GapRow {
   } as GapRow['citations'][number];
   return {
     conceptName: 'Alpha',
+    conceptKey: 'Alpha', // `ol-63e1`: this suite is about copy, not the name/key split.
     course: 'CRS101',
     gapClass: 'mastery-gap',
     rank: 1,

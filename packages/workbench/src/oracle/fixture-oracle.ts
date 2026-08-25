@@ -165,15 +165,22 @@ export async function buildFixtureOracle(vault: VaultSource): Promise<FixtureOra
           // so the second walk costs time, never correctness — see the
           // "self-consistency" argument in the module doc for why this is
           // not the one to cache away.
-          const { records: instrumentRecords } = await enumerateVaultInstruments(vault, {
-            excludePaths: EXCLUDE_PATHS,
-          });
+          const [{ records: instrumentRecords }, innerConcepts] = await Promise.all([
+            enumerateVaultInstruments(vault, { excludePaths: EXCLUDE_PATHS }),
+            extractConcepts(vault, { includeTier3: true }),
+          ]);
           const reviewLog = realReviewLog(instrumentRecords, stream.entries);
           return composeOracleRanking({
             vault,
             basePath: BASE_PATH,
             reviewLog,
             asOf: FIXTURE_ORACLE_ASOF,
+            // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
+            // (`ol-63e1`). Re-extracted here (rather than sharing the outer
+            // `concepts` fetched below) for the same self-consistency reason
+            // this branch already re-walks `enumerateVaultInstruments` — see
+            // the module doc.
+            concepts: innerConcepts,
           });
         })(),
       ]);

@@ -219,6 +219,8 @@ export function findSessionState(id: string): SessionWorkbenchState | undefined 
 
 interface RankedTarget {
   readonly conceptName: string;
+  /** `ol-63e1`: the opaque join key — what `borrowedInstruments` must stamp onto its rebuilt `conceptIds`, never `conceptName`. */
+  readonly conceptKey: string;
   readonly course: string;
   readonly notePath: VaultPath;
   readonly noteTitle: string;
@@ -249,7 +251,10 @@ function borrowedInstruments(
     const target = targets[index % targets.length] as RankedTarget;
     return {
       ...record,
-      conceptIds: [target.conceptName],
+      // `ol-63e1`: the opaque key, not the display name — this is what
+      // `GapRow.conceptKey`/`study-session/build.ts`'s instrument lookup
+      // joins on, matching production's `session/enumerate.ts` mint site.
+      conceptIds: [target.conceptKey],
       courses: [target.course],
       notePath: target.notePath,
       noteTitle: target.noteTitle,
@@ -334,7 +339,11 @@ function tally(records: readonly VaultInstrumentRecord[]): ReadonlyMap<VaultPath
 }
 
 function rankedTargetsOf(
-  ranked: readonly { readonly conceptName: string; readonly course: string }[],
+  ranked: readonly {
+    readonly conceptName: string;
+    readonly conceptKey: string;
+    readonly course: string;
+  }[],
   concepts: readonly ConceptRecord[],
 ): readonly RankedTarget[] {
   const byName = new Map(concepts.map((concept) => [concept.name, concept]));
@@ -344,6 +353,7 @@ function rankedTargetsOf(
     if (notePath === undefined) continue;
     targets.push({
       conceptName: entry.conceptName,
+      conceptKey: entry.conceptKey,
       course: entry.course,
       notePath,
       noteTitle: noteTitleOf(notePath),
@@ -373,6 +383,7 @@ async function composeWorld(
     basePath: BASE_PATH,
     reviewLog: [],
     asOf: state.asOf,
+    concepts,
     ...sourcesOption,
   });
   const rankedEntries = first.ranking.courses.flatMap((course) =>
@@ -396,6 +407,7 @@ async function composeWorld(
           basePath: BASE_PATH,
           reviewLog,
           asOf: state.asOf,
+          concepts,
           ...sourcesOption,
         });
 
