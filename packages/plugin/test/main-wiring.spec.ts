@@ -332,6 +332,38 @@ describe('the bulk-review triage view is registered and reachable (F3.3, ol-jie3
   });
 });
 
+describe("component 3.3's delivered ranking weights have a real production caller ([D-110], ol-v7r5.3)", () => {
+  // Same defect shape this file's own module doc opens with: `rank-weights-provider.ts`,
+  // `rank/wiring.ts` and their fetch/decode logic were all complete and tested
+  // (`test/rank/*.spec.ts`) while nothing in `main.ts` ever called
+  // `buildRankWeightsWiring` or threaded its result into
+  // `createLocalStudyPlanProvider` — ol-v7r5.3's own close evidence recorded the
+  // exact seam as not yet crossed because `main.ts` was a live concurrent lane's
+  // file at the time. These assertions are the source-level proof that the seam
+  // is now crossed.
+
+  it('builds the rank-weights wiring through the tested composer, against the real data host and the real HTTP GET adapter', () => {
+    expect(main).toMatch(
+      /this\.rankWeights\s*=\s*await buildRankWeightsWiring\(\{\s*dataHost:\s*this,\s*httpGet:\s*obsidianRankWeightsGet,/,
+    );
+  });
+
+  it('imports the real composer and transport adapter, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*obsidianRankWeightsGet\s*\}\s*from\s*'\.\/rank\/obsidian-rank-weights-transport\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*buildRankWeightsWiring,\s*type RankWeightsWiring\s*\}\s*from\s*'\.\/rank\/wiring\.js'/,
+    );
+  });
+
+  it('threads the delivered weights into the study-plan provider, omitting the key when unconfigured rather than passing undefined (exactOptionalPropertyTypes, F7.8)', () => {
+    expect(main).toMatch(
+      /\.\.\.\(this\.rankWeights\?\.readRankWeights\s*\?\s*\{ readRankWeights: this\.rankWeights\.readRankWeights \}\s*:\s*\{\}\)/,
+    );
+  });
+});
+
 describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
   // `OLEA_COMMAND_DRAFT_CARDS` / `DraftCardsModal` shipped in wave-2 round-2
   // and was withdrawn: F4.5 rules out a student-invoked draft verb by name

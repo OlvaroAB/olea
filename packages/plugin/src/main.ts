@@ -38,6 +38,8 @@ import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-inde
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
+import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
+import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
   buildRetrievalWiring,
@@ -135,6 +137,8 @@ export default class OleaPlugin extends Plugin {
   private concept: ConceptWiring | null = null;
   /** F3.3's automatic generation pipeline (`ol-p3t07a`) — built unconditionally (unlike `retrieval`/`keywordIndex`, it needs no Worker token: the cache and accept/reject flow work offline, and only the sweep itself is a no-op with no Worker configured, F7.8). */
   private generation: GenerationWiring | null = null;
+  /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
+  private rankWeights: RankWeightsWiring | null = null;
 
   override async onload(): Promise<void> {
     // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
@@ -438,6 +442,14 @@ export default class OleaPlugin extends Plugin {
       createTransport: createObsidianWorkerTransport,
     });
 
+    // Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) —
+    // the fetch-or-null wiring built here, threaded into
+    // `refreshCachedStudyPlan`'s `createLocalStudyPlanProvider` call below.
+    this.rankWeights = await buildRankWeightsWiring({
+      dataHost: this,
+      httpGet: obsidianRankWeightsGet,
+    });
+
     this.registerInterval(
       window.setInterval(() => {
         void this.ingestion?.engine.tick();
@@ -555,6 +567,12 @@ export default class OleaPlugin extends Plugin {
       deviceId,
       settingsHost: this,
       now: () => new Date(),
+      // `exactOptionalPropertyTypes`: omit the key entirely rather than
+      // assign `undefined` to it when the Worker isn't configured (F7.8) —
+      // same pattern `drainEmbeddings` uses for `keywordIndex` above.
+      ...(this.rankWeights?.readRankWeights
+        ? { readRankWeights: this.rankWeights.readRankWeights }
+        : {}),
     });
     const result = await refreshStudyPlan({ store, provider });
     if (this.review !== null) this.review.plan = result.plan;
