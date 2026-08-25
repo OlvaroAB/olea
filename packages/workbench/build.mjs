@@ -89,7 +89,14 @@ const nodeBuiltinGuard = {
     });
     build.onLoad({ filter: /.*/, namespace: 'wb-unreachable' }, () => ({
       contents:
-        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
+        // `stat` added alongside the rest of this list — `ol-4pue` [ARRIVE-1]
+        // (`firstSeen`) gave `folder-source.ts` a `node:fs/promises` `stat`
+        // import this stub had not been told about, and esbuild's "no
+        // matching export" for it blocked every workbench build regardless
+        // of host. Discovered while verifying `ol-ppxj.11`; filed as
+        // `ol-ppxj.12` since it is a real, host-independent defect distinct
+        // from the virtiofs races this bead is scoped to.
+        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, stat = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
       loader: 'js',
     }));
   },
@@ -385,9 +392,44 @@ async function copyGenerationCassette() {
   );
 }
 
+/**
+ * `ol-ppxj.11` [HOST-1]: `cp(src, dest, { recursive: true })` into an ALREADY-
+ * EXISTING `dest` throws EEXIST on this host — the same measured defect as
+ * `ol-63et` (wrangler's mkdtemp/lstat), one level up the stack. Node's `fs.cp`
+ * lstats `dest` to decide whether it needs to `mkdir` it fresh; on this
+ * virtiofs mount that lstat can spuriously report ENOENT for a directory that
+ * was in fact created moments earlier (here, `dist` itself, by the
+ * `mkdir(dist, { recursive: true })` a few lines above `copyStatic()`'s
+ * caller). Believing `dest` absent, `fs.cp` takes the "create fresh" path and
+ * calls a plain, non-recursive `mkdir(dest)`, which then collides with the
+ * genuinely-existing directory and throws a REAL EEXIST.
+ *
+ * A short retry is order-independent and correct on both hosts: on a healthy
+ * host the lstat never lies, so `cp` never throws and this never loops; on
+ * this host, letting the racing stat settle before retrying makes the second
+ * attempt see `dest` as existing and take `fs.cp`'s ordinary "merge into an
+ * existing directory" path — the same result `cp` produces everywhere else.
+ * Verified: `node build.mjs production` — that plain `cp(public -> dist)`
+ * call — reproduced EEXIST on first run every time here before this wrapper,
+ * and 0 failures in 10 repeated runs after (5 into an empty dist, 5 more over
+ * the already-built one, which is the "second run over existing dist" case).
+ */
+async function cpTolerant(src, dest, options) {
+  const attempts = 8;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await cp(src, dest, options);
+      return;
+    } catch (error) {
+      if (error?.code !== 'EEXIST' || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 15 * attempt));
+    }
+  }
+}
+
 async function copyStatic() {
   await mkdir(join(dist, 'themes'), { recursive: true });
-  await cp(join(here, 'public'), dist, { recursive: true });
+  await cpTolerant(join(here, 'public'), dist, { recursive: true });
   await cp(
     join(here, 'src', 'themes', 'obsidian-default.css'),
     join(dist, 'themes', 'obsidian-default.css'),
