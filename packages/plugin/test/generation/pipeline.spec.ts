@@ -8,8 +8,18 @@
  * `conceptIds` carrying the opaque `ConceptRecord.key` (`ol-63e1`'s
  * coordinated flip — `session/enumerate.ts` keys the same field the same
  * way), never the display name.
+ *
+ * The `describe('routing consultation …')` block at the bottom is `ol-tz7v`
+ * / `[WIRE-7]`'s own suite: component 2.2's routing, opted into via
+ * `deps.routing`, gating this sweep's one generation capability (quiz
+ * drafting) against a real classification and a real per-concept instrument
+ * inventory. Every test above this block never supplies `routing`, and every
+ * `toEqual` above carries `skippedRouting: 0` for exactly that reason —
+ * proving the new field is inert, not just present, when routing is not
+ * asked for.
  */
-import type { ConceptRecord, ExtractedUnit } from 'olea-core';
+import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
+import { provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
@@ -69,7 +79,13 @@ describe('runGenerationSweep', () => {
       },
     });
 
-    expect(report).toEqual({ attempted: 0, drafted: 0, refused: 0, skippedDuplicate: 0 });
+    expect(report).toEqual({
+      attempted: 0,
+      drafted: 0,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
   });
 
   it('drafts a new concept, caching one pending record keyed on the opaque concept key', async () => {
@@ -84,7 +100,13 @@ describe('runGenerationSweep', () => {
       draftForConcept: async () => groundedResponse('Working memory'),
     });
 
-    expect(report).toEqual({ attempted: 1, drafted: 1, refused: 0, skippedDuplicate: 0 });
+    expect(report).toEqual({
+      attempted: 1,
+      drafted: 1,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
 
     const pending = await cache.listPending();
     expect(pending).toHaveLength(1);
@@ -154,7 +176,13 @@ describe('runGenerationSweep', () => {
     });
 
     expect(calls).toBe(0);
-    expect(report).toEqual({ attempted: 0, drafted: 0, refused: 0, skippedDuplicate: 1 });
+    expect(report).toEqual({
+      attempted: 0,
+      drafted: 0,
+      refused: 0,
+      skippedDuplicate: 1,
+      skippedRouting: 0,
+    });
   });
 
   it('bounds one sweep to MAX_CONCEPTS_PER_SWEEP attempts, leaving the rest for later', async () => {
@@ -194,7 +222,13 @@ describe('runGenerationSweep', () => {
       draftForConcept: async () => refusedResponse,
     });
 
-    expect(report).toEqual({ attempted: 1, drafted: 0, refused: 1, skippedDuplicate: 0 });
+    expect(report).toEqual({
+      attempted: 1,
+      drafted: 0,
+      refused: 1,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
     expect(await cache.list()).toEqual([]);
 
     // Retried, since nothing was cached — a second sweep attempts it again.
@@ -231,6 +265,163 @@ describe('runGenerationSweep', () => {
     });
 
     expect(calls).toBe(0);
-    expect(report).toEqual({ attempted: 0, drafted: 0, refused: 0, skippedDuplicate: 0 });
+    expect(report).toEqual({
+      attempted: 0,
+      drafted: 0,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
+  });
+});
+
+describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing`)', () => {
+  const CONCEPT_NOTE = '01 Courses/COGS214/Working memory.md';
+
+  function frontmatter(topic: string, course = 'COGS214'): string {
+    return ['---', `topic: [${topic}]`, `course: ${course}`, '---', ''].join('\n');
+  }
+
+  const MCQ_BLOCK = [
+    '```olea-mcq',
+    'stem: Which structure is it?',
+    'answer: The right one',
+    'distractor: d1',
+    'distractor: d2',
+    'distractor: d3',
+    'distractor: d4',
+    'feedback: Because of the thing.',
+    '```',
+  ].join('\n');
+
+  // The real derivation `extractConcepts`/`enumerateVaultInstruments` use
+  // internally (`ol-63e1`) for an unbound (tier-2) concept — matching it here
+  // is what lets `buildConceptInstrumentInventory`'s real vault walk find the
+  // same key the fake `listConceptsForCourse` candidate carries, the same way
+  // production's `listConceptsForCourseFactory` (`wiring.ts`) does by calling
+  // the real `extractConcepts` itself.
+  const conceptKey = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
+
+  it('classifier unavailable (`classifier: null`) routes to the retrieval baseline and skips quiz drafting', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    let calls = 0;
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', conceptKey)],
+      draftForConcept: async () => {
+        calls += 1;
+        return groundedResponse('Working memory');
+      },
+      routing: { classifier: null },
+    });
+
+    expect(calls).toBe(0);
+    expect(report).toEqual({
+      attempted: 0,
+      drafted: 0,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 1,
+    });
+    expect(await cache.list()).toEqual([]);
+  });
+
+  it('a classified concept whose mix warrants quiz drafts normally, against a real (empty) inventory', async () => {
+    const vault = new MemoryVaultSource({
+      [CONCEPT_NOTE]: `${frontmatter('Working memory')}## What is it?\n\nA short-term store.\n`,
+    });
+    const cache = createVaultDraftCacheStore(vault);
+
+    let classifyCalls = 0;
+    const classifier: KnowledgeKindClassifierPort = {
+      async classify(request) {
+        classifyCalls += 1;
+        expect(request.sourceMaterial.length).toBeGreaterThan(0); // real note text was actually read and sent
+        return { kind: 'category', confidence: 0.9 }; // quiz-weighted (target 2) vs an empty real inventory
+      },
+    };
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        {
+          key: conceptKey,
+          name: 'Working memory',
+          tier: 2,
+          courses: ['COGS214'],
+          sourcePaths: [CONCEPT_NOTE],
+        },
+      ],
+      draftForConcept: async () => groundedResponse('Working memory'),
+      routing: { classifier },
+    });
+
+    expect(classifyCalls).toBe(1);
+    expect(report).toEqual({
+      attempted: 1,
+      drafted: 1,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
+  });
+
+  it('a concept whose real inventory already meets the routed quiz target is skipped without a drafting call', async () => {
+    const vault = new MemoryVaultSource({
+      [CONCEPT_NOTE]: [
+        frontmatter('Working memory'),
+        '## What is it?',
+        '',
+        'A short-term store.',
+        '',
+        MCQ_BLOCK,
+        '',
+      ].join('\n'),
+    });
+    const cache = createVaultDraftCacheStore(vault);
+
+    const classifier: KnowledgeKindClassifierPort = {
+      // `fact` -> retrieval-dominant, quiz **floor** (target 1) — the
+      // existing MCQ block above already meets it (existing = 1).
+      async classify() {
+        return { kind: 'fact', confidence: 0.9 };
+      },
+    };
+
+    let draftCalls = 0;
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        {
+          key: conceptKey,
+          name: 'Working memory',
+          tier: 2,
+          courses: ['COGS214'],
+          sourcePaths: [CONCEPT_NOTE],
+        },
+      ],
+      draftForConcept: async () => {
+        draftCalls += 1;
+        return groundedResponse('Working memory');
+      },
+      routing: { classifier },
+    });
+
+    expect(draftCalls).toBe(0);
+    expect(report).toEqual({
+      attempted: 0,
+      drafted: 0,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 1,
+    });
   });
 });
