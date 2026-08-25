@@ -1,6 +1,8 @@
 import { Notice, Plugin, type WorkspaceLeaf } from 'obsidian';
 import type { StudyPlanArtifact } from 'olea-contracts';
 import {
+  type ClassifyKnowledgeKindOptions,
+  type ClassifyKnowledgeKindRequest,
   createFsrsScheduler,
   type DeviceCapability,
   type ExtractedUnit,
@@ -15,7 +17,10 @@ import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import {
   buildConceptWiring,
+  buildKnowledgeKindWiring,
   type ConceptWiring,
+  classifyConceptKnowledgeKind,
+  type KnowledgeKindWiring,
   type ReadConceptsFromVaultOptions,
   readConceptsFromVault,
 } from './concept/wiring.js';
@@ -135,6 +140,8 @@ export default class OleaPlugin extends Plugin {
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
   private concept: ConceptWiring | null = null;
+  /** Component register row 1.5's classifier port (`[KCT-2]` `ol-fx1k`, `[D-114]`) — F7.8 grey-out, same shape as `concept` above. */
+  private knowledgeKind: KnowledgeKindWiring | null = null;
   /** F3.3's automatic generation pipeline (`ol-p3t07a`) — built unconditionally (unlike `retrieval`/`keywordIndex`, it needs no Worker token: the cache and accept/reject flow work offline, and only the sweep itself is a no-op with no Worker configured, F7.8). */
   private generation: GenerationWiring | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
@@ -442,6 +449,14 @@ export default class OleaPlugin extends Plugin {
       createTransport: createObsidianWorkerTransport,
     });
 
+    // KCT-2 (`ol-fx1k`, `[D-114]`): the knowledge-kind classifier's production
+    // port, same F7.8 terms and the same deliberate no-trigger gap as
+    // `this.concept` — see `classifyKnowledgeKindForConcept` below.
+    this.knowledgeKind = await buildKnowledgeKindWiring({
+      dataHost: this,
+      createTransport: createObsidianWorkerTransport,
+    });
+
     // Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) —
     // the fetch-or-null wiring built here, threaded into
     // `refreshCachedStudyPlan`'s `createLocalStudyPlanProvider` call below.
@@ -651,6 +666,28 @@ export default class OleaPlugin extends Plugin {
   async readConceptsFromVault(options: ReadConceptsFromVaultOptions = {}) {
     if (this.concept === null) return null;
     return readConceptsFromVault(this.concept, new ObsidianSource(this.app), options);
+  }
+
+  /**
+   * `ol-fx1k`'s production entry point for knowledge-kind classification
+   * (`[KCT-2]`, `[D-114]`): reaches `classifyKnowledgeKind` through the
+   * composed `KnowledgeKindClassifierPort` when the Worker is configured,
+   * `null` otherwise (F7.8) — propagated through
+   * `classifyConceptKnowledgeKind` (`concept/wiring.ts`).
+   *
+   * No caller of this method exists in this package yet, deliberately — the
+   * same gap `readConceptsFromVault` documents above. The named consumer is
+   * component 2.2's instrument-type routing (`ol-dlr1`), which decides WHEN a
+   * concept's kind is worth a model call; `options.confidenceFloor` stays
+   * caller-supplied because register row 1.5 rules it DERIVED and nobody has
+   * run the derivation.
+   */
+  async classifyKnowledgeKindForConcept(
+    request: ClassifyKnowledgeKindRequest,
+    options: ClassifyKnowledgeKindOptions,
+  ) {
+    if (this.knowledgeKind === null) return null;
+    return classifyConceptKnowledgeKind(this.knowledgeKind, request, options);
   }
 
   /**

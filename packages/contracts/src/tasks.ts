@@ -70,6 +70,19 @@ export const TASK_IDS = {
    * catalogue's own test carried since P3-T02.
    */
   CONCEPTS_EXTRACT: 'concepts.extract.v1',
+  /**
+   * W6 · Slot J — what kind of knowledge a concept is: `fact` / `category` /
+   * `principle`, or explicitly `unclassified` (component register row 1.5,
+   * `[KCT-1]` `ol-kxr6`, `[KCT-2]` `ol-fx1k`). A verdict over given material —
+   * a concept plus its source passages — echoing `explain-back.judge.v1` and
+   * `grounding.judge.v1`'s shape rather than `concepts.extract.v1`'s, the same
+   * distinction `grounding.judge.v1`'s own comment draws: judging, not
+   * generating. The client-side stage is
+   * `packages/core/src/concept/knowledge-kind.ts`'s `classifyKnowledgeKind`,
+   * reached through the `KnowledgeKindClassifierPort` seam; this id is that
+   * port's join key, added by `[D-114]` / KCT-2 (`ol-fx1k`).
+   */
+  CONCEPTS_CLASSIFY: 'concepts.classify.v1',
   /** W3 · Slot G — Q&A and cloze card drafts, INV-6 accept step downstream (F3.3). */
   CARDS_GENERATE: 'cards.generate.v1',
   /** W3 · Slot G — MCQ generation incl. distractors (F3.10, amendment F2.14–F2.17). */

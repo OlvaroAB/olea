@@ -56,9 +56,14 @@
  */
 
 import {
+  type ClassifyKnowledgeKindOptions,
+  type ClassifyKnowledgeKindRequest,
+  type ClassifyKnowledgeKindResult,
   type ConceptReadBudget,
   type ConceptReaderPort,
   type ConceptReadResult,
+  classifyKnowledgeKind,
+  type KnowledgeKindClassifierPort,
   readConcepts,
   type VaultPath,
   type VaultSource,
@@ -67,6 +72,7 @@ import {
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { WorkerConceptReader } from './workerConceptReader.js';
+import { WorkerKnowledgeKindClassifier } from './workerKnowledgeKindClassifier.js';
 
 /** See the module doc's "THE BUDGET" section. */
 export const DEFAULT_MAX_PASSAGES_PER_READ = 60;
@@ -138,4 +144,63 @@ export async function readConceptsFromVault(
       : {}),
     ...(options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {}),
   });
+}
+
+// =============================================================================
+// `buildKnowledgeKindWiring` / `classifyConceptKnowledgeKind` — component
+// register row 1.5 (`[KCT-1]` `ol-kxr6`, `[KCT-2]` `ol-fx1k`, `[D-114]`).
+// =============================================================================
+//
+// Same composition-root shape as `buildConceptWiring` above, one seam over:
+// load the persisted Worker config, build a real `WorkerKnowledgeKindClassifier`
+// when (and only when) it is usable, `null` otherwise (F7.8).
+//
+// **Reachability, same caveat as `readConceptsFromVault`'s own doc.**
+// `classifyConceptKnowledgeKind` below is a genuine, non-test call to
+// `classifyKnowledgeKind` (`olea-core`), wired to a real
+// `WorkerKnowledgeKindClassifier` when the Worker is configured. Nothing in
+// this package calls THIS method yet — there is no command, view or schedule
+// that decides WHEN to classify a concept's knowledge kind, and the named
+// consumer (component 2.2, instrument-type routing, `ol-dlr1`) has no code in
+// the tree at all yet (per `ol-kxr6`'s own close notes). Building a trigger
+// now would be inventing one this bead was not asked to design.
+//
+// **The confidence floor is NOT declared here, unlike the read budget above.**
+// `ClassifyKnowledgeKindOptions.confidenceFloor` stays a caller-supplied,
+// required value all the way through this wiring layer — component register
+// row 1.5 rules it DERIVED (not merely un-measured, like the read budget),
+// and its derivation needs real classifier output scored against the vault
+// snapshot (N-015: synthetic never tunes a threshold), which is real work
+// this bead does not do. Inventing even a declared placeholder here would
+// blur that line; `classifyConceptKnowledgeKind`'s caller must supply one.
+export interface KnowledgeKindWiring {
+  /** `null` when the Worker isn't configured yet (F7.8) — see the module doc. */
+  readonly classifier: KnowledgeKindClassifierPort | null;
+}
+
+export async function buildKnowledgeKindWiring(
+  deps: ConceptWiringDeps,
+): Promise<KnowledgeKindWiring> {
+  const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
+  const config = await configStore.load();
+  if (!isWorkerConfigured(config)) return { classifier: null };
+
+  const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
+  return { classifier: new WorkerKnowledgeKindClassifier({ transport }) };
+}
+
+/**
+ * The production caller `ol-fx1k` exists to build: reaches
+ * `classifyKnowledgeKind` through whatever `KnowledgeKindClassifierPort`
+ * `buildKnowledgeKindWiring` composed, over the real Worker transport when
+ * one is configured. `null` when it is not (F7.8) — the same grey-out
+ * contract `readConceptsFromVault` follows, propagated one level up.
+ */
+export async function classifyConceptKnowledgeKind(
+  wiring: KnowledgeKindWiring,
+  request: ClassifyKnowledgeKindRequest,
+  options: ClassifyKnowledgeKindOptions,
+): Promise<ClassifyKnowledgeKindResult | null> {
+  if (wiring.classifier === null) return null;
+  return classifyKnowledgeKind(wiring.classifier, request, options);
 }

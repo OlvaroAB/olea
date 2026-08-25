@@ -11,11 +11,12 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these ten ids, spelled exactly this way', () => {
+  it('is exactly these eleven ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
       'cards.generate.v1',
+      'concepts.classify.v1',
       'concepts.extract.v1',
       'explain-back.judge.v1',
       'explain-why.generate.v1',
@@ -30,11 +31,11 @@ describe('the closed task-id catalogue', () => {
 
   it('covers every workload shape that reaches a model (cost model §1)', () => {
     // W1 retrieval (×2: embed, rerank), W3 bulk generation (×3), W4 corpus
-    // reasoning (concept extraction), W5 interactive, W6 judgment (×2:
-    // explain-back, grounding support check), W7 long-context. W2 perception
-    // is deliberately absent: it is reached *through* an ingestion task rather
-    // than called directly by the client (P3-T04 routes to Slot V below the
-    // yield threshold).
+    // reasoning (concept extraction), W5 interactive, W6 judgment (×3:
+    // explain-back, grounding support check, knowledge-kind classification),
+    // W7 long-context. W2 perception is deliberately absent: it is reached
+    // *through* an ingestion task rather than called directly by the client
+    // (P3-T04 routes to Slot V below the yield threshold).
     //
     // W4's `concepts.extract.v1` was reserved rather than registered here from
     // P3-T02 onward — this comment used to be the reminder that its absence
@@ -47,7 +48,12 @@ describe('the closed task-id catalogue', () => {
     // near-miss gap E6 (olea-service) measured: no mechanical signal over
     // independent embeddings separates "her notes NAME this" from "her notes
     // ANSWER this". Both read the query and the candidate content TOGETHER.
-    expect(ALL_TASK_IDS).toHaveLength(10);
+    //
+    // `concepts.classify.v1` (`[D-114]`, KCT-2 `ol-fx1k`) is component register
+    // row 1.5's classifier: a verdict over a concept plus its source material,
+    // grouped with W6 alongside the other two judgment-shaped tasks rather than
+    // with W4's concept extraction, because it judges rather than generates.
+    expect(ALL_TASK_IDS).toHaveLength(11);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
