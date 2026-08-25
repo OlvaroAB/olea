@@ -44,6 +44,7 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import type { ConceptRecord } from '../concept/types.js';
 import { buildConceptAssessmentEdges } from '../evidence-edge/build.js';
 import type {
   BuildConceptAssessmentEdgesOptions,
@@ -92,6 +93,69 @@ export interface ComposeOracleRankingResult {
 }
 
 /**
+ * Case-insensitive, course-scoped fallback for the exact-match name→key
+ * lookup `buildConceptAssessmentEdges` performs internally
+ * (`evidence-edge/build.ts`'s `conceptKeyByName`, `ol-63e1`).
+ *
+ * **The bug this closes (`ol-5y40`).** A `topic:` value that does not
+ * byte-match its note's exact Zettelkasten title is the ORDINARY case, not
+ * an exotic one — tier-2 extraction mints the `ConceptRecord` under the
+ * topic's own casing (R1/R2 forbid folding it there), while
+ * `extractTier3Evidence`'s vocabulary match returns the edge's `conceptName`
+ * in the *Zettelkasten note title's* casing (R2 — matched case-insensitively,
+ * returned verbatim in the vocabulary's own casing). The exact-match lookup
+ * then misses and the edge falls back to its own `conceptName` as the key
+ * (see `ConceptAssessmentEdge.conceptKey`'s doc) — a value that never
+ * matches `buildMaterialPresence`'s map (`gap/build.ts`, keyed by the real
+ * `ConceptRecord.key`), so a concept she genuinely has notes on
+ * misclassifies as `'material-gap'` (F4.10): the single most
+ * trust-damaging thing that screen can say, said silently.
+ *
+ * **Scoped narrowly to this composition seam, per the bead's acceptance
+ * criteria — this is not a case-folding of concept identity.** `extract.ts`
+ * is untouched: two topic strings differing only by case still mint two
+ * distinct `ConceptRecord`s (R1/R2), and this function never merges their
+ * evidence. It only ever fires for an edge whose exact-match lookup already
+ * failed (`edge.conceptKey === edge.conceptName` is the *only* way that can
+ * happen — a real key always carries `concept-prov1:`, never a bare display
+ * name), and it resolves on `(course, lowercased name)`, never name alone —
+ * so a same-named concept in a *different* course is never pulled in, and a
+ * genuine collision (two records, same course, same name, differing only by
+ * case) picks the extraction-order-first one deterministically rather than
+ * silently merging two identities. A term absent from `concepts`, in every
+ * casing, for this course, is left exactly as `buildConceptAssessmentEdges`
+ * resolved it — that is a true material-gap, not a residue of this join.
+ */
+function resolveCaseInsensitiveConceptKeys(
+  edges: BuildConceptAssessmentEdgesResult,
+  concepts: readonly ConceptRecord[],
+): BuildConceptAssessmentEdgesResult {
+  const keyByCourseAndLowerName = new Map<string, string>();
+  for (const concept of concepts) {
+    for (const course of concept.courses) {
+      const fallbackKey = `${course}::${concept.name.toLowerCase()}`;
+      // First concept wins on a same-course/same-casefold collision
+      // (extraction order) — deterministic, and this seam's job is ordinary
+      // topic-casing slips, not adjudicating a genuine name collision.
+      if (!keyByCourseAndLowerName.has(fallbackKey)) {
+        keyByCourseAndLowerName.set(fallbackKey, concept.key);
+      }
+    }
+  }
+
+  return {
+    ...edges,
+    edges: edges.edges.map((edge) => {
+      if (edge.conceptKey !== edge.conceptName) return edge; // already a real key
+      const resolvedKey = keyByCourseAndLowerName.get(
+        `${edge.course}::${edge.conceptName.toLowerCase()}`,
+      );
+      return resolvedKey === undefined ? edge : { ...edge, conceptKey: resolvedKey };
+    }),
+  };
+}
+
+/**
  * Build a fresh `RankOracleResult` from a vault and a review log.
  *
  * No cache, no clock read here (`asOf` is the caller's, same discipline as
@@ -103,7 +167,11 @@ export async function composeOracleRanking(
   input: ComposeOracleRankingInput,
 ): Promise<ComposeOracleRankingResult> {
   const { vault, reviewLog, asOf, options, ...edgeOptions } = input;
-  const edges = await buildConceptAssessmentEdges(vault, edgeOptions);
+  const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
+  // `ol-5y40`: repairs the case-mismatched fallback `buildConceptAssessmentEdges`
+  // leaves behind before anything downstream (the mastery join below,
+  // `rankOracle`'s grouping, `buildMaterialPresence`'s lookup) ever sees it.
+  const edges = resolveCaseInsensitiveConceptKeys(rawEdges, edgeOptions.concepts);
 
   // Keyed by the opaque join key, not the display name (`ol-63e1`) — this is
   // exactly the value `session/enumerate.ts` now mints into a review-log

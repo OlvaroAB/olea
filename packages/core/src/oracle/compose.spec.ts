@@ -202,3 +202,185 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     expect(entry?.factors.masteryState).toBe('seed');
   });
 });
+
+describe('composeOracleRanking — ol-5y40: a casing slip in her topic value must not read as a material-gap', () => {
+  let root: string;
+  let source: FolderSource;
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-oracle-compose-casefold-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("resolves an edge whose vocabulary casing differs from the topic-bound record's own casing onto that record's real key, never the fallback name-as-key", async () => {
+    // Her Zettelkasten note is titled "Widget Theory"; her `topic:` property
+    // on the note that carries the card reads "widget theory" (lowercase) —
+    // not a byte match, so tier-1 binding fails and `extractConcepts` mints
+    // a tier-2 record named "widget theory" verbatim (R1/R2). The past
+    // paper cites "Widget Theory" (the note's own casing), so
+    // `extractTier3Evidence`'s vocabulary match returns the edge under THAT
+    // casing (R2) — the exact case mismatch `ol-5y40` reports.
+    await write('05 Zettelkasten/Widget Theory.md', '# Widget Theory\n');
+    await write(
+      'Notes/one.md',
+      ['---', 'topic: widget theory', 'course: TESTC101', '---', '', 'Front::Back', ''].join('\n'),
+    );
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget Theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n',
+    );
+
+    const concepts = await extractConcepts(source, {});
+    const widget = concepts.find((c) => c.name === 'widget theory');
+    if (widget === undefined) throw new Error('expected "widget theory" to extract');
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    // The edge itself now carries the REAL opaque key, never its own
+    // display name as a fallback — the defect described in
+    // `evidence-edge/build.ts`'s `conceptKeyByName` doc.
+    const edge = result.edges.edges.find((e) => e.conceptName === 'Widget Theory');
+    expect(edge?.conceptKey).toBe(widget.key);
+    expect(edge?.conceptKey).not.toBe(edge?.conceptName);
+
+    // And the mastery map — what `buildGapView`'s caller joins
+    // `buildMaterialPresence` against, both keyed by `ConceptRecord.key` — is
+    // keyed by that same real key, so a caller like `gap/provider.ts` finds
+    // her material rather than reading a false material-gap.
+    expect(result.mastery.has(widget.key)).toBe(true);
+    expect(result.mastery.has('Widget Theory')).toBe(false);
+  });
+
+  it('never folds two genuinely distinct concepts across a course boundary that merely share a casefolded name', async () => {
+    // TESTC101 and OTHERC202 each author their own case variant of the same
+    // casefolded topic string ("widget theory" / "WIDGET THEORY") — R1/R2
+    // mints two distinct `ConceptRecord`s, one per course. Only TESTC101 has
+    // a past paper, citing "Widget Theory" (the Zettelkasten note's own
+    // casing, matching neither topic value exactly). The fix must resolve
+    // that edge onto TESTC101's own record — never OTHERC202's, which would
+    // be a genuine identity fold this bead's fix is forbidden from making.
+    await write('05 Zettelkasten/Widget Theory.md', '# Widget Theory\n');
+    await write(
+      'Notes/one.md',
+      ['---', 'topic: widget theory', 'course: TESTC101', '---', '', 'Front::Back', ''].join('\n'),
+    );
+    await write(
+      'Notes/other.md',
+      [
+        '---',
+        'topic: WIDGET THEORY',
+        'course: OTHERC202',
+        '---',
+        '',
+        'A different card::for a different course',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget Theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n',
+    );
+
+    const concepts = await extractConcepts(source, {});
+    const testcWidget = concepts.find(
+      (c) => c.name === 'widget theory' && c.courses.includes('TESTC101'),
+    );
+    const otherWidget = concepts.find(
+      (c) => c.name === 'WIDGET THEORY' && c.courses.includes('OTHERC202'),
+    );
+    if (testcWidget === undefined || otherWidget === undefined) {
+      throw new Error('expected two distinct per-course "widget theory" records to extract');
+    }
+    expect(testcWidget.key).not.toBe(otherWidget.key);
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    const edge = result.edges.edges.find((e) => e.conceptName === 'Widget Theory');
+    expect(edge?.conceptKey).toBe(testcWidget.key);
+    expect(edge?.conceptKey).not.toBe(otherWidget.key);
+  });
+});
