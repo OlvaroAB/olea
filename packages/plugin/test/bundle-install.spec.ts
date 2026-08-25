@@ -17,11 +17,11 @@
  *   broken or truncated build fails here rather than in her vault;
  * - its default export really is a class extending Obsidian's `Plugin`, which is
  *   the one contract Obsidian itself checks when it loads a plugin;
- * - `onload()` runs to completion and registers all three view types and all
- *   five commands (P2-T10's acceptance criterion, plus `ol-f77commands` and
- *   `ol-2tyj`'s later additions), through the *bundled* code path rather than
- *   the source one, so a tree-shaking or bundling regression that dropped a
- *   registration would be caught.
+ * - `onload()` runs to completion and registers all five view types and all
+ *   seven commands (P2-T10's acceptance criterion, plus `ol-f77commands`,
+ *   `ol-2tyj`, `ol-p5t06b` and `ol-jie3`'s later additions), through the
+ *   *bundled* code path rather than the source one, so a tree-shaking or
+ *   bundling regression that dropped a registration would be caught.
  *
  * What it still cannot check stays `@manual` — whether Obsidian's real workspace
  * then does what its API documents, and whether BRAT's download-and-install path
@@ -203,7 +203,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all four view types and all six commands when onload runs', async () => {
+  it('registers all five view types and all seven commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -217,6 +217,9 @@ describe('the built bundle is what Obsidian can load', () => {
       await (plugin as unknown as { onload(): Promise<void> }).onload();
 
       expect(plugin.views.map((view) => view.type).sort()).toEqual([
+        // `ol-jie3`: F3.3's bulk-review triage path, list density over the
+        // same accept/edit/reject resolution `olea-review` offers.
+        'olea-bulk-review',
         'olea-gap',
         'olea-review',
         // `ol-p5t06b`: the session builder (F4.6/F4.7/F4.8), the destination
@@ -232,6 +235,9 @@ describe('the built bundle is what Obsidian can load', () => {
       // `olea-open` arriving in the same run this spec first ran, and `olea-gap-
       // open` (`ol-2tyj`) here.
       expect(plugin.commands.map((command) => command.id).sort()).toEqual([
+        // `ol-jie3`: F3.3's bulk-review triage path, click-only this round
+        // (`ol-uxk9` is the keyboard-bindings follow-up).
+        'olea-bulk-review-open',
         'olea-create-card',
         // 'olea-draft-cards' was withdrawn (F4.5, wave-2 round-2 correction):
         // no student-invoked draft verb, because Olea is already drafting.
