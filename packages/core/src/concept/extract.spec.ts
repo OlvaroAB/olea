@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
 import { provisionalConceptKey } from './concept-key.js';
 import { extractConcepts } from './extract.js';
+import { conceptRecordSize } from './size.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 
@@ -110,6 +111,13 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
       courses: ['GEOL204'],
       sourcePaths: ['05 Zettelkasten/Imbrication.md'],
       boundNotePath: '05 Zettelkasten/Imbrication.md',
+      // Grounded in exactly one note — her own concept note, and nothing
+      // else names it (`[D-066]`'s err-fine default; `./size.spec.ts` covers
+      // the derivation itself).
+      size: conceptRecordSize({
+        sourcePaths: ['05 Zettelkasten/Imbrication.md'],
+        boundNotePath: '05 Zettelkasten/Imbrication.md',
+      }),
     });
 
     const pump = concepts.find((c) => c.name === 'Hummocky stratification');

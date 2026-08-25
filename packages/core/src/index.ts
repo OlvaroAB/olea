@@ -83,6 +83,24 @@ export type {
 // corroborating source feeding it. `ConceptReaderPort` is the service seam —
 // the model call that does the reading — and has no production adapter yet.
 export { ConceptReaderUnavailableError, gatherPassages, readConcepts } from './concept/read.js';
+// Concept size (`[D-066]`, component register row 1.3) — a deterministic,
+// material-grounded floor read by two named consumers outside this package:
+// honest scope counting (F8.1, F8.3) and session composition (F2.17). See
+// `./concept/size.js`'s module doc for what it is and is not.
+export type {
+  ConceptMaterialExtent,
+  ConceptSize,
+  ConceptSizeBand,
+  ReadConceptExtentInput,
+} from './concept/size.js';
+export {
+  COARSE_EXTENT_FLOOR,
+  conceptRecordExtent,
+  conceptRecordSize,
+  deriveConceptSize,
+  readConceptExtent,
+  readConceptSize,
+} from './concept/size.js';
 export type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './concept/types.js';
 export { addDays, daysBetween } from './dates.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
@@ -624,6 +642,7 @@ export type {
 export { hybridRetrieve } from './retrieval/hybrid.js';
 export type { Lexicon } from './retrieval/lexicon.js';
 export { buildLexicon, idfFor, lexicalCoverage, tokenize } from './retrieval/lexicon.js';
+export { D112_GROUNDING_BAND } from './retrieval/operating-point.js';
 export type {
   CachedEmbeddingEntry,
   EmbeddingCacheStore,

@@ -51,7 +51,12 @@ describe('extraction eval — differently-shaped fixture vaults', () => {
         // to assert about it yet, so it is stripped before comparison rather
         // than widening the ground truth to a value this suite does not
         // exist to check.
-        const withoutKey = concepts.map(({ key: _key, ...rest }) => rest);
+        //
+        // `size` (`[D-066]`, `olea-core`'s `concept/size.ts`) is stripped for
+        // the identical reason: this is a shape-reading oracle, not a
+        // size-derivation one — `concept/size.spec.ts` in `olea-core` is
+        // where the derivation itself is tested and mutation-checked.
+        const withoutKey = concepts.map(({ key: _key, size: _size, ...rest }) => rest);
         expect(withoutKey).toEqual(truth.expectedConcepts);
       });
 

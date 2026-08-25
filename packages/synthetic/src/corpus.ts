@@ -63,6 +63,7 @@ import {
   buildMaterialPresence,
   type ConceptMaterialPresence,
   type ConceptRecord,
+  conceptRecordSize,
   provisionalConceptKey,
   type SourceCoverage,
   type VaultPath,
@@ -238,13 +239,17 @@ export interface SyntheticCorpus {
  * `curriculum.ts`'s `buildCurriculum`.
  */
 export function buildCorpus(): SyntheticCorpus {
-  const concepts: ConceptRecord[] = NOTES.map((note) => ({
-    key: provisionalConceptKey({ name: note.conceptName, boundNotePath: null }),
-    name: note.conceptName,
-    tier: 3,
-    courses: [COURSE_VANTREL],
-    sourcePaths: [note.path],
-  }));
+  const concepts: ConceptRecord[] = NOTES.map((note) => {
+    const sourcePaths: readonly VaultPath[] = [note.path];
+    return {
+      key: provisionalConceptKey({ name: note.conceptName, boundNotePath: null }),
+      name: note.conceptName,
+      tier: 3,
+      courses: [COURSE_VANTREL],
+      sourcePaths,
+      size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
+    };
+  });
   const instrumentCountsByNotePath = new Map(
     NOTES.map((note) => [note.path, note.instrumentCount]),
   );

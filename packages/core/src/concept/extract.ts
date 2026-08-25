@@ -54,6 +54,7 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractTier3Evidence } from './evidence.js';
+import { conceptRecordSize } from './size.js';
 import type { ConceptRecord, ExtractConceptsOptions } from './types.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER, noteTitle } from './zettelkasten.js';
 
@@ -172,14 +173,16 @@ export async function extractConcepts(
   const records: ConceptRecord[] = [];
   for (const [name, acc] of byName) {
     const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
+    const sourcePaths = [...acc.sourcePaths].sort();
     const record: ConceptRecord = {
       key: provisionalConceptKey({ name, boundNotePath: bound ?? null }),
       name,
       tier: bound !== undefined ? 1 : 2,
       courses: [...acc.courses].sort(),
-      sourcePaths: [...acc.sourcePaths].sort(),
+      sourcePaths,
       ...(bound !== undefined ? { boundNotePath: bound } : {}),
       ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
+      size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
     };
     records.push(record);
   }
@@ -238,6 +241,7 @@ export async function extractConcepts(
         courses: [...courses].sort(),
         sourcePaths: [boundNotePath],
         boundNotePath,
+        size: conceptRecordSize({ sourcePaths: [boundNotePath], boundNotePath }),
       });
     }
   }

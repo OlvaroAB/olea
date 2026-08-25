@@ -24,6 +24,7 @@
 
 import type { RegisteredFileSpec } from '../source/types.js';
 import type { VaultPath } from '../vault/types.js';
+import type { ConceptSize } from './size.js';
 
 /** Which tier of the source hierarchy (knowledge model §3) produced this record. */
 export type ConceptTier = 1 | 2 | 3;
@@ -134,6 +135,27 @@ export interface ConceptRecord {
    * binding reads `boundNotePath` and correctly finds none.
    */
   readonly ambiguousNotePaths?: readonly VaultPath[];
+  /**
+   * How much of her material grounds this concept (`[D-066]`, component
+   * register row 1.3, `./size.js`). Derived from `sourcePaths` and
+   * `boundNotePath` alone — a whole-note-grounding proxy, since this record
+   * carries no passage-grain provenance; `./read.js`'s `ReadConcept` derives
+   * a finer version from passage anchors. Read by the two consumers `[D-066]`
+   * named: honest scope counting (F8.1, F8.3) and session composition
+   * (F2.17) — see `./size.js`'s module doc for what those integrations look
+   * like and why they are not wired from here.
+   *
+   * **Optional rather than required, deliberately, and only for now.** Both
+   * of this module's own mint sites (`./extract.js`) always set it, as does
+   * `packages/synthetic/src/corpus.ts`'s fixture builder. It is optional so a
+   * `ConceptRecord` literal built elsewhere in the tree during this round —
+   * `gap/build.spec.ts`'s test helper is the one found — is not forced to
+   * adopt a field from a bead outside that file's ownership mid-round. A
+   * follow-up tightens this to required once every construction site is
+   * updated; until then, absence here should read as "not yet updated," not
+   * as "this concept has no size."
+   */
+  readonly size?: ConceptSize;
   // `ambiguousTopicPaths` was here, and is deliberately gone (`ol-t3sd`).
   //
   // It recorded, on each concept, the notes whose instruments had been

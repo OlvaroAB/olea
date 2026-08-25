@@ -60,6 +60,8 @@ import { readList } from '../frontmatter/read.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts } from './extract.js';
+import type { ConceptSize } from './size.js';
+import { readConceptSize } from './size.js';
 import type { ConceptRecord, ConceptTier } from './types.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER } from './zettelkasten.js';
 
@@ -202,6 +204,15 @@ export interface ReadConcept {
   readonly boundNotePath?: VaultPath;
   /** Notes of hers whose `topic` property named it, sorted. Empty when only the material did. */
   readonly sourcePaths: readonly VaultPath[];
+  /**
+   * How much of her material grounds this concept (`[D-066]`, component
+   * register row 1.3, `./size.js`). Derived at passage grain from `anchor`
+   * and `alsoIn`, unioned with `sourcePaths` — the finer version of the
+   * proxy `./types.js`'s `ConceptRecord.size` computes from whole-note
+   * grounding alone. Read by the two consumers `[D-066]` named: honest scope
+   * counting (F8.1, F8.3) and session composition (F2.17).
+   */
+  readonly size: ConceptSize;
 }
 
 /** One row per document the stage looked at, **including the ones that yielded nothing**. */
@@ -398,6 +409,7 @@ function corroborate(
   const hers = wordings.map((w) => conventions.get(w)).find((r) => r !== undefined);
 
   if (hers === undefined) {
+    const sourcePaths: readonly VaultPath[] = [];
     return {
       name: proposal.name,
       aliases: dedupe(proposal.aliases, proposal.name),
@@ -407,7 +419,8 @@ function corroborate(
       courses: [...coursesFromPassages].sort(byCodeUnit),
       anchor: proposal.anchor,
       alsoIn: proposal.alsoIn,
-      sourcePaths: [],
+      sourcePaths,
+      size: readConceptSize({ anchor: proposal.anchor, alsoIn: proposal.alsoIn, sourcePaths }),
     };
   }
 
@@ -422,6 +435,12 @@ function corroborate(
     alsoIn: proposal.alsoIn,
     ...(hers.boundNotePath !== undefined ? { boundNotePath: hers.boundNotePath } : {}),
     sourcePaths: hers.sourcePaths,
+    size: readConceptSize({
+      anchor: proposal.anchor,
+      alsoIn: proposal.alsoIn,
+      sourcePaths: hers.sourcePaths,
+      ...(hers.boundNotePath !== undefined ? { boundNotePath: hers.boundNotePath } : {}),
+    }),
   };
 }
 
@@ -583,6 +602,15 @@ export async function readConcepts(
       alsoIn: [],
       ...(record.boundNotePath !== undefined ? { boundNotePath: record.boundNotePath } : {}),
       sourcePaths: record.sourcePaths,
+      // No passage anchored it — honestly zero passage evidence, not "not
+      // tracked" (`./size.js`'s `passageCount` doc) — so this falls back to
+      // whole-note grounding, same floor as an un-corroborated `ConceptRecord`.
+      size: readConceptSize({
+        anchor: undefined,
+        alsoIn: [],
+        sourcePaths: record.sourcePaths,
+        ...(record.boundNotePath !== undefined ? { boundNotePath: record.boundNotePath } : {}),
+      }),
     });
   }
 
