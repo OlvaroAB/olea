@@ -41,6 +41,17 @@ export interface AssessmentRecord {
   readonly weightRaw: string | undefined;
   readonly due: string | undefined;
   readonly status: string | undefined;
+  /**
+   * WHAT the assessment covers (F1.7, ASC-1) — never required, and never
+   * part of `unresolvedFields`/`unrecognizedColumns` above, which are about
+   * the five REQUIRED fields only. This is the STATED leg of the precedence
+   * ./scope.ts's `resolveScope` implements: her own coverage property if she
+   * has one, else the note's own body prose, else `undefined`. It is never a
+   * probabilistic judgement about what an exam tends to ask (that is F4.2's
+   * exam-likelihood ranking, a different, whole-course thing) — see
+   * ./scope.ts's file doc for the full precedence and what this is not.
+   */
+  readonly scope?: string | undefined;
 }
 
 /** How a semantic field was resolved to an actual frontmatter key found in the scanned notes. */

@@ -66,7 +66,19 @@ describe('readAssessments — against the real Assignments.base fixture', () => 
       weightRaw: '5',
       due: '2026-08-14',
       status: 'done',
+      scope: 'Short in-class quiz covering calibre classes and the roundness scale.',
     });
+  });
+
+  it("resolves a sixth, optional field — scope (F1.7 / ASC-1) — from the assessment note's own body prose where she has recorded no dedicated property", async () => {
+    const report = await readAssessments(source, BASE_PATH);
+    const midterm = report.records.find(
+      (r) => r.path === '02 Assignments/Midterm Test - GEOL204.md',
+    );
+    expect(midterm?.scope).toBe('Covers WEEK 1 through WEEK 5 material.');
+    // never required — an assessment stating nothing about its coverage is
+    // not reported as a gap the way an unmatched required column would be.
+    expect(report.unresolvedFields).toEqual([]);
   });
 
   it('is deterministic across repeated calls', async () => {

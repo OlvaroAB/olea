@@ -15,6 +15,13 @@
  * `readAssessments` call returns a full report, not a bare array, and an
  * empty `records` is always explained by `configErrors` or
  * `unresolvedFields` elsewhere in that report.
+ *
+ * A sixth, optional field — `scope`, F1.7 / ASC-1, WHAT the assessment
+ * covers rather than when it is or what it's worth — is resolved per note
+ * from ./scope.ts's `extractStatedScope` rather than through the alias table
+ * above: it is never required, so it never joins `unresolvedFields`, and
+ * most of her assessment notes state it in body prose rather than a
+ * dedicated property. See ./scope.ts for the full precedence.
  */
 
 import { parseDocument } from '../block/parse.js';
@@ -27,6 +34,7 @@ import {
   extractExtFilters,
   extractInFolderFilters,
 } from './base-file.js';
+import { extractStatedScope } from './scope.js';
 import {
   type AssessmentField,
   type AssessmentReadReport,
@@ -101,6 +109,11 @@ export async function readAssessments(
   const notesWithoutFrontmatter: VaultPath[] = [];
   const parsedByPath = new Map<VaultPath, Frontmatter>();
   const allKeys = new Set<string>();
+  // F1.7 / ASC-1: what each note states about its own coverage, resolved per
+  // note (never a global per-Base mapping like the five required fields
+  // above) — `scope` is optional and most of her assessment notes carry no
+  // dedicated property for it at all. See ./scope.ts for precedence.
+  const statedScopeByPath = new Map<VaultPath, string | undefined>();
 
   for (const path of notesScanned) {
     const content = await vault.read(path);
@@ -113,6 +126,7 @@ export async function readAssessments(
     const fm = parseFrontmatter(first.inner);
     parsedByPath.set(path, fm);
     for (const key of entryKeys(fm)) allKeys.add(key);
+    statedScopeByPath.set(path, extractStatedScope(fm, doc));
   }
 
   // One global mapping per field, resolved from the union of keys actually
@@ -165,6 +179,7 @@ export async function readAssessments(
               weightRaw,
               due: readField('due'),
               status: readField('status'),
+              scope: statedScopeByPath.get(path),
             };
           });
 
