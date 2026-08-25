@@ -132,9 +132,38 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
   constructor(
     private readonly httpRequest: HttpRequestFn,
     private readonly config: WorkerConfig,
+    /**
+     * F7.3 usage recording (`ol-p3t09`): called once per successful task
+     * response with the D-005-safe subset only — task id plus the response
+     * stamp's prompt version and model id. Never content, never the payload.
+     * Optional so every existing construction site and test double stays
+     * untouched; `usage/log-store.ts` is the production consumer.
+     */
+    private readonly onCallRecorded?: (entry: {
+      taskId: string;
+      promptVersion: string;
+      modelId: string;
+    }) => void,
   ) {}
 
-  send(request: WorkerTaskRequest): Promise<unknown> {
-    return sendWorkerTask(this.httpRequest, this.config, request);
+  async send(request: WorkerTaskRequest): Promise<unknown> {
+    const result = await sendWorkerTask(this.httpRequest, this.config, request);
+    if (this.onCallRecorded && typeof result === 'object' && result !== null) {
+      const r = result as Record<string, unknown>;
+      const stamp = r.stamp as Record<string, unknown> | undefined;
+      if (
+        r.ok === true &&
+        stamp &&
+        typeof stamp.promptVersion === 'string' &&
+        typeof stamp.modelId === 'string'
+      ) {
+        this.onCallRecorded({
+          taskId: request.taskId,
+          promptVersion: stamp.promptVersion,
+          modelId: stamp.modelId,
+        });
+      }
+    }
+    return result;
   }
 }

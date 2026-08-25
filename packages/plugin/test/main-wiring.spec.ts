@@ -149,7 +149,7 @@ describe('the settings tab reaches a real Worker transport (ol-k57j)', () => {
 
   it('constructs the setting tab with itself as the data host and the real transport factory', () => {
     expect(main).toMatch(
-      /new OleaSettingTab\(this\.app,\s*this,\s*this,\s*createObsidianWorkerTransport\)/,
+      /new OleaSettingTab\(this\.app,\s*this,\s*this,\s*createRecordingTransport\)/,
     );
   });
 
@@ -196,7 +196,7 @@ describe('the embedding cache is actually drained (ol-odb0.1)', () => {
 
   it('builds the retrieval wiring through the tested composer, against the real data host and the real transport factory', () => {
     expect(main).toMatch(
-      /this\.retrieval\s*=\s*await buildRetrievalWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createObsidianWorkerTransport,/,
+      /this\.retrieval\s*=\s*await buildRetrievalWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,/,
     );
   });
 
@@ -229,7 +229,7 @@ describe('the explain-back grading pipeline has a real production caller (ol-drf
 
   it('builds the grading wiring through the tested composer, against the real data host and the real transport factory', () => {
     expect(main).toMatch(
-      /this\.grading\s*=\s*await buildGradingWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createObsidianWorkerTransport,/,
+      /this\.grading\s*=\s*await buildGradingWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,/,
     );
   });
 
@@ -254,7 +254,7 @@ describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle
 
   it('builds the concept wiring through the tested composer, against the real data host and the real transport factory', () => {
     expect(main).toMatch(
-      /this\.concept\s*=\s*await buildConceptWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createObsidianWorkerTransport,/,
+      /this\.concept\s*=\s*await buildConceptWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,/,
     );
   });
 

@@ -71,6 +71,7 @@ import {
 } from './today/data-source.js';
 import { refreshOpenTodayViews } from './today/refresh.js';
 import { TodayView, VIEW_TYPE_OLEA_TODAY } from './today/view.js';
+import { ObsidianUsageLogStore } from './usage/log-store.js';
 import { ObsidianSource } from './vault/obsidian-source.js';
 import { createObsidianWorkerTransport } from './worker/obsidian-transport.js';
 
@@ -148,12 +149,23 @@ export default class OleaPlugin extends Plugin {
   private rankWeights: RankWeightsWiring | null = null;
 
   override async onload(): Promise<void> {
+    // F7.3 usage view (`ol-p3t09`): every Worker transport built below records
+    // the D-005-safe per-call subset (task id, prompt version, model id) into
+    // `usage/log-store.ts`'s own `data.json` key, which the settings pane's
+    // usage section aggregates. The wrapper keeps the factory signature every
+    // wiring site already expects.
+    const usageLogStore = new ObsidianUsageLogStore(this);
+    const createRecordingTransport: typeof createObsidianWorkerTransport = (config) =>
+      createObsidianWorkerTransport(config, (entry) => {
+        void usageLogStore.record({ ...entry, recordedAt: new Date().toISOString() });
+      });
+
     // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
     // narrow-port pattern `ObsidianQueueStore` and `ObsidianKeywordIndexStore`
     // already use. `createObsidianWorkerTransport` is injected rather than
     // built inside the tab so `settings-tab.ts` never has to import
     // `obsidian`'s `requestUrl` itself (ol-k57j; see `worker/obsidian-transport.ts`).
-    this.addSettingTab(new OleaSettingTab(this.app, this, this, createObsidianWorkerTransport));
+    this.addSettingTab(new OleaSettingTab(this.app, this, this, createRecordingTransport));
 
     const vault = new ObsidianSource(this.app);
     // The queue and the panel must agree about what "due" means, so both read
@@ -424,7 +436,7 @@ export default class OleaPlugin extends Plugin {
     // token is pasted yet (F7.8) — see `retrieval/wiring.ts`'s module doc.
     this.retrieval = await buildRetrievalWiring({
       dataHost: this,
-      createTransport: createObsidianWorkerTransport,
+      createTransport: createRecordingTransport,
     });
 
     // ol-drfy: the explain-back grading pipeline's production JudgeCaller,
@@ -435,7 +447,7 @@ export default class OleaPlugin extends Plugin {
     // routing), not this bead.
     this.grading = await buildGradingWiring({
       dataHost: this,
-      createTransport: createObsidianWorkerTransport,
+      createTransport: createRecordingTransport,
     });
 
     // EXT-7 (`ol-5nle`): the concept-reading stage's production port, wired
@@ -446,7 +458,7 @@ export default class OleaPlugin extends Plugin {
     // documents for grading.
     this.concept = await buildConceptWiring({
       dataHost: this,
-      createTransport: createObsidianWorkerTransport,
+      createTransport: createRecordingTransport,
     });
 
     // KCT-2 (`ol-fx1k`, `[D-114]`): the knowledge-kind classifier's production
@@ -454,7 +466,7 @@ export default class OleaPlugin extends Plugin {
     // `this.concept` — see `classifyKnowledgeKindForConcept` below.
     this.knowledgeKind = await buildKnowledgeKindWiring({
       dataHost: this,
-      createTransport: createObsidianWorkerTransport,
+      createTransport: createRecordingTransport,
     });
 
     // Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) —

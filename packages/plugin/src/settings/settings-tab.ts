@@ -32,6 +32,7 @@ import type { App, Plugin } from 'obsidian';
 import { PluginSettingTab, Setting } from 'obsidian';
 import type { WorkerTaskTransport } from 'olea-core';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
+import { renderUsageSection } from '../usage/settings-section.js';
 import type { ObsidianDataHost, PersistedWorkerConfig } from '../worker/config-store.js';
 import { ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import { describeTestConnectionOutcome, testWorkerConnection } from '../worker/test-connection.js';
@@ -60,6 +61,8 @@ import {
 export class OleaSettingTab extends PluginSettingTab {
   private readonly configStore: ObsidianWorkerConfigStore;
   private readonly studyPlanConfigStore: ObsidianStudyPlanSettingsStore;
+  /** Kept for the F7.3 usage section (`ol-p3t09`), which reads its own `data.json` key through the same host. */
+  private readonly dataHost: ObsidianDataHost;
 
   constructor(
     app: App,
@@ -75,6 +78,7 @@ export class OleaSettingTab extends PluginSettingTab {
     // ranking needs no model call), which is why it renders in its own
     // section rather than inside the "AI" one.
     this.studyPlanConfigStore = new ObsidianStudyPlanSettingsStore(dataHost);
+    this.dataHost = dataHost;
   }
 
   override display(): void {
@@ -96,6 +100,10 @@ export class OleaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('AI').setHeading();
     void this.renderWorkerFields(containerEl);
+
+    // F7.3 usage view (`ol-p3t09`) — informational in v0.9, the future quota
+    // surface. Same async-render terms as the field renderers above.
+    void renderUsageSection(containerEl, this.dataHost);
   }
 
   private async renderStudyPlanFields(containerEl: HTMLElement): Promise<void> {
