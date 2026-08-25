@@ -46,6 +46,49 @@ export {
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept/concept-key.js';
+export type {
+  PassageTextLookup,
+  RunCorpusRelationBatchInput,
+} from './concept/corpus-relations/batch.js';
+export { runCorpusRelationBatch, totalCorpusDropped } from './concept/corpus-relations/batch.js';
+export { nominateCorpusRelationCandidates } from './concept/corpus-relations/nominate.js';
+export type {
+  CorpusRelationBatchTriggerInput,
+  CorpusRelationBatchTriggerReason,
+  CorpusRelationBatchTriggerResult,
+} from './concept/corpus-relations/trigger.js';
+export { shouldRunCorpusRelationBatch } from './concept/corpus-relations/trigger.js';
+// The corpus-level relation stage (`[D-082]`, component register row 1.2a,
+// `[EXT-5]` `ol-2zfj.7`): candidate nomination over cheap signals, a
+// combined-passage verdict, and the batch trigger/scope rule. Structurally
+// separate from `./concept/read.js` (per-document) and `./concept/
+// reconcile.js` (that stage's own reconciliation) — see `./concept/
+// corpus-relations/types.js`'s module doc. `CorpusRelationVerdictPort` is the
+// service seam; `[EXT-11]` (`ol-kw4a`, `[D-118]`) is its first production
+// adapter, in `packages/plugin/src/concept/`, which is why these need to be
+// nameable outside this package for the first time.
+export type {
+  CorpusConcept,
+  CorpusRelationBatchResult,
+  CorpusRelationCandidate,
+  CorpusRelationDropReason,
+  NominationSignal,
+  NominationSignalKind,
+} from './concept/corpus-relations/types.js';
+export {
+  CORPUS_RELATION_DROP_REASONS,
+  CORPUS_STAGE_EMITTABLE_TYPES,
+  emptyCorpusDropCounts,
+} from './concept/corpus-relations/types.js';
+export type {
+  CorpusRelationVerdictPort,
+  CorpusVerdict,
+  CorpusVerdictRequest,
+  CorpusVerdictRequestCandidate,
+  CorpusVerdictResponse,
+  ReconcileCorpusVerdictsResult,
+} from './concept/corpus-relations/verdict.js';
+export { reconcileCorpusVerdicts } from './concept/corpus-relations/verdict.js';
 // ol-p3t07a: the F3.3 automatic-generation pipeline (`packages/plugin/src/
 // generation/`) needs F1.3's course-from-path derivation to turn a
 // newly-landed source's note path into the `courseCode` `draftQuizCardsFor

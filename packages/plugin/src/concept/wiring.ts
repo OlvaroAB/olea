@@ -62,16 +62,27 @@ import {
   type ConceptReadBudget,
   type ConceptReaderPort,
   type ConceptReadResult,
+  type ConceptRelation,
+  type CorpusConcept,
+  type CorpusRelationBatchTriggerReason,
+  type CorpusRelationVerdictPort,
   classifyKnowledgeKind,
   type KnowledgeKindClassifierPort,
+  type Provenance,
+  type ReadConcept,
   readConcepts,
+  runCorpusRelationBatch,
+  shouldRunCorpusRelationBatch,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
+import { gatherCorpusRelationVaultContext } from './corpusRelationSignals.js';
+import type { ObsidianCorpusRelationStateStore } from './corpusRelationStateStore.js';
 import { WorkerConceptReader } from './workerConceptReader.js';
+import { WorkerCorpusRelationVerdict } from './workerCorpusRelationVerdict.js';
 import { WorkerKnowledgeKindClassifier } from './workerKnowledgeKindClassifier.js';
 
 /** See the module doc's "THE BUDGET" section. */
@@ -203,4 +214,172 @@ export async function classifyConceptKnowledgeKind(
 ): Promise<ClassifyKnowledgeKindResult | null> {
   if (wiring.classifier === null) return null;
   return classifyKnowledgeKind(wiring.classifier, request, options);
+}
+
+// =============================================================================
+// `buildCorpusRelationWiring` / `runCorpusRelationBatchIfDue` — the
+// corpus-level relation stage's production seam (`[D-082]`, component
+// register row 1.2a, `[EXT-5]` `ol-2zfj.7`, `[EXT-11]` `ol-kw4a`, `[D-118]`).
+// =============================================================================
+//
+// Same composition-root shape as `buildConceptWiring`/`buildKnowledgeKindWiring`
+// above: load the persisted Worker config, build a real
+// `WorkerCorpusRelationVerdict` when (and only when) it is usable, `null`
+// otherwise (F7.8).
+//
+// **Unlike `readConceptsFromVault`/`classifyConceptKnowledgeKind`, this bead's
+// own charge is to close the "nothing calls this yet" gap for the corpus
+// stage specifically** (EXT-11's acceptance criteria: "a real production
+// caller exists for `runCorpusRelationBatch`... that never fires on a
+// per-document event"). `runCorpusRelationBatchIfDue` below is that caller —
+// see its own doc for the trigger it is wired to and what it deliberately
+// still leaves to the composition root in `main.ts` (which this bead's own
+// file ownership does not include; the wiring is a patch handed to the
+// orchestrator).
+
+export interface CorpusRelationWiring {
+  /** `null` when the Worker isn't configured yet (F7.8) — see the module doc. */
+  readonly verdictPort: CorpusRelationVerdictPort | null;
+}
+
+export async function buildCorpusRelationWiring(
+  deps: ConceptWiringDeps,
+): Promise<CorpusRelationWiring> {
+  const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
+  const config = await configStore.load();
+  if (!isWorkerConfigured(config)) return { verdictPort: null };
+
+  const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
+  return { verdictPort: new WorkerCorpusRelationVerdict({ transport }) };
+}
+
+/**
+ * `ReadConcept[]` (a full concept READ, per-document relations included) ->
+ * `CorpusConcept[]` (this stage's own narrower input) — dropping every
+ * concept with no `anchor`, exactly as `ReadConcept.anchor`'s own doc says
+ * such a concept must be: "ineligible for the corpus-level relation stage."
+ */
+export function corpusConceptsFrom(concepts: readonly ReadConcept[]): readonly CorpusConcept[] {
+  return concepts
+    .filter(
+      (concept): concept is ReadConcept & { anchor: Provenance } => concept.anchor !== undefined,
+    )
+    .map((concept) => ({ name: concept.name, aliases: concept.aliases, anchor: concept.anchor }));
+}
+
+export interface RunCorpusRelationBatchIfDueOptions {
+  readonly vault: VaultSource;
+  /**
+   * True the instant `main.ts`'s ingestion tick loop observes the queue
+   * transition from doing work to fully idle
+   * (`./corpusRelationTrigger.js`'s `ingestionSessionJustClosed`) — the
+   * FIRST of `shouldRunCorpusRelationBatch`'s two boundaries, and the one
+   * this function is wired to for real. Never derived from a single
+   * document or job landing (F1-sources.md's "the corpus stage fires on
+   * batch boundaries, never on document arrival").
+   */
+  readonly ingestionSessionClosed: boolean;
+  /** This run's full, current concept set — `corpusConceptsFrom(readConceptsFromVault(...))`'s `concepts`, for whichever course(s) the caller scopes this to. */
+  readonly allConcepts: readonly CorpusConcept[];
+  /**
+   * Component register row 1.2a's derived threshold
+   * (`packages/core/src/concept/corpus-relations/trigger.ts`'s `n`) —
+   * undefaulted deliberately (EXT-11, `ol-kw4a`, item 4: no tuning pass has
+   * run, the same posture `ClassifyKnowledgeKindOptions.confidenceFloor`
+   * held before KCT-3). Omit it to run this stage on the
+   * ingestion-session-close boundary alone: the concept-count boundary is
+   * then structurally disabled (an infinite threshold, never a guessed
+   * number) rather than silently defaulted to one this module invented.
+   */
+  readonly n?: number;
+}
+
+export interface CorpusRelationBatchRunOutcome {
+  readonly ran: boolean;
+  /** Present only when `ran` is true — which boundary fired. */
+  readonly reason?: CorpusRelationBatchTriggerReason;
+  /** Present only when `ran` is true. Fold onto `ConceptReadResult.relations` (same `ConceptRelation[]` shape) — see the module doc for why this bead does not introduce a second store for them. */
+  readonly relations?: readonly ConceptRelation[];
+  readonly candidatesNominated?: number;
+}
+
+/**
+ * The production caller `ol-kw4a` exists to build, closing `[EXT-5]`'s own
+ * named gap for `runCorpusRelationBatch`. Reaches it through whatever
+ * `CorpusRelationVerdictPort` `buildCorpusRelationWiring` composed, with
+ * REAL nomination signals (`./corpusRelationSignals.js`'s `her-link` scan —
+ * see that module's doc for why `assessment-cooccurrence` and
+ * `embedding-proximity` are named, deferred follow-on work rather than
+ * built here) and a REAL, persisted "new concepts since last run" count
+ * (`./corpusRelationStateStore.js`).
+ *
+ * **Where the resulting edges land.** This function returns them; it does
+ * not persist or surface them itself. Nothing in this plugin persists
+ * concepts across sessions yet either (`readConceptsFromVault`'s own doc:
+ * every call is a fresh, in-memory read) — building a dedicated relations
+ * store ahead of a concept registry would be structure with nothing to
+ * attach to. The natural fold point that already exists is
+ * `ConceptReadResult.relations`: both this function's `relations` and a
+ * per-document read's `relations` are the identical `ConceptRelation[]`
+ * shape, so a caller holding both concatenates them into one list rather
+ * than this bead inventing a second representation.
+ *
+ * **`n`'s absence never blocks the ingestion-session-close boundary.** See
+ * `RunCorpusRelationBatchIfDueOptions.n`'s own doc — the concept-count
+ * boundary is what stays unreachable without a derived value, not this
+ * whole function.
+ *
+ * The persisted "known concept names" set is updated only when this
+ * function actually runs a batch — never on a call that declines to run —
+ * so "new concepts since last run" keeps accumulating correctly across
+ * every tick that does not cross a boundary.
+ */
+export async function runCorpusRelationBatchIfDue(
+  wiring: CorpusRelationWiring,
+  stateStore: ObsidianCorpusRelationStateStore,
+  options: RunCorpusRelationBatchIfDueOptions,
+): Promise<CorpusRelationBatchRunOutcome> {
+  if (wiring.verdictPort === null) return { ran: false };
+
+  const state = await stateStore.load();
+  const known = new Set(state.knownConceptNames);
+  const newConcepts = options.allConcepts.filter((concept) => !known.has(concept.name));
+
+  const trigger = shouldRunCorpusRelationBatch({
+    ingestionSessionClosed: options.ingestionSessionClosed,
+    newConceptsSinceLastRun: newConcepts.length,
+    n: options.n ?? Number.POSITIVE_INFINITY,
+  });
+  if (!trigger.shouldRun) return { ran: false };
+  // A boundary crossed with nothing new to nominate against is an honest
+  // no-op, not an error — `nominateCorpusRelationCandidates` would return
+  // `[]` anyway (every candidate needs at least one NEW endpoint), so this
+  // short-circuits before the vault scan below rather than doing it for
+  // nothing.
+  if (newConcepts.length === 0) {
+    return { ran: false, ...(trigger.reason !== undefined ? { reason: trigger.reason } : {}) };
+  }
+
+  const { signals, passageTextByName } = await gatherCorpusRelationVaultContext(
+    options.vault,
+    options.allConcepts,
+  );
+
+  const result = await runCorpusRelationBatch(wiring.verdictPort, {
+    newConcepts,
+    allConcepts: options.allConcepts,
+    signals,
+    passageText: (concept) => passageTextByName.get(concept.name) ?? '',
+  });
+
+  await stateStore.save({
+    knownConceptNames: [...new Set(options.allConcepts.map((concept) => concept.name))],
+  });
+
+  return {
+    ran: true,
+    ...(trigger.reason !== undefined ? { reason: trigger.reason } : {}),
+    relations: result.relations,
+    candidatesNominated: result.candidatesNominated,
+  };
 }

@@ -107,6 +107,24 @@ export const TASK_IDS = {
    * verdict over material that already exists, not a generation.
    */
   GROUNDING_JUDGE: 'grounding.judge.v1',
+  /**
+   * W4 · Slot G — the corpus-level relation verdict: given a candidate pair
+   * of concepts and BOTH endpoints' introducing-passage text, does the
+   * material support `prerequisite` or `contrasts-with` between them
+   * (`[D-082]`, component register row 1.2a, `[EXT-5]` `ol-2zfj.7`)? Sits
+   * beside `concepts.extract.v1` and `concepts.classify.v1` in the same
+   * family — extract proposes within-document relations, classify types a
+   * concept, this task verdicts corpus-level candidates — rather than a
+   * bare-noun `relations.verdict.v1`, which no existing id shape uses
+   * (`[D-118]`). Payload/response fixed by
+   * `packages/core/src/concept/corpus-relations/verdict.ts`'s
+   * `CorpusVerdictRequest`/`CorpusVerdictResponse`: a batch of candidates,
+   * each carrying both endpoints' names and introducing-passage TEXT; a
+   * verdict per candidate, or silence for abstention. The client-side stage
+   * is that same module's `CorpusRelationVerdictPort` seam, wired to this id
+   * by `[EXT-11]` (`ol-kw4a`), added by `[D-118]`.
+   */
+  CONCEPTS_RELATIONS: 'concepts.relations.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */

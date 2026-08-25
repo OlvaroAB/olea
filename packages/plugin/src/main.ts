@@ -9,20 +9,27 @@ import {
   type GradeExplainBackInput,
   loadCachedStudyPlan,
   type PendingExplainBackGrading,
+  type QueueSnapshot,
   refreshStudyPlan,
   type Scheduler,
   type VaultSource,
 } from 'olea-core';
 import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
+import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
+import { ingestionSessionJustClosed } from './concept/corpusRelationTrigger.js';
 import {
   buildConceptWiring,
+  buildCorpusRelationWiring,
   buildKnowledgeKindWiring,
   type ConceptWiring,
+  type CorpusRelationWiring,
   classifyConceptKnowledgeKind,
+  corpusConceptsFrom,
   type KnowledgeKindWiring,
   type ReadConceptsFromVaultOptions,
   readConceptsFromVault,
+  runCorpusRelationBatchIfDue,
 } from './concept/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
@@ -147,6 +154,11 @@ export default class OleaPlugin extends Plugin {
   private generation: GenerationWiring | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
   private rankWeights: RankWeightsWiring | null = null;
+  /** `[EXT-11]` (`ol-kw4a`, `[D-118]`) — the corpus-level relation stage's production port, same F7.8 grey-out terms as `concept`/`knowledgeKind` above. */
+  private corpusRelation: CorpusRelationWiring | null = null;
+  private corpusRelationStateStore: ObsidianCorpusRelationStateStore | null = null;
+  /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
+  private lastIngestionSnapshot: QueueSnapshot | null = null;
 
   override async onload(): Promise<void> {
     // F7.3 usage view (`ol-p3t09`): every Worker transport built below records
@@ -469,6 +481,16 @@ export default class OleaPlugin extends Plugin {
       createTransport: createRecordingTransport,
     });
 
+    // `[EXT-11]` (`ol-kw4a`, `[D-118]`): the corpus-level relation stage's
+    // production port. Unlike `this.concept`/`this.knowledgeKind` above, this
+    // bead's charge was to close the "nothing calls it yet" gap — see
+    // `tickIngestionAndMaybeRunCorpusRelations` below.
+    this.corpusRelation = await buildCorpusRelationWiring({
+      dataHost: this,
+      createTransport: createRecordingTransport,
+    });
+    this.corpusRelationStateStore = new ObsidianCorpusRelationStateStore(this);
+
     // Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) —
     // the fetch-or-null wiring built here, threaded into
     // `refreshCachedStudyPlan`'s `createLocalStudyPlanProvider` call below.
@@ -479,10 +501,46 @@ export default class OleaPlugin extends Plugin {
 
     this.registerInterval(
       window.setInterval(() => {
-        void this.ingestion?.engine.tick();
+        void this.tickIngestionAndMaybeRunCorpusRelations();
         void this.drainEmbeddings(capability);
       }, INGESTION_TICK_INTERVAL_MS),
     );
+  }
+
+  /**
+   * Ticks the ingestion queue, then checks whether that tick just closed an
+   * ingestion session — never a per-document event (component register row
+   * 1.2a; F1's batch-boundary scenario) — and if so, runs the corpus-level
+   * relation stage's batch (`[EXT-11]`, `ol-kw4a`, `[D-118]`). Also EXT-7's
+   * first real caller for `readConceptsFromVault`.
+   */
+  private async tickIngestionAndMaybeRunCorpusRelations(): Promise<void> {
+    const previous = this.lastIngestionSnapshot;
+    await this.ingestion?.engine.tick();
+    const current = this.ingestion?.engine.snapshot() ?? null;
+    if (current === null) return;
+    this.lastIngestionSnapshot = current;
+
+    if (!ingestionSessionJustClosed(previous, current)) return;
+    if (this.corpusRelation === null || this.corpusRelationStateStore === null) return;
+    if (this.concept === null) return;
+
+    try {
+      const vault = new ObsidianSource(this.app);
+      const readResult = await readConceptsFromVault(this.concept, vault);
+      if (readResult === null || readResult.outcome !== 'read') return;
+
+      await runCorpusRelationBatchIfDue(this.corpusRelation, this.corpusRelationStateStore, {
+        vault,
+        ingestionSessionClosed: true,
+        allConcepts: corpusConceptsFrom(readResult.concepts),
+      });
+      // `.relations` not yet folded anywhere — no persisted concept/relation
+      // registry exists in this plugin for either stage's edges to land in.
+      // Filed as follow-on work, not guessed at here.
+    } catch (error) {
+      console.error('Olea: corpus relation batch failed', error);
+    }
   }
 
   /**

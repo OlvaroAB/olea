@@ -202,7 +202,7 @@ describe('the embedding cache is actually drained (ol-odb0.1)', () => {
 
   it('the ingestion tick interval also drains embeddings, not just the queue', () => {
     expect(main).toMatch(
-      /void this\.ingestion\?\.engine\.tick\(\);\s*void this\.drainEmbeddings\(capability\);/,
+      /void this\.tickIngestionAndMaybeRunCorpusRelations\(\);\s*void this\.drainEmbeddings\(capability\);/,
     );
   });
 

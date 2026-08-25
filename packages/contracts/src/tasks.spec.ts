@@ -11,13 +11,14 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these eleven ids, spelled exactly this way', () => {
+  it('is exactly these twelve ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
       'cards.generate.v1',
       'concepts.classify.v1',
       'concepts.extract.v1',
+      'concepts.relations.v1',
       'explain-back.judge.v1',
       'explain-why.generate.v1',
       'grounding.judge.v1',
@@ -53,7 +54,14 @@ describe('the closed task-id catalogue', () => {
     // row 1.5's classifier: a verdict over a concept plus its source material,
     // grouped with W6 alongside the other two judgment-shaped tasks rather than
     // with W4's concept extraction, because it judges rather than generates.
-    expect(ALL_TASK_IDS).toHaveLength(11);
+    //
+    // `concepts.relations.v1` (`[D-118]`, EXT-11 `ol-kw4a`) is the corpus-level
+    // relation verdict `[EXT-5]` (`ol-2zfj.7`) left with no task id: grouped
+    // with W4 alongside `concepts.extract.v1` (both propose relation edges over
+    // real material) rather than with W6's judgments, since a verdict over a
+    // candidate pair that may abstain is closer to this stage's own shape than
+    // to a closed-label classification.
+    expect(ALL_TASK_IDS).toHaveLength(12);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
