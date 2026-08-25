@@ -255,12 +255,12 @@ export async function appendSuspendRecord(
  * per device, crash-safe `\n` separation, and every byte validated against
  * the frozen schema before it reaches the vault.
  *
- * **Reachability.** This function has no production caller yet — emitting a
- * verdict event from the accept/reject UI is the ask-modal lane's job, not
- * this one's (see the bead this function's `ol-548w` reference points at).
- * Same posture as `appendSuspendRecord` above: the recording discipline is
- * built *before* the UI that will call it, deliberately, so the day that UI
- * lands there is already somewhere correct for its verdict to go.
+ * **Reachability.** Wired (`ol-mfn0`, wave-2 round-3): called from
+ * `packages/plugin/src/generation/accept.ts`'s `DraftAcceptPort.accept`/
+ * `.reject` (:106 and :137), reached from `review/session.ts`'s
+ * `resolveDraftAt` (:356-366) off the real keypress/click dispatch in
+ * `review/view.ts` (:257-261) — the same operation that does the
+ * accept-to-vault write, never emitted ahead of it.
  */
 export async function appendVerdictRecord(
   vault: VaultSource,
