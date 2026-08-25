@@ -350,6 +350,17 @@ const KNOWN_FINDINGS = [
       'every non-declaration, non-barrel, non-comment occurrence of the port type name is a ' +
       'doc comment; zero real code references',
   },
+  {
+    port: 'ConceptReaderPort',
+    tasks: ['ol-2zfj.1'],
+    followUp: 'ol-5nle',
+    reason:
+      '2026-08-25, the D-072 escape hatch used as written: ol-2zfj.1 (EXT-3) shipped the ' +
+      'client-side reading stage declaring only packages/core/src/concept/, and left the port ' +
+      'unimplemented on purpose — the task id (frozen catalogue), service TaskDefinition/prompt, ' +
+      'and plugin adapter are Class C or outside that ownership. ol-5nle (EXT-7) is the named ' +
+      'wiring bead carrying the full ordered procedure; this entry is removed when it lands.',
+  },
 ];
 
 /** Validates `followUp` format on whichever findings list is active (the hardcoded default, or
