@@ -37,11 +37,15 @@
  * client for storage" (`ol-kxr6`'s own description) — so this module owns
  * everything except the judgement, reached through
  * `KnowledgeKindClassifierPort`, the same seam shape `./read.ts`'s
- * `ConceptReaderPort` uses. **There is no production adapter.** Registering
- * the task id is a change to the frozen catalogue in `packages/contracts`
- * (C4.1–C4.3) — a closed vocabulary by design — and the prompt is private
- * IP that belongs in the service repo (C4.3). Neither is this module's to
- * do; see `ol-kxr6`'s close notes for the bead that wires it.
+ * `ConceptReaderPort` uses. **The production adapter now exists**
+ * (`WorkerKnowledgeKindClassifier`, `packages/plugin/src/concept/`,
+ * `ol-fx1k` / `[KCT-2]` / `[D-114]`), composed at
+ * `OleaPlugin.classifyKnowledgeKindForConcept`
+ * (`packages/plugin/src/main.ts`) — but that method has **no caller of its
+ * own yet**, deliberately: the named consumer is component 2.2's
+ * instrument-type routing (`ol-dlr1`, gated on `ol-tqd5`'s routing policy),
+ * and neither has landed. So the model call is wired end-to-end while
+ * nothing in the product decides *when* to make it.
  *
  * **The confidence floor is declared as a required option with no
  * default**, the same discipline `./read.ts`'s `ConceptReadBudget
