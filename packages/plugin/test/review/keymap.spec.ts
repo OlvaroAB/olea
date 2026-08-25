@@ -24,6 +24,14 @@ const SCREENS: readonly ReviewScreen[] = [
   { kind: 'session-complete' },
   { kind: 'empty' },
   { kind: 'note-missing' },
+  // ol-uxk9: the same three item screens above, but with a still-pending
+  // draft (`instrument.draftId !== null`, F3.3, `[D-097]`) — the converse
+  // hint-row assertion below runs over these too, so a draft screen's E/S
+  // hints get the same "promises nothing the resolver doesn't accept"
+  // guarantee as every other screen.
+  { kind: 'card-front', isNewDraft: true },
+  { kind: 'card-reveal', isNewDraft: true },
+  { kind: 'mcq-unanswered', optionCount: PRESENTED_OPTIONS, isNewDraft: true },
 ];
 
 describe('resolveReviewKey — card front', () => {
@@ -119,6 +127,93 @@ describe('resolveReviewKey — MCQ answered', () => {
 
   it('answer keys do nothing once already answered', () => {
     expect(resolveReviewKey({ key: 'a' }, screen)).toBeNull();
+  });
+});
+
+describe('resolveReviewKey — a still-pending draft item (ol-uxk9, Q6.5 completeness)', () => {
+  // The three item screens a draft can actually be showing when unresolved
+  // (`view.ts`'s `currentScreen` computes `isNewDraft` from
+  // `instrument.draftId !== null` on exactly these three — `mcqAnswer`/`rate`
+  // resolve any pending draft before `mcq-answered` can render again, and
+  // `note-missing` has no draft path at all).
+  const draftScreens: readonly ReviewScreen[] = [
+    { kind: 'card-front', isNewDraft: true },
+    { kind: 'card-reveal', isNewDraft: true },
+    { kind: 'mcq-unanswered', optionCount: PRESENTED_OPTIONS, isNewDraft: true },
+  ];
+
+  it.each(draftScreens)(
+    '%j: E accepts-and-edits the draft instead of editing the note',
+    (screen) => {
+      expect(resolveReviewKey({ key: 'e' }, screen)).toEqual({ kind: 'accept-edit-draft' });
+      expect(resolveReviewKey({ key: 'E' }, screen)).toEqual({ kind: 'accept-edit-draft' });
+    },
+  );
+
+  it.each(draftScreens)('%j: S rejects the draft instead of suspending', (screen) => {
+    expect(resolveReviewKey({ key: 's' }, screen)).toEqual({ kind: 'reject-draft' });
+    expect(resolveReviewKey({ key: 'S' }, screen)).toEqual({ kind: 'reject-draft' });
+  });
+
+  it.each(draftScreens)(
+    '%j: Escape and the arrow keys are unaffected by draft status',
+    (screen) => {
+      expect(resolveReviewKey({ key: 'Escape' }, screen)).toEqual({ kind: 'end-session' });
+      expect(resolveReviewKey({ key: 'ArrowUp' }, screen)).toEqual({
+        kind: 'focus-move',
+        direction: 'up',
+      });
+    },
+  );
+
+  it('isNewDraft: false behaves identically to an ordinary (unmarked) screen', () => {
+    const marked: ReviewScreen = { kind: 'card-front', isNewDraft: false };
+    const unmarked: ReviewScreen = { kind: 'card-front' };
+    expect(resolveReviewKey({ key: 'e' }, marked)).toEqual({ kind: 'edit' });
+    expect(resolveReviewKey({ key: 'e' }, marked)).toEqual(
+      resolveReviewKey({ key: 'e' }, unmarked),
+    );
+    expect(resolveReviewKey({ key: 's' }, marked)).toEqual({ kind: 'suspend' });
+  });
+
+  it('mcq-answered has no isNewDraft field at all — resolveDraftAt already resolved the draft before this screen can render — so E/S stay the ordinary edit/suspend pair, never accept-edit-draft/reject-draft', () => {
+    const screen: ReviewScreen = { kind: 'mcq-answered' };
+    expect(resolveReviewKey({ key: 'e' }, screen)).toEqual({ kind: 'edit' });
+    expect(resolveReviewKey({ key: 's' }, screen)).toEqual({ kind: 'suspend' });
+  });
+});
+
+describe('hintsFor — a still-pending draft item swaps the E/S hint labels (ol-uxk9)', () => {
+  it('card-front names "edit before saving" / "reject" instead of the ordinary pair', () => {
+    const hints = hintsFor({ kind: 'card-front', isNewDraft: true });
+    expect(hints).toContainEqual({ key: 'E', label: 'edit before saving' });
+    expect(hints).toContainEqual({ key: 'S', label: 'reject' });
+    expect(hints).not.toContainEqual({ key: 'E', label: 'edit the note' });
+    expect(hints).not.toContainEqual({ key: 'S', label: 'suspend' });
+  });
+
+  it('an ordinary (non-draft) card-front keeps the ordinary pair', () => {
+    const hints = hintsFor({ kind: 'card-front' });
+    expect(hints).toContainEqual({ key: 'E', label: 'edit the note' });
+    expect(hints).toContainEqual({ key: 'S', label: 'suspend' });
+  });
+
+  it('every draft hint still resolves — the converse (Q6.5) — for all three draft screens', () => {
+    const draftScreens: readonly ReviewScreen[] = [
+      { kind: 'card-front', isNewDraft: true },
+      { kind: 'card-reveal', isNewDraft: true },
+      { kind: 'mcq-unanswered', optionCount: PRESENTED_OPTIONS, isNewDraft: true },
+    ];
+    for (const screen of draftScreens) {
+      for (const hint of hintsFor(screen)) {
+        for (const key of keysForHint(hint.key)) {
+          expect(
+            resolveReviewKey({ key }, screen),
+            `hint promised "${key}" on ${screen.kind}`,
+          ).not.toBeNull();
+        }
+      }
+    }
   });
 });
 

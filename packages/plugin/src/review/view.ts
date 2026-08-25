@@ -199,11 +199,21 @@ export class ReviewView extends ItemView {
       case 'note-missing':
         return { kind: 'note-missing' };
       case 'front':
-        return { kind: 'card-front' };
+        return { kind: 'card-front', isNewDraft: vm.instrument.draftId !== null };
       case 'reveal':
-        return { kind: 'card-reveal' };
+        return { kind: 'card-reveal', isNewDraft: vm.instrument.draftId !== null };
       case 'mcq-open':
-        return { kind: 'mcq-unanswered', optionCount: vm.instrument.options.length };
+        return {
+          kind: 'mcq-unanswered',
+          optionCount: vm.instrument.options.length,
+          // `mcqAnswer` resolves any pending draft before this phase can ever
+          // render again (`session.ts`'s `resolveDraftAt`), so this is the
+          // only one of the three item screens where a real MCQ presentation
+          // can actually carry `isNewDraft: true` — computed the same way as
+          // the other two rather than assumed, so a future change to that
+          // ordering shows up here rather than silently going stale.
+          isNewDraft: vm.instrument.draftId !== null,
+        };
       case 'mcq-answered':
         return { kind: 'mcq-answered' };
       case 'complete':
@@ -272,6 +282,12 @@ export class ReviewView extends ItemView {
       case 'suspend':
         await session.suspend();
         break;
+      case 'accept-edit-draft':
+        await session.acceptEditDraft();
+        break;
+      case 'reject-draft':
+        await session.rejectDraft();
+        break;
       case 'skip-missing-note':
         await session.skipMissingNote();
         break;
@@ -334,18 +350,24 @@ export class ReviewView extends ItemView {
         this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderNoteMissing();
         break;
-      case 'front':
-        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
-        this.renderFront(vm.instrument);
+      case 'front': {
+        const screen = this.currentScreen(vm);
+        this.renderHeader(vm.progress, screen, vm.instrument);
+        this.renderFront(vm.instrument, screen);
         break;
-      case 'reveal':
-        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
-        this.renderReveal(vm.instrument, vm.ratingPreviews);
+      }
+      case 'reveal': {
+        const screen = this.currentScreen(vm);
+        this.renderHeader(vm.progress, screen, vm.instrument);
+        this.renderReveal(vm.instrument, vm.ratingPreviews, screen);
         break;
-      case 'mcq-open':
-        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
-        this.renderMcqOpen(vm.instrument);
+      }
+      case 'mcq-open': {
+        const screen = this.currentScreen(vm);
+        this.renderHeader(vm.progress, screen, vm.instrument);
+        this.renderMcqOpen(vm.instrument, screen);
         break;
+      }
       case 'mcq-answered':
         this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderMcqAnswered(vm.instrument, vm.selectedIndex, vm.wasUnsure, vm.intervalLabel);
@@ -364,15 +386,20 @@ export class ReviewView extends ItemView {
    * through so this can tell a still-pending draft (`instrument.draftId !==
    * null`, F3.3, `[D-097]`, `ol-p3t07a`) from an ordinary instrument.
    *
-   * **The "new" badge and its edit/reject controls (F3.3/`[D-097`]).** A
-   * draft item replaces "Edit note"/"Suspend" with "Edit before saving" and
-   * "Reject" — the ordinary pair means nothing for something not yet in the
-   * vault (there is no note-anchored edit target, and nothing scheduled yet
-   * to suspend). Both are one click away, matching `[D-097]`'s "edit and
-   * reject one tap away"; neither has a keyboard binding of its own in this
-   * round (disclosed limitation, `ol-p3t07a`'s close evidence) — `keymap.ts`'s
-   * `Q6.5` promise ("every ON-SCREEN hint is a real binding") still holds
-   * because no hint row claims a key for either.
+   * **The "new" badge and its edit/reject controls (F3.3/`[D-097]`, keyboard
+   * bindings ol-uxk9).** A draft item replaces "Edit note"/"Suspend" with
+   * "Edit before saving" and "Reject" — the ordinary pair means nothing for
+   * something not yet in the vault (there is no note-anchored edit target,
+   * and nothing scheduled yet to suspend). Both are one click away, matching
+   * `[D-097]`'s "edit and reject one tap away", **and now also one keypress
+   * away, on the same E/S keys the ordinary "Edit note"/"Suspend" pair
+   * already used** — `keymap.ts`'s `resolveReviewKey`/`hintsFor` swap what
+   * E/S mean based on `screen.isNewDraft` (computed in `currentScreen`
+   * above), rather than this view growing a second pair of keys. That keeps
+   * `Q6.5`'s promise intact two ways at once: no hint row ever claims a key
+   * this resolver doesn't accept, and every action — including these two —
+   * now has a keyboard path. `dispatch` (below) is the single place either
+   * button's click or the matching keypress ends up, so the two can't drift.
    */
   private renderHeader(
     progress: { readonly position: number; readonly total: number },
@@ -393,10 +420,15 @@ export class ReviewView extends ItemView {
       this.actionButton(
         header,
         'Edit before saving',
-        null,
-        () => void this.dispatchDraftAction('edit-draft'),
+        verifiedKeycap(screen, 'e', 'E', 'accept-edit-draft'),
+        () => void this.dispatch({ kind: 'accept-edit-draft' }),
       );
-      this.actionButton(header, 'Reject', null, () => void this.dispatchDraftAction('reject'));
+      this.actionButton(
+        header,
+        'Reject',
+        verifiedKeycap(screen, 's', 'S', 'reject-draft'),
+        () => void this.dispatch({ kind: 'reject-draft' }),
+      );
       return;
     }
 
@@ -412,15 +444,6 @@ export class ReviewView extends ItemView {
       actionKeycap('suspend', screen),
       () => void this.dispatch({ kind: 'suspend' }),
     );
-  }
-
-  /** The two new-badge-only actions (`renderHeader`'s doc) — kept out of `keymap.ts`'s `ReviewAction`/`dispatch` switch deliberately (see that method's doc), so this is their one call path. */
-  private async dispatchDraftAction(kind: 'edit-draft' | 'reject'): Promise<void> {
-    const session = this.session;
-    if (session === null) return;
-    if (kind === 'edit-draft') await session.acceptEditDraft();
-    else await session.rejectDraft();
-    this.render();
   }
 
   /** `hotkey` is `null` when the resolver has no binding for the action; the button is then built without a keycap rather than promising a key that does nothing (Q6.5). */
@@ -461,17 +484,27 @@ export class ReviewView extends ItemView {
     }
   }
 
-  private renderFront(instrument: QaCard | ClozeCard): void {
+  /**
+   * `screen` is the same `ReviewScreen` `renderHeader` was just called with
+   * (`render`'s `'front'` case computes it once) — reusing it, rather than
+   * rebuilding `{ kind: 'card-front' }` here, is what keeps this hint row's
+   * E/S labels in sync with a draft item's `isNewDraft` flag; a second,
+   * hand-typed literal here could drift from the header's the same way the
+   * MCQ hint row's stale `optionCount` comment above once did.
+   */
+  private renderFront(instrument: QaCard | ClozeCard, screen: ReviewScreen): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
     body.createEl('h2', { cls: 'olea-review-question', text: questionText(instrument) });
     body.createDiv({ cls: 'olea-review-divider' });
-    this.hints(body, { kind: 'card-front' });
+    this.hints(body, screen);
   }
 
+  /** `screen` — see `renderFront`'s doc; same reasoning, same source. */
   private renderReveal(
     instrument: QaCard | ClozeCard,
     ratingPreviews: readonly RatingPreview[],
+    screen: ReviewScreen,
   ): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
@@ -517,10 +550,11 @@ export class ReviewView extends ItemView {
       );
     }
 
-    this.hints(body, { kind: 'card-reveal' });
+    this.hints(body, screen);
   }
 
-  private renderMcqOpen(instrument: McqItem): void {
+  /** `screen` — see `renderFront`'s doc; same reasoning, same source. */
+  private renderMcqOpen(instrument: McqItem, screen: ReviewScreen): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
     body.createEl('h2', {
@@ -544,7 +578,7 @@ export class ReviewView extends ItemView {
       );
     });
 
-    this.hints(body, { kind: 'mcq-unanswered', optionCount: instrument.options.length });
+    this.hints(body, screen);
   }
 
   private renderMcqAnswered(

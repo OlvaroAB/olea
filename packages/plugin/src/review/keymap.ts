@@ -10,14 +10,41 @@
  * allowed to promise a key this resolver doesn't accept. `render.ts` builds
  * its on-screen hint rows from `HINTS` below rather than hand-typing key
  * labels a second time, so the two cannot drift apart.
+ *
+ * **A still-pending draft item (`isNewDraft` on `ReviewScreen`, ol-uxk9)
+ * repurposes E/S rather than adding new keys.** `view.ts`'s header already
+ * swaps "Edit note"/"Suspend" for "Edit before saving"/"Reject" on a draft
+ * item (F3.3, `[D-097]`) — same physical position, same two keys, different
+ * meaning for something not yet in the vault. `isNewDraftScreen` below is
+ * the one place that decides "is this screen a draft" for both
+ * `resolveReviewKey` and `hintsFor`, so the resolver and the hint row can
+ * never disagree about which pair of actions E/S currently mean.
  */
 
 import type { Rating } from 'olea-contracts';
 
+/**
+ * `isNewDraft` (ol-uxk9, Q6.5 completeness) marks a screen whose item is
+ * still a cached, unaccepted draft (`instrument.draftId !== null`, F3.3,
+ * `[D-097]`) — only the three item screens an unresolved draft can actually
+ * be showing (`view.ts`'s `resolveDraftAt` runs on `rate`/`mcqAnswer`, so a
+ * draft is always resolved before `mcq-answered` renders, and `note-missing`
+ * has no draft path at all: nothing has landed in a note yet to go missing).
+ * Optional rather than required, so the many call sites that build a plain
+ * screen literal to probe a single keycap (`copy.ts`'s `ratingKeycap`,
+ * `mcqOptionKeycap`) — none of which care about the header's E/S pair —
+ * don't have to thread a value through; the safe default (`undefined` reads
+ * as "not a draft") is also the conservative one; it never *invents* draft
+ * behaviour, only omits it where nobody asked.
+ */
 export type ReviewScreen =
-  | { readonly kind: 'card-front' }
-  | { readonly kind: 'card-reveal' }
-  | { readonly kind: 'mcq-unanswered'; readonly optionCount: number }
+  | { readonly kind: 'card-front'; readonly isNewDraft?: boolean }
+  | { readonly kind: 'card-reveal'; readonly isNewDraft?: boolean }
+  | {
+      readonly kind: 'mcq-unanswered';
+      readonly optionCount: number;
+      readonly isNewDraft?: boolean;
+    }
   | { readonly kind: 'mcq-answered' }
   | { readonly kind: 'session-complete' }
   | { readonly kind: 'empty' }
@@ -32,6 +59,8 @@ export type ReviewAction =
   | { readonly kind: 'mcq-next' }
   | { readonly kind: 'edit' }
   | { readonly kind: 'suspend' }
+  | { readonly kind: 'accept-edit-draft' }
+  | { readonly kind: 'reject-draft' }
   | { readonly kind: 'end-session' }
   | { readonly kind: 'close-tab' }
   | { readonly kind: 'focus-move'; readonly direction: 'up' | 'down' }
@@ -73,6 +102,33 @@ function hasGlobalBindings(screen: ReviewScreen): boolean {
   );
 }
 
+/**
+ * Whether `screen` is currently showing an unresolved draft — the one thing
+ * that changes what E/S mean within the global bindings above (`edit`/`suspend`
+ * become `accept-edit-draft`/`reject-draft`, reusing the same physical keys
+ * rather than adding new ones, because the header replaces the same two
+ * buttons those keys already hint at — see `view.ts`'s `renderHeader` doc).
+ *
+ * Written as its own exhaustive switch over `ReviewScreen['kind']`, rather
+ * than an inline `screen.kind === 'card-front' || ...` check, so that adding
+ * a future screen kind is a compile error here until someone decides whether
+ * a draft can ever show on it — the same reason `resolveReviewKey`'s and
+ * `hintsFor`'s own switches are exhaustive with no `default`.
+ */
+function isNewDraftScreen(screen: ReviewScreen): boolean {
+  switch (screen.kind) {
+    case 'card-front':
+    case 'card-reveal':
+    case 'mcq-unanswered':
+      return screen.isNewDraft === true;
+    case 'mcq-answered':
+    case 'session-complete':
+    case 'empty':
+    case 'note-missing':
+      return false;
+  }
+}
+
 export function resolveReviewKey(
   event: { readonly key: string },
   screen: ReviewScreen,
@@ -80,8 +136,13 @@ export function resolveReviewKey(
   const key = event.key;
 
   if (hasGlobalBindings(screen)) {
-    if (key === 'e' || key === 'E') return { kind: 'edit' };
-    if (key === 's' || key === 'S') return { kind: 'suspend' };
+    const isDraft = isNewDraftScreen(screen);
+    if (key === 'e' || key === 'E') {
+      return isDraft ? { kind: 'accept-edit-draft' } : { kind: 'edit' };
+    }
+    if (key === 's' || key === 'S') {
+      return isDraft ? { kind: 'reject-draft' } : { kind: 'suspend' };
+    }
     if (key === 'Escape') return { kind: 'end-session' };
     if (key === 'ArrowUp') return { kind: 'focus-move', direction: 'up' };
     if (key === 'ArrowDown') return { kind: 'focus-move', direction: 'down' };
@@ -137,10 +198,11 @@ export interface HintEntry {
 
 /** The exact hint rows each screen renders (`PluginHintRow` in the mocks), generated from the same bindings `resolveReviewKey` accepts — see this module's doc. */
 export function hintsFor(screen: ReviewScreen): readonly HintEntry[] {
+  const isDraft = isNewDraftScreen(screen);
   const global: HintEntry[] = hasGlobalBindings(screen)
     ? [
-        { key: 'E', label: 'edit the note' },
-        { key: 'S', label: 'suspend' },
+        isDraft ? { key: 'E', label: 'edit before saving' } : { key: 'E', label: 'edit the note' },
+        isDraft ? { key: 'S', label: 'reject' } : { key: 'S', label: 'suspend' },
         { key: 'Esc', label: 'end session' },
       ]
     : [];
