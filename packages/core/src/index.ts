@@ -181,18 +181,33 @@ export { reconcileRelations, totalDropped } from './concept/reconcile.js';
 // The six ruled concept-to-concept relation types (`[REL-1]`, C7.10,
 // `[D-070]`) — vocabulary, directedness, and which types v0.9 actually
 // emits. See `./concept/relation.js`'s module doc for the per-type argument.
+// The fold both relation producers land in (`ol-2zfj.12`) — an in-memory
+// projection, deliberately NOT a persisted store: see `./concept/relation.js`'s
+// "THE FOLD" section and `olea-service/docs/dev/relation-landing-design.md`
+// for the argument and the Class C line it stops at.
 export type {
   ConceptRelation,
   ProposedRelation,
   RelationEmissionStatus,
+  RelationEvidenceState,
   RelationProvenanceKind,
+  RelationSet,
+  RelationSetEntry,
+  RelationStage,
+  RelationTriageStanding,
   RelationType,
 } from './concept/relation.js';
 export {
+  assertionsForTriage,
+  deriveRelationSet,
   PER_DOCUMENT_EMITTABLE_TYPES,
   RELATION_DIRECTEDNESS,
   RELATION_EMISSION_STATUS,
   RELATION_TYPES,
+  relationKey,
+  servedRelations,
+  stageForRelationType,
+  TRIAGE_STANDING_BY_PROVENANCE,
 } from './concept/relation.js';
 // Concept size (`[D-066]`, component register row 1.3) — a deterministic,
 // material-grounded floor read by two named consumers outside this package:
