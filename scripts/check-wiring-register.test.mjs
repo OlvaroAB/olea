@@ -106,6 +106,7 @@ test('a clean register against a clean tree exits 0', () => {
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     (() => {
       const p = join(root, 'status.json');
@@ -147,6 +148,7 @@ test('BAD ORACLE 1 — a port with no caller, whose owning task is closed, is a 
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -184,6 +186,7 @@ test('BAD ORACLE 2 — the SAME tree with the owning task still open is NOT a fi
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -233,6 +236,7 @@ test('ratchet: the exact known set passes (exit 0)', () => {
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -251,6 +255,7 @@ test('ratchet: a finding not in KNOWN_FINDINGS fails as NEW (exit 1)', () => {
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -295,6 +300,7 @@ test('ratchet: a KNOWN_FINDINGS entry that no longer reproduces fails as FIXED (
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -383,7 +389,7 @@ test("regression (ol-odb0.1): a direct construction in a composition-root-style 
     '| `DirectPort` | `packages/core/src/direct/types.ts:1` | `RealDirect` — `packages/plugin/src/direct/impl.ts:1` | none | `ol-fixture-direct` | P2 |\n' +
     '| `IndirectStore` | `packages/core/src/indirect/types.ts:1` | `RealIndirect` — `packages/plugin/src/indirect/impl.ts:1` | none | `ol-fixture-indirect` | P2 |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(
     out,
@@ -398,7 +404,7 @@ test("regression (ol-odb0.1): a construction inside a SEPARATE wiring module is 
     '| `DirectPort` | `packages/core/src/direct/types.ts:1` | `RealDirect` — `packages/plugin/src/direct/impl.ts:1` | `packages/plugin/src/main.ts:4` | `ol-fixture-direct` | P2 |\n' +
     '| `IndirectStore` | `packages/core/src/indirect/types.ts:1` | `RealIndirect` — `packages/plugin/src/indirect/impl.ts:1` | none | `ol-fixture-indirect` | P2 |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(
     out,
@@ -416,6 +422,7 @@ test('regression (ol-odb0.1): the SAME two ports, register ACCURATELY citing the
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--known-findings',
     emptyKnownFindings(root),
   ]);
@@ -449,6 +456,7 @@ test('regression: a comment merely NAMING a construction is not mistaken for a r
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--known-findings',
     emptyKnownFindings(root),
   ]);
@@ -473,7 +481,7 @@ test('a caller citation with no matching call site anywhere is flagged as a wron
     REGISTER_HEADER +
     '| `FooPort` | `packages/core/src/foo/types.ts:1` | `RealFoo` — `packages/plugin/src/foo/impl.ts:1` | `packages/plugin/src/main.ts:1` | `ol-fixture-foo` | P2 |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /no call site to 'RealFoo' was found anywhere/);
 });
@@ -509,7 +517,7 @@ test("regression (ol-drfy): a row claiming 'none' implementation, where the port
     REGISTER_HEADER +
     '| `FooPort` | `packages/core/src/foo/types.ts:1` | none | none | `ol-fixture-foo` | P2 |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(
     out,
@@ -533,6 +541,7 @@ test("a 'none' claim with no reference anywhere outside its own declaration is l
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -565,6 +574,7 @@ test('a reference to the port type ONLY inside its own declaring file does not f
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -594,6 +604,7 @@ test('a reference to the port type ONLY inside the barrel re-export (packages/co
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--task-status',
     statusPath,
     '--known-findings',
@@ -627,6 +638,7 @@ test("a deferred row's 'none' claim is NEVER re-checked against source, even whe
   const { code, out } = runGuard([
     '--repo-root',
     root,
+    ...registerArg(root),
     '--known-findings',
     emptyKnownFindings(root),
   ]);
@@ -650,7 +662,7 @@ test('a "Production implementation" citing a symbol whose cited file:line does n
     REGISTER_HEADER +
     '| `FooPort` | `packages/core/src/foo/types.ts:1` | `RealFoo` — `packages/plugin/src/foo/impl.ts:1` | none | `ol-fixture-foo` | deferred — [D-1] (`ol-fixture-foo-decision`) |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(
     out,
@@ -666,7 +678,7 @@ test('a port present in source but absent from the register fails closed (exit 2
     'packages/plugin/src/baz/types.ts',
     'export interface BazStore {\n  save(): void;\n}\n',
   );
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /MISSING from the register/);
   assert.match(out, /BazStore/);
@@ -685,7 +697,7 @@ test('a register row naming a port the scan no longer finds fails closed (exit 2
     'packages/core/src/foo/types.ts',
     'export interface FooPort {\n  get(): string;\n}\n',
   );
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /register row\(s\) name a port the scan no longer finds/);
   assert.match(out, /GhostProvider/);
@@ -702,7 +714,7 @@ test('an unresolvable file:line reference fails closed (exit 2)', () => {
     REGISTER_HEADER +
     '| `FooPort` | `packages/core/src/foo/types.ts:1` | `RealFoo` — `packages/plugin/src/nowhere.ts:5` | none | `ol-fixture-foo` | deferred — [D-1] (`ol-fixture-foo-decision`) |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /file does not exist/);
 });
@@ -719,7 +731,7 @@ test('a "Defined at" line that does not actually mention the interface fails clo
     // Line 2 is `  get(): string;` — real file, real line, wrong content.
     '| `FooPort` | `packages/core/src/foo/types.ts:2` | none | none | `ol-fixture-foo` | deferred — [D-1] (`ol-fixture-foo-decision`) |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /does not mention/);
 });
@@ -731,7 +743,7 @@ test('zero ports found by the scan fails closed (exit 2) — a blind guard is no
     'docs/dev/wiring-register.md',
     `${REGISTER_HEADER}| \`FooPort\` | \`x.ts:1\` | none | none | \`ol-x\` | P2 |\n`,
   );
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /ZERO ports/);
 });
@@ -746,7 +758,7 @@ test('a missing register file fails closed (exit 2)', () => {
 test('an empty register file fails closed (exit 2)', () => {
   const root = fixtureRepo();
   write(root, 'docs/dev/wiring-register.md', '   \n');
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /empty/);
 });
@@ -762,7 +774,7 @@ test('a deferred row with no cited decision/bead is an unparseable row (exit 2)'
     REGISTER_HEADER +
     '| `FooPort` | `packages/core/src/foo/types.ts:1` | none | none | `ol-fixture-foo` | deferred, just because |\n';
   write(root, 'docs/dev/wiring-register.md', register);
-  const { code, out } = runGuard(['--repo-root', root]);
+  const { code, out } = runGuard(['--repo-root', root, ...registerArg(root)]);
   assert.equal(code, 2, out);
   assert.match(out, /no cited decision\/bead/);
 });
@@ -785,10 +797,11 @@ test('SKIP_WIRING_REGISTER=1 bypasses the check and says so loudly', () => {
 // `--register` pointing at the fixture's own register file: the DEFAULT register path resolves to
 // `<repo-root>/../olea-service/docs/dev/wiring-register.md` (the register lives in the sibling
 // private repo for real invocations), which a throwaway `mkdtempSync` fixture root has no sibling
-// for — the same reason most of the OTHER fixture tests in this file do not rely on the default
-// either. (That the majority of this file's tests currently fail to route around this is a
-// separate, pre-existing gap, filed as discovered work rather than fixed here — see this bead's
-// close evidence.)
+// for. ol-1bb8 routed around this narrowly, for its own 6 new tests only; ol-a5vw (2026-08-25)
+// generalised the same `registerArg(root)` pattern to every OTHER fixture test in this file that
+// was omitting `--register` (24 of them) — each was silently falling through to that unreachable
+// default path and failing closed on "register not found" rather than exercising the scenario it
+// named. The helper below is that general fix, not a hack scoped to this section.
 // ------------------------------------------------------------------------------------------
 
 /** A throwaway repo tree with `packages/{core,plugin,workbench}/src` all present. */
