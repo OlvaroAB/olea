@@ -41,6 +41,33 @@
  * opens a card; the intended caller is a `StudyPlanProvider.fetchPlan`
  * implementation invoked through `refreshStudyPlan`'s "may refresh"
  * discipline, not the review session path.
+ *
+ * ## This IS the named producer for `[YIELD-1]` / `ol-evr1` (foundation item 42)
+ *
+ * "Olea reads past papers to judge what a course tends to examine" resolves
+ * to exactly this call: `composeOracleRanking` → `rankOracle` (`./rank.ts`),
+ * a probabilistic per-course, per-concept judgement built from
+ * `buildConceptAssessmentEdges`'s yield rank and confidence (P5-T03, itself
+ * over `extractTier3Evidence`'s reading of registered past papers, P5-T01).
+ * It is not the same thing item 25 disclaims building — that is
+ * `oracle.rank.v1` (`olea-service/src/tasks/oracleRank.ts`), a separate,
+ * unratified LLM narrative pass that narrates this module's own ranking and
+ * is barred from re-deciding it (see `rank.ts`'s module doc). Three
+ * production call sites consume this function's result, each reachable from
+ * the shipped plugin via `main.ts` rather than only the workbench:
+ *
+ *   - `packages/plugin/src/gap/provider.ts` (`createLocalGapProvider`) — the
+ *     gap view's ranking and abstention state.
+ *   - `packages/plugin/src/plan/provider.ts` (`createLocalStudyPlanProvider`)
+ *     — the cached study plan `refreshStudyPlan` may rebuild; this is also
+ *     the seam `[D-110]`'s delivered `rank-weights` envelope threads into via
+ *     `options` (`ol-v7r5.3`, wired at `main.ts`'s `rankWeights` field).
+ *   - `packages/plugin/src/session-builder/provider.ts`
+ *     (`createLocalSessionBuilderProvider`) — the session builder's input,
+ *     via `buildGapView` and `buildComposedStudySession`.
+ *
+ * See `findings/YIELD-1-exam-likelihood.md` (olea-service) for the full
+ * producer/consumer/check account.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';

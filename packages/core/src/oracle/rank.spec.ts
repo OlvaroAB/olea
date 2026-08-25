@@ -174,6 +174,58 @@ describe('rankOracle — accumulation across multiple assessments', () => {
   });
 });
 
+describe('rankOracle — the past-paper yield signal is load-bearing, not decoration (ol-evr1 / [YIELD-1])', () => {
+  it('a concept with stronger past-paper salience outranks an otherwise-identical one, and flattening yieldRank collapses that order', () => {
+    // Both concepts share the SAME single assessment, so weight, exam
+    // proximity and mastery (all omitted/unknown here) are identical for
+    // both — yieldRank/confidence (the signal `extractTier3Evidence`/
+    // `buildConceptAssessmentEdges` derive from her registered past papers)
+    // is the only thing that can drive the order below.
+    const sharedAssessment = readReport([assessment()]);
+    const withSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({ conceptName: 'concept-a', conceptKey: 'concept-a', yieldRank: 1, confidence: 1 }),
+          edge({ conceptName: 'concept-b', conceptKey: 'concept-b', yieldRank: 5, confidence: 1 }),
+        ],
+        assessmentsRead: sharedAssessment,
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const ranked = rankOracle(withSignal);
+    const course = ranked.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+    expect(course.ranked[0]?.priorityScore).toBeGreaterThan(course.ranked[1]?.priorityScore ?? 0);
+
+    // Ablate: flatten yieldRank to the same value for both concepts, holding
+    // every other factor fixed. If yield/confidence were decoration — never
+    // actually driving the order above — this would still differ. It must
+    // not: the two scores collapse to equal, and only the deterministic
+    // name-ascending tie-break (never a fabricated preference) decides order.
+    const withoutSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({ conceptName: 'concept-a', conceptKey: 'concept-a', yieldRank: 1, confidence: 1 }),
+          edge({ conceptName: 'concept-b', conceptKey: 'concept-b', yieldRank: 1, confidence: 1 }),
+        ],
+        assessmentsRead: sharedAssessment,
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const flattened = rankOracle(withoutSignal);
+    const flatCourse = flattened.courses[0];
+    if (flatCourse?.status !== 'ranked') throw new Error('expected ranked');
+    expect(flatCourse.ranked[0]?.priorityScore).toBeCloseTo(
+      flatCourse.ranked[1]?.priorityScore ?? -1,
+      10,
+    );
+    expect(flatCourse.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+  });
+});
+
 describe('rankOracle — reasoning cites the actual strongest contributor (derived, not decorated)', () => {
   it('names the assessment with the highest `contribution`, not the first or last edge in insertion order', () => {
     // Deliberately inserted weakest-first so a bug that trusted array order
