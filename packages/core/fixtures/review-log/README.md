@@ -94,8 +94,10 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
   suite therefore has exactly one concept, and that is the correct, checked outcome.
 
   **This file is also the whole reason review-log v4 has a `not-attributable` case.** Its
-  `77777777-...` line names two concepts and carries a single `masteryAtTime` of `"coming"`.
-  Which of the two that state described was never captured, so a per-concept map cannot be
+  `77777777-...` line names two concepts and carries a single `masteryAtTime`, migrated in place
+  to `"sprout"` under the ratified vocabulary (`D-049`/`VOC-1`; on disk before that migration it
+  read `"coming"`, the retired word this file's prose used to quote here). Which of the two
+  concepts that state described was never captured, so a per-concept map cannot be
   built from it honestly: splitting it across both asserts something the log never said, and
   picking one invents a primary concept. The migration therefore keeps the value and declines
   the attribution. The alternative was to edit or drop this line, and INV-2 forbids both — the
@@ -112,10 +114,17 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
     and another natively is the *same* record, byte for byte, not an id collision. Its
     `masteryAtTime` is the one-entry map `upgradeV3` produces from a single-concept v3 record,
     which is what makes the byte comparison meaningful rather than trivially true.
-  - **two concepts with two different mastery states** (`12121212-...`) — the case the version
-    exists for, and the case no earlier version can express at all. A v3 record could say
-    "coming" about a two-concept review; only a v4 record can say which concept was "coming"
-    and which was "shaky".
+  - **two concepts, each with its own `masteryAtTime` entry** (`12121212-...`) — the case the
+    version exists for, and the case no earlier version can express at all: a v3 record could
+    say only one state for a two-concept review, never which concept it described; a v4 record
+    keys the state per concept instead. Before the ratified vocabulary landed (`D-049`/`VOC-1`)
+    the two concepts here held two different retired-vocabulary states (`"coming"` and
+    `"shaky"`); D-049's collapse merges both onto the single word `sprout`, so on disk today
+    both entries read `"sprout"` — identical values, still two independent map entries. That
+    coincidence is a known side effect of the migration, not a re-authored fixture (INV-2), and
+    it is why this line no longer demonstrates two *differing* states, only two independently
+    attributed ones; picking fresh distinct values (a new fixture line, never an edit to this
+    one) is `ol-gwuo`'s job, not a change made here.
   - **`masteryAtTime` absent entirely** (`13131313-...`) — what every vault writer produces
     today, and will until C5.4's rollup (`ol-p4t06`) exists. Absent means "not recorded", which
     is exactly what `null` meant in v1–v3. Note the contrast with `yieldRank`, `examProximity`
