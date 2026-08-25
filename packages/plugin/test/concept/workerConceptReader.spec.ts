@@ -92,6 +92,119 @@ describe('WorkerConceptReader — the request it builds', () => {
   });
 });
 
+describe('WorkerConceptReader — the relations it reads ([EXT-10], C7.10, [D-070])', () => {
+  it('resolves fromIndex/toIndex against the SAME concepts array it already parsed, to real concept names', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [
+          { name: 'Event-related potential', anchorIndex: 1 },
+          { name: 'P300', anchorIndex: 2 },
+        ],
+        relations: [{ type: 'is-a', fromIndex: 2, toIndex: 1, confidence: 0.9 }],
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.relations).toEqual([
+      { type: 'is-a', from: 'P300', to: 'Event-related potential', confidence: 0.9 },
+    ]);
+  });
+
+  it('resolves a part-of edge the same way', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [
+          { name: 'P300', anchorIndex: 1 },
+          { name: 'Event-related potential', anchorIndex: 2 },
+        ],
+        relations: [{ type: 'part-of', fromIndex: 1, toIndex: 2, confidence: 0.6 }],
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.relations).toEqual([
+      { type: 'part-of', from: 'P300', to: 'Event-related potential', confidence: 0.6 },
+    ]);
+  });
+
+  it('an omitted result.relations field reads exactly like an empty array', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [{ name: 'Concept X', anchorIndex: 1 }] }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.relations).toEqual([]);
+  });
+
+  it('an empty relations array is a valid, honest answer', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [{ name: 'Concept X', anchorIndex: 1 }], relations: [] }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    expect((await reader.read({ passages })).relations).toEqual([]);
+  });
+});
+
+describe('WorkerConceptReader — refuses rather than mis-resolves a confabulated relation (belt and braces)', () => {
+  it('throws when result.relations is not an array', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [{ name: 'Concept X', anchorIndex: 1 }], relations: 'not an array' }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+  });
+
+  it('throws when a relation names a type outside is-a/part-of', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [
+          { name: 'A', anchorIndex: 1 },
+          { name: 'B', anchorIndex: 2 },
+        ],
+        relations: [{ type: 'contrasts-with', fromIndex: 1, toIndex: 2, confidence: 0.5 }],
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+  });
+
+  it('throws when fromIndex names a concept position that never survived (grounding accounting drifted)', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'A', anchorIndex: 1 }],
+        relations: [{ type: 'is-a', fromIndex: 7, toIndex: 1, confidence: 0.5 }],
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+  });
+
+  it('throws when a relation carries no numeric confidence — never defaulted', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [
+          { name: 'A', anchorIndex: 1 },
+          { name: 'B', anchorIndex: 2 },
+        ],
+        relations: [{ type: 'is-a', fromIndex: 1, toIndex: 2 }],
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+  });
+});
+
 describe('WorkerConceptReader — the response it reads', () => {
   it('maps a grounded anchorIndex back to the real Provenance the request held', async () => {
     const transport = new RecordingTransport(() =>

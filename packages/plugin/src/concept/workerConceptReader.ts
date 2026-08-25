@@ -48,8 +48,11 @@ import {
   ConceptReaderUnavailableError,
   type ConceptReadRequest,
   type ConceptReadResponse,
+  PER_DOCUMENT_EMITTABLE_TYPES,
   type ProposedConcept,
+  type ProposedRelation,
   type Provenance,
+  type RelationType,
   type WorkerTaskTransport,
 } from 'olea-core';
 
@@ -116,14 +119,13 @@ export class WorkerConceptReader implements ConceptReaderPort {
       );
     }
 
-    return { concepts: readProposals(body, passages) };
+    const response = readResponseBody(body);
+    const concepts = readProposals(response, passages);
+    return { concepts, relations: readRelationProposals(response, concepts) };
   }
 }
 
-function readProposals(
-  body: unknown,
-  passages: readonly ConceptPassage[],
-): readonly ProposedConcept[] {
+function readResponseBody(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerConceptReaderError(
       'WorkerConceptReader: the Worker response was not an object.',
@@ -160,11 +162,19 @@ function readProposals(
     );
   }
 
+  return response;
+}
+
+function readResult(response: Record<string, unknown>): Record<string, unknown> {
   const result = response['result'];
-  const rawConcepts =
-    typeof result === 'object' && result !== null
-      ? (result as Record<string, unknown>)['concepts']
-      : undefined;
+  return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {};
+}
+
+function readProposals(
+  response: Record<string, unknown>,
+  passages: readonly ConceptPassage[],
+): readonly ProposedConcept[] {
+  const rawConcepts = readResult(response)['concepts'];
   if (!Array.isArray(rawConcepts)) {
     throw new WorkerConceptReaderError(
       'WorkerConceptReader: the Worker response carried no `result.concepts` array.',
@@ -220,4 +230,94 @@ function toProposedConcept(
     : [];
 
   return { name, aliases, anchor: anchorPassage.anchor, alsoIn };
+}
+
+/**
+ * `is-a`/`part-of` edges (`[EXT-10]`, C7.10's per-document half, `[D-070]`).
+ * `result.relations` names its endpoints by 1-based position in
+ * `result.concepts` — the SAME array `concepts` above already parsed, in the
+ * same order, because `groundConcepts` (`olea-service/src/tasks/conceptsExtract.ts`)
+ * renumbers relation indices to match the concepts array it actually returns.
+ * That is what lets this function resolve an edge back to the real,
+ * verbatim concept wording `reconcileRelations`
+ * (`packages/core/src/concept/reconcile.ts`) needs — the same "resolve a
+ * grounded index back to the real thing" move `toProposedConcept` already
+ * makes for `anchorIndex` against `passages`, one level over.
+ *
+ * `result.relations` is OPTIONAL on the wire, not merely possibly-empty: an
+ * absent field reads exactly like an empty array (mirrors
+ * `ConceptReadResponse.relations`'s own optionality one level up), so a
+ * Worker response from before this task asked for relations at all does not
+ * fail this adapter.
+ */
+function readRelationProposals(
+  response: Record<string, unknown>,
+  concepts: readonly ProposedConcept[],
+): readonly ProposedRelation[] {
+  const rawRelations = readResult(response)['relations'];
+  if (rawRelations === undefined) return [];
+  if (!Array.isArray(rawRelations)) {
+    throw new WorkerConceptReaderError(
+      'WorkerConceptReader: the Worker response carried a `result.relations` that was not an array.',
+    );
+  }
+
+  return rawRelations.map((raw, index) => toProposedRelation(raw, concepts, index));
+}
+
+const PER_DOCUMENT_RELATION_TYPES: ReadonlySet<string> = PER_DOCUMENT_EMITTABLE_TYPES;
+
+function toProposedRelation(
+  raw: unknown,
+  concepts: readonly ProposedConcept[],
+  index: number,
+): ProposedRelation {
+  const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+
+  const type = entry['type'];
+  if (typeof type !== 'string' || !PER_DOCUMENT_RELATION_TYPES.has(type)) {
+    // Belt and braces, same posture as `toProposedConcept`'s anchorIndex
+    // check: `conceptsExtractRelationProposal`'s zod schema already restricts
+    // `type` to `is-a` | `part-of`, so reaching here means that check did
+    // not run — a loud failure, not a silently-dropped or silently-widened
+    // relation type.
+    throw new WorkerConceptReaderError(
+      `WorkerConceptReader: relation ${index} carried an unrecognised type (${String(type)}).`,
+    );
+  }
+
+  const fromIndex = entry['fromIndex'];
+  const toIndex = entry['toIndex'];
+  if (typeof fromIndex !== 'number' || !Number.isInteger(fromIndex)) {
+    throw new WorkerConceptReaderError(
+      `WorkerConceptReader: relation ${index} carried no numeric fromIndex.`,
+    );
+  }
+  if (typeof toIndex !== 'number' || !Number.isInteger(toIndex)) {
+    throw new WorkerConceptReaderError(
+      `WorkerConceptReader: relation ${index} carried no numeric toIndex.`,
+    );
+  }
+
+  const from = concepts[fromIndex - 1];
+  const to = concepts[toIndex - 1];
+  if (from === undefined || to === undefined) {
+    // The Worker's own `groundConcepts` already renumbers relations to name
+    // only concepts that survived grounding. Reaching here means that check
+    // did not run or this adapter's index accounting has drifted from the
+    // Worker's — the same "never re-trust a boundary check on faith" call
+    // `toProposedConcept` makes for `anchorIndex`.
+    throw new WorkerConceptReaderError(
+      `WorkerConceptReader: relation ${index} (${type}) named a concept position outside the concepts this same response returned.`,
+    );
+  }
+
+  const confidence = entry['confidence'];
+  if (typeof confidence !== 'number' || Number.isNaN(confidence)) {
+    throw new WorkerConceptReaderError(
+      `WorkerConceptReader: relation ${index} (${type}) carried no numeric confidence.`,
+    );
+  }
+
+  return { type: type as RelationType, from: from.name, to: to.name, confidence };
 }
