@@ -1,7 +1,34 @@
 /**
- * `extractConcepts` — tiers 1, 2 and 3 (C7.2, C7.3, F1.4, F4.1, P1-T05,
- * P5-T02). See ./types.ts for the tier model and the R1/R2 verbatim-name
- * rule this module must not violate.
+ * `extractConcepts` — **one corroborating source, no longer the extractor**
+ * (C7.2, C7.3, F1.4, F4.1, P1-T05, P5-T02, `[D-068]`).
+ *
+ * **Read `./read.ts` first.** `[D-068]` ruled that concepts come from the
+ * material rather than from the filing: a model reads her lecture notes,
+ * papers and course documents and returns the concepts inside them, and that
+ * read is the floor everyone gets. This module walks her `topic` properties,
+ * her Zettelkasten titles and her course folders — all of which are her
+ * *filing*. Scope principle 13 is what it now serves: **conventions are
+ * evidence, never preconditions.** What it produces corroborates the read and
+ * outranks it on conflict; it no longer decides whether anything is found at
+ * all. `./read.ts`'s `readConcepts` is the caller that applies that
+ * precedence, and it is the only place the two are reconciled.
+ *
+ * The behaviour below is deliberately unchanged by that demotion — this is
+ * the "rebased rather than deleted" half of `[D-068]`'s own accounting. What
+ * changed is its *standing*, and one thing follows from that which is easy to
+ * miss: **its old oracle is gone.** Asserting that this function returns an
+ * expected set of concepts, against a fixture vault built to mirror one
+ * student's filing, measures our assumptions rather than the product's
+ * promise. Those assertions are still useful as tests of *this* source's
+ * mechanics; they are no longer tests of whether concept extraction works.
+ *
+ * **Tier 3 here is superseded, not repaired.** The vocabulary-matching path
+ * below can only surface a concept her own curation already names somewhere,
+ * which is exactly the parasitism `[D-068]` removed; `[EXT-2]` (`ol-468f`)
+ * separately ruled it stays off in production. It survives in the tree only
+ * because `./evidence.js` still serves two consumers outside this directory
+ * that have nothing to do with concept identity — see the bead filed against
+ * `ol-2zfj.1` for its retirement.
  *
  * **Tier 3, on.** `includeTier3: true` was a flag scaffold only through
  * P1-T05 (threw rather than doing anything). P5-T02 turns it on: past-paper

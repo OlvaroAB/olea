@@ -54,6 +54,27 @@ export type {
 } from './concept/evidence.js';
 export { extractTier3Evidence } from './concept/evidence.js';
 export { extractConcepts } from './concept/extract.js';
+export type {
+  ConceptPassage,
+  ConceptReadBudget,
+  ConceptReadCoverage,
+  ConceptReaderPort,
+  ConceptReaderUnavailableReason,
+  ConceptReadFailure,
+  ConceptReadRequest,
+  ConceptReadResponse,
+  ConceptReadResult,
+  ConceptsRead,
+  ConceptsUnrecognised,
+  ProposedConcept,
+  ReadConcept,
+  ReadConceptsOptions,
+} from './concept/read.js';
+// Concepts from the material, not from the filing (F1.4, `[D-068]`,
+// `[D-082]`). `readConcepts` is the stage; `extractConcepts` above is now one
+// corroborating source feeding it. `ConceptReaderPort` is the service seam —
+// the model call that does the reading — and has no production adapter yet.
+export { ConceptReaderUnavailableError, gatherPassages, readConcepts } from './concept/read.js';
 export type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './concept/types.js';
 export { addDays, daysBetween } from './dates.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
