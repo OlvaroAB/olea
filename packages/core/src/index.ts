@@ -762,6 +762,31 @@ export {
   appendSuspendRecord,
   appendVerdictRecord,
 } from './review-log/write.js';
+// Component register row 2.2's KC-type-to-instrument routing policy
+// (`ol-tqd5`, `ol-dlr1`) — a pre-registered default, not a measured
+// baseline (n=1 has no power to test one). **No caller exists yet**,
+// deliberately: the same two-hops-behind-ready-inputs gap
+// `./concept/knowledge-kind.js` documents for its own entry point — see
+// `./routing/instrument-mix.js`'s module doc.
+export type {
+  ConceptInstrumentInventory,
+  InstrumentEmphasis,
+  InstrumentMix,
+  InstrumentMixGap,
+  RoutingGroup,
+} from './routing/instrument-mix.js';
+export {
+  CARDS_FOR_EVERYTHING_NULL,
+  EMPHASIS_ORDER,
+  EMPTY_INVENTORY,
+  instrumentMixGaps,
+  ROUTING_GROUP_INSTRUMENT_TYPES,
+  ROUTING_GROUPS,
+  routeKnowledgeKind,
+  routeKnowledgeKindClassification,
+  routingReason,
+  UNCLASSIFIED_MIX,
+} from './routing/instrument-mix.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
   // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported
