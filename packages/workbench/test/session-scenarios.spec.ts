@@ -12,6 +12,7 @@
 // `loadFixtureVault` itself — see that module's doc.
 
 import { fileURLToPath } from 'node:url';
+import type { StudySessionModel } from 'olea-core';
 import { FolderSource } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -24,6 +25,25 @@ const vault = new FolderSource(
   fileURLToPath(new URL('../../core/fixtures/vault', import.meta.url)),
 );
 
+/**
+ * `[D-091]` (component register §3.7, `ol-zji3` [BUD-1]): the session budget
+ * is a declared TARGET, never a ceiling. `build.ts`'s fill keeps taking items
+ * while `plannedSeconds` is still under `budgetSeconds` and stops once it is
+ * at or past it — so the fill rounds UP to the single item that crosses the
+ * line rather than refusing it. That makes `plannedSeconds <= budgetSeconds`
+ * the wrong invariant; the true one, derived from the rule rather than fitted
+ * to an observed number, is: whatever the overshoot is, it is smaller than
+ * the LAST item's own length, because before that item was taken the running
+ * total was still strictly under target.
+ */
+function expectBudgetOvershootBound(model: StudySessionModel): void {
+  const overshoot = model.plannedSeconds - model.budgetSeconds;
+  if (overshoot <= 0) return;
+  const lastItem = model.items[model.items.length - 1];
+  expect(lastItem).toBeDefined();
+  expect(overshoot).toBeLessThan(lastItem?.estimatedSeconds ?? 0);
+}
+
 describe('SESSION_STATES', () => {
   it('every advertised state builds against the real fixture vault without throwing', async () => {
     for (const state of SESSION_STATES) {
@@ -31,7 +51,9 @@ describe('SESSION_STATES', () => {
       expect(scenario.state).toBe(state);
       expect(scenario.model.budgetMinutes).toBe(state.budgetMinutes);
       expect(scenario.model.asOf).toBe(state.asOf);
-      expect(scenario.model.plannedSeconds).toBeLessThanOrEqual(scenario.model.budgetSeconds);
+      // Not a ceiling check — `[D-091]` (`ol-zji3` [BUD-1]) — see
+      // `expectBudgetOvershootBound`'s doc comment for the derivation.
+      expectBudgetOvershootBound(scenario.model);
       // A real walk, not a stub: the fixture vault has instruments and concepts.
       expect(scenario.instrumentCount).toBeGreaterThan(0);
       expect(scenario.conceptCount).toBeGreaterThan(0);
@@ -152,14 +174,27 @@ describe('the three emptinesses are three different states', () => {
     expect(scenario.model.nextAssessment).toBeNull();
   });
 
-  it('"nothing fits" is reachable from a practising state, and is not either of the above', async () => {
+  it('a target far below every instrument’s length still rounds up to admit one, and is not either of the above (`[D-091]`)', async () => {
     const scenario = await buildSessionScenario('session-short-20', vault);
-    // One minute is below every estimate the model holds.
+    // 0.1 minutes (6s) is below every instrument's estimated length in the
+    // fixture vault. Under a CEILING reading that produced an empty session
+    // (`items === []`) — the assumption this test used to encode. Under
+    // target semantics (`[D-091]`, `ol-zji3` [BUD-1]) it no longer can:
+    // `plannedSeconds` starts at 0, which is < any positive `budgetSeconds`,
+    // so the fill always rounds up to admit at least the first candidate
+    // rather than refusing it outright (the same structural fact
+    // `build.spec.ts`'s "a target smaller than the shortest instrument
+    // still admits it" case exercises directly). What still makes this a
+    // THIRD, distinct emptiness from the other two above is that admitting
+    // that one item crosses the target immediately, so a later candidate is
+    // left out as `did-not-fit` — unlike "ranked, nothing to practise"
+    // (`no-instruments`, zero items) or "nothing ranked" (no rows at all).
     const state = await scenario.deps.load({ budgetMinutes: 0.1 });
     expect(state.kind).toBe('model');
     if (state.kind !== 'model') return;
 
-    expect(state.model.items).toEqual([]);
+    expect(state.model.items.length).toBeGreaterThanOrEqual(1);
+    expectBudgetOvershootBound(state.model);
     expect(state.model.consideredRowCount).toBeGreaterThan(0);
     expect(state.model.leftOut.some((o) => o.reason === 'did-not-fit')).toBe(true);
   });
@@ -174,7 +209,8 @@ describe('the budget seam is live, not pre-baked models', () => {
     if (tight.kind !== 'model' || roomy.kind !== 'model') throw new Error('expected models');
 
     expect(tight.model.budgetMinutes).toBe(5);
-    expect(tight.model.plannedSeconds).toBeLessThanOrEqual(5 * 60);
+    // Not a ceiling check — `[D-091]` (`ol-zji3` [BUD-1]).
+    expectBudgetOvershootBound(tight.model);
     expect(roomy.model.items.length).toBeGreaterThan(tight.model.items.length);
   });
 
