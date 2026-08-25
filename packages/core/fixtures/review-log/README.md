@@ -107,7 +107,7 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
 ## Current v4 fixtures
 
 - `2026-08-10.device-workstation.v4.jsonl` — a fifth device on the same calendar day, writing
-  what the writer produces today (`ol-g6zg`). Five lines:
+  what the writer produces today (`ol-g6zg`). Six lines:
   - **a v4 copy of the event that also exists as v1 and as v3** (`11111111-...`). Merging all
     three files must collapse it to one, which is the v4 restatement of the property the v1/v2
     and v1/v3 pairs already prove: a record reaching one device through the full migration chain
@@ -121,10 +121,10 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
     the two concepts here held two different retired-vocabulary states (`"coming"` and
     `"shaky"`); D-049's collapse merges both onto the single word `sprout`, so on disk today
     both entries read `"sprout"` — identical values, still two independent map entries. That
-    coincidence is a known side effect of the migration, not a re-authored fixture (INV-2), and
-    it is why this line no longer demonstrates two *differing* states, only two independently
-    attributed ones; picking fresh distinct values (a new fixture line, never an edit to this
-    one) is `ol-gwuo`'s job, not a change made here.
+    coincidence is a known side effect of the migration, not a re-authored fixture (INV-2): the
+    line is left exactly as it was written and still demonstrates the *structural* case (an
+    independently-attributed map entry per concept), just no longer two *differing* values. The
+    differing-values case now lives on a new line, `16161616-...`, appended below (`ol-gwuo`).
   - **`masteryAtTime` absent entirely** (`13131313-...`) — what every vault writer produces
     today, and will until C5.4's rollup (`ol-p4t06`) exists. Absent means "not recorded", which
     is exactly what `null` meant in v1–v3. Note the contrast with `yieldRank`, `examProximity`
@@ -137,6 +137,16 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
   - **a v4 suspend** (`15151515-...`). The suspend record carries no `selectionContext` and so
     has no mastery to attribute; it moves to v4 anyway, because `schemaVersion` is read per line
     and one daily file must never hold two current versions.
+  - **two concepts, two genuinely different post-migration `masteryAtTime` values**
+    (`16161616-...`, appended by `ol-gwuo`) — the case `12121212-...` demonstrated before the
+    vocabulary collapse and can no longer, restored as a *new* line rather than an edit to that
+    one (INV-2/append-only discipline; the bullet above states why editing it was never an
+    option). `imbrication` holds `"sprout"` and `cementation` holds `"sapling"` — two adjacent
+    values from the ratified four-stage enum (`masteryState` in `contracts/src/review-log.ts`:
+    `seed` → `sprout` → `sapling` → `tree`), chosen as fixture data, not a schema change. Together
+    with `12121212-...` it also shows the two-record contrast: same map shape (two concepts, two
+    map entries), one line's values happen to coincide post-migration and the other's do not —
+    `golden.spec.ts`'s whole-vault merge test checks both, distinctness included.
 
   Note what is *not* here, and cannot be written by anything: a line carrying the
   `not-attributable` form of `masteryAtTime`. That form exists only as the output of

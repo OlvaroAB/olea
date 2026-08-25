@@ -741,8 +741,8 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
     }
   });
 
-  it('parses all five lines with zero invalid lines', () => {
-    expect(result.records).toHaveLength(5);
+  it('parses all six lines with zero invalid lines', () => {
+    expect(result.records).toHaveLength(6);
     expect(result.invalidLines).toEqual([]);
   });
 
@@ -762,10 +762,20 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
     }
   });
 
-  it('carries the case no earlier version could express: two concepts, two different mastery states', () => {
+  it('carries a per-concept map with two independent entries — the shape no earlier version could express', () => {
     // v3 could say "this two-concept review happened while mastery was sprout".
     // It could not say *whose*. This is the sentence the version exists to make
-    // sayable.
+    // sayable — structurally, regardless of what the two entries' values
+    // happen to be.
+    //
+    // `ol-gwuo`: this line was authored pre-D-049 with two DIFFERENT
+    // retired-vocabulary states ("coming" and "shaky"). D-049/VOC-1's collapse
+    // maps both onto the single ratified word `sprout`, so both entries below
+    // read the same value today — a known, accepted side effect of the
+    // migration (INV-2 forbids editing this frozen-adjacent line to
+    // manufacture difference; see the README). The two entries are still
+    // independently attributed map entries, which is what this test checks.
+    // The case of two *differing* values lives on `16161616-...` below.
     const multi = reviews(result.records).find(
       (r) => r.eventId === '12121212-1212-4121-8121-121212121212',
     );
@@ -774,6 +784,30 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
       attribution: 'per-concept',
       byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
     });
+  });
+
+  it('carries a record with two genuinely different mastery states across concepts (`ol-gwuo`)', () => {
+    // Added because `12121212-...` (above) was authored pre-D-049 with two
+    // DIFFERENT retired-vocabulary states and the vocabulary collapse made
+    // both entries read identically. This new line demonstrates, post-
+    // migration, the case v3 could never express at all: one instrument, two
+    // concepts, two distinct current-vocabulary mastery states in one record.
+    const multi = reviews(result.records).find(
+      (r) => r.eventId === '16161616-1616-4161-8161-161616161616',
+    );
+    expect(multi?.conceptIds).toEqual(['imbrication', 'cementation']);
+    expect(multi?.masteryAtTime).toEqual({
+      attribution: 'per-concept',
+      byConcept: { imbrication: 'sprout', cementation: 'sapling' },
+    });
+    // Adjacent growth stages (sprout → sapling), chosen from the ratified
+    // four-value enum (`masteryState` in `review-log.ts`) — a fixture VALUE
+    // choice, not a schema change.
+    expect(multi?.masteryAtTime?.attribution).toBe('per-concept');
+    if (multi?.masteryAtTime?.attribution === 'per-concept') {
+      const values = Object.values(multi.masteryAtTime.byConcept);
+      expect(new Set(values).size).toBeGreaterThan(1);
+    }
   });
 
   it('the map names exactly the concepts the record names — enforced at the record, not the field', () => {
@@ -868,14 +902,30 @@ describe('a whole vault of all four versions merges into one coherent day', () =
     );
     expect(declined.map((r) => r.eventId)).toEqual(['77777777-7777-4777-8777-777777777777']);
 
-    // And exactly one record names two concepts with two distinct mastery
-    // states — the one written at v4, because that is the only version that can.
-    const perConcept = reviews(merged.records).filter(
+    // Two records name two concepts each with a per-concept mastery map — the
+    // shape only v4 can express — but only one of them holds two genuinely
+    // *distinct* values today. `12121212-...` was authored pre-D-049 with two
+    // different retired-vocabulary states; the D-049/VOC-1 collapse maps both
+    // onto the ratified word `sprout`, so its two entries now coincide
+    // (`ol-gwuo`; INV-2 forbids editing that frozen-adjacent line to
+    // manufacture difference). `16161616-...` is the fixture line added for
+    // `ol-gwuo` specifically to keep this case demonstrated post-migration.
+    const perConceptMulti = reviews(merged.records).filter(
       (r) =>
         r.masteryAtTime?.attribution === 'per-concept' &&
         Object.keys(r.masteryAtTime.byConcept).length > 1,
     );
-    expect(perConcept.map((r) => r.eventId)).toEqual(['12121212-1212-4121-8121-121212121212']);
+    expect(perConceptMulti.map((r) => r.eventId).sort()).toEqual(
+      ['12121212-1212-4121-8121-121212121212', '16161616-1616-4161-8161-161616161616'].sort(),
+    );
+
+    const distinctPerConcept = perConceptMulti.filter((r) => {
+      if (r.masteryAtTime?.attribution !== 'per-concept') return false;
+      return new Set(Object.values(r.masteryAtTime.byConcept)).size > 1;
+    });
+    expect(distinctPerConcept.map((r) => r.eventId)).toEqual([
+      '16161616-1616-4161-8161-161616161616',
+    ]);
 
     // The projection still resolves suspension across every version.
     expect(suspendedInstrumentIds(merged.records)).toEqual(
