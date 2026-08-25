@@ -34,6 +34,19 @@ export const OLEA_COMMAND_GAP_OPEN = 'olea-gap-open';
  * follow-on from reading the gap view.
  */
 export const OLEA_COMMAND_SESSION_BUILD = 'olea-session-build';
+/**
+ * `ol-jie3`: F3.3's bulk-review triage path — "a bulk-review path remains
+ * available for a student who would rather clear a document's drafts in one
+ * sitting; it is the same action at a second density, never a second mental
+ * model." Opens a listing surface over every still-pending cached draft
+ * (`generation/cache-store.ts`'s `DraftCacheStore.listPending()`), grouped
+ * by source document, resolved through the exact same
+ * `generation/accept.ts` `DraftAcceptPort` first-presentation review already
+ * calls — no forked verdict machinery, no new generation verb (F4.5 stays
+ * honoured: this asks her to resolve drafts Olea already made, never to make
+ * new ones).
+ */
+export const OLEA_COMMAND_BULK_REVIEW_OPEN = 'olea-bulk-review-open';
 // `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
 // round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
 // student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea

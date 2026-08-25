@@ -22,6 +22,8 @@ import {
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
+import { createBulkReviewController } from './generation/bulk-review.js';
+import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
   buildGradingWiring,
@@ -169,7 +171,14 @@ export default class OleaPlugin extends Plugin {
     // `keywordIndex` below — so the cache and accept/reject flow work
     // offline; only the sweep itself (never called from here) needs a
     // configured Worker (F7.8).
-    this.generation = buildGenerationWiring({ vault, deviceId });
+    // Captured as a local, not re-read through `this.generation` below: a
+    // plain local of type `GenerationWiring` stays non-null across every
+    // closure that captures it (the bulk-review view factory included),
+    // where re-reading `this.generation` inside a lazily-invoked
+    // `registerView` callback would need a redundant null check for
+    // something that is, in fact, built unconditionally right here.
+    const generationWiring = buildGenerationWiring({ vault, deviceId });
+    this.generation = generationWiring;
 
     this.review = {
       vault,
@@ -252,6 +261,10 @@ export default class OleaPlugin extends Plugin {
       // the other door, and seeds a concept — see `revealSessionBuilderView`.
       buildSession: () => {
         void this.revealSessionBuilderView(undefined);
+      },
+      // `ol-jie3`: F3.3's bulk-review triage path.
+      openBulkReview: () => {
+        void this.revealBulkReviewView();
       },
     });
 
@@ -340,6 +353,28 @@ export default class OleaPlugin extends Plugin {
             deviceId,
             settingsHost: this,
             now: () => new Date(),
+            // Same instance the Today panel's replay uses — see this file's
+            // own comment above `scheduler`'s construction: "one Scheduler...
+            // is what makes that literally the same computation."
+            scheduler,
+          }),
+        ),
+    );
+
+    // `ol-jie3`: F3.3's bulk-review triage path — the same accept/edit/reject
+    // resolution first-presentation review offers, at list density, grouped
+    // by document. `createBulkReviewController` is called fresh on every
+    // open (mirrors `createLocalGapProvider`'s "no cache, recompute" posture
+    // above), so a draft accepted from first-presentation review a moment
+    // earlier does not linger here.
+    this.registerView(
+      VIEW_TYPE_OLEA_BULK_REVIEW,
+      (leaf) =>
+        new BulkReviewView(leaf, () =>
+          createBulkReviewController({
+            cache: generationWiring.cache,
+            acceptPort: generationWiring.acceptPort,
+            editPort: createObsidianEditPort(this.app),
           }),
         ),
     );
@@ -702,6 +737,31 @@ export default class OleaPlugin extends Plugin {
     await workspace.revealLeaf(leaf);
     const view = leaf.view;
     if (view instanceof SessionBuilderView) await view.setFocusConcept(conceptName);
+  }
+
+  /**
+   * Opens F3.3's bulk-review triage path (`ol-jie3`) in the right sidebar,
+   * or reveals the one already there — the same reuse-don't-stack shape as
+   * `revealGapView`/`revealTodayView`/`revealSessionBuilderView`, for the
+   * same reason: a command that stacks panes is a command she stops
+   * pressing.
+   *
+   * Always refreshes on the way out, mirroring `revealTodayView`'s/
+   * `revealGapView`'s own `ol-h3wy` reasoning: a first-presentation review
+   * resolved elsewhere (or a change on another device, `[CACHE-1]`) could
+   * land between two reveals of an already-open leaf, and this is what
+   * keeps that leaf from just showing whatever it last composed.
+   */
+  private async revealBulkReviewView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_BULK_REVIEW);
+    const leaf = existing[0] ?? workspace.getRightLeaf(false);
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_BULK_REVIEW, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_BULK_REVIEW);
   }
 
   override onunload(): void {

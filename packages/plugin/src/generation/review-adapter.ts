@@ -37,7 +37,8 @@ import type { DraftRecord } from './types.js';
 /** Matches `review/queue-adapter.ts`'s own `OPTION_IDS` convention (the letters `keymap.ts` binds). */
 const OPTION_IDS = 'abcdefghij';
 
-function basenameWithoutExtension(path: string): string {
+/** Exported additively for `bulk-review.ts` (`ol-jie3`), which needs the same note-title derivation for its group headers — one function, not two copies that could drift. */
+export function basenameWithoutExtension(path: string): string {
   const slash = path.lastIndexOf('/');
   const file = slash === -1 ? path : path.slice(slash + 1);
   const dot = file.lastIndexOf('.');

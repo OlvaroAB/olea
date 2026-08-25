@@ -43,6 +43,13 @@
  * off-Mac). "Start today's review" and "Create card" have no chord named
  * anywhere in the contract, so both stay unbound.
  *
+ * **`OLEA_COMMAND_BULK_REVIEW_OPEN` (`ol-jie3`) opens F3.3's bulk-review
+ * triage path** — a listing surface over every still-pending cached draft,
+ * grouped by document, resolved through the same `DraftAcceptPort`
+ * first-presentation review uses. Not a new generation verb (see the
+ * withdrawn-command note just below): it never asks Olea to draft anything,
+ * only lets her resolve what is already drafted, at a second density.
+ *
  * **`OLEA_COMMAND_DRAFT_CARDS` was withdrawn (David, wave-2 round-2
  * correction).** F4.5 rules out a student-invoked draft verb by name —
  * there is no "Draft 6?" because Olea is already drafting under unbounded
@@ -53,6 +60,7 @@
  */
 
 import {
+  OLEA_COMMAND_BULK_REVIEW_OPEN,
   OLEA_COMMAND_CREATE_CARD,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
@@ -70,6 +78,8 @@ export interface OleaCommandHandlers {
   readonly openGap: () => void;
   /** `ol-p5t06b`: opens the session builder (F4.6, F4.7, F4.8), unfocused — built from the whole ranking. */
   readonly buildSession: () => void;
+  /** `ol-jie3`: opens F3.3's bulk-review triage path — the same accept/edit/reject resolution as first-presentation review, at list density, grouped by document. */
+  readonly openBulkReview: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -119,6 +129,15 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       name: 'Olea: Build a study session',
       callback: handlers.buildSession,
       // Unbound, same as the three above.
+    },
+    {
+      id: OLEA_COMMAND_BULK_REVIEW_OPEN,
+      // F3.3's own phrasing: clearing "a document's drafts in one sitting".
+      name: 'Olea: Review drafts in bulk',
+      callback: handlers.openBulkReview,
+      // No chord named anywhere in the contract for this one, matching the
+      // gap/session-builder commands above. Click-only this round —
+      // `ol-uxk9` is the keyboard-bindings follow-up.
     },
   ];
 }

@@ -301,6 +301,37 @@ describe('the gap/coverage screen is registered and reachable (ol-2tyj)', () => 
   });
 });
 
+describe('the bulk-review triage view is registered and reachable (F3.3, ol-jie3)', () => {
+  // Same defect shape this file's own module doc opens with: `BulkReviewController`
+  // and `BulkReviewView` are both complete and tested (`bulk-review.spec.ts`), and
+  // this is the source-level proof that `main.ts` actually registers the view,
+  // wires it to the real cache/accept-port/edit-port, and gives the command
+  // palette a real handler — the D-072 reachability chain, by file:line.
+
+  it('registers the bulk-review view type', () => {
+    expect(main).toMatch(/registerView\(\s*VIEW_TYPE_OLEA_BULK_REVIEW/);
+  });
+
+  it('constructs a real BulkReviewView against a controller factory', () => {
+    expect(main).toMatch(/new BulkReviewView\(\s*leaf,\s*\(\)\s*=>\s*createBulkReviewController\(/);
+  });
+
+  it('wires the controller to the real cache, the real accept port, and a real edit port', () => {
+    expect(main).toMatch(/cache:\s*generationWiring\.cache,/);
+    expect(main).toMatch(/acceptPort:\s*generationWiring\.acceptPort,/);
+    expect(main).toMatch(/editPort:\s*createObsidianEditPort\(this\.app\),/);
+  });
+
+  it('the "Review drafts in bulk" command opens the view', () => {
+    expect(main).toMatch(/openBulkReview:\s*\(\)\s*=>\s*\{\s*void this\.revealBulkReviewView\(\);/);
+  });
+
+  it('reveals an existing leaf rather than stacking a second one, same shape as Gap/Today/Session', () => {
+    expect(main).toMatch(/getLeavesOfType\(VIEW_TYPE_OLEA_BULK_REVIEW\)/);
+    expect(main).toMatch(/refreshOpenTodayViews\(workspace,\s*VIEW_TYPE_OLEA_BULK_REVIEW\)/);
+  });
+});
+
 describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
   // `OLEA_COMMAND_DRAFT_CARDS` / `DraftCardsModal` shipped in wave-2 round-2
   // and was withdrawn: F4.5 rules out a student-invoked draft verb by name
