@@ -46,7 +46,13 @@
  * tempts).
  */
 
-import type { ConceptMaterialPresence, Scheduler, VaultPath, VaultSource } from 'olea-core';
+import type {
+  CalendarDay,
+  ConceptMaterialPresence,
+  Scheduler,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import {
   allGapRows,
   buildComposedStudySession,
@@ -96,6 +102,35 @@ function instrumentCountsByNotePath(
     counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * ARRIVE-2 (`ol-epi9`): each concept's arrival day — the local calendar day
+ * of the EARLIEST `firstSeen` across its notes — keyed by `conceptKey`, for
+ * `buildComposedStudySession`'s `arrivalDays` input. `firstSeen` is optional
+ * on `VaultSource`, and a host that cannot say (or a fake without the
+ * accessor) yields an absent entry, which `classifyObligation` treats as the
+ * pre-ARRIVE-1 `overdueDays: 0` — never Infinity. Local zone deliberately
+ * (`localToday`'s own doc): the question is the day the file appeared on the
+ * device she works at.
+ */
+async function arrivalDaysByConceptKey(
+  vault: VaultSource,
+  rows: readonly { readonly conceptKey: string; readonly notePaths: readonly VaultPath[] }[],
+): Promise<ReadonlyMap<string, CalendarDay>> {
+  const firstSeen = vault.firstSeen?.bind(vault);
+  if (firstSeen === undefined) return new Map();
+
+  const days = new Map<string, CalendarDay>();
+  await Promise.all(
+    rows.map(async (row) => {
+      const stats = await Promise.all(row.notePaths.map((path) => firstSeen(path)));
+      const known = stats.filter((ms): ms is number => ms !== null);
+      if (known.length === 0) return;
+      days.set(row.conceptKey, localToday(new Date(Math.min(...known))));
+    }),
+  );
+  return days;
 }
 
 /**
@@ -164,8 +199,14 @@ export function createLocalSessionBuilderProvider(
         // forbids a standing counter of unmet material, and nothing on this
         // surface has a clause authorising one (`study-session/compose.ts`'s
         // module doc).
+        // ARRIVE-2 (`ol-epi9`): resolved here, after the gap view names the
+        // rows, so only concepts actually in play cost a stat call.
+        const gapRows = allGapRows(gap);
+        const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
+
         const composed = buildComposedStudySession({
-          rows: allGapRows(gap),
+          rows: gapRows,
+          arrivalDays,
           instruments: buildConceptInstrumentIndex(enumeration.records),
           replay,
           budgetMinutes: request.budgetMinutes,
