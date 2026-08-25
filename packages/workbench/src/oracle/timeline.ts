@@ -121,7 +121,7 @@ export interface TimelineEventSummary {
   readonly eventId: string;
   readonly instrumentId: string;
   readonly conceptIds: readonly string[];
-  readonly kind: 'review' | 'suspend' | 'unsuspend';
+  readonly kind: 'review' | 'suspend' | 'unsuspend' | 'verdict';
 }
 
 export interface TimelineDayResult {
