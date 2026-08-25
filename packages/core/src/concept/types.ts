@@ -31,17 +31,47 @@ export type ConceptTier = 1 | 2 | 3;
 /**
  * A concept extracted from her vault.
  *
- * **R1/R2 — student-scoped, verbatim display names.** `name` is copied
- * character-for-character from her `topic` property (or, for a tier-1
- * binding, her Zettelkasten note's filename — the two are identical by
- * construction, since binding requires an exact match). It is never
- * title-cased, trimmed into a canonical form, or fuzzy-deduplicated: two
- * topic strings differing only by case produce two distinct `ConceptRecord`s,
- * because nothing in the contract says otherwise for that case. See
- * `extract.spec.ts` for the case that proves this.
+ * **Identity is `key`, not `name` (C7.11, `[D-088]`, `[D-109]`, `ol-il6m`).**
+ * `key` is the opaque, immutable join key — the field every review-log
+ * record, mastery rollup and scheduling reference is meant to key on — and
+ * `name` is a *mutable display attribute* on that key: it renders her wording
+ * but no longer identifies the record. This is `ol-il6m`'s whole point:
+ * before it, renaming a note or editing a `topic:` value severed a concept's
+ * event history because the display string *was* the identity. See
+ * `./concept-key.js`'s module doc for what `key` can and cannot yet promise —
+ * the derivation shipped today is a provisional stand-in, not the ruled,
+ * stable mechanism C7.11 describes.
+ *
+ * **R1/R2 — student-scoped, verbatim display names — still governs `name`.**
+ * `name` is copied character-for-character from her `topic` property (or,
+ * for a tier-1 binding, her Zettelkasten note's filename — the two are
+ * identical by construction, since binding requires an exact match). It is
+ * never title-cased, trimmed into a canonical form, or fuzzy-deduplicated:
+ * two topic strings differing only by case produce two distinct
+ * `ConceptRecord`s, because nothing in the contract says otherwise for that
+ * case. See `extract.spec.ts` for the case that proves this.
  */
 export interface ConceptRecord {
-  /** Exactly as written in her vault — see the R1/R2 note above. */
+  /**
+   * Opaque, immutable, never displayed to her (C7.11). The join key: what a
+   * review-log record, a mastery rollup or a scheduling reference should key
+   * on, once callers migrate to it (`ol-il6m`'s notes track which callers
+   * still key on `name` and why that is deliberate for now, not an oversight
+   * — flipping a join site without flipping every reader of that join would
+   * silently corrupt it).
+   *
+   * **Provisional** (`./concept-key.js`, `PROVISIONAL_CONCEPT_KEY_PREFIX`):
+   * minted fresh on every extraction call from `boundNotePath` or `name`,
+   * because there is no persisted lookup yet that could hand back an existing
+   * key instead of deriving one. It is therefore stable *within* one run and
+   * NOT yet stable across a note rename or a `topic:` edit — the exact
+   * property C7.11's key exists to guarantee, and the exact property this
+   * stand-in does not yet deliver. A follow-up bead tracks the persisted
+   * mechanism (a vault-frontmatter stamp or a review-log lineage replay) that
+   * closes that gap.
+   */
+  readonly key: string;
+  /** Exactly as written in her vault — see the R1/R2 note above. Mutable: two extraction runs may see two different names for the same `key` if she renames in between. */
   readonly name: string;
   /**
    * 1 when a `topic`-derived name also matches a Zettelkasten note exactly,

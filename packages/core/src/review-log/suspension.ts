@@ -45,7 +45,12 @@ export function suspendedInstrumentIds(entries: readonly ReviewLogEntry[]): Read
   const latest = new Map<string, { instant: number; eventId: string; suspended: boolean }>();
 
   for (const entry of entries) {
-    if (entry.kind === 'review') continue;
+    // Explicit allow-list, not a `!== 'review'` skip (`ol-548w`): a third
+    // `kind`, `'verdict'`, now exists on the same union, and it is not an
+    // opinion about suspension either. A skip written as "not review" would
+    // silently treat it as suspend/unsuspend and could flip an instrument's
+    // suspended state on a verdict event that merely happens to sort later.
+    if (entry.kind !== 'suspend' && entry.kind !== 'unsuspend') continue;
 
     const instant = Date.parse(entry.timestamp);
     const prior = latest.get(entry.instrumentId);

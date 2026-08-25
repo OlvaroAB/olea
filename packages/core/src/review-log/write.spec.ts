@@ -6,11 +6,14 @@ import { FolderSource } from '../vault/folder-source.js';
 import { parseReviewLog } from './parse.js';
 import { reviewLogPath } from './path.js';
 import { suspendedInstrumentIds } from './suspension.js';
+import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
   appendReviewLogRecord,
   appendSuspendRecord,
+  appendVerdictRecord,
   type ReviewLogRecordInput,
   type SuspendLogRecordInput,
+  type VerdictLogRecordInput,
 } from './write.js';
 
 function baseInput(overrides: Partial<ReviewLogRecordInput> = {}): ReviewLogRecordInput {
@@ -442,5 +445,120 @@ describe('appendSuspendRecord', () => {
     await expect(
       appendSuspendRecord(source, suspendInput(), { deviceId: 'has/slash' }),
     ).rejects.toThrow();
+  });
+});
+
+describe('appendVerdictRecord (ol-548w, INV-6)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-verdict-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function verdictInput(overrides: Partial<VerdictLogRecordInput> = {}): VerdictLogRecordInput {
+    return {
+      timestamp: '2026-08-25T09:20:00-04:00',
+      instrumentId: 'qa:imbrication:1',
+      instrumentType: 'qa',
+      conceptIds: ['concept-prov1:Imbrication'],
+      verdict: 'accepted',
+      artifactProvenance: {
+        taskId: 'card.generate.v1',
+        promptVersion: '2026-08-20',
+        modelId: 'workers-ai:test-model',
+      },
+      ...overrides,
+    };
+  }
+
+  it('appends a verdict event carrying no content, into the same C5.2 daily file as reviews', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendVerdictRecord(source, verdictInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'verdict-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(4);
+    expect(result.record.kind).toBe('verdict');
+    expect(result.record.eventId).toBe('verdict-1');
+    expect(result.record.verdict).toBe('accepted');
+    expect(result.record.conceptIds).toEqual(['concept-prov1:Imbrication']);
+    expect(result.path).toBe(reviewLogPath('2026-08-25', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('interleaves with reviews in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-08-25T09:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    const beforeVerdict = await readFile(
+      join(tempRoot, reviewLogPath('2026-08-25', 'desktop')),
+      'utf8',
+    );
+    const verdict = await appendVerdictRecord(source, verdictInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'v1',
+    });
+    const after = await readFile(join(tempRoot, verdict.path), 'utf8');
+
+    expect(after.startsWith(beforeVerdict)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'verdict']);
+  });
+
+  it('is projected by ./verdicts.js — reviewLogVerdicts and latestVerdictByInstrument read it back', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendVerdictRecord(source, verdictInput({ verdict: 'rejected' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'v1',
+      // Force an explicit earlier timestamp so the second verdict below is
+      // unambiguously later, exercising the "most recent wins" resolution.
+    });
+    await appendVerdictRecord(
+      source,
+      verdictInput({ verdict: 'accepted', timestamp: '2026-08-25T10:00:00-04:00' }),
+      { deviceId: 'desktop', generateEventId: () => 'v2' },
+    );
+
+    const raw = await readFile(join(tempRoot, reviewLogPath('2026-08-25', 'desktop')), 'utf8');
+    const { records } = parseReviewLog(raw);
+
+    expect(reviewLogVerdicts(records)).toHaveLength(2);
+    const latest = latestVerdictByInstrument(records);
+    expect(latest.get('qa:imbrication:1')?.verdict).toBe('accepted');
+  });
+
+  it('validates before writing: a missing artifactProvenance field never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const { artifactProvenance, ...withoutProvenance } = verdictInput();
+    await expect(
+      appendVerdictRecord(source, withoutProvenance as VerdictLogRecordInput, {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+  });
+
+  it('rejects an empty conceptIds before writing', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendVerdictRecord(source, verdictInput({ conceptIds: [] }), { deviceId: 'desktop' }),
+    ).rejects.toThrow(/schema validation/);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendVerdictRecord(source, verdictInput(), { deviceId: 'desktop' });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
   });
 });

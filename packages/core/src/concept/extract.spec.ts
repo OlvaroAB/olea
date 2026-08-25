@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
+import { provisionalConceptKey } from './concept-key.js';
 import { extractConcepts } from './extract.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
@@ -100,6 +101,10 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
     const concepts = await extractConcepts(source, { includeTier3: true });
 
     expect(concepts.find((c) => c.name === 'Imbrication')).toEqual({
+      key: provisionalConceptKey({
+        name: 'Imbrication',
+        boundNotePath: '05 Zettelkasten/Imbrication.md',
+      }),
       name: 'Imbrication',
       tier: 3,
       courses: ['GEOL204'],
@@ -505,7 +510,11 @@ describe('extractConcepts — a multi-valued `topic:` contributes to every conce
     );
     // Same tier, same courses, same sources. If a later change reintroduced a
     // primary/secondary distinction, it would have to show up in one of these.
-    expect({ ...first, name: '' }).toEqual({ ...second, name: '' });
+    // `key` is neutralised too: with no bound note, it derives from `name`
+    // (`./concept-key.js`), so "Concept One" and "Concept Two" legitimately
+    // mint different keys — that difference is `key` doing its job, not a
+    // primary/secondary distinction this test is checking for.
+    expect({ ...first, name: '', key: '' }).toEqual({ ...second, name: '', key: '' });
   });
 
   it('a single-valued `topic:` is the same shape as a co-listed one', async () => {

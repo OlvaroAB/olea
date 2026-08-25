@@ -43,7 +43,16 @@ describe('extraction eval — differently-shaped fixture vaults', () => {
         // has never seen this vault's shape calls it exactly this way.
         const concepts = await extractConcepts(vault);
 
-        expect(concepts).toEqual(truth.expectedConcepts);
+        // `key` is intentionally not part of `FixtureConceptGroundTruth`
+        // (`../src/fixture-vaults.ts`'s own doc: no compile-time coupling to
+        // `extract.ts`'s exact shape beyond what this eval checks). It is a
+        // provisional, content-derived stand-in (`ol-il6m`,
+        // `olea-core`'s `concept-key.js`) with nothing for this shape-oracle
+        // to assert about it yet, so it is stripped before comparison rather
+        // than widening the ground truth to a value this suite does not
+        // exist to check.
+        const withoutKey = concepts.map(({ key: _key, ...rest }) => rest);
+        expect(withoutKey).toEqual(truth.expectedConcepts);
       });
 
       it('never throws on a second, tier-3-enabled pass either', async () => {

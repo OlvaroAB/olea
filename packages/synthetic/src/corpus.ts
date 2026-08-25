@@ -63,6 +63,7 @@ import {
   buildMaterialPresence,
   type ConceptMaterialPresence,
   type ConceptRecord,
+  provisionalConceptKey,
   type SourceCoverage,
   type VaultPath,
 } from 'olea-core';
@@ -238,6 +239,7 @@ export interface SyntheticCorpus {
  */
 export function buildCorpus(): SyntheticCorpus {
   const concepts: ConceptRecord[] = NOTES.map((note) => ({
+    key: provisionalConceptKey({ name: note.conceptName, boundNotePath: null }),
     name: note.conceptName,
     tier: 3,
     courses: [COURSE_VANTREL],

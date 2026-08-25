@@ -63,6 +63,10 @@ export { type ContractEntry, type ContractId, contracts, SchemaRegistry } from '
 // and worker.ts's header explains D-011's versioning discipline for the
 // envelope.
 export {
+  type ArtifactProvenance,
+  type ArtifactVerdict,
+  artifactProvenance,
+  artifactVerdict,
   type InstrumentType,
   instrumentType,
   type MasteryAtTime,
@@ -105,6 +109,10 @@ export {
   suspendLogRecordV2,
   suspendLogRecordV3,
   suspendLogRecordV4,
+  type VerdictLogRecord,
+  type VerdictLogRecordV4,
+  verdictLogRecord,
+  verdictLogRecordV4,
 } from './review-log.js';
 // The versioned study-plan artifact (A2.5, C7.6, P5-T05). Worker-computed
 // policy, cached and executed client-side; its `planVersion` is the one value

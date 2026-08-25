@@ -51,6 +51,7 @@ import { parseDocument } from '../block/parse.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, wikilinkTarget } from '../frontmatter/read.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractTier3Evidence } from './evidence.js';
 import type { ConceptRecord, ExtractConceptsOptions } from './types.js';
@@ -172,6 +173,7 @@ export async function extractConcepts(
   for (const [name, acc] of byName) {
     const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
     const record: ConceptRecord = {
+      key: provisionalConceptKey({ name, boundNotePath: bound ?? null }),
       name,
       tier: bound !== undefined ? 1 : 2,
       courses: [...acc.courses].sort(),
@@ -230,6 +232,7 @@ export async function extractConcepts(
       // by traversal order.
       if (boundNotePath === undefined) continue;
       records.push({
+        key: provisionalConceptKey({ name, boundNotePath }),
         name,
         tier: 3,
         courses: [...courses].sort(),

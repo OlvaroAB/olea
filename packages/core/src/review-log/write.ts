@@ -37,6 +37,8 @@ import {
   reviewLogRecord,
   type SuspendLogRecord,
   suspendLogRecord,
+  type VerdictLogRecord,
+  verdictLogRecord,
 } from 'olea-contracts';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { reviewLogPath } from './path.js';
@@ -58,6 +60,14 @@ export type ReviewLogRecordInput = Omit<ReviewLogRecord, 'schemaVersion' | 'even
  * first, so both directions go through this same call.
  */
 export type SuspendLogRecordInput = Omit<SuspendLogRecord, 'schemaVersion' | 'eventId'>;
+
+/**
+ * Every `VerdictLogRecord` field the caller supplies; the writer stamps the
+ * rest (`ol-548w`, INV-6). `kind` is stamped, not asked for — the same reason
+ * `ReviewLogRecordInput` stamps it: this writer produces verdict events and
+ * only verdict events.
+ */
+export type VerdictLogRecordInput = Omit<VerdictLogRecord, 'schemaVersion' | 'eventId' | 'kind'>;
 
 export interface AppendReviewLogOptions {
   /**
@@ -81,6 +91,13 @@ export interface AppendReviewLogResult {
 export interface AppendSuspendLogResult {
   /** The full, validated record actually written (schemaVersion and eventId included). */
   readonly record: SuspendLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+export interface AppendVerdictLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: VerdictLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -221,6 +238,48 @@ export async function appendSuspendRecord(
   if (!parsed.success) {
     throw new Error(
       `appendSuspendRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one accept/edit/reject verdict
+ * (`ol-548w`, INV-6).
+ *
+ * The third sibling of `appendReviewLogRecord`/`appendSuspendRecord`, sharing
+ * the same append path and the same durability discipline: one file per day
+ * per device, crash-safe `\n` separation, and every byte validated against
+ * the frozen schema before it reaches the vault.
+ *
+ * **Reachability.** This function has no production caller yet — emitting a
+ * verdict event from the accept/reject UI is the ask-modal lane's job, not
+ * this one's (see the bead this function's `ol-548w` reference points at).
+ * Same posture as `appendSuspendRecord` above: the recording discipline is
+ * built *before* the UI that will call it, deliberately, so the day that UI
+ * lands there is already somewhere correct for its verdict to go.
+ */
+export async function appendVerdictRecord(
+  vault: VaultSource,
+  input: VerdictLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendVerdictLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'verdict',
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = verdictLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendVerdictRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

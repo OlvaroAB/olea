@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
+import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { SourceCoverage } from '../concept/evidence.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
@@ -217,7 +218,13 @@ describe('buildGapView', () => {
 
 describe('buildMaterialPresence', () => {
   function concept(name: string, sourcePaths: readonly string[]): ConceptRecord {
-    return { name, tier: 2, courses: ['CRS101'], sourcePaths: sourcePaths as VaultPath[] };
+    return {
+      key: provisionalConceptKey({ name, boundNotePath: null }),
+      name,
+      tier: 2,
+      courses: ['CRS101'],
+      sourcePaths: sourcePaths as VaultPath[],
+    };
   }
 
   it("sums instruments across every note that names the concept (ol-t3sd's many-to-many)", () => {

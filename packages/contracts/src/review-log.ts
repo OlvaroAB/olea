@@ -20,7 +20,10 @@
  * may be evidence for every concept its note names; and v4 moves `masteryAtTime`
  * out of `selectionContext` onto the record itself as a per-concept map, because
  * a rating is evidence for every concept the instrument names and each of those
- * concepts has its own mastery. The rule for every reader is the same one v1's
+ * concepts has its own mastery; and v4 later gains a third `kind`,
+ * `verdictLogRecordV4` (`ol-548w`, INV-6), additive the same way `suspend`/
+ * `unsuspend` were additive at v2 — no version bump, because nothing about an
+ * existing kind's shape changes. The rule for every reader is the same one v1's
  * doc already stated — **read the version first, never guess** — with exactly
  * one migration site, core's `upgrade.ts` (`upgradeV1`, then `upgradeV2`, then
  * `upgradeV3`). Every version bump so far was taken while the only records in
@@ -337,6 +340,20 @@ export const suspendEventKind = z.enum(['suspend', 'unsuspend']);
 export type SuspendEventKind = z.infer<typeof suspendEventKind>;
 
 /**
+ * What she did with an Olea-drafted instrument (`ol-548w`, INV-6, C5.4).
+ *
+ * INV-6 requires an accept step before anything AI-generated lands in her
+ * vault. Before this, that step existed only as a UI shape — she saw an
+ * unticked checkbox — and left no trace once acted on, so INV-6 was enforced
+ * by the flow rather than evidenced by anything. `accepted`/`edited` are both
+ * a real acceptance (she kept the artifact, with or without changing it
+ * first); `rejected` is a real refusal. All three are the ground truth
+ * `ol-v0w4`'s end-to-end evaluation needs and none of them existed as data.
+ */
+export const artifactVerdict = z.enum(['accepted', 'edited', 'rejected']);
+export type ArtifactVerdict = z.infer<typeof artifactVerdict>;
+
+/**
  * One suspend or unsuspend event, **schema version 2 — FROZEN. Superseded by
  * `suspendLogRecordV3`.**
  *
@@ -649,6 +666,77 @@ export const suspendLogRecordV4 = z.object({
 export type SuspendLogRecordV4 = z.infer<typeof suspendLogRecordV4>;
 
 /**
+ * Which prompt template and model produced the artifact a verdict is about
+ * (D7.3, D-005). The same two fields `responseStamp` (`../worker.ts`) stamps
+ * onto a generated artifact client-side; a verdict record repeats them here
+ * rather than importing that type, so this record has no compile-time
+ * coupling to the Worker envelope beyond the two fields it actually needs.
+ *
+ * **Why this is not content, and why it is required rather than optional.**
+ * D-005 forbids her content, never the provenance of a call that produced an
+ * artifact — task id, model id and prompt version are exactly what it
+ * enumerates as permitted. Every verdict is about something Olea drafted, so
+ * every verdict has a generating call to name; there is no honest case for
+ * omitting it, unlike `masteryAtTime` (`ol-g6zg`'s doc above), where absence
+ * states a true "not yet computed".
+ */
+export const artifactProvenance = z.object({
+  /** The task id that produced the draft (`../worker.ts`'s `taskId`, not re-imported — see this object's doc). */
+  taskId: z.string().min(1),
+  /** VERSION file of the prompt template that produced it (C4.3, D7.3). */
+  promptVersion: z.string().min(1),
+  /** The model that produced it (C4.6). */
+  modelId: z.string().min(1),
+});
+export type ArtifactProvenance = z.infer<typeof artifactProvenance>;
+
+/**
+ * One accept/edit/reject verdict, **schema version 4** (`ol-548w`, INV-6).
+ *
+ * A third `kind`, additive to the discriminated union exactly the way
+ * `suspend`/`unsuspend` were additive at v2 (D-020) — no `schemaVersion` bump,
+ * because nothing about the *shape* of an existing kind changes. Lives in the
+ * same daily file as reviews and suspensions (C5.2), append-only: a verdict
+ * is a fact about a moment, never revised in place — re-drafting after a
+ * reject is a new instrument with its own future verdict, not an edit to this
+ * one.
+ *
+ * **Keyed on `conceptIds`, the opaque join key (C7.11, `[D-088]`, `[D-109]`,
+ * `ol-il6m`).** This is a brand-new writer with no legacy record to stay
+ * consistent with, so it keys on `ConceptRecord.key` from day one rather than
+ * inheriting the display-name join `reviewLogRecordV4.conceptIds` still
+ * carries today (see `olea-core`'s `session/enumerate.ts` for why that one
+ * has not flipped yet). A future coordinated flip of the review/suspend
+ * mint sites does not have to touch this shape at all.
+ *
+ * **No content, per D-005.** `verdict` and `artifactProvenance` are exactly
+ * what INV-6's oracle needs — what she decided, and which generating call
+ * produced the thing she decided about — and neither carries her text.
+ */
+export const verdictLogRecordV4 = z.object({
+  schemaVersion: z.literal(4),
+  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+  kind: z.literal('verdict'),
+  /** Stable unique id for this event; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset. The offset matters: "when did she decide" is local. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The instrument this verdict is about. */
+  instrumentId: z.string().min(1),
+  instrumentType,
+  /**
+   * Every concept this instrument was drafted for, in the order the drafting
+   * pass named them. Non-empty for the same reason `reviewLogRecordV3`'s
+   * field is: an instrument with no concept is invisible to every later
+   * question, and a record naming none would be an un-backfillable hole.
+   */
+  conceptIds: z.array(z.string().min(1)).min(1),
+  verdict: artifactVerdict,
+  artifactProvenance,
+});
+export type VerdictLogRecordV4 = z.infer<typeof verdictLogRecordV4>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v4 lines against.
  *
@@ -659,6 +747,7 @@ export type SuspendLogRecordV4 = z.infer<typeof suspendLogRecordV4>;
 export const reviewLogEntryV4 = z.discriminatedUnion('kind', [
   reviewLogRecordV4,
   suspendLogRecordV4,
+  verdictLogRecordV4,
 ]);
 export type ReviewLogEntryV4 = z.infer<typeof reviewLogEntryV4>;
 
@@ -673,6 +762,8 @@ export const reviewLogRecord = reviewLogRecordV4;
 export type ReviewLogRecord = z.infer<typeof reviewLogRecordV4>;
 export const suspendLogRecord = suspendLogRecordV4;
 export type SuspendLogRecord = z.infer<typeof suspendLogRecordV4>;
+export const verdictLogRecord = verdictLogRecordV4;
+export type VerdictLogRecord = z.infer<typeof verdictLogRecordV4>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 4 as const;

@@ -38,6 +38,14 @@ export type {
   ThematicBreakBlock,
 } from './block/types.js';
 export { isLossless } from './block/types.js';
+export type { ConceptKeyInput, ConceptKeySource } from './concept/concept-key.js';
+// The provisional concept-key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`).
+// See `./concept/concept-key.js`'s module doc for what this derivation can
+// and cannot yet promise.
+export {
+  PROVISIONAL_CONCEPT_KEY_PREFIX,
+  provisionalConceptKey,
+} from './concept/concept-key.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,
@@ -585,12 +593,28 @@ export {
 export type { RetrieveDeps, RetrieveOptions } from './retrieval/engine.js';
 export { retrieve } from './retrieval/engine.js';
 export type {
+  AssembleBandedGroundedContextOptions,
   AssembleGroundedContextOptions,
+  BandDecision,
   GroundedChunk,
+  GroundingBandThresholds,
+  GroundingBandTier,
+  GroundingDiagnostic,
+  GroundingDiagnosticHit,
+  GroundingJudgePort,
+  GroundingJudgeRequest,
+  GroundingJudgeVerdict,
   GroundingRefusalReason,
   GroundingResult,
+  ResolveGroundedContextOptions,
 } from './retrieval/groundedContext.js';
-export { assembleGroundedContext } from './retrieval/groundedContext.js';
+export {
+  assembleBandedGroundedContext,
+  assembleGroundedContext,
+  classifyGroundingBand,
+  PROVISIONAL_GROUNDING_BAND,
+  resolveGroundedContext,
+} from './retrieval/groundedContext.js';
 export type {
   HybridHit,
   HybridRetrievalOptions,
@@ -643,14 +667,23 @@ export { isInstrumentSuspended, suspendedInstrumentIds } from './review-log/susp
 // per version hop, chained; there is deliberately no other migration anywhere,
 // and each hop takes exactly one argument so it cannot consult current state.
 export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
+// INV-6's accept step, evidenced (`ol-548w`): the verdict projection folded
+// from the review log, never stored — see review-log/verdicts.ts.
+export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendReviewLogOptions,
   AppendReviewLogResult,
   AppendSuspendLogResult,
+  AppendVerdictLogResult,
   ReviewLogRecordInput,
   SuspendLogRecordInput,
+  VerdictLogRecordInput,
 } from './review-log/write.js';
-export { appendReviewLogRecord, appendSuspendRecord } from './review-log/write.js';
+export {
+  appendReviewLogRecord,
+  appendSuspendRecord,
+  appendVerdictRecord,
+} from './review-log/write.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
   ScheduleInput,
