@@ -240,6 +240,31 @@ describe('the explain-back grading pipeline has a real production caller (ol-drf
   });
 });
 
+describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle)', () => {
+  // Same defect shape as `JudgeCaller` above, one bead earlier in the same
+  // ownership chain: `readConcepts` and `ConceptReaderPort` (`ol-2zfj.1`)
+  // were closed with the reading stage complete and the port deliberately
+  // unimplemented — the D-072 escape hatch, and the wiring register's
+  // `ConceptReaderPort` finding. These assertions are the source-level proof
+  // that `main.ts` composes a real `WorkerConceptReader` over the real
+  // transport, not a fake, and that a real (if not yet invoked-by-anything-
+  // else) call to `readConcepts` exists in production code — see
+  // `concept/wiring.ts`'s module doc for why nothing currently invokes
+  // `readConceptsFromVault` in turn.
+
+  it('builds the concept wiring through the tested composer, against the real data host and the real transport factory', () => {
+    expect(main).toMatch(
+      /this\.concept\s*=\s*await buildConceptWiring\(\{\s*dataHost:\s*this,\s*createTransport:\s*createObsidianWorkerTransport,/,
+    );
+  });
+
+  it('exposes a production entry point that reaches readConcepts through the composed wiring', () => {
+    expect(main).toMatch(
+      /async readConceptsFromVault\(options:\s*ReadConceptsFromVaultOptions\s*=\s*\{\}\)\s*\{\s*if \(this\.concept === null\) return null;\s*return readConceptsFromVault\(this\.concept, new ObsidianSource\(this\.app\), options\);/,
+    );
+  });
+});
+
 describe('the gap/coverage screen is registered and reachable (ol-2tyj)', () => {
   // `GapView` and `createLocalGapProvider` were both complete and tested —
   // this is the same defect shape this file's own module doc opens with:

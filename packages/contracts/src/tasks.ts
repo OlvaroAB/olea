@@ -61,6 +61,15 @@ export const TASK_IDS = {
   RETRIEVAL_EMBED: 'retrieval.embed.v1',
   /** W3 · Slot G — section summaries (F3.2). */
   SECTIONS_SUMMARIZE: 'sections.summarize.v1',
+  /**
+   * W4 · Slot G — concepts read out of her material, corroborated (never
+   * overridden) by her filing conventions (F1.4, C7.3, `[D-068]`, `[D-082]`).
+   * The client-side stage is `packages/core/src/concept/read.ts`'s
+   * `readConcepts`, reached through the `ConceptReaderPort` seam; this id is
+   * that port's join key, added by EXT-7 (`ol-5nle`) per the reservation this
+   * catalogue's own test carried since P3-T02.
+   */
+  CONCEPTS_EXTRACT: 'concepts.extract.v1',
   /** W3 · Slot G — Q&A and cloze card drafts, INV-6 accept step downstream (F3.3). */
   CARDS_GENERATE: 'cards.generate.v1',
   /** W3 · Slot G — MCQ generation incl. distractors (F3.10, amendment F2.14–F2.17). */

@@ -12,6 +12,12 @@ import {
 } from 'olea-core';
 import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
+import {
+  buildConceptWiring,
+  type ConceptWiring,
+  type ReadConceptsFromVaultOptions,
+  readConceptsFromVault,
+} from './concept/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
@@ -124,6 +130,7 @@ export default class OleaPlugin extends Plugin {
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
+  private concept: ConceptWiring | null = null;
 
   override async onload(): Promise<void> {
     // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
@@ -371,6 +378,17 @@ export default class OleaPlugin extends Plugin {
       createTransport: createObsidianWorkerTransport,
     });
 
+    // EXT-7 (`ol-5nle`): the concept-reading stage's production port, wired
+    // to the real Worker transport on the same F7.8 grey-out terms as
+    // `this.retrieval`/`this.grading` above. See `concept/wiring.ts`'s module
+    // doc and this class's own `readConceptsFromVault` for why nothing calls
+    // *that method* yet — the same deliberate gap `gradeExplainBackAttempt`
+    // documents for grading.
+    this.concept = await buildConceptWiring({
+      dataHost: this,
+      createTransport: createObsidianWorkerTransport,
+    });
+
     this.registerInterval(
       window.setInterval(() => {
         void this.ingestion?.engine.tick();
@@ -497,6 +515,23 @@ export default class OleaPlugin extends Plugin {
   ): Promise<PendingExplainBackGrading | null> {
     if (this.grading === null) return null;
     return gradeExplainBackAttempt(this.grading, input);
+  }
+
+  /**
+   * `ol-5nle`'s production entry point for the concept-reading stage:
+   * reaches `readConcepts` through the real, composed `ConceptReaderPort`
+   * when the Worker is configured, `null` otherwise (F7.8) — propagated
+   * through `readConceptsFromVault` (`concept/wiring.ts`) rather than
+   * re-checked here.
+   *
+   * No caller of this method exists in this package yet, deliberately — the
+   * same gap `gradeExplainBackAttempt` documents above. There is no command,
+   * view or schedule today that decides WHEN to read her vault for concepts;
+   * building one is a separate bead's job, not implied by wiring the port.
+   */
+  async readConceptsFromVault(options: ReadConceptsFromVaultOptions = {}) {
+    if (this.concept === null) return null;
+    return readConceptsFromVault(this.concept, new ObsidianSource(this.app), options);
   }
 
   /**

@@ -337,7 +337,10 @@ function parseArgs(argv) {
 // fix did not catch it, because that fix only falsifies a claim about a symbol the register
 // already names, and `JudgeCaller`'s row named none. The "CAN A 'NONE' CLAIM BE TRUSTED?" section
 // is the fix for that. `MisconceptionEmbedder` was re-verified against it, not assumed still
-// correct, and stayed a finding.
+// correct, and stayed a finding. Third correction, 2026-08-25: `ConceptReaderPort` is DELETED
+// here too — `ol-5nle` (EXT-7) genuinely wired it (`WorkerConceptReader`,
+// `packages/plugin/src/concept/workerConceptReader.ts:82`, constructed at
+// `packages/plugin/src/concept/wiring.ts:102`), closing the D-072 escape hatch this entry named.
 // ------------------------------------------------------------------------------------------
 
 const KNOWN_FINDINGS = [
@@ -349,17 +352,6 @@ const KNOWN_FINDINGS = [
       'declared seam, no implementation — re-verified 2026-08-16 against findTypeReference: ' +
       'every non-declaration, non-barrel, non-comment occurrence of the port type name is a ' +
       'doc comment; zero real code references',
-  },
-  {
-    port: 'ConceptReaderPort',
-    tasks: ['ol-2zfj.1'],
-    followUp: 'ol-5nle',
-    reason:
-      '2026-08-25, the D-072 escape hatch used as written: ol-2zfj.1 (EXT-3) shipped the ' +
-      'client-side reading stage declaring only packages/core/src/concept/, and left the port ' +
-      'unimplemented on purpose — the task id (frozen catalogue), service TaskDefinition/prompt, ' +
-      'and plugin adapter are Class C or outside that ownership. ol-5nle (EXT-7) is the named ' +
-      'wiring bead carrying the full ordered procedure; this entry is removed when it lands.',
   },
 ];
 
