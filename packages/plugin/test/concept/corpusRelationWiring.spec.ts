@@ -17,8 +17,10 @@ import type {
 import { describe, expect, it } from 'vitest';
 import { ObsidianCorpusRelationStateStore } from '../../src/concept/corpusRelationStateStore.js';
 import {
+  buildConceptWiring,
   buildCorpusRelationWiring,
   corpusConceptsFrom,
+  readConceptsAndRelations,
   runCorpusRelationBatchIfDue,
 } from '../../src/concept/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
@@ -270,5 +272,195 @@ describe('runCorpusRelationBatchIfDue — trigger discipline', () => {
 
     expect(outcome).toEqual({ ran: false, reason: 'ingestion-session-closed' });
     expect(transport.calls).toHaveLength(0);
+  });
+});
+
+// ---- readConceptsAndRelations ---------------------------------------------
+//
+// The landing seam (`ol-2zfj.12`). Before it, BOTH producers' edges were
+// computed and dropped. These tests fix the one property that matters: an
+// edge from either stage reaches the fold, and neither stage's output is
+// silently discarded.
+//
+// INV-3: every concept name and every line of vault content below is coined
+// for this file. None is drawn from any real vault.
+
+/**
+ * One transport standing in for both tasks, dispatching on task id — the
+ * `concepts.extract.v1` per-document read and the `concepts.relations.v1`
+ * corpus verdict. Two concepts, one prose block each, so the extract
+ * response's 1-based `anchorIndex` is stable at 1 and 2.
+ */
+function twoStageTransport() {
+  const calls: WorkerTaskRequest[] = [];
+  return {
+    calls,
+    send: async (request: WorkerTaskRequest) => {
+      calls.push(request);
+      if (request.taskId === 'concepts.extract.v1') {
+        return {
+          ok: true,
+          result: {
+            concepts: [
+              { name: 'Bud', aliases: [], anchorIndex: 1, alsoInIndexes: [] },
+              { name: 'Scale', aliases: [], anchorIndex: 2, alsoInIndexes: [] },
+            ],
+            relations: [{ type: 'is-a', fromIndex: 1, toIndex: 2, confidence: 0.6 }],
+          },
+        };
+      }
+      return {
+        ok: true,
+        result: {
+          verdicts: [{ a: 'Bud', b: 'Scale', type: 'contrasts-with', confidence: 0.9 }],
+        },
+      };
+    },
+  };
+}
+
+const TWO_CONCEPT_VAULT = {
+  'Bud.md': 'A bud is a kind of scale, and it sits beside [[Scale]] in the same margin.',
+  'Scale.md': 'A scale is the covering a bud is made of.',
+};
+
+describe('readConceptsAndRelations — both producers land in one fold', () => {
+  it('folds the per-document stage AND the corpus stage into a single RelationSet', async () => {
+    const transport = twoStageTransport();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+    );
+
+    expect(pass).not.toBeNull();
+    expect(pass?.corpus.ran).toBe(true);
+
+    // The whole point of the bead: neither stage's edges are dropped. And
+    // D-070's distinction survives the fold end to end — the corpus edge was
+    // nominated by her own wikilink in `Bud.md`, so `verdict.ts` stamps it
+    // `'hers'` (`ol-9qwy`) and it lands as an ASSERTION, while the
+    // per-document `is-a` is a model proposal and lands as a candidate.
+    const byType = (pass?.relations.entries ?? []).map((entry) => ({
+      type: entry.edge.type,
+      stage: entry.stage,
+      standing: entry.triageStanding,
+      provenance: entry.edge.provenance,
+    }));
+    expect(byType).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'is-a',
+          stage: 'per-document',
+          standing: 'candidate',
+          provenance: 'model-proposed',
+        },
+        { type: 'contrasts-with', stage: 'corpus', standing: 'assertion', provenance: 'hers' },
+      ]),
+    );
+    expect(byType).toHaveLength(2);
+  });
+
+  it('every folded edge carries provenance, confidence and both endpoints introducing passages (C7.10)', async () => {
+    const transport = twoStageTransport();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+    );
+
+    expect(pass?.relations.entries.length).toBeGreaterThan(0);
+    for (const entry of pass?.relations.entries ?? []) {
+      expect(['hers', 'model-proposed']).toContain(entry.edge.provenance);
+      expect(typeof entry.edge.confidence).toBe('number');
+      expect(entry.edge.introducingPassages.from.sourcePath).toBeTruthy();
+      expect(entry.edge.introducingPassages.to.sourcePath).toBeTruthy();
+      expect(entry.evidence).toBe('current');
+    }
+  });
+
+  it('a tick that crosses no batch boundary still folds the per-document edges — the corpus stage gates itself, it never blanks the fold', async () => {
+    const transport = twoStageTransport();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: false },
+    );
+
+    expect(pass?.corpus.ran).toBe(false);
+    expect(pass?.relations.entries.map((entry) => entry.edge.type)).toEqual(['is-a']);
+    expect(transport.calls.some((call) => call.taskId === 'concepts.relations.v1')).toBe(false);
+  });
+
+  it('returns null when the Worker is unconfigured — F7.8 grey-out, propagated rather than half-worked', async () => {
+    const deps = {
+      dataHost: new FakeDataHost(),
+      createTransport: () => twoStageTransport(),
+    };
+    const pass = await readConceptsAndRelations(
+      await buildConceptWiring(deps),
+      await buildCorpusRelationWiring(deps),
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+    );
+    expect(pass).toBeNull();
+  });
+
+  it('nothing is persisted by the fold — the pass leaves no relation state behind (the Class C line)', async () => {
+    const transport = twoStageTransport();
+    const dataHost = new FakeDataHost();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(dataHost),
+      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+    );
+
+    // The corpus stage's own known-concept bookkeeping is all that persists —
+    // a rebuildable trigger cache, never the edges themselves. No relation,
+    // provenance, passage or confidence reaches any store.
+    const blob = dataHost.blob as Record<string, unknown>;
+    expect(Object.keys(blob)).toEqual(['corpusRelationState']);
+    expect(JSON.stringify(blob)).not.toContain('contrasts-with');
+    expect(JSON.stringify(blob)).not.toContain('is-a');
   });
 });

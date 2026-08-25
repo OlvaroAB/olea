@@ -11,6 +11,7 @@ import {
   type PendingExplainBackGrading,
   type QueueSnapshot,
   refreshStudyPlan,
+  type RelationSet,
   type Scheduler,
   type VaultSource,
 } from 'olea-core';
@@ -25,11 +26,10 @@ import {
   type ConceptWiring,
   type CorpusRelationWiring,
   classifyConceptKnowledgeKind,
-  corpusConceptsFrom,
   type KnowledgeKindWiring,
   type ReadConceptsFromVaultOptions,
+  readConceptsAndRelations,
   readConceptsFromVault,
-  runCorpusRelationBatchIfDue,
 } from './concept/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
@@ -157,6 +157,24 @@ export default class OleaPlugin extends Plugin {
   /** `[EXT-11]` (`ol-kw4a`, `[D-118]`) — the corpus-level relation stage's production port, same F7.8 grey-out terms as `concept`/`knowledgeKind` above. */
   private corpusRelation: CorpusRelationWiring | null = null;
   private corpusRelationStateStore: ObsidianCorpusRelationStateStore | null = null;
+
+  /**
+   * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
+   * edges, deduplicated and provenance-ranked. Held in memory for the process
+   * lifetime, deliberately NOT persisted: `ConceptRelation`'s endpoints are
+   * concept NAMES while C7.11/`[D-088]` rule identity an opaque key never
+   * derived from content, so a persisted, name-keyed edge store would bake in
+   * the exact fragility that clause prevents. The persisted home is a Class C
+   * proposal in `olea-service/docs/dev/relation-landing-design.md` §7.1.
+   *
+   * **No consumer reads this field yet**, and that gap is named rather than
+   * papered over: the two named readers `[D-070]` gives the corpus types —
+   * the misconception record's confusion pairing and queue ordering — have no
+   * code in this tree, and no clause names a triage surface (design doc §7.2).
+   * What has changed is that the edges are no longer computed and discarded on
+   * every ingestion tick.
+   */
+  private relations: RelationSet | null = null;
   /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
   private lastIngestionSnapshot: QueueSnapshot | null = null;
 
@@ -513,6 +531,9 @@ export default class OleaPlugin extends Plugin {
    * 1.2a; F1's batch-boundary scenario) — and if so, runs the corpus-level
    * relation stage's batch (`[EXT-11]`, `ol-kw4a`, `[D-118]`). Also EXT-7's
    * first real caller for `readConceptsFromVault`.
+   *
+   * Both stages' edges are folded into `this.relations` rather than dropped
+   * (`ol-2zfj.12`); see that field's doc for what still has no consumer.
    */
   private async tickIngestionAndMaybeRunCorpusRelations(): Promise<void> {
     const previous = this.lastIngestionSnapshot;
@@ -526,18 +547,20 @@ export default class OleaPlugin extends Plugin {
     if (this.concept === null) return;
 
     try {
-      const vault = new ObsidianSource(this.app);
-      const readResult = await readConceptsFromVault(this.concept, vault);
-      if (readResult === null || readResult.outcome !== 'read') return;
-
-      await runCorpusRelationBatchIfDue(this.corpusRelation, this.corpusRelationStateStore, {
-        vault,
-        ingestionSessionClosed: true,
-        allConcepts: corpusConceptsFrom(readResult.concepts),
-      });
-      // `.relations` not yet folded anywhere — no persisted concept/relation
-      // registry exists in this plugin for either stage's edges to land in.
-      // Filed as follow-on work, not guessed at here.
+      // Both producers' edges land in one fold (`ol-2zfj.12`): the
+      // per-document read's `is-a`/`part-of` and the corpus batch's
+      // `prerequisite`/`contrasts-with`, deduplicated, ranked by provenance
+      // ahead of confidence (`[D-070]`), with `[D-093]`'s abstention state
+      // carried per edge. Nothing is persisted and nothing lands in her layer
+      // — `[D-097]` keeps edges gated.
+      const pass = await readConceptsAndRelations(
+        this.concept,
+        this.corpusRelation,
+        this.corpusRelationStateStore,
+        { vault: new ObsidianSource(this.app), ingestionSessionClosed: true },
+      );
+      if (pass === null) return;
+      this.relations = pass.relations;
     } catch (error) {
       console.error('Olea: corpus relation batch failed', error);
     }

@@ -147,11 +147,29 @@ export interface ProposedRelation {
  * Who vouches for an edge (C7.10, `[D-070]`). An edge she authored — a link
  * between two of her own concept notes — is strong evidence; one a model
  * proposed from adjacency in the material is not, and **only the first
- * reaches triage as an assertion.** Nothing in this codebase mints `'hers'`
- * yet — every edge this module's readers produce today comes from the
- * per-document model read, so it is always `'model-proposed'`. The literal
- * exists so the type is correct for the day a wikilink-derived source is
- * built, rather than needing a breaking change then.
+ * reaches triage as an assertion.**
+ *
+ * **Both literals are minted in production, and by different stages**
+ * *(corrected — this doc previously said nothing mints `'hers'` yet, which
+ * `ol-9qwy` made stale on 2026-08-25; that bead's close explicitly held the
+ * refresh for this file's owning lane, `ol-2zfj.12`)*:
+ *
+ * - The **per-document** stage (`./read.js` via `./reconcile.js`) mints
+ *   `'model-proposed'` for every edge it emits, with no path to `'hers'`. It
+ *   reads one document's passages and has no view of her links at all.
+ * - The **corpus** stage stamps `'hers'` whenever `'her-link'` was among a
+ *   candidate's nomination signals (`./corpus-relations/verdict.js`,
+ *   `ol-9qwy`): the expensive judgement — *these two ideas belong together* —
+ *   is a link she authored. The relation TYPE stays model-inferred from the
+ *   combined passages either way, so `[D-082]` is intact: provenance answers
+ *   who vouches for the pair, type answers what the relation is, and neither
+ *   implies the other.
+ *
+ * The practical consequence for anything reading this field: `'hers'` can
+ * only ever appear on a **corpus-stage** type (`prerequisite`,
+ * `contrasts-with`). An `is-a` or `part-of` edge is always
+ * `'model-proposed'`, which is why `RelationTriageStanding` is not, and must
+ * not become, a filter on what readers are served.
  */
 export type RelationProvenanceKind = 'hers' | 'model-proposed';
 
@@ -181,4 +199,340 @@ export interface ConceptRelation {
     readonly from: Provenance;
     readonly to: Provenance;
   };
+}
+
+// ===========================================================================
+// THE FOLD — where both stages' edges land (`ol-2zfj.12`)
+// ===========================================================================
+//
+// Two producers now emit `ConceptRelation`s and neither owns the result: the
+// per-document stage (`./read.js` via `./reconcile.js`) and the corpus-level
+// stage (`./corpus-relations/batch.js`). Before this section both outputs
+// were computed and dropped on the floor at the composition root.
+//
+// **This is a FOLD, not a store, and that is the whole design decision.**
+// The full argument, the options weighed and the Class C line are in
+// `olea-service/docs/dev/relation-landing-design.md`. The three load-bearing
+// reasons, restated here because a reader meets the code first:
+//
+// 1. **Edges are a PROJECTION, not events.** The architecture boundary §1
+//    rules the vault event log the truth and every knowledge state a local
+//    projection recomputed from it. A model's reading of her material is not
+//    something she did; it is a derivation over material the vault already
+//    holds, rebuildable by re-running the read. Appending edges to the event
+//    log would put a derivation where only her acts belong, and would make
+//    INV-2's byte-identical round-trip carry model output. **Her verdicts on
+//    edges are the events** — and those are `[D-097]`'s gate, which is not
+//    built here.
+// 2. **`from`/`to` are NAMES, and C7.11 rules identity is an opaque key
+//    never derived from content (`[D-088]`).** Persisting name-keyed edges
+//    today would bake into a persisted schema exactly the fragility C7.11
+//    exists to prevent — a rename orphaning every edge. The fold holds names
+//    because that is all either producer emits; a persisted home must hold
+//    keys, and minting those is the crossing that needs a decision bead.
+// 3. **Nothing persists concepts either.** A relations store ahead of a
+//    concept registry is structure with nothing to attach to.
+//
+// So this section builds the merge, the dedupe, the provenance ranking and
+// the two read-side gates — everything that is reversible — and stops at the
+// seam. `deriveRelationSet` is pure: no I/O, no clock, no identity minting.
+
+/**
+ * Which of the two stages a type is emitted by, derived from
+ * `RELATION_EMISSION_STATUS` rather than restated — the same discipline
+ * `./corpus-relations/types.js`'s `CORPUS_STAGE_EMITTABLE_TYPES` already
+ * uses, so a change to the emission table moves both together.
+ *
+ * `undefined` for a type no stage may emit today (`causes`, `related`). An
+ * edge of such a type reaching the fold is a producer defect — both
+ * reconcilers already refuse it — and is dropped and counted here rather
+ * than trusted a second time over the same boundary.
+ */
+export type RelationStage = 'per-document' | 'corpus';
+
+export function stageForRelationType(type: RelationType): RelationStage | undefined {
+  if (PER_DOCUMENT_EMITTABLE_TYPES.has(type)) return 'per-document';
+  if (RELATION_EMISSION_STATUS[type] === 'blocked-on-corpus-stage') return 'corpus';
+  return undefined;
+}
+
+/**
+ * How an edge arrives at triage (C7.10, knowledge model §5, R8, `[D-070]`):
+ * *"An edge she authored — a link between two of her own concept notes — is
+ * strong evidence; one a model proposed from adjacency in the material is
+ * not. **Only the first reaches triage as an assertion; the second is a
+ * candidate.**"*
+ *
+ * **This is a property of the TRIAGE surface, not of reader eligibility, and
+ * conflating the two is the mistake this type exists to prevent.** The word
+ * "candidate" is used three ways in the corpus and they are different facts:
+ *
+ * 1. `./corpus-relations/types.js`'s `CorpusRelationCandidate` — a nominated
+ *    *pair*, before any verdict. Not an edge at all.
+ * 2. **This type** — a minted edge's *standing* when it is shown to her:
+ *    hers is presented as an assertion, a model's as a proposal awaiting
+ *    corroboration, "never rendered identically"
+ *    (`features/F1-sources.md`'s `relations-triage` scenario).
+ * 3. `RelationEvidenceState` below — `[D-093]`'s degradation, where an edge
+ *    whose cited passage moved abstains automatically.
+ *
+ * Reading (2) as (3) would silently switch off concept size's containment
+ * evidence (`./size.js`), a reader C7.10 names by name: `is-a` and `part-of`
+ * come only from the per-document stage, which has no path to `'hers'` at all
+ * (see `RelationProvenanceKind`), so **every** edge size reads would be a
+ * candidate and therefore unservable. It is (3), and only (3), that gates
+ * what a reader is served.
+ *
+ * **No confidence FLOOR is applied here.** `[D-070]` rules provenance, not a
+ * number; a numeric triage cutoff would be a derived constant (component
+ * register's declared-versus-derived rule) and nobody has run that
+ * derivation. This module declines to invent one.
+ */
+export type RelationTriageStanding = 'assertion' | 'candidate';
+
+export const TRIAGE_STANDING_BY_PROVENANCE: Readonly<
+  Record<RelationProvenanceKind, RelationTriageStanding>
+> = Object.freeze({
+  hers: 'assertion',
+  'model-proposed': 'candidate',
+});
+
+/**
+ * `[D-093]` / C7.10's edge staleness, as a field the fold carries and
+ * **deliberately never sets.** An edge whose endpoint passage was
+ * meaningfully changed or deleted degrades and abstains automatically,
+ * because "candidates are never served"; it is re-verdicted at the next
+ * batch pass.
+ *
+ * **`[CORP-3]` (`ol-2zfj.2`, component register row 1.4) owns that
+ * lifecycle and this module does not build one line of it** — no hashing, no
+ * materiality judgement, no re-verdict. What is built here is the *shape*
+ * that lifecycle needs so it is not a breaking change later: the state lives
+ * per entry, `servedRelations` enforces the abstention by construction
+ * rather than asking every reader to remember, and each attestation keeps
+ * its own `introducingPassages` so degradation can be decided per
+ * attestation rather than per merged edge.
+ */
+export type RelationEvidenceState = 'current' | 'stale';
+
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The dedupe identity of an edge, respecting directedness: a directed type
+ * keys on `(type, from, to)`; the symmetric types key on `(type, {a,b}
+ * sorted)`, so the two producers emitting the same `contrasts-with` in
+ * opposite orientations fold into one entry rather than two.
+ *
+ * **Keyed on NAMES, and that is a stated limitation rather than a choice.**
+ * C7.11 rules a concept's identity is an opaque, immutable key never derived
+ * from content (`[D-088]`) — precisely because name-as-identity makes every
+ * rename an orphaning. Both producers emit post-corroboration *names*, so a
+ * name key is all this fold can compute. It is sound for an in-memory fold
+ * over one read, where every name in the set came from that same read. It is
+ * **not** sound for a persisted home, which is the first reason
+ * `relation-landing-design.md` stops at the seam.
+ *
+ * The `\u0000` separator is NUL, which cannot occur in a concept
+ * name read out of markdown, so no pair of distinct edges can collide by
+ * concatenation. A printable separator would not do — a name containing a
+ * space, a slash or a colon is not hypothetical in a vault.
+ *
+ * **The key holds concept names, so it is an in-memory join value and never
+ * a telemetry one** (D-005). No caller may log it.
+ */
+export function relationKey(relation: Pick<ConceptRelation, 'type' | 'from' | 'to'>): string {
+  const endpoints =
+    RELATION_DIRECTEDNESS[relation.type] === 'symmetric'
+      ? [relation.from, relation.to].sort(byCodeUnit)
+      : [relation.from, relation.to];
+  return `${relation.type}\u0000${endpoints[0]}\u0000${endpoints[1]}`;
+}
+
+/** The same key with a directed edge's endpoints swapped — symmetric types return their own key. */
+function reversedRelationKey(relation: Pick<ConceptRelation, 'type' | 'from' | 'to'>): string {
+  return relationKey({ type: relation.type, from: relation.to, to: relation.from });
+}
+
+/** One folded edge: the winning attestation, its standing, and every attestation that agreed. */
+export interface RelationSetEntry {
+  /** `relationKey` of every attestation below — the entry's identity within one fold. */
+  readonly key: string;
+  readonly stage: RelationStage;
+  /** The winning attestation — the one a reader is served. Always `attestations[0]`. */
+  readonly edge: ConceptRelation;
+  /** From `edge.provenance`, per `TRIAGE_STANDING_BY_PROVENANCE`. */
+  readonly triageStanding: RelationTriageStanding;
+  /** Always `'current'` from this module — see `RelationEvidenceState`. */
+  readonly evidence: RelationEvidenceState;
+  /**
+   * Every attestation of this edge, best-first, **kept rather than
+   * discarded**. Two stages independently reading the same relation out of
+   * different passages is corroborating evidence, and each attestation
+   * carries its own `introducingPassages`, which is what `[D-093]` needs to
+   * degrade one attestation without discarding the edge.
+   */
+  readonly attestations: readonly ConceptRelation[];
+}
+
+/** The fold's result — entries plus the health counts a caller reports against (D-005: counts, never names). */
+export interface RelationSet {
+  /** Sorted by `key`, so a fold over the same inputs in any order is identical. */
+  readonly entries: readonly RelationSetEntry[];
+  /** How many attestations were folded into an existing entry rather than opening a new one. */
+  readonly mergedDuplicates: number;
+  /**
+   * Directed pairs where both `A→B` and `B→A` of the same type survived —
+   * a real contradiction (nothing is both a kind of and an instance of the
+   * other), counted once per pair. **Reported, never resolved**: picking a
+   * winner would be a judgement about her material this module has no
+   * evidence for. It is component register row 1.2a's health check made
+   * countable.
+   */
+  readonly contradictions: number;
+  /** Edges of a type no stage may emit (`causes`, `related`) — a producer defect, dropped. */
+  readonly droppedUnemittable: number;
+}
+
+/**
+ * Rank two attestations of the same edge. Negative means `a` wins.
+ *
+ * **Provenance outranks confidence, and never the other way round**
+ * (`[D-070]`): an edge she authored is strong evidence and a model's
+ * self-reported number cannot outbid it. Within one provenance, higher
+ * confidence wins; a genuine tie keeps the first seen, which makes the fold
+ * order-stable given sorted input.
+ *
+ * **Confidences are never combined.** Two attestations at 0.6 do not make an
+ * edge at 0.84, or 0.6, or anything else this module could defend in plain
+ * English — any combination rule is a derived constant, and inventing one
+ * here is exactly the "constant fitted to nothing" the component register
+ * warns against. The winner's own confidence travels verbatim, and
+ * `attestations` keeps the rest so a later derivation has the raw material.
+ */
+function rankAttestations(a: ConceptRelation, b: ConceptRelation): number {
+  const aHers = a.provenance === 'hers' ? 0 : 1;
+  const bHers = b.provenance === 'hers' ? 0 : 1;
+  if (aHers !== bHers) return aHers - bHers;
+  return b.confidence - a.confidence;
+}
+
+/**
+ * Fold every producer's edges into one deduplicated, provenance-ranked set.
+ *
+ * Pure: same inputs, same output, no I/O and no identity minting. Call it
+ * with the per-document read's `relations` and the corpus batch's
+ * `relations` — in any order, and with any number of groups, since the stage
+ * of each edge is derived from its own type rather than from which argument
+ * it arrived in.
+ */
+export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[])[]): RelationSet {
+  const byKey = new Map<string, ConceptRelation[]>();
+  const stageByKey = new Map<string, RelationStage>();
+  let mergedDuplicates = 0;
+  let droppedUnemittable = 0;
+
+  for (const group of groups) {
+    for (const edge of group) {
+      const stage = stageForRelationType(edge.type);
+      if (stage === undefined) {
+        droppedUnemittable += 1;
+        continue;
+      }
+      const key = relationKey(edge);
+      const existing = byKey.get(key);
+      if (existing === undefined) {
+        byKey.set(key, [edge]);
+        stageByKey.set(key, stage);
+        continue;
+      }
+      existing.push(edge);
+      mergedDuplicates += 1;
+    }
+  }
+
+  // No early return on an empty map: a fold that dropped every edge as
+  // unemittable is NOT the same measurement as a fold that was handed
+  // nothing, and returning the shared empty set here would silently erase
+  // `droppedUnemittable` — the one signal that says a producer emitted a type
+  // no stage may emit.
+  const entries: RelationSetEntry[] = [];
+  for (const [key, attestations] of byKey) {
+    const ranked = [...attestations].sort(rankAttestations);
+    const edge = ranked[0];
+    // Unreachable — a key exists only because an edge was pushed under it —
+    // but `noUncheckedIndexedAccess` is on and a thrown-away assertion is
+    // worse than a guard that can never fire.
+    if (edge === undefined) continue;
+    const stage = stageByKey.get(key);
+    if (stage === undefined) continue;
+    entries.push({
+      key,
+      stage,
+      edge,
+      triageStanding: TRIAGE_STANDING_BY_PROVENANCE[edge.provenance],
+      evidence: 'current',
+      attestations: ranked,
+    });
+  }
+  entries.sort((a, b) => byCodeUnit(a.key, b.key));
+
+  const keys = new Set(entries.map((entry) => entry.key));
+  let contradictions = 0;
+  for (const entry of entries) {
+    if (RELATION_DIRECTEDNESS[entry.edge.type] === 'symmetric') continue;
+    const reversed = reversedRelationKey(entry.edge);
+    // Count each contradicting pair once, from whichever side sorts first.
+    if (keys.has(reversed) && byCodeUnit(entry.key, reversed) < 0) contradictions += 1;
+  }
+
+  return { entries, mergedDuplicates, contradictions, droppedUnemittable };
+}
+
+/**
+ * The edges a named reader (`./size.js` today; the misconception store and
+ * queue ordering once their beads land) is served.
+ *
+ * **The abstention gate, enforced here rather than at every reader**
+ * (`[D-093]`, C7.10): an edge whose evidence has gone stale is withheld —
+ * "abstention is automatic, because candidates are never served". Today no
+ * edge is ever `'stale'`, because `[CORP-3]` has not built the detection, so
+ * this is presently an identity filter. It is written now so that switching
+ * the lifecycle on is a change in one module rather than an audit of every
+ * consumer that learned to read `entries` directly.
+ *
+ * **Triage standing is deliberately NOT filtered here** — see
+ * `RelationTriageStanding`'s doc. A model-proposed edge is a candidate *at
+ * triage*; it is still what concept size reads, and has been since
+ * `[EXT-6]`.
+ */
+export function servedRelations(set: RelationSet): readonly ConceptRelation[] {
+  return set.entries.filter((entry) => entry.evidence === 'current').map((entry) => entry.edge);
+}
+
+/**
+ * The edges that would reach a triage surface **as assertions** — hers, not
+ * a model's (`[D-070]`, and `features/F1-sources.md`'s scenario *"an edge she
+ * authored reaches triage as an assertion; a model-proposed edge is a
+ * candidate only"*, tagged `@auto:core/registry/relations-triage.spec`).
+ *
+ * **Nothing composes this to a surface, and nothing may.** No contract clause
+ * names a concept-relation triage surface — C7.10 rules what triage *shows*,
+ * never that a screen exists — and the standing rule *"no user-visible
+ * affordance without a clause"* forbids a lane inventing one. This function
+ * exists for the same reason `routing/instrument-mix.js`'s `routingReason`
+ * does: so that the rule is a checkable value with its own test coverage
+ * before a surface reaches for it, rather than being invented at the UI layer
+ * against no source of truth on the day one is clauses.
+ *
+ * **It is not empty in production, which is what makes the missing clause a
+ * live gap rather than a hypothetical one.** Since `ol-9qwy` the corpus stage
+ * stamps `'hers'` on any edge her own wikilink helped nominate
+ * (`./corpus-relations/verdict.js`), so a real vault with a linked card index
+ * yields real assertions here — with nowhere ruled for them to go. The one
+ * thing that follows from that is a decision bead, not a screen.
+ */
+export function assertionsForTriage(set: RelationSet): readonly RelationSetEntry[] {
+  return set.entries.filter((entry) => entry.triageStanding === 'assertion');
 }

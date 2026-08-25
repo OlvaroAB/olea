@@ -63,13 +63,16 @@ import {
   type ConceptReaderPort,
   type ConceptReadResult,
   type ConceptRelation,
+  type ConceptsRead,
   type CorpusConcept,
   type CorpusRelationBatchTriggerReason,
   type CorpusRelationVerdictPort,
   classifyKnowledgeKind,
+  deriveRelationSet,
   type KnowledgeKindClassifierPort,
   type Provenance,
   type ReadConcept,
+  type RelationSet,
   readConcepts,
   runCorpusRelationBatch,
   shouldRunCorpusRelationBatch,
@@ -298,7 +301,7 @@ export interface CorpusRelationBatchRunOutcome {
   readonly ran: boolean;
   /** Present only when `ran` is true — which boundary fired. */
   readonly reason?: CorpusRelationBatchTriggerReason;
-  /** Present only when `ran` is true. Fold onto `ConceptReadResult.relations` (same `ConceptRelation[]` shape) — see the module doc for why this bead does not introduce a second store for them. */
+  /** Present only when `ran` is true. Folded onto the per-document read's own `relations` by `readConceptsAndRelations` below (`ol-2zfj.12`) — same `ConceptRelation[]` shape, one `RelationSet`. */
   readonly relations?: readonly ConceptRelation[];
   readonly candidatesNominated?: number;
 }
@@ -313,16 +316,16 @@ export interface CorpusRelationBatchRunOutcome {
  * built here) and a REAL, persisted "new concepts since last run" count
  * (`./corpusRelationStateStore.js`).
  *
- * **Where the resulting edges land.** This function returns them; it does
- * not persist or surface them itself. Nothing in this plugin persists
- * concepts across sessions yet either (`readConceptsFromVault`'s own doc:
- * every call is a fresh, in-memory read) — building a dedicated relations
- * store ahead of a concept registry would be structure with nothing to
- * attach to. The natural fold point that already exists is
- * `ConceptReadResult.relations`: both this function's `relations` and a
- * per-document read's `relations` are the identical `ConceptRelation[]`
- * shape, so a caller holding both concatenates them into one list rather
- * than this bead inventing a second representation.
+ * **Where the resulting edges land** — answered by `ol-2zfj.12`, and no
+ * longer nowhere. This function still returns them rather than persisting
+ * them; `readConceptsAndRelations` below is the fold point, holding both
+ * this stage's edges and the per-document stage's in one `RelationSet`.
+ * Nothing in this plugin persists concepts across sessions
+ * (`readConceptsFromVault`'s own doc: every call is a fresh, in-memory
+ * read), and a persisted relations store ahead of a concept registry would
+ * be structure with nothing to attach to — see that function's doc and
+ * `olea-service/docs/dev/relation-landing-design.md` for why persistence is
+ * the Class C line rather than the next commit.
  *
  * **`n`'s absence never blocks the ingestion-session-close boundary.** See
  * `RunCorpusRelationBatchIfDueOptions.n`'s own doc — the concept-count
@@ -381,5 +384,112 @@ export async function runCorpusRelationBatchIfDue(
     ...(trigger.reason !== undefined ? { reason: trigger.reason } : {}),
     relations: result.relations,
     candidatesNominated: result.candidatesNominated,
+  };
+}
+
+// =============================================================================
+// `readConceptsAndRelations` — the landing seam for BOTH relation producers
+// (`ol-2zfj.12`, C7.10, `[D-070]`, `[D-093]`, INV-6 as re-drawn by `[D-097]`).
+// =============================================================================
+//
+// Until this function existed, both producers' edges were computed and then
+// dropped: the per-document stage's `ConceptsRead.relations` was read only for
+// concept size inside `readConcepts` itself, and this file's own
+// `runCorpusRelationBatchIfDue` returned edges that `main.ts` discarded with a
+// comment saying so. This is where they meet.
+//
+// **It is a fold held in memory for the duration of one pass, and NOT a
+// store.** The full argument is in
+// `olea-service/docs/dev/relation-landing-design.md`; the short form is that
+// (a) the architecture boundary §1 makes her event log the truth and every
+// knowledge state a projection, and a model's reading of her material is a
+// derivation rather than something she did; (b) `ConceptRelation`'s endpoints
+// are NAMES while C7.11/`[D-088]` rule concept identity an opaque key never
+// derived from content, so persisting name-keyed edges would bake the exact
+// fragility that clause exists to prevent into a persisted schema; and (c)
+// nothing persists concepts either, so a relations store would have nothing to
+// key against. Persistence is the Class C crossing this lane stops at.
+
+/** The result of one combined concept-and-relation pass — `null` from the pass when there was nothing to read. */
+export interface ConceptAndRelationPass {
+  /** The per-document stage's own result, narrowed to the read case. */
+  readonly read: ConceptsRead;
+  /** The corpus stage's outcome, including whether its trigger even fired. */
+  readonly corpus: CorpusRelationBatchRunOutcome;
+  /**
+   * Both stages' edges, deduplicated and provenance-ranked
+   * (`deriveRelationSet`). Present on every pass — `entries: []` when neither
+   * stage emitted anything, which is a measurement rather than an absence.
+   */
+  readonly relations: RelationSet;
+}
+
+export interface ReadConceptsAndRelationsOptions {
+  readonly vault: VaultSource;
+  /** Forwarded verbatim to `runCorpusRelationBatchIfDue` — see its own doc; never derived from a per-document event. */
+  readonly ingestionSessionClosed: boolean;
+  /** Forwarded verbatim to `runCorpusRelationBatchIfDue`; omitted leaves the concept-count boundary structurally disabled. */
+  readonly n?: number;
+  /** Forwarded verbatim to `readConceptsFromVault`. */
+  readonly read?: ReadConceptsFromVaultOptions;
+}
+
+/**
+ * Run one per-document read, run the corpus batch if its trigger fires, and
+ * fold both stages' edges into a single `RelationSet`.
+ *
+ * `null` when the read produced nothing to fold on: the Worker is
+ * unconfigured (F7.8 grey-out, propagated one level up exactly as
+ * `readConceptsFromVault` does) or the read came back `'unrecognised'`, which
+ * F1.4 requires be reported rather than returned as a silent empty list. A
+ * caller that wants the unrecognised reason calls `readConceptsFromVault`
+ * itself; this function's contract is the fold, and a fold over a read that
+ * did not happen is not a meaningful zero.
+ *
+ * **The corpus stage still gates itself.** This function never forces a
+ * batch: it hands `runCorpusRelationBatchIfDue` the same trigger inputs it
+ * would have received from the composition root, and folds `[]` when that
+ * declines to run. A pass on a tick that crosses no boundary therefore yields
+ * the per-document edges alone, which is the correct answer rather than a
+ * degraded one.
+ *
+ * **Reachability (`[D-072]`, plan §2.7 clause 5).** There is deliberately no
+ * production caller in this package yet: the only site holding both an
+ * `ingestionSessionClosed` transition and a configured wiring is
+ * `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations`
+ * (`packages/plugin/src/main.ts:517`), which `ol-2zfj.12`'s declared file
+ * ownership does not include. The one-hop replacement of that method's body
+ * is handed to the orchestrator as a patch, the same procedure `[EXT-11]`
+ * (`ol-kw4a`) used to make `runCorpusRelationBatchIfDue` itself reachable.
+ * Until it is applied, this function is exercised by
+ * `test/concept/corpusRelationWiring.spec.ts` alone.
+ *
+ * **What this function deliberately does not do.** It does not persist, does
+ * not surface, and does not gate. `[D-097]` re-draws INV-6 with edges
+ * explicitly still *gated* — "EDGES: stay gated for now... measured precision
+ * of the corpus stage's verdicts is what would earn edges the concepts
+ * treatment" — so nothing here may land an edge in her layer. Nothing here
+ * does: the set is returned to the caller and forgotten when the pass ends.
+ */
+export async function readConceptsAndRelations(
+  conceptWiring: ConceptWiring,
+  corpusWiring: CorpusRelationWiring,
+  stateStore: ObsidianCorpusRelationStateStore,
+  options: ReadConceptsAndRelationsOptions,
+): Promise<ConceptAndRelationPass | null> {
+  const read = await readConceptsFromVault(conceptWiring, options.vault, options.read ?? {});
+  if (read === null || read.outcome !== 'read') return null;
+
+  const corpus = await runCorpusRelationBatchIfDue(corpusWiring, stateStore, {
+    vault: options.vault,
+    ingestionSessionClosed: options.ingestionSessionClosed,
+    allConcepts: corpusConceptsFrom(read.concepts),
+    ...(options.n !== undefined ? { n: options.n } : {}),
+  });
+
+  return {
+    read,
+    corpus,
+    relations: deriveRelationSet(read.relations, corpus.relations ?? []),
   };
 }
