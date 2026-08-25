@@ -34,3 +34,9 @@ export const OLEA_COMMAND_GAP_OPEN = 'olea-gap-open';
  * follow-on from reading the gap view.
  */
 export const OLEA_COMMAND_SESSION_BUILD = 'olea-session-build';
+/**
+ * `ol-odb0`: opens `DraftCardsModal` (F3.3/C4.7) — the first command-palette
+ * entry reaching `draftQuizCardsForConcept` (`ol-odb0.2`), the wired,
+ * refusing production caller for `retrieve()`/`assembleGroundedContext`.
+ */
+export const OLEA_COMMAND_DRAFT_CARDS = 'olea-draft-cards';

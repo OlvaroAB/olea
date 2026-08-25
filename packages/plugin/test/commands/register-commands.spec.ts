@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   OLEA_COMMAND_CREATE_CARD,
+  OLEA_COMMAND_DRAFT_CARDS,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
   OLEA_COMMAND_REVIEW_START,
@@ -39,15 +40,17 @@ function fakeHandlers(): OleaCommandHandlers {
     openToday: vi.fn(),
     openGap: vi.fn(),
     buildSession: vi.fn(),
+    draftCards: vi.fn(),
   };
 }
 
 describe('buildOleaCommands', () => {
-  it('registers exactly the six command ids (review, create, today, open, gap, session) — ol-2tyj added "gap", ol-p5t06b added "session"', () => {
+  it('registers exactly the seven command ids (review, create, today, open, gap, session, draft cards) — ol-2tyj added "gap", ol-p5t06b added "session", ol-odb0 added "draft cards"', () => {
     const commands = buildOleaCommands(fakeHandlers());
     expect(commands.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_CREATE_CARD,
+        OLEA_COMMAND_DRAFT_CARDS,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_OPEN,
         OLEA_COMMAND_REVIEW_START,
@@ -73,6 +76,7 @@ describe('buildOleaCommands', () => {
     expect(byId[OLEA_COMMAND_CREATE_CARD]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_GAP_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_SESSION_BUILD]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_DRAFT_CARDS]?.hotkeys).toBeUndefined();
   });
 
   it('wires each command callback to its matching handler', () => {
@@ -86,6 +90,7 @@ describe('buildOleaCommands', () => {
     byId[OLEA_COMMAND_OPEN]?.callback();
     byId[OLEA_COMMAND_GAP_OPEN]?.callback();
     byId[OLEA_COMMAND_SESSION_BUILD]?.callback();
+    byId[OLEA_COMMAND_DRAFT_CARDS]?.callback();
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
     expect(handlers.createCard).toHaveBeenCalledTimes(1);
@@ -96,6 +101,7 @@ describe('buildOleaCommands', () => {
     expect(handlers.openToday).toHaveBeenCalledTimes(2);
     expect(handlers.openGap).toHaveBeenCalledTimes(1);
     expect(handlers.buildSession).toHaveBeenCalledTimes(1);
+    expect(handlers.draftCards).toHaveBeenCalledTimes(1);
   });
 
   it('"explain something back" is not registered — David\'s ruling points existing commands at the Today panel, it does not manufacture a destination for contextual AI that is not built', () => {
@@ -111,10 +117,11 @@ describe('registerOleaCommands', () => {
     const registrar = new FakeCommandRegistrar();
     registerOleaCommands(registrar, fakeHandlers());
 
-    expect(registrar.registered).toHaveLength(6);
+    expect(registrar.registered).toHaveLength(7);
     expect(registrar.registered.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_CREATE_CARD,
+        OLEA_COMMAND_DRAFT_CARDS,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_OPEN,
         OLEA_COMMAND_REVIEW_START,

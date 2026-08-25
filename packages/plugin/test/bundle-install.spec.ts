@@ -27,10 +27,11 @@
  * then does what its API documents, and whether BRAT's download-and-install path
  * works in a real vault (`ol-bratverify`).
  *
- * The stub below is deliberately small. The bundle touches exactly seven
- * `obsidian` exports (`Plugin`, `PluginSettingTab`, `ItemView`, `Notice`,
- * `Setting`, `TFile`, `Platform`), which is why this is a fake worth having; if
- * that surface grows into something that has to imitate Obsidian's behaviour
+ * The stub below is deliberately small. The bundle touches exactly eight
+ * `obsidian` exports (`Plugin`, `PluginSettingTab`, `ItemView`, `Modal`,
+ * `Notice`, `Setting`, `TFile`, `Platform` — `Modal` arrived with `ol-odb0`'s
+ * `DraftCardsModal`), which is why this is a fake worth having; if that
+ * surface grows into something that has to imitate Obsidian's behaviour
  * rather than merely exist, this test should be deleted rather than grown.
  *
  * **Never skipped.** This was `describe.skipIf(!bundleBuilt)` until run 11. `main.js`
@@ -118,11 +119,21 @@ class FakeNotice {
 }
 class FakeSetting {}
 class FakeTFile {}
+// `ol-odb0`: `DraftCardsModal extends Modal`, and a `class X extends Y`
+// statement evaluates `Y` the instant the bundle module runs — so `Modal`
+// has to exist in the stub for the bundle to load at all, even though this
+// file never opens the modal (it never calls the command that constructs
+// one). Not instantiated here on purpose: same "exist, don't imitate"
+// discipline the other six fakes already hold.
+class FakeModal {
+  constructor(readonly app: unknown) {}
+}
 
 const obsidianStub = {
   Plugin: FakePlugin,
   PluginSettingTab: FakePluginSettingTab,
   ItemView: FakeItemView,
+  Modal: FakeModal,
   Notice: FakeNotice,
   Setting: FakeSetting,
   TFile: FakeTFile,
@@ -198,7 +209,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all four view types and all six commands when onload runs', async () => {
+  it('registers all four view types and all seven commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -228,6 +239,9 @@ describe('the built bundle is what Obsidian can load', () => {
       // open` (`ol-2tyj`) here.
       expect(plugin.commands.map((command) => command.id).sort()).toEqual([
         'olea-create-card',
+        // `ol-odb0`: the first palette entry reaching the wired retrieval →
+        // grounding → generation path (`draftQuizCardsForConcept`).
+        'olea-draft-cards',
         'olea-gap-open',
         'olea-open',
         'olea-review-start',
