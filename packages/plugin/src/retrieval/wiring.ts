@@ -48,6 +48,7 @@
 import {
   chunksFromIndex,
   EmbeddingCacheEngine,
+  type EmbeddingProvider,
   type KeywordIndexEngine,
   type RetrievalChunk,
   WorkerEmbeddingProvider,
@@ -84,12 +85,35 @@ export interface RetrievalWiring {
    * for `this.ingestion`/`this.review`.
    */
   readonly embeddingCache: EmbeddingCacheEngine | null;
+  /**
+   * The same `EmbeddingProvider` instance `embeddingCache` was built with —
+   * exposed so a `retrieve()` caller (`ol-odb0.2`) can assemble a
+   * `RetrieveDeps` (`{keywordIndex, embeddingCache, embeddingProvider}`)
+   * without constructing a second one. `retrieve()` needs it directly for
+   * embedding the QUERY text itself, which is not something `embeddingCache`
+   * does on a caller's behalf (`embeddingCache` only ever embeds corpus
+   * chunks via `ensureEmbeddings`). `null` on exactly the same condition as
+   * `embeddingCache` — the two are always both-or-neither.
+   */
+  readonly embeddingProvider: EmbeddingProvider | null;
+  /**
+   * The same `WorkerTaskTransport` instance `embeddingProvider` sends
+   * `retrieval.embed.v1` through — exposed so a generative caller
+   * downstream of a grounded retrieval (`ol-odb0.2`'s
+   * `draft-quiz-cards.ts`) can send its own task envelope over the same
+   * connection, rather than every retrieval-adjacent caller constructing
+   * its own transport from `deps.createTransport` independently. `null` on
+   * the same condition as the other two fields.
+   */
+  readonly transport: WorkerTaskTransport | null;
 }
 
 export async function buildRetrievalWiring(deps: RetrievalWiringDeps): Promise<RetrievalWiring> {
   const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
   const config = await configStore.load();
-  if (!isWorkerConfigured(config)) return { embeddingCache: null };
+  if (!isWorkerConfigured(config)) {
+    return { embeddingCache: null, embeddingProvider: null, transport: null };
+  }
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
   const provider = new WorkerEmbeddingProvider({ transport });
@@ -99,7 +123,7 @@ export async function buildRetrievalWiring(deps: RetrievalWiringDeps): Promise<R
     provider,
     model: SLOT_E_MODEL_ID,
   });
-  return { embeddingCache };
+  return { embeddingCache, embeddingProvider: provider, transport };
 }
 
 export interface DrainIntoEmbeddingCacheParams {
