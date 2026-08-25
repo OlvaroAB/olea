@@ -77,7 +77,7 @@ describe('buildTodayPanel', () => {
     expect(vm.insights?.effort.status).toBe('not-enough-history');
   });
 
-  it('groups the mastery overview by course, and a never-reviewed concept counts as new', () => {
+  it('groups the mastery overview by course, and a never-reviewed concept counts as seed', () => {
     const vm = buildTodayPanel(
       input({
         entries: [review(TODAY, 'r1')],
@@ -90,7 +90,7 @@ describe('buildTodayPanel', () => {
     );
     expect(vm.mastery?.courses.map((c) => c.course)).toEqual(['BIOL204', 'STAT110']);
     expect(vm.mastery?.courses[0]?.distribution.total).toBe(2);
-    expect(vm.mastery?.courses[0]?.distribution.counts.new).toBe(1);
+    expect(vm.mastery?.courses[0]?.distribution.counts.seed).toBe(1);
   });
 
   it('echoes the window it was given, so the panel can state its own scope', () => {

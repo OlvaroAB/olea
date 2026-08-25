@@ -48,7 +48,7 @@ function entry(conceptName: string, rank: number, priorityScore: number): Concep
         },
       ],
       preMasteryScore: priorityScore,
-      masteryState: 'shaky',
+      masteryState: 'sprout',
       masteryNeedWeight: 1,
       priorityScore,
     },

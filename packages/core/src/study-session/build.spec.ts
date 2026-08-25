@@ -52,7 +52,7 @@ function row(spec: RowSpec): GapRow {
       applied: false,
       weight: 1,
     },
-    masteryState: 'shaky',
+    masteryState: 'sprout',
     targetAssessmentPath:
       spec.targetAssessmentPath === undefined
         ? ('02 Assignments/quiz-2.md' as VaultPath)

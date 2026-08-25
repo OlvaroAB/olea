@@ -5,14 +5,20 @@
  * ## What a sprig is, established from the contract before building anything
  *
  * `docs/design/pass3-explainback-sprig/BRIEF.md` (§3, "The sprig and
- * mastery") names it precisely: *"a small olive sprig that grows leaves as
- * evidence accumulates"* — five growth stages, bare stem to five leaves,
- * one leaf per named mastery state (F2.11, frozen by D-017). It is a
- * **rendering** of a concept's mastery state, nothing more: the brief's own
- * words are "the sprig simply doesn't reach five leaves" — the sprig does
- * not carry independent state, it draws the state `../mastery/rollup.ts`
- * already computed, through the one vocabulary site `./display.ts` already
- * owns (F2.11: "one vocabulary used everywhere").
+ * mastery") named the original idea — *"a small olive sprig that grows
+ * leaves as evidence accumulates"*, five growth stages, bare stem to five
+ * leaves, one leaf per named mastery state (frozen by D-017 at the time).
+ * **That five-fixed-leaf geometry is retired (D-048, D-049; `VOC-1`,
+ * `ol-7efk`).** The ratified sprig is **parameterised geometry, not one leaf
+ * per stage at a fixed position**: `seed` draws no stem and no leaves,
+ * `sprout` one leaf, `sapling` three leaves, and `tree` the same three
+ * leaves plus fruit — never a fourth leaf. Reference implementation:
+ * `StageSprig` in
+ * `docs/design/pass5b-mastery-ratified/ui_kits/olea-plugin/MasteryAxes.jsx`.
+ * It remains a **rendering** of a concept's mastery state, nothing more: the
+ * sprig does not carry independent state, it draws the state
+ * `../mastery/rollup.ts` already computed, through the one vocabulary site
+ * `./display.ts` already owns (F2.11: "one vocabulary used everywhere").
  *
  * So there is no separate "sprig data model" to invent here beyond what
  * those two modules already produce. This file's whole job is composing
@@ -69,9 +75,9 @@ export function conceptSprig(
 
 /**
  * How many concepts (of the given set, or every concept the log names) sit
- * in each of the five named states — the Today mastery overview's compact
+ * in each of the four named states — the Today mastery overview's compact
  * distribution (F6.2, BRIEF §3: "a row of sprigs or a compact
- * distribution"). Ordered `MASTERY_ORDER` (new → yours), the same order
+ * distribution"). Ordered `MASTERY_ORDER` (seed → tree), the same order
  * `../mastery/display.ts` fixes for any strip that renders a distribution.
  */
 export interface MasteryDistribution {

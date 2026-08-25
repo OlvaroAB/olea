@@ -282,22 +282,22 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     expect(record.selectionContext.yieldRank).toBeNull();
     // `ol-rpr4`: C5.4's rollup is wired now, so every v4 record carries it.
     // This is her first-ever review of Alpha, so the log the builder read
-    // (before this rating) had no scored evidence for it at all — `new`, not
-    // `coming`, which is what folding this very rating into the slice would
+    // (before this rating) had no scored evidence for it at all — `seed`, not
+    // `sprout`, which is what folding this very rating into the slice would
     // wrongly produce (see the discriminating test below for that failure
     // made concrete).
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { Alpha: 'new' },
+      byConcept: { Alpha: 'seed' },
     });
   });
 
   it('THE TRAP: stamps mastery from the log as it stood BEFORE this rating, not after (ol-rpr4)', async () => {
-    // Two prior, real, on-disk v4 records for Alpha — a lapse then a success —
-    // appended through the same production writer the port itself uses.
-    // Read alone, that history is exactly `shaky`: 1 success of 2, at
-    // `midSuccessRate`'s ceiling (F2.11's "sometimes ... sometimes" read as
-    // "at most half", per `mastery/rollup.ts`'s own doc).
+    // Two prior, real, on-disk v4 records for Alpha — both successes, on two
+    // distinct days — appended through the same production writer the port
+    // itself uses. Read alone, that history is exactly `sprout`: a perfect
+    // recent rate, but only 2 distinct days, short of `minSpacedDays` (3) —
+    // "recalled reliably *across spaced attempts*" (R7) is not yet earned.
     const vault = studyVault();
     await appendReviewLogRecord(
       vault,
@@ -306,7 +306,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
         instrumentId: 'seed-alpha-1',
         instrumentType: 'qa',
         conceptIds: ['Alpha'],
-        rating: 'again',
+        rating: 'good',
         wasUnsure: false,
         durationMs: null,
         selectionContext: {
@@ -360,15 +360,16 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     expect(record?.kind).toBe('review');
     if (record?.kind !== 'review') return;
 
-    // The falsifiable claim: `shaky` (1 success of the 2 PRIOR events), not
-    // `coming` (2 of the 3 events INCLUDING the just-written rating, which is
-    // what a caller that folded its own event into the slice would compute —
-    // `recentSuccessRate` crosses from 0.5, at the shaky/coming boundary, to
-    // ~0.667, over it). A regression that reorders the read and the append
-    // above turns this into `coming` and this assertion goes red.
+    // The falsifiable claim: `sprout` (only the 2 PRIOR distinct days — short
+    // of `minSpacedDays`), not `tree` (3 distinct days INCLUDING the
+    // just-written rating's day, which is what a caller that folded its own
+    // event into the slice would compute — the spacing gate opens, the
+    // recent window is all recall successes, and the state jumps straight
+    // past `sapling` to `tree`). A regression that reorders the read and the
+    // append above turns this into `tree` and this assertion goes red.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { Alpha: 'shaky' },
+      byConcept: { Alpha: 'sprout' },
     });
   });
 

@@ -45,22 +45,21 @@ describe('buildMasteryOverview', () => {
 
     expect(overview.courses.map((c) => c.course)).toEqual(['BIOL204', 'STAT110']);
     for (const course of overview.courses) {
-      // The five named states, all present, none of them collapsed. A row that
+      // The four named stages, all present, none of them collapsed. A row that
       // gained an `average`, a `percent` or a course-level `state` would be the
       // report-card shape `ol-lohq` rules out, so the field set is asserted
       // rather than described.
       expect(Object.keys(course).sort()).toEqual(['course', 'distribution']);
       expect(Object.keys(course.distribution.counts).sort()).toEqual([
-        'coming',
-        'new',
-        'shaky',
-        'solid',
-        'yours',
+        'sapling',
+        'seed',
+        'sprout',
+        'tree',
       ]);
     }
   });
 
-  it('a concept named in the set but absent from the log counts as new, not omitted', () => {
+  it('a concept named in the set but absent from the log counts as seed, not omitted', () => {
     const overview = buildMasteryOverview({
       entries: [review('a', '2026-08-01', 'e1')],
       concepts: [
@@ -71,7 +70,7 @@ describe('buildMasteryOverview', () => {
 
     const biol = overview.courses[0];
     expect(biol?.distribution.total).toBe(2);
-    expect(biol?.distribution.counts.new).toBe(1);
+    expect(biol?.distribution.counts.seed).toBe(1);
   });
 
   it('orders by her course code, never by how well a course is going', () => {

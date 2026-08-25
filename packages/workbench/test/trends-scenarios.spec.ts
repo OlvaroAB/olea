@@ -137,11 +137,11 @@ describe('the states show what their notes claim', () => {
     expect(vm.insights?.spacing.status).toBe('not-enough-history');
     expect(vm.insights?.effort.status).toBe('not-enough-history');
     expect(vm.insights?.spacing.measured).toBeNull();
-    // "Every concept is new" is a fact about a deck she has just met, not an
+    // "Every concept is seed" is a fact about a deck she has just met, not an
     // absence of evidence — so the overview is drawn.
     expect(vm.mastery?.courses).toHaveLength(2);
     expect(
-      vm.mastery?.courses.reduce((sum, c) => sum + c.distribution.counts.new, 0),
+      vm.mastery?.courses.reduce((sum, c) => sum + c.distribution.counts.seed, 0),
     ).toBeGreaterThan(0);
   });
 });

@@ -88,19 +88,25 @@ const DEFAULT_ASSESSMENT_WEIGHT_DIVISOR = 100;
 /**
  * The mastery-need ladder's default. Monotonically decreasing with mastery,
  * never zero (F4.9) — see `types.ts`'s `RankOracleOptions.masteryNeedWeight`
- * doc for what would ratify these five numbers. `'unknown'` is neutral
+ * doc for what would ratify these four numbers. `'unknown'` is neutral
  * (1, i.e. no discount at all) because "no mastery data was supplied" is not
  * evidence that she has mastered nothing — it is the absence of a signal,
  * and this module's rule throughout is that an absent signal never silently
  * reads as the worst case OR the best case; it reads as neutral and is
  * flagged (`assessmentWeightKnown`, `masteryState === 'unknown'`, `daysUntilDue === null`).
+ *
+ * **Re-bucketed for D-049's four-stage vocabulary (`VOC-1`, `ol-7efk`).** The
+ * retired ladder's `shaky` (0.85) and `coming` (0.6) rungs merge into
+ * `sprout`'s single rung; `seed`, `sapling` and `tree` keep the old `new`,
+ * `solid` and `yours` values unchanged. Like every rung here, `sprout`'s
+ * 0.7 is an unmeasured, provisional midpoint (F4.9's "never zero" is the
+ * only ratified fact about this ladder), not a fitted or ratified number.
  */
 const DEFAULT_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState, number>> = {
-  new: 1,
-  shaky: 0.85,
-  coming: 0.6,
-  solid: 0.35,
-  yours: 0.15,
+  seed: 1,
+  sprout: 0.7,
+  sapling: 0.35,
+  tree: 0.15,
   unknown: 1,
 };
 
@@ -123,7 +129,7 @@ function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions
       `rankOracle: assessmentWeightDivisor must be > 0, got ${assessmentWeightDivisor}`,
     );
   }
-  for (const state of ['new', 'shaky', 'coming', 'solid', 'yours', 'unknown'] as const) {
+  for (const state of ['seed', 'sprout', 'sapling', 'tree', 'unknown'] as const) {
     const value = masteryNeedWeight[state];
     if (!(value >= 0)) {
       throw new Error(`rankOracle: masteryNeedWeight.${state} must be >= 0, got ${value}`);
@@ -203,7 +209,7 @@ function unionCitations(
  * `masteryState` for one concept. **Deliberately two different absences**:
  * `mastery` entirely omitted (the caller opted the whole ranking out of a
  * mastery join) reads as `'unknown'` — neutral, flagged, no claim made.
- * `mastery` supplied but this concept has no entry in it reads as `'new'`
+ * `mastery` supplied but this concept has no entry in it reads as `'seed'`
  * — P4-T06's own contract for zero scored evidence, which is a real,
  * contract-backed answer rather than an absence this module invented.
  */
@@ -212,7 +218,7 @@ function resolveMasteryState(
   conceptName: string,
 ): OracleMasteryState {
   if (mastery === undefined) return 'unknown';
-  return mastery.get(conceptName)?.state ?? 'new';
+  return mastery.get(conceptName)?.state ?? 'seed';
 }
 
 function buildEdgeContribution(

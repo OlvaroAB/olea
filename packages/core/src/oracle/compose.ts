@@ -26,7 +26,7 @@
  * assessment cites never appears in a `ConceptPriority` at all (P5-T03's join
  * is course-and-evidence only), so computing its mastery would be work with
  * no reader. A concept with an edge but no review history still gets a real
- * `computeConceptMastery` call and reads `'new'` — which is the correct,
+ * `computeConceptMastery` call and reads `'seed'` — which is the correct,
  * *not* `'unknown'`, answer: mastery data was supplied for it, it simply
  * shows no scored evidence yet (see `rank.ts`'s `resolveMasteryState` doc for
  * why those two absences are deliberately different values).

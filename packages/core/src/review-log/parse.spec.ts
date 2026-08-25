@@ -23,7 +23,7 @@ function record(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
     },
     // v4: mastery is per concept and lives on the record, not in the context
     // (`ol-g6zg`). One concept here, so one entry.
-    masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'coming' } },
+    masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
     ...overrides,
   };
 }

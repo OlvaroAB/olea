@@ -69,14 +69,14 @@ function masteryResult(conceptId: string, state: MasteryState): ConceptMasteryRe
     conceptId,
     state,
     evidence: {
-      scoredEventCount: state === 'new' ? 0 : 5,
+      scoredEventCount: state === 'seed' ? 0 : 5,
       explainBackAttempts: 0,
-      tiersPracticed: { recognition: false, recall: state !== 'new', explanation: false },
+      tiersPracticed: { recognition: false, recall: state !== 'seed', explanation: false },
       recognitionOnly: false,
-      recentWindowSize: state === 'new' ? 0 : 5,
-      recentSuccessRate: state === 'new' ? null : 0.8,
-      recentDistinctDays: state === 'new' ? 0 : 3,
-      recentRecallSuccess: state === 'yours',
+      recentWindowSize: state === 'seed' ? 0 : 5,
+      recentSuccessRate: state === 'seed' ? null : 0.8,
+      recentDistinctDays: state === 'seed' ? 0 : 3,
+      recentRecallSuccess: state === 'tree',
     },
   };
 }
@@ -277,21 +277,23 @@ describe('rankOracle — mastery join, two distinct absences', () => {
     expect(course.ranked[0]?.factors.masteryNeedWeight).toBe(1);
   });
 
-  it('mastery supplied but this concept absent from it => new, per P4-T06 contract', () => {
-    const mastery = new Map([['some-other-concept', masteryResult('some-other-concept', 'solid')]]);
+  it('mastery supplied but this concept absent from it => seed, per P4-T06 contract', () => {
+    const mastery = new Map([
+      ['some-other-concept', masteryResult('some-other-concept', 'sapling')],
+    ]);
     const result = rankOracle(input(mastery));
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
-    expect(course.ranked[0]?.factors.masteryState).toBe('new');
+    expect(course.ranked[0]?.factors.masteryState).toBe('seed');
   });
 
-  it('mastery present and high (`yours`) discounts, but never zeroes, the score', () => {
-    const mastery = new Map([['concept-a', masteryResult('concept-a', 'yours')]]);
+  it('mastery present and high (`tree`) discounts, but never zeroes, the score', () => {
+    const mastery = new Map([['concept-a', masteryResult('concept-a', 'tree')]]);
     const result = rankOracle(input(mastery));
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
-    expect(entry?.factors.masteryState).toBe('yours');
+    expect(entry?.factors.masteryState).toBe('tree');
     expect(entry?.factors.masteryNeedWeight).toBeGreaterThan(0);
     expect(entry?.factors.masteryNeedWeight).toBeLessThan(1);
     expect(entry?.priorityScore).toBeCloseTo(
@@ -418,7 +420,7 @@ describe('rankOracle — purity / rebuild equivalence', () => {
         assessmentsRead: readReport([assessment()]),
         assessmentsWithNoEvidence: [],
       },
-      mastery: new Map([['concept-a', masteryResult('concept-a', 'shaky')]]),
+      mastery: new Map([['concept-a', masteryResult('concept-a', 'sprout')]]),
       asOf: ASOF,
     };
     expect(rankOracle(input)).toEqual(rankOracle(input));

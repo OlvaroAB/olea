@@ -114,9 +114,9 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
     expect(entry).toBeDefined();
     // One logged review, rated `again`: a real (if bleak) success rate, so
-    // this reads `shaky`, never the neutral `unknown` a caller that dropped
-    // the log would produce, and never `new` — mastery data WAS supplied.
-    expect(entry?.factors.masteryState).toBe('shaky');
+    // this reads `sprout`, never the neutral `unknown` a caller that dropped
+    // the log would produce, and never `seed` — mastery data WAS supplied.
+    expect(entry?.factors.masteryState).toBe('sprout');
 
     // `edges` is passed through so a caller (the gap view) never has to
     // re-run the tier-3 walk to get the sourceCoverage it also needs.
@@ -133,10 +133,10 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
 
     const conceptNames = [...new Set(result.edges.edges.map((e) => e.conceptName))].sort();
     expect([...result.mastery.keys()].sort()).toEqual(conceptNames);
-    expect(result.mastery.get('Widget theory')?.state).toBe('shaky');
+    expect(result.mastery.get('Widget theory')?.state).toBe('sprout');
   });
 
-  it('a concept with evidence but no review history still reads `new`, not `unknown` — mastery data was supplied for it', async () => {
+  it('a concept with evidence but no review history still reads `seed`, not `unknown` — mastery data was supplied for it', async () => {
     const result = await composeOracleRanking({
       vault: source,
       basePath: BASE_PATH,
@@ -147,6 +147,6 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
-    expect(entry?.factors.masteryState).toBe('new');
+    expect(entry?.factors.masteryState).toBe('seed');
   });
 });

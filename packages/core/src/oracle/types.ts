@@ -166,7 +166,7 @@ export interface RankOracleInput {
   /**
    * Per-concept mastery (P4-T06), keyed by concept id. **Omit entirely**
    * (vs. supplying a map that simply lacks an entry) to get
-   * `masteryState: 'unknown'` for every concept instead of `'new'` — see
+   * `masteryState: 'unknown'` for every concept instead of `'seed'` — see
    * `./rank.ts`'s `resolveMasteryState` for why those two absences are
    * deliberately not the same value.
    *

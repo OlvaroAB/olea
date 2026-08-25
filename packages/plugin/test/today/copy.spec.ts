@@ -213,7 +213,7 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
   // Scenarios: features/F6-today.md, "F6.2 — Today mastery overview (panel)"
   // and "F6.5 — Observed-pattern insights".
   const trends = [
-    masteryCountLabel('solid', 7),
+    masteryCountLabel('sapling', 7),
     conceptCountLabel(8),
     INSIGHTS_TOO_EARLY,
     spacingRateSentence(41.8, 2.9, 7),
@@ -222,12 +222,12 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
     insightsScopeSentence(120),
   ];
 
-  it('uses F2.11’s five words and coins no sixth', () => {
+  it('uses F2.11’s four words and coins no fifth', () => {
     // The vocabulary is imported from `MASTERY_DISPLAY`, so the only way to
     // fail this is to hardcode a synonym — which is exactly the drift F2.11's
     // single-site rule exists to stop.
-    expect(masteryCountLabel('new', 4)).toBe('4 new');
-    expect(masteryCountLabel('yours', 1)).toBe('1 yours');
+    expect(masteryCountLabel('seed', 4)).toBe('4 seed');
+    expect(masteryCountLabel('tree', 1)).toBe('1 tree');
     for (const word of ['mastered', 'weak', 'strong', 'developing', 'expert', 'beginner']) {
       expect(trends.join(' ').toLowerCase()).not.toContain(word);
     }

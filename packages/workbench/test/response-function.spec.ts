@@ -57,10 +57,10 @@ function reviewEntry(input: {
 describe('claim: mastery falls after a wrong and recovers more slowly than it fell', () => {
   it('one lapse demotes the state in a single event; regaining it needs more events than that', () => {
     // recentWindowSize=4 (below default 5) makes the arithmetic exact and
-    // legible: reach 'yours' with 4 correct qa reviews on 4 distinct days,
+    // legible: reach 'tree' with 4 correct qa reviews on 4 distinct days,
     // demote it with exactly ONE wrong review, then count how many
     // subsequent correct reviews (on new distinct days) it takes to regain
-    // 'yours'. See the module doc's worked derivation in the task report.
+    // 'tree'. See the module doc's worked derivation in the task report.
     const options = { recentWindowSize: 4 };
     const days = [
       '2027-01-01',
@@ -91,7 +91,7 @@ describe('claim: mastery falls after a wrong and recovers more slowly than it fe
       );
     }
     let mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-    expect(mastery.get(CONCEPT_A)?.state).toBe('yours');
+    expect(mastery.get(CONCEPT_A)?.state).toBe('tree');
 
     // The fall: one wrong review, one event.
     entries.push(
@@ -103,10 +103,10 @@ describe('claim: mastery falls after a wrong and recovers more slowly than it fe
       }),
     );
     mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-    expect(mastery.get(CONCEPT_A)?.state).not.toBe('yours');
-    expect(mastery.get(CONCEPT_A)?.state).toBe('coming');
+    expect(mastery.get(CONCEPT_A)?.state).not.toBe('tree');
+    expect(mastery.get(CONCEPT_A)?.state).toBe('sprout');
 
-    // The recovery: keep adding correct reviews on new days until 'yours'
+    // The recovery: keep adding correct reviews on new days until 'tree'
     // returns, and assert that took MORE than the one event the fall took.
     let recoveredAfter = 0;
     for (let i = 5; i < days.length; i += 1) {
@@ -120,28 +120,40 @@ describe('claim: mastery falls after a wrong and recovers more slowly than it fe
       );
       recoveredAfter += 1;
       mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-      if (mastery.get(CONCEPT_A)?.state === 'yours') break;
+      if (mastery.get(CONCEPT_A)?.state === 'tree') break;
     }
-    expect(mastery.get(CONCEPT_A)?.state).toBe('yours');
+    expect(mastery.get(CONCEPT_A)?.state).toBe('tree');
     expect(recoveredAfter).toBeGreaterThan(1); // recovery took more events than the one-event fall
     expect(recoveredAfter).toBe(4); // exactly the window size, on this construction
   });
 });
 
-describe('claim: a concept failed twice outranks one passed twice (equal evidence otherwise)', () => {
+describe('claim: a concept failed three times outranks one passed three times (equal evidence otherwise)', () => {
   it('rankOracle ranks the failed concept above the passed one when everything else about their evidence is equal', () => {
+    // Three events each, on three distinct days each — the minimum evidence
+    // count that can even distinguish two growth stages under the ratified
+    // four-stage vocabulary (D-049; `VOC-1`/`ol-7efk`): `sapling` requires
+    // `minSpacedDays` (3) distinct days, so a 2-event "equal evidence"
+    // construction (this test's pre-D-049 shape) can no longer land on
+    // different stages — both would read `sprout` regardless of outcome,
+    // because the retired `shaky`/`coming` split this test originally
+    // exploited is exactly what D-049 merged into `sprout`'s single bucket.
     const entriesA: ReviewLogEntry[] = [
       reviewEntry({ eventId: 'a1', conceptId: CONCEPT_A, day: '2027-01-01', rating: 'again' }),
       reviewEntry({ eventId: 'a2', conceptId: CONCEPT_A, day: '2027-01-02', rating: 'again' }),
+      reviewEntry({ eventId: 'a3', conceptId: CONCEPT_A, day: '2027-01-03', rating: 'again' }),
     ];
     const entriesB: ReviewLogEntry[] = [
       reviewEntry({ eventId: 'b1', conceptId: CONCEPT_B, day: '2027-01-01', rating: 'good' }),
       reviewEntry({ eventId: 'b2', conceptId: CONCEPT_B, day: '2027-01-02', rating: 'good' }),
+      reviewEntry({ eventId: 'b3', conceptId: CONCEPT_B, day: '2027-01-03', rating: 'good' }),
     ];
     const mastery = computeAllConceptMastery([...entriesA, ...entriesB], [CONCEPT_A, CONCEPT_B]);
-    expect(mastery.get(CONCEPT_A)?.state).toBe('shaky'); // twice failed: the floor once evidence exists
-    // Twice passed on only 2 distinct days (< minSpacedDays 3) caps below 'solid'.
-    expect(['coming', 'shaky']).toContain(mastery.get(CONCEPT_B)?.state);
+    expect(mastery.get(CONCEPT_A)?.state).toBe('sprout'); // three failures: the floor once evidence exists
+    // Three qa passes across three distinct days clears both the success-rate
+    // and spacing gates, and a qa success is recall-tier — so this reaches
+    // the top stage, not merely `sapling`.
+    expect(mastery.get(CONCEPT_B)?.state).toBe('tree');
 
     const course = 'syn:course:test';
     const assessmentPath = 'syn:assessment:test:midterm';
@@ -188,8 +200,8 @@ describe('claim: a concept failed twice outranks one passed twice (equal evidenc
     const priorityB = courseResult.ranked.find((p) => p.conceptName === CONCEPT_B);
     expect(priorityA).toBeDefined();
     expect(priorityB).toBeDefined();
-    // The worked claim: worse mastery (two fails) outranks better mastery
-    // (two passes) when every other evidence input is identical.
+    // The worked claim: worse mastery (three fails) outranks better mastery
+    // (three passes) when every other evidence input is identical.
     expect(priorityA?.priorityScore ?? 0).toBeGreaterThan(priorityB?.priorityScore ?? 0);
   });
 });

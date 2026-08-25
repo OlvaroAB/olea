@@ -16,7 +16,7 @@
  * kind of aggregation on top of the one the knowledge model actually names.
  * So "children" below means **the review events that are evidence for a
  * concept**, and "parent" means **the concept**. A concept whose evidence
- * disagrees sharply (some instruments solid, some failing) is exactly the
+ * disagrees sharply (some instruments strong, some failing) is exactly the
  * "children disagree" case this module has to get right — see this file's
  * spec for that scenario.
  *
@@ -26,10 +26,10 @@
  *
  * - **`min` over instruments** — rejected. R7 states evidence is *weighted*,
  *   not that the weakest instrument governs the whole concept. A concept
- *   drilled solidly by three cards and only shakily by a fourth is not "as
- *   bad as its worst card" — F2.11's "shaky: recalled sometimes, missed
- *   sometimes" is a statement about a *rate*, which `min` cannot express (it
- *   can only ever say "at least one full miss exists").
+ *   drilled reliably by three cards and only patchily by a fourth is not "as
+ *   bad as its worst card" — F2.11's `sprout`, "practised, recall is not
+ *   holding yet," is a statement about a *rate*, which `min` cannot express
+ *   (it can only ever say "at least one full miss exists").
  * - **A continuous decay curve (half-life weighting)** — rejected for v0.9.
  *   R3 explicitly reserves forgetting-curve modelling to FSRS, at the
  *   instrument level ("do not run FSRS at concept level" — a decay curve
@@ -79,28 +79,49 @@
  * explicitly time-stamped "evidence is N days old" fact alongside the state,
  * never folded into the state itself without a new decision).
  *
- * ## The five states, as evidence rules (F2.11, R7, D-017)
+ * ## The four growth stages, as evidence rules (F2.11, R7, D-049)
  *
- * 1. **`new`** — no scored evidence at all for this concept.
- * 2. **`shaky`** — some scored evidence exists; the recent success rate is
- *    at or below `MID_SUCCESS_RATE`. F2.11's own words are "recalled
- *    *sometimes*, missed sometimes" — read as at most half, not just under
- *    half, so an exact coin-flip record reads as `shaky`, not `coming`. This
- *    is also the floor once *any* evidence exists — the vocabulary has no
- *    state below `shaky` other than `new`, so a run of outright misses
- *    still reads as `shaky`, not as a sixth, worse word the product does
- *    not have.
- * 3. **`coming`** — recent success rate strictly above `MID_SUCCESS_RATE`,
- *    below `HIGH_SUCCESS_RATE`; or a `HIGH_SUCCESS_RATE` run that has not
- *    yet happened on enough distinct days (see below) — a good streak
- *    crammed into one sitting reads as `coming`, not `solid`.
- * 4. **`solid`** — recent success rate at or above `HIGH_SUCCESS_RATE`,
+ * **Renamed and re-bucketed from the retired five-state ordinal (D-048,
+ * D-049; `VOC-1`/`ol-7efk`).** The old `shaky` (rate at or below
+ * `MID_SUCCESS_RATE`) and `coming` (rate between the two thresholds) were
+ * two bands of one thing the new vocabulary names once: `sprout`,
+ * "practised, recall is not holding yet." Collapsing them retires
+ * `midSuccessRate` — there is no longer a second threshold to place between
+ * "no evidence" and "eligible for `sapling`". Nothing about the `sapling` /
+ * `tree` boundary or the spacing check changes; only the two lowest bands
+ * merge into one, because the ratified vocabulary has one word where the old
+ * ordinal had two.
+ *
+ * **This module still computes one axis, not two.** F2.11 (D-049) also
+ * ratifies a separate `vitality` reading — `holding` / `needs tending` /
+ * `too early to say`, fluctuating, never a demotion — but that axis is not
+ * modelled here: no field on `ConceptMasteryResult` carries it, and the
+ * `state` this module returns is the growth-stage axis only. Wiring a real
+ * retrievability-based vitality reading is `MAT-2`'s (`ol-95vv`) scope, not
+ * this landing's — this module's own windowed, non-monotonic computation
+ * (see "Recency and forgetting" above) is exactly the single-ordinal
+ * shape the registry's hard clamp ("no implementation may express decay by
+ * lowering a stage") means to retire, and doing that properly means
+ * splitting this function's output into a monotonic stage plus a fluctuating
+ * vitality read from a different (already-ruled, `[D-087]`) arithmetic —
+ * real algorithm work this landing does not do. Flagged rather than silently
+ * left, per the run charter's Class C discipline.
+ *
+ * 1. **`seed`** — no scored evidence at all for this concept.
+ * 2. **`sprout`** — some scored evidence exists and either the recent
+ *    success rate is below `HIGH_SUCCESS_RATE`, or it clears that bar but
+ *    not yet across enough distinct days (see below). This is also the
+ *    floor once *any* evidence exists — the vocabulary has no state below
+ *    `sprout` other than `seed`, so a run of outright misses still reads as
+ *    `sprout`, not as a fifth, worse word the product does not have.
+ * 3. **`sapling`** — recent success rate at or above `HIGH_SUCCESS_RATE`,
  *    **and** spread across at least `minSpacedDays` distinct calendar days
  *    within that same recent window ("recalled reliably *across spaced
- *    attempts*" — R7). This is also the ceiling for any concept whose
+ *    attempts*" — R7). A good streak crammed into one sitting stays
+ *    `sprout`, not `sapling`. This is also the ceiling for any concept whose
  *    scored evidence is recognition-only (MCQ) — R7's named rule and this
  *    task's named test.
- * 5. **`yours`** — everything `solid` requires, **and** the recent window
+ * 4. **`tree`** — everything `sapling` requires, **and** the recent window
  *    contains at least one *recall* success: a Q&A or cloze review she
  *    answered without failing (`rating !== 'again'`). Recognition (MCQ)
  *    never counts, however many times it succeeds — R7 in its own words:
@@ -120,14 +141,14 @@
  * `tiersPracticed.explanation`) but never enters the scored evidence
  * `recognitionOnly` and the success-rate window are computed over — it is
  * neither a recognition success nor a recall success, so it does **not**,
- * on its own, lift a recognition-only concept's cap or satisfy the `yours`
+ * on its own, lift a recognition-only concept's cap or satisfy the `tree`
  * gate — only a recall success does today. **This is a contract
  * silence this module had to resolve, not a modelling preference**: once
  * P4-T02 wires a real per-attempt outcome into the log (or into transient
  * D-008 context), the honest fix is to let a *successful* explain-back also
  * satisfy the gate, matching a recall success. Filed as a follow-up rather
  * than guessed at here, because widening what counts as "success" for
- * `yours` is exactly the kind of threshold this project reserves for a
+ * `tree` is exactly the kind of threshold this project reserves for a
  * decision bead, never a lane's silent call.
  *
  * ## Purity and rebuildability
@@ -188,41 +209,34 @@ export interface MasteryRollupOptions {
    */
   readonly recentWindowSize?: number;
   /**
-   * Recent success rate strictly above this promotes `shaky` to `coming`;
-   * at or below, it stays `shaky`. Default 0.5 — "more often than not"
-   * (R7) read literally, so an exact half does not yet qualify.
-   */
-  readonly midSuccessRate?: number;
-  /**
-   * Recent success rate at or above this is eligible for `solid` (subject
-   * to the spacing check). Default 0.8 — unmeasured; picked only to sit
-   * clearly above `midSuccessRate`.
+   * Recent success rate at or above this is eligible for `sapling` (subject
+   * to the spacing check); below it, the concept stays `sprout`. Default
+   * 0.8 — unmeasured. (The old `midSuccessRate` threshold, which split
+   * `sprout`'s predecessor bands `shaky`/`coming`, retired with D-049 — the
+   * ratified vocabulary has one word there, not two.)
    */
   readonly highSuccessRate?: number;
   /**
    * Minimum distinct calendar days within the recent window required to
-   * confirm `solid` instead of demoting a high-success but single-sitting
-   * run to `coming`. Default 3 — unmeasured; the smallest number that is
+   * confirm `sapling` instead of leaving a high-success but single-sitting
+   * run at `sprout`. Default 3 — unmeasured; the smallest number that is
    * unambiguously more than "she reviewed it a few times just now."
    */
   readonly minSpacedDays?: number;
 }
 
 const DEFAULT_RECENT_WINDOW_SIZE = 5;
-const DEFAULT_MID_SUCCESS_RATE = 0.5;
 const DEFAULT_HIGH_SUCCESS_RATE = 0.8;
 const DEFAULT_MIN_SPACED_DAYS = 3;
 
 interface ResolvedOptions {
   readonly recentWindowSize: number;
-  readonly midSuccessRate: number;
   readonly highSuccessRate: number;
   readonly minSpacedDays: number;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
   const recentWindowSize = options?.recentWindowSize ?? DEFAULT_RECENT_WINDOW_SIZE;
-  const midSuccessRate = options?.midSuccessRate ?? DEFAULT_MID_SUCCESS_RATE;
   const highSuccessRate = options?.highSuccessRate ?? DEFAULT_HIGH_SUCCESS_RATE;
   const minSpacedDays = options?.minSpacedDays ?? DEFAULT_MIN_SPACED_DAYS;
   if (!Number.isInteger(recentWindowSize) || recentWindowSize < 1) {
@@ -235,17 +249,12 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
       `computeConceptMastery: minSpacedDays must be a positive integer, got ${minSpacedDays}`,
     );
   }
-  if (!(midSuccessRate >= 0 && midSuccessRate <= 1)) {
+  if (!(highSuccessRate >= 0 && highSuccessRate <= 1)) {
     throw new Error(
-      `computeConceptMastery: midSuccessRate must be within [0, 1], got ${midSuccessRate}`,
+      `computeConceptMastery: highSuccessRate must be within [0, 1], got ${highSuccessRate}`,
     );
   }
-  if (!(highSuccessRate >= midSuccessRate && highSuccessRate <= 1)) {
-    throw new Error(
-      `computeConceptMastery: highSuccessRate must be within [midSuccessRate, 1], got ${highSuccessRate}`,
-    );
-  }
-  return { recentWindowSize, midSuccessRate, highSuccessRate, minSpacedDays };
+  return { recentWindowSize, highSuccessRate, minSpacedDays };
 }
 
 /**
@@ -267,7 +276,7 @@ export interface ConceptMasteryEvidence {
   readonly explainBackAttempts: number;
   /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated. */
   readonly tiersPracticed: Readonly<Record<EvidenceTier, boolean>>;
-  /** True when every scored event is recognition (MCQ) — the state can never exceed `solid`. */
+  /** True when every scored event is recognition (MCQ) — the state can never exceed `sapling`. */
   readonly recognitionOnly: boolean;
   /** Size of the recent-evidence window actually used (capped by how much scored evidence exists). */
   readonly recentWindowSize: number;
@@ -275,7 +284,7 @@ export interface ConceptMasteryEvidence {
   readonly recentSuccessRate: number | null;
   /** Distinct calendar days the recent window's events fall on. */
   readonly recentDistinctDays: number;
-  /** At least one recall (Q&A/cloze) success inside the recent window — the `yours` gate. */
+  /** At least one recall (Q&A/cloze) success inside the recent window — the `tree` gate. */
   readonly recentRecallSuccess: boolean;
 }
 
@@ -366,8 +375,7 @@ export function computeConceptMastery(
   if (conceptId.length === 0) {
     throw new Error('computeConceptMastery: conceptId must be non-empty');
   }
-  const { recentWindowSize, midSuccessRate, highSuccessRate, minSpacedDays } =
-    resolveOptions(options);
+  const { recentWindowSize, highSuccessRate, minSpacedDays } = resolveOptions(options);
   const { scored, explainBackAttempts, tiersPracticed } = conceptScoredEvents(entries, conceptId);
 
   const recognitionOnly = scored.length > 0 && scored.every((e) => e.instrumentType === 'mcq');
@@ -375,7 +383,7 @@ export function computeConceptMastery(
   if (scored.length === 0) {
     return {
       conceptId,
-      state: 'new',
+      state: 'seed',
       evidence: {
         scoredEventCount: 0,
         explainBackAttempts,
@@ -402,29 +410,27 @@ export function computeConceptMastery(
   const recentRecallSuccess = window.some((e) => e.instrumentType !== 'mcq' && e.success);
 
   let state: MasteryState;
-  if (recentSuccessRate <= midSuccessRate) {
-    state = 'shaky';
-  } else if (recentSuccessRate < highSuccessRate) {
-    state = 'coming';
+  if (recentSuccessRate < highSuccessRate) {
+    state = 'sprout';
   } else if (recentDistinctDays < minSpacedDays) {
-    // A high recent rate crammed into too few sessions reads as `coming`,
-    // never `solid` — R7's "across spaced attempts", read literally.
-    state = 'coming';
+    // A high recent rate crammed into too few sessions stays `sprout`,
+    // never `sapling` — R7's "across spaced attempts", read literally.
+    state = 'sprout';
   } else if (recentRecallSuccess) {
-    state = 'yours';
+    state = 'tree';
   } else {
-    state = 'solid';
+    state = 'sapling';
   }
 
   // Belt-and-suspenders, and this task's named acceptance test: a concept
   // whose *entire* scored history is recognition-only can never read as
-  // `yours`, however this branch's arithmetic came out. Mechanically this is
+  // `tree`, however this branch's arithmetic came out. Mechanically this is
   // already implied by `recentRecallSuccess` being false whenever
   // `recognitionOnly` is true over the full history and the window is a
   // suffix of it, but the rule is asserted directly rather than left to
   // follow from that coincidence.
-  if (recognitionOnly && state === 'yours') {
-    state = 'solid';
+  if (recognitionOnly && state === 'tree') {
+    state = 'sapling';
   }
 
   return {

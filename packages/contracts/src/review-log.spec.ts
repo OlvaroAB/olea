@@ -29,7 +29,7 @@ const SELECTION_CONTEXT = {
   dueState: 'due',
   examProximity: null,
   yieldRank: null,
-  masteryAtTime: 'coming',
+  masteryAtTime: 'sprout',
   instrumentTypesOffered: ['qa'],
   planVersion: null,
 } as const;

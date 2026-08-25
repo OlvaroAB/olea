@@ -87,27 +87,44 @@ export const rating = z.enum(['again', 'hard', 'good', 'easy']);
 export type Rating = z.infer<typeof rating>;
 
 /**
- * Named mastery states (F2.11). `yours` requires recall or explanation (R7).
+ * Named growth-stage vocabulary (F2.11, D-049). `tree` requires a graded
+ * explain-back (R7) — recall alone, however extensive, caps at `sapling`.
  *
- * **These are F2.11's words verbatim, and that is the point (D-017).** This
- * enum previously read `unseen … developing`, which contradicted the spec's
- * `new … coming`. Two of five disagreed, and the conflict was settled toward
- * the prose for one reason: `new` and `coming` are her words about her own
- * learning, while `unseen` and `developing` are the system's words about her.
- * Principle 12 — information and consequence, never verdict — is a vocabulary
- * decision before it is a copy decision.
+ * **These are F2.11's current words verbatim (D-017's discipline, applied a
+ * second time).** This enum previously read `new … yours` — a single
+ * five-value ordinal that D-048 ruled a genuine modelling defect, not a
+ * naming preference: it made a retention claim (`solid`) and an
+ * understanding claim (`yours`) compete on one scale, and it had to express
+ * fading recall as a demotion because it had nowhere else to put fading.
+ * D-049 (decided from rendered candidates, not from prose) settled the
+ * replacement: growth stage split out as its own monotonic axis, four
+ * values, with vitality — `holding` / `needs tending` / `too early to say`,
+ * `docs/Olea_vocabulary_registry.md` §1 axis 2 — carrying retention
+ * separately as an overlay that never lowers a stage. **This enum is the
+ * growth-stage axis only.** Vitality is not yet a persisted field; nothing
+ * here should be read as encoding it, and nothing should default a missing
+ * vitality reading to any one of its three values.
  *
- * Changed at a deliberate moment rather than a convenient one. The review log
- * persists this value and the record is explicitly not backfillable, so the
- * cost of the rename rises the instant a real review exists. No real record
- * did when this changed; that made it the last cheap moment, not the first.
+ * The old five collapse onto the new four as: `new` → `seed`, `shaky` and
+ * `coming` both → `sprout` (the new vocabulary has one bucket for "practised,
+ * not holding yet" where the old ordinal split it in two), `solid` →
+ * `sapling`, `yours` → `tree`.
  *
- * These identifiers are also the only mastery vocabulary in the codebase.
- * Display strings live at exactly one site — `mastery/display.ts` in core —
- * so F2.11's "one vocabulary used everywhere" is enforced by there being
- * nowhere else to disagree with.
+ * Changed at a deliberate moment rather than a convenient one, the same
+ * argument D-017 made the first time: the review log persists this value and
+ * the record is explicitly not backfillable, so the cost of a rename rises
+ * the instant a real review exists. `[D-048]` found no real record did when
+ * this changed and ruled it the last cheap moment, not the first — `[D-109]`
+ * then generalised the point: no backwards compatibility is owed before real
+ * user data exists, so this is a migrate-in-place value change, not a new
+ * schema version.
+ *
+ * These identifiers are also the only growth-stage vocabulary in the
+ * codebase. Display strings live at exactly one site — `mastery/display.ts`
+ * in core — so F2.11's "one vocabulary used everywhere" is enforced by there
+ * being nowhere else to disagree with.
  */
-export const masteryState = z.enum(['new', 'shaky', 'coming', 'solid', 'yours']);
+export const masteryState = z.enum(['seed', 'sprout', 'sapling', 'tree']);
 export type MasteryState = z.infer<typeof masteryState>;
 
 /**

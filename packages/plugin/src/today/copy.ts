@@ -231,11 +231,11 @@ export function weekCellLabel(day: string, studied: boolean): string {
 export const MASTERY_LABEL = 'Mastery';
 
 /**
- * One segment of a course's distribution strip: `3 solid`.
+ * One segment of a course's distribution strip: `3 sapling`.
  *
  * The word comes from `MASTERY_DISPLAY` and could not have come from anywhere
  * else — F2.11's single-vocabulary rule is enforced by there being exactly one
- * module holding these five words, and this function is a reader of it, never
+ * module holding these four words, and this function is a reader of it, never
  * a second copy.
  */
 export function masteryCountLabel(state: MasteryState, count: number): string {

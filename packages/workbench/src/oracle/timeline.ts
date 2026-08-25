@@ -267,7 +267,7 @@ export interface MasteryAdvancement {
   readonly rose: boolean;
 }
 
-const ADVANCED_STATES: ReadonlySet<string> = new Set(['solid', 'yours']);
+const ADVANCED_STATES: ReadonlySet<string> = new Set(['sapling', 'tree']);
 
 function advancedFraction(day: TimelineDayResult): number {
   const values = [...day.result.mastery.values()];

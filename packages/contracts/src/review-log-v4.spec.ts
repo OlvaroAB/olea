@@ -59,7 +59,7 @@ function v3ReviewLine(over: Record<string, unknown> = {}) {
     rating: 'good',
     wasUnsure: false,
     durationMs: 1200,
-    selectionContext: { ...SELECTION_CONTEXT_V4, masteryAtTime: 'coming' },
+    selectionContext: { ...SELECTION_CONTEXT_V4, masteryAtTime: 'sprout' },
     conceptIds: ['imbrication'],
     ...over,
   };
@@ -149,7 +149,7 @@ describe('v4 is v3 with masteryAtTime moved — nothing else changed', () => {
     // order it emits — v3's order with `masteryAtTime` appended, and
     // `selectionContext` still in the slot v3 gave it.
     const shuffled = {
-      masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'coming' } },
+      masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
       conceptIds: ['imbrication'],
       selectionContext: SELECTION_CONTEXT_V4,
       kind: 'review',
@@ -182,7 +182,7 @@ describe('v4 is v3 with masteryAtTime moved — nothing else changed', () => {
     // Otherwise a v4 record could carry two answers to the same question, one
     // of them in the place a v3 reader would look.
     const parsed = reviewLogRecordV4.parse(
-      v4ReviewLine({ selectionContext: { ...SELECTION_CONTEXT_V4, masteryAtTime: 'solid' } }),
+      v4ReviewLine({ selectionContext: { ...SELECTION_CONTEXT_V4, masteryAtTime: 'sapling' } }),
     );
     expect(parsed.selectionContext).not.toHaveProperty('masteryAtTime');
     expect(parsed.masteryAtTime).toBeUndefined();
@@ -216,14 +216,14 @@ describe('masteryAtTime is optional, and absent means "not recorded"', () => {
   });
 
   it('rejects a bare mastery state — the v3 shape does not survive the move', () => {
-    expect(reviewLogRecordV4.safeParse(v4ReviewLine({ masteryAtTime: 'coming' })).success).toBe(
+    expect(reviewLogRecordV4.safeParse(v4ReviewLine({ masteryAtTime: 'sprout' })).success).toBe(
       false,
     );
   });
 
   it('rejects an untagged map — the discriminator is never inferred from shape', () => {
     expect(
-      reviewLogRecordV4.safeParse(v4ReviewLine({ masteryAtTime: { imbrication: 'coming' } }))
+      reviewLogRecordV4.safeParse(v4ReviewLine({ masteryAtTime: { imbrication: 'sprout' } }))
         .success,
     ).toBe(false);
   });
@@ -236,13 +236,13 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
         conceptIds: ['imbrication', 'bioturbation'],
         masteryAtTime: {
           attribution: 'per-concept',
-          byConcept: { imbrication: 'coming', bioturbation: 'shaky' },
+          byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
         },
       }),
     );
     expect(parsed.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming', bioturbation: 'shaky' },
+      byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
     });
   });
 
@@ -252,7 +252,7 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
         v4ReviewLine({
           masteryAtTime: {
             attribution: 'per-concept',
-            byConcept: { imbrication: 'coming', appoggiatura: 'solid' },
+            byConcept: { imbrication: 'sprout', appoggiatura: 'sapling' },
           },
         }),
       ).success,
@@ -264,7 +264,7 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
       reviewLogRecordV4.safeParse(
         v4ReviewLine({
           conceptIds: ['imbrication', 'bioturbation'],
-          masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'coming' } },
+          masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
         }),
       ).success,
     ).toBe(false);
@@ -281,7 +281,7 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
   it('the failure names the field, so a writer bug is diagnosable from the message alone', () => {
     const result = reviewLogRecordV4.safeParse(
       v4ReviewLine({
-        masteryAtTime: { attribution: 'per-concept', byConcept: { appoggiatura: 'solid' } },
+        masteryAtTime: { attribution: 'per-concept', byConcept: { appoggiatura: 'sapling' } },
       }),
     );
     expect(result.success).toBe(false);
@@ -296,7 +296,7 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
     const parsed = reviewLogRecordV4.parse(
       v4ReviewLine({
         conceptIds: ['imbrication', 'imbrication'],
-        masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'coming' } },
+        masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
       }),
     );
     expect(parsed.conceptIds).toEqual(['imbrication', 'imbrication']);
@@ -308,7 +308,7 @@ describe('the map and conceptIds agree — a RECORD-level invariant, not a field
     expect(
       reviewLogEntryV4.safeParse(
         v4ReviewLine({
-          masteryAtTime: { attribution: 'per-concept', byConcept: { appoggiatura: 'solid' } },
+          masteryAtTime: { attribution: 'per-concept', byConcept: { appoggiatura: 'sapling' } },
         }),
       ).success,
     ).toBe(false);
@@ -323,15 +323,15 @@ describe('the not-attributable arm — a value kept, an attribution declined', (
     const parsed = reviewLogRecordV4.parse(
       v4ReviewLine({
         conceptIds: ['imbrication', 'bioturbation'],
-        masteryAtTime: { attribution: 'not-attributable', recorded: 'coming' },
+        masteryAtTime: { attribution: 'not-attributable', recorded: 'sprout' },
       }),
     );
-    expect(parsed.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'coming' });
+    expect(parsed.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'sprout' });
   });
 
   it('is not checked against conceptIds, because it makes no claim about any of them', () => {
     const parsed = reviewLogRecordV4.parse(
-      v4ReviewLine({ masteryAtTime: { attribution: 'not-attributable', recorded: 'solid' } }),
+      v4ReviewLine({ masteryAtTime: { attribution: 'not-attributable', recorded: 'sapling' } }),
     );
     expect(parsed.conceptIds).toEqual(['imbrication']);
   });
@@ -355,7 +355,7 @@ describe('the not-attributable arm — a value kept, an attribution declined', (
   it('rejects an unknown attribution tag rather than falling back to a shape', () => {
     expect(
       reviewLogRecordV4.safeParse(
-        v4ReviewLine({ masteryAtTime: { attribution: 'primary-concept', recorded: 'coming' } }),
+        v4ReviewLine({ masteryAtTime: { attribution: 'primary-concept', recorded: 'sprout' } }),
       ).success,
     ).toBe(false);
   });

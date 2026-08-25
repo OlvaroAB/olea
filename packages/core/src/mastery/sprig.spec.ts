@@ -31,11 +31,12 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
 }
 
 describe('conceptSprig — the sprig-ready projection (BRIEF §3)', () => {
-  it('a concept with no evidence sprigs at `new`, one leaf', () => {
+  it('a concept with no evidence sprigs at `seed`, no leaves', () => {
     const sprig = conceptSprig([], 'concept-a');
-    expect(sprig.state).toBe('new');
-    expect(sprig.display).toBe(MASTERY_DISPLAY.new);
-    expect(sprig.display.leaves).toBe(1);
+    expect(sprig.state).toBe('seed');
+    expect(sprig.display).toBe(MASTERY_DISPLAY.seed);
+    expect(sprig.display.leaves).toBe(0);
+    expect(sprig.display.fruit).toBe(false);
   });
 
   it('resolves the rolled-up state through the single vocabulary site — never a second copy of the words', () => {
@@ -47,10 +48,11 @@ describe('conceptSprig — the sprig-ready projection (BRIEF §3)', () => {
       }),
     );
     const sprig = conceptSprig(entries, 'concept-a');
-    expect(sprig.state).toBe('yours');
-    expect(sprig.display).toBe(MASTERY_DISPLAY.yours);
-    expect(sprig.display.label).toBe('yours');
-    expect(sprig.display.leaves).toBe(5);
+    expect(sprig.state).toBe('tree');
+    expect(sprig.display).toBe(MASTERY_DISPLAY.tree);
+    expect(sprig.display.label).toBe('tree');
+    expect(sprig.display.leaves).toBe(3);
+    expect(sprig.display.fruit).toBe(true);
   });
 });
 
@@ -62,7 +64,7 @@ describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
     expect(Object.keys(dist.counts)).toEqual([...MASTERY_ORDER]);
   });
 
-  it('a concept named in the requested set but absent from the log counts as new, not omitted', () => {
+  it('a concept named in the requested set but absent from the log counts as seed, not omitted', () => {
     const entries = Array.from({ length: 5 }, (_, i) =>
       review({
         eventId: `a${i}`,
@@ -73,8 +75,8 @@ describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
     );
     const dist = masteryDistribution(entries, ['concept-a', 'concept-never-studied']);
     expect(dist.total).toBe(2);
-    expect(dist.counts.new).toBe(1);
-    expect(dist.counts.yours).toBe(1);
+    expect(dist.counts.seed).toBe(1);
+    expect(dist.counts.tree).toBe(1);
   });
 
   it('buckets each concept independently — never an aggregate mastery number', () => {
@@ -99,11 +101,13 @@ describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
     ];
     const dist = masteryDistribution(entries, ['concept-a', 'concept-b', 'concept-c']);
     expect(dist.total).toBe(3);
-    expect(dist.counts.yours).toBe(1); // concept-a: spaced recall success
-    expect(dist.counts.shaky).toBe(1); // concept-b: all misses
-    // concept-c: one successful MCQ — high recent rate, but only one
-    // session, so the spacing gate holds it at `coming`, not `solid`.
-    expect(dist.counts.coming).toBe(1);
+    expect(dist.counts.tree).toBe(1); // concept-a: spaced recall success
+    // concept-b (all misses) and concept-c (one successful MCQ, one
+    // session — high recent rate, but the spacing gate holds it below
+    // `sapling`) both read `sprout`: the ratified vocabulary has one word
+    // for "practised, not holding yet" where the retired ordinal split it
+    // into `shaky` and `coming` (D-049; see rollup.ts's module doc).
+    expect(dist.counts.sprout).toBe(2);
   });
 
   it('defaults to every concept the log names when no set is given', () => {

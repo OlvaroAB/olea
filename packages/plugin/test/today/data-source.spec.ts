@@ -52,7 +52,7 @@ function reviewLine(day: string, eventId: string): string {
       dueState: 'due',
       examProximity: null,
       yieldRank: null,
-      masteryAtTime: 'coming',
+      masteryAtTime: 'sprout',
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },

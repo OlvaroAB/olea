@@ -12,7 +12,7 @@
  *
  * **What that means concretely, and what it deliberately does not.** Mastery
  * (`../mastery/rollup.js`) weights recognition *down*: a concept practised only
- * on MCQs can reach `solid` but never `yours`, because recognising a definition
+ * on MCQs can reach `sapling` but never `tree`, because recognising a definition
  * among four options is not producing it. That is a statement about knowledge
  * and this module does not touch it — `masteryState` and the word shown for it
  * are byte-identical whether or not this weighting applies. What this module
@@ -133,7 +133,7 @@ export interface ReadinessFactors {
  * `mastery` is `undefined` when no mastery entry exists for this concept —
  * which weights nothing, deliberately. "She has no recorded practice" is not
  * evidence she is ready; it is the absence of evidence either way, and the
- * oracle's own `masteryNeedWeight` already reads that absence (`'new'` vs.
+ * oracle's own `masteryNeedWeight` already reads that absence (`'seed'` vs.
  * `'unknown'`, which `rank.ts` keeps distinct). Weighting on top of it here
  * would double-count one silence.
  */

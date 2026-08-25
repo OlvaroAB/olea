@@ -244,14 +244,14 @@ describe('appendReviewLogRecord', () => {
           conceptIds: ['imbrication', 'bioturbation'],
           masteryAtTime: {
             attribution: 'per-concept',
-            byConcept: { imbrication: 'coming', bioturbation: 'shaky' },
+            byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
           },
         }),
         { deviceId: 'desktop', generateEventId: () => 'e1' },
       );
       const raw = await readFile(join(tempRoot, result.path), 'utf8');
       expect(raw.trimEnd()).toContain(
-        '"masteryAtTime":{"attribution":"per-concept","byConcept":{"imbrication":"coming","bioturbation":"shaky"}}',
+        '"masteryAtTime":{"attribution":"per-concept","byConcept":{"imbrication":"sprout","bioturbation":"sprout"}}',
       );
     });
 
@@ -263,7 +263,7 @@ describe('appendReviewLogRecord', () => {
           baseInput({
             masteryAtTime: {
               attribution: 'per-concept',
-              byConcept: { imbrication: 'coming', appoggiatura: 'solid' },
+              byConcept: { imbrication: 'sprout', appoggiatura: 'sapling' },
             },
           }),
           { deviceId: 'desktop' },
@@ -281,7 +281,7 @@ describe('appendReviewLogRecord', () => {
             conceptIds: ['imbrication', 'bioturbation'],
             masteryAtTime: {
               attribution: 'per-concept',
-              byConcept: { imbrication: 'coming' },
+              byConcept: { imbrication: 'sprout' },
             },
           }),
           { deviceId: 'desktop' },

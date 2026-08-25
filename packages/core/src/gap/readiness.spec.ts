@@ -21,7 +21,7 @@ function mastery(
 ): ConceptMasteryResult {
   return {
     conceptId,
-    state: 'coming',
+    state: 'sprout',
     evidence: {
       scoredEventCount: 5,
       explainBackAttempts: 0,
@@ -71,7 +71,7 @@ function entry(conceptName: string, rank: number, assessmentPath: VaultPath): Co
       distinctSourceCount: 1,
       contributions: [contribution],
       preMasteryScore: 1,
-      masteryState: 'coming',
+      masteryState: 'sprout',
       masteryNeedWeight: 1,
       priorityScore: 1,
     },
@@ -238,7 +238,7 @@ describe('R7 in the gap view — the readiness/knowledge split', () => {
     // R7: mastery describes knowledge, the gap view describes readiness, and
     // one may never rewrite the other.
     expect(alphaIn(mcq)).toBe(alphaIn(written));
-    expect(alphaIn(mcq)).toBe('coming');
+    expect(alphaIn(mcq)).toBe('sprout');
   });
 
   it('is reversible from the outside — weight 1 returns the oracle ordering exactly', () => {

@@ -1,70 +1,56 @@
 /**
- * `sprigPlan`'s two load-bearing properties (`ol-t1hc`): leaf count comes from
- * `MASTERY_DISPLAY` — never a second, retyped table — and an empty leaf is always drawn as one
- * of five positions, outline only, never left out.
+ * `sprigPlan`'s load-bearing properties (`ol-t1hc`, re-geometried for D-049 /
+ * `VOC-1` / `ol-7efk`): geometry comes from `SPRIG_GEOMETRY` — never a second,
+ * retyped table — and follows the ratified per-stage shape (`seed` no stem/no
+ * leaves, `sprout` one leaf, `sapling` three leaves, `tree` the same three
+ * leaves plus fruit), never the retired "one leaf filled out of five fixed
+ * positions."
  *
- * `renderSprig` itself (the DOM-building half) is not exercised here — see `render-sprig.ts`'s
- * own module doc for why: this workspace has no DOM test environment (no `jsdom`/`happy-dom`
- * dependency), and adding one mid-task would touch the shared lockfile. `sprigPlan` carries every
- * decision `renderSprig` turns into markup, so it is what is worth asserting on.
+ * `renderSprig` itself (the DOM-building half) is not exercised here — see
+ * `render-sprig.ts`'s own module doc for why: this workspace has no DOM test
+ * environment (no `jsdom`/`happy-dom` dependency), and adding one mid-task
+ * would touch the shared lockfile. `sprigPlan` carries every decision
+ * `renderSprig` turns into markup, so it is what is worth asserting on.
  */
 
 import { MASTERY_DISPLAY } from 'olea-core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { sprigPlan } from '../../src/sprig/render-sprig.js';
 
-// Restores whatever `MASTERY_DISPLAY[state].leaves` looked like before each mutating test —
-// `MASTERY_DISPLAY` is `Readonly` only at the type level, not frozen at runtime, which is exactly
-// what lets this test prove `sprigPlan` reads it live rather than caching a copy.
-type MutableDisplay = { leaves: number };
-const mutableDisplay = MASTERY_DISPLAY as unknown as Record<string, MutableDisplay>;
-
-const ORIGINAL_LEAVES = Object.fromEntries(
-  Object.entries(MASTERY_DISPLAY).map(([state, display]) => [state, display.leaves]),
-);
-
-afterEach(() => {
-  for (const [state, leaves] of Object.entries(ORIGINAL_LEAVES)) {
-    const display = mutableDisplay[state];
-    if (display !== undefined) display.leaves = leaves;
-  }
-});
-
 describe('sprigPlan', () => {
-  it('always plans exactly 5 leaf positions, whatever the state', () => {
-    for (const state of Object.keys(MASTERY_DISPLAY) as (keyof typeof MASTERY_DISPLAY)[]) {
-      expect(sprigPlan(state).leaves).toHaveLength(5);
-    }
+  it('seed draws no stem and no leaves', () => {
+    const plan = sprigPlan('seed');
+    expect(plan.seed).toBe(true);
+    expect(plan.stemTop).toBeNull();
+    expect(plan.leaves).toHaveLength(0);
+    expect(plan.fruit).toBeNull();
   });
 
-  it('fills exactly MASTERY_DISPLAY[state].leaves positions, from the bottom of the stem up', () => {
-    const plan = sprigPlan('coming'); // 3 leaves
-    expect(plan.leaves.map((l) => l.filled)).toEqual([true, true, true, false, false]);
+  it('sprout draws a stem and exactly one leaf', () => {
+    const plan = sprigPlan('sprout');
+    expect(plan.seed).toBe(false);
+    expect(plan.stemTop).not.toBeNull();
+    expect(plan.leaves).toHaveLength(1);
+    expect(plan.fruit).toBeNull();
   });
 
-  it('an empty leaf is planned as an outline position, never omitted', () => {
-    const plan = sprigPlan('new'); // 1 leaf
-    const empties = plan.leaves.filter((l) => !l.filled);
-    expect(empties).toHaveLength(4);
-    // Still real geometry — a position, not a gap in the array.
-    for (const leaf of empties) {
-      expect(typeof leaf.cx).toBe('number');
-      expect(typeof leaf.cy).toBe('number');
-    }
+  it('sapling draws a stem and exactly three leaves, still no fruit', () => {
+    const plan = sprigPlan('sapling');
+    expect(plan.seed).toBe(false);
+    expect(plan.leaves).toHaveLength(3);
+    expect(plan.fruit).toBeNull();
+  });
+
+  it('tree draws the same three leaves as sapling, plus fruit — never a fourth leaf', () => {
+    const sapling = sprigPlan('sapling');
+    const tree = sprigPlan('tree');
+    expect(tree.leaves).toHaveLength(3);
+    expect(tree.leaves).toEqual(sapling.leaves);
+    expect(tree.fruit).not.toBeNull();
   });
 
   it('carries the mastery word as the accessible label, unchanged from MASTERY_DISPLAY', () => {
-    expect(sprigPlan('shaky').label).toBe(MASTERY_DISPLAY.shaky.label);
-    expect(sprigPlan('yours').label).toBe(MASTERY_DISPLAY.yours.label);
-  });
-
-  it('reads MASTERY_DISPLAY live — leaf count follows a mutation, never a retyped table', () => {
-    expect(sprigPlan('shaky').leaves.filter((l) => l.filled)).toHaveLength(2);
-
-    const shaky = mutableDisplay.shaky;
-    expect(shaky).toBeDefined();
-    if (shaky !== undefined) shaky.leaves = 4;
-
-    expect(sprigPlan('shaky').leaves.filter((l) => l.filled)).toHaveLength(4);
+    expect(sprigPlan('sapling').label).toBe(MASTERY_DISPLAY.sapling.label);
+    expect(sprigPlan('tree').label).toBe(MASTERY_DISPLAY.tree.label);
   });
 });

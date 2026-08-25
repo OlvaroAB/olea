@@ -151,7 +151,7 @@ describe('createLocalGapProvider — configured', () => {
     const course = state.model.courses.find((c) => c.course === 'TESTC101');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const row = course.rows.find((r) => r.conceptName === 'Widget theory');
-    expect(row?.masteryState).toBe('new');
+    expect(row?.masteryState).toBe('seed');
   });
 
   it('a vault that throws mid-walk resolves to "unavailable", not a crash', async () => {

@@ -73,12 +73,19 @@ import { CARD_TYPES, conceptById, INSTRUMENTS } from './vocabulary.js';
  *
  * **`synthetic-provisional` (N-015).** C5.4's mastery rollup does not exist
  * yet, so this generator needs *some* rule to put a plausible `masteryAtTime`
- * on each record, and these boundaries were chosen to exercise all five of
- * F2.11's states across a 90-day stream. They are a property of the fiction,
- * not a finding about learning, and nothing may calibrate against them: when
- * the real rollup lands, this constant is replaced by a call into it, and if
- * anyone has meanwhile derived a number from these bands, that number is
- * measuring our own assumptions.
+ * on each record, and these boundaries were chosen to exercise all four of
+ * F2.11's ratified stages (D-049; `VOC-1`/`ol-7efk`) across a 90-day stream.
+ * They are a property of the fiction, not a finding about learning, and
+ * nothing may calibrate against them: when the real rollup lands, this
+ * constant is replaced by a call into it, and if anyone has meanwhile
+ * derived a number from these bands, that number is measuring our own
+ * assumptions.
+ *
+ * **Re-bucketed for the four-stage vocabulary.** The retired five-state
+ * ordinal's `shaky` (< 4 days) and `coming` (< 12 days) bands merge into
+ * `sprout`'s single band (< 12 days) — the ratified vocabulary has one word
+ * for "practised, not holding yet" where the fiction previously drew two.
+ * `seed`'s and `sapling`'s boundaries (1 and 45 days) are unchanged.
  *
  * Under review-log v4 (`ol-g6zg`) the value is recorded **per concept** rather
  * than as one number on the record. A synthetic instrument is evidence for
@@ -90,14 +97,13 @@ export const MASTERY_STABILITY_BANDS: readonly {
   readonly belowStabilityDays: number;
   readonly state: MasteryState;
 }[] = [
-  { belowStabilityDays: 1, state: 'new' },
-  { belowStabilityDays: 4, state: 'shaky' },
-  { belowStabilityDays: 12, state: 'coming' },
-  { belowStabilityDays: 45, state: 'solid' },
+  { belowStabilityDays: 1, state: 'seed' },
+  { belowStabilityDays: 12, state: 'sprout' },
+  { belowStabilityDays: 45, state: 'sapling' },
 ];
 
 /** Above every band. */
-const TOP_MASTERY: MasteryState = 'yours';
+const TOP_MASTERY: MasteryState = 'tree';
 
 /** Per-instrument-type scaling of answer duration. MCQs are quick; recall is not. */
 const DURATION_SCALE: Readonly<Record<InstrumentType, number>> = {

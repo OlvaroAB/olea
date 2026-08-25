@@ -942,24 +942,24 @@ button.olea-review-mcq-option:hover {
   background: var(--olea-host-brand);
 }
 
-/* One leaf is "no practice recorded yet" (F2.11). It reads as the absence of
-   evidence rather than as a weak grade, so it takes the neutral line colour
-   and not a faded brand — a pale green still says "a little bit grown", which
-   is a claim the state does not make. */
-.olea-today-mastery-seg[data-leaves="1"] {
+/* Keyed on ordinal stage position (`data-stage-index`, `MASTERY_ORDER.indexOf(state)`), not on
+   leaf count (D-049; `VOC-1`/`ol-7efk`): the ratified sprig geometry gives `sapling` and `tree`
+   the same three leaves, so leaf count stopped being monotonic with stage the moment the second
+   axis (vitality, carried as fruit rather than a leaf) was pulled out of a single five-leaf scale.
+   `seed` is "no practice recorded yet" (F2.11) and reads as the absence of evidence rather than as
+   a weak grade, so it takes the neutral line colour and not a faded brand — a pale green still
+   says "a little bit grown", which is a claim the state does not make. The top stage (`tree`) is
+   the default, unstyled full-opacity brand fill — no rule needed. */
+.olea-today-mastery-seg[data-stage-index="0"] {
   background: var(--olea-host-line);
 }
 
-.olea-today-mastery-seg[data-leaves="2"] {
+.olea-today-mastery-seg[data-stage-index="1"] {
   opacity: 0.35;
 }
 
-.olea-today-mastery-seg[data-leaves="3"] {
+.olea-today-mastery-seg[data-stage-index="2"] {
   opacity: 0.55;
-}
-
-.olea-today-mastery-seg[data-leaves="4"] {
-  opacity: 0.78;
 }
 
 .olea-today-mastery-counts {
@@ -1457,27 +1457,25 @@ button.olea-review-mcq-option:hover {
 }
 
 /* ============================================================
-   ---- Brand: the sprig (F2.3, F2.11; ol-t1hc) ----
+   ---- Brand: the sprig (F2.3, F2.11; ol-t1hc, VOC-1/ol-7efk) ----
    ============================================================
 
    The one progress indicator Olea has (docs/Olea.dc.html, service repo, calls it "the only
    progress bar in the whole thing"). `packages/plugin/src/sprig/render-sprig.ts` builds the SVG
-   DOM — a stem and five fixed leaf positions, some filled; this section only paints it. Used
-   inline inside `.olea-today-mastery-count` (Today panel, above) and `.olea-gap-mastery` (gap
-   view, above) — appended here rather than in either of those sections because neither view's own
-   drift-guard test (`test/today/styles.spec.ts`, `test/gap/styles.spec.ts`) expects a rule for a
-   class its own `cls:`/`addClass` literals never emit, and these classes are only ever set from
-   inside `render-sprig.ts`, never spelled out as a string in either view file.
+   DOM; this section only paints it. **Geometry is per-stage, not a fixed five-position leaf
+   count** (D-048/D-049): `seed` draws a small ellipse and no stem; `sprout`/`sapling`/`tree` draw
+   a stem and 1/3/3 leaves, `tree` alone adding fruit to the same three leaves. There is no
+   "empty" leaf any more — every leaf a stage draws is filled, so there is one leaf class, not
+   two. Used inline inside `.olea-today-mastery-count` (Today panel, above) and `.olea-gap-mastery`
+   (gap view, above) — appended here rather than in either of those sections because neither
+   view's own drift-guard test (`test/today/styles.spec.ts`, `test/gap/styles.spec.ts`) expects a
+   rule for a class its own `cls:`/`addClass` literals never emit, and these classes are only ever
+   set from inside `render-sprig.ts`, never spelled out as a string in either view file.
 
-   OWNED COLOUR: none of its own — deliberately. The design system's own geometry note
-   (`docs/design/components/brand/SPRIG-GEOMETRY.md`) names two dedicated tokens for the filled
-   and empty leaf, as "already present" in this file; they are not — grepping this file before
-   this section existed found neither. Rather than invent them as a third owned colour on top of
-   this file's existing DP-1 budget (the honey and olive constants declared per-root above), the
-   filled leaf and stem reuse the same olive brand variable already declared by both
-   `.olea-today-root` and `.olea-gap-root`, and the empty leaf's outline reuses the same neutral,
-   host-adaptive line colour `.olea-today-mastery-seg[data-leaves="1"]` already uses for "no
-   evidence yet". Both values resolve correctly wherever a sprig is mounted purely through CSS
+   OWNED COLOUR: none of its own — deliberately. The stem, seed and leaves reuse the same olive
+   brand variable already declared by both `.olea-today-root` and `.olea-gap-root`; the fruit
+   reuses the same host-adaptive `--olea-host-fruit` role `MasteryAxes.jsx`'s own `StageSprig`
+   draws it with. Both resolve correctly wherever a sprig is mounted purely through CSS
    custom-property inheritance from whichever root contains it — the rules below never need their
    own copy of either variable. (Deliberately not named by their literal token here: this section
    lands inside `test/session-builder/styles.spec.ts`'s unbounded read of everything after its own
@@ -1485,8 +1483,9 @@ button.olea-review-mcq-option:hover {
 
    NO MOTION HERE. The growth transition (a new leaf drawing itself once, stem-side end first, on
    evidence change) is deferred — see `render-sprig.ts`'s own module doc and `ol-t1hc`'s closing
-   report for why. Nothing below animates, so there is nothing to gate behind
-   `prefers-reduced-motion` yet.
+   report for why. The vitality `wilt` overlay `StageSprig` also draws is not built here either —
+   vitality is not yet a persisted field (`MAT-2`'s scope). Nothing below animates, so there is
+   nothing to gate behind `prefers-reduced-motion` yet.
 */
 
 .olea-sprig {
@@ -1501,13 +1500,13 @@ button.olea-review-mcq-option:hover {
   stroke-linecap: round;
 }
 
-.olea-sprig-leaf-filled {
+.olea-sprig-seed,
+.olea-sprig-leaf {
   fill: var(--olea-host-brand);
   stroke: none;
 }
 
-.olea-sprig-leaf-empty {
-  fill: none;
-  stroke: var(--olea-host-line);
-  stroke-width: 1;
+.olea-sprig-fruit {
+  fill: var(--olea-host-fruit, var(--olea-host-brand));
+  stroke: none;
 }

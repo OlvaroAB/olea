@@ -179,7 +179,7 @@ export function strugglingCourseReadsWorse(
 ): boolean {
   const strugglingCourses = new Set(world.stream.groundTruth.strugglingCourseIds);
   if (strugglingCourses.size === 0) return true; // nothing declared to check
-  const ADVANCED: ReadonlySet<string> = new Set(['solid', 'yours']);
+  const ADVANCED: ReadonlySet<string> = new Set(['sapling', 'tree']);
 
   let strugglingAdvanced = 0;
   let strugglingTotal = 0;

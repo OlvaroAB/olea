@@ -53,7 +53,7 @@ function conceptPriority(overrides: Partial<ConceptPriority> = {}): ConceptPrior
       distinctSourceCount: new Set(citations.map((c) => c.sourcePath)).size,
       contributions: [contribution()],
       preMasteryScore: 0.16,
-      masteryState: 'new',
+      masteryState: 'seed',
       masteryNeedWeight: 1,
       priorityScore: 0.16,
     },

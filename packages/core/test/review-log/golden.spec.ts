@@ -670,7 +670,7 @@ describe('the v3 fixture on disk is still v3 — extended, never migrated (`ol-g
     expect(line).toBeDefined();
     expect(line?.conceptIds).toEqual(['imbrication', 'bioturbation']);
     expect((line?.selectionContext as Record<string, unknown> | undefined)?.masteryAtTime).toBe(
-      'coming',
+      'sprout',
     );
   });
 });
@@ -684,12 +684,12 @@ describe('migrating the v3 fixture — attribute where you can, decline where yo
     );
     expect(single?.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming' },
+      byConcept: { imbrication: 'sprout' },
     });
   });
 
   it('the two-concept record keeps its value and refuses to attribute it', () => {
-    // The crux of the whole v4 decision. `"coming"` was really recorded, so it
+    // The crux of the whole v4 decision. `"sprout"` was really recorded, so it
     // is not thrown away; which of the two concepts it described was never
     // captured, so it is not assigned — not to the first, not to both. Assigning
     // it would persist a guess into an append-only log, where it is
@@ -697,7 +697,7 @@ describe('migrating the v3 fixture — attribute where you can, decline where yo
     const multi = reviews(result.records).find(
       (r) => r.eventId === '77777777-7777-4777-8777-777777777777',
     );
-    expect(multi?.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'coming' });
+    expect(multi?.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'sprout' });
     expect(multi?.conceptIds).toEqual(['imbrication', 'bioturbation']);
   });
 
@@ -763,7 +763,7 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
   });
 
   it('carries the case no earlier version could express: two concepts, two different mastery states', () => {
-    // v3 could say "this two-concept review happened while mastery was coming".
+    // v3 could say "this two-concept review happened while mastery was sprout".
     // It could not say *whose*. This is the sentence the version exists to make
     // sayable.
     const multi = reviews(result.records).find(
@@ -772,7 +772,7 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
     expect(multi?.conceptIds).toEqual(['imbrication', 'bioturbation']);
     expect(multi?.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming', bioturbation: 'shaky' },
+      byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
     });
   });
 

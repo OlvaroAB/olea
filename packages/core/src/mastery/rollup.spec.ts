@@ -4,6 +4,11 @@
 // from `core/mastery-rollup.spec` to match this module's actual path — see
 // this task's report).
 //
+// Vocabulary updated for D-049/`VOC-1` (`ol-7efk`): the retired five-state
+// ordinal (`new`/`shaky`/`coming`/`solid`/`yours`) is now the ratified
+// four-stage set (`seed`/`sprout`/`sapling`/`tree`). `shaky` and `coming`
+// collapse onto one word, `sprout` — see `rollup.ts`'s module doc for why.
+//
 // Concept and instrument ids below are structural placeholders
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
@@ -63,28 +68,28 @@ describe('evidenceTierOf — R7 tiers', () => {
 });
 
 describe('computeConceptMastery — empty log and no-evidence concept', () => {
-  it('an empty log is `new`', () => {
+  it('an empty log is `seed`', () => {
     const result = computeConceptMastery([], 'concept-a');
-    expect(result.state).toBe('new');
+    expect(result.state).toBe('seed');
     expect(result.evidence.scoredEventCount).toBe(0);
   });
 
-  it('a concept the log never names is `new`, even when the log has other evidence', () => {
+  it('a concept the log never names is `seed`, even when the log has other evidence', () => {
     const entries = onConsecutiveDays('2026-01-01', 5, () => ({ conceptIds: ['concept-b'] }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('new');
+    expect(result.state).toBe('seed');
   });
 });
 
-describe('computeConceptMastery — recognition-only concept caps at solid (named test, R7)', () => {
-  it('many correct MCQ reviews, spread over days, never exceed solid', () => {
+describe('computeConceptMastery — recognition-only concept caps at sapling (named test, R7)', () => {
+  it('many correct MCQ reviews, spread over days, never exceed sapling', () => {
     const entries = onConsecutiveDays('2026-01-01', 20, () => ({
       instrumentType: 'mcq',
       instrumentId: 'mcq:concept-a:1',
       rating: 'good',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('solid');
+    expect(result.state).toBe('sapling');
     expect(result.evidence.recognitionOnly).toBe(true);
   });
 
@@ -103,12 +108,12 @@ describe('computeConceptMastery — recognition-only concept caps at solid (name
     });
     const result = computeConceptMastery([...mcq, recall], 'concept-a');
     expect(result.evidence.recognitionOnly).toBe(false);
-    expect(result.state).toBe('yours');
+    expect(result.state).toBe('tree');
   });
 });
 
 describe('computeConceptMastery — explain-back is recorded, never scored (contract silence)', () => {
-  it('explain-back attempts alone do not reach past new — no success signal exists to act on', () => {
+  it('explain-back attempts alone do not reach past seed — no success signal exists to act on', () => {
     const entries = [
       review({
         eventId: 'e1',
@@ -125,17 +130,17 @@ describe('computeConceptMastery — explain-back is recorded, never scored (cont
       }),
     ];
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('new');
+    expect(result.state).toBe('seed');
     expect(result.evidence.explainBackAttempts).toBe(2);
     expect(result.evidence.tiersPracticed.explanation).toBe(true);
   });
 
-  it('explain-back attempts do not by themselves satisfy the `yours` gate even alongside solid recall evidence', () => {
+  it('explain-back attempts do not by themselves satisfy the `tree` gate even alongside solid recall evidence', () => {
     const recall = onConsecutiveDays('2026-01-01', 5, () => ({
       instrumentType: 'qa',
       rating: 'good',
     }));
-    // Recall alone already reaches `yours` (see the dedicated test below); this
+    // Recall alone already reaches `tree` (see the dedicated test below); this
     // asserts explain-back's presence changes nothing about *how* that happens
     // — it is recorded, not counted, per this module's documented reading of
     // R7's "success", not "attempt".
@@ -156,18 +161,18 @@ describe('computeConceptMastery — explain-back is recorded, never scored (cont
   });
 });
 
-describe('computeConceptMastery — recall success reaches `yours` (R7: recognition alone cannot)', () => {
-  it('spaced, reliable Q&A recall reaches yours', () => {
+describe('computeConceptMastery — recall success reaches `tree` (R7: recognition alone cannot)', () => {
+  it('spaced, reliable Q&A recall reaches tree', () => {
     const entries = onConsecutiveDays('2026-01-01', 5, () => ({
       instrumentType: 'qa',
       rating: 'good',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('yours');
+    expect(result.state).toBe('tree');
     expect(result.evidence.recentRecallSuccess).toBe(true);
   });
 
-  it('a high-success run crammed into one sitting is `coming`, not `solid` or `yours`', () => {
+  it('a high-success run crammed into one sitting is `sprout`, not `sapling` or `tree`', () => {
     const entries = Array.from({ length: 5 }, (_, i) =>
       review({
         eventId: `c${i}`,
@@ -177,13 +182,13 @@ describe('computeConceptMastery — recall success reaches `yours` (R7: recognit
       }),
     );
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('coming');
+    expect(result.state).toBe('sprout');
     expect(result.evidence.recentDistinctDays).toBe(1);
   });
 });
 
 describe('computeConceptMastery — a concept whose evidence disagrees sharply', () => {
-  it('an even mix of hits and misses across several instruments reads as shaky, not smoothed to coming', () => {
+  it('an even mix of hits and misses across several instruments reads as sprout', () => {
     // Exactly the default window size worth of evidence (4 <= 5), split
     // evenly, so the 50% boundary is unambiguous rather than an artefact of
     // which end of the window got trimmed.
@@ -194,13 +199,13 @@ describe('computeConceptMastery — a concept whose evidence disagrees sharply',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
     expect(result.evidence.recentSuccessRate).toBeCloseTo(0.5, 5);
-    expect(result.state).toBe('shaky');
+    expect(result.state).toBe('sprout');
   });
 
-  it('an all-failure history is still shaky, never a state below it — the vocabulary has no floor beneath shaky once evidence exists', () => {
+  it('an all-failure history is still sprout, never a state below it — the vocabulary has no floor beneath sprout once evidence exists', () => {
     const entries = onConsecutiveDays('2026-01-01', 4, () => ({ rating: 'again' }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('shaky');
+    expect(result.state).toBe('sprout');
   });
 });
 
@@ -215,17 +220,16 @@ describe('computeConceptMastery — options are honoured and validated', () => {
     const wide = computeConceptMastery(entries, 'concept-a', { recentWindowSize: 10 });
     expect(narrow.evidence.recentSuccessRate).toBe(1);
     expect(wide.evidence.recentSuccessRate).toBe(0.5);
-    expect(wide.state).toBe('shaky');
+    expect(wide.state).toBe('sprout');
   });
 
   it('rejects a non-positive recentWindowSize', () => {
     expect(() => computeConceptMastery([], 'concept-a', { recentWindowSize: 0 })).toThrow();
   });
 
-  it('rejects highSuccessRate below midSuccessRate', () => {
-    expect(() =>
-      computeConceptMastery([], 'concept-a', { midSuccessRate: 0.8, highSuccessRate: 0.5 }),
-    ).toThrow();
+  it('rejects a highSuccessRate outside [0, 1]', () => {
+    expect(() => computeConceptMastery([], 'concept-a', { highSuccessRate: 1.5 })).toThrow();
+    expect(() => computeConceptMastery([], 'concept-a', { highSuccessRate: -0.1 })).toThrow();
   });
 
   it('rejects an empty conceptId', () => {
@@ -312,8 +316,8 @@ describe('computeAllConceptMastery', () => {
       ...onConsecutiveDays('2026-01-01', 4, () => ({ conceptIds: ['concept-b'], rating: 'again' })),
     ];
     const all = computeAllConceptMastery(entries);
-    expect(all.get('concept-a')?.state).toBe('yours');
-    expect(all.get('concept-b')?.state).toBe('shaky');
+    expect(all.get('concept-a')?.state).toBe('tree');
+    expect(all.get('concept-b')?.state).toBe('sprout');
   });
 
   it('a restricted conceptIds list rolls up only those concepts', () => {
@@ -332,7 +336,7 @@ describe('masteryAtTimeForConceptIds — the value a future writer stamps (ol-g6
       rating: 'good',
     }));
     const value = masteryAtTimeForConceptIds(entries, ['concept-a']);
-    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'yours' } });
+    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'tree' } });
   });
 
   it('excludes the not-yet-appended event by construction — it only ever sees what the caller passes', () => {
@@ -341,6 +345,6 @@ describe('masteryAtTimeForConceptIds — the value a future writer stamps (ol-g6
     // exactly what it is given and nothing more.
     const priorHistory = onConsecutiveDays('2026-01-01', 2, () => ({ rating: 'again' }));
     const value = masteryAtTimeForConceptIds(priorHistory, ['concept-a']);
-    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'shaky' } });
+    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'sprout' } });
   });
 });

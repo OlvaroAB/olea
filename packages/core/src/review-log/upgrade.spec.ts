@@ -28,7 +28,7 @@ const SELECTION_CONTEXT: ReviewLogRecordV1['selectionContext'] = {
   dueState: 'due',
   examProximity: null,
   yieldRank: null,
-  masteryAtTime: 'coming',
+  masteryAtTime: 'sprout',
   instrumentTypesOffered: ['qa'],
   planVersion: null,
 };
@@ -235,7 +235,7 @@ describe('upgradeV3 — one concept, so one place the value can belong', () => {
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
     expect(upgraded.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming' },
+      byConcept: { imbrication: 'sprout' },
     });
   });
 
@@ -289,7 +289,7 @@ describe('upgradeV3 — several concepts, so nowhere honest to put the value', (
   it('keeps the value and declines the attribution', () => {
     const upgraded = upgradeV3(multi);
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
-    expect(upgraded.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'coming' });
+    expect(upgraded.masteryAtTime).toEqual({ attribution: 'not-attributable', recorded: 'sprout' });
   });
 
   it('does not assign it to the first concept — there is no primary concept', () => {
@@ -300,7 +300,7 @@ describe('upgradeV3 — several concepts, so nowhere honest to put the value', (
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
     expect(upgraded.masteryAtTime).not.toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming' },
+      byConcept: { imbrication: 'sprout' },
     });
   });
 
@@ -309,7 +309,7 @@ describe('upgradeV3 — several concepts, so nowhere honest to put the value', (
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
     expect(upgraded.masteryAtTime).not.toEqual({
       attribution: 'per-concept',
-      byConcept: { imbrication: 'coming', bioturbation: 'coming' },
+      byConcept: { imbrication: 'sprout', bioturbation: 'sprout' },
     });
   });
 
@@ -383,7 +383,7 @@ describe('every path into v4 serialises identically', () => {
         instrumentTypesOffered: ['qa'],
         planVersion: null,
       },
-      masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'coming' } },
+      masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
     });
     expect(JSON.stringify(migrated)).toBe(JSON.stringify(native));
   });
@@ -415,7 +415,7 @@ describe('upgradeV2 is unchanged — it still produces v3, not v4', () => {
     const upgraded = upgradeV2(v2Record());
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
     expect(upgraded.schemaVersion).toBe(3);
-    expect(upgraded.selectionContext.masteryAtTime).toBe('coming');
+    expect(upgraded.selectionContext.masteryAtTime).toBe('sprout');
     expect(upgraded).not.toHaveProperty('masteryAtTime');
   });
 });

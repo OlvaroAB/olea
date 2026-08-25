@@ -83,7 +83,7 @@ function row(overrides: Partial<GapRow> = {}): GapRow {
       applied: false,
       weight: 1,
     },
-    masteryState: 'shaky',
+    masteryState: 'sprout',
     targetAssessmentPath: '02 Assessments/final.md' as VaultPath,
     assessmentFormat: 'unknown',
     citations: [citation],

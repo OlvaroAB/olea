@@ -43,7 +43,7 @@ import type {
   StreakDay,
   TodayViewModel,
 } from 'olea-core';
-import { MASTERY_DISPLAY, MASTERY_ORDER } from 'olea-core';
+import { MASTERY_ORDER } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   conceptCountLabel,
@@ -181,11 +181,14 @@ export class TodayView extends ItemView {
       const count = course.distribution.counts[state];
       if (count === 0) continue;
       const segment = strip.createDiv({ cls: 'olea-today-mastery-seg' });
-      // `data-leaves` rather than an `is-<state>` class: the leaf count IS the
-      // state (F2.11), so one attribute carries the whole ordering and the
-      // stylesheet needs no five-way branch that could drift from
-      // `MASTERY_DISPLAY`.
-      segment.setAttr('data-leaves', String(MASTERY_DISPLAY[state].leaves));
+      // `data-stage-index` (ordinal position in `MASTERY_ORDER`) rather than an
+      // `is-<state>` class or leaf count: `sapling` and `tree` share the same
+      // three-leaf geometry (D-049), so leaf count stopped being monotonic with
+      // stage the moment vitality moved off the leaf scale onto fruit. Ordinal
+      // position is still exactly one attribute carrying the whole ordering,
+      // and the stylesheet still needs no branch that could drift from
+      // `MASTERY_ORDER`.
+      segment.setAttr('data-stage-index', String(MASTERY_ORDER.indexOf(state)));
       segment.setAttr('style', `flex-grow:${count}`);
 
       // The sprig here is one representative icon per occupied state bucket, not
