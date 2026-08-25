@@ -14,6 +14,9 @@ import {
   OPERATING_FRESH_FOR_SECONDS,
   OPERATING_GOVERNS_FOR_SECONDS,
   plannedConceptBasis,
+  RANK_WEIGHTS_CONTRACT_ID,
+  RANK_WEIGHTS_ENDPOINT_PATH,
+  rankWeightsEnvelope,
   readArtifactEnvelope,
   STUDY_PLAN_ENVELOPE_CONTRACT_ID,
   STUDY_PLAN_KIND,
@@ -81,6 +84,7 @@ describe('the versioned-artifact envelope', () => {
       STUDY_PLAN_ENVELOPE_CONTRACT_ID,
       VISION_ROUTE_CONTRACT_ID,
       MISCONCEPTION_MERGE_CONTRACT_ID,
+      RANK_WEIGHTS_CONTRACT_ID,
     ]) {
       expect(contracts.has(id)).toBe(true);
     }
@@ -247,6 +251,28 @@ describe('the delivered-threshold surfaces share this envelope', () => {
       body: { minSimilarity: 0.92 },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it('carries the ranking-weights policy', () => {
+    const parsed = rankWeightsEnvelope.safeParse({
+      envelopeVersion: 1,
+      kind: 'rank-weights',
+      bodyVersion: 1,
+      policyVersion: 'rw1-abc',
+      computedAt: '2026-08-16T09:00:00.000Z',
+      freshForSeconds: OPERATING_FRESH_FOR_SECONDS,
+      governsForSeconds: OPERATING_GOVERNS_FOR_SECONDS,
+      body: {
+        proximityHalfLifeDays: 14,
+        assessmentWeightDivisor: 100,
+        masteryNeedWeight: { seed: 1, sprout: 0.7, sapling: 0.35, tree: 0.15, unknown: 1 },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('names a fixed GET endpoint for the ranking-weights artifact', () => {
+    expect(RANK_WEIGHTS_ENDPOINT_PATH).toBe('/v1/rank-weights');
   });
 
   it('maps the shipped study-plan artifact onto the envelope, totally', () => {

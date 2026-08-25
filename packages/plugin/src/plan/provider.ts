@@ -8,10 +8,23 @@
  * "computed with no model call and no network," and `oracle/compose.ts`'s
  * `composeOracleRanking` is the whole of that computation, vault and review
  * log in, `RankOracleResult` out. There is nothing for a Worker call to do
- * here: the policy the plan carries is derived entirely from her own
- * assessments Base and her own review log, both already on the device.
- * `StudyPlanProvider.fetchPlan` does not require HTTP anywhere in its
- * contract, only "compute a fresh plan" — this computes one locally.
+ * *for the ranking itself*: the policy the plan carries is derived entirely
+ * from her own assessments Base and her own review log, both already on the
+ * device. `StudyPlanProvider.fetchPlan` does not require HTTP anywhere in
+ * its contract, only "compute a fresh plan" — this computes one locally.
+ *
+ * **`deps.readRankWeights` is the one optional exception, added by
+ * `ol-v7r5.3` for `[D-110]`.** Component 3.3's ranking-weight *factors*
+ * (proximity half-life, assessment weight divisor, mastery-need ladder) are
+ * DERIVED and now delivered from the service (`rank/wiring.ts`,
+ * `rank/rank-weights-provider.ts`) rather than baked into this package —
+ * but the *ranking computation* stays exactly as local and network-free as
+ * the paragraph above says. When `readRankWeights` is absent, or it
+ * resolves `undefined` (unconfigured, offline, an expired or unreadable
+ * envelope — every case `fetchRankWeightsOptions` collapses to one
+ * outcome), `composeOracleRanking` is called with no `options` at all and
+ * `rank.ts`'s own `DECLARED_FALLBACK_*` constants apply — F7.8's posture,
+ * degrade rather than half-work, with nothing surfaced to her as an error.
  *
  * ## Never throws past `fetchPlan`'s own caller… except by design
  *
@@ -37,7 +50,7 @@
  * module doc).
  */
 
-import type { StudyPlanProvider, VaultSource } from 'olea-core';
+import type { RankOracleOptions, StudyPlanProvider, VaultSource } from 'olea-core';
 import {
   buildStudyPlan,
   calendarDaysEndingOn,
@@ -62,6 +75,14 @@ export interface CreateLocalStudyPlanProviderDeps {
   readonly now: () => Date;
   /** Overridable for tests. Defaults to the window `open-session.ts` and the Today panel both probe. */
   readonly probeDays?: number;
+  /**
+   * `[D-110]` (`ol-v7r5.3`): reads the delivered `rank-weights` artifact —
+   * see `rank/wiring.ts`'s `RankWeightsWiring.readRankWeights`. Absent, or
+   * resolving `undefined`, means `composeOracleRanking` runs with no
+   * `options`, which is `rank.ts`'s declared-fallback path — see the module
+   * doc above.
+   */
+  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
 }
 
 /**
@@ -96,9 +117,14 @@ export function createLocalStudyPlanProvider(
       // (not the heavier `enumerateVaultInstruments`, which this provider has
       // no other use for) is the name→opaque-key source for
       // `ConceptAssessmentEdge.conceptKey` (`ol-63e1`).
-      const [{ entries }, concepts] = await Promise.all([
+      // The vault/log walk and the rank-weights fetch share nothing —
+      // one reads her material, the other is a network call to the Worker
+      // (or a same-tick `undefined` when `readRankWeights` is absent) — so
+      // all three run concurrently, same discipline as the two walks below.
+      const [{ entries }, concepts, options] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
         extractConcepts(deps.vault, {}),
+        deps.readRankWeights?.() ?? Promise.resolve(undefined),
       ]);
 
       const { ranking } = await composeOracleRanking({
@@ -107,6 +133,7 @@ export function createLocalStudyPlanProvider(
         reviewLog: entries,
         asOf: today,
         concepts,
+        ...(options !== undefined ? { options } : {}),
       });
 
       return buildStudyPlan({ ranking, computedAt: now.toISOString() });

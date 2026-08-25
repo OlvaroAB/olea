@@ -493,6 +493,62 @@ export const misconceptionMergeEnvelope = artifactEnvelope(
 export type MisconceptionMergeEnvelope = z.infer<typeof misconceptionMergeEnvelope>;
 
 /**
+ * **3.3 — rank by exam likelihood.** `[D-110]` (`ol-egov.28`): the component
+ * register's four ranking-weight factors (proximity half-life, assessment
+ * weight divisor, five-rung-plus-neutral mastery-need ladder) are DERIVED
+ * per the register, and the register's own boundary column names them
+ * service — so, per the declared/derived rule, only the numbers ship, never
+ * the fitting. This is the third delivered threshold, and — unlike 1.6 and
+ * 2.5, which pick between two internally-correct behaviours — a stale
+ * weight set here costs *precision in a ranking*, never a false claim on
+ * screen, which is the same operating-not-governing argument 1.6 and 2.5
+ * already make, so this uses the same `OPERATING_*` pair.
+ *
+ * Promoted from `olea-service`'s `src/tasks/oracleRank.ts` scaffold
+ * (`ol-v7r5.2`), which built this shape by hand because this file was
+ * vendored and out of that bead's ownership — `ol-v7r5.3` is that
+ * promotion. The service module re-vendors this export rather than
+ * redefining it once `scripts/vendor-contracts.sh` runs.
+ */
+export const rankWeightsBody = z.object({
+  /** Days at which exam proximity's contribution decays to half its value. */
+  proximityHalfLifeDays: z.number().positive(),
+  /** Divides an assessment's weight onto `[0, 1]` before it composes with proximity. */
+  assessmentWeightDivisor: z.number().positive(),
+  /** One multiplier per growth stage (`VOC-1`'s four-stage vocabulary, plus `unknown` for a skipped mastery join). */
+  masteryNeedWeight: z.object({
+    seed: z.number().min(0),
+    sprout: z.number().min(0),
+    sapling: z.number().min(0),
+    tree: z.number().min(0),
+    unknown: z.number().min(0),
+  }),
+});
+export type RankWeightsBody = z.infer<typeof rankWeightsBody>;
+
+export const RANK_WEIGHTS_KIND = 'rank-weights';
+export const RANK_WEIGHTS_BODY_VERSION = 1;
+export const RANK_WEIGHTS_CONTRACT_ID = 'rank-weights-envelope.v1';
+
+/**
+ * The Worker route that serves this artifact. A GET with no request
+ * payload — `rank-weights` names no request-specific variable, so it does
+ * not fit `POST /v1/task`'s generative-envelope shape (`tasks.ts`'s
+ * `TASK_ENDPOINT_PATH`), the same reason `embedDispatch.ts`/
+ * `rerankDispatch.ts` are additive branches rather than a body shape forced
+ * through that endpoint. This is the first delivered-artifact kind with a
+ * production route; `ol-v7r5.3`'s close evidence names the caller.
+ */
+export const RANK_WEIGHTS_ENDPOINT_PATH = '/v1/rank-weights';
+
+export const rankWeightsEnvelope = artifactEnvelope(
+  RANK_WEIGHTS_KIND,
+  RANK_WEIGHTS_BODY_VERSION,
+  rankWeightsBody,
+);
+export type RankWeightsEnvelope = z.infer<typeof rankWeightsEnvelope>;
+
+/**
  * **The study plan, expressed against the shared envelope** — the surface the
  * envelope was generalised *from*.
  *
@@ -578,6 +634,12 @@ contracts.register({
   schema: misconceptionMergeEnvelope,
   description:
     'Delivered misconception-merge threshold (register 2.5) in the versioned-artifact envelope',
+});
+contracts.register({
+  id: RANK_WEIGHTS_CONTRACT_ID,
+  schema: rankWeightsEnvelope,
+  description:
+    'Delivered ranking-weights policy (register 3.3, [D-110]) in the versioned-artifact envelope',
 });
 contracts.register({
   id: STUDY_PLAN_ENVELOPE_CONTRACT_ID,

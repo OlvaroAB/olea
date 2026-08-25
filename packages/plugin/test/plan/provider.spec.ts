@@ -84,6 +84,85 @@ describe('createLocalStudyPlanProvider — not configured', () => {
   });
 });
 
+describe('createLocalStudyPlanProvider — delivered ranking weights ([D-110], ol-v7r5.3)', () => {
+  it('no readRankWeights dep at all — composes normally on the declared fallback (F7.8, no error surfaced)', async () => {
+    const provider = createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+    const raw = await provider.fetchPlan();
+    const plan = studyPlanArtifact.parse(raw);
+    const course = plan.courses.find((c) => c.course === 'TESTC101');
+    expect(course?.status).toBe('ranked');
+  });
+
+  it('readRankWeights resolving undefined (offline/unconfigured/expired) — same declared-fallback plan, no throw', async () => {
+    const baseline = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    }).fetchPlan();
+
+    const degraded = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readRankWeights: async () => undefined,
+    }).fetchPlan();
+
+    const baselinePlan = studyPlanArtifact.parse(baseline);
+    const degradedPlan = studyPlanArtifact.parse(degraded);
+    const baselineCourse = baselinePlan.courses.find((c) => c.course === 'TESTC101');
+    const degradedCourse = degradedPlan.courses.find((c) => c.course === 'TESTC101');
+    if (baselineCourse?.status !== 'ranked' || degradedCourse?.status !== 'ranked') {
+      throw new Error('expected TESTC101 to rank in both plans');
+    }
+    expect(degradedCourse.concepts[0]?.weight).toBe(baselineCourse.concepts[0]?.weight);
+  });
+
+  it('a delivered rank-weights artifact is actually threaded into composeOracleRanking, not silently ignored', async () => {
+    let calls = 0;
+    const baseline = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    }).fetchPlan();
+
+    const delivered = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readRankWeights: async () => {
+        calls++;
+        // Sharply different from rank.ts's DECLARED_FALLBACK_MASTERY_NEED_WEIGHT
+        // (seed: 1, sprout: 0.7, sapling: 0.35, tree: 0.15, unknown: 1) — if this
+        // is threaded through, the concept's `weight` (priorityScore) changes.
+        return {
+          proximityHalfLifeDays: 14,
+          assessmentWeightDivisor: 100,
+          masteryNeedWeight: { seed: 5, sprout: 5, sapling: 5, tree: 5, unknown: 5 },
+        };
+      },
+    }).fetchPlan();
+
+    expect(calls).toBe(1);
+    const baselinePlan = studyPlanArtifact.parse(baseline);
+    const deliveredPlan = studyPlanArtifact.parse(delivered);
+    const baselineCourse = baselinePlan.courses.find((c) => c.course === 'TESTC101');
+    const deliveredCourse = deliveredPlan.courses.find((c) => c.course === 'TESTC101');
+    if (baselineCourse?.status !== 'ranked' || deliveredCourse?.status !== 'ranked') {
+      throw new Error('expected TESTC101 to rank in both plans');
+    }
+    expect(deliveredCourse.concepts[0]?.weight).not.toBe(baselineCourse.concepts[0]?.weight);
+  });
+});
+
 describe('createLocalStudyPlanProvider — configured', () => {
   it('composes a valid StudyPlanArtifact entirely on-device, reflecting her real review log', async () => {
     const vault = studyVault();
