@@ -1,11 +1,14 @@
 /**
  * `createLocalSessionBuilderProvider` — the production `SessionBuilderViewDeps`
- * (`ol-p5t06b` [P5-T06b], F4.6/F4.7/F4.8).
+ * (`ol-p5t06b` [P5-T06b], F4.6/F4.7/F4.8; SESS-2/`ol-4a78` for the composition
+ * layer below).
  *
  * The gap view's twin, one layer on. `gap/provider.ts` composes the oracle
- * chain into a `GapViewModel`; this composes the same chain and then selects a
- * time-bounded prefix of it. The three extra things it needs, and where each
- * comes from:
+ * chain into a `GapViewModel`; this composes the same chain and then hands it
+ * to `buildComposedStudySession` (`study-session/compose.ts`), which decides
+ * which concepts are eligible and in what order (obligation class,
+ * cross-course allocation, F2.18 blocking) before selecting a time-bounded
+ * prefix of it. The four extra things it needs, and where each comes from:
  *
  *  - **the instruments themselves** — `enumerateVaultInstruments`, which
  *    `gap/provider.ts` already walks for its per-note counts. Here the records
@@ -15,10 +18,12 @@
  *    `edges.assessmentsRead.records`, passed through unmodified. This is what
  *    turns `GapRow.targetAssessmentPath` into a date, which is F4.7's countdown.
  *  - **her review history** — already read here for the mastery join, and now
- *    read a second time for something new: `durationMs`. The plugin has been
- *    writing that field since `review/session.ts` landed and nothing has ever
- *    read it (`study-session/duration.ts`'s module doc). This is its first
- *    production reader.
+ *    read for two new things: `durationMs`, and a `Scheduler` replay
+ *    (`replaySchedulerStates`) that SESS-2's obligation classifier reads for
+ *    each concept's last-retrieved day and FSRS due day. The plugin has been
+ *    writing `durationMs` since `review/session.ts` landed and nothing has
+ *    ever read it (`study-session/duration.ts`'s module doc) — this is its
+ *    first production reader.
  *
  * ## The history window, and why the durations use a longer one
  *
@@ -41,18 +46,19 @@
  * tempts).
  */
 
-import type { ConceptMaterialPresence, VaultPath, VaultSource } from 'olea-core';
+import type { ConceptMaterialPresence, Scheduler, VaultPath, VaultSource } from 'olea-core';
 import {
   allGapRows,
+  buildComposedStudySession,
   buildConceptInstrumentIndex,
   buildGapView,
   buildMaterialPresence,
-  buildStudySession,
   calendarDaysEndingOn,
   composeOracleRanking,
   enumerateVaultInstruments,
   estimateInstrumentDurations,
   readReviewLogHistory,
+  replaySchedulerStates,
   reviewLogPath,
 } from 'olea-core';
 import {
@@ -70,6 +76,14 @@ export interface CreateLocalSessionBuilderProviderDeps {
   readonly settingsHost: ObsidianDataHost;
   /** Injected for determinism under test; production passes `() => new Date()`. */
   readonly now: () => Date;
+  /**
+   * The same `Scheduler` `main.ts` builds once for the Today panel's replay
+   * — "one `Scheduler`... is what makes that literally the same computation
+   * rather than two that match" (`main.ts`'s own module doc). SESS-2's
+   * obligation classifier replays the log through it to read each concept's
+   * last-retrieved day and FSRS due day.
+   */
+  readonly scheduler: Scheduler;
   readonly probeDays?: number;
 }
 
@@ -139,9 +153,21 @@ export function createLocalSessionBuilderProvider(
           sourceCoverage: edges.tier3.sourceCoverage,
         });
 
-        const model = buildStudySession({
+        // SESS-2 (`ol-4a78`): the same replay `main.ts`'s Today panel builds
+        // its due-state from, over the same `entries` this call already read
+        // for the mastery join — a second fold over data already in hand,
+        // never a second read of the vault.
+        const replay = replaySchedulerStates(entries, deps.scheduler);
+
+        // `composed.overflow`/`courseShares`/`forcedCourses` are deliberately
+        // dropped here rather than threaded into `SessionBuilderState`: F6.7
+        // forbids a standing counter of unmet material, and nothing on this
+        // surface has a clause authorising one (`study-session/compose.ts`'s
+        // module doc).
+        const composed = buildComposedStudySession({
           rows: allGapRows(gap),
           instruments: buildConceptInstrumentIndex(enumeration.records),
+          replay,
           budgetMinutes: request.budgetMinutes,
           // The first production read of the review log's `durationMs` (INV-4:
           // the discipline went in ahead of the feature, and this is the
@@ -157,7 +183,7 @@ export function createLocalSessionBuilderProvider(
             : {}),
         });
 
-        return { kind: 'model', model };
+        return { kind: 'model', model: composed.model };
       } catch (error) {
         console.error('Olea: could not build a study session', error);
         return { kind: 'unavailable' };

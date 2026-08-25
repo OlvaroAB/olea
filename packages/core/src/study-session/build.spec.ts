@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
+import type { ConceptSize } from '../concept/size.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import type { McqInstrumentRecord, QaInstrumentRecord } from '../session/types.js';
@@ -34,6 +35,8 @@ interface RowSpec {
   readonly gapClass?: GapClass;
   readonly targetAssessmentPath?: VaultPath | null;
   readonly assessmentFormat?: AssessmentFormat;
+  /** `ol-urvq` [SIZE-2] — omitted means no size reading, which prices as `'fine'`. */
+  readonly conceptSize?: ConceptSize;
 }
 
 function row(spec: RowSpec): GapRow {
@@ -70,7 +73,13 @@ function row(spec: RowSpec): GapRow {
     notePaths: [],
     instrumentCount: 1,
     affordances: ['open-concept', 'build-session'],
+    ...(spec.conceptSize !== undefined ? { conceptSize: spec.conceptSize } : {}),
   };
+}
+
+/** A minimal `ConceptSize` fixture — `build.ts`'s fill only ever reads `.band`. */
+function conceptSize(band: ConceptSize['band']): ConceptSize {
+  return { band, extent: { noteCount: band === 'coarse' ? 3 : 1, structureCorroborated: false } };
 }
 
 /** Rows in descending gapScore, ranked 1..n — the shape `buildGapView` hands over. */
@@ -170,11 +179,13 @@ function emptyIndex(): ConceptInstrumentIndex {
 }
 
 // ---------------------------------------------------------------------------
-// F4.6 — the budget is a ceiling, and the order is inherited
+// F4.6 — the budget is a declared target, and the order is inherited
+// (`[D-091]`, component register §3.7; `ol-zji3` [BUD-1] realigns this suite
+// with the ruling — see build.ts's module doc for the semantics)
 // ---------------------------------------------------------------------------
 
 describe('the budget is a promise', () => {
-  it('never exceeds the minutes she asked for', () => {
+  it('keeps filling while under the target, and rounds up to the item that crosses it', () => {
     const rows = rankedRows([
       { conceptName: 'A', gapScore: 9 },
       { conceptName: 'B', gapScore: 8 },
@@ -188,7 +199,11 @@ describe('the budget is a promise', () => {
       qa('d1', ['D']),
     ]);
 
-    // 5 minutes = 300s; 90s per instrument admits three, not 3.33.
+    // 5 minutes = 300s target; 90s per instrument admits three (270s) while
+    // still under target, then a FOURTH — 270 is still below the 300s
+    // target, so the fill takes it too and stops only once the running total
+    // (360s) has reached the target. A ceiling would have refused this one;
+    // the target rounds up to it instead.
     const session = buildStudySession({
       rows,
       instruments: index,
@@ -197,9 +212,45 @@ describe('the budget is a promise', () => {
       asOf: AS_OF,
     });
 
-    expect(session.items).toHaveLength(3);
-    expect(session.plannedSeconds).toBe(270);
-    expect(session.plannedSeconds).toBeLessThanOrEqual(session.budgetSeconds);
+    expect(session.items).toHaveLength(4);
+    expect(session.plannedSeconds).toBe(360);
+    expect(session.plannedSeconds).toBeGreaterThan(session.budgetSeconds);
+    // The overshoot is bounded to at most one item: once 360 >= 300, nothing
+    // further is offered a slot.
+    expect(session.leftOut).toEqual([]);
+  });
+
+  it('stops taking instruments once the running total has reached the target', () => {
+    const rows = rankedRows([
+      { conceptName: 'A', gapScore: 9 },
+      { conceptName: 'B', gapScore: 8 },
+      { conceptName: 'C', gapScore: 7 },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B']), qa('c1', ['C'])]);
+
+    // 2 minutes = 120s target, 60s per instrument: A takes it to 60 (still
+    // under target, keep going), B takes it to 120 (AT target — stop). C
+    // never gets a look-in, and is left out as did-not-fit rather than
+    // silently dropped.
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 2,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items.map((i) => i.conceptName)).toEqual(['A', 'B']);
+    expect(session.plannedSeconds).toBe(120);
+    expect(session.leftOut).toEqual([
+      {
+        conceptName: 'C',
+        course: 'CRS101',
+        gapClass: 'mastery-gap',
+        gapRank: 3,
+        reason: 'did-not-fit',
+      },
+    ]);
   });
 
   it('draws from the highest-priority gaps first, in the order it was handed', () => {
@@ -302,6 +353,72 @@ describe('the budget is a promise', () => {
 });
 
 // ---------------------------------------------------------------------------
+// F2.17 — a coarse concept's slot is priced as worth more than a fine one's
+// (`[D-066]`; `ol-urvq` [SIZE-2])
+// ---------------------------------------------------------------------------
+
+describe('a coarse concept costs more of the budget than a fine one', () => {
+  it('prices a coarse row at 1.5x a fine row of the same instrument type', () => {
+    const rows = rankedRows([
+      { conceptName: 'Coarse', gapScore: 9, conceptSize: conceptSize('coarse') },
+      { conceptName: 'Fine', gapScore: 8, conceptSize: conceptSize('fine') },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('c1', ['Coarse']), qa('f1', ['Fine'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    const coarseItem = session.items.find((i) => i.conceptName === 'Coarse');
+    const fineItem = session.items.find((i) => i.conceptName === 'Fine');
+    expect(coarseItem?.estimatedSeconds).toBe(90); // 60 * 1.5
+    expect(fineItem?.estimatedSeconds).toBe(60); // 60 * 1
+    expect(session.plannedSeconds).toBe(150);
+  });
+
+  it('a row with no size reading prices as fine — the same err-fine asymmetry `concept/size.ts` uses', () => {
+    const rows = rankedRows([{ conceptName: 'Unsized', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('u1', ['Unsized'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items[0]?.estimatedSeconds).toBe(60);
+  });
+
+  it('a coarse concept fits fewer instruments into the same target than an all-fine session would', () => {
+    const rows = rankedRows([
+      { conceptName: 'A', gapScore: 9, conceptSize: conceptSize('coarse') },
+      { conceptName: 'B', gapScore: 8, conceptSize: conceptSize('coarse') },
+      { conceptName: 'C', gapScore: 7, conceptSize: conceptSize('coarse') },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B']), qa('c1', ['C'])]);
+
+    // 3 minutes = 180s target; 60s * 1.5 = 90s per coarse instrument admits
+    // two (180s, at target) where three fine instruments would have fit.
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 3,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(2);
+    expect(session.plannedSeconds).toBe(180);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // F4.6 — leaving out is information
 // ---------------------------------------------------------------------------
 
@@ -342,14 +459,17 @@ describe('what is left out is stated, never silently truncated', () => {
     expect(session.leftOutInstrumentCount).toBe(1);
   });
 
-  it('a budget too small for even one instrument is an empty session with a stated reason', () => {
+  it('a target smaller than the shortest instrument still admits it, rounding up rather than refusing it (`[D-091]`)', () => {
     const rows = rankedRows([
       { conceptName: 'A', gapScore: 9 },
       { conceptName: 'B', gapScore: 8 },
     ]);
     const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]);
 
-    // One minute of budget, two minutes per instrument.
+    // One minute of target, two minutes per instrument: A is still taken —
+    // the fill rounds up to the item that crosses the target rather than
+    // refusing an instrument that alone exceeds it — and B is left out once
+    // the target has been reached.
     const session = buildStudySession({
       rows,
       instruments: index,
@@ -358,10 +478,11 @@ describe('what is left out is stated, never silently truncated', () => {
       asOf: AS_OF,
     });
 
-    expect(session.items).toEqual([]);
-    expect(session.plannedSeconds).toBe(0);
+    expect(session.items.map((i) => i.conceptName)).toEqual(['A']);
+    expect(session.plannedSeconds).toBe(120);
+    expect(session.plannedSeconds).toBeGreaterThan(session.budgetSeconds);
     expect(session.consideredRowCount).toBe(2);
-    expect(session.leftOut.map((o) => o.reason)).toEqual(['did-not-fit', 'did-not-fit']);
+    expect(session.leftOut.map((o) => o.reason)).toEqual(['did-not-fit']);
   });
 
   it('nothing to build from is a DIFFERENT state from nothing fitting', () => {
@@ -378,16 +499,24 @@ describe('what is left out is stated, never silently truncated', () => {
     expect(nothingToRank.leftOut).toEqual([]);
     expect(nothingToRank.nextAssessment).toBeNull();
 
-    // The other emptiness — rows exist, nothing fits — is distinguishable by
-    // exactly these two fields, which is the whole point of carrying them.
+    // The other emptiness — rows exist, and at least one does not fit even
+    // though the target rounds up to admit what it can — is distinguishable
+    // by exactly these two fields, which is the whole point of carrying
+    // them. (Under `[D-091]`'s target semantics a *lone* row is always
+    // admitted — see the "target smaller than the shortest instrument" case
+    // above — so demonstrating "something left out" needs a second row the
+    // target has no room left for.)
     const nothingFits = buildStudySession({
-      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
-      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
       budgetMinutes: 1,
       durations: flatDurations(120),
       asOf: AS_OF,
     });
-    expect(nothingFits.consideredRowCount).toBe(1);
+    expect(nothingFits.consideredRowCount).toBe(2);
     expect(nothingFits.leftOut).toHaveLength(1);
   });
 

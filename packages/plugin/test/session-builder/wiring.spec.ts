@@ -93,7 +93,12 @@ describe('the session builder reads what only a real vault has', () => {
   it('composes the real oracle chain rather than re-implementing a ranking', () => {
     expect(provider).toMatch(/composeOracleRanking\(\{/);
     expect(provider).toMatch(/buildGapView\(\{/);
-    expect(provider).toMatch(/buildStudySession\(\{/);
+    expect(provider).toMatch(/buildComposedStudySession\(\{/);
+  });
+
+  it('SESS-2: replays scheduling state through the same Scheduler the Today panel uses, and reads its own scheduler dep rather than building a second instance', () => {
+    expect(provider).toMatch(/replaySchedulerStates\(entries,\s*deps\.scheduler\)/);
+    expect(main).toMatch(/scheduler,\s*\}\),/);
   });
 
   it('is the first production reader of the review log’s durationMs (INV-4)', () => {

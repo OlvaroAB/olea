@@ -811,6 +811,26 @@ export type {
   StudySessionOmissionReason,
 } from './study-session/build.js';
 export { buildStudySession, CONCEPT_SIZE_SECONDS_MULTIPLIER } from './study-session/build.js';
+// Session composition (SESS-1/`ol-xd1v`, SESS-2/`ol-4a78`; `[D-113]`). The
+// layer above `build.ts`'s fill — decides which concepts are eligible and in
+// what order (obligation class, cross-course allocation, F2.18 course
+// blocks) — see compose.ts's module doc for the full algorithm.
+export type {
+  BuildComposedStudySessionInput,
+  ComposedStudySession,
+  ComposeSessionRowsInput,
+  ComposeSessionRowsResult,
+  ObligationClass,
+  ObligationClassification,
+  ObligationOverflowEntry,
+  ObligationSignals,
+} from './study-session/compose.js';
+export {
+  buildComposedStudySession,
+  classifyObligation,
+  composeSessionRows,
+  RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
+} from './study-session/compose.js';
 export type {
   DurationEstimateSource,
   DurationModel,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { SourceCoverage } from '../concept/evidence.js';
+import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -229,13 +230,18 @@ describe('buildMaterialPresence', () => {
   // rather than one that happens to read the same as the name.
   const ALPHA_KEY = provisionalConceptKey({ name: 'Alpha', boundNotePath: null });
 
-  function concept(name: string, sourcePaths: readonly string[]): ConceptRecord {
+  function concept(
+    name: string,
+    sourcePaths: readonly string[],
+    size?: ConceptSize,
+  ): ConceptRecord {
     return {
       key: provisionalConceptKey({ name, boundNotePath: null }),
       name,
       tier: 2,
       courses: ['CRS101'],
       sourcePaths: sourcePaths as VaultPath[],
+      ...(size !== undefined ? { size } : {}),
     };
   }
 
@@ -261,5 +267,50 @@ describe('buildMaterialPresence', () => {
       instrumentCount: 0,
     });
     expect(classifyGap(presence.get(ALPHA_KEY))).toBe('coverage-gap');
+  });
+
+  it('carries ConceptRecord.size through verbatim (`[D-066]`, `ol-urvq` [SIZE-2])', () => {
+    const coarse: ConceptSize = {
+      band: 'coarse',
+      extent: { noteCount: 3, structureCorroborated: false },
+    };
+    const presence = buildMaterialPresence(
+      [concept('Alpha', ['01 Courses/CRS101/w1.md'], coarse)],
+      new Map(),
+    );
+    expect(presence.get(ALPHA_KEY)?.size).toEqual(coarse);
+  });
+
+  it('a concept with no size reading at all carries no size field, never an invented one', () => {
+    const presence = buildMaterialPresence(
+      [concept('Alpha', ['01 Courses/CRS101/w1.md'])],
+      new Map(),
+    );
+    expect(presence.get(ALPHA_KEY)?.size).toBeUndefined();
+    expect('size' in (presence.get(ALPHA_KEY) ?? {})).toBe(false);
+  });
+});
+
+describe("GapRow.conceptSize — study-session's coarse/fine slot pricing seam (`ol-urvq` [SIZE-2])", () => {
+  it('a ranked row carries the material presence size verbatim', () => {
+    const coarse: ConceptSize = {
+      band: 'coarse',
+      extent: { noteCount: 4, structureCorroborated: false },
+    };
+    const presence = new Map<string, ConceptMaterialPresence>([
+      ['Alpha', { notePaths: ['n.md' as VaultPath], instrumentCount: 1, size: coarse }],
+    ]);
+    const view = build(presence, [entry('Alpha', 1, 5)]);
+    const [row] = allGapRows(view);
+    expect(row?.conceptSize).toEqual(coarse);
+  });
+
+  it('a ranked row whose presence carries no size reading has no conceptSize field', () => {
+    const presence = new Map<string, ConceptMaterialPresence>([
+      ['Alpha', { notePaths: ['n.md' as VaultPath], instrumentCount: 1 }],
+    ]);
+    const view = build(presence, [entry('Alpha', 1, 5)]);
+    const [row] = allGapRows(view);
+    expect(row?.conceptSize).toBeUndefined();
   });
 });

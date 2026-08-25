@@ -51,6 +51,7 @@
 
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { SourceCoverage } from '../concept/evidence.js';
+import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { EvidenceQuestionCitation } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
@@ -96,6 +97,16 @@ export interface ConceptMaterialPresence {
   readonly notePaths: readonly VaultPath[];
   /** Instruments (cards) reachable from those notes. Zero with non-empty `notePaths` is F4.5. */
   readonly instrumentCount: number;
+  /**
+   * `ConceptRecord.size`, passed through — how much of her material grounds
+   * this concept (`[D-066]`, `concept/size.ts`). **Optional, deliberately
+   * mirroring `ConceptRecord.size`'s own optionality**: other lanes construct
+   * `ConceptMaterialPresence` literals (`packages/synthetic/src/corpus.ts`,
+   * `packages/plugin/src/gap/provider.ts`, `packages/workbench`) without this
+   * field, and a required key here would break their typecheck for a field
+   * this bead (`ol-urvq` [SIZE-2]) adds, not theirs.
+   */
+  readonly size?: ConceptSize;
 }
 
 /** One row of the gap view. */
@@ -133,6 +144,16 @@ export interface GapRow {
   readonly notePaths: readonly VaultPath[];
   readonly instrumentCount: number;
   readonly affordances: readonly GapAffordance[];
+  /**
+   * `ConceptMaterialPresence.size`, passed through verbatim — how much of her
+   * material grounds this concept (`[D-066]`). Read by `study-session/`'s
+   * fill (`ol-urvq` [SIZE-2]) to price a `'coarse'` concept's slot as worth
+   * more of the session's budget than a `'fine'` one's. **Optional**, for the
+   * same reason `ConceptMaterialPresence.size` is: a concept whose size was
+   * never computed (an older or synthetic construction site) is absent here
+   * rather than carrying an invented reading.
+   */
+  readonly conceptSize?: ConceptSize;
 }
 
 /** One course's gap view, or its abstention — mirroring `CourseOracleRanking`, which refuses to collapse the two. */
@@ -233,7 +254,11 @@ export function buildMaterialPresence(
       (total, path) => total + (instrumentCountsByNotePath.get(path) ?? 0),
       0,
     );
-    presence.set(concept.key, { notePaths, instrumentCount });
+    presence.set(concept.key, {
+      notePaths,
+      instrumentCount,
+      ...(concept.size !== undefined ? { size: concept.size } : {}),
+    });
   }
   return presence;
 }
@@ -287,6 +312,7 @@ function buildRow(
     notePaths: presence?.notePaths ?? [],
     instrumentCount: presence?.instrumentCount ?? 0,
     affordances: affordancesFor(gapClass),
+    ...(presence?.size !== undefined ? { conceptSize: presence.size } : {}),
   };
 }
 

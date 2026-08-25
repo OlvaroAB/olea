@@ -35,12 +35,26 @@
  *
  * ## The fill, stated plainly so the result is auditable
  *
- * Rows are taken in gapScore order (highest first). The fill runs in **passes**:
+ * Rows are taken in gapScore order (highest first) — or, when a caller
+ * passes `order: 'given'` (`./compose.ts`'s `buildComposedStudySession`,
+ * SESS-2/`ol-4a78`), in the order it was handed, already encoding obligation
+ * class, cross-course allocation and F2.18's course blocking. The fill runs
+ * in **passes**:
  * each pass offers every row one instrument, so a 20-minute session spreads
  * across her top gaps before it gives any single concept a second card. Within
  * a row, instruments matching the preferred format come first, then the
- * enumeration's own vault order; the first one that fits the remaining budget
- * is taken. The fill stops when a whole pass adds nothing.
+ * enumeration's own vault order.
+ *
+ * **The budget is a declared target, never a cap (`[D-091]`, component
+ * register §3.7; `ol-zji3` [BUD-1]).** While the running total is still below
+ * the target, the next instrument is taken regardless of its own length — she
+ * is "always free to outrun" the target, in the ruling's own words, so the
+ * fill rounds up to the item that crosses the line rather than refusing it.
+ * Once the running total reaches or passes the target, nothing further is
+ * taken. This replaces an earlier ceiling reading
+ * (`features/F4-oracle.md`'s `@auto:core/study-session/build.spec` scenario
+ * said the opposite, and was stale against `[D-091]`; both are now
+ * corrected). The fill stops when a whole pass adds nothing.
  *
  * Breadth before depth is a **judgement, and a reversible one**: "drawing on
  * the highest-priority gaps" (F4.6, plural) reads as covering several rather
@@ -70,6 +84,7 @@
  */
 
 import type { AssessmentRecord } from '../assessment/types.js';
+import type { ConceptSizeBand } from '../concept/size.js';
 import { daysBetween } from '../dates.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
@@ -160,7 +175,16 @@ export interface StudySessionModel {
   readonly asOf: CalendarDay;
   readonly budgetMinutes: number;
   readonly budgetSeconds: number;
-  /** Sum of the chosen items' estimates. Never greater than {@link budgetSeconds}. */
+  /**
+   * Sum of the chosen items' estimates.
+   *
+   * **May exceed {@link budgetSeconds}** — `[D-091]` (component register
+   * §3.7) rules the budget "a declared target never a cap", and she is
+   * "always free to outrun it". The fill (see the module doc) keeps taking
+   * items while `plannedSeconds` is still below the target and stops once it
+   * is at or past it, so at most one item's worth of overshoot is possible,
+   * never more (`ol-zji3` [BUD-1]).
+   */
   readonly plannedSeconds: number;
   readonly items: readonly StudySessionItem[];
   readonly leftOut: readonly StudySessionOmission[];
@@ -216,9 +240,52 @@ export interface BuildStudySessionInput {
    * pretending it was honoured.
    */
   readonly focusConceptName?: string;
+  /**
+   * Whether {@link rows} should be re-sorted by gapScore (the default,
+   * `'gapScore'`) or trusted as already in the order the fill should walk
+   * them (`'given'`).
+   *
+   * `'given'` exists for `buildComposedStudySession` (`./compose.ts`,
+   * SESS-2/`ol-4a78`), which hands over an order that already encodes
+   * obligation class, cross-course allocation and F2.18's course-block
+   * presentation — re-deriving gapScore order here would discard all three.
+   * Every other caller keeps the default; `focusConceptName`'s front-lift
+   * still applies either way.
+   */
+  readonly order?: 'gapScore' | 'given';
 }
 
 const SECONDS_PER_MINUTE = 60;
+
+/**
+ * How much more of the session's budget a `'coarse'` concept's slot costs
+ * against a `'fine'` one's, at the same instrument type (F2.17, `[D-066]`;
+ * `ol-urvq` [SIZE-2]).
+ *
+ * **Declared, not derived** (the component register's declared/derived
+ * rule — `docs/Olea_component_register.md`, and `concept/size.ts`'s own
+ * `COARSE_EXTENT_FLOOR` sets the precedent for this module). Plain-English
+ * defence: `concept/size.ts` already establishes that a `'coarse'` concept is
+ * grounded across more of her material than a `'fine'` one — by construction,
+ * more than `COARSE_EXTENT_FLOOR` separately-authored notes or passages. A
+ * single card cannot honestly stand for that much material at the same cost
+ * as a card that stands for one or two places; pricing it at one and a half
+ * times prices the slot without inventing a second instrument type or a
+ * per-concept minimum count (the module doc's two rejected alternatives).
+ * Never fitted against the vault or a corpus — `size.spec.ts`'s own
+ * discipline, carried here.
+ *
+ * A concept with no size reading at all (`GapRow.conceptSize` absent) prices
+ * as `'fine'` — the same err-fine asymmetry `concept/size.ts` defends: merging
+ * two concepts later is cheap, so understating breadth costs nothing that
+ * cannot be corrected, and overstating it would silently shrink a session for
+ * no material reason.
+ */
+export const CONCEPT_SIZE_SECONDS_MULTIPLIER: Readonly<Record<ConceptSizeBand, number>> =
+  Object.freeze({
+    fine: 1,
+    coarse: 1.5,
+  });
 
 /** Whole calendar days from `asOf` to `due`, or `null` when either is unreadable. See {@link SessionAssessmentCountdown.daysUntil}. */
 function daysUntilDue(asOf: CalendarDay, due: string | undefined): number | null {
@@ -229,19 +296,25 @@ function daysUntilDue(asOf: CalendarDay, due: string | undefined): number | null
 /**
  * Rows in the order the fill will walk them: gapScore descending, then the
  * gap view's own tiebreak (rank, then concept name) so a flattened multi-course
- * list is as deterministic as a single course's was. `focusConceptName`, when it
- * names a row, is lifted to the front afterwards.
+ * list is as deterministic as a single course's was — or, when `order` is
+ * `'given'`, the caller's own order untouched (see {@link BuildStudySessionInput.order}).
+ * `focusConceptName`, when it names a row, is lifted to the front afterwards
+ * either way.
  */
 function fillOrder(
   rows: readonly GapRow[],
   focusConceptName: string | undefined,
+  order: 'gapScore' | 'given',
 ): readonly GapRow[] {
-  const sorted = [...rows].sort((a, b) => {
-    if (a.gapScore !== b.gapScore) return b.gapScore - a.gapScore;
-    if (a.rank !== b.rank) return a.rank - b.rank;
-    if (a.course !== b.course) return a.course < b.course ? -1 : 1;
-    return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
-  });
+  const sorted =
+    order === 'given'
+      ? [...rows]
+      : [...rows].sort((a, b) => {
+          if (a.gapScore !== b.gapScore) return b.gapScore - a.gapScore;
+          if (a.rank !== b.rank) return a.rank - b.rank;
+          if (a.course !== b.course) return a.course < b.course ? -1 : 1;
+          return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
+        });
   if (focusConceptName === undefined) return sorted;
   const at = sorted.findIndex((row) => row.conceptName === focusConceptName);
   const focused = at <= 0 ? undefined : sorted[at];
@@ -396,7 +469,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     );
   }
 
-  const ordered = fillOrder(rows, input.focusConceptName);
+  const ordered = fillOrder(rows, input.focusConceptName, input.order ?? 'gapScore');
   const nextAssessment = nextAssessmentOf(ordered, input.assessments, asOf);
   const formatPreference: AssessmentFormat = nextAssessment?.format ?? 'unknown';
   const budgetSeconds = budgetMinutes * SECONDS_PER_MINUTE;
@@ -437,13 +510,22 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
           queue.at += 1;
           continue;
         }
-        const seconds = durations.secondsFor(record.instrumentType);
-        if (plannedSeconds + seconds > budgetSeconds) {
+        // `[D-091]` (component register §3.7): the budget is a declared
+        // target, never a cap, and she is "always free to outrun" it. Once
+        // the running total has REACHED the target nothing further is taken;
+        // until then, the next instrument is taken regardless of its own
+        // length, so the fill rounds up to the item that crosses the line
+        // rather than refusing it (`ol-zji3` [BUD-1]).
+        if (plannedSeconds >= budgetSeconds) {
           // Do NOT advance `at`: this instrument is still a candidate if a
           // later pass has room, and skipping past it would drop it silently.
           sawUnaffordable = true;
           break;
         }
+        const sizeBand = queue.row.conceptSize?.band ?? 'fine';
+        const seconds = Math.round(
+          durations.secondsFor(record.instrumentType) * CONCEPT_SIZE_SECONDS_MULTIPLIER[sizeBand],
+        );
         queue.at += 1;
         chosenInstrumentIds.add(record.instrumentId);
         plannedSeconds += seconds;
