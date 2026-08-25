@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { CompositeGroundingSignals } from './compositeSignals.js';
-import { assembleGroundedContext } from './groundedContext.js';
+import { cosinePercentile } from './cosine.js';
+import {
+  assembleBandedGroundedContext,
+  assembleGroundedContext,
+  classifyGroundingBand,
+  type GroundingJudgePort,
+  type GroundingJudgeRequest,
+  type GroundingJudgeVerdict,
+  resolveGroundedContext,
+} from './groundedContext.js';
 import type { HybridHit } from './hybrid.js';
 
 function hit(overrides: Partial<HybridHit> = {}): HybridHit {
@@ -259,5 +268,393 @@ describe('assembleGroundedContext — requireComposite distinguishes could-not-c
     const hits: HybridHit[] = [hit({ keywordScore: null, cosineScore: null })];
     const result = assembleGroundedContext(hits);
     expect(result).toEqual({ status: 'refused', reason: 'below-relevance-threshold' });
+  });
+});
+
+// -----------------------------------------------------------------------------------------------
+// `[D-089]` — the two-threshold band
+//
+// Scenarios: features/C2-index.md, "C4.7 / `[D-089]` — The refusal posture is a two-threshold
+// band", plus the band additions to that file's C4.7 / INV-5 block.
+// -----------------------------------------------------------------------------------------------
+
+/**
+ * Where the two bars sit in the MEASURED signal space, stated as aggregates
+ * only (`olea-service/.olea-harness/band-curve/final/band-curve.json`; the
+ * derivation is private, the numbers travel).
+ *
+ * The single fact these fixtures are built to respect: the highest `top1` any
+ * unanswerable query reached sits ABOVE the lowest `top1` any answerable query
+ * reached. The populations overlap — that is `ol-cmpl`'s finding and it is why
+ * the band exists at all — so a fixture must place its three tiers around that
+ * overlap rather than in three tidy, separated regions.
+ */
+const BAND = { lower: 0.545, upper: 0.715 } as const;
+
+const ABOVE_BAND_TOP1 = 0.78;
+const IN_BAND_TOP1 = 0.63;
+const BELOW_BAND_TOP1 = 0.48;
+
+function bandSignals(top1: number, lexBest = 0.4): CompositeGroundingSignals {
+  return { lexBest, top1, marginP99: 0.12 };
+}
+
+/** A judge that records every call, so "nothing was sent" is counted rather than inferred. */
+function countingJudge(supported: boolean) {
+  const calls: GroundingJudgeRequest[] = [];
+  return {
+    calls,
+    port: {
+      judge: async (request: GroundingJudgeRequest): Promise<GroundingJudgeVerdict> => {
+        calls.push(request);
+        return { supported, reason: 'because' };
+      },
+    } satisfies GroundingJudgePort,
+  };
+}
+
+const bandHits: HybridHit[] = [
+  hit({ path: 'a.md', blockIndex: 0, contentHash: 'h1', cosineScore: 0.61, keywordScore: 2 }),
+  hit({ path: 'b.md', blockIndex: 3, contentHash: 'h2', cosineScore: 0.44, keywordScore: 1 }),
+];
+
+describe('[D-089] the band classifies from the cheap signals alone', () => {
+  it('puts a query above the upper bar in the above-band tier', () => {
+    expect(classifyGroundingBand(bandSignals(ABOVE_BAND_TOP1), BAND)).toBe('above-band');
+  });
+
+  it('puts a query between the bars in the band', () => {
+    expect(classifyGroundingBand(bandSignals(IN_BAND_TOP1), BAND)).toBe('in-band');
+  });
+
+  it('puts a query below the lower bar in the below-band tier', () => {
+    expect(classifyGroundingBand(bandSignals(BELOW_BAND_TOP1), BAND)).toBe('below-band');
+  });
+
+  it('refuses to classify at all when the semantic signal never ran', () => {
+    expect(classifyGroundingBand({ lexBest: 0.4, top1: null, marginP99: null }, BAND)).toBeNull();
+  });
+
+  /**
+   * `ol-3h2f`. The bars are on `top1` and NOTHING ELSE, so a corpus small
+   * enough to make `marginP99` degenerate cannot move a tier. Below, the same
+   * `top1` is classified with `marginP99` at its small-corpus value (exactly
+   * zero) and at its full-corpus value; the tier is identical.
+   */
+  it('does not consult marginP99, so a small corpus cannot move a tier (ol-3h2f)', () => {
+    for (const top1 of [ABOVE_BAND_TOP1, IN_BAND_TOP1, BELOW_BAND_TOP1]) {
+      const smallCorpus: CompositeGroundingSignals = { lexBest: 0.4, top1, marginP99: 0 };
+      const fullCorpus: CompositeGroundingSignals = { lexBest: 0.4, top1, marginP99: 0.1633 };
+      expect(classifyGroundingBand(smallCorpus, BAND)).toBe(
+        classifyGroundingBand(fullCorpus, BAND),
+      );
+    }
+  });
+
+  /**
+   * `ol-3h2f`'s own N-013 note, pinned where the argument for the band lives.
+   * `cosinePercentile` floor-indexes, so for p = 0.99 and any n <= 100 the
+   * "99th percentile" IS the maximum and `marginP99` is exactly zero. This is
+   * arithmetic, not a measurement — and it is the whole reason the band is not
+   * placed on that statistic.
+   */
+  it('pins WHY marginP99 was unusable as a bar: it is exactly 0 for n <= 100 (ol-3h2f)', () => {
+    for (const n of [1, 10, 50, 99, 100]) {
+      const ascending = Array.from({ length: n }, (_, i) => i / n);
+      const top1 = ascending[n - 1] as number;
+      expect(top1 - cosinePercentile(ascending, 0.99)).toBe(0);
+    }
+    // And that it stops being identically zero the moment n clears 100 — the
+    // degeneration is a gradient, not a cliff, so neither half may be assumed.
+    const n = 101;
+    const ascending = Array.from({ length: n }, (_, i) => i / n);
+    expect((ascending[n - 1] as number) - cosinePercentile(ascending, 0.99)).toBeGreaterThan(0);
+  });
+
+  it('the optional lexical floor can only demote INTO the band, never below it', () => {
+    const thin = bandSignals(ABOVE_BAND_TOP1, 0.05);
+    expect(classifyGroundingBand(thin, { ...BAND, lex: 0.4 })).toBe('in-band');
+    const belowAndThin = bandSignals(BELOW_BAND_TOP1, 0.05);
+    expect(classifyGroundingBand(belowAndThin, { ...BAND, lex: 0.4 })).toBe('below-band');
+  });
+});
+
+describe('[D-089] above the upper bar, generation proceeds from the cheap signals alone', () => {
+  it('grounds and consults no judge', async () => {
+    const judge = countingJudge(false);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(0);
+  });
+});
+
+describe('[D-089] below the lower bar, the refusal is decided from numbers alone', () => {
+  it('refuses with the below-band reason and consults no judge', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'below-band' });
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  /**
+   * The per-tier network promise, counted rather than inferred. A refusal that
+   * phoned home first renders identically to one that did not, from every
+   * screen anyone would look at, which is exactly why this is asserted on the
+   * call count and not on the result's shape.
+   */
+  it('sends nothing over the network — zero port calls, not merely an empty result', async () => {
+    const judge = countingJudge(true);
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(judge.calls).toEqual([]);
+  });
+
+  /**
+   * The structural half of the same promise: the function that produces a
+   * below-band refusal is synchronous and takes no port at all, so it has no
+   * means of sending anything even if a future edit wanted it to.
+   */
+  it('is decided by a pure, synchronous function that cannot send anything', () => {
+    const decision = assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(decision).toMatchObject({ status: 'refused', reason: 'below-band' });
+  });
+});
+
+describe('[D-089] inside the band, the composite is consulted and may still refuse', () => {
+  it('sends the query and the retrieved passages for judgment', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'the query',
+      judge: judge.port,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls[0]?.query).toBe('the query');
+    expect(judge.calls[0]?.context).toContain('some retrieved text');
+    expect(result.status).toBe('grounded');
+  });
+
+  it('a judge rejection is a refusal, distinguishable from a below-band one', async () => {
+    const judge = countingJudge(false);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-rejected' });
+  });
+
+  it('the composite is band-scoped: it runs for the middle set only', async () => {
+    const judge = countingJudge(true);
+    for (const top1 of [ABOVE_BAND_TOP1, BELOW_BAND_TOP1, IN_BAND_TOP1, ABOVE_BAND_TOP1]) {
+      await resolveGroundedContext(bandHits, {
+        band: BAND,
+        query: 'q',
+        judge: judge.port,
+        compositeSignals: bandSignals(top1),
+      });
+    }
+    expect(judge.calls).toHaveLength(1);
+  });
+});
+
+describe('[D-089] hedged generation is admitted nowhere, at any tier', () => {
+  it('every outcome at every tier is exactly grounded or refused', async () => {
+    const judge = countingJudge(true);
+    for (const top1 of [ABOVE_BAND_TOP1, IN_BAND_TOP1, BELOW_BAND_TOP1]) {
+      const result = await resolveGroundedContext(bandHits, {
+        band: BAND,
+        query: 'q',
+        judge: judge.port,
+        compositeSignals: bandSignals(top1),
+      });
+      expect(['grounded', 'refused']).toContain(result.status);
+      if (result.status === 'grounded') {
+        // No confidence caveat, no "this may not be well supported" qualifier,
+        // no third shape: a grounded result is chunks and nothing else.
+        expect(Object.keys(result).sort()).toEqual(['chunks', 'status']);
+      }
+    }
+  });
+});
+
+describe('[D-089] a diagnostic refusal states only what retrieval actually returned', () => {
+  it('names which notes and passages were found, at what strength, and nothing more', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') return;
+    expect(result.diagnostic?.found).toEqual([
+      { path: 'a.md', blockIndex: 0, strength: 0.61 },
+      { path: 'b.md', blockIndex: 3, strength: 0.44 },
+    ]);
+  });
+
+  it('carries no chunk text — a refusal never carries her content', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(JSON.stringify(result)).not.toContain('some retrieved text');
+  });
+
+  it('makes no claim about the vault beyond the hits — there is no field for one', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    if (result.status !== 'refused' || !result.diagnostic) throw new Error('expected a diagnostic');
+    for (const found of result.diagnostic.found) {
+      expect(Object.keys(found).sort()).toEqual(['blockIndex', 'path', 'strength']);
+    }
+    expect(Object.keys(result.diagnostic)).toEqual(['found']);
+  });
+});
+
+describe('[D-089] §5 the band path fails closed, and says why truthfully', () => {
+  const insufficientNotesReasons = ['below-band', 'below-composite-threshold', 'judge-rejected'];
+
+  it('refuses when the judge throws', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: {
+        judge: async () => {
+          throw new Error('transport exploded');
+        },
+      },
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('refuses when the judge exceeds its time budget', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judgeTimeoutMs: 5,
+      judge: { judge: () => new Promise(() => {}) },
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('refuses when the judge returns something that is not a verdict', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: { judge: async () => ({}) as unknown as GroundingJudgeVerdict },
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('refuses when a band query has no judge wired at all — absent is not "skip the check"', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('never borrows the insufficient-notes reason for a transient failure', async () => {
+    for (const judge of [
+      {
+        judge: async () => {
+          throw new Error('boom');
+        },
+      },
+      { judge: () => new Promise<GroundingJudgeVerdict>(() => {}) },
+    ]) {
+      const result = await resolveGroundedContext(bandHits, {
+        band: BAND,
+        query: 'q',
+        judgeTimeoutMs: 5,
+        judge,
+        compositeSignals: bandSignals(IN_BAND_TOP1),
+      });
+      if (result.status !== 'refused') throw new Error('expected a refusal');
+      expect(insufficientNotesReasons).not.toContain(result.reason);
+    }
+  });
+
+  it('fails closed one layer earlier too: no semantic signal means the check never ran', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: { lexBest: 0.4, top1: null, marginP99: null },
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'composite-check-unavailable' });
+    expect(judge.calls).toHaveLength(0);
+  });
+});
+
+describe('INV-5 — the adversarial empty-context suite runs against the band path', () => {
+  it('refuses with no hits at all, and asks no judge about nothing', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext([], {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(result).toEqual({ status: 'refused', reason: 'no-hits' });
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  /**
+   * The case `ol-cmpl` measured and the synthetic suite could not see: hits
+   * that are genuinely retrieved, score well above the old 0.25 floor, and are
+   * about nothing the query asked. At the measured gibberish `top1` the band
+   * puts them below the lower bar, so they refuse on numbers alone — and,
+   * because that tier sends nothing, without her query ever leaving the device.
+   */
+  it('refuses real-embedding gibberish, which sits above the old absolute floor (ol-cmpl)', async () => {
+    const judge = countingJudge(true);
+    for (const top1 of [MEASURED.gibberish.lower, MEASURED.gibberish.upper]) {
+      expect(top1).toBeGreaterThan(0.25);
+      const result = await resolveGroundedContext(
+        [hit({ cosineScore: MEASURED.unrelated.p90, keywordScore: 1 })],
+        { band: BAND, query: 'q', judge: judge.port, compositeSignals: bandSignals(top1) },
+      );
+      expect(result).toMatchObject({ status: 'refused', reason: 'below-band' });
+    }
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  /**
+   * N-013. The band is what refuses the case above, not some other clause that
+   * happened to fire: retrieve the identical input with no band and it grounds.
+   */
+  it('N-013: the band is load-bearing — the same input grounds without it', () => {
+    const hits = [hit({ cosineScore: MEASURED.unrelated.p90, keywordScore: 1 })];
+    expect(assembleGroundedContext(hits).status).toBe('grounded');
   });
 });

@@ -37,7 +37,13 @@ import { chunksFromIndex } from './chunks.js';
 import type { CompositeGroundingThresholds } from './compositeSignals.js';
 import { computeCompositeGroundingSignals } from './compositeSignals.js';
 import type { EmbeddingCacheEngine } from './embeddingCache.js';
-import { assembleGroundedContext, type GroundingResult } from './groundedContext.js';
+import {
+  assembleGroundedContext,
+  type GroundingBandThresholds,
+  type GroundingJudgePort,
+  type GroundingResult,
+  resolveGroundedContext,
+} from './groundedContext.js';
 import { hybridRetrieve } from './hybrid.js';
 import type { EmbeddingProvider, EmbeddingVector, RerankProvider } from './types.js';
 
@@ -63,6 +69,28 @@ export interface RetrieveOptions {
    */
   readonly requireComposite?: boolean;
   readonly compositeThresholds?: CompositeGroundingThresholds;
+  /**
+   * `[D-089]`'s two-threshold band. Supplying it switches this function from
+   * the single-gate mechanism to the band path
+   * (`resolveGroundedContext`), and **takes precedence over
+   * `requireComposite`** — the two are different answers to the same question
+   * and running both would apply two operating points at once. There is no
+   * default: an absent `band` means the band is not in force, which is the
+   * only safe reading while its bars are unratified (see
+   * `PROVISIONAL_GROUNDING_BAND`).
+   *
+   * The composite signals the band is placed on are computed here for the same
+   * reason `requireComposite` computes them here — this is the layer holding
+   * `chunks` and `embeddings`.
+   */
+  readonly band?: GroundingBandThresholds;
+  /**
+   * Consulted for band queries only, and only when `band` is set. Its absence
+   * does not disable the check: a band query with no judge refuses
+   * (`judge-unavailable`), per `[D-089]` §5's fail-closed rule.
+   */
+  readonly judge?: GroundingJudgePort;
+  readonly judgeTimeoutMs?: number;
 }
 
 /**
@@ -97,9 +125,22 @@ export async function retrieve(
     },
   });
 
-  const compositeSignals = options.requireComposite
-    ? computeCompositeGroundingSignals({ query, chunks, queryVector, embeddings })
-    : undefined;
+  const compositeSignals =
+    options.requireComposite || options.band !== undefined
+      ? computeCompositeGroundingSignals({ query, chunks, queryVector, embeddings })
+      : undefined;
+
+  if (options.band !== undefined) {
+    return resolveGroundedContext(hits, {
+      band: options.band,
+      query,
+      ...(options.topK !== undefined ? { topK: options.topK } : {}),
+      ...(options.minCosineScore !== undefined ? { minCosineScore: options.minCosineScore } : {}),
+      ...(options.judge !== undefined ? { judge: options.judge } : {}),
+      ...(options.judgeTimeoutMs !== undefined ? { judgeTimeoutMs: options.judgeTimeoutMs } : {}),
+      ...(compositeSignals !== undefined ? { compositeSignals } : {}),
+    });
+  }
 
   return assembleGroundedContext(hits, {
     ...(options.topK !== undefined ? { topK: options.topK } : {}),
