@@ -43,6 +43,22 @@
  * (bounded by the same `MAX_CONCEPTS_PER_SWEEP` cap), which is the honest
  * price of not inventing a "give up after N refusals" policy nobody asked
  * for.
+ *
+ * **Routing consultation (`ol-tz7v` / `[WIRE-7]`), opt-in via `deps.routing`.**
+ * When absent, every candidate is drafted exactly as before this bead —
+ * `pipeline.spec.ts`'s whole existing suite never supplies it, so nothing
+ * about their expectations changes. When present, each new (not
+ * cache-deduped) candidate is routed through `routing.ts`'s
+ * `classifyForRouting` / `decideConceptRouting` against a **real** per-concept
+ * instrument inventory (`buildConceptInstrumentInventory`, one vault walk per
+ * sweep) before this sweep's one generation capability — `quiz.generate.v1`
+ * MCQ drafting — is invoked: a candidate whose routed mix already has its
+ * `quiz` group met or excluded (`quizDeficit === 0`) is skipped rather than
+ * drafted, counted separately in `GenerationSweepReport.skippedRouting`
+ * rather than `attempted`, since no transport call — not even the local
+ * `retrieve()` a refusal costs — is made for it. It is re-consulted every
+ * sweep, the same as a refused concept, because nothing about "routing says
+ * not yet" writes a cache entry either.
  */
 
 import type { ConceptRecord, ExtractedUnit, VaultSource } from 'olea-core';
@@ -56,7 +72,17 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
+import type { GenerationRoutingDeps } from './routing.js';
+import {
+  buildConceptInstrumentInventory,
+  classifyForRouting,
+  decideConceptRouting,
+  EMPTY_INVENTORY,
+  quizDeficit,
+} from './routing.js';
 import type { DraftRecord } from './types.js';
+
+export type { GenerationRoutingDeps };
 
 export interface GenerationPipelineDeps {
   readonly vault: VaultSource;
@@ -72,6 +98,8 @@ export interface GenerationPipelineDeps {
   readonly coursesFolder?: string;
   readonly now?: () => Date;
   readonly generateDraftId?: () => string;
+  /** Component 2.2's routing consultation — see the module doc's own section. Omitted preserves pre-`ol-tz7v` behaviour. */
+  readonly routing?: GenerationRoutingDeps;
 }
 
 export interface GenerationSweepReport {
@@ -83,6 +111,8 @@ export interface GenerationSweepReport {
   readonly refused: number;
   /** Concepts skipped because the cache already has a record for that (course, concept) pair. */
   readonly skippedDuplicate: number;
+  /** Concepts routing (`deps.routing`) determined do not currently warrant this sweep's one generation capability — never drafted, never cached, so re-consulted next sweep. Always `0` when `deps.routing` is absent. */
+  readonly skippedRouting: number;
 }
 
 const ZERO_REPORT: GenerationSweepReport = {
@@ -90,6 +120,7 @@ const ZERO_REPORT: GenerationSweepReport = {
   drafted: 0,
   refused: 0,
   skippedDuplicate: 0,
+  skippedRouting: 0,
 };
 
 function defaultGenerateDraftId(): string {
@@ -132,11 +163,23 @@ export async function runGenerationSweep(
   const generateDraftId = deps.generateDraftId ?? defaultGenerateDraftId;
   const now = deps.now ?? (() => new Date());
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
+  const routing = deps.routing;
+
+  // Built at most once per sweep, and only if routing was actually opted
+  // into — a real vault walk (`enumerateVaultInstruments`) is not worth
+  // paying when every candidate ends up cache-deduped anyway, or when no
+  // caller asked for routing at all.
+  let inventoryPromise: ReturnType<typeof buildConceptInstrumentInventory> | null = null;
+  const getInventory = (): ReturnType<typeof buildConceptInstrumentInventory> => {
+    inventoryPromise ??= buildConceptInstrumentInventory(deps.vault, { under: coursesFolder });
+    return inventoryPromise;
+  };
 
   let attempted = 0;
   let drafted = 0;
   let refused = 0;
   let skippedDuplicate = 0;
+  let skippedRouting = 0;
 
   for (const courseCode of [...courseCodes].sort()) {
     if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
@@ -154,6 +197,22 @@ export async function runGenerationSweep(
       if (existing !== null) {
         skippedDuplicate += 1;
         continue;
+      }
+
+      // Component 2.2's routing consultation (`ol-tz7v` / `[WIRE-7]`),
+      // opt-in — see the module doc. Costs a classify call (only when a
+      // classifier is actually configured; `classifyForRouting` short-
+      // circuits to unclassified otherwise) plus one shared inventory walk,
+      // never a `quiz.generate.v1` send: a candidate this routes away from
+      // is cheaper to discover here than as a refusal.
+      if (routing !== undefined) {
+        const classification = await classifyForRouting(routing, deps.vault, candidate);
+        const inventory = (await getInventory()).get(candidate.key) ?? EMPTY_INVENTORY;
+        const decision = decideConceptRouting(classification, inventory);
+        if (quizDeficit(decision) === 0) {
+          skippedRouting += 1;
+          continue;
+        }
       }
 
       attempted += 1;
@@ -204,5 +263,5 @@ export async function runGenerationSweep(
     }
   }
 
-  return { attempted, drafted, refused, skippedDuplicate };
+  return { attempted, drafted, refused, skippedDuplicate, skippedRouting };
 }

@@ -39,3 +39,22 @@ export const MAX_CONCEPTS_PER_SWEEP = 3;
  * for that reason; this entry exists to record the decision NOT to add one,
  * so a future reader does not read the absence as an oversight.
  */
+
+/**
+ * The knowledge-kind classifier's confidence floor, as consulted by
+ * component 2.2's routing (`routing.ts`, `ol-tz7v` / `[WIRE-7]`).
+ *
+ * **This is NOT declared, and this constant says so rather than dressing a
+ * guess as one.** Component register row 1.5 rules the confidence floor
+ * DERIVED — its derivation needs real classifier output scored against the
+ * vault snapshot (N-015: synthetic never tunes a threshold). `ol-3ux7.6`
+ * (`findings/KCT-3-confidence-floor.md`, olea-service) ran that derivation
+ * once already and found no usable floor on the real vault's 102-concept
+ * census (AUC 0.576, every candidate floor on a plateau ≤ 0.05), and
+ * recommends `0.0` as the **provisional baseline** — explicitly "not yet a
+ * decision bead" (that document's own words). This constant carries that
+ * exact number, named as provisional, so a caller of `routing.ts` never has
+ * to invent one, and so the one place this changes when `[D-nnn]` ratifies a
+ * different value is this line.
+ */
+export const PROVISIONAL_CONFIDENCE_FLOOR = 0.0;

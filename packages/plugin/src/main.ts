@@ -548,7 +548,9 @@ export default class OleaPlugin extends Plugin {
   private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
     if (this.generation === null) return;
     try {
-      await this.generation.sweep(units, this.draftQuizCardsDeps());
+      await this.generation.sweep(units, this.draftQuizCardsDeps(), {
+        classifier: this.knowledgeKind?.classifier ?? null,
+      });
     } catch (error) {
       console.error('Olea: generation sweep failed', error);
     }
