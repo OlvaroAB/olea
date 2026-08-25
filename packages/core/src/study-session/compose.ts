@@ -98,21 +98,37 @@
  * material; whether any of this ever reaches a screen is a contract question
  * this module does not answer.
  *
- * ## The known data gap: no arrival-day source exists yet (`ARRIVE-1`)
+ * ## The arrival-day signal (`ARRIVE-1`, `ol-4pue`) and its own honest gap
  *
  * The model's `classify()` computes an `unmet` concept's `overdueDays` from
- * `day - concept.arrivalDay`. No production data source records when a
- * concept first became reachable — `ConceptRecord` carries no date field,
- * no vault-stat accessor exists on `VaultSource`, and review-log entries only
- * exist for concepts that HAVE been retrieved, which by definition excludes
- * `unmet` ones. Treating an unknown wait as unbounded (`Infinity`) would make
- * `unmet` dominate every other class whenever any unmet concept exists,
- * reproducing the *opposite* starvation the design fought — recall-due and
- * baseline-due material would never win against a standing pool of new
- * material. So `overdueDays: 0` is the honest, conservative choice for
- * `unmet`: it defers entirely to `gapScore`, i.e. exactly today's production
- * behaviour, until a real "day this concept arrived" signal exists to widen
- * on. Filed as a follow-up rather than guessed at.
+ * `day - concept.arrivalDay`. `ObligationSignals.arrivalDay` is that signal
+ * in production types: the caller resolves it (typically via
+ * `VaultSource.firstSeen` over a concept's `notePaths` — a vault-host
+ * file-creation/first-seen accessor, non-persisted and reversible, Class B)
+ * and passes it in, either per call via {@link classifyObligation} or as a
+ * `ComposeSessionRowsInput.arrivalDays` map keyed by `conceptKey`. When
+ * present, `unmet` widens on real days-since-arrival exactly like every other
+ * class — the SESS-1 §1.1 fix this bead exists for. `ConceptRecord` still
+ * carries no date field and review-log entries still only exist for concepts
+ * that HAVE been retrieved (excluding `unmet` by definition), so
+ * `VaultSource.firstSeen` is the only production-shaped source; see that
+ * interface's doc.
+ *
+ * **The gap this module cannot close alone:** `arrivalDay` is `null`
+ * whenever the caller has none to offer — no map entry, no `firstSeen`
+ * implementation on the host, or a file whose creation time the host itself
+ * cannot report (`FolderSource`'s doc has a concrete example: checked-out git
+ * files on this project's own dev platform). `overdueDays: 0` remains the
+ * fallback for exactly that case: it defers to `gapScore`, i.e. today's
+ * pre-`ARRIVE-1` production behaviour, rather than to `Number.POSITIVE_INFINITY`,
+ * which would make `unmet` dominate every other class whenever any unmet
+ * concept exists — the *opposite* starvation the design fought, where
+ * recall-due and baseline-due material would never win against a standing
+ * pool of new material. This module stays pure (see "INV-1 / §7.1" below), so
+ * it cannot call `VaultSource` itself to close its own gap — resolving
+ * `firstSeen` into a real `arrivalDays` map for the production caller
+ * (`session-builder/provider.ts`) is deliberately left to a follow-up
+ * (`ol-4pue`'s notes name it), not guessed at here.
  *
  * ## INV-1 / §7.1
  *
@@ -209,6 +225,14 @@ export interface ObligationSignals {
   readonly lastRetrievalDay: CalendarDay | null;
   /** The soonest FSRS due day among this concept's reviewed instruments, or `null` if none has scheduling state. */
   readonly recallDueDay: CalendarDay | null;
+  /**
+   * ARRIVE-1 (`ol-4pue`): the day this concept first became reachable to
+   * her, or `null` when the caller has no signal for it (see the module
+   * doc's "arrival-day signal" section). Only read when `lastRetrievalDay`
+   * is `null` — an already-retrieved concept never needs it, since it is not
+   * in the `unmet` class this exists to widen.
+   */
+  readonly arrivalDay: CalendarDay | null;
   readonly asOf: CalendarDay;
 }
 
@@ -219,12 +243,23 @@ export interface ObligationSignals {
  * `overdueDays` means a different thing per class.
  */
 export function classifyObligation(input: ObligationSignals): ObligationClassification {
-  const { masteryState, lastRetrievalDay, recallDueDay, asOf } = input;
+  const { masteryState, lastRetrievalDay, recallDueDay, arrivalDay, asOf } = input;
 
   if (lastRetrievalDay === null) {
-    // See the module doc's "known data gap" section — no arrival-day source
-    // exists in production yet, so this defers entirely to gapScore (ARRIVE-1).
-    return { klass: 'unmet', overdueDays: 0 };
+    // ARRIVE-1: widen on real days-since-arrival when the caller has a
+    // signal for it, so `unmet` competes on the same "days waiting" key as
+    // every other class (SESS-1 §1.1) instead of sorting purely on gapScore.
+    // Clamped at 0 rather than allowed negative — a signal reporting an
+    // arrival "after" asOf (clock skew, a caller passing a future day) must
+    // never make a concept read as having a negative wait.
+    //
+    // No signal (`arrivalDay === null`) falls back to the module doc's
+    // conservative `overdueDays: 0` — see "The arrival-day signal" section
+    // for why 0, never `Number.POSITIVE_INFINITY`, is the honest choice for
+    // an unknown wait.
+    const overdueDays =
+      arrivalDay === null ? 0 : Math.max(0, daysBetweenCalendarDays(arrivalDay, asOf));
+    return { klass: 'unmet', overdueDays };
   }
   if (recallDueDay !== null && recallDueDay <= asOf) {
     return { klass: 'recall-due', overdueDays: daysBetweenCalendarDays(recallDueDay, asOf) };
@@ -431,6 +466,20 @@ export interface ComposeSessionRowsInput {
   readonly durations: DurationModel;
   readonly asOf: CalendarDay;
   readonly budgetSeconds: number;
+  /**
+   * ARRIVE-1 (`ol-4pue`): per-concept arrival day, keyed by `conceptKey` —
+   * precomputed pure data, exactly like `instruments`/`replay`/`durations`
+   * are, so this module stays synchronous and does no `VaultSource` I/O
+   * itself (see the module doc's "INV-1 / §7.1" section). Typically built by
+   * resolving `VaultSource.firstSeen` over each concept's `GapRow.notePaths`
+   * and converting the earliest result with `calendarDayOfTimestamp`.
+   * **Optional, and safe to omit entirely**: a missing map, or a concept
+   * absent from it, both read as "no signal" and fall back to
+   * {@link classifyObligation}'s conservative `overdueDays: 0` for `unmet` —
+   * never to an unbounded wait. See the module doc's "arrival-day signal"
+   * section for why 0 is the honest fallback.
+   */
+  readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
 }
 
 export interface ComposeSessionRowsResult {
@@ -452,7 +501,7 @@ export interface ComposeSessionRowsResult {
  * slightly tight candidate set — never a wrong final session.
  */
 export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessionRowsResult {
-  const { rows, instruments, replay, durations, asOf, budgetSeconds } = input;
+  const { rows, instruments, replay, durations, asOf, budgetSeconds, arrivalDays } = input;
 
   const classified: ClassifiedRow[] = rows.map((row) => {
     const { lastRetrievalDay, recallDueDay } = obligationSignalsFor(
@@ -464,6 +513,9 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
       masteryState: row.masteryState,
       lastRetrievalDay,
       recallDueDay,
+      // ARRIVE-1: `undefined` map or missing entry both collapse to `null` —
+      // "no signal", not "arrived at epoch 0" — see `ComposeSessionRowsInput`.
+      arrivalDay: arrivalDays?.get(row.conceptKey) ?? null,
       asOf,
     });
     return {
@@ -516,6 +568,8 @@ export interface BuildComposedStudySessionInput
   readonly rows: readonly GapRow[];
   /** `replaySchedulerStates(entries, scheduler)` — see `ComposeSessionRowsInput.replay`. */
   readonly replay: ReplayResult;
+  /** ARRIVE-1 — see `ComposeSessionRowsInput.arrivalDays`, passed straight through. */
+  readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
 }
 
 export interface ComposedStudySession {
@@ -558,6 +612,7 @@ export function buildComposedStudySession(
     durations: input.durations,
     asOf: input.asOf,
     budgetSeconds,
+    ...(input.arrivalDays !== undefined ? { arrivalDays: input.arrivalDays } : {}),
   });
 
   const model = buildStudySession({

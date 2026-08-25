@@ -77,6 +77,37 @@ export interface VaultSource {
    * correctness check rather than event bookkeeping.
    */
   watch(handler: (event: VaultEvent) => void): Unsubscribe;
+
+  /**
+   * Best-effort "when did this file first become reachable to her" signal —
+   * epoch milliseconds, or `null` when the host cannot say (file does not
+   * exist, or the underlying filesystem/host does not track a creation time).
+   * ARRIVE-1's (`ol-4pue`) vault-host arrival-day accessor: non-persisted,
+   * reversible (Class B) — nothing is stamped into her files, this only reads
+   * what the host already tracks.
+   *
+   * **Optional by design**, not merely by omission: adding it as a required
+   * method would force every `VaultSource` implementation across the
+   * workspace — several outside this module's ownership — to grow one
+   * overnight, and every existing in-memory/fixture fake would have to invent
+   * an answer. A missing method, an `undefined`-returning host, and a `null`
+   * return for a real file all mean the same thing to a caller — "no signal"
+   * — and MUST all be treated identically.
+   *
+   * **The honest fallback for "no signal" is `overdueDays: 0`, never
+   * `Number.POSITIVE_INFINITY`** — see `study-session/compose.ts`'s module
+   * doc ("The known data gap") for why treating an unknown wait as unbounded
+   * reproduces the exact starvation this signal exists to fix, just for the
+   * other obligation classes instead. A caller building an arrival-day map
+   * from this accessor must preserve that fallback rather than substituting
+   * its own.
+   *
+   * **Do not conflate this with "last modified."** A note edited long after
+   * it first appeared should still read as having arrived when it first
+   * appeared, not every time it is touched — see `FolderSource`'s
+   * implementation note on why `mtime` is never used as a substitute here.
+   */
+  firstSeen?(path: VaultPath): Promise<number | null>;
 }
 
 /** Shared validity rule for the `VaultPath` contract above. */

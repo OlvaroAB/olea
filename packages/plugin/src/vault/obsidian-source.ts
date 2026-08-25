@@ -118,6 +118,21 @@ export class ObsidianSource implements VaultSource {
   }
 
   /**
+   * ARRIVE-1 (`ol-4pue`): `VaultSource.firstSeen`, over `TFile.stat.ctime` —
+   * Obsidian's own record of when it first saw the file (epoch ms), which is
+   * the best "arrival" signal this host exposes and is not the same thing as
+   * a raw filesystem birthtime (Obsidian sets it itself and keeps it across
+   * the moves/renames a raw fs stat would not survive). `null` for a path
+   * that does not resolve to a file — no exception, matching the interface
+   * doc's "absence is a first-class outcome," same as `exists`.
+   */
+  async firstSeen(path: VaultPath): Promise<number | null> {
+    if (!isVaultPath(path)) return null;
+    const file = this.vault.getFileByPath(path);
+    return file === null ? null : file.stat.ctime;
+  }
+
+  /**
    * Subscribes to the vault's own `create` | `modify` | `delete` | `rename`
    * events (C1.5) and maps them onto `VaultEvent`, forwarding only file
    * events (folder create/modify/delete/rename are not part of this

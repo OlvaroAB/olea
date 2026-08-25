@@ -160,6 +160,34 @@ describe('classifyObligation', () => {
         masteryState: 'seed',
         lastRetrievalDay: null,
         recallDueDay: null,
+        arrivalDay: null,
+        asOf: AS_OF,
+      }),
+    ).toEqual({ klass: 'unmet', overdueDays: 0 });
+  });
+
+  // ARRIVE-1 (`ol-4pue`) — SESS-1 §1.1's fix: `unmet` widens on real
+  // days-since-arrival when the caller has a signal, instead of always
+  // deferring to gapScore.
+  it('a never-retrieved concept with an arrival-day signal is unmet, overdue by days since arrival', () => {
+    expect(
+      classifyObligation({
+        masteryState: 'seed',
+        lastRetrievalDay: null,
+        recallDueDay: null,
+        arrivalDay: '2026-09-01', // 13 days before AS_OF (2026-09-14)
+        asOf: AS_OF,
+      }),
+    ).toEqual({ klass: 'unmet', overdueDays: 13 });
+  });
+
+  it('a never-retrieved concept whose arrival day is not before asOf (clock skew) clamps to 0, never negative', () => {
+    expect(
+      classifyObligation({
+        masteryState: 'seed',
+        lastRetrievalDay: null,
+        recallDueDay: null,
+        arrivalDay: '2026-09-20', // after AS_OF
         asOf: AS_OF,
       }),
     ).toEqual({ klass: 'unmet', overdueDays: 0 });
@@ -170,6 +198,7 @@ describe('classifyObligation', () => {
       masteryState: 'sprout',
       lastRetrievalDay: '2026-09-01',
       recallDueDay: '2026-09-10',
+      arrivalDay: null,
       asOf: AS_OF,
     });
     expect(result).toEqual({ klass: 'recall-due', overdueDays: 4 });
@@ -181,6 +210,7 @@ describe('classifyObligation', () => {
       masteryState: 'sprout',
       lastRetrievalDay: '2026-09-01',
       recallDueDay: null,
+      arrivalDay: null,
       asOf: AS_OF,
     });
     const gap = RETRIEVAL_BASELINE_STAGE_LADDER_DAYS.sprout;
@@ -193,6 +223,7 @@ describe('classifyObligation', () => {
       masteryState: 'tree',
       lastRetrievalDay: '2026-09-13',
       recallDueDay: null,
+      arrivalDay: null,
       asOf: AS_OF,
     });
     expect(result).toEqual({ klass: 'elective', overdueDays: 0 });
@@ -204,6 +235,7 @@ describe('classifyObligation', () => {
         masteryState,
         lastRetrievalDay: '2026-09-01',
         recallDueDay: null,
+        arrivalDay: null,
         asOf: AS_OF,
       }).klass;
     // 13 days since last retrieval: sprout's 5-day rung is long past (baseline-due);
@@ -221,6 +253,7 @@ describe('classifyObligation', () => {
         masteryState: 'seed',
         lastRetrievalDay: '2026-08-01',
         recallDueDay: null,
+        arrivalDay: null,
         asOf: AS_OF,
       }).klass,
     ).toBe('elective');
@@ -229,6 +262,7 @@ describe('classifyObligation', () => {
         masteryState: 'unknown',
         lastRetrievalDay: '2026-08-01',
         recallDueDay: null,
+        arrivalDay: null,
         asOf: AS_OF,
       }).klass,
     ).toBe('elective');
@@ -239,6 +273,7 @@ describe('classifyObligation', () => {
       masteryState: 'sprout' as const,
       lastRetrievalDay: '2026-09-01',
       recallDueDay: null,
+      arrivalDay: null,
       asOf: AS_OF,
     };
     // A concept baseline-due "yesterday" and not served is STILL exactly one
@@ -300,6 +335,67 @@ describe('composeSessionRows', () => {
     });
 
     expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['New']);
+  });
+
+  // ARRIVE-1 (`ol-4pue`) — SESS-1 §1.1's fix: with a real arrival-day signal,
+  // `unmet` competes on the SAME days-waiting key as every other class,
+  // rather than deferring entirely to gapScore (the previous test's
+  // pre-`ARRIVE-1` fallback behaviour, still exercised there with no
+  // `arrivalDays` map supplied).
+  it('an unmet concept with an old arrival day outranks a merely-mild baseline-due concept, despite a lower gapScore', () => {
+    const theRows = rows([
+      { conceptName: 'OldUnmet', gapScore: 1 }, // seed -> unmet, low priority
+      { conceptName: 'MildBaselineDue', gapScore: 9, masteryState: 'sprout' }, // high priority, barely overdue
+    ]);
+    // Both concepts carry an instrument (nonzero cost) so the tight budget
+    // below genuinely forces a choice between them rather than fitting both.
+    const instruments = buildConceptInstrumentIndex([
+      qa('o1', ['OldUnmet']),
+      qa('m1', ['MildBaselineDue']),
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      // sprout's rung is 5 days; last retrieved 6 days before AS_OF -> 1 day overdue.
+      replay: replay({ m1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' } }),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 60, // room for exactly one
+      // OldUnmet arrived 50 days before AS_OF — far more overdue than
+      // MildBaselineDue's 1 day, so it must win the slot despite gapScore 1 < 9.
+      arrivalDays: new Map([['OldUnmet', '2026-07-26']]),
+    });
+
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['OldUnmet']);
+  });
+
+  it('an unmet concept absent from the arrivalDays map still falls back to overdueDays 0, never Infinity', () => {
+    const theRows = rows([
+      { conceptName: 'UnknownArrival', gapScore: 1 }, // seed -> unmet, no map entry
+      { conceptName: 'MildBaselineDue', gapScore: 9, masteryState: 'sprout' },
+    ]);
+    // Both concepts carry an instrument (nonzero cost) so the tight budget
+    // below genuinely forces a choice between them rather than fitting both.
+    const instruments = buildConceptInstrumentIndex([
+      qa('u1', ['UnknownArrival']),
+      qa('m1', ['MildBaselineDue']),
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({ m1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' } }),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 60, // room for exactly one
+      // A map is supplied but has no entry for this concept — same "no
+      // signal" outcome as omitting the map entirely (never Infinity, which
+      // would let UnknownArrival dominate every baseline-due/recall-due
+      // concept in the vault by construction).
+      arrivalDays: new Map([['SomeOtherConcept', '2000-01-01']]),
+    });
+
+    // MildBaselineDue's 1 overdue day beats UnknownArrival's fallback 0.
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['MildBaselineDue']);
   });
 
   it("allocates across courses proportionally to each course's share of ranked material (interim, pending ALLOC-1)", () => {

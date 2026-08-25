@@ -11,7 +11,7 @@
  */
 
 import { watch as fsWatch } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 import {
   isVaultPath,
@@ -125,6 +125,35 @@ export class FolderSource implements VaultSource {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw err;
     }
+  }
+
+  /**
+   * ARRIVE-1 (`ol-4pue`): `VaultSource.firstSeen`, over `node:fs`'s
+   * `birthtimeMs`. Deliberately NOT `mtimeMs` — a note edited long after it
+   * first appeared would then read as having *just* arrived every time it is
+   * touched, which is backwards for an "arrival day" signal (and would make a
+   * heavily-revisited old note perpetually look newest, exactly inverted from
+   * what this accessor exists to report).
+   *
+   * `birthtimeMs` is itself unreliable on this project's own dev/CI platform:
+   * checked-out git files here report `birthtimeMs: 0` (verified against this
+   * repo's own tracked files, not a synthetic case) because Linux ext4-family
+   * filesystems frequently do not track a true creation time and Node reports
+   * the epoch rather than throwing. A `0` (or otherwise non-finite/non-
+   * positive) value is therefore treated as "unavailable", identically to a
+   * missing file — see the interface doc: absence is a first-class, expected
+   * outcome here, not an edge case.
+   */
+  async firstSeen(path: VaultPath): Promise<number | null> {
+    let stats: import('node:fs').Stats;
+    try {
+      stats = await stat(this.toAbsolute(path));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    const birth = stats.birthtimeMs;
+    return Number.isFinite(birth) && birth > 0 ? birth : null;
   }
 
   /**

@@ -98,6 +98,25 @@ describe('FolderSource against the synthetic fixture vault', () => {
       expect(await source.exists('01 Courses/does-not-exist.md')).toBe(false);
     });
   });
+
+  describe('firstSeen (ARRIVE-1, `ol-4pue`)', () => {
+    it('returns null for a missing file rather than throwing', async () => {
+      expect(await source.firstSeen('01 Courses/does-not-exist.md')).toBeNull();
+    });
+
+    // Deliberately NOT a synthetic case: this repo's own git-checked-out
+    // fixture files report `birthtimeMs: 0` on this project's dev/CI
+    // platform (verified directly against this exact file with `fs.statSync`
+    // — Linux ext4-family filesystems frequently do not track a real
+    // creation time). This is the production-shaped "no signal" path the
+    // interface doc calls a first-class, expected outcome, and it is exactly
+    // why `study-session/compose.ts`'s fallback matters: a real vault's own
+    // dev-platform checkout hits it routinely, not just a contrived edge
+    // case.
+    it('returns null (not epoch 0) for a real file whose birthtime the host cannot report', async () => {
+      expect(await source.firstSeen(PDF_FIXTURE)).toBeNull();
+    });
+  });
 });
 
 describe('FolderSource write, against a temp copy', () => {
@@ -204,6 +223,21 @@ describe('FolderSource write, against a temp copy', () => {
     const read1 = await source.read('hard-breaks.md');
     await source.write('hard-breaks.md', read1);
     expect(await source.read('hard-breaks.md')).toBe(original);
+  });
+
+  it('firstSeen reports a plausible epoch-ms timestamp for a freshly-created file (ARRIVE-1)', async () => {
+    // A temp directory's files (as opposed to a git checkout's) do get a real
+    // `birthtimeMs` on this platform — see the top-level `firstSeen` describe
+    // block's fixture-vault test for the platform's other, equally real, case.
+    const source = new FolderSource(tempRoot);
+    const before = Date.now();
+    await source.write('fresh.md', 'x');
+    const after = Date.now();
+
+    const seen = await source.firstSeen('fresh.md');
+    expect(seen).not.toBeNull();
+    expect(seen as number).toBeGreaterThanOrEqual(before - 1000); // small clock-skew margin
+    expect(seen as number).toBeLessThanOrEqual(after + 1000);
   });
 
   it('rejects an invalid path', async () => {
