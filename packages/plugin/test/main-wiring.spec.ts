@@ -301,33 +301,18 @@ describe('the gap/coverage screen is registered and reachable (ol-2tyj)', () => 
   });
 });
 
-describe('the draft-cards modal is registered and reachable (ol-odb0)', () => {
-  // Same defect shape this file's own module doc opens with, one layer up
-  // again: `draftQuizCardsForConcept` (`ol-odb0.2`) was a real, tested,
-  // non-mock production caller with no command, view or modal anywhere in
-  // the plugin that could ever reach it — `ol-odb0`'s own parent bead names
-  // this exact gap in its acceptance criteria. These are the source-level
-  // checks that a command really does open `DraftCardsModal` against the
-  // real, composed retrieval wiring, not a placeholder `Notice` — the same
-  // "Create Card" shape that stayed a placeholder for three passes before
-  // ol-p2t04 built it.
+describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
+  // `OLEA_COMMAND_DRAFT_CARDS` / `DraftCardsModal` shipped in wave-2 round-2
+  // and was withdrawn: F4.5 rules out a student-invoked draft verb by name
+  // ("there is no 'Draft 6?' — because Olea is already drafting",
+  // `[D-063]`). This is the reachability check's mirror image — proving the
+  // surface is GONE, not merely proving something else is present, so a
+  // future re-add of the command or the modal fails here rather than
+  // sailing back in silently.
 
-  it('the command palette entry opens the modal', () => {
-    expect(main).toMatch(/draftCards:\s*\(\)\s*=>\s*\{\s*this\.openDraftCardsModal\(\);/);
-  });
-
-  it('constructs a real DraftCardsModal from the composed retrieval wiring, not a placeholder', () => {
-    expect(main).toMatch(/new DraftCardsModal\(this\.app,\s*deps,\s*conceptName\)\.open\(\);/);
-  });
-
-  it('assembles DraftQuizCardsDeps from the real embedding cache, embedding provider, transport and keyword index — not a second, parallel construction', () => {
-    expect(main).toMatch(/embeddingCache:\s*retrieval\.embeddingCache,/);
-    expect(main).toMatch(/embeddingProvider:\s*retrieval\.embeddingProvider,/);
-    expect(main).toMatch(/transport:\s*retrieval\.transport,/);
-    expect(main).toMatch(/keywordIndex:\s*keywordIndex\.engine\.toPersisted\(\),/);
-  });
-
-  it('degrades honestly (F7.8) when no Worker connection is configured, rather than opening a modal destined to fail on first submit', () => {
-    expect(main).toMatch(/new Notice\(AI_NOT_CONFIGURED_NOTICE\);/);
+  it('main.ts never references the withdrawn modal or handler', () => {
+    expect(main).not.toMatch(/DraftCardsModal/);
+    expect(main).not.toMatch(/openDraftCardsModal/);
+    expect(main).not.toMatch(/draftCards:/);
   });
 });

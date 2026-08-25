@@ -92,6 +92,27 @@ jobs:
       - name: "Wiring register — every port traced to a caller, a cited deferral, or KNOWN_FINDINGS"
         run: pnpm run wiring-register
 
+      # Surface register (the `ol-odb0` incident, olea-service beads database): every
+      # command-palette entry, registered view and modal this plugin ships must be a row in
+      # docs/dev/surface-register.md, citing the contract clause(s) that permit it. Wiring
+      # register above checks a surface is REACHABLE; this checks it is PERMITTED — the gap a
+      # student-invoked "draft cards" command shipped through, contrary to the functional
+      # scope's F4.5, before David caught it the same day.
+      #
+      # UNLIKE the wiring register above, a missing register here is NOT treated as a hard
+      # failure: this repo's own CI has no ../olea-service checkout (verified — no step anywhere
+      # in this workflow checks it out), so the private register never resolves here, always,
+      # not occasionally. The gate step below logs a loud warning and exits 0 in that case rather
+      # than blocking every PR on an environment gap this workflow does not close — see
+      # scripts/check-surface-register.mjs's own docblock ("THE REGISTER" section) for the full
+      # reasoning. It still runs for real, and fails for real, in any workspace with both repos
+      # cloned as siblings (this project's own dev workspace included).
+      - name: "Surface register — self-test (must pass before the gate is trusted)"
+        run: pnpm run surface-register:test
+
+      - name: "Surface register — every command, view and modal traced to a permitting contract clause"
+        run: pnpm run surface-register
+
       # BUILD BEFORE TEST — deliberate, and the order is load-bearing.
       # `packages/plugin/test/bundle-install.spec.ts` loads the ACTUAL built main.js
       # and asserts it is valid CommonJS default-exporting a Plugin subclass that

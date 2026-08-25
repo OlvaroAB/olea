@@ -34,9 +34,6 @@ import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-inde
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
-import { AI_NOT_CONFIGURED_NOTICE } from './retrieval/draft-cards-copy.js';
-import { DraftCardsModal } from './retrieval/draft-cards-modal.js';
-import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
   buildRetrievalWiring,
   drainIntoEmbeddingCache,
@@ -238,11 +235,6 @@ export default class OleaPlugin extends Plugin {
       // the other door, and seeds a concept — see `revealSessionBuilderView`.
       buildSession: () => {
         void this.revealSessionBuilderView(undefined);
-      },
-      // `ol-odb0`: the first command-palette entry reaching
-      // `draftQuizCardsForConcept` (`ol-odb0.2`) — see `openDraftCardsModal`.
-      draftCards: () => {
-        this.openDraftCardsModal();
       },
     });
 
@@ -636,52 +628,6 @@ export default class OleaPlugin extends Plugin {
     await workspace.revealLeaf(leaf);
     const view = leaf.view;
     if (view instanceof SessionBuilderView) await view.setFocusConcept(conceptName);
-  }
-
-  /**
-   * `ol-odb0`'s production entry point for `DraftCardsModal`: the modal is
-   * the "ask a grounded question of her material" surface, and this is the
-   * one place that assembles a real `DraftQuizCardsDeps` (`retrieve.js`'s
-   * `RetrieveDeps` plus a `WorkerTaskTransport`) from the composition this
-   * class already holds — the same "the compose-root is the only place that
-   * joins these" pattern `drainEmbeddings` already follows one layer down.
-   *
-   * `conceptName` lets a future caller (e.g. the gap view's `build-session`
-   * affordance, `ol-p5t06b`'s own pattern) seed the modal; the palette
-   * command passes `undefined` and she types both fields herself.
-   *
-   * Mirrors F7.8's grey-out contract exactly where `this.retrieval`'s own
-   * fields are `null` (no Worker token pasted yet) — an honest `Notice`
-   * rather than a modal that would only fail on its first submit. Also
-   * covers the (normally momentary) window before `this.keywordIndex` has
-   * finished its first build.
-   */
-  private openDraftCardsModal(conceptName?: string): void {
-    const retrieval = this.retrieval;
-    const keywordIndex = this.keywordIndex;
-    if (
-      retrieval === null ||
-      retrieval.embeddingCache === null ||
-      retrieval.embeddingProvider === null ||
-      retrieval.transport === null
-    ) {
-      new Notice(AI_NOT_CONFIGURED_NOTICE);
-      return;
-    }
-    if (keywordIndex === null) {
-      new Notice('Olea: still reading your vault — try again in a moment.');
-      return;
-    }
-
-    const deps: DraftQuizCardsDeps = {
-      retrieve: {
-        keywordIndex: keywordIndex.engine.toPersisted(),
-        embeddingCache: retrieval.embeddingCache,
-        embeddingProvider: retrieval.embeddingProvider,
-      },
-      transport: retrieval.transport,
-    };
-    new DraftCardsModal(this.app, deps, conceptName).open();
   }
 
   override onunload(): void {

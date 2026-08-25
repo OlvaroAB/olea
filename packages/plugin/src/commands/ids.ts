@@ -34,9 +34,10 @@ export const OLEA_COMMAND_GAP_OPEN = 'olea-gap-open';
  * follow-on from reading the gap view.
  */
 export const OLEA_COMMAND_SESSION_BUILD = 'olea-session-build';
-/**
- * `ol-odb0`: opens `DraftCardsModal` (F3.3/C4.7) — the first command-palette
- * entry reaching `draftQuizCardsForConcept` (`ol-odb0.2`), the wired,
- * refusing production caller for `retrieve()`/`assembleGroundedContext`.
- */
-export const OLEA_COMMAND_DRAFT_CARDS = 'olea-draft-cards';
+// `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
+// round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
+// student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea
+// is already drafting" (`[D-063]`, unbounded automatic generation). The
+// command opened `DraftCardsModal`, deleted with it; `draftQuizCardsForConcept`
+// and its supporting modules stay, as internals the F3.3 automatic-generation
+// pipeline and the P3-T07a accept/triage flow call instead of a palette entry.

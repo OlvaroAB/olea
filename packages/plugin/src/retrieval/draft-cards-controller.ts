@@ -1,15 +1,24 @@
 /**
- * `runDraftCards` — the obsidian-free orchestration `draft-cards-modal.ts`
- * calls into, kept separate from the `Modal` subclass for the same reason
- * `open-session.ts` sits beside `review/view.ts`: this is the part with
- * actual branching to get right (refusal vs. drafted vs. a Worker-level
- * error vs. an unparseable body), and it is testable under plain Vitest
+ * `runDraftCards` — obsidian-free orchestration, testable under plain Vitest
  * because it never touches the DOM or imports `obsidian`.
  *
  * Composes two things that already exist and are separately tested:
  * `draftQuizCardsForConcept` (`ol-odb0.2`/`ol-odb0.3`, the wired, refusing
  * production caller) and `parseDraftedResponse` (`draft-cards-copy.ts`, the
  * public-envelope-only response shaping). Neither is duplicated here.
+ *
+ * **Sanctioned callers, and only these (F4.5).** The student-invoked
+ * "Olea: Draft cards for a concept" command and its `DraftCardsModal` DOM
+ * layer were withdrawn (David, wave-2 round-2 correction) because F4.5 rules
+ * out a student-invoked draft verb by name: there is no "Draft 6?" because
+ * Olea is already drafting under unbounded automatic generation (`[D-063]`).
+ * This module is contract-valid internal plumbing, not a UI entry point, and
+ * is meant to be called only from: (1) the F3.3 automatic, ingestion-driven
+ * generation pipeline, and (2) P3-T07a's accept/triage flow, where she
+ * reviews material Olea already drafted rather than asking for a draft. Do
+ * not wire a command, hotkey or palette entry to this module or to
+ * `draftQuizCardsForConcept` beneath it — that is exactly the withdrawn
+ * surface.
  */
 
 import {

@@ -42,11 +42,18 @@
  * macOS and Ctrl elsewhere, which is what F7.7's Mac-spelled "⌘⇧O" means
  * off-Mac). "Start today's review" and "Create card" have no chord named
  * anywhere in the contract, so both stay unbound.
+ *
+ * **`OLEA_COMMAND_DRAFT_CARDS` was withdrawn (David, wave-2 round-2
+ * correction).** F4.5 rules out a student-invoked draft verb by name —
+ * there is no "Draft 6?" because Olea is already drafting under unbounded
+ * automatic generation (`[D-063]`). See `ids.ts`'s note at the id's old
+ * location for the fuller citation; `draftQuizCardsForConcept` and its
+ * supporting modules are unaffected, called instead by the F3.3 automatic
+ * pipeline and the P3-T07a accept/triage flow.
  */
 
 import {
   OLEA_COMMAND_CREATE_CARD,
-  OLEA_COMMAND_DRAFT_CARDS,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
   OLEA_COMMAND_REVIEW_START,
@@ -63,8 +70,6 @@ export interface OleaCommandHandlers {
   readonly openGap: () => void;
   /** `ol-p5t06b`: opens the session builder (F4.6, F4.7, F4.8), unfocused — built from the whole ranking. */
   readonly buildSession: () => void;
-  /** `ol-odb0`: opens `DraftCardsModal` (F3.3/C4.7), unfocused — she names the course and concept herself. */
-  readonly draftCards: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -114,15 +119,6 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       name: 'Olea: Build a study session',
       callback: handlers.buildSession,
       // Unbound, same as the three above.
-    },
-    {
-      id: OLEA_COMMAND_DRAFT_CARDS,
-      // "For a concept" rather than "for this note": F3.3's ask is grounded
-      // on her indexed material generally, not on whatever note has focus,
-      // so the modal asks her to name the concept rather than inferring one.
-      name: 'Olea: Draft cards for a concept',
-      callback: handlers.draftCards,
-      // Unbound, same as the three above — she assigns a chord if she wants one.
     },
   ];
 }

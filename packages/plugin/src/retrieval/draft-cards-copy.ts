@@ -1,10 +1,13 @@
 /**
- * `draft-cards-copy.ts` — the strings and the response-shaping logic for
- * `draft-cards-modal.ts`, kept obsidian-free (same split
- * `settings-tab.ts`'s module doc documents for `degradation-statement.ts`
- * and the `*-field-copy.ts` files) so the part that could actually be wrong
- * — the copy, and how a raw Worker envelope turns into something a modal can
- * render — is unit-testable under plain Vitest.
+ * `draft-cards-copy.ts` — the strings and the response-shaping logic for the
+ * card-drafting outcome (`draft-cards-controller.ts`'s `runDraftCards`),
+ * kept obsidian-free (same split `settings-tab.ts`'s module doc documents
+ * for `degradation-statement.ts` and the `*-field-copy.ts` files) so the
+ * part that could actually be wrong — the copy, and how a raw Worker
+ * envelope turns into something a caller can render — is unit-testable
+ * under plain Vitest. See `draft-cards-controller.ts`'s module doc for the
+ * sanctioned callers (F4.5): the student-invoked draft command and modal
+ * this file originally served were withdrawn.
  *
  * **The refusal copy is the load-bearing part of this file.** `ol-riwn` /
  * `[D-089]` rule that an "I could not check" refusal must never read as "your
