@@ -24,8 +24,14 @@
  *    keeping the current 40/20 ratio) — below that, band-versus-judge on
  *    false refusals cannot be settled in either direction.
  * 3. `grounding.judge.v1`'s prompt version changes — both bars were measured
- *    against one prompt version's verdicts, and a rewrite has already moved
- *    5 of 60 recorded verdicts once.
+ *    against one prompt version's verdicts, and a version change invalidates
+ *    that recorded operating point wholesale: a rewrite could move the
+ *    unanswerable side, which sampling noise demonstrably does not. (The
+ *    trigger is unchanged; its original justification — "a rewrite already
+ *    moved 5 of 60 verdicts once" — was superseded: that figure sits inside
+ *    the measured same-version noise floor, 2-7 verdicts across draws of one
+ *    prompt version, and is not evidence of a real delta. See the private
+ *    repo's `findings/JUD-1-refusal-curve.md` §6 and `ol-3fpp`.)
  *
  * None of these fire automatically; each is a data event a human notices and
  * acts on by opening a new decision bead, not a check this module runs.
