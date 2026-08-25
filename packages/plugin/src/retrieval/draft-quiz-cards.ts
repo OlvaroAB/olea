@@ -5,14 +5,35 @@
  * **What this file exists to close.** Before it existed, the only non-test,
  * non-mock reference to `retrieve`, `hybridRetrieve` or
  * `computeCompositeGroundingSignals` anywhere in either repo was `olea-core`'s
- * own re-export of them (`ol-odb0`'s diagnosis). `requireComposite` is
- * opt-in by construction (`groundedContext.ts`'s own doc), so ratifying
- * `[D-042]`'s operating point did not by itself change what the alpha user
- * experiences — this is the caller that makes it real: it calls `retrieve()`
- * with `requireComposite: true` and `RECOMMENDED_COMPOSITE_THRESHOLDS`
- * passed EXPLICITLY (never relying on `assembleGroundedContext`'s own
- * default for that option), for the card-drafting flow through
- * `quiz.generate.v1` the bead's own notes name as the chosen destination.
+ * own re-export of them (`ol-odb0`'s diagnosis). It originally ran `[D-042]`'s
+ * single-gate composite (`requireComposite: true` +
+ * `RECOMMENDED_COMPOSITE_THRESHOLDS`, `ol-odb0.2`); `[WIRE-5]` (`ol-i0y6`)
+ * switches it to `[D-089]`'s two-threshold band at the operating point
+ * `[D-112]` (`ol-oqip`) ratified — see "THE BAND SWITCH" below — for the
+ * card-drafting flow through `quiz.generate.v1` the bead's own notes name as
+ * the chosen destination.
+ *
+ * ===========================================================================
+ * THE BAND SWITCH (`[WIRE-5]` / `ol-i0y6`)
+ * ===========================================================================
+ * This call site now passes `band: D112_GROUNDING_BAND`
+ * (`packages/core/src/retrieval/operating-point.ts`) and a
+ * `WorkerGroundingJudge` (`./workerGroundingJudge.js`) to `retrieve()` in
+ * place of `requireComposite`/`compositeThresholds` — `retrieve()`'s own doc
+ * says a `band` takes precedence over `requireComposite` for exactly this
+ * reason, so the two are never both in force. `retrieve()` already threads
+ * `request.conceptName` through as the band's `query` for escalation; this
+ * call site does not need to repeat it.
+ *
+ * **The judge is constructed here, from `deps.transport`, not injected as a
+ * new field on `DraftQuizCardsDeps`.** That is deliberate: `DraftQuizCardsDeps`
+ * is what the live F3.3 pipeline lane is building against this same round,
+ * and its own acceptance keeps this function's exported signature stable.
+ * `WorkerGroundingJudge` needs nothing beyond the transport `deps` already
+ * carries, so widening the deps shape to inject it would be a needless
+ * surface change for a dependency this module can already assemble itself —
+ * the same shape `draft-cards-controller.ts` already deliberately leaves
+ * `parseDraftedResponse` uninjected for.
  *
  * **Why `quiz.generate.v1`, not `cards.generate.v1`.** Same reasoning
  * `packages/workbench/src/oracle/generate.ts` already recorded for the
@@ -51,11 +72,12 @@
 import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
 import type { WorkerTaskTransport } from 'olea-core';
 import {
+  D112_GROUNDING_BAND,
   type GroundingRefusalReason,
-  RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
   retrieve,
 } from 'olea-core';
+import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**
  * `quiz.generate.v1`'s request shape, restated locally rather than imported
@@ -101,7 +123,7 @@ export interface DraftQuizCardsRequest {
 export type DraftQuizCardsResult =
   | {
       readonly status: 'refused';
-      /** Which of `GroundingRefusalReason`'s four cases fired — `ol-riwn`'s `composite-check-unavailable` distinguishes "we could not check" from "checked and found nothing," and a caller surfacing this to her must keep that distinction rather than collapsing both into one "your notes don't cover this" message ([D-089]). */
+      /** Which `GroundingRefusalReason` fired — since the band switch this includes `'below-band'`, `'judge-rejected'` and `'judge-unavailable'` alongside the single-gate reasons. `ol-riwn`'s transient reasons (`'composite-check-unavailable'`, `'judge-unavailable'`) distinguish "we could not check" from "checked and found nothing," and a caller surfacing this to her must keep that distinction rather than collapsing both into one "your notes don't cover this" message ([D-089]). */
       readonly reason: GroundingRefusalReason;
     }
   | {
@@ -120,34 +142,40 @@ export interface DraftQuizCardsDeps {
 
 /**
  * Drafts `quiz.generate.v1` questions for one concept, refusing before any
- * generative call when `request.conceptName` does not clear `[D-042]`'s
- * ratified composite operating point against her indexed material.
+ * generative call unless `request.conceptName` clears `[D-089]`'s
+ * two-threshold band against her indexed material, at the operating point
+ * `[D-112]` ratified.
  *
- * `requireComposite: true` and `compositeThresholds:
- * RECOMMENDED_COMPOSITE_THRESHOLDS` are passed EXPLICITLY on every call —
- * never omitted in favour of `retrieve`'s own default (`false`) or
- * `assembleGroundedContext`'s own default threshold value. That explicitness
- * is what `draft-quiz-cards.spec.ts`'s N-013 test pins: the same fixture,
- * retrieved again with `requireComposite: false`, grounds — proving this
- * call site's explicit `true` is the only thing standing between "refuses"
- * and "never refuses" for that input.
+ * `band: D112_GROUNDING_BAND` is passed EXPLICITLY on every call — never
+ * omitted in favour of `retrieve`'s own default (no band at all, per
+ * `groundedContext.ts`'s own doc: there is no default operating point that
+ * can be in force by accident). That explicitness is what
+ * `draft-quiz-cards.spec.ts`'s N-013 test pins: the same below-band fixture,
+ * retrieved again with no `band` option, grounds — proving this call site's
+ * explicit band is the only thing standing between "refuses" and "never
+ * refuses" for that input. `judge: new WorkerGroundingJudge({ transport:
+ * deps.transport })` is constructed fresh per call — it is stateless and
+ * holds only the transport reference `deps` already carries, so there is
+ * nothing to gain from constructing it once and caching it here.
  */
 export async function draftQuizCardsForConcept(
   deps: DraftQuizCardsDeps,
   request: DraftQuizCardsRequest,
 ): Promise<DraftQuizCardsResult> {
   const grounding = await retrieve(deps.retrieve, request.conceptName, {
-    requireComposite: true,
-    compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+    band: D112_GROUNDING_BAND,
+    judge: new WorkerGroundingJudge({ transport: deps.transport }),
   });
 
   if (grounding.status === 'refused') {
-    // THE load-bearing line (see module doc): no `transport.send` call has
-    // happened, or ever will for this call, once we are here. A refused
-    // retrieval reaches the caller as `{status: 'refused', reason}` and
-    // nothing else — not an empty `drafted` result, which would be
-    // indistinguishable from a generation that legitimately produced zero
-    // questions.
+    // THE load-bearing line (see module doc): the GENERATIVE `transport.send`
+    // call (`quiz.generate.v1`) never happens, or ever will for this call,
+    // once we are here — whatever the reason, including a band escalation
+    // that DID send the query and passages to the judge (`grounding.judge.v1`)
+    // and was refused. A refused retrieval reaches the caller as
+    // `{status: 'refused', reason}` and nothing else — not an empty
+    // `drafted` result, which would be indistinguishable from a generation
+    // that legitimately produced zero questions.
     return { status: 'refused', reason: grounding.reason };
   }
 
