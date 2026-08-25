@@ -220,6 +220,83 @@
 // asserts that the claim carries a citation (a bead id), not that the deferral was wise.
 //
 // ==============================================================================================
+// THE BLIND SPOT: OPTION-GATED CAPABILITIES AND WORKBENCH-ONLY CALLERS — added 2026-08-25
+// (ol-1bb8), filed off ol-468f's 2026-08-21 dispositioning
+// ==============================================================================================
+// Everything above this section answers "is the symbol/type referenced at all in production
+// text?" — a purely textual question. It has no way to notice a capability sitting behind a
+// DEFAULT-OFF BOOLEAN OPTION, because the enclosing function is called all the time and there is
+// no separate symbol for a disabled branch; and it has no way to distinguish a caller inside
+// `packages/workbench` (a developer tool, not the shipped product) from one inside
+// `packages/plugin` — a caller citation resolves identically either way. Both shapes are REAL:
+// `extractConcepts`'s `includeTier3` option (`packages/core/src/concept/types.ts:198`,
+// `packages/core/src/concept/extract.ts:190`) defaults `false`; every non-test call site passing
+// `includeTier3: true` is in `packages/workbench` (`session-scenarios.ts`, `fixture-oracle.ts`) or
+// `packages/synthetic/test`; the one production call site with no options at all
+// (`packages/core/src/session/enumerate.ts:205`) never turns it on. `extractConcepts` itself is
+// not a `*Port`-shaped seam (same reason `masteryAtTimeForConceptIds` and `hybridRetrieve` are
+// prose, not rows — see the register's "Beyond the table" section), so this specific function is
+// never a row here; it is cited as the real-world illustration of the DEFECT CLASS this section
+// closes, not as a row this script now tracks.
+//
+// TWO NEW, INDEPENDENT CHECKS, both scoped to `phaseKind === 'phase'` rows (same calibration
+// boundary as everything else — a `deferred` row's shape is a human decision, not re-derived):
+//
+// 1. WORKBENCH-ONLY CALLER. A row's "Production caller" cell may cite one or more `file:line`
+//    refs. If EVERY cited ref's file starts with `packages/workbench/`, the row is marked
+//    `workbenchOnlyCaller` — the citation is real (the file exists, the line is in range, exactly
+//    as RESOLVABILITY already required), but it names a developer tool, not the shipped product.
+//    This is checked purely from the CITED PATH, deliberately: no call-graph tracing is
+//    attempted, and none is needed — the register's own citation already says where the caller
+//    lives. A row citing BOTH a workbench ref and a non-workbench ref is NOT workbench-only (a
+//    real production caller exists too); only an ALL-workbench citation set counts. A row citing
+//    NO caller at all (`none`) is unaffected by this check — it is already `callerIsNone`, the
+//    ordinary unwired shape.
+//
+//    This SUBSUMES part of the caller cross-check above for implementation-symbol rows: when the
+//    symbol scan (core+plugin only, per that section) finds no call site and the register cites
+//    only a workbench ref, this section reports `workbenchOnlyCaller` instead of the generic
+//    "citation may be wrong or stale" problem — the citation is not wrong, it is honestly
+//    reporting a caller this register must not credit as reachable.
+//
+// 2. OPTION-GATED CAPABILITY. A "Production caller" cell may carry an inline annotation,
+//    anywhere in the cell text:
+//
+//        GATE(`optionName`, default `false`)
+//
+//    naming the option key and its default. When present, this script does NOT trust the plain
+//    "is the symbol called at all" signal for that row — a bare call with the option left at its
+//    default proves nothing about whether the gated behaviour ever runs. Instead it independently
+//    scans for the FIRST non-comment line, in `packages/core/src` or `packages/plugin/src`
+//    (never `packages/workbench`, never test/spec files — the same production corpus as
+//    everywhere else in this file), matching `optionName: true` as a whole word. Found = the gate
+//    is satisfied by real production code, full stop — this is deliberately as blunt as
+//    `findTypeReference`'s "CAN A 'NONE' CLAIM BE TRUSTED?" check above and for the identical
+//    reason: a plain word-boundary match cannot tell a genuine enabling call from an unrelated
+//    object literal that happens to set the same key, and ANY surviving ambiguity should force a
+//    human to look again rather than trying to be clever about which hits "count". Not found in
+//    production: the SAME scan then runs against `packages/workbench/src` — found there names the
+//    exact workbench-only shape section 1 above names, with the extra fact that the bare symbol
+//    genuinely IS reachable from production (that is what makes this shape strictly more
+//    dangerous, per the module's own framing, than either "no caller" or "workbench-only caller":
+//    every visible signal says wired). Found nowhere at all: the capability is dead behind its own
+//    flag, full stop.
+//
+//    A GATE-annotated row's reachability is governed ENTIRELY by whether the gate is satisfied in
+//    production — NOT by `callerIsNone`/`workbenchOnlyCaller` (a row can have a perfectly good,
+//    real, non-workbench "Production caller" citation and still be unreachable, because that
+//    citation is exactly the bare call the gate makes insufficient). This is the one place in this
+//    script where a non-`none` caller citation does not, by itself, mean "wired".
+//
+// BOTH SHAPES FLOW THROUGH THE EXISTING RATCHET, not a parallel exit code. A workbench-only or
+// gate-never-enabled row, once its owning task has closed, is a `genuineFinding` exactly like the
+// ordinary "no caller at all" shape — same KNOWN_FINDINGS mechanism, same NEW/FIXED ratchet
+// discipline, just a message that NAMES the shape so a human reading the failure is not left to
+// rediscover which of the three defect classes they are looking at. Neither shape currently
+// applies to any real row in `docs/dev/wiring-register.md` — see this file's own test for the
+// planted fixtures that prove each direction (the checker actually fails, then actually passes).
+//
+// ==============================================================================================
 // THE RATCHET (David, 2026-08-16) — KNOWN_FINDINGS, modelled on check-threshold-provenance.mjs's
 // KNOWN_GAPS in the sibling repo. Read that file first; this is the same shape.
 // ==============================================================================================
@@ -317,7 +394,14 @@ function parseArgs(argv) {
   // which is design detail this public repo may not carry. The CHECKER stays here because what it
   // scans -- packages/core and packages/plugin -- is here. Private description, public subject.
   if (!opts.registerPath) {
-    opts.registerPath = join(opts.repoRoot, '..', 'olea-service', 'docs', 'dev', 'wiring-register.md');
+    opts.registerPath = join(
+      opts.repoRoot,
+      '..',
+      'olea-service',
+      'docs',
+      'dev',
+      'wiring-register.md',
+    );
   }
   return opts;
 }
@@ -449,6 +533,37 @@ function collectAllProductionFiles(repoRoot) {
   return acc;
 }
 
+/** The repo-relative path prefix that marks a citation as naming the component workbench rather
+ * than the shipped product — see the module doc's "THE BLIND SPOT" section, part 1. */
+const WORKBENCH_PREFIX = 'packages/workbench/';
+
+/** `packages/workbench/src`, scanned SEPARATELY from `productionFiles` and never merged into it —
+ * the workbench is a developer tool, not production, and the whole point of the workbench-only
+ * and gate checks below is to tell the two corpora apart rather than pool them. Same exclusions
+ * (`test/`, `dist/`, `.spec.`/`.test.` files) as `collectTsFiles` already applies; safe to call
+ * even when the directory does not exist (matches `productionScanRoots`'s own tolerance). */
+function collectWorkbenchFiles(repoRoot) {
+  return collectTsFiles(join(repoRoot, 'packages', 'workbench', 'src'));
+}
+
+/** Scans `files` for the first non-comment line matching `optionName: true` as a whole word —
+ * the OPTION-GATED check's enabling-call detector. See the module doc's "THE BLIND SPOT" section,
+ * part 2, for what this deliberately does and does not try to be clever about. */
+function findEnablingCallSite(repoRoot, optionName, files) {
+  const enableRe = new RegExp(`(?<![\\w$])${optionName}\\s*:\\s*true\\b`);
+  for (const file of files) {
+    const lines = readFileSync(file, 'utf8').split('\n');
+    for (let idx = 0; idx < lines.length; idx++) {
+      const trimmed = lines[idx].trimStart();
+      if (/^(\/\/|\*|\/\*)/.test(trimmed)) continue; // full-line comment
+      if (enableRe.test(lines[idx])) {
+        return { file: relative(repoRoot, file), line: idx + 1 };
+      }
+    }
+  }
+  return null;
+}
+
 /** Scans `files` for the first line that CONSTRUCTS or CALLS `symbol` — `new SYMBOL(` or a bare
  * `SYMBOL(` — excluding `symbol`'s own `export function`/`export class` declaration line (which
  * would otherwise false-positive on a factory function: `export function createFoo(` textually
@@ -517,6 +632,17 @@ const FILE_LINE_RE = /`([^`\s]+\.tsx?):(\d+)`/g;
 const BACKTICK_RE = /`([^`]+)`/;
 const TASK_ID_RE = /`(ol-[A-Za-z0-9.-]+)`/g;
 const IDENTIFIER_TOKEN_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+// `GATE(`optionName`, default `false`)` — see the module doc's "THE BLIND SPOT" section, part 2.
+const GATE_RE = /GATE\(`([A-Za-z_$][A-Za-z0-9_$]*)`,\s*default\s*`(true|false)`\)/;
+
+/** Extracts a row's OPTION-GATE annotation from its "Production caller" cell, or null when the
+ * cell carries none — see the module doc's "THE BLIND SPOT" section, part 2, for the syntax and
+ * what a match means downstream. */
+function extractGate(cell) {
+  const m = GATE_RE.exec(cell);
+  if (!m) return null;
+  return { option: m[1], default: m[2] };
+}
 
 function stripEmphasis(cell) {
   return cell.replace(/\*\*/g, '').replace(/\*/g, '').trim();
@@ -606,6 +732,16 @@ function parseRegister(text) {
 
     const taskIds = [...taskCell.matchAll(TASK_ID_RE)].map((m) => m[1]);
 
+    // Workbench-only caller: EVERY cited "Production caller" ref (there is at least one, since
+    // `callerIsNone` is false whenever `callerRefs.length > 0`) points inside packages/workbench.
+    // See the module doc's "THE BLIND SPOT" section, part 1.
+    const workbenchOnlyCaller =
+      callerRefs.length > 0 && callerRefs.every((r) => r.file.startsWith(WORKBENCH_PREFIX))
+        ? callerRefs[0]
+        : null;
+
+    const gate = extractGate(callerCell);
+
     const phaseStripped = stripEmphasis(phaseCell);
     let phaseKind;
     let phaseLabel;
@@ -641,6 +777,8 @@ function parseRegister(text) {
       implSymbol,
       callerRefs,
       callerIsNone,
+      workbenchOnlyCaller,
+      gate,
       taskIds,
       phaseKind,
       phaseLabel,
@@ -712,6 +850,48 @@ function resolveTaskStatuses(repoRoot, allTaskIds, taskStatusOverridePath) {
     statuses: HARDCODED_FALLBACK_STATUS,
     source: 'hardcoded fallback (2026-08-16 snapshot)',
   };
+}
+
+/** Builds the human-readable finding message for one unreachable row, naming WHICH of the three
+ * shapes applies (ordinary/workbench-only/gate-ungoverned) rather than a single generic sentence
+ * — see the module doc's "THE BLIND SPOT" section for why the distinction matters: a reader
+ * hitting a NEW ratchet failure should not have to re-derive which defect class they are looking
+ * at from the port name alone. */
+function buildFindingMessage(row) {
+  const base = `${row.name}: owning task(s) [${row.taskIds.join(', ')}] closed, phase ${row.phaseLabel} reached, `;
+  if (row.gate) {
+    if (row.gateEnabledInWorkbench) {
+      return (
+        base +
+        `and it is option-gated by \`${row.gate.option}\` (default \`${row.gate.default}\`) — the ` +
+        `only place \`${row.gate.option}: true\` appears anywhere in the scanned tree is ` +
+        `${row.gateEnabledInWorkbench.file}:${row.gateEnabledInWorkbench.line}, inside ` +
+        `packages/workbench — a workbench-only enabling call does not discharge reachability, and ` +
+        `this is MORE dangerous than no caller at all because the bare symbol IS reachable from ` +
+        `real production code; only the gate itself is dark`
+      );
+    }
+    return (
+      base +
+      `and it is option-gated by \`${row.gate.option}\` (default \`${row.gate.default}\`) — ` +
+      `nothing anywhere in the scanned tree, production or packages/workbench, ever passes ` +
+      `\`${row.gate.option}: true\`; the capability is unreachable behind its own default`
+    );
+  }
+  if (row.workbenchOnlyCaller) {
+    return (
+      base +
+      `and the only cited "Production caller" is ${row.workbenchOnlyCaller.file}:` +
+      `${row.workbenchOnlyCaller.line}, inside packages/workbench — a workbench caller does not ` +
+      `discharge reachability (CLAUDE.md: "A workbench caller does not discharge it"); this is ` +
+      `MORE dangerous than no caller at all because it looks wired from every screen you would look at`
+    );
+  }
+  return (
+    base +
+    `and there is still no production caller — the task that claimed to wire this is done, and it ` +
+    `is not reachable from anything the product runs`
+  );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -850,7 +1030,10 @@ function main() {
           `actually constructed at ${detected.file}:${detected.line} — the register is STALE ` +
           `(this is the ol-odb0.1 false-negative shape; update the Production caller cell)`,
       );
-    } else if (!row.callerIsNone && !sourceSaysWired) {
+    } else if (!row.callerIsNone && !sourceSaysWired && !row.workbenchOnlyCaller) {
+      // A workbench-only citation is handled separately below (reachability), not here: the
+      // citation is not wrong or stale — it honestly names a workbench caller, which this section
+      // is not the place to adjudicate. See the module doc's "THE BLIND SPOT" section, part 1.
       problems.push(
         `'${row.name}' register cites a Production caller, but no call site to ` +
           `'${row.implSymbol}' was found anywhere in packages/core/src or packages/plugin/src ` +
@@ -881,6 +1064,20 @@ function main() {
     }
   }
 
+  // --- Option-gate evaluation: is the gate satisfied by real production code, only by
+  // packages/workbench, or nowhere at all? See the module doc's "THE BLIND SPOT" section, part 2.
+  // Purely a detection pass — no problems pushed here; the result feeds reachability below, the
+  // same way task-status does, because a gate-never-enabled row is a FINDING (ratchet-eligible),
+  // not a structural register/tree mismatch.
+  const workbenchFiles = collectWorkbenchFiles(opts.repoRoot);
+  for (const row of rows) {
+    if (!row.gate) continue;
+    row.gateEnabledInProd = findEnablingCallSite(opts.repoRoot, row.gate.option, productionFiles);
+    row.gateEnabledInWorkbench = row.gateEnabledInProd
+      ? null
+      : findEnablingCallSite(opts.repoRoot, row.gate.option, workbenchFiles);
+  }
+
   // Structural problems (parse-adjacent) are environment/register-quality failures — exit 2,
   // distinct from a real wiring finding. Report and stop before spending a `bd` round-trip.
   if (problems.length > 0) {
@@ -890,7 +1087,18 @@ function main() {
   }
 
   // --- Reachability: closed-task ports with no caller and no cited deferral ---
-  const rowsNeedingStatus = rows.filter((r) => r.callerIsNone && r.phaseKind === 'phase');
+  //
+  // "Unreachable" now has THREE shapes, not one — see the module doc's "THE BLIND SPOT" section:
+  //   - ordinary: `callerIsNone` (ratchet has always tracked this)
+  //   - workbench-only: every cited caller ref lives in packages/workbench
+  //   - gate-ungoverned: the row carries a GATE(...) annotation and it is not satisfied in
+  //     production — this OVERRIDES a real, non-workbench caller citation, because the gate
+  //     annotation exists precisely to say "the bare call is not enough".
+  function rowLooksUnreachable(row) {
+    if (row.gate) return !row.gateEnabledInProd;
+    return row.callerIsNone || !!row.workbenchOnlyCaller;
+  }
+  const rowsNeedingStatus = rows.filter((r) => r.phaseKind === 'phase' && rowLooksUnreachable(r));
   const allTaskIds = [...new Set(rowsNeedingStatus.flatMap((r) => r.taskIds))];
   let statusResult = { statuses: {}, source: '(not needed — every port is wired or deferred)' };
   if (allTaskIds.length > 0) {
@@ -921,13 +1129,7 @@ function main() {
     }
     const allClosed = known.every((s) => s === 'closed');
     if (allClosed) {
-      genuineFindings.push({
-        port: row.name,
-        message:
-          `${row.name}: owning task(s) [${row.taskIds.join(', ')}] closed, phase ${row.phaseLabel} ` +
-          `reached, and there is still no production caller — the task that claimed to wire this ` +
-          `is done, and it is not reachable from anything the product runs`,
-      });
+      genuineFindings.push({ port: row.name, message: buildFindingMessage(row) });
     }
   }
   if (problems.length > 0) {
@@ -937,12 +1139,29 @@ function main() {
   }
 
   // --- Report (unconditional — green must not mean silent) ---
-  const wiredCount = rows.filter((r) => !r.callerIsNone).length;
+  const workbenchOnlyRows = rows.filter((r) => !!r.workbenchOnlyCaller);
+  const gatedRows = rows.filter((r) => !!r.gate);
+  const gatedSatisfiedRows = gatedRows.filter((r) => !!r.gateEnabledInProd);
+  const wiredCount = rows.filter(
+    (r) => !r.callerIsNone && !r.workbenchOnlyCaller && (!r.gate || r.gateEnabledInProd),
+  ).length;
   const deferredCount = rows.filter((r) => r.phaseKind === 'deferred').length;
   console.log(
     `check-wiring-register: ${rows.length} port(s) registered — ${wiredCount} wired, ` +
       `${deferredCount} deliberately deferred, ${unknownRows.length} unknown phase, ` +
       `${genuineFindings.length} finding(s) this run. Task-status source: ${statusResult.source}.`,
+  );
+  console.log(
+    `  option-gated: ${gatedRows.length} row(s) carry a GATE(...) annotation, ` +
+      `${gatedSatisfiedRows.length} satisfied by real production code this run.`,
+  );
+  console.log(
+    `  workbench-only caller: ${workbenchOnlyRows.length} row(s) whose ONLY cited caller lives ` +
+      `in packages/workbench` +
+      (workbenchOnlyRows.length > 0
+        ? ` (${workbenchOnlyRows.map((r) => r.name).join(', ')})`
+        : '') +
+      `.`,
   );
   if (unknownRows.length > 0) {
     console.log(

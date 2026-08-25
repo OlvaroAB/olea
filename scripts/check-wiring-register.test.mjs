@@ -779,6 +779,278 @@ test('SKIP_WIRING_REGISTER=1 bypasses the check and says so loudly', () => {
   assert.match(out, /SKIPPED/);
 });
 
+// ------------------------------------------------------------------------------------------
+// THE BLIND SPOT (ol-1bb8, 2026-08-25) — a capability behind a default-off option, and a
+// capability whose only caller lives in packages/workbench. Every test below explicitly passes
+// `--register` pointing at the fixture's own register file: the DEFAULT register path resolves to
+// `<repo-root>/../olea-service/docs/dev/wiring-register.md` (the register lives in the sibling
+// private repo for real invocations), which a throwaway `mkdtempSync` fixture root has no sibling
+// for — the same reason most of the OTHER fixture tests in this file do not rely on the default
+// either. (That the majority of this file's tests currently fail to route around this is a
+// separate, pre-existing gap, filed as discovered work rather than fixed here — see this bead's
+// close evidence.)
+// ------------------------------------------------------------------------------------------
+
+/** A throwaway repo tree with `packages/{core,plugin,workbench}/src` all present. */
+function gateFixtureRepo() {
+  const root = fixtureRepo();
+  mkdirSync(join(root, 'packages', 'workbench', 'src'), { recursive: true });
+  return root;
+}
+
+function registerArg(root) {
+  return ['--register', join(root, 'docs', 'dev', 'wiring-register.md')];
+}
+
+test('OPTION-GATED, never enabled anywhere: a genuine finding when the owning task is closed (exit 1, NEW)', () => {
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/gated/types.ts',
+    'export interface GatedPort {\n  run(): void;\n}\n',
+  );
+  write(root, 'packages/plugin/src/gated/impl.ts', 'export class RealGated {\n  run() {}\n}\n');
+  // A real call site exists — the bare symbol IS constructed from real production code — but the
+  // gated option is never passed true anywhere at all. This is exactly the shape that would slip
+  // past every OLDER check in this file: the caller cross-check finds `RealGated(` and declares
+  // the row wired, because it has no notion of call ARGUMENTS.
+  write(
+    root,
+    'packages/plugin/src/gated/wiring.ts',
+    "import { RealGated } from './impl.js';\nexport function buildGatedWiring() {\n  return new RealGated();\n}\n",
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `GatedPort` | `packages/core/src/gated/types.ts:1` | `RealGated` — `packages/plugin/src/gated/impl.ts:1` | `packages/plugin/src/gated/wiring.ts:3` GATE(`includeTier3`, default `false`) | `ol-fixture-gated` | P4 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-gated': 'closed' }));
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 1, out);
+  assert.match(out, /RATCHET MISMATCH/);
+  assert.match(out, /NEW — found this run, not in KNOWN_FINDINGS/);
+  assert.match(out, /GatedPort/);
+  assert.match(out, /option-gated by `includeTier3`/);
+  assert.match(
+    out,
+    /nothing anywhere in the scanned tree, production or packages\/workbench, ever passes `includeTier3: true`/,
+  );
+});
+
+test('OPTION-GATED, enabled ONLY from packages/workbench: a genuine finding naming the workbench shape specifically (exit 1, NEW)', () => {
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/gated/types.ts',
+    'export interface GatedPort {\n  run(): void;\n}\n',
+  );
+  write(root, 'packages/plugin/src/gated/impl.ts', 'export class RealGated {\n  run() {}\n}\n');
+  write(
+    root,
+    'packages/plugin/src/gated/wiring.ts',
+    "import { RealGated } from './impl.js';\nexport function buildGatedWiring() {\n  return new RealGated();\n}\n",
+  );
+  // The ONLY place `includeTier3: true` appears anywhere in the tree is a workbench scenario file
+  // — the real Tier-3 concept extraction shape (session-scenarios.ts, fixture-oracle.ts).
+  write(
+    root,
+    'packages/workbench/src/gated-scenario.ts',
+    "import { buildGatedWiring } from '../../plugin/src/gated/wiring.js';\nexport function runScenario() {\n  return callGated({ includeTier3: true });\n}\n",
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `GatedPort` | `packages/core/src/gated/types.ts:1` | `RealGated` — `packages/plugin/src/gated/impl.ts:1` | `packages/plugin/src/gated/wiring.ts:3` GATE(`includeTier3`, default `false`) | `ol-fixture-gated` | P4 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-gated': 'closed' }));
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 1, out);
+  assert.match(out, /RATCHET MISMATCH/);
+  assert.match(out, /GatedPort/);
+  assert.match(out, /packages\/workbench\/src\/gated-scenario\.ts/);
+  assert.match(out, /workbench-only enabling call does not discharge reachability/);
+  assert.match(
+    out,
+    /MORE dangerous than no caller at all because the bare symbol IS reachable from/,
+  );
+});
+
+test('OPTION-GATED, enabled by real production code: reachable regardless of task status (exit 0)', () => {
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/gated/types.ts',
+    'export interface GatedPort {\n  run(): void;\n}\n',
+  );
+  write(root, 'packages/plugin/src/gated/impl.ts', 'export class RealGated {\n  run() {}\n}\n');
+  write(
+    root,
+    'packages/plugin/src/gated/wiring.ts',
+    "import { RealGated } from './impl.js';\nexport function buildGatedWiring() {\n  return new RealGated({ includeTier3: true });\n}\n",
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `GatedPort` | `packages/core/src/gated/types.ts:1` | `RealGated` — `packages/plugin/src/gated/impl.ts:1` | `packages/plugin/src/gated/wiring.ts:3` GATE(`includeTier3`, default `false`) | `ol-fixture-gated` | P4 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-gated': 'closed' })); // closed on purpose — must still pass
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 0, out);
+  assert.match(out, /OK/);
+  assert.match(out, /1 satisfied by real production code this run/);
+});
+
+test('WORKBENCH-ONLY CALLER: a dotted-reference row whose "Production caller" cites ONLY packages/workbench is a genuine finding (exit 1, NEW)', () => {
+  // This is the shape NO existing check in this file could see before ol-1bb8: the "Production
+  // implementation" cell is a dotted reference (`OleaPlugin.buildWbOnly`, not a bare identifier),
+  // so `extractImplSymbol` returns null and the caller cross-check has no symbol to verify against
+  // at all — the caller citation was previously trusted as register-text-only, whatever it named.
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/wbonly/types.ts',
+    'export interface WbOnlyProvider {\n  get(): string;\n}\n',
+  );
+  write(
+    root,
+    'packages/plugin/src/wbonly/impl.ts',
+    "export class WbOnlyImpl {\n  get() { return 'x'; }\n}\n",
+  );
+  write(
+    root,
+    'packages/workbench/src/wbonly-caller.ts',
+    'export function runWbOnly() {\n  return null;\n}\n// line 3\n// line 4\n// line 5\n',
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `WbOnlyProvider` | `packages/core/src/wbonly/types.ts:1` | `OleaPlugin.buildWbOnly` — `packages/plugin/src/wbonly/impl.ts:1` | `packages/workbench/src/wbonly-caller.ts:5` | `ol-fixture-wbonly` | P3 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-wbonly': 'closed' }));
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 1, out);
+  assert.match(out, /RATCHET MISMATCH/);
+  assert.match(out, /WbOnlyProvider/);
+  assert.match(out, /packages\/workbench\/src\/wbonly-caller\.ts:5/);
+  assert.match(out, /workbench caller does not discharge reachability/);
+  assert.match(out, /MORE dangerous than no caller at all because it looks wired/);
+});
+
+test('WORKBENCH-ONLY CALLER: the SAME shape with the owning task still open is NOT a finding — calibration holds (exit 0)', () => {
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/wbonly/types.ts',
+    'export interface WbOnlyProvider {\n  get(): string;\n}\n',
+  );
+  write(
+    root,
+    'packages/plugin/src/wbonly/impl.ts',
+    "export class WbOnlyImpl {\n  get() { return 'x'; }\n}\n",
+  );
+  write(
+    root,
+    'packages/workbench/src/wbonly-caller.ts',
+    'export function runWbOnly() {\n  return null;\n}\n// line 3\n// line 4\n// line 5\n',
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `WbOnlyProvider` | `packages/core/src/wbonly/types.ts:1` | `OleaPlugin.buildWbOnly` — `packages/plugin/src/wbonly/impl.ts:1` | `packages/workbench/src/wbonly-caller.ts:5` | `ol-fixture-wbonly` | P3 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-wbonly': 'open' }));
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 0, out);
+  assert.match(out, /OK/);
+});
+
+test('WORKBENCH-ONLY CALLER: a row citing BOTH a workbench ref and a real production ref is NOT workbench-only — discrimination half (exit 0)', () => {
+  const root = gateFixtureRepo();
+  write(
+    root,
+    'packages/core/src/wbonly/types.ts',
+    'export interface WbOnlyProvider {\n  get(): string;\n}\n',
+  );
+  write(
+    root,
+    'packages/plugin/src/wbonly/impl.ts',
+    "export class WbOnlyImpl {\n  get() { return 'x'; }\n}\n",
+  );
+  write(
+    root,
+    'packages/plugin/src/wbonly/real-caller.ts',
+    '// real production caller\nconst x = 1;\n',
+  );
+  write(
+    root,
+    'packages/workbench/src/wbonly-caller.ts',
+    'export function runWbOnly() {\n  return null;\n}\n// line 3\n// line 4\n// line 5\n',
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `WbOnlyProvider` | `packages/core/src/wbonly/types.ts:1` | `OleaPlugin.buildWbOnly` — `packages/plugin/src/wbonly/impl.ts:1` | `packages/plugin/src/wbonly/real-caller.ts:2`, `packages/workbench/src/wbonly-caller.ts:5` | `ol-fixture-wbonly` | P3 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const statusPath = join(root, 'status.json');
+  writeFileSync(statusPath, JSON.stringify({ 'ol-fixture-wbonly': 'closed' }));
+
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    '--task-status',
+    statusPath,
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 0, out);
+  assert.match(out, /OK/);
+});
+
 test('the real register in this repo parses without a structural error (read-only, no --task-status)', () => {
   // Not asserting exit 0 here — the real register may legitimately have reachability findings
   // (exit 1) when a real port's owning task has closed with no production caller and no cited
