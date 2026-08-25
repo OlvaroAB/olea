@@ -412,6 +412,84 @@ describe('rankOracle — option validation', () => {
   });
 });
 
+describe('rankOracle — declared fallback vs. delivered weights (D-110, ol-egov.28)', () => {
+  // Component 3.3's weights are now DERIVED-DELIVERED: `options` is where a
+  // production caller threads a decoded artifact-envelope body in (see
+  // `resolveOptions`'s doc in rank.ts). No `options` at all must still
+  // produce a sane ranking — that is the DECLARED_FALLBACK_* path this test
+  // asserts explicitly, distinct from every other test in this file that
+  // exercises it only incidentally.
+  const singleEdgeInput = (options?: RankOracleInput['options']): RankOracleInput => ({
+    evidence: {
+      edges: [edge()],
+      assessmentsRead: readReport([assessment()]),
+      assessmentsWithNoEvidence: [],
+    },
+    asOf: ASOF,
+    ...(options !== undefined ? { options } : {}),
+  });
+
+  it('with no options supplied, resolves to the declared fallback (half-life 14, divisor 100)', () => {
+    const result = rankOracle(singleEdgeInput());
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.contributions[0]?.assessmentWeightScore).toBeCloseTo(20 / 100, 10);
+
+    const daysUntilDue = Math.round(
+      (Date.parse('2026-09-01T00:00:00.000Z') - Date.parse('2026-08-16T00:00:00.000Z')) /
+        86_400_000,
+    );
+    expect(entry?.factors.contributions[0]?.examProximityScore).toBeCloseTo(
+      1 / (1 + daysUntilDue / 14),
+      10,
+    );
+  });
+
+  it('a delivered options object (as if decoded from an artifact envelope) overrides every field it supplies', () => {
+    const delivered: RankOracleInput['options'] = {
+      proximityHalfLifeDays: 7,
+      assessmentWeightDivisor: 50,
+      masteryNeedWeight: { seed: 1, sprout: 0.9, sapling: 0.5, tree: 0.3, unknown: 1 },
+    };
+    const withFallback = rankOracle(singleEdgeInput());
+    const withDelivered = rankOracle(singleEdgeInput(delivered));
+
+    const fallbackEntry = (() => {
+      const course = withFallback.courses[0];
+      if (course?.status !== 'ranked') throw new Error('expected ranked');
+      return course.ranked[0];
+    })();
+    const deliveredEntry = (() => {
+      const course = withDelivered.courses[0];
+      if (course?.status !== 'ranked') throw new Error('expected ranked');
+      return course.ranked[0];
+    })();
+
+    // A smaller divisor (50 vs 100) scores the same 20%-weighted assessment
+    // higher, and a shorter half-life (7 vs 14 days) decays proximity faster
+    // for the same days-until-due — so the delivered priority score must
+    // differ from the fallback one, proving the input actually drives the
+    // arithmetic rather than being silently ignored.
+    expect(deliveredEntry?.factors.contributions[0]?.assessmentWeightScore).toBeCloseTo(
+      20 / 50,
+      10,
+    );
+    expect(deliveredEntry?.priorityScore).not.toBeCloseTo(fallbackEntry?.priorityScore ?? 0, 5);
+  });
+
+  it('a delivered mastery-need ladder is honored end to end', () => {
+    const mastery = new Map([['concept-a', masteryResult('concept-a', 'tree')]]);
+    const delivered: RankOracleInput['options'] = {
+      masteryNeedWeight: { seed: 1, sprout: 1, sapling: 1, tree: 0.9, unknown: 1 },
+    };
+    const result = rankOracle({ ...singleEdgeInput(delivered), mastery });
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked[0]?.factors.masteryNeedWeight).toBe(0.9);
+  });
+});
+
 describe('rankOracle — purity / rebuild equivalence', () => {
   it('the same input produces byte-identical output run twice', () => {
     const input: RankOracleInput = {

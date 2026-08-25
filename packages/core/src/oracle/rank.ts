@@ -21,7 +21,7 @@
  * function is the authority on order and on "reasoning matches what
  * actually drove it", and it needs Slot O for neither.
  *
- * ## The scoring shape, and why every constant in it is provisional
+ * ## The scoring shape, and where its weights actually come from
  *
  * For each concept↔assessment edge (P5-T03), this module computes a
  * `contribution` — how much that one assessment's evidence should weigh in
@@ -41,14 +41,32 @@
  * coverage is unnecessary — but ranks below an equally-evidenced concept
  * she hasn't touched.
  *
- * **None of the four signals, none of the combination shape, and none of
- * the mastery ladder is measured against her real exam outcomes or her real
- * study rhythm.** `RankOracleOptions`'s doc comments say what would ratify
- * each one; per `eval/CLAUDE.md`, none of them may be tuned from synthetic
- * data, and ratifying any of them is a decision-bead call, never a lane's.
- * What IS proved here, by test and by mutation, is narrower and load-
- * bearing on its own: the reasoning text this module emits for every
- * ranked entry is mechanically DERIVED from these exact numbers, never a
+ * **Per `[D-110]` (`ol-egov.28`), the proximity half-life, the assessment
+ * weight divisor and the mastery-need ladder are DERIVED, not declared: the
+ * component register's boundary column names them service-boundary, so their
+ * fitting and tuning source live privately in `olea-service`
+ * (`src/tasks/oracleRank.ts`), and only the resulting numbers are delivered
+ * to the client — inside the versioned-artifact envelope
+ * (`packages/contracts/src/artifact-envelope.ts`), the same pattern
+ * components 1.6 and 2.5 already use. This module never fits, tunes or
+ * reasons about that derivation; `rankOracle` simply applies whichever
+ * `RankOracleOptions` its caller hands it via `RankOracleInput.options` — in
+ * production that is a decoded delivered artifact's body, once one is
+ * wired (see the module-level note beside `resolveOptions` below for the
+ * current gap).
+ *
+ * The `DECLARED_FALLBACK_*` constants below are a **different, narrower
+ * thing**: this module's own client-side default for when no delivered
+ * artifact is available yet — first run, offline, no cache. Each is
+ * DECLARED per the component register's declared/derived line (defensible
+ * in plain English, never fitted) and carries its own argued sentence where
+ * it is defined, so the client degrades sanely rather than refusing to rank
+ * at all. They are not a placeholder for the derived numbers and are never
+ * tuned to approximate them.
+ *
+ * What IS proved here, by test and by mutation, regardless of which weights
+ * were supplied: the reasoning text this module emits for every ranked
+ * entry is mechanically DERIVED from these exact numbers, never a
  * separately-composed description that could drift from what actually
  * produced the order.
  *
@@ -82,27 +100,47 @@ import type {
   RankOracleResult,
 } from './types.js';
 
-const DEFAULT_PROXIMITY_HALF_LIFE_DAYS = 14;
-const DEFAULT_ASSESSMENT_WEIGHT_DIVISOR = 100;
+/**
+ * DECLARED FALLBACK (`[D-110]`, `ol-egov.28`) — used only when
+ * `RankOracleInput.options` does not supply `proximityHalfLifeDays`, i.e. no
+ * delivered artifact was available. **Plain-English defense:** two weeks is
+ * a plain, undebatable point at which an assessment starts to feel urgent to
+ * a student planning ahead. It needs no fitting to defend and is not itself
+ * a claim about her, only a shape for the decay curve — which is exactly
+ * what makes it safe to declare rather than derive.
+ */
+const DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS = 14;
 
 /**
- * The mastery-need ladder's default. Monotonically decreasing with mastery,
- * never zero (F4.9) — see `types.ts`'s `RankOracleOptions.masteryNeedWeight`
- * doc for what would ratify these four numbers. `'unknown'` is neutral
- * (1, i.e. no discount at all) because "no mastery data was supplied" is not
- * evidence that she has mastered nothing — it is the absence of a signal,
- * and this module's rule throughout is that an absent signal never silently
- * reads as the worst case OR the best case; it reads as neutral and is
- * flagged (`assessmentWeightKnown`, `masteryState === 'unknown'`, `daysUntilDue === null`).
+ * DECLARED FALLBACK (`[D-110]`) — used only when `options` does not supply
+ * `assessmentWeightDivisor`. **Plain-English defense:** assessment weights
+ * are conventionally recorded as a percentage of the course grade (the
+ * Bases table's own `Sum` summary reads up to 100); dividing by 100 is the
+ * plain reading of that convention, not a number fitted against any corpus.
+ */
+const DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR = 100;
+
+/**
+ * DECLARED FALLBACK (`[D-110]`) — used only when `options` does not supply
+ * `masteryNeedWeight`. **Plain-English defense:** the ladder only has to be
+ * monotonically decreasing and never zero (F4.9 forbids ever implying full
+ * coverage is unnecessary); seed/sprout/sapling/tree space four stages
+ * roughly evenly between "no discount" and "small residual discount", and
+ * `'unknown'` is neutral (1, no discount) because "no mastery data was
+ * supplied" is not evidence she has mastered nothing — it is the absence of
+ * a signal, and this module's rule throughout is that an absent signal never
+ * silently reads as the worst case OR the best case; it reads as neutral and
+ * is flagged (`assessmentWeightKnown`, `masteryState === 'unknown'`,
+ * `daysUntilDue === null`). None of that needs measurement to defend, which
+ * is what makes it a legitimate declared value rather than a stand-in for a
+ * derived one.
  *
  * **Re-bucketed for D-049's four-stage vocabulary (`VOC-1`, `ol-7efk`).** The
  * retired ladder's `shaky` (0.85) and `coming` (0.6) rungs merge into
  * `sprout`'s single rung; `seed`, `sapling` and `tree` keep the old `new`,
- * `solid` and `yours` values unchanged. Like every rung here, `sprout`'s
- * 0.7 is an unmeasured, provisional midpoint (F4.9's "never zero" is the
- * only ratified fact about this ladder), not a fitted or ratified number.
+ * `solid` and `yours` values unchanged.
  */
-const DEFAULT_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState, number>> = {
+const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState, number>> = {
   seed: 1,
   sprout: 0.7,
   sapling: 0.35,
@@ -116,11 +154,31 @@ interface ResolvedOptions {
   readonly masteryNeedWeight: Readonly<Record<OracleMasteryState, number>>;
 }
 
+/**
+ * Resolves the weights this ranking pass runs with. **This is the seam
+ * `[D-110]`'s derived-delivered weights arrive through**: `options` is
+ * `RankOracleInput.options`, and in production it is meant to be a decoded
+ * delivered artifact's body (`olea-service`'s `deriveRankWeights` /
+ * `buildRankWeightsEnvelope`, `src/tasks/oracleRank.ts`) rather than
+ * hand-authored client values. Falling back per-field (not all-or-nothing)
+ * means a partial or first-generation delivered body still improves on the
+ * declared fallback wherever it has an opinion.
+ *
+ * **Known gap (reachability, plan §2.7 clause 5):** no production caller
+ * decodes a `rank-weights` envelope and passes it here yet — the
+ * `rank-weights` kind has no row in `packages/contracts/src/
+ * artifact-envelope.ts`, so every caller today omits `options` and this
+ * always resolves to the declared fallback below. See the follow-up bead
+ * this module's file ownership does not cover (packages/contracts and the
+ * plugin's provider layer): filed as `ol-v7r5.3`, discovered from
+ * `ol-v7r5.2`.
+ */
 function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions {
-  const proximityHalfLifeDays = options?.proximityHalfLifeDays ?? DEFAULT_PROXIMITY_HALF_LIFE_DAYS;
+  const proximityHalfLifeDays =
+    options?.proximityHalfLifeDays ?? DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS;
   const assessmentWeightDivisor =
-    options?.assessmentWeightDivisor ?? DEFAULT_ASSESSMENT_WEIGHT_DIVISOR;
-  const masteryNeedWeight = options?.masteryNeedWeight ?? DEFAULT_MASTERY_NEED_WEIGHT;
+    options?.assessmentWeightDivisor ?? DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR;
+  const masteryNeedWeight = options?.masteryNeedWeight ?? DECLARED_FALLBACK_MASTERY_NEED_WEIGHT;
   if (!(proximityHalfLifeDays > 0)) {
     throw new Error(`rankOracle: proximityHalfLifeDays must be > 0, got ${proximityHalfLifeDays}`);
   }
