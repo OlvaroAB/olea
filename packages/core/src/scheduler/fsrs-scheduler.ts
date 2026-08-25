@@ -49,7 +49,14 @@ import {
   fsrs,
   type Grade,
 } from 'ts-fsrs';
-import type { ScheduleInput, ScheduleOutput, Scheduler, SchedulerState } from './types.js';
+import type {
+  RetrievabilityInput,
+  RetrievabilityOutput,
+  ScheduleInput,
+  ScheduleOutput,
+  Scheduler,
+  SchedulerState,
+} from './types.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -136,6 +143,26 @@ export function createFsrsScheduler(): Scheduler {
         instrumentId: input.instrumentId,
         state: nextState,
         intervalDays,
+      };
+    },
+
+    retrievability(input: RetrievabilityInput): RetrievabilityOutput {
+      // `format: false` selects the numeric overload of `get_retrievability`
+      // rather than the formatted-percentage-string one — same boundary
+      // discipline as `schedule`: only this file ever names a `ts-fsrs`
+      // type or passes one of its literal option values. `input.state` is
+      // non-nullable on `RetrievabilityInput` (see types.ts), so — unlike
+      // `schedule` — there is no `createEmptyCard` branch to consider here:
+      // a real prior card always exists to convert via `toCardInput`.
+      const recallProbability = engine.get_retrievability(
+        toCardInput(input.state),
+        input.now,
+        false,
+      );
+
+      return {
+        instrumentId: input.instrumentId,
+        recallProbability,
       };
     },
   };

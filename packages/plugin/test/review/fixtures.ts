@@ -5,7 +5,7 @@
  * suite and share nothing with the design system's sample copy.
  */
 import type { Rating } from 'olea-contracts';
-import type { ScheduleInput, Scheduler } from 'olea-core';
+import type { RetrievabilityInput, ScheduleInput, Scheduler } from 'olea-core';
 import { vi } from 'vitest';
 import type { DraftAcceptPort } from '../../src/generation/accept.js';
 import type {
@@ -117,6 +117,22 @@ export function fakeScheduler(): Scheduler {
           learningState: 'review' as const,
           lastReview: now.toISOString(),
         },
+      };
+    }),
+    // The recall-probability half of the port (`VIT-1`). Deliberately not real
+    // FSRS arithmetic — a decaying stand-in whose only contracted properties
+    // are the ones a caller may legitimately rely on: it starts at 1 the
+    // instant of the review, never increases as time passes, and stays inside
+    // [0, 1]. A fake returning a constant would let a consumer that ignores
+    // `now` pass, which is the one mistake worth catching here.
+    retrievability: vi.fn(({ instrumentId, state, now }: RetrievabilityInput) => {
+      const elapsedDays = Math.max(
+        0,
+        (now.getTime() - new Date(state.lastReview).getTime()) / 86_400_000,
+      );
+      return {
+        instrumentId,
+        recallProbability: 1 / (1 + elapsedDays / Math.max(state.stability, 0.1)),
       };
     }),
   };

@@ -506,6 +506,22 @@ export { masteryAtTimeForConceptIds } from './mastery/rollup.js';
 // first consumer outside it (`ol-lohq`).
 export type { ConceptSprig, MasteryDistribution } from './mastery/sprig.js';
 export { conceptSprig, masteryDistribution } from './mastery/sprig.js';
+// F2.11's second axis (knowledge model R3, `[D-087]`; `VIT-1` / `ol-1bjz`).
+// The fold from per-instrument retrievability to a concept's `holding` /
+// `tending` / `early` reading. **It has no consumer outside core yet** — the
+// mastery surface that will show a stage beside its vitality is `MAT-2`
+// (`ol-95vv`), and until that lands nothing here renders. Exported now so the
+// fold and the scheduler accessor it depends on are nameable from one place
+// when it does, and so no surface is tempted to re-derive vitality locally.
+export type {
+  ReadVitalityInput,
+  RecallTierInstrumentType,
+  Vitality,
+  VitalityInstrument,
+  VitalityReading,
+  VitalityWeakest,
+} from './mastery/vitality.js';
+export { isRecallTier, readVitality } from './mastery/vitality.js';
 // The misconception store (F5.6, knowledge model §4.1, D-008, M1-M4,
 // P4-T04): a local projection folded from its own append-only event log,
 // never a second source of truth — see misconception/types.ts's module doc.
@@ -748,6 +764,12 @@ export {
 } from './review-log/write.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
+  // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported
+  // here rather than left as a deep import because every out-of-package caller
+  // — the mastery surface that will read a concept's vitality, and the test
+  // fakes that have to satisfy `Scheduler` at all — needs to name both shapes.
+  RetrievabilityInput,
+  RetrievabilityOutput,
   ScheduleInput,
   ScheduleOutput,
   Scheduler,

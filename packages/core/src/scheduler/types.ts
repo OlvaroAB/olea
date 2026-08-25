@@ -127,15 +127,59 @@ export interface ScheduleOutput {
 }
 
 /**
- * The scheduling port. One method, deliberately: everything queue
- * composition (P2-T07) and rating mapping (P2-T06) need reduces to "given
- * this instrument's prior state and a rating at this instant, what's next."
+ * What `Scheduler.retrievability` needs to compute a point-in-time recall
+ * probability.
+ *
+ * `state` is **not nullable here**, unlike `ScheduleInput.state`. An
+ * instrument with no review history has no recall probability to report —
+ * not `1` (she has never seen it, so there is nothing to have retained) and
+ * not `0` (absence of evidence isn't evidence of forgetting either).
+ * Making the pre-review case unrepresentable forces every caller to handle
+ * "no reading yet" as its own branch rather than silently reading a
+ * fabricated `1.0` off a `null` state. This is not hypothetical: the
+ * modelling harness hit exactly this by reading retrievability immediately
+ * after a review, which reports `1.0` for everything and quietly turned a
+ * difficulty proxy into a constant. Callers with a `SchedulerState | null`
+ * (e.g. anything holding a `ScheduleOutput.state` or a freshly-loaded
+ * instrument) must narrow out `null` themselves before calling this method.
+ */
+export interface RetrievabilityInput {
+  /** The instrument being read. R3: never a concept id. */
+  readonly instrumentId: string;
+  /** This instrument's current scheduling state. Non-nullable, deliberately: see above. */
+  readonly state: SchedulerState;
+  /**
+   * The instant to evaluate recall probability at. Never read from
+   * `Date.now()` inside this module — always the caller's value, same
+   * determinism discipline as `ScheduleInput.now`, so replaying a review log
+   * (or any later instant a caller wants to ask about) is trustworthy.
+   */
+  readonly now: Date;
+}
+
+/** What `Scheduler.retrievability` returns: a single point-in-time recall estimate. */
+export interface RetrievabilityOutput {
+  /** Echoes `RetrievabilityInput.instrumentId`. R3: never a concept id. */
+  readonly instrumentId: string;
+  /** Probability in `[0, 1]` that this instrument would be recalled at `now`. */
+  readonly recallProbability: number;
+}
+
+/**
+ * The scheduling port. `schedule` and `retrievability` are the only two
+ * methods, deliberately: everything queue composition (P2-T07), rating
+ * mapping (P2-T06), and any product surface reading a recall estimate needs
+ * reduces to one of "given this instrument's prior state and a rating at
+ * this instant, what's next" or "given this instrument's current state, how
+ * likely is recall right now."
  *
  * Implementations must be pure functions of their input — same
  * `(instrumentId, state, rating, now)` always yields the same
- * `ScheduleOutput` — so that scheduling tests, and later a full replay of a
- * review log to rebuild state from scratch, are trustworthy.
+ * `ScheduleOutput`, and same `(instrumentId, state, now)` always yields the
+ * same `RetrievabilityOutput` — so that scheduling tests, and later a full
+ * replay of a review log to rebuild state from scratch, are trustworthy.
  */
 export interface Scheduler {
   schedule(input: ScheduleInput): ScheduleOutput;
+  retrievability(input: RetrievabilityInput): RetrievabilityOutput;
 }

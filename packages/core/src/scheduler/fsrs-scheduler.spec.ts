@@ -11,7 +11,7 @@
 import type { Rating } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { createFsrsScheduler } from './fsrs-scheduler.js';
-import type { ScheduleOutput, Scheduler, SchedulerState } from './types.js';
+import type { RetrievabilityOutput, ScheduleOutput, Scheduler, SchedulerState } from './types.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = new Date('2026-01-01T09:00:00.000Z');
@@ -189,5 +189,162 @@ describe('createFsrsScheduler — SchedulerState JSON round-trip', () => {
 
     const roundTripped = JSON.parse(JSON.stringify(fresh)) as SchedulerState;
     expect(roundTripped).toStrictEqual(fresh);
+  });
+});
+
+describe('createFsrsScheduler — retrievability', () => {
+  it('reads at (or extremely close to) 1.0 immediately after the review that produced the state — the trap case documented as the reason RetrievabilityInput.state is non-nullable', () => {
+    // Reading retrievability at the exact instant of the review it derives
+    // from is uninformative: every instrument reads ~1.0 here regardless of
+    // review history, which is exactly the trap `types.ts`'s module doc
+    // names — a caller reading this immediately after `schedule()` would see
+    // a flat constant and mistake it for a real signal. It is *not* evidence
+    // that `state` should be allowed to be `null`; it is the reason a caller
+    // must hold a real (non-null) post-review state before asking at all.
+    const scheduler = createFsrsScheduler();
+    const { state } = scheduler.schedule({
+      instrumentId: 'inst-trap',
+      state: null,
+      rating: 'good',
+      now: START,
+    });
+
+    const { recallProbability } = scheduler.retrievability({
+      instrumentId: 'inst-trap',
+      state,
+      now: START,
+    });
+
+    expect(recallProbability).toBeCloseTo(1, 6);
+  });
+
+  it('is monotonically non-increasing in elapsed time for a fixed state', () => {
+    // The defining shape of a decay curve: checking later never *raises*
+    // the recall estimate for the same underlying state.
+    const scheduler = createFsrsScheduler();
+    const mature = buildMatureState(scheduler, 'inst-decay');
+    const lastReview = new Date(mature.lastReview);
+    const offsetsInDays = [0, 1, 5, 10, 30, 100, 365];
+
+    const readings = offsetsInDays.map(
+      (days) =>
+        scheduler.retrievability({
+          instrumentId: 'inst-decay',
+          state: mature,
+          now: new Date(lastReview.getTime() + days * DAY),
+        }).recallProbability,
+    );
+
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i]).toBeLessThanOrEqual(readings[i - 1] as number);
+    }
+  });
+
+  it('yields a higher recall probability for higher stability at the same elapsed time', () => {
+    // Stability is FSRS's "days until retention decays to the request-
+    // retention target" (types.ts) — higher stability must mean slower
+    // decay, i.e. a higher reading at any fixed elapsed time.
+    const scheduler = createFsrsScheduler();
+    const baseState: SchedulerState = {
+      schemaVersion: 1,
+      due: '2026-02-01T00:00:00.000Z',
+      stability: 5,
+      difficulty: 5,
+      scheduledDays: 5,
+      learningStepIndex: 0,
+      reps: 3,
+      lapses: 0,
+      learningState: 'review',
+      lastReview: START.toISOString(),
+    };
+    const moreStableState: SchedulerState = { ...baseState, stability: 30 };
+    const now = new Date(START.getTime() + 10 * DAY);
+
+    const lower = scheduler.retrievability({
+      instrumentId: 'inst-a',
+      state: baseState,
+      now,
+    }).recallProbability;
+    const higher = scheduler.retrievability({
+      instrumentId: 'inst-a',
+      state: moreStableState,
+      now,
+    }).recallProbability;
+
+    expect(higher).toBeGreaterThan(lower);
+  });
+
+  it('is always in [0, 1] across a spread of states and instants', () => {
+    const scheduler = createFsrsScheduler();
+    const mature = buildMatureState(scheduler, 'inst-range');
+    const lastReview = new Date(mature.lastReview);
+    const instants = [0, 1, 10, 100, 1000].map(
+      (days) => new Date(lastReview.getTime() + days * DAY),
+    );
+
+    for (const now of instants) {
+      const { recallProbability } = scheduler.retrievability({
+        instrumentId: 'inst-range',
+        state: mature,
+        now,
+      });
+      expect(recallProbability).toBeGreaterThanOrEqual(0);
+      expect(recallProbability).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('is pure: the same input twice yields the same output', () => {
+    const scheduler = createFsrsScheduler();
+    const mature = buildMatureState(scheduler, 'inst-pure');
+    const now = new Date(new Date(mature.lastReview).getTime() + 7 * DAY);
+    const input = { instrumentId: 'inst-pure', state: mature, now };
+
+    const first = scheduler.retrievability(input);
+    const second = scheduler.retrievability(input);
+
+    expect(second).toStrictEqual(first);
+  });
+
+  it('echoes the instrument id given, never a concept id', () => {
+    const scheduler = createFsrsScheduler();
+    const mature = buildMatureState(scheduler, 'inst-echo');
+
+    const { instrumentId } = scheduler.retrievability({
+      instrumentId: 'inst-echo',
+      state: mature,
+      now: new Date(mature.lastReview),
+    });
+
+    expect(instrumentId).toBe('inst-echo');
+  });
+
+  it('end-to-end: schedule() a first review, then read retrievability off the resulting state at a later instant', () => {
+    // The path the product will actually take: `schedule()` writes
+    // `SchedulerState` to her vault, and some later moment (building a
+    // queue, or a concept-level rollup computed elsewhere over several
+    // instruments' readings — never here, per R3) reads `retrievability()`
+    // off that same persisted state, never off `ScheduleInput.state`, which
+    // can be `null`.
+    const scheduler = createFsrsScheduler();
+    const { state } = scheduler.schedule({
+      instrumentId: 'inst-e2e',
+      state: null,
+      rating: 'good',
+      now: START,
+    });
+    const laterInstant = new Date(new Date(state.lastReview).getTime() + 2 * DAY);
+
+    const reading: RetrievabilityOutput = scheduler.retrievability({
+      instrumentId: 'inst-e2e',
+      state,
+      now: laterInstant,
+    });
+
+    expect(reading.instrumentId).toBe('inst-e2e');
+    // Some time has passed since the review with no further evidence, so
+    // recall has decayed off the immediate-post-review ~1.0 but the result
+    // is still a valid probability.
+    expect(reading.recallProbability).toBeGreaterThan(0);
+    expect(reading.recallProbability).toBeLessThan(1);
   });
 });

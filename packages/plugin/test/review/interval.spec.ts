@@ -1,5 +1,5 @@
 import type { Rating } from 'olea-contracts';
-import type { ScheduleInput, Scheduler } from 'olea-core';
+import type { RetrievabilityInput, ScheduleInput, Scheduler } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   describeInterval,
@@ -35,6 +35,20 @@ function fakeScheduler(): Scheduler {
           learningState: 'review' as const,
           lastReview: now.toISOString(),
         },
+      };
+    }),
+    // `VIT-1`'s recall-probability half. Nothing in this file's subject
+    // (interval preview copy) reads it; it exists so the fake still satisfies
+    // `Scheduler`, and it decays with elapsed time rather than returning a
+    // constant so a future consumer that ignores `now` cannot pass against it.
+    retrievability: vi.fn(({ instrumentId, state, now }: RetrievabilityInput) => {
+      const elapsedDays = Math.max(
+        0,
+        (now.getTime() - new Date(state.lastReview).getTime()) / 86_400_000,
+      );
+      return {
+        instrumentId,
+        recallProbability: 1 / (1 + elapsedDays / Math.max(state.stability, 0.1)),
       };
     }),
   };
