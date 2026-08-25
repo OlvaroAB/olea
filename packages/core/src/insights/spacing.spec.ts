@@ -20,6 +20,7 @@ import {
   CONCENTRATION_RATIO,
   detectSpacing,
   impliedAssessmentDays,
+  MIN_NEAR_STUDY_DAYS,
   MIN_REVIEWS,
   PRE_ASSESSMENT_WINDOW_DAYS,
 } from './spacing.js';
@@ -218,6 +219,58 @@ describe('detectSpacing — the three statuses are three different statements', 
     // Half the records are explain-back. Every scheduled record is early, so an
     // honest share is 1 — a share computed over all records would read 0.5.
     expect(detectSpacing(entries).measured?.earlyShare).toBe(1);
+  });
+
+  it('SPC-1 (ol-5xg9): one busy evening in an otherwise-idle pre-assessment week no longer reads as a pattern', () => {
+    // The neutralised-twin shape from `ol-cahv`, built by hand: a reviewer who
+    // is sparse everywhere, including in the week before her assessment,
+    // except for one evening that lands inside the near window. Before this
+    // gate existed, that single day was enough to clear BOTH conditions —
+    // concentration and attendance — on its own, because the near window's
+    // "rate" is a rate over almost nothing.
+    const perDay = (offset: number): number => {
+      if (offset === 3 || offset === 15 || offset === 30) return 6; // far, spread thin
+      if (offset === 45) return 15; // the one busy evening — inside the near window
+      return 0;
+    };
+    const result = detectSpacing(history(perDay));
+
+    // AFTER: the gate declines rather than reporting the pattern.
+    expect(result.status).toBe('not-enough-history');
+    expect(result.reason).toContain(String(MIN_NEAR_STUDY_DAYS));
+    expect(result.reason).toContain('pre-assessment window');
+
+    // The gate silences the VERDICT, not the arithmetic (`abstain`'s doc): the
+    // same numbers the old, ungated rule would have called `observed` on are
+    // still visible in `measured`, which is the "shows its working" property
+    // `InsightResult`'s doc asks for. This is the BEFORE half of the
+    // before/after, recovered from the one call rather than a second one,
+    // because there is no separate "ungated" function to call — the ratios
+    // are computed identically either way and only the status differs.
+    expect(result.measured).not.toBeNull();
+    expect(result.measured?.concentration).toBeGreaterThanOrEqual(CONCENTRATION_RATIO);
+    expect(result.measured?.attendanceRatio).toBeGreaterThanOrEqual(ATTENDANCE_RATIO);
+    // And the actual failing floor: exactly one distinct near study-day.
+    const measured = result.measured;
+    expect(measured).not.toBeNull();
+    if (measured !== null) {
+      expect(measured.nearStudyDayShare).toBeCloseTo(1 / measured.nearDayCount, 10);
+    }
+  });
+
+  it('SPC-1: a genuine week of near-daily study still clears the floor and fires', () => {
+    // Regression guard on the floor itself: `MIN_NEAR_STUDY_DAYS` must not
+    // suppress the ordinary case the detector exists to catch. Same shape as
+    // "fires when she both works harder and turns up more" above, asserted
+    // here specifically against the new constant so a future change to it is
+    // caught by name rather than only by a pre-existing test going red.
+    const result = detectSpacing(
+      history((offset) =>
+        offset > 45 - PRE_ASSESSMENT_WINDOW_DAYS && offset <= 45 ? 20 : offset % 4 === 0 ? 2 : 0,
+      ),
+    );
+    expect(result.status).toBe('observed');
+    expect(result.measured?.nearDayCount).toBeGreaterThanOrEqual(MIN_NEAR_STUDY_DAYS);
   });
 
   it('is pure and leaves the log untouched', () => {

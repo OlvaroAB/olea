@@ -39,12 +39,13 @@
  * `examProximity: null` throughout (pre-F1.1 history, or a vault with no
  * assignment notes) produces `not-enough-history` rather than a wrong answer.
  *
- * ## Two conditions, four constants, and none of them swept
+ * ## Two conditions, five constants, and none of them swept
  *
  * `PRE_ASSESSMENT_WINDOW_DAYS`, `CONCENTRATION_RATIO`, `ATTENDANCE_RATIO` and
- * the sufficiency floors below are **declared constants with a plain-English
- * reading** — "the week before", "more than twice as much per day", "half again
- * as many of those days", "at least three weeks and thirty reviews". That
+ * the sufficiency floors below (including `MIN_NEAR_STUDY_DAYS`) are
+ * **declared constants with a plain-English reading** — "the week before",
+ * "more than twice as much per day", "half again as many of those days", "at
+ * least three weeks and thirty reviews", "more than half the week". That
  * reading is the whole of their justification. **Not one of them was moved to
  * make a measurement come out**: a threshold tuned on fabricated data measures
  * our own assumptions (N-015), and a result that survives only a narrow window
@@ -54,19 +55,30 @@
  * `ATTENDANCE_RATIO` is a *second condition* rather than a raised first one,
  * and that distinction is the point — its own doc records the false positive
  * that prompted it and why raising `CONCENTRATION_RATIO` instead would have
- * been the forbidden move.
+ * been the forbidden move. `MIN_NEAR_STUDY_DAYS` (SPC-1, `ol-5xg9`) is the
+ * same discipline applied one level over: a data-sufficiency gate rather than
+ * a moved threshold — see its own doc.
  *
  * ## What this detector actually achieves, measured
  *
  * `packages/workbench/test/trends-scenarios.spec.ts` runs it over forty seeded
  * streams per persona. It fires on **40/40 crammers**, on **0/40 of every other
- * persona** — and on **8/40 of the crammer's own neutralised twin**, which is
- * the honest ceiling on it at this operating point and is asserted there as an
- * exact count rather than smoothed away. The twin studies on roughly a seventh
- * of days, so ninety days leave about ten pre-assessment calendar days and the
- * rate over ten days is noisy. Separating cleanly on that corpus wants a
- * concentration threshold near 5; it has not been moved there, for the reason
- * above.
+ * persona** — and, ungated (concentration and attendance alone, ignoring
+ * `MIN_NEAR_STUDY_DAYS`), on **8/40 of the crammer's own neutralised twin**,
+ * asserted there as an exact count rather than smoothed away. The twin studies
+ * on roughly a seventh of days, so ninety days leave about ten pre-assessment
+ * calendar days and the rate over ten of them is noisy. Separating cleanly on
+ * that corpus wants a concentration threshold near 5; it has not been moved
+ * there, for the reason above.
+ *
+ * `MIN_NEAR_STUDY_DAYS` is the answer instead: **gated, the same 8/40 becomes
+ * 3/40** — a real reduction from a constant chosen without looking at that
+ * number, not a target hit by choosing one. The reduction is partial and
+ * expected to be: the floor removes the single-outlier-day shape the ruling
+ * diagnosed, and does nothing for a twin whose few near study-days happen to
+ * clear it anyway with one of them still carrying a disproportionate share of
+ * the near reviews. That residual is a `CONCENTRATION_RATIO` question, if it
+ * is ever revisited, not a `MIN_NEAR_STUDY_DAYS` one.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
@@ -128,6 +140,53 @@ export const ATTENDANCE_RATIO = 1.5;
 /** Below these, the detector declines rather than guesses. A fortnight of scraps is not a semester. */
 export const MIN_REVIEWS = 30;
 export const MIN_SPAN_DAYS = 21;
+
+/**
+ * The data-sufficiency gate on the near (pre-assessment) window itself — SPC-1
+ * (`ol-5xg9`), implementing the ruling on `ol-cahv` (David, 2026-08-18).
+ *
+ * `MIN_REVIEWS` and `MIN_SPAN_DAYS` floor the *whole* logged history. They do
+ * nothing about a history that is long and busy everywhere else but thin at
+ * exactly the place both ratios are computed from: the calendar days inside a
+ * pre-assessment window. The ruling's own diagnosis is precise about why that
+ * matters — a reviewer who studies roughly one day in seven leaves a
+ * pre-assessment window carrying only about one or two real study days, so
+ * `nearReviewsPerDay` and `nearStudyDayShare` are then estimated from almost
+ * nothing, and one busy evening that happens to land inside the window moves
+ * both ratios a long way. That is a small-sample problem, not a wrong
+ * threshold, and `CONCENTRATION_RATIO` is not the lever for it (see its own
+ * doc and `ol-cahv`).
+ *
+ * The floor is on **near study-days** — the number of distinct calendar days
+ * inside a pre-assessment window that carry at least one review — rather than
+ * on near reviews (a single heavy session already produces many "rated
+ * attempts" without saying anything about a *pattern*) and rather than on the
+ * window's raw calendar-day count (`nearDayCount` is fixed by where the
+ * assessments fall, not by anything she did, so it cannot distinguish a
+ * crammer from her neutralised twin — they can share the identical window).
+ * Distinct days are the direct evidence for "a pull toward the exam repeated
+ * itself", which is what the second condition (`ATTENDANCE_RATIO`) already
+ * reads as the meaningful signal.
+ *
+ * SET A PRIORI, per the ruling's explicit condition, from the regime
+ * arithmetic already in the diagnosis rather than by finding a value that
+ * suppresses the false positives: `PRE_ASSESSMENT_WINDOW_DAYS` is seven days,
+ * "the week before". A single day of evidence out of that week is exactly the
+ * one-busy-evening failure mode; two is still one outlier plus one confirming
+ * day. Requiring **more than half the week** — four of its seven days — is
+ * the smallest bar past which the near side is evidence about a *week's*
+ * behaviour rather than about one or two days inside it. It is not fitted to
+ * the 40-seed corpus: it would read the same in English, and hold the same
+ * value, if that corpus did not exist. (Written as a fraction of
+ * `PRE_ASSESSMENT_WINDOW_DAYS` rather than a bare literal so the two constants
+ * cannot silently drift apart if the window width ever changes.)
+ *
+ * REVERSIBILITY: a parameter, not a schema. It only suppresses `observed` in
+ * favour of the existing `not-enough-history` status — a gated stream
+ * computes identically underneath, nothing is persisted, and setting this
+ * back to `0` restores today's behaviour exactly.
+ */
+export const MIN_NEAR_STUDY_DAYS = Math.ceil(PRE_ASSESSMENT_WINDOW_DAYS / 2);
 
 export interface SpacingMeasured {
   /** Reviews per calendar day inside `PRE_ASSESSMENT_WINDOW_DAYS` of an assessment. */
@@ -195,8 +254,18 @@ function ratioOf(numerator: number, denominator: number): number {
   return numerator === 0 ? 0 : Number.POSITIVE_INFINITY;
 }
 
-function abstain(reason: string): SpacingInsight {
-  return { id: 'spacing', status: 'not-enough-history', measured: null, reason };
+/**
+ * `measured` defaults to `null` — the type's own contract is that `null`
+ * means `not-enough-history`, never the reverse (`InsightResult`'s doc). Most
+ * callers abstain before there is anything to measure, so `null` is honest
+ * for them. The SPC-1 gate is the one exception: it fires only after the full
+ * `SpacingMeasured` has already been computed, and passing it through here
+ * lets a caller (the workbench evidence suite, in particular) see what the
+ * ratios *would* have read — "shows its working" even while declining to
+ * speak.
+ */
+function abstain(reason: string, measured: SpacingMeasured | null = null): SpacingInsight {
+  return { id: 'spacing', status: 'not-enough-history', measured, reason };
 }
 
 /**
@@ -305,6 +374,18 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
     spanDays,
     assessmentDays,
   };
+
+  // SPC-1 (`ol-5xg9`): the sufficiency floor on the near window itself, not
+  // on the whole history — see `MIN_NEAR_STUDY_DAYS`. Checked after `measured`
+  // is built (not before, like the earlier floors above) so a caller can
+  // still see what the ratios read even though the verdict is suppressed —
+  // the gate silences the surface, not the arithmetic.
+  if (nearStudyOffsets.size < MIN_NEAR_STUDY_DAYS) {
+    return abstain(
+      `fewer than ${MIN_NEAR_STUDY_DAYS} study-days inside any pre-assessment window`,
+      measured,
+    );
+  }
 
   // Both conditions, and the reason string says which one failed — a detector
   // that reports only its verdict is a detector nobody can debug from a

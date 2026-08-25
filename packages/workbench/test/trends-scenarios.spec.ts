@@ -211,7 +211,7 @@ describe('F6.5(a) spacing — measured against a planted ground truth', () => {
     }
   });
 
-  it('STILL FIRES on the crammer’s neutralised twin on 8 of 40 seeds — the honest result', () => {
+  it('still fires on the crammer’s neutralised twin on 3 of 40 seeds once the sufficiency gate holds', () => {
     // This is the finding, not a bug to be threshold-ed away. The neutralised
     // crammer is an irregular reviewer who studies on roughly a seventh of
     // days, so a ninety-day history gives her about ten pre-assessment calendar
@@ -229,7 +229,14 @@ describe('F6.5(a) spacing — measured against a planted ground truth', () => {
     //
     // An exact count so that any change to the detector or the generator turns
     // this red rather than drifting.
-    expect(firingCounts('crammer', true).spacing).toBe(8);
+    //
+    // SPC-1 (ol-5xg9, per the ol-cahv ruling): the threshold above was NOT
+    // moved — a MIN_NEAR_STUDY_DAYS sufficiency floor now abstains when the
+    // near window carries too few distinct study-days to support a rate.
+    // Under the gate the count falls 8 -> 3; the ungated arithmetic is still
+    // recoverable from each abstained result's populated `measured` field, so
+    // the original 8-of-40 finding stays on the record below.
+    expect(firingCounts('crammer', true).spacing).toBe(3);
   });
 });
 
