@@ -183,6 +183,17 @@ function ports(): { readonly ports: ReviewSessionPorts; readonly touched: string
       editPort,
       noteExists: createVaultNoteExistsPort(source),
       clock,
+      // `ol-p3t07a`: this suite never composes a queue with a pending draft
+      // item — see `review/session.spec.ts` and `generation/*.spec.ts` for
+      // that coverage.
+      draftAcceptPort: {
+        accept() {
+          throw new Error('end-to-end.spec: no draft item in this suite should call accept');
+        },
+        reject() {
+          throw new Error('end-to-end.spec: no draft item in this suite should call reject');
+        },
+      },
     },
   };
 }
@@ -246,7 +257,7 @@ async function driveToCompletion(session: ReviewSession, round: number): Promise
       case 'mcq-open': {
         const correct = view.instrument.options.findIndex((option) => option.correct);
         expect(correct).toBeGreaterThanOrEqual(0);
-        session.mcqAnswer(correct);
+        await session.mcqAnswer(correct);
         break;
       }
       case 'mcq-answered': {

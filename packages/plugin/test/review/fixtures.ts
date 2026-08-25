@@ -7,6 +7,7 @@
 import type { Rating } from 'olea-contracts';
 import type { ScheduleInput, Scheduler } from 'olea-core';
 import { vi } from 'vitest';
+import type { DraftAcceptPort } from '../../src/generation/accept.js';
 import type {
   EditPort,
   NoteExistsPort,
@@ -25,6 +26,7 @@ export function qaFixture(overrides: Partial<QaCard> = {}): QaCard {
     noteTitle: 'Articulatory rehearsal limits',
     sourcePath: 'Courses/PSYC210/articulatory-rehearsal.md',
     blockId: 'blk-1',
+    draftId: null,
     question: 'What limits the capacity of articulatory rehearsal?',
     answer: 'Chunking and rehearsal trade off against a small fixed slot count.',
     ...overrides,
@@ -40,6 +42,7 @@ export function clozeFixture(overrides: Partial<ClozeCard> = {}): ClozeCard {
     noteTitle: 'Encoding specificity',
     sourcePath: 'Courses/PSYC210/encoding.md',
     blockId: 'blk-2',
+    draftId: null,
     before: 'Recall is best when the ',
     clozeText: 'retrieval context',
     after: ' matches the context at encoding.',
@@ -57,6 +60,7 @@ export function mcqFixture(overrides: Partial<McqItem> = {}): McqItem {
     noteTitle: 'Primary vs secondary sources',
     sourcePath: 'Courses/HIST150/sources.md',
     blockId: null,
+    draftId: null,
     stem: 'Which of these is a primary source?',
     options: [
       { id: 'a', label: 'A letter written by a participant', correct: true },
@@ -157,6 +161,33 @@ export function fakeEditPort(): EditPort & { readonly calls: unknown[] } {
 export function fakeNoteExists(missing: readonly string[] = []): NoteExistsPort {
   return {
     exists: vi.fn(async (path: string) => !missing.includes(path)),
+  };
+}
+
+export interface FakeDraftAcceptCall {
+  readonly kind: 'accept' | 'reject';
+  readonly draftId: string;
+  readonly verdict?: 'accepted' | 'edited';
+}
+
+/**
+ * `ol-p3t07a`: `accept` mints a deterministic, distinguishable-from-the-draft-id
+ * instrument id by default (`resolved:<draftId>`) — tests that care about the
+ * exact value override `instrumentId`.
+ */
+export function fakeDraftAcceptPort(
+  instrumentId: (draftId: string) => string = (draftId) => `resolved:${draftId}`,
+): DraftAcceptPort & { readonly calls: FakeDraftAcceptCall[] } {
+  const calls: FakeDraftAcceptCall[] = [];
+  return {
+    calls,
+    accept: vi.fn(async (draftId: string, verdict: 'accepted' | 'edited') => {
+      calls.push({ kind: 'accept', draftId, verdict });
+      return { instrumentId: instrumentId(draftId) };
+    }),
+    reject: vi.fn(async (draftId: string) => {
+      calls.push({ kind: 'reject', draftId });
+    }),
   };
 }
 

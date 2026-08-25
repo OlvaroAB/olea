@@ -37,6 +37,16 @@ export interface ReviewInstrumentCommon {
   readonly sourcePath: string;
   /** Block id the card was anchored to (C1.4), if any — used to jump the editor to the right line. */
   readonly blockId: string | null;
+  /**
+   * `null` for an ordinary, already-scheduled instrument. Non-`null` means
+   * this item is a cached, unreviewed draft (F3.3, `[CACHE-1]`, `ol-p3t07a`)
+   * being served for the FIRST time — the value is the cache record's own
+   * id, which `generation/accept.ts`'s `DraftAcceptPort` resolves the moment
+   * she answers, edits, or rejects it. `instrumentId` on a draft item is a
+   * transient stand-in (the draft id itself) until that resolution mints
+   * the real one — see `generation/review-adapter.ts`'s module doc.
+   */
+  readonly draftId: string | null;
 }
 
 export interface QaCard extends ReviewInstrumentCommon {

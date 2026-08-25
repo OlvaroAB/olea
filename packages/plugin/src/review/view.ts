@@ -83,7 +83,7 @@ import {
 import type { RatingPreview } from './interval.js';
 import { hintsFor, type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
 import type { ReviewSession, ReviewViewModel, SessionCompleteSummary } from './session.js';
-import type { ClozeCard, McqItem, QaCard } from './types.js';
+import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from './types.js';
 
 export const VIEW_TYPE_OLEA_REVIEW = 'olea-review';
 
@@ -255,7 +255,10 @@ export class ReviewView extends ItemView {
         await session.rate(action.rating);
         break;
       case 'mcq-answer':
-        session.mcqAnswer(action.optionIndex);
+        // Awaited: for a new-badge item (`renderHeader`'s doc) this is the
+        // `[D-097]` accept step, materializing the draft into the vault
+        // before this method returns — see `session.ts`'s own doc.
+        await session.mcqAnswer(action.optionIndex);
         break;
       case 'mcq-toggle-guessed':
         session.mcqToggleGuessed();
@@ -328,23 +331,23 @@ export class ReviewView extends ItemView {
         this.renderComplete(vm.summary);
         break;
       case 'note-missing':
-        this.renderHeader(vm.progress, this.currentScreen(vm));
+        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderNoteMissing();
         break;
       case 'front':
-        this.renderHeader(vm.progress, this.currentScreen(vm));
+        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderFront(vm.instrument);
         break;
       case 'reveal':
-        this.renderHeader(vm.progress, this.currentScreen(vm));
+        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderReveal(vm.instrument, vm.ratingPreviews);
         break;
       case 'mcq-open':
-        this.renderHeader(vm.progress, this.currentScreen(vm));
+        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderMcqOpen(vm.instrument);
         break;
       case 'mcq-answered':
-        this.renderHeader(vm.progress, this.currentScreen(vm));
+        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
         this.renderMcqAnswered(vm.instrument, vm.selectedIndex, vm.wasUnsure, vm.intervalLabel);
         break;
     }
@@ -355,16 +358,48 @@ export class ReviewView extends ItemView {
     }
   }
 
+  /**
+   * `instrument` is `null` only for the note-missing/empty/complete screens
+   * that never carry one — everything else passes its `vm.instrument`
+   * through so this can tell a still-pending draft (`instrument.draftId !==
+   * null`, F3.3, `[D-097]`, `ol-p3t07a`) from an ordinary instrument.
+   *
+   * **The "new" badge and its edit/reject controls (F3.3/`[D-097`]).** A
+   * draft item replaces "Edit note"/"Suspend" with "Edit before saving" and
+   * "Reject" — the ordinary pair means nothing for something not yet in the
+   * vault (there is no note-anchored edit target, and nothing scheduled yet
+   * to suspend). Both are one click away, matching `[D-097]`'s "edit and
+   * reject one tap away"; neither has a keyboard binding of its own in this
+   * round (disclosed limitation, `ol-p3t07a`'s close evidence) — `keymap.ts`'s
+   * `Q6.5` promise ("every ON-SCREEN hint is a real binding") still holds
+   * because no hint row claims a key for either.
+   */
   private renderHeader(
     progress: { readonly position: number; readonly total: number },
     screen: ReviewScreen,
+    instrument: ReviewInstrument | null,
   ): void {
     const header = this.contentEl.createDiv({ cls: 'olea-review-header' });
     header.createSpan({
       cls: 'olea-review-progress',
       text: `${progress.position} of ${progress.total}`,
     });
+    if (instrument !== null && instrument.draftId !== null) {
+      header.createSpan({ cls: 'olea-review-new-badge', text: 'New' });
+    }
     header.createDiv({ cls: 'olea-review-header-spacer' });
+
+    if (instrument !== null && instrument.draftId !== null) {
+      this.actionButton(
+        header,
+        'Edit before saving',
+        null,
+        () => void this.dispatchDraftAction('edit-draft'),
+      );
+      this.actionButton(header, 'Reject', null, () => void this.dispatchDraftAction('reject'));
+      return;
+    }
+
     this.actionButton(
       header,
       'Edit note',
@@ -377,6 +412,15 @@ export class ReviewView extends ItemView {
       actionKeycap('suspend', screen),
       () => void this.dispatch({ kind: 'suspend' }),
     );
+  }
+
+  /** The two new-badge-only actions (`renderHeader`'s doc) — kept out of `keymap.ts`'s `ReviewAction`/`dispatch` switch deliberately (see that method's doc), so this is their one call path. */
+  private async dispatchDraftAction(kind: 'edit-draft' | 'reject'): Promise<void> {
+    const session = this.session;
+    if (session === null) return;
+    if (kind === 'edit-draft') await session.acceptEditDraft();
+    else await session.rejectDraft();
+    this.render();
   }
 
   /** `hotkey` is `null` when the resolver has no binding for the action; the button is then built without a keycap rather than promising a key that does nothing (Q6.5). */

@@ -64,19 +64,24 @@ import {
   replayedStateOf,
   reviewLogPath,
 } from 'olea-core';
+import type { DraftAcceptPort } from '../generation/accept.js';
+import type { DraftCacheStore } from '../generation/cache-store.js';
+import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import { describeInterval } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
 import { adaptExecutedReviewQueue } from './queue-adapter.js';
 import { ReviewSession } from './session.js';
 
-/** The four side-effecting seams plus the clock, exactly as `ReviewSessionDeps` names them. */
+/** The five side-effecting seams plus the clock, exactly as `ReviewSessionDeps` names them. */
 export interface ReviewSessionPorts {
   readonly reviewLog: ReviewLogPort;
   readonly suspendPort: SuspendPort;
   readonly editPort: EditPort;
   readonly noteExists: NoteExistsPort;
   readonly clock: Clock;
+  /** F3.3/`[D-097]`'s accept-at-first-presentation seam (`ol-p3t07a`, `ol-mfn0`). */
+  readonly draftAcceptPort: DraftAcceptPort;
 }
 
 export interface OpenReviewSessionInput {
@@ -99,6 +104,14 @@ export interface OpenReviewSessionInput {
    * case here.
    */
   readonly plan?: StudyPlanArtifact | null;
+  /**
+   * F3.3/`[D-097]`'s "new" badge (`ol-p3t07a`): every `status: 'pending'`
+   * record is read fresh and merged into today's queue, ahead of the
+   * ordinarily-scheduled items. Omitted means no drafts are offered — a
+   * caller with no generation pipeline wired (a test, the workbench) gets
+   * exactly the queue `buildReviewSession` composed, unchanged.
+   */
+  readonly draftCache?: DraftCacheStore;
 }
 
 export type OpenReviewSessionOutcome =
@@ -174,11 +187,20 @@ export async function openReviewSession(
     // plan is the Phase A shape, not a branch — see the module doc.
     const executed = executeStudyPlan({ queue: composed.queue, plan: input.plan ?? null });
 
-    const queue = adaptExecutedReviewQueue({
+    const scheduled = adaptExecutedReviewQueue({
       items: executed.items,
       recordsById: composed.recordsById,
       ...(input.random !== undefined ? { random: input.random } : {}),
     });
+
+    // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): every still-pending
+    // draft, read fresh, ahead of the ordinarily-scheduled items — see
+    // `OpenReviewSessionInput.draftCache`'s doc. `[]` when no cache is
+    // wired, so this is a pure addition and never removes or reorders
+    // anything `composeQueue`/`executeStudyPlan` decided.
+    const pendingDrafts = input.draftCache ? await input.draftCache.listPending() : [];
+    const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
+    const queue = [...draftItems, ...scheduled];
 
     const session = new ReviewSession({
       queue,
@@ -188,6 +210,7 @@ export async function openReviewSession(
       editPort: input.ports.editPort,
       noteExists: input.ports.noteExists,
       clock: input.ports.clock,
+      draftAcceptPort: input.ports.draftAcceptPort,
       nextDueLabel: nextDueLabel(now, earliestFutureDue(composed, now)),
     });
 

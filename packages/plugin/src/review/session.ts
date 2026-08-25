@@ -17,6 +17,7 @@
 import type { Rating } from 'olea-contracts';
 import type { McqRating, Scheduler } from 'olea-core';
 import { mapMcqRating } from 'olea-core';
+import type { DraftAcceptPort } from '../generation/accept.js';
 import { previewQaClozeIntervals, previewSingleInterval, type RatingPreview } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
@@ -73,6 +74,14 @@ export interface ReviewSessionDeps {
   readonly editPort: EditPort;
   readonly noteExists: NoteExistsPort;
   readonly clock: Clock;
+  /**
+   * Resolves a cached, unreviewed draft (`instrument.draftId !== null`, F3.3,
+   * `ol-p3t07a`) into a real instrument the moment she answers, edits, or
+   * rejects it. Required even for a session with no draft items today —
+   * same "always wired, not every item uses it" posture `suspendPort` and
+   * `editPort` already have.
+   */
+  readonly draftAcceptPort: DraftAcceptPort;
   /** Shown on the empty state when the queue starts with nothing due (F2.2's "nothing due" scenario). */
   readonly nextDueLabel?: string | null;
 }
@@ -185,22 +194,66 @@ export class ReviewSession {
     this.phase = 'front';
   }
 
-  /** Q&A/cloze rating (F2.16: all four values valid — no MCQ-style narrowing here). */
+  /**
+   * Q&A/cloze rating (F2.16: all four values valid — no MCQ-style narrowing
+   * here). For a still-pending draft (F3.3, `ol-p3t07a`) this IS the accept
+   * step — `[D-097]`'s "answering it is accepting it, no added tap" — before
+   * anything is recorded.
+   */
   async rate(rating: Rating): Promise<void> {
     if (this.phase !== 'reveal') return;
-    const item = this.requireCurrent();
+    const item = await this.resolveDraftAt(this.index, 'accepted');
     await this.logAndAdvance(item, rating, false);
   }
 
-  mcqAnswer(optionIndex: number): void {
+  /**
+   * `[D-097]`'s "answering it is accepting it" for an MCQ new-badge item: a
+   * still-pending draft is materialized into the vault (real `instrumentId`
+   * minted) BEFORE anything else below runs, so the interval preview and the
+   * eventual `logAndAdvance` both operate on the real instrument, never the
+   * transient draft-id stand-in (`generation/review-adapter.ts`'s doc).
+   * A no-op resolution (same item back) for an ordinary instrument.
+   */
+  async mcqAnswer(optionIndex: number): Promise<void> {
     if (this.phase !== 'mcq-open') return;
-    const instrument = this.requireMcq(this.requireCurrent());
+    const item = await this.resolveDraftAt(this.index, 'accepted');
+    const instrument = this.requireMcq(item);
     if (optionIndex < 0 || optionIndex >= instrument.options.length) return;
     this.mcqSelectedIndex = optionIndex;
     this.wasUnsure = false;
     this.phase = 'mcq-answered';
 
     this.mcqIntervalLabel = this.previewMcqInterval(this.mcqRating(instrument, optionIndex));
+  }
+
+  /**
+   * F3.3/`[D-097]`'s one-tap "edit" for a new-badge item: resolves the draft
+   * with verdict `'edited'` (materializing it, exactly as `accept` does),
+   * then opens the note it just landed in through the ordinary `editPort` so
+   * she can hand-edit the persisted text before it is ever offered again.
+   * No-op — deliberately — for an ordinary, already-materialized item; the
+   * header's regular "Edit note" button already covers that case.
+   */
+  async acceptEditDraft(): Promise<void> {
+    const item = this.currentItem;
+    if (item === null || item.instrument.draftId === null) return;
+    const resolved = await this.resolveDraftAt(this.index, 'edited');
+    await this.deps.editPort.edit(resolved.instrument);
+  }
+
+  /**
+   * F3.3's "reject prunes — withdrawn from circulation, retained in full,
+   * never deleted": one tap away, before she has answered. Writes nothing to
+   * the vault (there is no instrument yet) and removes the item from
+   * today's queue, same shape `removeMissingNote` already uses. No-op for an
+   * ordinary item or an already-resolved draft.
+   */
+  async rejectDraft(): Promise<void> {
+    const item = this.currentItem;
+    if (item === null || item.instrument.draftId === null) return;
+    await this.deps.draftAcceptPort.reject(item.instrument.draftId);
+    this.items.splice(this.index, 1);
+    await this.presentCurrent();
   }
 
   /** "Wasn't sure / guessed" (F2.16) — offered regardless of whether the answer was right or wrong (`PluginMcqAnswered`'s doc), even though it only changes the recorded rating when she was actually correct. */
@@ -288,6 +341,38 @@ export class ReviewSession {
 
   private progress(): ReviewProgress {
     return { position: this.index + 1, total: this.items.length };
+  }
+
+  /**
+   * If the item at `index` is a still-pending draft (`instrument.draftId !==
+   * null`), resolves it through `draftAcceptPort.accept` and replaces it IN
+   * PLACE with a `draftId: null` copy carrying the real, materialized
+   * `instrumentId` — the one moment `[D-097]`'s "answering it is accepting
+   * it" actually happens (`rate`/`mcqAnswer`/`acceptEditDraft` are this
+   * method's only callers). A no-op returning the item unchanged for an
+   * ordinary instrument, so every caller can call this unconditionally
+   * rather than branching on `draftId` itself.
+   */
+  private async resolveDraftAt(
+    index: number,
+    verdict: 'accepted' | 'edited',
+  ): Promise<ReviewQueueItem> {
+    const item = this.items[index];
+    if (item === undefined) {
+      throw new Error(`ReviewSession: no item at index ${index} to resolve`);
+    }
+    if (item.instrument.draftId === null) return item;
+
+    const { instrumentId } = await this.deps.draftAcceptPort.accept(
+      item.instrument.draftId,
+      verdict,
+    );
+    const resolved: ReviewQueueItem = {
+      ...item,
+      instrument: { ...item.instrument, instrumentId, draftId: null },
+    };
+    this.items[index] = resolved;
+    return resolved;
   }
 
   private requireCurrent(): ReviewQueueItem {

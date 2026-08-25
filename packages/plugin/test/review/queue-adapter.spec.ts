@@ -12,9 +12,15 @@ import {
   createFsrsScheduler,
   executeStudyPlan,
   PRESENTED_OPTIONS,
+  provisionalConceptKey,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { adaptExecutedReviewQueue, adaptReviewQueue } from '../../src/review/queue-adapter.js';
+
+/** `ol-63e1`: `conceptIds` now carries the opaque key, never the display name — 'Alpha' here is unbound (no matching Zettelkasten note). */
+function unboundKey(name: string): string {
+  return provisionalConceptKey({ name, boundNotePath: null });
+}
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -130,7 +136,7 @@ describe('each queue item becomes a renderable instrument of its own type', () =
     expect(qa.instrument.noteTitle).toBe('qa');
     expect(qa.instrument.blockId).toBe('blk1');
     expect(qa.instrument.courseCode).toBe('TEST101');
-    expect(qa.instrument.conceptIds).toEqual(['Alpha']);
+    expect(qa.instrument.conceptIds).toEqual([unboundKey('Alpha')]);
   });
 
   it('a cloze carries the sentence in three parts and the heading as its context line', async () => {

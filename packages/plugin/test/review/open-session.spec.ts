@@ -25,6 +25,7 @@ import {
   calendarDayFromLocalDate,
   createFsrsScheduler,
   parseReviewLog,
+  provisionalConceptKey,
   reviewLogPath,
   suspendedInstrumentIds,
 } from 'olea-core';
@@ -45,6 +46,17 @@ import type { ReviewSession } from '../../src/review/session.js';
 import { memoryVault, unreadableVault } from './memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
+
+/**
+ * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` now carry
+ * the opaque key, never the display name — 'Alpha'/'Beta' here are both
+ * unbound (`Concepts/Alpha.md`/`Concepts/Beta.md` carry `title:`, not `topic:`,
+ * and sit outside the default Zettelkasten folder, so they bind nothing;
+ * the real binding comes from `Courses/TEST101/Week one|two.md`'s `topic:`).
+ */
+function unboundKey(name: string): string {
+  return provisionalConceptKey({ name, boundNotePath: null });
+}
 
 /** Fixed so the composed queue, the log filename and the assertions all agree. */
 const NOW = new Date('2026-08-10T14:00:00-04:00');
@@ -117,6 +129,18 @@ function ports(vault: ReturnType<typeof memoryVault>, clock: Clock = fixedClock(
     editPort,
     noteExists: createVaultNoteExistsPort(vault),
     clock,
+    // `ol-p3t07a`: no fixture in this suite composes a queue with a pending
+    // draft item (that is `review/session.spec.ts`'s and
+    // `generation/review-adapter.spec.ts`'s job) — this port is required by
+    // `ReviewSessionPorts` but never called by anything this file drives.
+    draftAcceptPort: {
+      accept() {
+        throw new Error('open-session.spec: no draft item in this suite should ever call accept');
+      },
+      reject() {
+        throw new Error('open-session.spec: no draft item in this suite should ever call reject');
+      },
+    },
   };
   return { ports: shape, edited };
 }
@@ -165,7 +189,7 @@ async function advancePastCurrentItem(session: ReviewSession): Promise<void> {
     return;
   }
   if (vm.phase === 'mcq-open') {
-    session.mcqAnswer(0);
+    await session.mcqAnswer(0);
     await session.mcqNext();
   }
 }
@@ -288,7 +312,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // made concrete).
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { Alpha: 'seed' },
+      byConcept: { [unboundKey('Alpha')]: 'seed' },
     });
   });
 
@@ -305,7 +329,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
         timestamp: '2026-08-08T09:00:00-04:00',
         instrumentId: 'seed-alpha-1',
         instrumentType: 'qa',
-        conceptIds: ['Alpha'],
+        conceptIds: [unboundKey('Alpha')],
         rating: 'good',
         wasUnsure: false,
         durationMs: null,
@@ -325,7 +349,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
         timestamp: '2026-08-09T09:00:00-04:00',
         instrumentId: 'seed-alpha-2',
         instrumentType: 'qa',
-        conceptIds: ['Alpha'],
+        conceptIds: [unboundKey('Alpha')],
         rating: 'good',
         wasUnsure: false,
         durationMs: null,
@@ -369,7 +393,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // append above turns this into `tree` and this assertion goes red.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
-      byConcept: { Alpha: 'sprout' },
+      byConcept: { [unboundKey('Alpha')]: 'sprout' },
     });
   });
 
@@ -399,7 +423,7 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
       outcome.session.reveal();
       await outcome.session.rate('hard');
     } else if (vm.phase === 'mcq-open') {
-      outcome.session.mcqAnswer(0);
+      await outcome.session.mcqAnswer(0);
       await outcome.session.mcqNext();
     }
 
@@ -511,7 +535,7 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
         status: 'ranked',
         concepts: [
           {
-            conceptId: 'Beta',
+            conceptId: unboundKey('Beta'),
             rank: 1,
             weight: 10,
             examProximityDays: 3,
@@ -533,7 +557,7 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     // With this plan, Beta — ranked, weight 10 — sorts before Alpha, which the
     // plan never mentions and which therefore stays unranked.
     const first = outcome.session.currentItem;
-    expect(first?.instrument.conceptIds).toContain('Beta');
+    expect(first?.instrument.conceptIds).toContain(unboundKey('Beta'));
     expect(first?.selectionContext.planVersion).toBe(PLAN.planVersion);
     expect(first?.selectionContext.yieldRank).toBe(1);
     expect(first?.selectionContext.examProximity).toBe(3);
@@ -545,7 +569,7 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     // yieldRank/examProximity stay the queue's nulls while planVersion still
     // names the plan that was in force.
     const second = outcome.session.currentItem;
-    expect(second?.instrument.conceptIds).toContain('Alpha');
+    expect(second?.instrument.conceptIds).toContain(unboundKey('Alpha'));
     expect(second?.selectionContext.planVersion).toBe(PLAN.planVersion);
     expect(second?.selectionContext.yieldRank).toBeNull();
     expect(second?.selectionContext.examProximity).toBeNull();

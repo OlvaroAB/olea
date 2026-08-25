@@ -102,6 +102,11 @@ function common(record: VaultInstrumentRecord) {
     noteTitle: record.noteTitle,
     sourcePath: record.notePath,
     blockId: record.blockId,
+    // Every instrument this adapter enumerates already exists in the vault
+    // (`buildReviewSession` walked it) — never a cached, unreviewed draft.
+    // `ol-p3t07a`'s new-badge items come from `generation/review-adapter.ts`
+    // instead, which sets this to the draft's own id.
+    draftId: null,
   } as const;
 }
 

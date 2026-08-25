@@ -3,6 +3,7 @@ import type { StudyPlanArtifact } from 'olea-contracts';
 import {
   createFsrsScheduler,
   type DeviceCapability,
+  type ExtractedUnit,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
   type PendingExplainBackGrading,
@@ -21,6 +22,7 @@ import {
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
+import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
   buildGradingWiring,
   type GradingWiring,
@@ -34,6 +36,7 @@ import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-inde
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
+import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
   buildRetrievalWiring,
   drainIntoEmbeddingCache,
@@ -128,6 +131,8 @@ export default class OleaPlugin extends Plugin {
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
   private concept: ConceptWiring | null = null;
+  /** F3.3's automatic generation pipeline (`ol-p3t07a`) — built unconditionally (unlike `retrieval`/`keywordIndex`, it needs no Worker token: the cache and accept/reject flow work offline, and only the sweep itself is a no-op with no Worker configured, F7.8). */
+  private generation: GenerationWiring | null = null;
 
   override async onload(): Promise<void> {
     // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
@@ -158,6 +163,14 @@ export default class OleaPlugin extends Plugin {
     const studyPlanStore = new ObsidianStudyPlanStore(this);
     const cachedPlan = (await loadCachedStudyPlan(studyPlanStore)).plan;
 
+    // `ol-p3t07a`: built here, before `this.review`, so `this.review.ports`
+    // below can wire the real `DraftAcceptPort` rather than a placeholder.
+    // Needs only `vault`/`deviceId` — no Worker token, unlike `retrieval`/
+    // `keywordIndex` below — so the cache and accept/reject flow work
+    // offline; only the sweep itself (never called from here) needs a
+    // configured Worker (F7.8).
+    this.generation = buildGenerationWiring({ vault, deviceId });
+
     this.review = {
       vault,
       scheduler,
@@ -179,6 +192,10 @@ export default class OleaPlugin extends Plugin {
         // this whole path against a shim that knows nothing about vaults.
         noteExists: createVaultNoteExistsPort(vault),
         clock: systemClock,
+        // F3.3/`[D-097]`'s accept-at-first-presentation seam (`ol-p3t07a`,
+        // `ol-mfn0`): resolves a cached, unreviewed draft the moment she
+        // answers, edits, or rejects it.
+        draftAcceptPort: this.generation.acceptPort,
       },
     };
 
@@ -338,6 +355,11 @@ export default class OleaPlugin extends Plugin {
       vault,
       queueStore: new ObsidianQueueStore(this),
       capability,
+      // `ol-p3t07a`: F3.3's "generate automatically when material lands"
+      // trigger. Fires once per drained job, best-effort (see `wiring.ts`'s
+      // own doc for why a generation failure can never fail the ingestion
+      // job it rode in on).
+      onUnitsLanded: (units) => this.onUnitsLanded(units),
     });
 
     // ol-tuvx: `ObsidianKeywordIndexStore` was a finished adapter nothing
@@ -422,6 +444,55 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * Assembles `DraftQuizCardsDeps` for a grounded generative call
+   * (`ol-p3t07a`), or `null` when any half is unavailable — no Worker token
+   * pasted yet (F7.8), or the keyword index has not built its first
+   * snapshot. Mirrors `retrieval/wiring.ts`'s own `null`-on-unconfigured
+   * posture rather than inventing a second one.
+   */
+  private draftQuizCardsDeps(): DraftQuizCardsDeps | null {
+    const embeddingCache = this.retrieval?.embeddingCache;
+    const embeddingProvider = this.retrieval?.embeddingProvider;
+    const transport = this.retrieval?.transport;
+    if (
+      embeddingCache === null ||
+      embeddingCache === undefined ||
+      embeddingProvider === null ||
+      embeddingProvider === undefined ||
+      transport === null ||
+      transport === undefined ||
+      this.keywordIndex === null
+    ) {
+      return null;
+    }
+    return {
+      retrieve: {
+        keywordIndex: this.keywordIndex.engine.toPersisted(),
+        embeddingCache,
+        embeddingProvider,
+      },
+      transport,
+    };
+  }
+
+  /**
+   * F3.3's "generate automatically when material lands" trigger
+   * (`ol-p3t07a`), fired by `ingestion/wiring.ts`'s `onUnitsLanded` hook
+   * once per drained job. Never throws into the ingestion path it rides on
+   * — a generation failure is not an extraction failure (see that hook's
+   * own doc); `GenerationWiring.sweep` itself already no-ops honestly when
+   * the Worker isn't configured (F7.8) or `units` is empty.
+   */
+  private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
+    if (this.generation === null) return;
+    try {
+      await this.generation.sweep(units, this.draftQuizCardsDeps());
+    } catch (error) {
+      console.error('Olea: generation sweep failed', error);
+    }
+  }
+
+  /**
    * F2.8's switch-on, the recompute half (P5-T07). Runs `composeOracleRanking`
    * → `buildStudyPlan` through `refreshStudyPlan`'s cache-first, never-throws
    * discipline, and updates `this.review.plan` in place when it settles —
@@ -481,6 +552,9 @@ export default class OleaPlugin extends Plugin {
       // background refresh that lands between two sessions reaches the
       // second one without her having to restart Obsidian.
       plan: wiring.plan,
+      // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): whatever the cache
+      // holds pending, read fresh at open time, exactly like the plan above.
+      ...(this.generation ? { draftCache: this.generation.cache } : {}),
     });
     if (!outcome.ok) {
       console.error('Olea: could not compose a review session', outcome.error);

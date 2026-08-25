@@ -161,6 +161,7 @@ describe('questionText', () => {
     noteTitle: 'Note',
     sourcePath: 'a.md',
     blockId: null,
+    draftId: null,
     question: 'Who is telling us?',
     answer: 'No single narrator.',
   } as QaCard;
@@ -173,6 +174,7 @@ describe('questionText', () => {
     noteTitle: 'Note',
     sourcePath: 'a.md',
     blockId: null,
+    draftId: null,
     before: 'The play withholds ',
     clozeText: 'an outside perspective',
     after: ' entirely.',

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
 import {
   clozeFixture,
+  fakeDraftAcceptPort,
   fakeEditPort,
   fakeNoteExists,
   fakeReviewLog,
@@ -31,6 +32,7 @@ function baseDeps(overrides: Partial<ReviewSessionDeps> = {}): ReviewSessionDeps
     editPort: fakeEditPort(),
     noteExists: fakeNoteExists(),
     clock: fixedClock('2026-08-10T09:00:00Z'),
+    draftAcceptPort: fakeDraftAcceptPort(),
     ...overrides,
   };
 }
@@ -125,7 +127,7 @@ describe('F2.16 — MCQ rating mapping, as wired through the session', () => {
     const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
     await session.start();
 
-    session.mcqAnswer(0); // the fixture's correct option
+    await session.mcqAnswer(0); // the fixture's correct option
     await session.mcqNext();
 
     expect(reviewLog.calls).toHaveLength(1);
@@ -139,7 +141,7 @@ describe('F2.16 — MCQ rating mapping, as wired through the session', () => {
     const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
     await session.start();
 
-    session.mcqAnswer(0);
+    await session.mcqAnswer(0);
     session.mcqToggleGuessed();
     await session.mcqNext();
 
@@ -153,7 +155,7 @@ describe('F2.16 — MCQ rating mapping, as wired through the session', () => {
     const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
     await session.start();
 
-    session.mcqAnswer(1); // wrong option in the fixture
+    await session.mcqAnswer(1); // wrong option in the fixture
     session.mcqToggleGuessed();
     await session.mcqNext();
 
@@ -168,7 +170,7 @@ describe('F2.16 — MCQ rating mapping, as wired through the session', () => {
     const session = new ReviewSession(baseDeps({ queue: items }));
     await session.start();
 
-    session.mcqAnswer(0);
+    await session.mcqAnswer(0);
     await session.mcqNext(); // no tap at all
 
     const vm = session.getViewModel();
@@ -406,7 +408,7 @@ describe('F2.16 — the session maps through core, and holds no mapping of its o
     const session = new ReviewSession(baseDeps({ queue: [queueItem(instrument)], reviewLog }));
     await session.start();
 
-    session.mcqAnswer(outcome.correct ? correctIndex : wrongIndex);
+    await session.mcqAnswer(outcome.correct ? correctIndex : wrongIndex);
     if (outcome.wasUnsure) session.mcqToggleGuessed();
     await session.mcqNext();
 
@@ -421,7 +423,7 @@ describe('F2.16 — the session maps through core, and holds no mapping of its o
         const reviewLog = fakeReviewLog();
         const session = new ReviewSession(baseDeps({ queue: [queueItem(instrument)], reviewLog }));
         await session.start();
-        session.mcqAnswer(index);
+        await session.mcqAnswer(index);
         if (unsure) session.mcqToggleGuessed();
         await session.mcqNext();
         expect(reviewLog.calls[0]?.rating).not.toBe('easy');

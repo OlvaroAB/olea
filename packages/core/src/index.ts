@@ -62,6 +62,15 @@ export type {
 } from './concept/evidence.js';
 export { extractTier3Evidence } from './concept/evidence.js';
 export { extractConcepts } from './concept/extract.js';
+// ol-p3t07a: the F3.3 automatic-generation pipeline (`packages/plugin/src/
+// generation/`) needs F1.3's course-from-path derivation to turn a
+// newly-landed source's note path into the `courseCode` `draftQuizCardsFor
+// Concept` requires — nothing outside `olea-core` could reach it before this
+// additive barrel export (same precedent as `masteryAtTimeForConceptIds`'s
+// own addition: a deep import would risk double-bundling, and this package
+// is the one place the derivation is defined). Does not touch course.ts
+// itself.
+export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
 export type {
   ConceptPassage,
   ConceptReadBudget,

@@ -278,7 +278,35 @@ export function buildScenario(options: BuildScenarioOptions): Scenario {
 
   const clock: ReviewSessionDeps['clock'] = { now: () => WORKBENCH_NOW };
 
-  const base = { scheduler, reviewLog, suspendPort, editPort, noteExists: alwaysExists, clock };
+  /**
+   * `ol-p3t07a`: `WorkbenchQueue`'s items are always ordinary, already-
+   * enumerated instruments (`draftId: null` — `queue-adapter.ts`'s `common()`
+   * sets it and this file constructs no instrument literals of its own, see
+   * this file's module doc), so nothing here should ever reach a still-
+   * pending draft. Present because `ReviewSessionDeps` requires it.
+   */
+  const draftAcceptPort: ReviewSessionDeps['draftAcceptPort'] = {
+    accept(): Promise<never> {
+      return Promise.reject(
+        new Error('workbench: no scenario composes a queue with a pending draft item'),
+      );
+    },
+    reject(): Promise<never> {
+      return Promise.reject(
+        new Error('workbench: no scenario composes a queue with a pending draft item'),
+      );
+    },
+  };
+
+  const base = {
+    scheduler,
+    reviewLog,
+    suspendPort,
+    editPort,
+    noteExists: alwaysExists,
+    clock,
+    draftAcceptPort,
+  };
 
   const single = (item: ReviewQueueItem): readonly ReviewQueueItem[] => [item];
 
