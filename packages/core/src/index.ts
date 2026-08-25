@@ -46,6 +46,15 @@ export {
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept/concept-key.js';
+// ol-p3t07a: the F3.3 automatic-generation pipeline (`packages/plugin/src/
+// generation/`) needs F1.3's course-from-path derivation to turn a
+// newly-landed source's note path into the `courseCode` `draftQuizCardsFor
+// Concept` requires — nothing outside `olea-core` could reach it before this
+// additive barrel export (same precedent as `masteryAtTimeForConceptIds`'s
+// own addition: a deep import would risk double-bundling, and this package
+// is the one place the derivation is defined). Does not touch course.ts
+// itself.
+export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,
@@ -62,15 +71,40 @@ export type {
 } from './concept/evidence.js';
 export { extractTier3Evidence } from './concept/evidence.js';
 export { extractConcepts } from './concept/extract.js';
-// ol-p3t07a: the F3.3 automatic-generation pipeline (`packages/plugin/src/
-// generation/`) needs F1.3's course-from-path derivation to turn a
-// newly-landed source's note path into the `courseCode` `draftQuizCardsFor
-// Concept` requires — nothing outside `olea-core` could reach it before this
-// additive barrel export (same precedent as `masteryAtTimeForConceptIds`'s
-// own addition: a deep import would risk double-bundling, and this package
-// is the one place the derivation is defined). Does not touch course.ts
-// itself.
-export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
+// Knowledge-kind classification (component register row 1.5, `[KCT-1]`,
+// `ol-kxr6`) — a label, or explicitly unclassified, read by component 2.2
+// (instrument-type routing). `KnowledgeKindClassifierPort` is the service
+// seam — the model call that does the classifying — and has no production
+// adapter yet; see `./concept/knowledge-kind.js`'s module doc.
+export type {
+  ClassifyKnowledgeKindFailure,
+  ClassifyKnowledgeKindOptions,
+  ClassifyKnowledgeKindRequest,
+  ClassifyKnowledgeKindResponse,
+  ClassifyKnowledgeKindResult,
+  ConceptKindClassified,
+  ConceptKindUnclassified,
+  KnowledgeKind,
+  KnowledgeKindClassification,
+  KnowledgeKindClassified,
+  KnowledgeKindClassifierPort,
+  KnowledgeKindClassifierUnavailableReason,
+  KnowledgeKindDistribution,
+  KnowledgeKindHealthCheck,
+  KnowledgeKindNotRun,
+  KnowledgeKindSourcePassage,
+} from './concept/knowledge-kind.js';
+export {
+  assessKnowledgeKindDistribution,
+  classifyKnowledgeKind,
+  DOMINANT_KIND_SHARE_CEILING,
+  gateKnowledgeKindConfidence,
+  isKnowledgeKind,
+  KNOWLEDGE_KINDS,
+  KnowledgeKindClassifierUnavailableError,
+  MIN_SAMPLE_FOR_DISTRIBUTION_CHECK,
+  summariseKnowledgeKindDistribution,
+} from './concept/knowledge-kind.js';
 export type {
   ConceptPassage,
   ConceptReadBudget,
@@ -776,7 +810,7 @@ export type {
   StudySessionOmission,
   StudySessionOmissionReason,
 } from './study-session/build.js';
-export { buildStudySession } from './study-session/build.js';
+export { buildStudySession, CONCEPT_SIZE_SECONDS_MULTIPLIER } from './study-session/build.js';
 export type {
   DurationEstimateSource,
   DurationModel,
