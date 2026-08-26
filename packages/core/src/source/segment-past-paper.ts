@@ -36,6 +36,13 @@
  *    the fixture past paper and worth a discovered-from bead if a real paper
  *    ever needs it.
  *
+ * **This module is for markdown past papers only.** A past paper whose text
+ * came from `../extract/` (a PDF today) has no block kinds at all, so both
+ * of this module's safety arguments below are unavailable for it — see
+ * `./segment-past-paper-plaintext.js`, a deliberately separate module with
+ * its own, differently argued defences (`ol-pdfpastpaper`), not a reuse of
+ * this one's regexes over raw text.
+ *
  * **Why a code block or a list inside a question cannot break this**: only
  * `paragraph` blocks are ever inspected for a `(x)` marker. A `code` or
  * `list` block is never a candidate — it is always absorbed as content of
