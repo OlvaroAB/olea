@@ -679,7 +679,11 @@ export { appendMisconceptionEvent } from './misconception/write.js';
 // `RankOracleResult` from a vault and a review log — `rankOracle` had no
 // non-test caller anywhere until this joined `buildConceptAssessmentEdges`
 // and the mastery rollup to it. See oracle/compose.ts's module doc.
-export type { ComposeOracleRankingInput, ComposeOracleRankingResult } from './oracle/compose.js';
+export type {
+  ComposeOracleRankingInput,
+  ComposeOracleRankingResult,
+  ComposeRetrievabilityInput,
+} from './oracle/compose.js';
 export { composeOracleRanking } from './oracle/compose.js';
 // F4.2's high-yield ranking (P5-T04). Not previously reachable from this entry
 // point — added here because `buildStudyPlan` takes a `RankOracleResult` and an

@@ -17,8 +17,45 @@ import type { ReviewLogRecord } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord } from '../concept/types.js';
+import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import { FolderSource } from '../vault/folder-source.js';
 import { composeOracleRanking } from './compose.js';
+
+/**
+ * A `Scheduler` whose recall probability is looked up per instrument id —
+ * the same technique `mastery/rollup.spec.ts`'s own `stubScheduler` uses, so
+ * a test can say "this instrument reads 0.35" without reverse-engineering an
+ * FSRS stability that produces it. `schedule` still returns a real-shaped
+ * `SchedulerState`, because `readAllConceptVitality` (the producer this
+ * suite is threading) calls `replaySchedulerStates` internally, which needs
+ * something to fold.
+ */
+function stubScheduler(byInstrument: Readonly<Record<string, number>>): Scheduler {
+  return {
+    schedule({ instrumentId, now }) {
+      const state: SchedulerState = {
+        schemaVersion: 1,
+        due: now.toISOString(),
+        stability: 1,
+        difficulty: 5,
+        scheduledDays: 1,
+        learningStepIndex: 0,
+        reps: 1,
+        lapses: 0,
+        learningState: 'review',
+        lastReview: now.toISOString(),
+      };
+      return { instrumentId, state, intervalDays: 1 };
+    },
+    retrievability({ instrumentId }) {
+      const recallProbability = byInstrument[instrumentId];
+      if (recallProbability === undefined) {
+        throw new Error(`stubScheduler: no probability configured for ${instrumentId}`);
+      }
+      return { instrumentId, recallProbability };
+    },
+  };
+}
 
 const BASE_PATH = '02 Assignments/Assignments.base';
 
@@ -200,6 +237,86 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // NOT match `conceptKey`, so mastery reads `seed` exactly as if nothing
     // had been reviewed at all.
     expect(entry?.factors.masteryState).toBe('seed');
+  });
+
+  it("with no `retrievability` input at all, every concept reads the documented neutral (1) — `RankOracleInput.retrievability`'s own default path", async () => {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+    expect(entry?.factors.retrievabilityWeight).toBe(1);
+  });
+
+  it('threads retrievability from a supplied Scheduler + instant into the ranking (register join 1-2, `[D-087]`, `ol-95vv.1`)', async () => {
+    const scheduler = stubScheduler({ 'qa:widget-theory:1': 0.35 });
+    const now = new Date('2026-08-15T09:00:00.000Z');
+
+    const withRetrievability = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+      retrievability: { scheduler, now },
+    });
+    const withoutRetrievability = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    const findEntry = (result: typeof withRetrievability) => {
+      const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+      if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+      const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+      if (entry === undefined) throw new Error('expected Widget theory to be ranked');
+      return entry;
+    };
+
+    const withEntry = findEntry(withRetrievability);
+    const withoutEntry = findEntry(withoutRetrievability);
+
+    // Neutral without a scheduler (re-asserted here so this test stands on
+    // its own if the dedicated default-path test above is ever removed).
+    expect(withoutEntry.factors.retrievabilityWeight).toBe(1);
+    // The stub's recall probability for `qa:widget-theory:1` — the review
+    // fixture's `instrumentId` — flows straight through as the multiplier.
+    expect(withEntry.factors.retrievabilityWeight).toBe(0.35);
+    expect(withEntry.factors.priorityScore).toBeCloseTo(
+      withoutEntry.factors.preMasteryScore * withoutEntry.factors.masteryNeedWeight * 0.35,
+    );
+    // The signal actually moved the score — this is the "changes ranking"
+    // half `rank.ts`'s own blend arithmetic already specifies; this suite
+    // covers only that compose's threading reaches it.
+    expect(withEntry.factors.priorityScore).not.toBe(withoutEntry.factors.priorityScore);
+  });
+
+  it('a concept with no recall-tier instrument read (e.g. no review history) is left OUT of the map — reads neutral, never a fabricated value', async () => {
+    const scheduler = stubScheduler({}); // never queried: no review events exist for widgetKey
+    const now = new Date('2026-08-15T09:00:00.000Z');
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [],
+      asOf: '2026-08-15',
+      concepts,
+      retrievability: { scheduler, now },
+    });
+
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+    expect(entry?.factors.retrievabilityWeight).toBe(1);
   });
 });
 

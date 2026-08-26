@@ -68,6 +68,23 @@
  *
  * See `findings/YIELD-1-exam-likelihood.md` (olea-service) for the full
  * producer/consumer/check account.
+ *
+ * ## Retrievability's producer is threaded here, not yet reached from a caller
+ *
+ * `RankOracleInput.retrievability`'s doc (`./types.ts`) used to say nothing
+ * threads a vitality-fold output through this composition at all — that gap
+ * is closed: `retrievability` (`ComposeRetrievabilityInput`, below) accepts a
+ * `Scheduler` and an instant, and this module folds them through
+ * `readAllConceptVitality` (register join 1-2, `[D-087]`, `ol-95vv.1`) into
+ * exactly the `ReadonlyMap<string, number>` shape `rankOracle` wants. What
+ * remains open is reachability one hop further out: none of the three
+ * production callers above passes this field yet.
+ * `session-builder/provider.ts` already holds both a `Scheduler` and `now` in
+ * its own deps for an unrelated obligation-classifier replay, which makes it
+ * the natural next call site — but threading it is outside this composition's
+ * own file, and outside this bead's owned files (`ol-sxfl`'s `owns` names
+ * only `oracle/compose.ts` and `mastery/vitality.ts`), so it is left as a
+ * named follow-on rather than done here.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -78,10 +95,51 @@ import type {
   BuildConceptAssessmentEdgesResult,
 } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
-import { computeAllConceptMastery } from '../mastery/rollup.js';
+import { computeAllConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
+import type { Scheduler } from '../scheduler/types.js';
 import type { VaultSource } from '../vault/types.js';
 import { rankOracle } from './rank.js';
 import type { RankOracleOptions, RankOracleResult } from './types.js';
+
+/**
+ * Retrievability's raw materials (register join 1-2, `[D-087]`, `ol-95vv.1`):
+ * the vitality fold needs a `Scheduler` port AND the instant to read it at, so
+ * this bundles the two rather than accepting them as two independently
+ * optional fields — a caller with only one of them cannot honestly ask for a
+ * reading, and an object that can be half-supplied invites exactly that bug.
+ *
+ * Omitting this field entirely is the documented default path:
+ * `RankOracleInput.retrievability` reads every concept as neutral (1, no
+ * adjustment) when it is never supplied at all (see its own doc) — this
+ * bundle being absent is how `composeOracleRanking` reaches that same
+ * omission rather than fabricating a scheduler or a clock read of its own.
+ */
+export interface ComposeRetrievabilityInput {
+  readonly scheduler: Scheduler;
+  /**
+   * The instant retrievability is read at. Never read from a clock inside
+   * this module — same discipline `asOf` above already documents — so the
+   * caller's own `now` (already threaded through `session-builder/provider.ts`
+   * and `plan/provider.ts` for `asOf`/`computedAt`) is what belongs here, not
+   * a fresh `new Date()`.
+   */
+  readonly now: Date;
+}
+
+/**
+ * `readVitality`'s fold (`../mastery/vitality.ts`) is gated on a `holdingCut`
+ * that decides `holding` vs `tending` — an open, undecided derived constant
+ * (`VIT-1` / `ol-1bjz`; no default on purpose, see that module's doc). This
+ * composition never reads a vitality READING (the `holding`/`tending`/`early`
+ * classification) — it only reads `VitalityReading.weakest.recallProbability`,
+ * the raw number the classification is computed FROM, which does not depend
+ * on where the cut sits. `1` here is not a stand-in for VIT-1's answer; it is
+ * an inert argument to a required parameter of a function whose *other*
+ * output this call never looks at, chosen because passing a value that could
+ * be mistaken for a considered guess (e.g. something mid-range) is worse than
+ * one that plainly cannot be.
+ */
+const UNUSED_VITALITY_HOLDING_CUT = 1;
 
 export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOptions {
   readonly vault: VaultSource;
@@ -95,6 +153,19 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
   readonly reviewLog: readonly ReviewLogEntry[];
   /** The calendar day exam proximity is measured from — passed straight to `rankOracle`. */
   readonly asOf: string;
+  /**
+   * Retrievability's producer (register join 1-2, `[D-087]`, `ol-95vv.1`).
+   * Omit for a caller with no `Scheduler` handy — `rankOracle` reads every
+   * concept as neutral in that case, exactly as
+   * `RankOracleInput.retrievability`'s own doc requires. Supplied, this
+   * composition folds each ranked concept's instruments through
+   * `readAllConceptVitality` (D-087's minimum-over-instruments shape) and
+   * passes the weakest instrument's recall probability through as the
+   * signal — never the `holding`/`tending`/`early` classification, which
+   * this composition does not compute a cut for (see
+   * `UNUSED_VITALITY_HOLDING_CUT`'s doc, below).
+   */
+  readonly retrievability?: ComposeRetrievabilityInput;
   readonly options?: RankOracleOptions;
 }
 
@@ -193,7 +264,7 @@ function resolveCaseInsensitiveConceptKeys(
 export async function composeOracleRanking(
   input: ComposeOracleRankingInput,
 ): Promise<ComposeOracleRankingResult> {
-  const { vault, reviewLog, asOf, options, ...edgeOptions } = input;
+  const { vault, reviewLog, asOf, options, retrievability, ...edgeOptions } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
   // `ol-5y40`: repairs the case-mismatched fallback `buildConceptAssessmentEdges`
   // leaves behind before anything downstream (the mastery join below,
@@ -206,6 +277,7 @@ export async function composeOracleRanking(
   // every entry before the coordinated flip.
   const conceptKeys = [...new Set(edges.edges.map((edge) => edge.conceptKey))].sort();
   const mastery = computeAllConceptMastery(reviewLog, conceptKeys);
+  const retrievabilityScores = resolveRetrievabilityScores(reviewLog, conceptKeys, retrievability);
 
   const ranking = rankOracle({
     evidence: {
@@ -215,8 +287,48 @@ export async function composeOracleRanking(
     },
     mastery,
     asOf,
+    ...(retrievabilityScores !== undefined ? { retrievability: retrievabilityScores } : {}),
     ...(options !== undefined ? { options } : {}),
   });
 
   return { ranking, edges, mastery };
+}
+
+/**
+ * Register join 1-2 (`[D-087]`, `ol-95vv.1`): the producer for
+ * `RankOracleInput.retrievability`, over exactly the concepts this
+ * composition already ranks. `undefined` when `retrievabilityInput` is
+ * omitted — `rankOracle` reads that as neutral for every concept, the same
+ * "absent signal is neutral" rule its own doc states.
+ *
+ * A concept with no recall-tier instrument read (`readAllConceptVitality`'s
+ * `weakest === null` — no evidence, or recognition-only, or never-practised;
+ * `../mastery/vitality.ts`'s sufficiency floor) is left OUT of the returned
+ * map rather than defaulted to some placeholder number — `resolveRetrievabilityWeight`
+ * (`./rank.ts`) already reads a missing key as neutral for that one concept,
+ * which is the honest answer: "no reading" is not the same fact as "reading
+ * of 1", and this composition should not manufacture the latter out of the
+ * former.
+ */
+function resolveRetrievabilityScores(
+  reviewLog: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  retrievabilityInput: ComposeRetrievabilityInput | undefined,
+): ReadonlyMap<string, number> | undefined {
+  if (retrievabilityInput === undefined) return undefined;
+  const { scheduler, now } = retrievabilityInput;
+  const readings = readAllConceptVitality(
+    reviewLog,
+    conceptKeys,
+    scheduler,
+    now,
+    UNUSED_VITALITY_HOLDING_CUT,
+  );
+  const scores = new Map<string, number>();
+  for (const [conceptKey, reading] of readings) {
+    if (reading.weakest !== null) {
+      scores.set(conceptKey, reading.weakest.recallProbability);
+    }
+  }
+  return scores;
 }
