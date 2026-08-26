@@ -675,6 +675,19 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-text);
 }
 
+/* ol-p6t03 (Q6.1/Q6.5): the pane's one native control (`.olea-today-primary-action`)
+   gets no ring of its own from Obsidian — the host's own chrome routinely resets a
+   plain button's default browser outline, the same gap `.olea-review-root
+   :focus-visible` exists to close on the review tab. `--interactive-accent` is
+   branch-invariant (declared once on `body`, not per theme branch — see
+   `styles-host-vars.spec.ts`'s `BRANCH_INVARIANT` set on the review section above),
+   so reading it here needs no dark-floor layer of this pane's own. */
+.olea-today-root :focus-visible {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .olea-today-header {
   display: flex;
   align-items: center;
@@ -1509,4 +1522,35 @@ button.olea-review-mcq-option:hover {
 .olea-sprig-fruit {
   fill: var(--olea-host-fruit, var(--olea-host-brand));
   stroke: none;
+}
+
+/* ============================================================
+   ---- Bulk review triage (F3.3; ol-jie3) ----
+   ============================================================
+
+   `bulk-review-view.ts` carries NO rule here beyond this one, deliberately: the view
+   ships wholly unstyled, so every element renders on bare host defaults — `<h2>`,
+   `<p>` and `<button>` with no authored `color`/`background` at all. That is the
+   safest possible position on theme resilience (there is nothing here that COULD
+   read a wrong branch, because nothing here reads a host variable), and a full
+   stylesheet for this surface is its own separate piece of work, not a resilience
+   fix — the drift-guard pattern `test/today/styles.spec.ts` and
+   `test/gap/styles.spec.ts` run for their own panes has no counterpart here yet
+   because there is no rule set for it to guard.
+
+   The one gap worth closing now (ol-p6t03, Q6.1/Q6.5): the view's four buttons
+   (`.olea-bulk-review-remainder`, `.olea-bulk-review-action` ×3 per row) are real
+   `<button>` elements, so Tab already reaches every one of them and Enter/Space
+   already activates them — nothing here is click-only in the sense that would
+   matter for a keyboard-only reader, only in the sense the view's own module doc
+   already discloses (no single-key accelerator, `ol-uxk9`). What bare defaults do
+   NOT guarantee is a VISIBLE ring on that native focus, for the same reason
+   `.olea-today-root :focus-visible` above needed restating: the host commonly
+   resets a plain button's outline. Same fix, same fallback colour, no other rule
+   added — adding the rest of this surface's chrome is out of scope for a
+   resilience/access pass. */
+.olea-bulk-review-root :focus-visible {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

@@ -144,3 +144,16 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
     expect(css).not.toContain('--background-modifier-border-hover');
   });
 });
+
+describe('the Today pane restores a visible keyboard focus ring (ol-p6t03, Q6.1/Q6.5)', () => {
+  it('declares :focus-visible on the pane root, not just on .olea-review-root', () => {
+    expect(css).toMatch(/\.olea-today-root\s+:focus-visible\s*\{/);
+  });
+
+  it('paints the ring with the branch-invariant accent, with a real fallback', () => {
+    const m = /\.olea-today-root\s+:focus-visible\s*\{([^}]*)\}/.exec(css);
+    expect(m, 'the :focus-visible rule from the test above').not.toBeNull();
+    const body = m?.[1] ?? '';
+    expect(body).toMatch(/outline:\s*2px solid var\(--interactive-accent,\s*#[0-9a-f]{6}\)/);
+  });
+});
