@@ -51,6 +51,47 @@ export type ConceptTier = 1 | 2 | 3;
  * two topic strings differing only by case produce two distinct
  * `ConceptRecord`s, because nothing in the contract says otherwise for that
  * case. See `extract.spec.ts` for the case that proves this.
+ *
+ * **A concept carries identity, provenance tier and KC-type — and nothing
+ * else (`[D-070]`, `ol-s7wh`). Standing prohibition, not a style
+ * preference.** The knowledge model (§2, the identity-layer table) closes
+ * the list at six fields: `key`, `name`, `aliases`, `discipline`,
+ * provenance tier, KC-type. On `ConceptRecord` — the extraction-time record,
+ * tiers 1–3 — that maps to `key` and `name` (identity) and `tier`
+ * (provenance tier: *which* of the source hierarchy's three tiers found
+ * this concept, §3). `aliases` and KC-type are not yet fields here: aliases
+ * only exist once passage-level reads are reconciled (`./read.ts`'s
+ * `ReadConcept.aliases`), and KC-type is a separate service-side
+ * classification output (`./knowledge-kind.ts`) with no production caller
+ * joining it onto a record yet — their absence is a pipeline gap, not
+ * license to invent a local stand-in field here. `discipline` has no field
+ * of its own on this record either; `courses` is the closest existing thing
+ * and the two have not been reconciled — flagged, not resolved, by this
+ * comment.
+ *
+ * **Explicitly excluded, and why each is excluded rather than merely
+ * unlisted:** difficulty, importance, examinability and troublesomeness are
+ * the four characteristics people reach for first. Examinability is an
+ * EDGE — the concept-to-assessment edge — because it is evidential: whether
+ * a concept is examinable is a fact about the assessments that touch it,
+ * not about the concept in isolation, so it belongs on that edge, never
+ * here. Difficulty, importance and troublesomeness are each EVIDENCE THAT
+ * MUST BE COMPUTED, never asserted: they are exactly the kind of summary
+ * judgement the graph and the review-log evidence exist to produce on
+ * demand, and stamping one onto the concept record turns a computation into
+ * a stale cache with no invalidation path. The tenet already held for
+ * instruments applies unchanged: finer typologies are unfalsifiable at n=1
+ * and reintroduce exactly the classification habit principle 12 excludes.
+ * A concept should be thin; the graph and the evidence carry the weight.
+ *
+ * A compile-time tripwire for exactly these four sits right below this
+ * interface (`ForbiddenConceptCharacteristicKey` /
+ * `_assertNoForbiddenConceptCharacteristics`) — the same `keyof` +
+ * template-literal-narrowing technique `../scheduler/surface.spec.ts` uses
+ * for R3, inlined here rather than in a sibling `.spec.ts` because this
+ * bead's ownership is this file alone
+ * (`owns: packages/core/src/concept/types.ts`). If any of the four is ever
+ * added as a field, `pnpm -r typecheck` fails on that assertion.
  */
 export interface ConceptRecord {
   /**
@@ -177,6 +218,38 @@ export interface ConceptRecord {
   // whose name asserts a problem that no longer exists is worse than no field,
   // because a later reader believes it.
 }
+
+/**
+ * The four characteristics `[D-070]` / `ol-s7wh` names and excludes — see
+ * `ConceptRecord`'s doc comment above for why each one is excluded (edge vs
+ * computed-evidence) rather than merely unlisted. Kept as a named type,
+ * rather than inlined into the assertion below, so a future reader who
+ * greps for one of these words lands on the prohibition, not just its
+ * enforcement.
+ */
+type ForbiddenConceptCharacteristicKey =
+  | 'difficulty'
+  | 'importance'
+  | 'examinability'
+  | 'troublesomeness';
+
+/** `T` collapses to `never` only when it already is one — used below to fail a build rather than silently accept a widened type. */
+type AssertNever<T extends never> = T;
+
+/**
+ * Compile-time tripwire for the standing prohibition above. If any of
+ * `ForbiddenConceptCharacteristicKey`'s four names is ever added as a field
+ * on `ConceptRecord`, `Extract<keyof ConceptRecord, ForbiddenConceptCharacteristicKey>`
+ * stops being `never`, `AssertNever` no longer accepts it, and this line
+ * fails `pnpm -r typecheck` — the same `keyof` + narrowing technique
+ * `../scheduler/surface.spec.ts` uses for R3's "no concept-shaped key"
+ * guarantee, run here in reverse (asserting a key is ABSENT rather than
+ * present) because this bead's ownership is `types.ts` alone, with no
+ * sibling `.spec.ts` to hold a runtime companion.
+ */
+type _assertNoForbiddenConceptCharacteristics = AssertNever<
+  Extract<keyof ConceptRecord, ForbiddenConceptCharacteristicKey>
+>;
 
 export interface ExtractConceptsOptions {
   /** Restrict `topic` scanning to this subtree. Defaults to the whole vault. */
