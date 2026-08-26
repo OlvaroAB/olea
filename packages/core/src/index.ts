@@ -594,6 +594,22 @@ export { isRecallTier, readVitality } from './mastery/vitality.js';
 // P4-T04): a local projection folded from its own append-only event log,
 // never a second source of truth — see misconception/types.ts's module doc.
 //
+// F2.12 confusion routing (`ol-p4t05`) lives alongside the store rather than
+// its own top-level module: it reads the same "route a repeated failure into
+// an explanation" territory this store already occupies, and its prompt-line
+// framing follows `./framing.js`'s M3 discipline directly — see
+// `confusion-routing.ts`'s own module doc for the full argument, and the
+// component register's open note that this bead currently has no dedicated
+// register row.
+export type {
+  ConfusionRoutingDecision,
+  ConfusionRoutingInput,
+} from './misconception/confusion-routing.js';
+export {
+  CONFUSION_ROUTING_LAPSE_THRESHOLD,
+  confusionRoutingPromptLine,
+  evaluateConfusionRouting,
+} from './misconception/confusion-routing.js';
 // `MisconceptionDigestEntry` is aliased below to avoid a name collision with
 // `./grading/gradingPipeline.js`'s identically-named type. The two are
 // deliberately different shapes for different layers, not duplicates: this

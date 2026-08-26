@@ -240,6 +240,30 @@ describe('the explain-back grading pipeline has a real production caller (ol-drf
   });
 });
 
+describe('F2.12 confusion routing has a real production entry point (ol-p4t05)', () => {
+  // `grading/wiring.ts`'s module doc names `ol-p4t05` as the intended next
+  // caller of `gradeExplainBackAttempt` above: routing a repeated card
+  // failure INTO the explain-back pipeline. This is the source-level proof
+  // that a real, composed decision function (`evaluateConfusionRouting`,
+  // delegating to `olea-core`'s pure F2.12 logic) now exists as a production
+  // method on the plugin class — reachable the moment the review rating flow
+  // (a concurrently-owned lane's files, `review/**`, not this bead's) wires
+  // the call site. See `grading/wiring.ts`'s own doc for why nothing
+  // currently invokes `evaluateConfusionRouting` in turn.
+
+  it('exposes a production entry point that evaluates confusion routing through the composed wiring', () => {
+    expect(main).toMatch(
+      /evaluateConfusionRouting\(input:\s*ConfusionRoutingInput\):\s*ConfusionRoutingDecision \{\s*return evaluateConfusionRouting\(input\);/,
+    );
+  });
+
+  it('imports the composed decision function from grading/wiring, not a bare re-export of olea-core', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildGradingWiring,\s*evaluateConfusionRouting,\s*type GradingWiring,\s*gradeExplainBackAttempt,\s*\}\s*from\s*'\.\/grading\/wiring\.js'/,
+    );
+  });
+});
+
 describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle)', () => {
   // Same defect shape as `JudgeCaller` above, one bead earlier in the same
   // ownership chain: `readConcepts` and `ConceptReaderPort` (`ol-2zfj.1`)

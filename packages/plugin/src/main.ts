@@ -3,6 +3,8 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
+  type ConfusionRoutingDecision,
+  type ConfusionRoutingInput,
   createFsrsScheduler,
   type DeviceCapability,
   type ExtractedUnit,
@@ -40,6 +42,7 @@ import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-re
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
   buildGradingWiring,
+  evaluateConfusionRouting,
   type GradingWiring,
   gradeExplainBackAttempt,
 } from './grading/wiring.js';
@@ -359,12 +362,10 @@ export default class OleaPlugin extends Plugin {
                 now: () => new Date(),
               }),
               now: () => new Date(),
-              // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends half was built and
-              // could not be wired here because this file belonged to another
-              // lane at the time — see `today/data-source.ts`'s own doc on
-              // `TodayTrendsSource`. Absent path means "not configured", which
-              // `createVaultTrendsSource` already reads as "no weights" rather
-              // than a guessed folder.
+              // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
+              // Today panel's insights. Absent path means "not configured",
+              // which `createVaultTrendsSource` already reads as "no weights"
+              // rather than a guessed folder.
               trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
             });
           },
@@ -756,6 +757,25 @@ export default class OleaPlugin extends Plugin {
   ): Promise<PendingExplainBackGrading | null> {
     if (this.grading === null) return null;
     return gradeExplainBackAttempt(this.grading, input);
+  }
+
+  /**
+   * `ol-p4t05`'s production entry point for F2.12 confusion routing: decides,
+   * from a just-recorded rating and the resulting lapse count, whether to
+   * surface the explain-back offer instead of just rescheduling harder — and
+   * what that offer says. Pure and synchronous — see `grading/wiring.ts`'s
+   * module doc for why this needs no Worker/F7.8 gating, unlike
+   * `gradeExplainBackAttempt` above.
+   *
+   * No caller of this method exists in this package yet, deliberately: the
+   * review rating flow that would call it after each graded review lives in
+   * `review/**`, a concurrently-owned lane's files this bead does not touch.
+   * This method exists so that lane has something real to call into — the
+   * same "genuinely reachable, trigger left to the bead whose job it is"
+   * shape `gradeExplainBackAttempt` documents above.
+   */
+  evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
+    return evaluateConfusionRouting(input);
   }
 
   /**

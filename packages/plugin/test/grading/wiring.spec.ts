@@ -13,7 +13,11 @@
  */
 import type { WorkerTaskRequest } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { buildGradingWiring, gradeExplainBackAttempt } from '../../src/grading/wiring.js';
+import {
+  buildGradingWiring,
+  evaluateConfusionRouting,
+  gradeExplainBackAttempt,
+} from '../../src/grading/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
 import type { WorkerConfig } from '../../src/worker/transport.js';
@@ -159,5 +163,19 @@ describe('gradeExplainBackAttempt', () => {
       gradeExplainBackAttempt(wiring, { ...baseInput, referenceAnswer: '   ' }),
     ).rejects.toThrow(/UnusableGradingInputError|referenceAnswer/i);
     expect(transport.calls).toHaveLength(0);
+  });
+});
+
+// ---- evaluateConfusionRouting (ol-p4t05, F2.12) --------------------------
+
+describe('evaluateConfusionRouting — the plugin-side composition delegates to olea-core', () => {
+  it('offers at the declared lapse threshold, needing no GradingWiring/Worker at all', () => {
+    const decision = evaluateConfusionRouting({ rating: 'again', lapses: 4 });
+    expect(decision.shouldOffer).toBe(true);
+  });
+
+  it('does not offer below the threshold or on a non-Again rating', () => {
+    expect(evaluateConfusionRouting({ rating: 'again', lapses: 3 }).shouldOffer).toBe(false);
+    expect(evaluateConfusionRouting({ rating: 'good', lapses: 99 }).shouldOffer).toBe(false);
   });
 });

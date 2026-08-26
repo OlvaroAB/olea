@@ -44,6 +44,27 @@
  *   pipeline. This module — and `OleaPlugin.gradeExplainBackAttempt` — is
  *   what makes that routing land somewhere real instead of a dead end.
  *
+ * ===========================================================================
+ * `ol-p4t05` UPDATE: THE ROUTING DECISION EXISTS NOW; THE REVIEW-SIDE CALLER
+ * STILL DOES NOT, AND FOR THE SAME REASON AS ABOVE
+ * ===========================================================================
+ * `evaluateConfusionRouting` below composes `olea-core`'s pure F2.12 decision
+ * (`../misconception/confusion-routing.js`, in that package) into this
+ * plugin's wiring layer, mirroring `gradeExplainBackAttempt` immediately
+ * below it. It needs no `GradingWiring`/Worker dependency — the decision is
+ * local and synchronous — but it lives here rather than as a bare re-export
+ * because this file is the one this bead's own module doc already commits to
+ * being "the destination," and because a caller wiring the two together (an
+ * offer, then a grade once she writes one) has one composition root to import
+ * from instead of two.
+ *
+ * Its own caller is still missing, on purpose, for the same reason
+ * `gradeExplainBackAttempt` had none until now: the review rating flow that
+ * would call this after each graded review lives in `packages/plugin/src/
+ * review/**`, a concurrently-owned lane's files this bead does not touch.
+ * `OleaPlugin.evaluateConfusionRouting` (main.ts) exists so that lane has
+ * something real to call into.
+ *
  * So "genuinely reachable" here means what it means for
  * `WorkerTaskTransport` in the register today ("wired, but its only
  * production caller today is the settings connection test... genuinely
@@ -53,7 +74,10 @@
  */
 
 import {
+  type ConfusionRoutingDecision,
+  type ConfusionRoutingInput,
   createWorkerJudgeCaller,
+  evaluateConfusionRouting as evaluateConfusionRoutingCore,
   type GradeExplainBackInput,
   gradeExplainBack,
   type JudgeCaller,
@@ -113,4 +137,18 @@ export async function gradeExplainBackAttempt(
 ): Promise<PendingExplainBackGrading | null> {
   if (wiring.judgeCaller === null) return null;
   return gradeExplainBack(input, wiring.judgeCaller);
+}
+
+/**
+ * `ol-p4t05`'s F2.12 decision, composed at this plugin's wiring layer.
+ * Delegates entirely to `olea-core`'s `evaluateConfusionRouting`
+ * (`../misconception/confusion-routing.js` in that package) — pure and
+ * synchronous, with no `GradingWiring`/Worker dependency, unlike
+ * `gradeExplainBackAttempt` above. It lives here, rather than as a bare
+ * re-export from `main.ts`, so this file stays the one composition root the
+ * bead that built `gradeExplainBackAttempt` already named as this bead's
+ * destination — see the module doc above.
+ */
+export function evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
+  return evaluateConfusionRoutingCore(input);
 }
