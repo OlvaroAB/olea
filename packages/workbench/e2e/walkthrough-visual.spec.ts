@@ -31,13 +31,15 @@
  * logic); what a rendered diff catches here is the same class of defect the
  * flat-surface goldens catch — geometry, real content, real citations.
  *
- * TALL STEPS: 7, 8, 10, 11 and 12 need more pane than walk mode's default
+ * TALL STEPS: 1, 7, 8, 10, 11 and 12 need more pane than walk mode's default
  * (~448px at the shared 1280x900 viewport) offers — `helpers.ts`'s
  * `WALK_STEP_VIEWPORTS` has the measured numbers and the argument for
  * per-step overrides here rather than a shared config change.
  * `pane-fit.spec.ts`'s walk-step loop applies the identical override before
  * measuring, so its pass is a real guarantee about what this file is about
- * to capture — steps 1-6 and 9 use no override and fit unaided.
+ * to capture — steps 2-6 and 9 use no override and fit unaided. (Step 1's
+ * override is `ol-7kyo`/WBF-5's — see `WALK_STEP_VIEWPORTS`'s own comment for
+ * why a bead about a WIDTH collapse also touches a HEIGHT override.)
  *
  * WHY STEP 1 GETS NO SYNTHETIC-ID CHECK BEYOND THIS FILE'S GENERAL ONE: step
  * 1 ('note') renders her fixture note's own markdown verbatim — there is no

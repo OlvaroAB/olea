@@ -190,7 +190,7 @@ export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; heigh
  * whose content fits comfortably as a flat surface needs a taller viewport to
  * fit again inside walk mode's smaller pane. Measured the same way as
  * `TALL_SURFACE_VIEWPORTS` (`pane-fit`'s `measure()`, at `playwright.config.ts`'s
- * 1280x900 default): steps 1-6 and 9 need no override (content fits the
+ * 1280x900 default): steps 2-6 and 9 need no override (content fits the
  * ~448px walk-mode pane unaided). Steps 7 and 8 mount the FIXTURE oracle
  * (`oracle-fixture`, D-041) over the real fixture vault rather than the
  * synthetic corpus the flat `oracle` surface uses, and need far more room
@@ -199,8 +199,27 @@ export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; heigh
  * and step 12 (trends, 1310px) match their flat-surface equivalents. Each
  * entry is `measured need + walk-mode overhead + margin`, rounded up and
  * verified by `pane-fit.spec.ts`'s own walk-step loop.
+ *
+ * Step 1 (ol-7kyo, WBF-5): the note view's own content needs ~474px and the
+ * default-viewport pane only offers ~448px — a PRE-EXISTING 26px overflow
+ * that predates this bead and is unrelated to its width-collapse defect.
+ * `host-frame.ts`'s `body` was `display: flex` with no `flex-direction`
+ * (defaulting to row) before WBF-5, which put `.wb-note`'s height on the
+ * CROSS axis; the default `align-items: stretch` there silently squashed it
+ * to the pane's exact height, so the true overflow painted past the box
+ * without `body.scrollHeight`/`documentElement.scrollHeight` ever reporting
+ * it — the same "scrolled view nothing can notice" failure mode this file's
+ * own module doc describes, just met on a walk step instead of a flat
+ * surface. WBF-5 put `body` on `flex-direction: column`, which puts height on
+ * the MAIN axis instead; a flex item's main size floors at its own
+ * (here, unshrinkable) content size, so the pre-existing overflow becomes a
+ * real, measured, newly-visible one instead of a silently-clipped one. This
+ * override is the honest fix `pane-fit.spec.ts`'s own failure message asks
+ * for ("the viewport override needs raising") — not a width fix, and not
+ * part of the same defect family as the session/trends collapse.
  */
 export const WALK_STEP_VIEWPORTS: Partial<Record<number, { width: number; height: number }>> = {
+  1: { width: 1280, height: 950 },
   7: { width: 1280, height: 3650 },
   8: { width: 1280, height: 3650 },
   10: { width: 1280, height: 1250 },

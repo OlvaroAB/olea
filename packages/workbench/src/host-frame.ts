@@ -79,9 +79,43 @@ import type { Realm } from './obsidian-shim/dom.js';
  */
 const HOST_DOCUMENT_CSS = `
 html, body { margin: 0; height: 100%; }
-body { display: flex; min-width: 0; background: var(--background-primary, #1e1e1e); color: var(--text-normal, #dadada); }
-body > .workspace-leaf-content { display: flex; flex: 1; min-width: 0; }
-body .view-content { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+/* ol-7kyo (WBF-5): \`flex-direction: column\`, not the flex default of row. \`body\`
+   sometimes holds TWO children at once — a \`.wb-illustrative-label\` (or the D-041
+   fixture-oracle one) rendered as a banner ABOVE the view, then \`.workspace-leaf-
+   content\` appended after it (\`main.ts\`'s \`mountSession\`/\`mountTrends\`/
+   \`mountFixtureOracle\`). Left at the flex default of row, those two became side-
+   by-side flex items competing for body's WIDTH: the label has no width of its
+   own (flex-basis: auto), so its hypothetical main size is its own content's
+   fit-content width, which for a wrapping text banner is close to the full row —
+   leaving \`.workspace-leaf-content\`'s \`flex: 1\` almost nothing to grow into. That
+   is the whole defect: \`.olea-session-root\` measuring 32px (its own left+right
+   padding, with 0px of content width inside), \`.olea-session-item\` at 0px, and
+   the reused \`TodayView\` 'Start review' button at 12px on the trends surface —
+   all downstream of the SAME \`.workspace-leaf-content\` collapse, and the same
+   family as \`.olea-gap-coverage\`'s collapse on the fixture-oracle steps (WBF-3).
+   Column stacks the banner above the view instead, and the view still gets the
+   full width via \`align-items: stretch\` (the default cross-axis behaviour of a
+   column flex container), which is what a screenshot banner over a product pane
+   should look like regardless. The \`margin: auto\` centering \`.wb-detached\`,
+   \`.wb-gap-card\` and \`.wb-note\` rely on when they are body's ONLY child is
+   unaffected: flexbox's auto-margin centering absorbs free space on both axes
+   independent of the container's main-axis direction.
+
+   SECOND-ORDER FIX THE COLUMN SWITCH REQUIRES: \`min-height: 0\`, alongside the
+   \`min-width: 0\` these two rules already carried. Height is now the MAIN axis
+   for \`.workspace-leaf-content\`/\`.view-content\` (it was the cross axis under
+   row), so their flex item's automatic minimum size — "auto" by default, which
+   resolves to the item's CONTENT-based min size when not overridden — now
+   applies to height instead of width. Without \`min-height: 0\` a tall review
+   card (measured on \`cloze-reveal\`/\`mcq-answered-*\`, the two states closest to
+   \`pane-fit.spec.ts\`'s height ceiling) refused to shrink below its own content
+   height, overflowed the pane by exactly that difference, and shifted every
+   pixel below the header down by it — the same "automatic minimum size" trap
+   \`min-width: 0\` already exists to defeat on the other axis, just met here for
+   the first time because nothing before this fix put height on a main axis. */
+body { display: flex; flex-direction: column; min-width: 0; background: var(--background-primary, #1e1e1e); color: var(--text-normal, #dadada); }
+body > .workspace-leaf-content { display: flex; flex: 1; min-width: 0; min-height: 0; }
+body .view-content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .wb-detached { color: var(--text-muted, #9e9e9e); margin: auto; padding: 24px; text-align: center; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 
 /* Walkthrough gap card (rule 2, ol-c48c): renders where a product screen
