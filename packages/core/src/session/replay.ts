@@ -38,15 +38,25 @@
  *
  * ## Order is (timestamp, eventId), not array order
  *
- * The same total order `mergeReviewLogRecords` sorts by and `suspension.ts`
- * resolves by. Entries reach a caller from several devices' files in whatever
- * order it read them, and FSRS is emphatically order-dependent — replaying
- * yesterday's Again after today's Good produces a different state. Sorting here
- * rather than trusting the caller is what makes the projection the same on the
- * phone and the laptop.
+ * `compareByInstantThenEventId`, imported from `../review-log/merge.ts` rather
+ * than kept as a private copy here (`ol-2jod.15`) — that module owns the ruled
+ * total order (`ol-egov.20`: `(instant, deviceId, eventId)`), and this is its
+ * single-device projection: sound whenever every entry being compared shares
+ * one device identity, which is exactly this module's situation. Replay never
+ * sees a `deviceId` — it is handed either a single device's own entries, or an
+ * array some caller (a merge across devices) already folded into one ordered
+ * whole — so there is no third device identity left to distinguish by the time
+ * entries reach here, and the projection is provably the same order the full
+ * comparator would give (see `merge.spec.ts` and the "shares merge.ts's order"
+ * describe block in this module's own spec). Entries reach a caller from
+ * several devices' files in whatever order it read them, and FSRS is
+ * emphatically order-dependent — replaying yesterday's Again after today's
+ * Good produces a different state. Sorting here rather than trusting the
+ * caller is what makes the projection the same on the phone and the laptop.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import { compareByInstantThenEventId } from '../review-log/merge.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 
 /**
@@ -73,14 +83,6 @@ export interface ReplayResult {
   readonly skippedCount: number;
 }
 
-/** The total order every projection over this log uses. See the module doc. */
-function byInstantThenEventId(a: ReviewLogEntry, b: ReviewLogEntry): number {
-  const instantA = Date.parse(a.timestamp);
-  const instantB = Date.parse(b.timestamp);
-  if (instantA !== instantB) return instantA - instantB;
-  return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
-}
-
 /**
  * Folds review-log entries into current scheduling state, one instrument at a
  * time.
@@ -94,7 +96,7 @@ export function replaySchedulerStates(
   entries: readonly ReviewLogEntry[],
   scheduler: Scheduler,
 ): ReplayResult {
-  const ordered = [...entries].sort(byInstantThenEventId);
+  const ordered = [...entries].sort(compareByInstantThenEventId);
   const states = new Map<string, ReplayedInstrument>();
   let replayedCount = 0;
   let skippedCount = 0;

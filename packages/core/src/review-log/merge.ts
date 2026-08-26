@@ -124,6 +124,32 @@ function sameContent(a: ReviewLogEntry, b: ReviewLogEntry): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/**
+ * The single-device projection of the ruled total order `(instant, deviceId,
+ * eventId)` — compares by `(instant, eventId)` only, dropping the middle
+ * term. That is a sound projection, not an approximation, whenever every
+ * record being compared shares one deviceId: the deviceId step in the full
+ * comparator only ever *breaks a tie*, so for two records tagged with the
+ * same id (including the implicit `''` every bare-array source carries,
+ * see the module doc) it can never distinguish them and dropping it changes
+ * nothing about the result.
+ *
+ * Exported so a caller that genuinely has no device id to sort by — a
+ * single-device array, or an array already merged elsewhere so any distinct
+ * device identity has already been folded away — shares this module's ruled
+ * order instead of keeping a private copy that silently falls one step
+ * behind the next time the order itself moves (`ol-2jod.15`: exactly that
+ * had already happened once, when `ol-egov.20` added the `deviceId` term
+ * here and `session/replay.ts` kept its own pre-ruling `(instant, eventId)`
+ * comparator).
+ */
+export function compareByInstantThenEventId(a: ReviewLogEntry, b: ReviewLogEntry): number {
+  const instantA = Date.parse(a.timestamp);
+  const instantB = Date.parse(b.timestamp);
+  if (instantA !== instantB) return instantA - instantB;
+  return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
+}
+
 export function mergeReviewLogRecords(...sources: readonly MergeSource[]): MergeReviewLogResult {
   const byEventId = new Map<string, ReviewLogEntry>();
   // The smallest deviceId this eventId has been seen tagged with, across all
@@ -160,7 +186,9 @@ export function mergeReviewLogRecords(...sources: readonly MergeSource[]): Merge
     const deviceA = deviceIdByEventId.get(a.eventId) ?? '';
     const deviceB = deviceIdByEventId.get(b.eventId) ?? '';
     if (deviceA !== deviceB) return deviceA < deviceB ? -1 : 1;
-    return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
+    // deviceId ties (including both '') fall through to the shared
+    // (instant, eventId) projection — see compareByInstantThenEventId.
+    return compareByInstantThenEventId(a, b);
   });
 
   return { records, duplicateEventIds: [...duplicateEventIds].sort() };

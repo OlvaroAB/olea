@@ -2,6 +2,7 @@
 // the log, never stored beside it" — @auto:core/session/replay.spec
 import type { InstrumentType, Rating, ReviewLogEntry, SelectionContextV4 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { compareByInstantThenEventId, mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { Scheduler } from '../scheduler/types.js';
 import { replayedStateOf, replaySchedulerStates } from './replay.js';
@@ -201,5 +202,59 @@ describe('order and purity', () => {
     expect(second.states.get('inst-1')?.state).toEqual(first.states.get('inst-1')?.state);
     // And it did not mutate what it was given.
     expect(entries.map((e) => e.eventId)).toEqual(['e1', 'e2', 'e3']);
+  });
+});
+
+describe("shares review-log/merge.ts's total order (ol-2jod.15)", () => {
+  // This module used to keep its own private `byInstantThenEventId`
+  // comparator, which fell one step behind when `ol-egov.20` added the
+  // `deviceId` term to merge.ts's ruled order. There is now exactly one
+  // comparator, imported here to prove it — not a second copy that merely
+  // happens to agree today.
+
+  it('replays in the exact array order mergeReviewLogRecords would sort the same entries into', () => {
+    // No device ids on either side: for records that all share one device
+    // identity (here, none at all), the ruled (instant, deviceId, eventId)
+    // order and its (instant, eventId) projection are the same order —
+    // proven directly, not just asserted, by feeding the identical entries
+    // through both functions and comparing the resulting sequences.
+    const unordered: readonly ReviewLogEntry[] = [
+      review('e3', '2026-08-20T09:00:00+00:00', 'inst-1', 'good'),
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-1', 'good'),
+      suspend('e2', '2026-08-14T09:00:00+00:00', 'inst-1'),
+    ];
+
+    const mergedOrder = mergeReviewLogRecords(unordered).records.map((r) => r.eventId);
+    const replayOrder = [...unordered].sort(compareByInstantThenEventId).map((e) => e.eventId);
+
+    expect(replayOrder).toEqual(mergedOrder);
+    expect(mergedOrder).toEqual(['e1', 'e2', 'e3']);
+  });
+
+  it('same-instant tiebreak by eventId agrees with merge.ts for untagged sources, including reversed input', () => {
+    const instant = '2026-08-10T09:00:00+00:00';
+    const bbb = review('bbb', instant, 'inst-1', 'again');
+    const aaa = review('aaa', instant, 'inst-1', 'easy');
+
+    const mergedOrder = mergeReviewLogRecords([bbb, aaa]).records.map((r) => r.eventId);
+    const replayOrder = [bbb, aaa].sort(compareByInstantThenEventId).map((e) => e.eventId);
+
+    expect(replayOrder).toEqual(mergedOrder);
+    expect(replayOrder).toEqual(['aaa', 'bbb']);
+  });
+
+  it('replaySchedulerStates itself uses this shared comparator: single-device input order never affects the result', () => {
+    // Belt-and-braces over the two tests above, which check the comparator in
+    // isolation: this checks the public function replay.ts actually exports.
+    const instant = '2026-08-10T09:00:00+00:00';
+    const first = replaySchedulerStates(
+      [review('bbb', instant, 'inst-1', 'again'), review('aaa', instant, 'inst-1', 'easy')],
+      scheduler(),
+    );
+    const second = replaySchedulerStates(
+      [review('aaa', instant, 'inst-1', 'easy'), review('bbb', instant, 'inst-1', 'again')],
+      scheduler(),
+    );
+    expect(first.states.get('inst-1')?.state).toEqual(second.states.get('inst-1')?.state);
   });
 });
