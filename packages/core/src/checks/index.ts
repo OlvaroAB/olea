@@ -32,6 +32,11 @@ export {
   type MasteryStageDistributionMeasured,
 } from './mastery-stage-health.js';
 export {
+  checkMaterialityTriggerHealth,
+  type MaterialityTriggerCase,
+  type MaterialityTriggerHealthMeasured,
+} from './materiality-trigger-health.js';
+export {
   checkMisconceptionMergeBoundary,
   type MisconceptionMergeBoundaryMeasured,
   type MisconceptionMergeCase,
@@ -42,7 +47,17 @@ export {
   type RankFactorAblationMeasured,
 } from './rank-factor-ablation.js';
 export {
+  checkRelationReaderFires,
+  type RelationReaderHealthMeasured,
+  type RelationReaderObservation,
+} from './relation-reader-health.js';
+export {
   checkReplayDeterminism,
   type ReplayDeterminismMeasured,
 } from './replay-determinism.js';
+export {
+  checkRhythmNeutralisedTwin,
+  type RhythmNeutralisedTwinMeasured,
+  type RhythmTwinCase,
+} from './rhythm-neutralised-twin.js';
 export type { CheckVerdict } from './types.js';
