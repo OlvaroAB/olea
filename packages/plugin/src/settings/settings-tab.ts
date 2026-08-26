@@ -30,8 +30,9 @@
 
 import type { App, Plugin } from 'obsidian';
 import { PluginSettingTab, Setting } from 'obsidian';
-import type { WorkerTaskTransport } from 'olea-core';
+import type { VaultSource, WorkerTaskTransport } from 'olea-core';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
+import { renderPrivacySection } from '../privacy/settings-section.js';
 import { renderUsageSection } from '../usage/settings-section.js';
 import type { ObsidianDataHost, PersistedWorkerConfig } from '../worker/config-store.js';
 import { ObsidianWorkerConfigStore } from '../worker/config-store.js';
@@ -70,6 +71,8 @@ export class OleaSettingTab extends PluginSettingTab {
     dataHost: ObsidianDataHost,
     /** Injected rather than imported directly, so this file never has to import `obsidian`'s `requestUrl` itself — `main.ts` supplies the real `createObsidianWorkerTransport`. */
     private readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport,
+    /** F7.4's export/delete section (`ol-p6t01`) — vault + device id, minted after the tab would otherwise be constructed, so `main.ts` supplies them here. */
+    private readonly privacy: { readonly vault: VaultSource; readonly deviceId: string },
   ) {
     super(app, plugin);
     this.configStore = new ObsidianWorkerConfigStore(dataHost);
@@ -104,6 +107,15 @@ export class OleaSettingTab extends PluginSettingTab {
     // F7.3 usage view (`ol-p3t09`) — informational in v0.9, the future quota
     // surface. Same async-render terms as the field renderers above.
     void renderUsageSection(containerEl, this.dataHost);
+
+    // F7.4 export + full delete (`ol-p6t01`) — a settings-pane section, the
+    // only clause-consistent surface (F7.7's command set has no entry for it).
+    renderPrivacySection(containerEl, {
+      app: this.app,
+      vault: this.privacy.vault,
+      dataHost: this.dataHost,
+      deviceId: this.privacy.deviceId,
+    });
   }
 
   private async renderStudyPlanFields(containerEl: HTMLElement): Promise<void> {

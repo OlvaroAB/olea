@@ -10,8 +10,8 @@ import {
   loadCachedStudyPlan,
   type PendingExplainBackGrading,
   type QueueSnapshot,
-  refreshStudyPlan,
   type RelationSet,
+  refreshStudyPlan,
   type Scheduler,
   type VaultSource,
 } from 'olea-core';
@@ -190,13 +190,6 @@ export default class OleaPlugin extends Plugin {
         void usageLogStore.record({ ...entry, recordedAt: new Date().toISOString() });
       });
 
-    // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
-    // narrow-port pattern `ObsidianQueueStore` and `ObsidianKeywordIndexStore`
-    // already use. `createObsidianWorkerTransport` is injected rather than
-    // built inside the tab so `settings-tab.ts` never has to import
-    // `obsidian`'s `requestUrl` itself (ol-k57j; see `worker/obsidian-transport.ts`).
-    this.addSettingTab(new OleaSettingTab(this.app, this, this, createRecordingTransport));
-
     const vault = new ObsidianSource(this.app);
     // The queue and the panel must agree about what "due" means, so both read
     // the same walk and the same replay. One `Scheduler`, built here, is what
@@ -208,6 +201,17 @@ export default class OleaPlugin extends Plugin {
     // first has to happen — `ensureDeviceId` is idempotent and writes only on
     // the run that mints.
     const deviceId = await ensureDeviceId(this);
+
+    // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
+    // narrow-port pattern `ObsidianQueueStore` and `ObsidianKeywordIndexStore`
+    // already use. `createObsidianWorkerTransport` is injected rather than
+    // built inside the tab so `settings-tab.ts` never has to import
+    // `obsidian`'s `requestUrl` itself (ol-k57j; see `worker/obsidian-transport.ts`).
+    // Constructed after `vault` and `deviceId` exist because F7.4's privacy
+    // section (`ol-p6t01`) needs both.
+    this.addSettingTab(
+      new OleaSettingTab(this.app, this, this, createRecordingTransport, { vault, deviceId }),
+    );
 
     // C5.5/A2.5 (P5-T07): the plan is a rebuildable cache (D-006), so the
     // synchronous half is just "read whatever is on disk" — fast, and awaited
