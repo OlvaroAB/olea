@@ -19,6 +19,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../extract/types.js';
+import { FolderSource } from '../vault/folder-source.js';
 import type {
   ListOptions,
   Unsubscribe,
@@ -71,6 +72,79 @@ class MemoryVault implements VaultSource {
   watch(_handler: (event: VaultEvent) => void): Unsubscribe {
     return () => undefined;
   }
+}
+
+/**
+ * `MemoryVault` for markdown, plus real binary content for a handful of paths
+ * — what the non-markdown gathering tests below need and `MemoryVault` alone
+ * cannot give them, since its `readBinary` just UTF-8-encodes a text file
+ * and would corrupt any byte above 0x7F.
+ */
+class BinaryVault implements VaultSource {
+  constructor(
+    private readonly files: Record<string, string>,
+    private readonly binaries: Record<string, Uint8Array>,
+  ) {}
+
+  list(options: ListOptions = {}): Promise<readonly VaultPath[]> {
+    const { under, extensions } = options;
+    return Promise.resolve(
+      [...Object.keys(this.files), ...Object.keys(this.binaries)]
+        .filter((p) => under === undefined || p === under || p.startsWith(`${under}/`))
+        .filter((p) => extensions === undefined || extensions.includes(p.split('.').pop() ?? ''))
+        .sort(),
+    );
+  }
+  read(path: VaultPath): Promise<string> {
+    const content = this.files[path];
+    if (content === undefined) return Promise.reject(new Error(`no such text file ${path}`));
+    return Promise.resolve(content);
+  }
+  readBinary(path: VaultPath): Promise<Uint8Array> {
+    const bytes = this.binaries[path];
+    if (bytes !== undefined) return Promise.resolve(bytes);
+    return this.read(path).then((t) => new TextEncoder().encode(t));
+  }
+  write(): Promise<void> {
+    return Promise.reject(new Error('read-only'));
+  }
+  exists(path: VaultPath): Promise<boolean> {
+    return Promise.resolve(path in this.files || path in this.binaries);
+  }
+  watch(_handler: (event: VaultEvent) => void): Unsubscribe {
+    return () => undefined;
+  }
+}
+
+// ---- a tiny hand-built one-page PDF, mirroring `extract/pdf.spec.ts`'s own
+// "hand-built objects/xref" style so the duplicate-filing and honest-degrade
+// tests below exercise the real extractor, not a mock of it.
+
+function pdfLatin1ToBytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+  return out;
+}
+
+/** A minimal, valid, one-page PDF whose page shows `text` via a single `Tj` operator. */
+function buildOnePagePdfBytes(text: string): Uint8Array {
+  const escaped = text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const content = `BT /F1 12 Tf 20 150 Td (${escaped}) Tj ET`;
+  const objects =
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+    '2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n' +
+    '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+    '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R ' +
+    '/Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n' +
+    `5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`;
+  return pdfLatin1ToBytes(
+    `%PDF-1.4\n${objects}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+  );
+}
+
+/** Bytes that are not a PDF at all — no `%PDF` header, no objects to find. `pdfExtractor` reports this honestly as `outcome: 'unreadable'` rather than throwing (`extract/pdf.ts`: "no objects at all -> 'unreadable'"). */
+function buildUnreadableBytes(): Uint8Array {
+  return pdfLatin1ToBytes('this is not a PDF, a PPTX or a DOCX — just bytes with nothing in them');
 }
 
 /** A reader that returns a fixed set and records every request it was handed. */
@@ -626,5 +700,155 @@ describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
     expect(ormathel?.anchor).toBeUndefined();
     expect(result.relations).toEqual([]);
     expect(result.relationsDropped).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ol-fkya / [EXT-9] — non-markdown material (F1.6, F3.1) reaches the reading
+// stage, with page-grain provenance, fair budget allocation across documents,
+// duplicate-filing collapsed by content hash, and no metadata surfaced.
+// ---------------------------------------------------------------------------
+
+describe('gatherPassages — non-markdown material (F1.6, F3.1, ol-fkya)', () => {
+  const vaultRoot = new URL('../../fixtures/vault', import.meta.url).pathname;
+  const vault = new FolderSource(vaultRoot);
+
+  it("an embedded PDF (F1.6) reaches the reading stage with page-grain provenance and the embedding note's course", async () => {
+    const passages = await gatherPassages(vault, { under: '01 Courses/GEOL204/WEEK 2' });
+
+    const deck = passages.find((p) => p.anchor.sourcePath.endsWith('Geol204-Week2-Slides.pdf'));
+    expect(deck).toBeDefined();
+    expect(deck?.text).toBe('GEOL204 Week 2 - Stratigraphic succession');
+    expect(deck?.anchor.location.page).toBe(1);
+    expect(deck?.anchor.location.charRange.end).toBeGreaterThan(0);
+    expect(deck?.anchor.embeddedIn?.notePath).toBe(
+      '01 Courses/GEOL204/WEEK 2/Lecture - Deposition & Bedform Stratification.md',
+    );
+    expect(deck?.course).toBe('GEOL204');
+  });
+
+  it('markdown passages from the same scope are unaffected by the embedded PDF sharing it', async () => {
+    const passages = await gatherPassages(vault, { under: '01 Courses/GEOL204/WEEK 2' });
+
+    const markdownHeading = passages.find(
+      (p) =>
+        p.anchor.sourcePath.endsWith('.md') &&
+        p.text.includes('Deposition & Bedform Stratification'),
+    );
+    expect(markdownHeading).toBeDefined();
+    // The embed line itself is still offered as an ordinary markdown block —
+    // gathering the deck's own content is additive, never a replacement.
+    expect(passages.some((p) => p.text.includes('![[Geol204-Week2-Slides.pdf]]'))).toBe(true);
+  });
+
+  it('a PDF dropped directly into the vault with no embedding note (F3.1) also reaches the reading stage', async () => {
+    const passages = await gatherPassages(vault, { under: '01 Courses/GEOL204/WEEK 3' });
+
+    const hybrid = passages.filter((p) => p.anchor.sourcePath.endsWith('hybrid-pages-node.pdf'));
+    const xref = passages.filter((p) => p.anchor.sourcePath.endsWith('xref-stream-only.pdf'));
+    expect(hybrid).toHaveLength(3);
+    expect(xref).toHaveLength(3);
+    // Standalone material carries no embedding note — there isn't one.
+    expect(hybrid.every((p) => p.anchor.embeddedIn === undefined)).toBe(true);
+    expect(hybrid.map((p) => p.anchor.location.page).sort()).toEqual([1, 2, 3]);
+    expect(hybrid.every((p) => p.course === 'GEOL204')).toBe(true);
+    expect(
+      hybrid.some(
+        (p) =>
+          p.text ===
+          'Hybrid page tree fixture, page one. Only the branch pages node is compressed.',
+      ),
+    ).toBe(true);
+  });
+
+  it('no PDF/PPTX/DOCX metadata field exists on a passage to surface (ol-pdfmeta)', async () => {
+    const passages = await gatherPassages(vault, { under: '01 Courses/GEOL204/WEEK 3' });
+    const deck = passages.find((p) => p.anchor.sourcePath.endsWith('.pdf'));
+    expect(deck).toBeDefined();
+    // `ConceptPassage` has exactly these three fields — there is no fourth
+    // place a document's Author/Title/Producer could ride along on.
+    expect(deck && Object.keys(deck).sort()).toEqual(['anchor', 'course', 'text']);
+  });
+});
+
+describe('gatherPassages — duplicate filing collapses by content hash (ol-n0yc)', () => {
+  it('the same bytes filed at two vault paths are extracted once, not twice', async () => {
+    const bytes = buildOnePagePdfBytes('Duplicate-filed deck content');
+    const vault = new BinaryVault(
+      {
+        '01 Courses/DUPX101/Lecture.md': '# Lecture\n\n![[deck.pdf]]\n',
+      },
+      {
+        // Embedded copy — resolves via `![[deck.pdf]]` above.
+        '01 Courses/DUPX101/deck.pdf': bytes,
+        // A second, standalone copy of the identical bytes at another path
+        // — the "filed twice" shape `ol-n0yc` names, discovered via the F3.1
+        // sweep rather than any embed.
+        '01 Courses/DUPX101/Archive/deck-copy.pdf': bytes,
+      },
+    );
+
+    const passages = await gatherPassages(vault);
+    const deckPassages = passages.filter((p) => p.text === 'Duplicate-filed deck content');
+
+    expect(deckPassages).toHaveLength(1);
+    // The lexicographically-first path is canonical.
+    expect(deckPassages[0]?.anchor.sourcePath).toBe('01 Courses/DUPX101/Archive/deck-copy.pdf');
+    expect(deckPassages[0]?.course).toBe('DUPX101');
+  });
+});
+
+describe('gatherPassages — unextractable material degrades cleanly (no invented text)', () => {
+  it('a file this stage cannot read contributes zero passages and does not throw, and other material is unaffected', async () => {
+    const vault = new BinaryVault(
+      {
+        '01 Courses/BADX101/Lecture.md': '# Lecture\n\n![[garbage.pdf]]\n\nOrdinary body text.\n',
+      },
+      { '01 Courses/BADX101/garbage.pdf': buildUnreadableBytes() },
+    );
+
+    const passages = await gatherPassages(vault);
+
+    expect(passages.some((p) => p.anchor.sourcePath.endsWith('garbage.pdf'))).toBe(false);
+    // Nothing invented for it, and the rest of the vault still reads fine.
+    expect(passages.some((p) => p.text.includes('Ordinary body text.'))).toBe(true);
+  });
+
+  it('readConcepts still runs to completion over a vault containing unreadable material', async () => {
+    const vault = new BinaryVault(
+      {
+        '01 Courses/BADX101/Lecture.md': '# Lecture\n\n![[garbage.pdf]]\n\nOrdinary body text.\n',
+      },
+      { '01 Courses/BADX101/garbage.pdf': buildUnreadableBytes() },
+    );
+    const reader = new ScriptedReader([]);
+
+    const result = await readConcepts(vault, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+  });
+});
+
+describe('readConcepts — budget allocation does not let one document starve the rest (DF-22, ol-fkya)', () => {
+  const vaultRoot = new URL('../../fixtures/vault', import.meta.url).pathname;
+  const vault = new FolderSource(vaultRoot);
+
+  it('a tight budget still reaches every document in scope, decks included', async () => {
+    const reader = new ScriptedReader([]);
+    // WEEK 3 holds four markdown notes and two standalone PDFs — six
+    // distinct documents. Positional truncation from the largest markdown
+    // note alone would exhaust a budget of 10 before either PDF, or three of
+    // the four notes, ever appeared in a request.
+    const result = await readConcepts(vault, reader, {
+      budget: { maxPassages: 10 },
+      under: '01 Courses/GEOL204/WEEK 3',
+    });
+
+    expect(result.truncatedByBudget).toBe(true);
+    expect(result.passagesRead).toBe(10);
+    const sourcesRepresented = result.coverage.filter((c) => c.passagesRead > 0);
+    expect(sourcesRepresented).toHaveLength(6);
+    const decksRepresented = sourcesRepresented.filter((c) => c.sourcePath.endsWith('.pdf'));
+    expect(decksRepresented).toHaveLength(2);
   });
 });
