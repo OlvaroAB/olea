@@ -9,12 +9,21 @@
  */
 
 import { TASK_IDS } from 'olea-contracts';
-import type { WorkerTaskRequest } from 'olea-core';
+import {
+  EmbeddingCacheEngine,
+  type EmbeddingCacheStore,
+  type EmbeddingProvider,
+  type EmbedResult,
+  type PersistedEmbeddingCache,
+  type PersistedKeywordIndex,
+  type WorkerTaskRequest,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildExplainWhyRequest,
   EXPLAIN_WHY_GENERATE_CONTRACT_VERSION,
   EXPLAIN_WHY_GENERATE_TASK_ID,
+  retrieveExplainWhySourceChunks,
   WorkerExplainWhyError,
   WorkerExplainWhyGenerator,
 } from '../../src/review/explainWhy.js';
@@ -306,6 +315,101 @@ describe('buildExplainWhyRequest — composing the request from a review instrum
     const request = buildExplainWhyRequest(qaFixture(), '', chunks);
     chunks.push('b');
     expect(request.sourceChunks).toEqual(['a']);
+  });
+});
+
+/** Always rejects — forces `retrieve()`'s "degrades to keyword-only" path (`engine.ts`'s own module doc), same posture `packages/workbench/src/explain/ground.ts`'s `NoEmbeddingProvider` already takes for this exact clause. */
+class RejectingEmbeddingProvider implements EmbeddingProvider {
+  embed(): Promise<EmbedResult> {
+    return Promise.reject(new Error('RejectingEmbeddingProvider: no embedding provider wired'));
+  }
+}
+
+class MemoryEmbeddingCacheStore implements EmbeddingCacheStore {
+  private saved: PersistedEmbeddingCache | null = null;
+  async load(): Promise<PersistedEmbeddingCache | null> {
+    return this.saved;
+  }
+  async save(cache: PersistedEmbeddingCache): Promise<void> {
+    this.saved = cache;
+  }
+}
+
+function indexWithBlocks(path: string, blocks: readonly string[]): PersistedKeywordIndex {
+  return {
+    version: 1,
+    documents: [
+      {
+        path,
+        courses: [],
+        contentHash: 'unused',
+        blocks: blocks.map((text, blockIndex) => ({
+          blockIndex,
+          kind: 'paragraph' as const,
+          text,
+        })),
+      },
+    ],
+  };
+}
+
+async function fakeRetrieveDeps(keywordIndex: PersistedKeywordIndex) {
+  const embeddingProvider = new RejectingEmbeddingProvider();
+  const embeddingCache = await EmbeddingCacheEngine.create({
+    store: new MemoryEmbeddingCacheStore(),
+    provider: embeddingProvider,
+    model: 'fake-model-v1',
+  });
+  return { keywordIndex, embeddingCache, embeddingProvider };
+}
+
+describe('retrieveExplainWhySourceChunks — F2.7 grounding half (ol-sn1q)', () => {
+  it("a Q&A instrument's own question text is what is searched, and real chunk text comes back", async () => {
+    const instrument = qaFixture();
+    const keywordIndex = indexWithBlocks('course/note.md', [instrument.question]);
+
+    const chunks = await retrieveExplainWhySourceChunks(
+      { retrieve: await fakeRetrieveDeps(keywordIndex) },
+      instrument,
+    );
+
+    expect(chunks).toEqual([instrument.question]);
+  });
+
+  it("an MCQ instrument's stem is searched, not the correct answer", async () => {
+    const instrument = mcqFixture();
+    const keywordIndex = indexWithBlocks('course/note.md', [instrument.stem]);
+
+    const chunks = await retrieveExplainWhySourceChunks(
+      { retrieve: await fakeRetrieveDeps(keywordIndex) },
+      instrument,
+    );
+
+    expect(chunks).toEqual([instrument.stem]);
+  });
+
+  it('an empty index refuses honestly downstream: [], never a thrown error', async () => {
+    const keywordIndex = indexWithBlocks('course/empty.md', []);
+
+    const chunks = await retrieveExplainWhySourceChunks(
+      { retrieve: await fakeRetrieveDeps(keywordIndex) },
+      qaFixture(),
+    );
+
+    expect(chunks).toEqual([]);
+  });
+
+  it('unrelated material in the index does not come back as if it were grounding', async () => {
+    const keywordIndex = indexWithBlocks('course/unrelated.md', [
+      'A completely unrelated sentence about something else entirely.',
+    ]);
+
+    const chunks = await retrieveExplainWhySourceChunks(
+      { retrieve: await fakeRetrieveDeps(keywordIndex) },
+      qaFixture(),
+    );
+
+    expect(chunks).toEqual([]);
   });
 });
 

@@ -39,14 +39,19 @@
  *   lives (`ol-tka5`) and what the accept step records (`ol-548w`) — are
  *   both still open. Producing a real grading with nowhere honest to send it
  *   would be worse than not producing one yet.
- * - The intended next caller is `ol-p4t05` (confusion routing, F2.12):
- *   its whole premise is routing a repeated card failure *into* this
- *   pipeline. This module — and `OleaPlugin.gradeExplainBackAttempt` — is
- *   what makes that routing land somewhere real instead of a dead end.
+ * - The candidate next caller was `ol-p4t05`/`ol-h2bx` (confusion routing,
+ *   F2.12) — routing a repeated card failure *into* this pipeline once she
+ *   has written something to grade. **That did not happen, and the section
+ *   below this one records why**: `ol-h2bx` routes the accepted offer into
+ *   F2.7's on-demand explain-why channel instead, precisely because the two
+ *   Class C questions in the bullet above are still open. This module's
+ *   "no caller yet" therefore remains true even though confusion routing
+ *   itself is now fully wired.
  *
  * ===========================================================================
- * `ol-p4t05` UPDATE: THE ROUTING DECISION EXISTS NOW; THE REVIEW-SIDE CALLER
- * STILL DOES NOT, AND FOR THE SAME REASON AS ABOVE
+ * `ol-p4t05` UPDATE: THE ROUTING DECISION EXISTS. `ol-h2bx` UPDATE: THE
+ * REVIEW-SIDE CALLER NOW EXISTS TOO — AND ROUTES SOMEWHERE DIFFERENT FROM
+ * WHAT THIS DOC ORIGINALLY EXPECTED
  * ===========================================================================
  * `evaluateConfusionRouting` below composes `olea-core`'s pure F2.12 decision
  * (`../misconception/confusion-routing.js`, in that package) into this
@@ -54,23 +59,22 @@
  * below it. It needs no `GradingWiring`/Worker dependency — the decision is
  * local and synchronous — but it lives here rather than as a bare re-export
  * because this file is the one this bead's own module doc already commits to
- * being "the destination," and because a caller wiring the two together (an
- * offer, then a grade once she writes one) has one composition root to import
- * from instead of two.
+ * being "the destination."
  *
- * Its own caller is still missing, on purpose, for the same reason
- * `gradeExplainBackAttempt` had none until now: the review rating flow that
- * would call this after each graded review lives in `packages/plugin/src/
- * review/**`, a concurrently-owned lane's files this bead does not touch.
- * `OleaPlugin.evaluateConfusionRouting` (main.ts) exists so that lane has
- * something real to call into.
- *
- * So "genuinely reachable" here means what it means for
- * `WorkerTaskTransport` in the register today ("wired, but its only
- * production caller today is the settings connection test... genuinely
- * wired, not yet exercised for real work") — composed against real
- * infrastructure, not a fake, and callable by production code, with the
- * actual trigger left to the bead whose job it is.
+ * `ol-h2bx` (`review/session.ts`'s `logAndAdvance`, composed at
+ * `OleaPlugin.evaluateConfusionRouting` → `main.ts`'s `composeReviewSession`)
+ * is that caller now. **It does NOT wire the two together the way this doc's
+ * first version expected** — "an offer, then a grade once she writes one."
+ * There is still no explain-back destination in the review UI where she
+ * writes anything (see this doc's own "WHY THE MODEL/UI QUESTION IS
+ * DELIBERATELY OUT OF SCOPE HERE" section above, unchanged), and
+ * `ol-tka5`/`ol-548w` are still open Class C questions. So accepting F2.12's
+ * offer routes into F2.7's on-demand explain-why channel instead
+ * (`ExplainWhyPort`/`requestExplainWhy`, `review/explainWhy.ts` /
+ * `review/session.ts`) — the same grounded explanation the on-demand tap
+ * shows, not a Feynman-mode input. `gradeExplainBackAttempt` immediately
+ * below still has no caller anywhere in this package, and that gap is not
+ * closed by this update.
  */
 
 import {

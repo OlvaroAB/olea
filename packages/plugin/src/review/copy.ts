@@ -163,6 +163,26 @@ export const REVIEW_UNAVAILABLE_BODY =
   'So there is no queue to show. This is not a claim that nothing is due — try again in a moment.';
 
 /**
+ * F2.7's honest "cannot ground" refusal (`ol-sn1q`), shown by both the
+ * on-demand explain-why panel and F2.12's "explain it back" offer — the two
+ * share one on-demand channel (`grading/wiring.ts`'s module doc), so they
+ * share this sentence rather than each inventing its own. A claim about
+ * whether her notes support an explanation belongs here, not as a `view.ts`
+ * literal — the same line `REVIEW_UNAVAILABLE_BODY` draws for the vault-read
+ * failure above.
+ */
+export const EXPLAIN_WHY_REFUSAL =
+  "Olea can't ground an explanation for this from your notes right now.";
+
+/**
+ * F7.8's grey-out, worded for this one on-demand channel: shown when she
+ * taps "Explain it back" (F2.12) but no AI Worker is configured, so there is
+ * nothing to route the accepted offer into.
+ */
+export const EXPLAIN_WHY_UNAVAILABLE =
+  "Explain it back isn't available yet — no AI Worker is configured.";
+
+/**
  * What a cloze front shows where the deleted text will appear.
  *
  * Naming the call `ol-09kf` left open: this is **copy, not layout.** The

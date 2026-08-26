@@ -571,6 +571,50 @@ button.olea-review-mcq-option:hover {
   font: 400 13px / 1 var(--olea-host-ui-font);
 }
 
+/* ---- F2.7 on-demand "explain why" panel (ol-sn1q) ---- */
+
+.olea-review-explain-why {
+  width: 100%;
+  text-align: left;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin-top: 18px;
+}
+
+.olea-review-explain-why-text {
+  font: 400 15px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  margin: 0;
+}
+
+/* ---- F2.12 confusion-routing offer (ol-h2bx) ---- */
+
+.olea-review-confusion-banner {
+  width: 100%;
+  text-align: left;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+}
+
+.olea-review-confusion-prompt {
+  font: 400 15px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  margin: 0 0 12px;
+}
+
+.olea-review-confusion-message {
+  /* --olea-host-muted, not -faint: same ol-nrrm floor as every other
+     secondary-text role in this file. */
+  font: 400 14px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  margin: 0;
+}
+
 /* ---- Mobile (Obsidian mobile / F2.13): thumb-sized targets, no key hints ---- */
 
 @media (max-width: 480px) {

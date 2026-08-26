@@ -15,7 +15,12 @@
  */
 
 import type { Rating } from 'olea-contracts';
-import type { McqRating, Scheduler } from 'olea-core';
+import type {
+  ConfusionRoutingDecision,
+  ConfusionRoutingInput,
+  McqRating,
+  Scheduler,
+} from 'olea-core';
 import { mapMcqRating } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import {
@@ -99,6 +104,27 @@ export interface ReviewSessionDeps {
    * retrieval is NOT its job, and is not done here — see the lane report).
    */
   readonly explainWhyPort?: ExplainWhyPort;
+  /**
+   * F2.12's confusion-routing decision (`ol-h2bx`), composed at
+   * `OleaPlugin.evaluateConfusionRouting` (`grading/wiring.ts`'s pure
+   * delegate to `olea-core`'s `evaluateConfusionRouting`). Optional and
+   * absent by default — not because this decision is AI-gated (it is pure
+   * and synchronous, unlike `explainWhyPort`), but so every existing
+   * `ReviewSessionDeps` fixture stays valid without this bead touching it.
+   * An absent evaluator reads as "never offer," the same "simply cannot
+   * offer it" posture `explainWhyPort` above already has.
+   */
+  readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
+}
+
+/**
+ * F2.12's pending offer, as `ReviewSession` holds it: which instrument it is
+ * about (the one that was JUST rated, not necessarily the one the view is
+ * currently showing) and the offer's own prompt sentence.
+ */
+export interface PendingConfusionRoutingOffer {
+  readonly instrument: ReviewInstrument;
+  readonly promptText: string;
 }
 
 type InternalPhase =
@@ -124,6 +150,8 @@ export class ReviewSession {
   private reviewedCount = 0;
   private readonly courseCodesSeen = new Set<string>();
   private dueSoonCount = 0;
+  /** F2.12 (`ol-h2bx`) — set by `logAndAdvance` after every graded review, cleared by `acceptConfusionRoutingOffer`. */
+  private pendingConfusionOffer: PendingConfusionRoutingOffer | null = null;
 
   constructor(private readonly deps: ReviewSessionDeps) {
     this.items = [...deps.queue];
@@ -336,6 +364,50 @@ export class ReviewSession {
     return this.deps.explainWhyPort.explainWhy(request);
   }
 
+  /**
+   * F2.12's offer for the caller to render, or `null` when none is pending
+   * (`ol-h2bx`). `view.ts` reads this after every render rather than the
+   * offer riding inside `ReviewViewModel`'s phase union, because the offer
+   * is about the instrument that was JUST rated — not necessarily the one
+   * `getViewModel()` is currently showing.
+   */
+  getConfusionRoutingOffer(): PendingConfusionRoutingOffer | null {
+    return this.pendingConfusionOffer;
+  }
+
+  /**
+   * F2.12's "one available action" (`ol-h2bx`): routes the just-offered
+   * instrument through the SAME on-demand channel F2.7 already built
+   * (`explainWhyPort`/`requestExplainWhy` above) — never a new explain-back
+   * destination. Building one is a Class C move this bead does not make
+   * (`grading/wiring.ts`'s module doc: `ol-tka5`/`ol-548w` are both still
+   * open Class C questions), so "explain it back" here means the same
+   * grounded, on-demand explanation F2.7 shows for the failed item, not a
+   * Feynman-mode input she writes into.
+   *
+   * `sourceChunks` is the caller's already-retrieved grounding context for
+   * the OFFERED instrument — same contract `requestExplainWhy` already has,
+   * and deliberately not retrieved by this method either (see that
+   * method's doc).
+   *
+   * Clears the pending offer unconditionally once there was one to clear —
+   * "one available action," taken, whatever the port then does with it.
+   * Returns `null` without touching anything when there is nothing pending;
+   * also returns `null` (offer still cleared) when no `explainWhyPort` is
+   * wired (F7.8) — nothing to route into is not a reason to leave a
+   * resolved offer looking unresolved.
+   */
+  async acceptConfusionRoutingOffer(
+    sourceChunks: readonly string[],
+  ): Promise<ExplainWhyOutcome | null> {
+    const offer = this.pendingConfusionOffer;
+    if (offer === null) return null;
+    this.pendingConfusionOffer = null;
+    if (this.deps.explainWhyPort === undefined) return null;
+    const request = buildExplainWhyRequest(offer.instrument, '', sourceChunks);
+    return this.deps.explainWhyPort.explainWhy(request);
+  }
+
   async skipMissingNote(): Promise<void> {
     if (this.phase !== 'note-missing') return;
     this.index += 1;
@@ -486,16 +558,30 @@ export class ReviewSession {
       selectionContext: item.selectionContext,
     });
 
-    const { intervalDays } = previewSingleInterval(
-      this.deps.scheduler,
-      item.instrument.instrumentId,
-      item.priorState,
+    // Called directly (rather than through `previewSingleInterval`) because
+    // F2.12 needs the resulting `SchedulerState.lapses` this same call
+    // produces — one `Scheduler.schedule` call, never two, for one rating.
+    const scheduled = this.deps.scheduler.schedule({
+      instrumentId: item.instrument.instrumentId,
+      state: item.priorState,
       rating,
       now,
-    );
+    });
     this.reviewedCount += 1;
     this.courseCodesSeen.add(item.instrument.courseCode);
-    if (intervalDays <= 1) this.dueSoonCount += 1;
+    if (scheduled.intervalDays <= 1) this.dueSoonCount += 1;
+
+    // F2.12 (`ol-h2bx`): evaluated after every graded review, for the
+    // instrument that was just rated. An absent evaluator (no port wired)
+    // never offers, matching every other optional port's "simply cannot
+    // offer it" posture.
+    const decision = this.deps.evaluateConfusionRouting?.({
+      rating,
+      lapses: scheduled.state.lapses,
+    });
+    this.pendingConfusionOffer = decision?.shouldOffer
+      ? { instrument: item.instrument, promptText: decision.promptText }
+      : null;
 
     this.index += 1;
     await this.presentCurrent();

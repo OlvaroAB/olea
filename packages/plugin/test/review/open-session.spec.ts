@@ -621,3 +621,71 @@ describe('nextDueLabel — the empty screen names the next item, in whole local 
     expect(nextDueLabel(NOW, new Date('2026-08-16T09:00:00-04:00'))).toBe('in 6 days');
   });
 });
+
+describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the composed session (ol-sn1q, ol-h2bx)', () => {
+  it('an omitted explainWhyPort composes a session that cannot offer it (F7.8 grey-out)', async () => {
+    const vault = studyVault();
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+
+    expect(await outcome.session.requestExplainWhy('', [])).toBeNull();
+  });
+
+  it('a wired explainWhyPort is genuinely reachable through the composed session', async () => {
+    const vault = studyVault();
+    const explainWhyPort = {
+      explainWhy: async () => ({ refused: false as const, text: 'Because...', citedChunkIndex: 1 }),
+    };
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: { ...ports(vault).ports, explainWhyPort },
+      random: fixedRandom,
+      probeDays: 30,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+
+    expect(await outcome.session.requestExplainWhy('', [])).toEqual({
+      refused: false,
+      text: 'Because...',
+      citedChunkIndex: 1,
+    });
+  });
+
+  it('a wired evaluateConfusionRouting is genuinely reachable through the composed session', async () => {
+    const vault = studyVault();
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: {
+        ...ports(vault).ports,
+        evaluateConfusionRouting: () => ({
+          shouldOffer: true,
+          lapses: 4,
+          promptText: 'offer text',
+        }),
+      },
+      random: fixedRandom,
+      probeDays: 30,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+    await advancePastCurrentItem(outcome.session);
+
+    expect(outcome.session.getConfusionRoutingOffer()?.promptText).toBe('offer text');
+  });
+
+  it('an omitted evaluateConfusionRouting composes a session that never offers', async () => {
+    const vault = studyVault();
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+    await advancePastCurrentItem(outcome.session);
+
+    expect(outcome.session.getConfusionRoutingOffer()).toBeNull();
+  });
+});

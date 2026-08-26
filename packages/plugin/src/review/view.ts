@@ -70,6 +70,8 @@ import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import { ReviewActivityNotifier } from './activity.js';
 import {
   actionKeycap,
+  EXPLAIN_WHY_REFUSAL,
+  EXPLAIN_WHY_UNAVAILABLE,
   mcqFeedbackSentence,
   mcqOptionKeycap,
   questionText,
@@ -80,10 +82,53 @@ import {
   sessionCompleteSentence,
   verifiedKeycap,
 } from './copy.js';
+import type { ExplainWhyOutcome } from './explainWhy.js';
 import type { RatingPreview } from './interval.js';
 import { hintsFor, type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
-import type { ReviewSession, ReviewViewModel, SessionCompleteSummary } from './session.js';
+import type {
+  PendingConfusionRoutingOffer,
+  ReviewSession,
+  ReviewViewModel,
+  SessionCompleteSummary,
+} from './session.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from './types.js';
+
+/**
+ * F2.7's on-demand panel state, keyed by which instrument the last request
+ * was about — so a re-render for a DIFFERENT current item never shows a
+ * stale result (`ol-sn1q`).
+ */
+type ExplainWhyPanelState =
+  | { readonly instrumentId: string; readonly status: 'loading' }
+  | { readonly instrumentId: string; readonly status: 'done'; readonly outcome: ExplainWhyOutcome };
+
+/**
+ * F2.12's offer banner state (`ol-h2bx`). `presentedWithInstrumentId` is the
+ * instrument that was current the moment the offer first appeared — the
+ * banner clears itself once she moves past THAT item (see
+ * `syncConfusionRoutingOffer`'s doc), which is what keeps it from lingering
+ * indefinitely without an explicit "decline" control (F2.12's own "one
+ * available action" framing).
+ */
+interface ConfusionBannerState {
+  readonly instrument: ReviewInstrument;
+  readonly promptText: string;
+  readonly presentedWithInstrumentId: string | null;
+  readonly status: 'idle' | 'loading' | 'unavailable' | 'done';
+  readonly outcome?: ExplainWhyOutcome;
+}
+
+/**
+ * F2.7's grounding half (`ol-sn1q`): retrieves `sourceChunks` for an
+ * instrument before either the on-demand tap or F2.12's "explain it back"
+ * calls into `ReviewSession`. Injected so `view.ts` never imports
+ * `olea-core`'s retrieval machinery directly — `main.ts` composes it from
+ * the real keyword index and embedding cache, same as every other
+ * Obsidian-only composition in this package.
+ */
+export type RetrieveExplainWhySourceChunks = (
+  instrument: ReviewInstrument,
+) => Promise<readonly string[]>;
 
 export const VIEW_TYPE_OLEA_REVIEW = 'olea-review';
 
@@ -109,8 +154,11 @@ export type ReviewSessionProvider = () => ReviewSession | null | Promise<ReviewS
 export class ReviewView extends ItemView {
   private readonly openSession: ReviewSessionProvider;
   private readonly activity: ReviewActivityNotifier;
+  private readonly retrieveSourceChunks: RetrieveExplainWhySourceChunks | undefined;
   private session: ReviewSession | null = null;
   private started = false;
+  private explainWhyPanel: ExplainWhyPanelState | null = null;
+  private confusionBanner: ConfusionBannerState | null = null;
 
   /**
    * `onReviewActivity` fires whenever her due counts may have moved, which is
@@ -137,10 +185,12 @@ export class ReviewView extends ItemView {
     leaf: WorkspaceLeaf,
     openSession: ReviewSessionProvider,
     onReviewActivity?: () => void,
+    retrieveSourceChunks?: RetrieveExplainWhySourceChunks,
   ) {
     super(leaf);
     this.openSession = openSession;
     this.activity = new ReviewActivityNotifier(onReviewActivity);
+    this.retrieveSourceChunks = retrieveSourceChunks;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -330,6 +380,8 @@ export class ReviewView extends ItemView {
       if (hadFocus) this.focusableControls()[0]?.focus();
       return;
     }
+    this.syncConfusionRoutingOffer(this.session);
+    this.renderConfusionRoutingBanner();
     const vm = this.session.getViewModel();
     // Every path that changes the queue ends in a `render()`, so this is the one
     // place that sees every phase transition. The notifier fires only on the
@@ -369,10 +421,17 @@ export class ReviewView extends ItemView {
         break;
       }
       case 'mcq-answered':
-        this.renderHeader(vm.progress, this.currentScreen(vm), vm.instrument);
+        this.renderHeader(
+          vm.progress,
+          this.currentScreen(vm),
+          vm.instrument,
+          vm.instrument.options[vm.selectedIndex]?.label ?? '',
+        );
         this.renderMcqAnswered(vm.instrument, vm.selectedIndex, vm.wasUnsure, vm.intervalLabel);
         break;
     }
+
+    this.renderExplainWhyPanelIfPending();
 
     if (hadFocus) {
       const controls = this.focusableControls();
@@ -405,6 +464,7 @@ export class ReviewView extends ItemView {
     progress: { readonly position: number; readonly total: number },
     screen: ReviewScreen,
     instrument: ReviewInstrument | null,
+    studentAnswerForExplain = '',
   ): void {
     const header = this.contentEl.createDiv({ cls: 'olea-review-header' });
     header.createSpan({
@@ -415,6 +475,20 @@ export class ReviewView extends ItemView {
       header.createSpan({ cls: 'olea-review-new-badge', text: 'New' });
     }
     header.createDiv({ cls: 'olea-review-header-spacer' });
+
+    // F2.7 (`ol-sn1q`): available on every screen carrying a current
+    // instrument, never gated on phase or on whether her answer was
+    // actually wrong (F2.20's "available at every stage" — `session.ts`'s
+    // `requestExplainWhy` already holds this discipline; this button just
+    // reaches it from every screen rather than a chosen few).
+    if (instrument !== null) {
+      this.actionButton(
+        header,
+        'Explain why',
+        null,
+        () => void this.handleExplainWhy(instrument, studentAnswerForExplain),
+      );
+    }
 
     if (instrument !== null && instrument.draftId !== null) {
       this.actionButton(
@@ -482,6 +556,154 @@ export class ReviewView extends ItemView {
       item.createSpan({ cls: 'olea-review-keycap', text: hint.key });
       item.createSpan({ text: hint.label });
     }
+  }
+
+  // ---- F2.7 on-demand "explain why" (`ol-sn1q`) ----
+
+  /**
+   * Retrieves grounding, then asks the session (`requestExplainWhy` never
+   * blocks — see that method's own doc). Never throws into the click
+   * handler: a rejected port call is the honest "something went wrong"
+   * case, and this class has nothing better to do with it than leave the
+   * panel showing its last state, so nothing here swallows it silently
+   * either — `requestExplainWhy`'s own tests already cover "a port that
+   * throws does not corrupt session state."
+   */
+  private async handleExplainWhy(
+    instrument: ReviewInstrument,
+    studentAnswer: string,
+  ): Promise<void> {
+    const session = this.session;
+    if (session === null) return;
+    this.explainWhyPanel = { instrumentId: instrument.instrumentId, status: 'loading' };
+    this.render();
+    const chunks = this.retrieveSourceChunks ? await this.retrieveSourceChunks(instrument) : [];
+    const outcome = await session.requestExplainWhy(studentAnswer, chunks);
+    this.explainWhyPanel =
+      outcome === null ? null : { instrumentId: instrument.instrumentId, status: 'done', outcome };
+    this.render();
+  }
+
+  /**
+   * Renders below whatever the current phase drew, only when the panel's
+   * state is about the instrument actually on screen right now — a re-render
+   * after advancing to a new item (rating, `requestExplainWhy`'s own "never
+   * blocks" guarantee) must not show a stale explanation for the PREVIOUS
+   * one.
+   */
+  private renderExplainWhyPanelIfPending(): void {
+    const state = this.explainWhyPanel;
+    const currentInstrumentId = this.session?.currentItem?.instrument.instrumentId ?? null;
+    if (state === null || state.instrumentId !== currentInstrumentId) return;
+
+    const panel = this.contentEl.createDiv({ cls: 'olea-review-explain-why' });
+    if (state.status === 'loading') {
+      panel.createEl('p', { cls: 'olea-review-explain-why-text', text: 'Asking Olea…' });
+      return;
+    }
+    panel.createEl('p', {
+      cls: 'olea-review-explain-why-text',
+      text: state.outcome.refused ? EXPLAIN_WHY_REFUSAL : state.outcome.text,
+    });
+  }
+
+  // ---- F2.12 confusion routing (`ol-h2bx`) ----
+
+  /**
+   * Picks up a fresh offer (`session.getConfusionRoutingOffer()`) and clears
+   * a stale one. A fresh offer is one about a DIFFERENT instrument than
+   * whatever `this.confusionBanner` currently holds — the session clears its
+   * own copy the instant `acceptConfusionRoutingOffer` is called, so this
+   * class keeps its own copy going to hold the result on screen after that.
+   *
+   * **Why the banner clears itself without an explicit "decline" control.**
+   * F2.12's own framing is "one available action" (vocabulary registry V3) —
+   * a second, explicit dismiss button would be a second action. Instead, the
+   * banner is scoped to the ONE item presented alongside it
+   * (`presentedWithInstrumentId`): once she moves past that item — rating it
+   * and advancing to the next — the banner clears on its own, whether or not
+   * she ever touched it. That is what "declining changes nothing and does
+   * not nag" means operationally: nothing to undo, and nothing that lingers.
+   */
+  private syncConfusionRoutingOffer(session: ReviewSession): void {
+    const offer: PendingConfusionRoutingOffer | null = session.getConfusionRoutingOffer();
+    const currentInstrumentId = session.currentItem?.instrument.instrumentId ?? null;
+
+    if (
+      offer !== null &&
+      offer.instrument.instrumentId !== this.confusionBanner?.instrument.instrumentId
+    ) {
+      this.confusionBanner = {
+        instrument: offer.instrument,
+        promptText: offer.promptText,
+        presentedWithInstrumentId: currentInstrumentId,
+        status: 'idle',
+      };
+      return;
+    }
+    if (
+      this.confusionBanner !== null &&
+      this.confusionBanner.presentedWithInstrumentId !== currentInstrumentId
+    ) {
+      this.confusionBanner = null;
+    }
+  }
+
+  private renderConfusionRoutingBanner(): void {
+    const state = this.confusionBanner;
+    if (state === null) return;
+
+    const banner = this.contentEl.createDiv({ cls: 'olea-review-confusion-banner' });
+    banner.createEl('p', { cls: 'olea-review-confusion-prompt', text: state.promptText });
+
+    if (state.status === 'idle') {
+      const btn = banner.createEl('button', {
+        cls: 'olea-review-primary-action',
+        attr: { [FOCUSABLE_ATTR]: 'true' },
+      });
+      btn.createSpan({ text: 'Explain it back' });
+      this.registerDomEvent(btn, 'click', () => void this.handleAcceptConfusionOffer());
+      return;
+    }
+    if (state.status === 'loading') {
+      banner.createEl('p', { cls: 'olea-review-confusion-message', text: 'Asking Olea…' });
+      return;
+    }
+    if (state.status === 'unavailable') {
+      banner.createEl('p', { cls: 'olea-review-confusion-message', text: EXPLAIN_WHY_UNAVAILABLE });
+      return;
+    }
+    if (state.outcome !== undefined) {
+      banner.createEl('p', {
+        cls: 'olea-review-confusion-message',
+        text: state.outcome.refused ? EXPLAIN_WHY_REFUSAL : state.outcome.text,
+      });
+    }
+  }
+
+  /** The banner's one action — see `syncConfusionRoutingOffer`'s doc for why there is no second, "decline" one. */
+  private async handleAcceptConfusionOffer(): Promise<void> {
+    const session = this.session;
+    const pending = this.confusionBanner;
+    if (session === null || pending === null) return;
+    this.confusionBanner = { ...pending, status: 'loading' };
+    this.render();
+
+    const chunks = this.retrieveSourceChunks
+      ? await this.retrieveSourceChunks(pending.instrument)
+      : [];
+    const outcome = await session.acceptConfusionRoutingOffer(chunks);
+
+    // A NEW offer may have superseded this one while the request was in
+    // flight — never clobber it with a stale result.
+    const latest = this.confusionBanner;
+    if (latest === null || latest.instrument.instrumentId !== pending.instrument.instrumentId)
+      return;
+    this.confusionBanner =
+      outcome === null
+        ? { ...pending, status: 'unavailable' }
+        : { ...pending, status: 'done', outcome };
+    this.render();
   }
 
   /**

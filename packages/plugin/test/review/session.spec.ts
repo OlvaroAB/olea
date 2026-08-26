@@ -431,3 +431,164 @@ describe('F2.16 — the session maps through core, and holds no mapping of its o
     }
   });
 });
+
+describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () => {
+  it('with no evaluator wired, no offer is ever produced (same "simply cannot offer it" posture as explainWhyPort)', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(baseDeps({ queue: [item], scheduler: fakeScheduler(4) }));
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+  });
+
+  it('offers, for the instrument just rated, using the SAME Scheduler.schedule call the interval preview already made', async () => {
+    const instrument = qaFixture();
+    const item = queueItem(instrument);
+    const scheduler = fakeScheduler(4);
+    const calls: unknown[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler,
+        evaluateConfusionRouting: (input) => {
+          calls.push(input);
+          return { shouldOffer: true, lapses: input.lapses, promptText: 'offer text' };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(calls).toEqual([{ rating: 'again', lapses: 4 }]);
+    // One `schedule` call for THIS rating — not a second one made just to
+    // read `lapses` back out.
+    expect(
+      (scheduler.schedule as unknown as { mock: { calls: unknown[] } }).mock.calls,
+    ).toHaveLength(1);
+    expect(session.getConfusionRoutingOffer()).toEqual({
+      instrument,
+      promptText: 'offer text',
+    });
+  });
+
+  it('never offers when the evaluator says not to (below threshold, or not an Again)', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(1),
+        evaluateConfusionRouting: () => ({ shouldOffer: false }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+  });
+
+  it('a later graded review clears a stale offer that was never accepted (no nagging)', async () => {
+    const items = [
+      queueItem(qaFixture({ instrumentId: 'a' })),
+      queueItem(qaFixture({ instrumentId: 'b' })),
+    ];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: items,
+        scheduler: fakeScheduler((rating) => (rating === 'again' ? 4 : 0)),
+        evaluateConfusionRouting: (input) =>
+          input.rating === 'again' && input.lapses >= 4
+            ? { shouldOffer: true, lapses: input.lapses, promptText: 'offer text' }
+            : { shouldOffer: false },
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+    expect(session.getConfusionRoutingOffer()).not.toBeNull();
+
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+  });
+
+  it("accepting the offer requests the SAME on-demand explanation F2.7's requestExplainWhy uses, and clears the offer", async () => {
+    const instrument = qaFixture();
+    const item = queueItem(instrument);
+    const calls: unknown[] = [];
+    const explainWhyPort = {
+      explainWhy: async (request: unknown) => {
+        calls.push(request);
+        return { refused: false as const, text: 'Because...', citedChunkIndex: 1 };
+      },
+    };
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        explainWhyPort,
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+    expect(session.getConfusionRoutingOffer()).not.toBeNull();
+
+    const outcome = await session.acceptConfusionRoutingOffer(['a source passage']);
+
+    expect(outcome).toEqual({ refused: false, text: 'Because...', citedChunkIndex: 1 });
+    expect(calls).toEqual([
+      {
+        courseCode: instrument.courseCode,
+        question: instrument.question,
+        studentAnswer: '',
+        correctAnswer: instrument.answer,
+        sourceChunks: ['a source passage'],
+      },
+    ]);
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+  });
+
+  it('accepting with no explainWhyPort wired returns null and still clears the offer (F7.8)', async () => {
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(qaFixture())],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+
+    const outcome = await session.acceptConfusionRoutingOffer([]);
+
+    expect(outcome).toBeNull();
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+  });
+
+  it('accepting with nothing pending is a no-op, never throws', async () => {
+    const session = new ReviewSession(baseDeps({ queue: [queueItem(qaFixture())] }));
+    await session.start();
+
+    const outcome = await session.acceptConfusionRoutingOffer([]);
+
+    expect(outcome).toBeNull();
+  });
+});

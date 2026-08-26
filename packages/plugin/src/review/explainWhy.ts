@@ -12,14 +12,18 @@
  *
  * - The GROUNDING half — turning a wrong answer into a set of quoted,
  *   citeable source passages — is `packages/core/src/retrieval/engine.ts`'s
- *   `retrieve()` (and, where a live grounding judge is wired, `groundedContext
- *   .ts`'s `resolveGroundedContext`). Composing that against a real vault,
- *   embedding provider and grounding judge is NOT this file's job, and is
- *   not done here — see the lane report for exactly what remains.
+ *   `retrieve()`. **`ol-sn1q` closed this half too**, in this same file:
+ *   `retrieveExplainWhySourceChunks` below composes a real, no-band
+ *   `retrieve()` call (mirroring `packages/workbench/src/explain/ground.ts`'s
+ *   already-built demo of the identical composition), and `main.ts` supplies
+ *   it with the real vault's keyword index, embedding cache and embedding
+ *   provider (`this.retrieval`/`this.keywordIndex`, the same instances
+ *   `retrieval/draft-quiz-cards.ts` reuses for its own grounded call).
  * - The PROSE half — turning grounded source chunks into an actual
  *   explanation of why the correct answer is correct — is
- *   `explain-why.generate.v1`, the Worker task this class calls. That is
- *   this file's whole job.
+ *   `explain-why.generate.v1`, the Worker task `WorkerExplainWhyGenerator`
+ *   calls. That is this class's whole job; `retrieveExplainWhySourceChunks`
+ *   below is a separate, pure-composition function that only feeds it.
  *
  * Shaped like `../retrieval/workerGroundingJudge.ts`'s `WorkerGroundingJudge`
  * and `olea-core`'s `createWorkerJudgeCaller` (`grading/workerJudgeCaller.ts`):
@@ -43,7 +47,7 @@
  * into every caller.
  */
 
-import type { WorkerTaskTransport } from 'olea-core';
+import { type RetrieveDeps, retrieve, type WorkerTaskTransport } from 'olea-core';
 import type { ReviewInstrument } from './types.js';
 
 /** `TASK_IDS.EXPLAIN_WHY_GENERATE`, mirrored — see the module doc for why it is not imported. */
@@ -201,6 +205,46 @@ export function buildExplainWhyRequest(
     correctAnswer,
     sourceChunks: [...sourceChunks],
   };
+}
+
+/**
+ * F2.7's GROUNDING half (`ol-sn1q`) — the retrieval-side companion to
+ * `WorkerExplainWhyGenerator`'s PROSE half above. Mirrors the production
+ * shape `retrieval/draft-quiz-cards.ts` already established for the same
+ * split ("the GROUNDING half"/"the PROSE half" in that file's own module
+ * doc): a plain `retrieve()` call, no band — matching
+ * `packages/workbench/src/explain/ground.ts`'s already-built demo of this
+ * exact composition (that file's own doc names this as F2.7's production
+ * shape, blocked there only on the prose half, which `ol-p3t08` closed).
+ *
+ * **Never throws, and never itself produces a second refusal shape.** A
+ * `retrieve()` refusal (nothing indexed yet, no keyword hit, an unreachable
+ * embedding provider) comes back from this function as `[]`, not a thrown
+ * error — the caller already has an honest "cannot ground" refusal for an
+ * empty/insufficient `sourceChunks` set (`explain-why.generate.v1`'s
+ * REQUIRED grounding contract, enforced server-side). Collapsing "we found
+ * nothing" and "the Worker refused" into the one signal the caller already
+ * handles is simpler than inventing a second refusal shape no scenario asks
+ * for.
+ */
+export interface ExplainWhySourceChunksDeps {
+  readonly retrieve: RetrieveDeps;
+}
+
+/**
+ * Retrieves F2.7's grounding context for a review instrument. The query is
+ * the instrument's own question text — the same string
+ * `buildExplainWhyRequest` sends as `question` — so what she is asked to
+ * explain and what Olea searches her notes for are never two different
+ * strings.
+ */
+export async function retrieveExplainWhySourceChunks(
+  deps: ExplainWhySourceChunksDeps,
+  instrument: ReviewInstrument,
+): Promise<readonly string[]> {
+  const { question } = questionAndCorrectAnswer(instrument);
+  const result = await retrieve(deps.retrieve, question);
+  return result.status === 'grounded' ? result.chunks.map((chunk) => chunk.text) : [];
 }
 
 function questionAndCorrectAnswer(instrument: ReviewInstrument): {

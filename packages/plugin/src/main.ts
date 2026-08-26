@@ -62,6 +62,7 @@ import {
   drainIntoEmbeddingCache,
   type RetrievalWiring,
 } from './retrieval/wiring.js';
+import { retrieveExplainWhySourceChunks, WorkerExplainWhyGenerator } from './review/explainWhy.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
 import {
@@ -71,6 +72,7 @@ import {
   systemClock,
 } from './review/ports.js';
 import type { ReviewSession } from './review/session.js';
+import type { ReviewInstrument } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { createLocalSessionBuilderProvider } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
@@ -297,6 +299,9 @@ export default class OleaPlugin extends Plugin {
           () => {
             void this.refreshTodayViews();
           },
+          // `ol-sn1q`: F2.7's grounding half, composed against whatever the
+          // real keyword index and embedding cache currently hold.
+          (instrument) => this.composeExplainWhySourceChunks(instrument),
         ),
     );
 
@@ -486,8 +491,11 @@ export default class OleaPlugin extends Plugin {
     // wired to the real Worker transport on the same F7.8 grey-out terms as
     // `this.retrieval` above. See `grading/wiring.ts`'s module doc and this
     // class's own `gradeExplainBackAttempt` method for why nothing calls
-    // *that method* yet — the destination is `ol-p4t05` (confusion
-    // routing), not this bead.
+    // *that method* yet. `ol-p4t05`/`ol-h2bx` (confusion routing, fully
+    // wired now) deliberately route into F2.7's on-demand explain-why
+    // channel instead — building the real "write your own explanation and
+    // get graded" destination is still blocked on `ol-tka5`/`ol-548w`, both
+    // open Class C questions.
     this.grading = await buildGradingWiring({
       dataHost: this,
       createTransport: createRecordingTransport,
@@ -703,6 +711,50 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `ol-sn1q`'s production `ExplainWhyPort`: the SAME `WorkerTaskTransport`
+   * `this.retrieval.transport` already exposes (the "one instance, many task
+   * ids" reuse `draftQuizCardsDeps` above already establishes for
+   * `quiz.generate.v1`), sending `explain-why.generate.v1` instead. `null`
+   * on the same unconfigured-Worker condition as every other AI-gated
+   * wiring in this file (F7.8).
+   */
+  private buildExplainWhyPort(): WorkerExplainWhyGenerator | null {
+    const transport = this.retrieval?.transport;
+    if (transport === null || transport === undefined) return null;
+    return new WorkerExplainWhyGenerator({ transport });
+  }
+
+  /**
+   * F2.7's grounding half (`ol-sn1q`): a real `retrieve()` call
+   * (`review/explainWhy.ts`'s `retrieveExplainWhySourceChunks`) over
+   * whatever the keyword index and embedding cache currently hold — the
+   * same two instances `draftQuizCardsDeps` above assembles for the
+   * generation sweep's own grounded call. `[]` when either half isn't ready
+   * yet (no Worker token pasted, or the index has not built its first
+   * snapshot): this function's own contract is "refuse honestly downstream"
+   * (see that function's doc), not "throw here."
+   */
+  private async composeExplainWhySourceChunks(
+    instrument: ReviewInstrument,
+  ): Promise<readonly string[]> {
+    const embeddingCache = this.retrieval?.embeddingCache;
+    const embeddingProvider = this.retrieval?.embeddingProvider;
+    if (embeddingCache === null || embeddingCache === undefined) return [];
+    if (embeddingProvider === null || embeddingProvider === undefined) return [];
+    if (this.keywordIndex === null) return [];
+    return retrieveExplainWhySourceChunks(
+      {
+        retrieve: {
+          keywordIndex: this.keywordIndex.engine.toPersisted(),
+          embeddingCache,
+          embeddingProvider,
+        },
+      },
+      instrument,
+    );
+  }
+
+  /**
    * Composes today's session, or `null` if the vault could not be read.
    *
    * Called by `ReviewView` on open — including when Obsidian restores the tab
@@ -718,11 +770,22 @@ export default class OleaPlugin extends Plugin {
     const wiring = this.review;
     if (wiring === null) return null;
 
+    // `ol-sn1q`/`ol-h2bx`: composed fresh on every open, same "read the
+    // current wiring, never a copy captured earlier" posture the plan and
+    // draft cache below already follow. `explainWhyPort` is `null` on the
+    // same F7.8 unconfigured-Worker condition as `this.retrieval` itself;
+    // `evaluateConfusionRouting` needs no such gate (pure, local).
+    const explainWhyPort = this.buildExplainWhyPort();
+
     const outcome = await openReviewSession({
       vault: wiring.vault,
       scheduler: wiring.scheduler,
       deviceId: wiring.deviceId,
-      ports: wiring.ports,
+      ports: {
+        ...wiring.ports,
+        ...(explainWhyPort ? { explainWhyPort } : {}),
+        evaluateConfusionRouting: (input) => this.evaluateConfusionRouting(input),
+      },
       // F2.8 Phase B: whatever plan is cached at this instant, read fresh —
       // never a copy captured when `this.review` was first built, so a
       // background refresh that lands between two sessions reaches the
@@ -767,12 +830,16 @@ export default class OleaPlugin extends Plugin {
    * module doc for why this needs no Worker/F7.8 gating, unlike
    * `gradeExplainBackAttempt` above.
    *
-   * No caller of this method exists in this package yet, deliberately: the
-   * review rating flow that would call it after each graded review lives in
-   * `review/**`, a concurrently-owned lane's files this bead does not touch.
-   * This method exists so that lane has something real to call into — the
-   * same "genuinely reachable, trigger left to the bead whose job it is"
-   * shape `gradeExplainBackAttempt` documents above.
+   * **`ol-h2bx` closed the reachability gap this doc used to name.**
+   * `composeReviewSession` above passes `(input) =>
+   * this.evaluateConfusionRouting(input)` into `openReviewSession`'s
+   * `ports.evaluateConfusionRouting`, which `ReviewSession.logAndAdvance`
+   * (`review/session.ts`) calls after every graded Q&A/cloze/MCQ rating. The
+   * accepted offer routes through the SAME on-demand channel F2.7 already
+   * built (`explainWhyPort`/`requestExplainWhy`) rather than into
+   * `gradeExplainBackAttempt` above — that method's own "no caller yet" gap
+   * is still real and is not this bead's to close (`ol-tka5`/`ol-548w` are
+   * still open Class C questions; see `grading/wiring.ts`'s module doc).
    */
   evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
     return evaluateConfusionRouting(input);

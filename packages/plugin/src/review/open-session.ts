@@ -56,7 +56,15 @@
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
-import type { QueueFilter, RandomSource, Scheduler, VaultPath, VaultSource } from 'olea-core';
+import type {
+  ConfusionRoutingDecision,
+  ConfusionRoutingInput,
+  QueueFilter,
+  RandomSource,
+  Scheduler,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import {
   buildReviewSession,
   calendarDaysEndingOn,
@@ -68,6 +76,7 @@ import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
 import { adaptExecutedReviewQueue } from './queue-adapter.js';
@@ -82,6 +91,18 @@ export interface ReviewSessionPorts {
   readonly clock: Clock;
   /** F3.3/`[D-097]`'s accept-at-first-presentation seam (`ol-p3t07a`, `ol-mfn0`). */
   readonly draftAcceptPort: DraftAcceptPort;
+  /**
+   * F2.7's on-demand explain-why port (`ol-sn1q`). Optional; absent means AI
+   * features are "greyed" (F7.8, plan §7.1) — same posture
+   * `ReviewSessionDeps.explainWhyPort` documents, threaded straight through.
+   */
+  readonly explainWhyPort?: ExplainWhyPort;
+  /**
+   * F2.12's confusion-routing decision (`ol-h2bx`). Optional; absent reads
+   * as "never offer" — same posture `ReviewSessionDeps.evaluateConfusionRouting`
+   * documents, threaded straight through.
+   */
+  readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
 }
 
 export interface OpenReviewSessionInput {
@@ -212,6 +233,10 @@ export async function openReviewSession(
       clock: input.ports.clock,
       draftAcceptPort: input.ports.draftAcceptPort,
       nextDueLabel: nextDueLabel(now, earliestFutureDue(composed, now)),
+      ...(input.ports.explainWhyPort ? { explainWhyPort: input.ports.explainWhyPort } : {}),
+      ...(input.ports.evaluateConfusionRouting
+        ? { evaluateConfusionRouting: input.ports.evaluateConfusionRouting }
+        : {}),
     });
 
     return {

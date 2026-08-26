@@ -97,8 +97,16 @@ const INTERVAL_BY_RATING: Readonly<Record<Rating, number>> = {
   easy: 14,
 };
 
-/** Distinct, deterministic intervals per rating so tests can assert on which one fired. */
-export function fakeScheduler(): Scheduler {
+/**
+ * Distinct, deterministic intervals per rating so tests can assert on which
+ * one fired. `lapses` defaults to `0` (unchanged from every existing caller);
+ * pass a number, or a function of the rating just applied, for F2.12
+ * (`ol-h2bx`) tests that need `SchedulerState.lapses` to cross the
+ * confusion-routing threshold.
+ */
+export function fakeScheduler(
+  lapses: number | ((rating: ScheduleInput['rating']) => number) = 0,
+): Scheduler {
   return {
     schedule: vi.fn(({ instrumentId, rating, now }: ScheduleInput) => {
       const intervalDays = INTERVAL_BY_RATING[rating];
@@ -113,7 +121,7 @@ export function fakeScheduler(): Scheduler {
           scheduledDays: intervalDays,
           learningStepIndex: 0,
           reps: 1,
-          lapses: 0,
+          lapses: typeof lapses === 'function' ? lapses(rating) : lapses,
           learningState: 'review' as const,
           lastReview: now.toISOString(),
         },
