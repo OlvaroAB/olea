@@ -18,6 +18,11 @@ import type { Rating } from 'olea-contracts';
 import type { McqRating, Scheduler } from 'olea-core';
 import { mapMcqRating } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
+import {
+  buildExplainWhyRequest,
+  type ExplainWhyOutcome,
+  type ExplainWhyPort,
+} from './explainWhy.js';
 import { previewQaClozeIntervals, previewSingleInterval, type RatingPreview } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
@@ -84,6 +89,16 @@ export interface ReviewSessionDeps {
   readonly draftAcceptPort: DraftAcceptPort;
   /** Shown on the empty state when the queue starts with nothing due (F2.2's "nothing due" scenario). */
   readonly nextDueLabel?: string | null;
+  /**
+   * F2.7's on-demand "explain why I got this wrong" (`ol-p3t08`). Optional
+   * and absent by default, matching plan §7.1's "AI features un-grey" — a
+   * session built with no port wired (offline, or no caller has assembled
+   * one yet) simply cannot offer it, rather than this class inventing a
+   * fallback behaviour. See `requestExplainWhy` below and `explainWhy.ts`'s
+   * module doc for what this port does and does not do (grounding-context
+   * retrieval is NOT its job, and is not done here — see the lane report).
+   */
+  readonly explainWhyPort?: ExplainWhyPort;
 }
 
 type InternalPhase =
@@ -287,6 +302,38 @@ export class ReviewSession {
     const item = this.currentItem;
     if (item === null) return;
     await this.deps.editPort.edit(item.instrument);
+  }
+
+  /**
+   * F2.7's on-demand "explain why I got this wrong" hook (`ol-p3t08`).
+   * Deliberately never gated on the current phase or on whether her answer
+   * was actually wrong — F2.20 says this help "stays available at every
+   * stage, to every concept, regardless of how well she knows it", so it is
+   * the caller's job to decide when to surface the affordance, not this
+   * class's job to second-guess it.
+   *
+   * **Never mutates `phase`, `index`, or any rating/logging state** — the
+   * property `features/F2-review.md`'s "the tap never blocks the session"
+   * scenario asks for. Calling this can never leave the session unable to
+   * `rate`/`mcqAnswer`/`mcqNext`/`suspend`/etc., because it touches none of
+   * the state those methods read or write.
+   *
+   * `sourceChunks` is the caller's already-retrieved grounding context
+   * (F2.7's grounding half — see `explainWhy.ts`'s module doc for why that
+   * is deliberately not this method's job either). Returns `null` when no
+   * `explainWhyPort` is wired (AI features "greyed", plan §7.1) rather than
+   * throwing — the caller decides how to render that, same as an absent
+   * `nextDueLabel` is a normal, renderable state rather than an error.
+   */
+  async requestExplainWhy(
+    studentAnswer: string,
+    sourceChunks: readonly string[],
+  ): Promise<ExplainWhyOutcome | null> {
+    if (this.deps.explainWhyPort === undefined) return null;
+    const item = this.currentItem;
+    if (item === null) return null;
+    const request = buildExplainWhyRequest(item.instrument, studentAnswer, sourceChunks);
+    return this.deps.explainWhyPort.explainWhy(request);
   }
 
   async skipMissingNote(): Promise<void> {
