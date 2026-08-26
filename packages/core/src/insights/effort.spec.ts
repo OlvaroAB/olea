@@ -186,6 +186,64 @@ describe('detectEffortImbalance — what it measures', () => {
     expect(result.measured?.coursesWithoutWeight).toEqual(['HIST101']);
   });
 
+  it('never reports "observed" without naming the course (ol-7j54 / ARC-1)', () => {
+    // The copy rule this bead enforces only works if the detector never lets
+    // an observed gap go unnamed — a caller has nothing to attach the
+    // sentence to otherwise. Checked across every fixture above that reaches
+    // "observed", not just one example.
+    const observedCases = [
+      detectEffortImbalance({
+        entries: [...minutes('bio-1', 5, 0), ...minutes('stat-1', 75, 100)],
+        concepts: CONCEPTS,
+        assessments: EVEN_WEIGHTS,
+      }),
+      detectEffortImbalance({
+        entries: minutes('stat-1', 80, 0),
+        concepts: CONCEPTS,
+        assessments: EVEN_WEIGHTS,
+      }),
+      detectEffortImbalance({
+        // Same imbalance as the first case, plus a third, unweighted course
+        // mixed in — the invariant must hold with a course left out too.
+        entries: [
+          ...minutes('bio-1', 5, 0),
+          ...minutes('stat-1', 75, 100),
+          ...minutes('hist-1', 40, 200),
+        ],
+        concepts: [...CONCEPTS, { conceptId: 'hist-1', courses: ['HIST101'] }],
+        assessments: EVEN_WEIGHTS,
+      }),
+    ];
+    for (const result of observedCases) {
+      expect(result.status).toBe('observed');
+      expect(result.measured?.widestGapCourse).toEqual(expect.any(String));
+      expect(result.measured?.widestGapCourse).not.toBe('');
+      // The named course is one of the ones actually measured, never an
+      // aggregate label invented on the side.
+      expect(result.measured?.courses.map((c) => c.course)).toContain(
+        result.measured?.widestGapCourse,
+      );
+    }
+  });
+
+  it('"not-observed" and "not-enough-history" carry no course claim to misattribute', () => {
+    const notObserved = detectEffortImbalance({
+      entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
+      concepts: CONCEPTS,
+      assessments: EVEN_WEIGHTS,
+    });
+    expect(notObserved.status).toBe('not-observed');
+    expect(notObserved.measured?.widestGapCourse).toBeNull();
+
+    const tooEarly = detectEffortImbalance({
+      entries: minutes('bio-1', 60, 0),
+      concepts: CONCEPTS,
+      assessments: [{ course: 'BIOL204', weight: 50 }],
+    });
+    expect(tooEarly.status).toBe('not-enough-history');
+    expect(tooEarly.measured).toBeNull();
+  });
+
   it('is pure and leaves the log untouched', () => {
     const entries = [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)];
     const snapshot = JSON.stringify(entries);

@@ -16,6 +16,7 @@ import {
   DUE_UNAVAILABLE,
   dueTodaySentence,
   earlyPullSentence,
+  effortInsightLine,
   effortShareClause,
   INSIGHTS_TOO_EARLY,
   insightsScopeSentence,
@@ -301,6 +302,42 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
     for (const text of trends) {
       expect(corpusStrings, `"${text}" is rendered but not sampled`).toContain(text);
     }
+  });
+});
+
+describe('effortInsightLine names the course it is about (ol-7j54 / ARC-1)', () => {
+  // The three phases of a course are per-course, not per-student: the same
+  // weight/time gap is ordinary early in a course and a real problem late in
+  // it, and two of her courses can be in different phases at once. The copy
+  // rule is that a claim like this must name the course rather than be
+  // presented as an unscoped fact — see olea-core's insights/index.ts.
+  const course = {
+    course: 'FIXTURE101',
+    timeMs: 1_000,
+    timeShare: 0.14,
+    weight: 50,
+    weightShare: 0.57,
+    gap: 0.43,
+  };
+
+  it('bundles the course from the record with the same text effortShareClause produces', () => {
+    const line = effortInsightLine(course);
+    expect(line.course).toBe('FIXTURE101');
+    expect(line.text).toBe(effortShareClause(course.weightShare, course.timeShare));
+  });
+
+  it('takes the course identity from the record it was measured from, not by construction here', () => {
+    const other = { ...course, course: 'OTHER202', weightShare: 0.4, timeShare: 0.1 };
+    expect(effortInsightLine(other).course).toBe('OTHER202');
+    expect(effortInsightLine(other).text).toBe(effortShareClause(0.4, 0.1));
+  });
+
+  it("the bundled text still names no course — only the record's own .course field does", () => {
+    // Same INV-3 property as effortShareClause: the fixture course code above
+    // must never leak into the sentence half of the pair.
+    const line = effortInsightLine(course);
+    expect(line.text).not.toContain('FIXTURE101');
+    expect(line.text).not.toMatch(/[A-Z]/);
   });
 });
 

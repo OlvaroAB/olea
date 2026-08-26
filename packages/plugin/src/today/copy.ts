@@ -68,7 +68,7 @@
  */
 
 import type { MasteryState } from 'olea-contracts';
-import { MASTERY_DISPLAY, MASTERY_ORDER } from 'olea-core';
+import { type CourseEffort, MASTERY_DISPLAY, MASTERY_ORDER } from 'olea-core';
 
 /** The pane's title, as Obsidian shows it on the tab and in the sidebar. F6's own words: "Today". */
 export const TODAY_VIEW_TITLE = 'Today';
@@ -225,6 +225,14 @@ export function weekCellLabel(day: string, studied: boolean): string {
  * - **Nothing here fires in the negative direction.** There is no sentence for
  *   "you are over-studying X", because `detectEffortImbalance` cannot report
  *   one; see its module doc.
+ * - **The effort line's truth depends on where its course sits in its term
+ *   (`ol-7j54` / ARC-1), so it is never emitted unscoped.** "Carries 57% of the
+ *   grade and 14% of the time" reads as ordinary early in a course and as a
+ *   real problem late in one — same sentence, opposite reading — and two of
+ *   her courses can be in different phases of the term at once. No phase is
+ *   computed here; the course is named instead, so she can judge it against a
+ *   term she already knows. `effortInsightLine` below is the enforced shape:
+ *   it cannot be built without the `CourseEffort` the sentence is about.
  * ------------------------------------------------------------------------ */
 
 /** The mastery overview's eyebrow (F6.2). Sits where `STREAK_LABEL` sits. */
@@ -314,9 +322,44 @@ export function earlyPullSentence(earlyShare: number): string | null {
  * runtime, and a copy module that could name a course is a copy module that
  * can leak one (`ol-p2t08`, and `copy.spec.ts`'s INV-3 check over every string
  * this file can produce). The view renders the code beside this clause.
+ *
+ * That naming is not decorative — `ol-7j54` (ARC-1) makes it a requirement,
+ * because this clause's truth depends on where its course sits in its term.
+ * `effortInsightLine` below is the enforced form of the pairing; call this
+ * function directly only where the caller already, separately, guarantees the
+ * course is rendered alongside it.
  */
 export function effortShareClause(weightShare: number, timeShare: number): string {
   return `carries ${percent(weightShare)} of the assessment weight and ${percent(timeShare)} of the time logged.`;
+}
+
+/** `effortInsightLine`'s return shape: the course a claim is about, paired with the claim. */
+export interface EffortInsightLine {
+  readonly course: string;
+  readonly text: string;
+}
+
+/**
+ * F6.5(b), bundled with the course it is true of (`ol-7j54` / ARC-1).
+ *
+ * `effortShareClause`'s text deliberately carries no course string — every
+ * course string on this panel comes from the vault at runtime, never from this
+ * module (INV-3, `ol-p2t08`). But the claim's *truth* still depends on where
+ * that course sits in its term, and the three phases are per-course, not
+ * per-student: the same sentence is unremarkable in a course that just started
+ * and a real problem in one nearing its end, at the very same moment as a
+ * different course on the same panel. Presenting it without the course would
+ * be exactly the unscoped statement `ol-7j54`'s ruling rejects — true of one
+ * running course, misleading about another.
+ *
+ * So this is the one way this module offers to reach the sentence: it takes
+ * the whole `CourseEffort` the claim was measured from, not bare shares, which
+ * makes it structurally impossible to call without the course attached — no
+ * argument-order mistake can separate the two, because there is only one
+ * argument to give.
+ */
+export function effortInsightLine(course: CourseEffort): EffortInsightLine {
+  return { course: course.course, text: effortShareClause(course.weightShare, course.timeShare) };
 }
 
 /**

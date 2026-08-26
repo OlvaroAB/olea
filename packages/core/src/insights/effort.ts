@@ -61,6 +61,17 @@
  *    Folding them in at weight zero would report every unweighted course as
  *    over-studied, which is an artefact of her note-keeping and not a fact
  *    about her term.
+ *
+ * ## Why this reports one named course, never an aggregate (`ol-7j54` / ARC-1)
+ *
+ * `widestGapCourse` is deliberately a single course, not a summary over all of
+ * them: "your courses are imbalanced" would be an unscoped claim that could be
+ * correct behaviour for a course just starting and a real problem for a course
+ * near its end at the very same moment (the three phases are per-course, not
+ * per-student). Naming the one course the widest gap belongs to is what lets
+ * the copy layer meet `../insights/index.ts`'s course-naming rule — see its
+ * doc — instead of presenting a fact whose truth silently depends on a phase
+ * this module does not compute.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
