@@ -203,7 +203,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all five view types and all seven commands when onload runs', async () => {
+  it('registers all five view types and all eight commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -239,6 +239,10 @@ describe('the built bundle is what Obsidian can load', () => {
         // (`ol-uxk9` is the keyboard-bindings follow-up).
         'olea-bulk-review-open',
         'olea-create-card',
+        // `ol-p6t02` (F7.5/Q6.3): the content-free diagnostics report, wired
+        // into `main.ts`'s `registerOleaCommands` call once this lane's file
+        // ownership cleared.
+        'olea-diagnostics-copy',
         // 'olea-draft-cards' was withdrawn (F4.5, wave-2 round-2 correction):
         // no student-invoked draft verb, because Olea is already drafting.
         'olea-gap-open',

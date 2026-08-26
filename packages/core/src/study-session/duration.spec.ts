@@ -22,7 +22,7 @@ function review(
 ): ReviewLogEntry {
   seq += 1;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: `e${seq}`,
     timestamp: '2026-09-14T09:00:00.000+00:00',
@@ -45,7 +45,7 @@ function review(
 function suspend(): ReviewLogEntry {
   seq += 1;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'suspend',
     eventId: `s${seq}`,
     timestamp: '2026-09-14T09:00:00.000+00:00',

@@ -1463,7 +1463,7 @@ function renderOracleInspector(inspector: HTMLElement, input: OracleInspectorInp
   planRow.createSpan({ cls: 'wb-inspector-label', text: 'plan' });
   planRow.createSpan({
     cls: 'wb-inspector-value',
-    text: `${scenario.plan.planVersion} — asOf ${scenario.plan.asOf}, computedAt ${scenario.plan.computedAt}, ${String(scenario.plan.courses.length)} course(s)`,
+    text: `${scenario.plan.policyVersion} — asOf ${scenario.plan.body.asOf}, computedAt ${scenario.plan.computedAt}, ${String(scenario.plan.body.courses.length)} course(s)`,
   });
 
   if (scenario.refresh) {
@@ -1475,7 +1475,7 @@ function renderOracleInspector(inspector: HTMLElement, input: OracleInspectorInp
       text:
         `source: ${refresh.source}, offline: ${String(refresh.offline)}` +
         (refresh.reason === undefined ? '' : `, reason: ${refresh.reason}`) +
-        (refresh.plan === null ? '' : `, planVersion: ${refresh.plan.planVersion}`),
+        (refresh.plan === null ? '' : `, planVersion: ${refresh.plan.policyVersion}`),
     });
   }
 
@@ -1571,7 +1571,7 @@ function renderTimelineInspector(inspector: HTMLElement, input: TimelineInspecto
   planRow.createSpan({
     cls: 'wb-inspector-value',
     attr: { 'data-wb-timeline-plan-version': 'true' },
-    text: `${scenario.day.result.plan.planVersion} — ${String(scenario.day.result.plan.courses.length)} course(s)`,
+    text: `${scenario.day.result.plan.policyVersion} — ${String(scenario.day.result.plan.body.courses.length)} course(s)`,
   });
 
   const changedRow = inspector.createDiv({ cls: 'wb-inspector-row' });
@@ -1614,7 +1614,7 @@ function renderTimelineInspector(inspector: HTMLElement, input: TimelineInspecto
     text:
       scenario.day.nextDayEvents.length === 0
         ? 'none'
-        : `${String(scenario.day.nextDayEvents.length)} event(s) on ${scenario.day.asOf}, would carry planVersion ${scenario.day.result.plan.planVersion}`,
+        : `${String(scenario.day.nextDayEvents.length)} event(s) on ${scenario.day.asOf}, would carry planVersion ${scenario.day.result.plan.policyVersion}`,
   });
 
   const traceHeading = inspector.createDiv({
@@ -2173,7 +2173,7 @@ function renderFixtureOracleInspector(
   asOfRow.createSpan({ cls: 'wb-inspector-label', text: 'plan' });
   asOfRow.createSpan({
     cls: 'wb-inspector-value',
-    text: `${result.plan.planVersion} — asOf ${result.plan.asOf}, computedAt ${result.plan.computedAt}, ${String(result.plan.courses.length)} course(s)`,
+    text: `${result.plan.policyVersion} — asOf ${result.plan.body.asOf}, computedAt ${result.plan.computedAt}, ${String(result.plan.body.courses.length)} course(s)`,
   });
 
   const traceHeading = inspector.createDiv({ cls: 'wb-inspector-note', text: 'pipeline trace' });

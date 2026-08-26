@@ -1,5 +1,5 @@
 import { Notice, Plugin, type WorkspaceLeaf } from 'obsidian';
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
@@ -15,6 +15,7 @@ import {
   type Scheduler,
   type VaultSource,
 } from 'olea-core';
+import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
 import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
@@ -116,7 +117,7 @@ interface ReviewWiring {
    * fresher plans arrive; `composeReviewSession` reads it at the instant a
    * session opens, never a stale copy captured at `onload`.
    */
-  plan: StudyPlanArtifact | null;
+  plan: StudyPlanEnvelope | null;
 }
 
 // olea-plugin — commands, settings and ObsidianSource land in P1/P2 (plan
@@ -220,7 +221,7 @@ export default class OleaPlugin extends Plugin {
     // `refreshCachedStudyPlan`'s job, kicked off below and never blocking
     // `onload`.
     const studyPlanStore = new ObsidianStudyPlanStore(this);
-    const cachedPlan = (await loadCachedStudyPlan(studyPlanStore)).plan;
+    const cachedPlan = (await loadCachedStudyPlan(studyPlanStore, new Date())).plan;
 
     // `ol-p3t07a`: built here, before `this.review`, so `this.review.ports`
     // below can wire the real `DraftAcceptPort` rather than a placeholder.
@@ -322,6 +323,13 @@ export default class OleaPlugin extends Plugin {
       // `ol-jie3`: F3.3's bulk-review triage path.
       openBulkReview: () => {
         void this.revealBulkReviewView();
+      },
+      copyDiagnostics: () => {
+        void copyDiagnosticsToClipboard({
+          pluginVersion: this.manifest.version,
+          loadQueue: () => new ObsidianQueueStore(this).load(),
+          loadIndex: () => new ObsidianKeywordIndexStore(this).load(),
+        });
       },
     });
 
@@ -688,7 +696,7 @@ export default class OleaPlugin extends Plugin {
         ? { readRankWeights: this.rankWeights.readRankWeights }
         : {}),
     });
-    const result = await refreshStudyPlan({ store, provider });
+    const result = await refreshStudyPlan({ store, provider, now: () => new Date() });
     if (this.review !== null) this.review.plan = result.plan;
     void this.refreshGapViews();
   }

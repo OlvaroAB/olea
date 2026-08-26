@@ -359,7 +359,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       slot.unsuspendOnDay = null;
       unsuspendedInstrumentIds.add(slot.instrument.instrumentId);
       const record: SuspendLogRecord = {
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'unsuspend',
         eventId: nextEventId(),
         timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -507,7 +507,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       };
 
       const record: ReviewLogRecord = {
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'review',
         eventId: nextEventId(),
         timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -560,7 +560,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
           // routing happened, which is what `masteryAtTime` means.
           const explainBackMastery = perConceptMastery(concept.conceptId, masteryAtTime);
           const explainBack: ReviewLogRecord = {
-            schemaVersion: 4,
+            schemaVersion: 5,
             kind: 'review',
             eventId: nextEventId(),
             timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -606,7 +606,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
           behaviour.unsuspendAfterDays === null ? null : dayIndex + behaviour.unsuspendAfterDays;
         suspendedInstrumentIds.add(instrument.instrumentId);
         pendingEntries.push({
-          schemaVersion: 4,
+          schemaVersion: 5,
           kind: 'suspend',
           eventId: nextEventId(),
           timestamp: isoWithOffset(cursorMs, offsetMinutes),

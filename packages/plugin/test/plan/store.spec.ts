@@ -8,7 +8,7 @@
  * somewhere before `open-session.ts` can read it back, and this is that
  * somewhere.
  */
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import {
   type ObsidianDataHost,
@@ -28,12 +28,18 @@ class FakeDataHost implements ObsidianDataHost {
   }
 }
 
-const samplePlan: StudyPlanArtifact = {
-  formatVersion: 1,
-  planVersion: 'sp1-test0000000003',
-  computedAt: '2026-08-20T09:00:00Z',
-  asOf: '2026-08-20',
-  courses: [],
+const samplePlan: StudyPlanEnvelope = {
+  envelopeVersion: 1,
+  kind: 'study-plan',
+  bodyVersion: 1,
+  policyVersion: 'sp1-test0000000003',
+  computedAt: '2026-08-20T09:00:00-04:00',
+  freshForSeconds: 3600,
+  governsForSeconds: 86_400,
+  body: {
+    asOf: '2026-08-20',
+    courses: [],
+  },
 };
 
 describe('ObsidianStudyPlanStore.load', () => {
@@ -95,7 +101,7 @@ describe('ObsidianStudyPlanStore.save — namespacing inside the shared data.jso
 
     host.blob = { ...(host.blob as Record<string, unknown>), otherFeature: 'value' };
 
-    const updated: StudyPlanArtifact = { ...samplePlan, planVersion: 'sp1-test0000000004' };
+    const updated: StudyPlanEnvelope = { ...samplePlan, policyVersion: 'sp1-test0000000004' };
     await store.save(updated);
 
     expect(host.blob).toEqual({

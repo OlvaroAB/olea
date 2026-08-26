@@ -36,7 +36,7 @@ const STREAMS = PERSONA_IDS.map((persona) =>
 
 /** A record with the same shape as a real one: contracts-valid, and not ours. */
 const REAL_SHAPED: ReviewLogEntry = {
-  schemaVersion: 4,
+  schemaVersion: 5,
   kind: 'review',
   eventId: '0f0b8b0a-1c2d-4e5f-8a9b-0c1d2e3f4a5b',
   timestamp: '2027-02-01T19:00:00.000+01:00',

@@ -256,7 +256,7 @@ describe('the prior state the view schedules against is the replayed one', () =>
       now: new Date('2027-08-20T12:00:00Z'),
       entries: [
         {
-          schemaVersion: 4,
+          schemaVersion: 5,
           kind: 'review',
           eventId: 'e1',
           timestamp: '2026-08-19T09:00:00+00:00',
@@ -353,24 +353,30 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
     if (first === undefined) throw new Error('expected a composed item');
 
     const plan = {
-      formatVersion: 1 as const,
-      planVersion: 'sp1-test0000000002',
-      computedAt: '2026-08-20T09:00:00Z',
-      asOf: '2026-08-20',
-      courses: [
-        {
-          course: 'TEST101',
-          status: 'ranked' as const,
-          concepts: first.conceptIds.map((conceptId, index) => ({
-            conceptId,
-            rank: index + 1,
-            weight: 10 - index,
-            examProximityDays: 5,
-            reasoning: 'test reasoning',
-            citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
-          })),
-        },
-      ],
+      envelopeVersion: 1 as const,
+      kind: 'study-plan' as const,
+      bodyVersion: 1 as const,
+      policyVersion: 'sp1-test0000000002',
+      computedAt: '2026-08-20T09:00:00-04:00',
+      freshForSeconds: 3600,
+      governsForSeconds: 86_400,
+      body: {
+        asOf: '2026-08-20',
+        courses: [
+          {
+            course: 'TEST101',
+            status: 'ranked' as const,
+            concepts: first.conceptIds.map((conceptId, index) => ({
+              conceptId,
+              rank: index + 1,
+              weight: 10 - index,
+              examProximityDays: 5,
+              reasoning: 'test reasoning',
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            })),
+          },
+        ],
+      },
     };
 
     const executed = executeStudyPlan({ queue: session.queue, plan });
@@ -380,7 +386,7 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
     });
 
     const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
-    expect(adapted?.selectionContext.planVersion).toBe(plan.planVersion);
+    expect(adapted?.selectionContext.planVersion).toBe(plan.policyVersion);
     expect(adapted?.selectionContext.yieldRank).toBe(1);
   });
 });

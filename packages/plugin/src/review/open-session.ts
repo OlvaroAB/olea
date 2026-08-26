@@ -55,7 +55,7 @@
  * branch that could drift from it.
  */
 
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import type { QueueFilter, RandomSource, Scheduler, VaultPath, VaultSource } from 'olea-core';
 import {
   buildReviewSession,
@@ -103,7 +103,7 @@ export interface OpenReviewSessionInput {
    * `executeStudyPlan` — see the module doc for why `null` is not a special
    * case here.
    */
-  readonly plan?: StudyPlanArtifact | null;
+  readonly plan?: StudyPlanEnvelope | null;
   /**
    * F3.3/`[D-097]`'s "new" badge (`ol-p3t07a`): every `status: 'pending'`
    * record is read fresh and merged into today's queue, ahead of the

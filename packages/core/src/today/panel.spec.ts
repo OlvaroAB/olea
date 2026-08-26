@@ -8,7 +8,7 @@ const DUE_THROUGH = new Date('2026-08-11T03:59:59.999Z');
 
 function review(day: string, eventId: string): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId,
     timestamp: `${day}T20:00:00-04:00`,

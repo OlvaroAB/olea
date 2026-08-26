@@ -18,7 +18,7 @@
  * stub.
  */
 
-import { type Rating, STUDY_PLAN_FORMAT_VERSION, type StudyPlanArtifact } from 'olea-contracts';
+import { type Rating, STUDY_PLAN_BODY_VERSION, type StudyPlanEnvelope } from 'olea-contracts';
 import type { RandomSource } from 'olea-core';
 import {
   appendReviewLogRecord,
@@ -167,7 +167,7 @@ const fixedRandom: RandomSource = { next: () => 0.42 };
 async function open(
   vault: ReturnType<typeof memoryVault>,
   clock: Clock = fixedClock(),
-  plan?: StudyPlanArtifact | null,
+  plan?: StudyPlanEnvelope | null,
 ) {
   return openReviewSession({
     vault,
@@ -524,27 +524,33 @@ describe('the session is scheduled against her replayed history', () => {
 // actually reaches a real session (P5-T07)".
 describe('P5-T07: a cached plan reaches the real session through executeStudyPlan', () => {
   /** Ranks Beta over Alpha; Alpha is deliberately absent from the plan. */
-  const PLAN: StudyPlanArtifact = {
-    formatVersion: STUDY_PLAN_FORMAT_VERSION,
-    planVersion: 'sp1-test0000000001',
+  const PLAN: StudyPlanEnvelope = {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion: 'sp1-test0000000001',
     computedAt: '2026-08-10T09:00:00-04:00',
-    asOf: '2026-08-10',
-    courses: [
-      {
-        course: 'TEST101',
-        status: 'ranked',
-        concepts: [
-          {
-            conceptId: unboundKey('Beta'),
-            rank: 1,
-            weight: 10,
-            examProximityDays: 3,
-            reasoning: 'test reasoning',
-            citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
-          },
-        ],
-      },
-    ],
+    freshForSeconds: 3600,
+    governsForSeconds: 86_400,
+    body: {
+      asOf: '2026-08-10',
+      courses: [
+        {
+          course: 'TEST101',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 10,
+              examProximityDays: 3,
+              reasoning: 'test reasoning',
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+      ],
+    },
   };
 
   it("a cached plan reorders the real session and completes D7.1's context", async () => {
@@ -558,7 +564,7 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     // plan never mentions and which therefore stays unranked.
     const first = outcome.session.currentItem;
     expect(first?.instrument.conceptIds).toContain(unboundKey('Beta'));
-    expect(first?.selectionContext.planVersion).toBe(PLAN.planVersion);
+    expect(first?.selectionContext.planVersion).toBe(PLAN.policyVersion);
     expect(first?.selectionContext.yieldRank).toBe(1);
     expect(first?.selectionContext.examProximity).toBe(3);
 
@@ -570,7 +576,7 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     // names the plan that was in force.
     const second = outcome.session.currentItem;
     expect(second?.instrument.conceptIds).toContain(unboundKey('Alpha'));
-    expect(second?.selectionContext.planVersion).toBe(PLAN.planVersion);
+    expect(second?.selectionContext.planVersion).toBe(PLAN.policyVersion);
     expect(second?.selectionContext.yieldRank).toBeNull();
     expect(second?.selectionContext.examProximity).toBeNull();
   });

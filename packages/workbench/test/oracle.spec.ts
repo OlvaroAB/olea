@@ -71,7 +71,7 @@ describe('deriveOracle', () => {
     const world = buildWorld(specFor('steady-reviewer'));
     const a = await deriveOracle({ world, asOf: ASOF, computedAt: COMPUTED_AT });
     const b = await deriveOracle({ world, asOf: ASOF, computedAt: COMPUTED_AT });
-    expect(a.result.plan.planVersion).toBe(b.result.plan.planVersion);
+    expect(a.result.plan.policyVersion).toBe(b.result.plan.policyVersion);
     expect(JSON.stringify(a.result.gap)).toBe(JSON.stringify(b.result.gap));
   });
 });
@@ -82,9 +82,9 @@ describe('deriveClosedLoop — a review event now carries a real planVersion', (
     const closed = await deriveClosedLoop({ world, asOf: ASOF, computedAt: COMPUTED_AT });
 
     expect(closed.queue.executed.items.length).toBeGreaterThan(0);
-    expect(closed.queue.executed.planVersion).toBe(closed.plan.planVersion);
+    expect(closed.queue.executed.planVersion).toBe(closed.plan.policyVersion);
     for (const item of closed.queue.executed.items) {
-      expect(item.selectionContext.planVersion).toBe(closed.plan.planVersion);
+      expect(item.selectionContext.planVersion).toBe(closed.plan.policyVersion);
       expect(item.selectionContext.planVersion).not.toBeNull();
     }
   });

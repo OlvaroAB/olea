@@ -34,7 +34,7 @@ function reviewEntry(input: {
   readonly instrumentType?: 'qa' | 'cloze' | 'mcq';
 }): ReviewLogEntry {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: input.eventId,
     timestamp: `${input.day}T12:00:00.000Z`,

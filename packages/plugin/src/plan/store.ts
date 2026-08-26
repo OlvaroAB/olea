@@ -20,7 +20,7 @@
  * back is the caller's.
  */
 
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import type { StudyPlanStore } from 'olea-core';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
@@ -42,7 +42,7 @@ export class ObsidianStudyPlanStore implements StudyPlanStore {
     return (blob as Record<string, unknown>)[STUDY_PLAN_STORAGE_KEY] ?? null;
   }
 
-  async save(plan: StudyPlanArtifact): Promise<void> {
+  async save(plan: StudyPlanEnvelope): Promise<void> {
     // Read-modify-write: every other store sharing this blob (queue,
     // keyword index, worker config, device id) must survive this write.
     const existing = await this.host.loadData();

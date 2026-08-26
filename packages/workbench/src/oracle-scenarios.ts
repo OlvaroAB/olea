@@ -23,7 +23,7 @@
  * 2's defence belongs on screen, not only in a spec file.
  */
 
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import { utcDate, WORKBENCH_NOW } from './clock.js';
 import { deriveClosedLoop, deriveOracle, type OracleDeriveResult } from './oracle/derive.js';
 import { withSyntheticDisplayNames } from './oracle/display-names.js';
@@ -122,7 +122,7 @@ export interface OracleScenario {
   readonly deps: GapViewDeps;
   readonly note: string;
   readonly trace: PipelineTrace;
-  readonly plan: StudyPlanArtifact;
+  readonly plan: StudyPlanEnvelope;
   /** Present only for `plan-fresh` / `plan-stale-offline`. */
   readonly refresh?: StudyPlanRefreshResult;
 }
@@ -165,7 +165,7 @@ function createMemoryStudyPlanStore(seed: unknown): StudyPlanStore {
 }
 
 /** A plan built from the SAME world at an earlier `asOf` — genuinely stale, not a copy relabelled. */
-async function buildStaleCachedPlan(persona: PersonaId): Promise<StudyPlanArtifact> {
+async function buildStaleCachedPlan(persona: PersonaId): Promise<StudyPlanEnvelope> {
   const world = worldFor(persona);
   const staleAsOf = utcDate(new Date(WORKBENCH_NOW.getTime() - 10 * 86_400_000));
   const { result } = await deriveOracle({
@@ -207,7 +207,7 @@ export async function buildOracleScenario(stateId: string): Promise<OracleScenar
               );
             },
           };
-    const refresh = await refreshStudyPlan({ store, provider });
+    const refresh = await refreshStudyPlan({ store, provider, now: () => WORKBENCH_NOW });
     return { deps: { load }, note: state.note, trace: closed.trace, plan: closed.plan, refresh };
   }
 

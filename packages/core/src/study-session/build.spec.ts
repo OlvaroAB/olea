@@ -817,7 +817,7 @@ describe('the session says where its times came from', () => {
     const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
     const index = buildConceptInstrumentIndex([qa('a1', ['A'])]);
     const history = Array.from({ length: 6 }, (_, n) => ({
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       kind: 'review' as const,
       eventId: `e${n}`,
       timestamp: '2026-09-13T09:00:00.000+00:00',

@@ -36,7 +36,7 @@
  * itself (an assertion is a test's job, not a pipeline stage's).
  */
 
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import type { Scheduler, SchedulerState } from 'olea-core';
 import { createFsrsScheduler } from 'olea-core';
 import {
@@ -82,7 +82,7 @@ export interface OracleDeriveInput {
 export interface OracleDeriveResult {
   readonly mastery: ReadonlyMap<string, ConceptMasteryResult>;
   readonly ranking: RankOracleResult;
-  readonly plan: StudyPlanArtifact;
+  readonly plan: StudyPlanEnvelope;
   readonly gap: GapViewModel;
   readonly queue: {
     readonly composed: ComposedQueue;
@@ -255,9 +255,9 @@ export async function deriveOracle(input: OracleDeriveInput): Promise<{
     'plan',
     () => buildStudyPlan({ ranking, computedAt }),
     (plan) => ({
-      status: plan.courses.length === 0 ? 'empty' : 'ok',
+      status: plan.body.courses.length === 0 ? 'empty' : 'ok',
       inputSummary: { rankedCourses: ranking.courses.length },
-      outputSummary: { planVersion: plan.planVersion, courses: plan.courses.length },
+      outputSummary: { planVersion: plan.policyVersion, courses: plan.body.courses.length },
     }),
   );
   stages.push(planStage.record);

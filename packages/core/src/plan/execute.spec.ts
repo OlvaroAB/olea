@@ -1,8 +1,8 @@
 import {
   GOVERNING_FRESH_FOR_SECONDS,
   GOVERNING_GOVERNS_FOR_SECONDS,
-  type ReviewLogRecordV4,
-  reviewLogRecordV4,
+  type ReviewLogRecordV5,
+  reviewLogRecordV5,
   type StudyPlanCourse,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
@@ -125,7 +125,7 @@ describe('executeStudyPlan — C7.6: the plan version reaches every D7.1 record'
     expect(executed.items[0]?.planWeight).toBe(0.7);
   });
 
-  it('produces a selection context the frozen v4 record actually accepts', () => {
+  it('produces a selection context the frozen v5 record actually accepts', () => {
     const executed = executeStudyPlan({
       queue: queue([item('i-ranked', ['concept-alpha'])]),
       plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
@@ -133,8 +133,8 @@ describe('executeStudyPlan — C7.6: the plan version reaches every D7.1 record'
     const offered = executed.items[0];
     if (offered === undefined) throw new Error('expected an item');
 
-    const record: ReviewLogRecordV4 = {
-      schemaVersion: 4,
+    const record: ReviewLogRecordV5 = {
+      schemaVersion: 5,
       kind: 'review',
       eventId: 'evt-1',
       timestamp: '2026-08-16T10:00:00.000Z',
@@ -147,7 +147,7 @@ describe('executeStudyPlan — C7.6: the plan version reaches every D7.1 record'
       conceptIds: [...offered.conceptIds],
     };
 
-    const parsed = reviewLogRecordV4.parse(record);
+    const parsed = reviewLogRecordV5.parse(record);
     // The end of the chain the clause names: the version is in the record the
     // A→B checkpoint will read off her disk.
     expect(parsed.selectionContext.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');

@@ -240,9 +240,9 @@ export async function buildFixtureOracle(vault: VaultSource): Promise<FixtureOra
         computedAt: `${FIXTURE_ORACLE_ASOF}T09:00:00.000Z`,
       }),
     (plan) => ({
-      status: plan.courses.length === 0 ? 'empty' : 'ok',
+      status: plan.body.courses.length === 0 ? 'empty' : 'ok',
       inputSummary: { rankedCourses: ranking.ranking.courses.length },
-      outputSummary: { planVersion: plan.planVersion, courses: plan.courses.length },
+      outputSummary: { planVersion: plan.policyVersion, courses: plan.body.courses.length },
     }),
   );
   stages.push(planStage.record);

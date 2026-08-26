@@ -12,7 +12,7 @@ import { buildMasteryOverview } from './mastery-overview.js';
 
 function review(conceptId: string, day: string, eventId: string): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId,
     timestamp: `${day}T20:00:00+00:00`,

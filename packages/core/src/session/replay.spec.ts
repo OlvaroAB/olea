@@ -22,7 +22,7 @@ function review(
   instrumentType: InstrumentType = 'qa',
 ): ReviewLogEntry {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId,
     timestamp,
@@ -43,7 +43,7 @@ function suspend(
   kind: 'suspend' | 'unsuspend' = 'suspend',
 ): ReviewLogEntry {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind,
     eventId,
     timestamp,

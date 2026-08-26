@@ -9,7 +9,7 @@ import { conceptSprig, masteryDistribution } from './sprig.js';
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-01-10T09:00:00-04:00',

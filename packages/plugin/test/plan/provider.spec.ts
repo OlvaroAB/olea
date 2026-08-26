@@ -9,7 +9,7 @@
  * not re-testing `composeOracleRanking`'s own acceptance criteria a second
  * time.
  */
-import { studyPlanArtifact } from 'olea-contracts';
+import { studyPlanEnvelope } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -93,8 +93,8 @@ describe('createLocalStudyPlanProvider — delivered ranking weights ([D-110], o
       now: () => new Date('2026-08-10T09:00:00-04:00'),
     });
     const raw = await provider.fetchPlan();
-    const plan = studyPlanArtifact.parse(raw);
-    const course = plan.courses.find((c) => c.course === 'TESTC101');
+    const plan = studyPlanEnvelope.parse(raw);
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
     expect(course?.status).toBe('ranked');
   });
 
@@ -114,10 +114,10 @@ describe('createLocalStudyPlanProvider — delivered ranking weights ([D-110], o
       readRankWeights: async () => undefined,
     }).fetchPlan();
 
-    const baselinePlan = studyPlanArtifact.parse(baseline);
-    const degradedPlan = studyPlanArtifact.parse(degraded);
-    const baselineCourse = baselinePlan.courses.find((c) => c.course === 'TESTC101');
-    const degradedCourse = degradedPlan.courses.find((c) => c.course === 'TESTC101');
+    const baselinePlan = studyPlanEnvelope.parse(baseline);
+    const degradedPlan = studyPlanEnvelope.parse(degraded);
+    const baselineCourse = baselinePlan.body.courses.find((c) => c.course === 'TESTC101');
+    const degradedCourse = degradedPlan.body.courses.find((c) => c.course === 'TESTC101');
     if (baselineCourse?.status !== 'ranked' || degradedCourse?.status !== 'ranked') {
       throw new Error('expected TESTC101 to rank in both plans');
     }
@@ -152,10 +152,10 @@ describe('createLocalStudyPlanProvider — delivered ranking weights ([D-110], o
     }).fetchPlan();
 
     expect(calls).toBe(1);
-    const baselinePlan = studyPlanArtifact.parse(baseline);
-    const deliveredPlan = studyPlanArtifact.parse(delivered);
-    const baselineCourse = baselinePlan.courses.find((c) => c.course === 'TESTC101');
-    const deliveredCourse = deliveredPlan.courses.find((c) => c.course === 'TESTC101');
+    const baselinePlan = studyPlanEnvelope.parse(baseline);
+    const deliveredPlan = studyPlanEnvelope.parse(delivered);
+    const baselineCourse = baselinePlan.body.courses.find((c) => c.course === 'TESTC101');
+    const deliveredCourse = deliveredPlan.body.courses.find((c) => c.course === 'TESTC101');
     if (baselineCourse?.status !== 'ranked' || deliveredCourse?.status !== 'ranked') {
       throw new Error('expected TESTC101 to rank in both plans');
     }
@@ -171,7 +171,7 @@ describe('createLocalStudyPlanProvider — configured', () => {
     await vault.write(
       '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
       `${JSON.stringify({
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'review',
         eventId: 'r1',
         timestamp: '2026-08-09T09:00:00-04:00',
@@ -199,11 +199,11 @@ describe('createLocalStudyPlanProvider — configured', () => {
     });
 
     const raw = await provider.fetchPlan();
-    const plan = studyPlanArtifact.parse(raw);
+    const plan = studyPlanEnvelope.parse(raw);
 
-    expect(plan.asOf).toBe('2026-08-10');
+    expect(plan.body.asOf).toBe('2026-08-10');
     expect(plan.computedAt).toBe(new Date('2026-08-10T09:00:00-04:00').toISOString());
-    const course = plan.courses.find((c) => c.course === 'TESTC101');
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
     expect(course?.status).toBe('ranked');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     expect(course.concepts.map((c) => c.conceptId)).toEqual(['Widget theory']);
@@ -219,8 +219,8 @@ describe('createLocalStudyPlanProvider — configured', () => {
     });
 
     const raw = await provider.fetchPlan();
-    const plan = studyPlanArtifact.parse(raw);
-    const course = plan.courses.find((c) => c.course === 'TESTC101');
+    const plan = studyPlanEnvelope.parse(raw);
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     // No log at all — a fresh install's honest state — still produces a
     // usable, schema-valid plan rather than throwing or abstaining.

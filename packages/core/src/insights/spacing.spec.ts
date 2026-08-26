@@ -42,7 +42,7 @@ interface ReviewOpts {
 
 function review(opts: ReviewOpts): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: `e-${opts.dayOffset}-${opts.index}`,
     timestamp: new Date(START + opts.dayOffset * DAY_MS).toISOString().replace('Z', '+00:00'),

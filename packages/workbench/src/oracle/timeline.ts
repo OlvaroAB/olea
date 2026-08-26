@@ -216,11 +216,11 @@ export async function deriveOracleTimeline(
 // from `deriveOracleTimeline` itself. `test/timeline.spec.ts` is the caller.
 // ---------------------------------------------------------------------------
 
-/** Every distinct `plan.planVersion` seen across the timeline, in day order (consecutive repeats collapsed). */
+/** Every distinct `plan.policyVersion` seen across the timeline, in day order (consecutive repeats collapsed). */
 export function planVersionSeries(timeline: OracleTimeline): readonly string[] {
   const series: string[] = [];
   for (const day of timeline.days) {
-    const version = day.result.plan.planVersion;
+    const version = day.result.plan.policyVersion;
     if (series.length === 0 || series[series.length - 1] !== version) series.push(version);
   }
   return series;

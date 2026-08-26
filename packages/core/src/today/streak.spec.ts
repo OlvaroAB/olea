@@ -4,7 +4,7 @@ import { computeStreak, type StreakSummary, studyDays } from './streak.js';
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: 'r1',
     timestamp: '2026-08-10T09:00:00-04:00',
@@ -27,7 +27,7 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
 
 function suspension(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'suspend',
     eventId: 's1',
     timestamp: '2026-08-10T09:00:00-04:00',

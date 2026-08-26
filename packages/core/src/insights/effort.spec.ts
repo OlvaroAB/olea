@@ -19,7 +19,7 @@ function review(
   durationMs: number | null,
 ): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: `e${index}`,
     timestamp: '2026-09-01T18:00:00+00:00',

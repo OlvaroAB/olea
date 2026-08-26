@@ -60,7 +60,7 @@ function reviewOf(
   conceptId: string,
 ): ReviewLogEntry {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId,
     timestamp,
@@ -181,7 +181,7 @@ describe('suspension, read from the whole log', () => {
       now: NOW,
       entries: [
         {
-          schemaVersion: 4,
+          schemaVersion: 5,
           kind: 'suspend',
           eventId: 's1',
           timestamp: '2026-08-01T09:00:00+00:00',
@@ -200,7 +200,7 @@ describe('suspension, read from the whole log', () => {
       now: NOW,
       entries: [
         {
-          schemaVersion: 4,
+          schemaVersion: 5,
           kind: 'suspend',
           eventId: 's1',
           timestamp: '2026-08-01T09:00:00+00:00',
@@ -208,7 +208,7 @@ describe('suspension, read from the whole log', () => {
           conceptIds: [unboundKey('Gamma')],
         },
         {
-          schemaVersion: 4,
+          schemaVersion: 5,
           kind: 'unsuspend',
           eventId: 's2',
           timestamp: '2026-08-02T09:00:00+00:00',
