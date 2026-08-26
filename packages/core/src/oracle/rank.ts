@@ -21,25 +21,45 @@
  * function is the authority on order and on "reasoning matches what
  * actually drove it", and it needs Slot O for neither.
  *
+ * ## Vetoes are separated from the blend (C5.10, `[D-076]` round 4, `ol-plxu`)
+ *
+ * Before any weighing happens, each concept↔assessment edge is checked
+ * against a short, closed list of **vetoes** — facts that disqualify it
+ * outright rather than merely discount it: `checkEdgeVeto` below. A vetoed
+ * edge is REMOVED from the blend entirely (`buildEdgeOutcome` returns it
+ * tagged `'vetoed'` before any weighing happens, and it never appears in
+ * `contributions`) and is reported instead in
+ * `OracleConceptFactors.vetoedEdges`, with a stated reason. If every edge a concept has is vetoed, the concept itself is
+ * removed from `ranked` and reported in `CourseOracleRanking.vetoedConcepts`
+ * — C5.10's own words: "A veto removes the concept from consideration and is
+ * not a weight." **This is a structural distinction, not a numeric one**: no
+ * combination of the SIGNALS below can reproduce a veto's effect (removal +
+ * a stated reason), and a veto is never expressed as a weight of zero mixed
+ * into the blend. Only `checkEdgeVeto`'s doc, not this one, is the source of
+ * truth for which facts are wired as vetoes today.
+ *
  * ## The scoring shape, and where its weights actually come from
  *
- * For each concept↔assessment edge (P5-T03), this module computes a
- * `contribution` — how much that one assessment's evidence should weigh in
- * the concept's overall priority — from four signals, each normalized to
- * roughly `[0, 1]` so they combine by multiplication without one signal
- * silently dominating by scale:
+ * For each SURVIVING (non-vetoed) concept↔assessment edge, this module
+ * computes a `contribution` — how much that one assessment's evidence should
+ * weigh in the concept's overall priority — from four signals, each
+ * normalized to roughly `[0, 1]` so they combine by multiplication without
+ * one signal silently dominating by scale:
  *
  *   contribution = yieldScore * confidence * assessmentWeightScore * examProximityScore
  *
  * A concept's `preMasteryScore` is the **sum** of its contributions across
- * every assessment that has an edge to it in the same course — a concept
- * examined by three assessments accumulates more priority than one examined
- * by a single low-weight quiz, which is the plain reading of "likelihood
- * and weight of examination" (F4.2). The final `priorityScore` multiplies
- * that by a mastery-need factor (`masteryNeedWeight`) so a concept she has
- * already got to `yours` still shows up — F4.9 forbids ever implying full
- * coverage is unnecessary — but ranks below an equally-evidenced concept
- * she hasn't touched.
+ * every surviving assessment that has an edge to it in the same course — a
+ * concept examined by three assessments accumulates more priority than one
+ * examined by a single low-weight quiz, which is the plain reading of
+ * "likelihood and weight of examination" (F4.2). The final `priorityScore`
+ * multiplies that by a mastery-need factor (`masteryNeedWeight`) — so a
+ * concept she has already got to `yours` still shows up (F4.9 forbids ever
+ * implying full coverage is unnecessary, but ranks below an equally-evidenced
+ * concept she hasn't touched) — and, when supplied, a retrievability factor
+ * (`retrievabilityWeight`, `RankOracleInput.retrievability`'s doc). Both are
+ * SIGNALS in C5.10's sense: they trade off smoothly and never remove a
+ * concept the way a veto does.
  *
  * **Per `[D-110]` (`ol-egov.28`), the proximity half-life, the assessment
  * weight divisor and the mastery-need ladder are DERIVED, not declared: the
@@ -92,9 +112,13 @@ import type { VaultPath } from '../vault/types.js';
 import type {
   ConceptPriority,
   CourseOracleRanking,
+  DueDateReadIssue,
+  EdgeVetoReason,
   OracleConceptFactors,
   OracleEdgeContribution,
   OracleMasteryState,
+  OracleVetoedConcept,
+  OracleVetoedEdge,
   RankOracleInput,
   RankOracleOptions,
   RankOracleResult,
@@ -225,22 +249,88 @@ function computeAssessmentWeightScore(
 }
 
 /**
- * Exam-proximity score. Unparseable `due` is neutral (1, same as "due
- * today") — an assessment whose date this reader could not parse must not
- * be silently deprioritized. An assessment that has genuinely already
- * passed (`daysUntilDue < 0`) scores 0: it cannot inform *future* study
- * priority, whatever its evidence.
+ * Resolves `due` to a days-until-due reading and, separately, whether the
+ * value read as an actual data-quality problem. **Three cases, not two:**
+ * `due` absent (ordinary — most assessments in the fixture and the real
+ * vault alike simply have a date), `due` present but unparseable (a data
+ * problem worth surfacing loudly — `dueDateIssue: 'unparseable'`), and `due`
+ * present and parseable. The first two both yield `daysUntilDue: null` —
+ * neither can place the assessment on the timeline — but only the second is
+ * flagged, because "no date recorded" is not itself news.
  */
-function computeExamProximity(
+function resolveDueTiming(
   asOf: Date,
   due: string | undefined,
-  halfLifeDays: number,
-): { readonly daysUntilDue: number | null; readonly score: number } {
-  const dueDate = due === undefined ? null : dateFromCalendarDay(due);
-  if (dueDate === null) return { daysUntilDue: null, score: 1 };
-  const daysUntilDue = daysBetween(asOf, dueDate);
-  if (daysUntilDue < 0) return { daysUntilDue, score: 0 };
-  return { daysUntilDue, score: 1 / (1 + daysUntilDue / halfLifeDays) };
+): { readonly daysUntilDue: number | null; readonly dueDateIssue: DueDateReadIssue | undefined } {
+  if (due === undefined) return { daysUntilDue: null, dueDateIssue: undefined };
+  const dueDate = dateFromCalendarDay(due);
+  if (dueDate === null) return { daysUntilDue: null, dueDateIssue: 'unparseable' };
+  return { daysUntilDue: daysBetween(asOf, dueDate), dueDateIssue: undefined };
+}
+
+/**
+ * C5.10's veto list, structurally separated from the weighted blend below:
+ * "A short list of facts that genuinely disqualify a concept act as
+ * vetoes... A veto removes the concept from consideration and is not a
+ * weight." **Exactly one of the three is computable from data this module
+ * has today.**
+ *
+ *  - `'assessment-passed'` — `daysUntilDue < 0`. Wired here. A passed
+ *    assessment cannot inform *future* study priority, whatever its
+ *    evidence, so it is REMOVED from the blend rather than merely scored
+ *    low — previously this floored `examProximityScore` to 0 in place (a
+ *    weight indistinguishable from any other), which is exactly the
+ *    gate-that-should-have-been-a-weight-or-vice-versa confusion C5.10 warns
+ *    against; separating it here is this bead's structural half.
+ *  - `'out-of-course-scope'` and `'suspended'` — **reserved, not wired.**
+ *    Neither fact is an input `rankOracle` receives today:
+ *    `AssessmentRecord.status` (`../assessment/types.js`) is free text the
+ *    contract does not define values for at this key (F1.7/F4.8 key on
+ *    `type`, never `status`), and concept-level suspension is a different
+ *    mechanism from `../review-log/suspension.ts`'s per-INSTRUMENT
+ *    projection — neither is threaded into `RankOracleInput`. Guessing a
+ *    mapping from `status` strings would be inventing contract vocabulary
+ *    this module does not own; wiring either is a reachability gap for a
+ *    follow-on bead, tracked structurally by `EdgeVetoReason` already
+ *    naming both so a producer has somewhere to report into.
+ *
+ * Never called for an edge whose `due` was merely absent or unparseable —
+ * "we don't know when this is due" is a SIGNAL (see
+ * `computeExamProximityScore`), not one of the disqualifying facts above.
+ */
+function checkEdgeVeto(daysUntilDue: number | null): { readonly reason: EdgeVetoReason } | null {
+  if (daysUntilDue !== null && daysUntilDue < 0) return { reason: 'assessment-passed' };
+  return null;
+}
+
+/**
+ * Exam-proximity SIGNAL score for a SURVIVING edge — never called for an
+ * edge `checkEdgeVeto` disqualified. `daysUntilDue === null` (missing or
+ * unparseable `due`) scores **0**.
+ *
+ * **DECLARED semantics, and the defect this replaces.** `daysUntilDue` was
+ * previously scored **1 — this function's maximum, identical to "due
+ * today"** — whenever `due` failed to parse, so a malformed date could
+ * outrank a real, dated deadline (`ol-plxu`). The fix: treat "no known
+ * deadline" the same way the decay formula's own floor treats a date
+ * receding to infinity (`1 / (1 + daysUntilDue / halfLifeDays) → 0` as
+ * `daysUntilDue → ∞`) — an assessment we cannot place on the timeline is
+ * never *more* urgent than one we can, however far away, so it can never
+ * tie or outrank any real dated assessment on this factor. This is argued
+ * in plain English, not fitted: it needs no corpus, only the shape of the
+ * decay curve it already uses.
+ *
+ * **This is a SIGNAL, never a gate** — the edge is NOT removed, unlike an
+ * `'assessment-passed'` veto. It stays in `contributions`, fully reported
+ * (`daysUntilDue: null`, `dueDateIssue` when the value was outright
+ * unparseable rather than merely absent), and the concept it belongs to can
+ * still rank on its other evidence, or even on this edge alone if it has no
+ * other — scoring 0 discounts this one edge's share, it does not disqualify
+ * the concept.
+ */
+function computeExamProximityScore(daysUntilDue: number | null, halfLifeDays: number): number {
+  if (daysUntilDue === null) return 0;
+  return 1 / (1 + daysUntilDue / halfLifeDays);
 }
 
 function compareCitations(a: EvidenceQuestionCitation, b: EvidenceQuestionCitation): number {
@@ -256,7 +346,7 @@ function unionCitations(
   const seen = new Map<string, EvidenceQuestionCitation>();
   for (const edge of edges) {
     for (const citation of edge.citations) {
-      const key = `${citation.sourcePath} ${citation.questionLabel}`;
+      const key = `${citation.sourcePath}\u0000${citation.questionLabel}`;
       if (!seen.has(key)) seen.set(key, citation);
     }
   }
@@ -283,28 +373,75 @@ function resolveMasteryState(
   return mastery.get(conceptKey)?.state ?? 'seed';
 }
 
-function buildEdgeContribution(
+/**
+ * `retrievabilityWeight` for one concept — see `RankOracleInput.retrievability`'s
+ * doc for what this is and why nothing supplies it today. Absence (the map
+ * itself omitted, or this concept missing from it) reads as neutral (1),
+ * the same "absent signal is neutral" rule `resolveMasteryState`'s
+ * `'unknown'` and `computeAssessmentWeightScore`'s unresolved-weight case
+ * both follow. A supplied value must be a genuine probability, `(0, 1]` —
+ * never negative, never a silent >1 that would inflate a concept's priority
+ * beyond what it earned from evidence alone.
+ */
+function resolveRetrievabilityWeight(
+  retrievability: ReadonlyMap<string, number> | undefined,
+  conceptKey: string,
+): number {
+  const value = retrievability?.get(conceptKey);
+  if (value === undefined) return 1;
+  if (!(value > 0 && value <= 1)) {
+    throw new Error(`rankOracle: retrievability.${conceptKey} must be within (0, 1], got ${value}`);
+  }
+  return value;
+}
+
+/** Deterministic order for `vetoedEdges`, matching `compareContributions`'s tie-break so purity/rebuild equivalence holds regardless of `Map` iteration order. */
+function compareVetoedEdges(a: OracleVetoedEdge, b: OracleVetoedEdge): number {
+  return a.assessmentPath < b.assessmentPath ? -1 : a.assessmentPath > b.assessmentPath ? 1 : 0;
+}
+
+/** One edge's outcome: REMOVED by a veto, or a surviving contribution to the blend — never both, matching C5.10's "a veto removes... and is not a weight." */
+type EdgeOutcome =
+  | { readonly kind: 'vetoed'; readonly vetoedEdge: OracleVetoedEdge }
+  | { readonly kind: 'contribution'; readonly contribution: OracleEdgeContribution };
+
+function buildEdgeOutcome(
   edge: ConceptAssessmentEdge,
   assessment: AssessmentRecord | undefined,
   asOf: Date,
   resolved: ResolvedOptions,
-): OracleEdgeContribution {
+): EdgeOutcome {
+  const { daysUntilDue, dueDateIssue } = resolveDueTiming(asOf, assessment?.due);
+  const veto = checkEdgeVeto(daysUntilDue);
+  if (veto !== null) {
+    return {
+      kind: 'vetoed',
+      vetoedEdge: { assessmentPath: edge.assessmentPath, reason: veto.reason, daysUntilDue },
+    };
+  }
   const yieldScore = computeYieldScore(edge.yieldRank);
   const weight = computeAssessmentWeightScore(assessment?.weight, resolved.assessmentWeightDivisor);
-  const proximity = computeExamProximity(asOf, assessment?.due, resolved.proximityHalfLifeDays);
+  const examProximityScore = computeExamProximityScore(
+    daysUntilDue,
+    resolved.proximityHalfLifeDays,
+  );
   const evidenceStrength = yieldScore * edge.confidence;
-  const contribution = evidenceStrength * weight.score * proximity.score;
+  const contribution = evidenceStrength * weight.score * examProximityScore;
   return {
-    assessmentPath: edge.assessmentPath,
-    yieldRank: edge.yieldRank,
-    yieldScore,
-    confidence: edge.confidence,
-    assessmentWeightKnown: weight.known,
-    assessmentWeightScore: weight.score,
-    daysUntilDue: proximity.daysUntilDue,
-    examProximityScore: proximity.score,
-    evidenceStrength,
-    contribution,
+    kind: 'contribution',
+    contribution: {
+      assessmentPath: edge.assessmentPath,
+      yieldRank: edge.yieldRank,
+      yieldScore,
+      confidence: edge.confidence,
+      assessmentWeightKnown: weight.known,
+      assessmentWeightScore: weight.score,
+      daysUntilDue,
+      ...(dueDateIssue !== undefined ? { dueDateIssue } : {}),
+      examProximityScore,
+      evidenceStrength,
+      contribution,
+    },
   };
 }
 
@@ -369,6 +506,7 @@ function rankOneCourse(
   noEvidencePathsForCourse: readonly VaultPath[],
   assessmentsByPath: ReadonlyMap<VaultPath, AssessmentRecord>,
   mastery: ReadonlyMap<string, { readonly state: MasteryState }> | undefined,
+  retrievability: ReadonlyMap<string, number> | undefined,
   asOf: Date,
   resolved: ResolvedOptions,
 ): CourseOracleRanking {
@@ -398,29 +536,53 @@ function rankOneCourse(
   }
 
   const entries: ConceptPriority[] = [];
+  const vetoedConcepts: OracleVetoedConcept[] = [];
   for (const [conceptKey, edges] of edgesByConcept) {
     // Every edge in this group shares one conceptName by construction (see
     // above) — restated from the first for display purposes only.
     const conceptName = edges[0]?.conceptName ?? conceptKey;
-    const contributions = edges
-      .map((edge) =>
-        buildEdgeContribution(edge, assessmentsByPath.get(edge.assessmentPath), asOf, resolved),
-      )
+
+    const outcomes = edges.map((edge) =>
+      buildEdgeOutcome(edge, assessmentsByPath.get(edge.assessmentPath), asOf, resolved),
+    );
+    const vetoedEdges = outcomes
+      .filter((o): o is Extract<EdgeOutcome, { kind: 'vetoed' }> => o.kind === 'vetoed')
+      .map((o) => o.vetoedEdge)
+      .sort(compareVetoedEdges);
+    const survivingEdges = edges.filter((_, index) => outcomes[index]?.kind === 'contribution');
+    const contributions = outcomes
+      .filter((o): o is Extract<EdgeOutcome, { kind: 'contribution' }> => o.kind === 'contribution')
+      .map((o) => o.contribution)
       .sort(compareContributions);
+
+    if (contributions.length === 0) {
+      // C5.10: "a veto removes the concept from consideration" — every edge
+      // this concept had was disqualified, so no `ConceptPriority` is built
+      // for it. Reported here rather than silently absent from `ranked`.
+      vetoedConcepts.push({ conceptName, conceptKey, vetoedEdges });
+      continue;
+    }
+
     const preMasteryScore = contributions.reduce((sum, c) => sum + c.contribution, 0);
     const masteryState = resolveMasteryState(mastery, conceptKey);
     const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
-    const citations = unionCitations(edges);
+    const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
+    // Citations reflect only SURVIVING evidence — a vetoed edge contributed
+    // nothing to this concept's score, so its citations are not offered as
+    // evidence for it either (reasoning matches what actually drove it).
+    const citations = unionCitations(survivingEdges);
     const distinctSourceCount = new Set(citations.map((c) => c.sourcePath)).size;
 
     const factors: OracleConceptFactors = {
       citations,
       distinctSourceCount,
       contributions,
+      vetoedEdges,
       preMasteryScore,
       masteryState,
       masteryNeedWeight,
-      priorityScore: preMasteryScore * masteryNeedWeight,
+      retrievabilityWeight,
+      priorityScore: preMasteryScore * masteryNeedWeight * retrievabilityWeight,
     };
 
     entries.push({
@@ -440,8 +602,13 @@ function rankOneCourse(
     return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
   });
   const ranked = entries.map((entry, index) => ({ ...entry, rank: index + 1 }));
+  // Deterministic order — same reason `ranked` sorts, so two calls with the
+  // same input produce byte-identical output (the purity/rebuild property).
+  vetoedConcepts.sort((a, b) =>
+    a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0,
+  );
 
-  return { course, status: 'ranked', ranked };
+  return { course, status: 'ranked', ranked, vetoedConcepts };
 }
 
 /**
@@ -496,6 +663,7 @@ export function rankOracle(input: RankOracleInput): RankOracleResult {
       noEvidenceByCourse.get(course) ?? [],
       assessmentsByPath,
       input.mastery,
+      input.retrievability,
       asOfDate,
       resolved,
     ),

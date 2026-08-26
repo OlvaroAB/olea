@@ -443,7 +443,15 @@ describe('rankOracle — assessment weight and exam proximity, unknown vs. known
     expect(contribution?.assessmentWeightScore).toBe(1);
   });
 
-  it('an already-past due date scores zero proximity', () => {
+  it("an already-past due date is now a VETO, not a floored weight (ol-plxu / C5.10) — the edge is removed, and since it is this concept's only evidence, the concept itself is removed and reported", () => {
+    // Ruled semantics changed here: C5.10 separates vetoes from the blend, and
+    // "an assessment has passed" is one of the three veto facts, not a signal
+    // that floors to zero in place. Superseded assertions this replaces: this
+    // used to assert `contribution.examProximityScore === 0` and
+    // `priorityScore === 0` on a STILL-PRESENT ranked entry — that is now the
+    // defect C5.10 names ("a gate that should have been a weight... silently
+    // deletes candidates, and a weight that should have been a gate silently
+    // admits them" read backwards): a veto must remove, not merely floor.
     const input: RankOracleInput = {
       evidence: {
         edges: [edge()],
@@ -455,13 +463,25 @@ describe('rankOracle — assessment weight and exam proximity, unknown vs. known
     const result = rankOracle(input);
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
-    const contribution = course.ranked[0]?.factors.contributions[0];
-    expect(contribution?.daysUntilDue).toBeLessThan(0);
-    expect(contribution?.examProximityScore).toBe(0);
-    expect(course.ranked[0]?.priorityScore).toBe(0);
+    // The concept has no surviving evidence at all, so it is NOT in `ranked`.
+    expect(course.ranked).toHaveLength(0);
+    // It is reported, not silently dropped.
+    expect(course.vetoedConcepts).toHaveLength(1);
+    const vetoedConcept = course.vetoedConcepts?.[0];
+    expect(vetoedConcept?.conceptKey).toBe('concept-a');
+    expect(vetoedConcept?.vetoedEdges).toEqual([
+      { assessmentPath: 'Assessments/Quiz1.md', reason: 'assessment-passed', daysUntilDue: -227 },
+    ]);
   });
 
-  it('an unparseable due date is neutral (1), distinct from an already-past one', () => {
+  it('an unparseable due date is now the exam-proximity FLOOR (0), never the maximum — the defect this bead fixes (ol-plxu)', () => {
+    // This test previously locked in the bug: it asserted
+    // `examProximityScore === 1` (the function's MAXIMUM, tied with
+    // due-today) for a date this reader could not parse. That is exactly
+    // "an unreadable date outranks a real deadline" — the ruled semantics
+    // this bead adopts is the opposite: no known deadline floors to 0, the
+    // same value the decay formula itself approaches as a real due date
+    // recedes to infinity, so it can never tie or outrank a dated one.
     const input: RankOracleInput = {
       evidence: {
         edges: [edge()],
@@ -473,9 +493,143 @@ describe('rankOracle — assessment weight and exam proximity, unknown vs. known
     const result = rankOracle(input);
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
+    // This is a SIGNAL, not a veto: the edge and the concept both survive.
+    expect(course.ranked).toHaveLength(1);
     const contribution = course.ranked[0]?.factors.contributions[0];
     expect(contribution?.daysUntilDue).toBeNull();
-    expect(contribution?.examProximityScore).toBe(1);
+    expect(contribution?.examProximityScore).toBe(0);
+    // Reported loudly and distinctly from a simply-absent `due`.
+    expect(contribution?.dueDateIssue).toBe('unparseable');
+  });
+
+  it('a missing due date (never recorded, not malformed) floors the same way but carries no dueDateIssue flag — absence is not itself news', () => {
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment({ due: undefined })]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const contribution = course.ranked[0]?.factors.contributions[0];
+    expect(contribution?.daysUntilDue).toBeNull();
+    expect(contribution?.examProximityScore).toBe(0);
+    expect(contribution?.dueDateIssue).toBeUndefined();
+  });
+});
+
+describe('rankOracle — vetoes are separated from the blend (C5.10, ol-plxu)', () => {
+  it('(a) a veto REMOVES the edge from the blend — it is absent from `contributions`, present only in `vetoedEdges`, and the concept still ranks on its other, surviving evidence', () => {
+    const passed = assessment({ path: 'Assessments/Passed.md', weight: 30, due: '2026-01-01' });
+    const upcoming = assessment({
+      path: 'Assessments/Upcoming.md',
+      weight: 30,
+      due: '2026-09-01',
+    });
+    const passedEdge = edge({ assessmentPath: 'Assessments/Passed.md' });
+    const upcomingEdge = edge({
+      assessmentPath: 'Assessments/Upcoming.md',
+      citations: [citation({ questionLabel: 'Q2' })],
+    });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [passedEdge, upcomingEdge],
+        assessmentsRead: readReport([passed, upcoming]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry).toBeDefined();
+
+    // Removed, not down-weighted: no contribution names the passed assessment.
+    expect(
+      entry?.factors.contributions.some((c) => c.assessmentPath === 'Assessments/Passed.md'),
+    ).toBe(false);
+    // Reported with a stated reason instead.
+    expect(entry?.factors.vetoedEdges).toEqual([
+      { assessmentPath: 'Assessments/Passed.md', reason: 'assessment-passed', daysUntilDue: -227 },
+    ]);
+    // The still-relevant assessment's evidence is untouched — the veto is
+    // scoped to the one edge it applies to, not the whole concept.
+    const upcomingContribution = entry?.factors.contributions.find(
+      (c) => c.assessmentPath === 'Assessments/Upcoming.md',
+    );
+    expect(upcomingContribution?.contribution).toBeGreaterThan(0);
+    expect(entry?.priorityScore).toBeCloseTo(upcomingContribution?.contribution ?? -1, 10);
+  });
+
+  it('(b) a SIGNAL — however low it scores — can never remove a candidate the way a veto does: an unparseable-date edge stays in `contributions` and the concept still ranks, even as its sole evidence', () => {
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment({ due: 'not-a-date' })]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    // Present, not vetoed away, even though its examProximityScore floors to 0.
+    expect(course.ranked).toHaveLength(1);
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    expect(course.ranked[0]?.factors.contributions).toHaveLength(1);
+    expect(course.ranked[0]?.factors.vetoedEdges ?? []).toHaveLength(0);
+  });
+
+  it('(c) a malformed due date ranks below both a due-today and a due-in-N-days assessment on the same terms, and is named in the structured report', () => {
+    const dueToday = assessment({ path: 'Assessments/Today.md', due: ASOF });
+    const dueInTen = assessment({
+      path: 'Assessments/TenDays.md',
+      due: '2026-08-26', // 10 days from ASOF
+    });
+    const malformed = assessment({ path: 'Assessments/Malformed.md', due: 'sometime soon' });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'concept-today',
+            conceptKey: 'concept-today',
+            assessmentPath: 'Assessments/Today.md',
+          }),
+          edge({
+            conceptName: 'concept-ten-days',
+            conceptKey: 'concept-ten-days',
+            assessmentPath: 'Assessments/TenDays.md',
+          }),
+          edge({
+            conceptName: 'concept-malformed',
+            conceptKey: 'concept-malformed',
+            assessmentPath: 'Assessments/Malformed.md',
+          }),
+        ],
+        assessmentsRead: readReport([dueToday, dueInTen, malformed]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual([
+      'concept-today',
+      'concept-ten-days',
+      'concept-malformed',
+    ]);
+
+    const malformedEntry = course.ranked.find((e) => e.conceptName === 'concept-malformed');
+    const malformedContribution = malformedEntry?.factors.contributions[0];
+    // Named in the structured report — not a silent floor, not a throw.
+    expect(malformedContribution?.dueDateIssue).toBe('unparseable');
+    expect(malformedContribution?.daysUntilDue).toBeNull();
+    expect(malformedContribution?.examProximityScore).toBe(0);
   });
 });
 
@@ -576,7 +730,7 @@ describe(
   'rankOracle — floor-correctness audit (component register 3.3: "for each ' +
     'factor, is silence-at-floor correct?" [YIELD-2] / ol-3ux7.7)',
   () => {
-    it('yes for a passed assessment: its contribution floors to exactly zero, but that floor is scoped to the one contribution it applies to — a still-relevant assessment on the same concept keeps its full weight', () => {
+    it('yes for a passed assessment: it is VETOED — removed from `contributions` entirely, reported in `vetoedEdges` — and that removal is scoped to the one edge it applies to, not the concept: a still-relevant assessment on the same concept keeps its full weight (ruled semantics updated by ol-plxu/C5.10 — a passed assessment previously floored `examProximityScore` to 0 IN PLACE, still counted as a "contribution"; C5.10 requires it removed outright, which this test now asserts)', () => {
       const passed = assessment({ path: 'Assessments/Passed.md', weight: 30, due: '2026-01-01' });
       const upcoming = assessment({
         path: 'Assessments/Upcoming.md',
@@ -601,19 +755,24 @@ describe(
       if (course?.status !== 'ranked') throw new Error('expected ranked');
       const entry = course.ranked[0];
       expect(entry).toBeDefined();
-      const passedContribution = entry?.factors.contributions.find(
-        (c) => c.assessmentPath === 'Assessments/Passed.md',
-      );
+      // Removed, not floored: `contributions` names only the surviving edge.
+      expect(entry?.factors.contributions).toHaveLength(1);
       const upcomingContribution = entry?.factors.contributions.find(
         (c) => c.assessmentPath === 'Assessments/Upcoming.md',
       );
-      expect(passedContribution?.examProximityScore).toBe(0);
-      expect(passedContribution?.contribution).toBe(0);
       expect(upcomingContribution?.contribution).toBeGreaterThan(0);
-      // The floor silences the one contribution it applies to, not the
-      // concept as a whole — the still-relevant assessment's evidence must
-      // keep counting toward the concept's priority.
+      // The veto silences the one edge it applies to, not the concept as a
+      // whole — the still-relevant assessment's evidence must keep counting
+      // toward the concept's priority.
       expect(entry?.priorityScore).toBeCloseTo(upcomingContribution?.contribution ?? -1, 10);
+      // Reported with a stated reason, never silently.
+      expect(entry?.factors.vetoedEdges).toEqual([
+        {
+          assessmentPath: 'Assessments/Passed.md',
+          reason: 'assessment-passed',
+          daysUntilDue: -227,
+        },
+      ]);
     });
 
     it('no for no-evidence-yet: a course with zero evidence never surfaces as a floored (zero-score) ranking — abstention is a status a floored-but-present concept never carries', () => {

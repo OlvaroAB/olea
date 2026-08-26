@@ -23,10 +23,64 @@ import type { VaultPath } from '../vault/types.js';
 export type OracleMasteryState = MasteryState | 'unknown';
 
 /**
+ * Why a concept↔assessment edge is DISQUALIFIED outright rather than merely
+ * weighted down — C5.10's veto list (`docs/Olea_alpha_functional_scope.md`,
+ * `[D-076]` round 4): "a short list of facts that genuinely disqualify a
+ * concept act as vetoes... A veto removes the concept from consideration and
+ * is not a weight." **Only `'assessment-passed'` has a producer today** — see
+ * `./rank.ts`'s `checkEdgeVeto` doc for exactly what data this module has and
+ * does not have for the other two. They are reserved here, not invented,
+ * because a caller/report needs somewhere to name them the moment a producer
+ * exists, and widening this union later is additive.
+ */
+export type EdgeVetoReason = 'assessment-passed' | 'out-of-course-scope' | 'suspended';
+
+/**
+ * One concept↔assessment edge REMOVED from the blend by a veto, reported
+ * rather than silently dropped — C5.10: "a fallback that silently vanishes is
+ * the next [defect]." Never appears in `OracleConceptFactors.contributions`;
+ * it lives in `vetoedEdges` instead, which is the structural half of "vetoes
+ * are separated from the blend."
+ */
+export interface OracleVetoedEdge {
+  readonly assessmentPath: VaultPath;
+  readonly reason: EdgeVetoReason;
+  /** Whole calendar days from `asOf` to `due` — always negative for `'assessment-passed'`. `null` for a veto reason that is not date-derived. */
+  readonly daysUntilDue: number | null;
+}
+
+/**
+ * A concept every one of whose edges was vetoed this pass — C5.10's "a veto
+ * removes the concept from consideration," taken to its conclusion. Reported
+ * on `CourseOracleRanking`'s `'ranked'` branch (`vetoedConcepts`) rather than
+ * silently producing a `ConceptPriority`-shaped hole, and distinct from
+ * `'abstained'`: abstention is "this course had no evidence at all" (P5-T03);
+ * this is "this one concept's evidence was all disqualified," a per-concept
+ * fact a whole-course status cannot carry.
+ */
+export interface OracleVetoedConcept {
+  readonly conceptName: string;
+  readonly conceptKey: string;
+  readonly vetoedEdges: readonly OracleVetoedEdge[];
+}
+
+/**
+ * Why a `due` value did not resolve to a usable date. `'unparseable'` means
+ * `due` was PRESENT but did not match the expected `YYYY-MM-DD` calendar-day
+ * shape — deliberately distinct from `due` being absent altogether, which is
+ * the ordinary, unremarkable "no date recorded" case. This is the loud,
+ * structured half of the fix for the defect this module's history flagged: a
+ * malformed date must show up somewhere a caller can see it, never win by
+ * going unnoticed.
+ */
+export type DueDateReadIssue = 'unparseable';
+
+/**
  * One assessment's contribution to a concept's priority score — the
  * per-edge arithmetic, kept individually inspectable rather than folded
  * away, because "why is this ranked here" has to be answerable down to a
- * single assessment and a single citation.
+ * single assessment and a single citation. Only SURVIVING edges (not vetoed
+ * — see `OracleVetoedEdge`) are represented here.
  */
 export interface OracleEdgeContribution {
   readonly assessmentPath: VaultPath;
@@ -40,9 +94,11 @@ export interface OracleEdgeContribution {
   readonly assessmentWeightKnown: boolean;
   /** `weight / options.assessmentWeightDivisor`, clamped to `[0, 1]`; `1` (neutral) when unknown. */
   readonly assessmentWeightScore: number;
-  /** Whole calendar days from `asOf` to the assessment's `due`, or `null` when `due` did not parse. Negative means already past. */
+  /** Whole calendar days from `asOf` to the assessment's `due`, or `null` when `due` was absent or did not parse. Never negative here — a passed assessment is a VETO, not a contribution (see `OracleVetoedEdge`). */
   readonly daysUntilDue: number | null;
-  /** `0` when the assessment has already passed (`daysUntilDue < 0`); `1` (neutral) when `due` did not parse; otherwise the half-life decay — see `./rank.ts`. */
+  /** Set when `due` was present but unparseable (see `DueDateReadIssue`) — `undefined` when `due` was absent or parsed cleanly. */
+  readonly dueDateIssue?: DueDateReadIssue;
+  /** `0` when `due` was absent or unparseable — DECLARED: treated the same as the half-life decay's own floor as a date recedes to infinity, so "no known deadline" can never tie or outrank a real, dated deadline; otherwise the half-life decay — see `./rank.ts`'s `computeExamProximityScore`. */
   readonly examProximityScore: number;
   /** `yieldScore * confidence` — the evidence signal alone, before assessment weight or timing. */
   readonly evidenceStrength: number;
@@ -52,18 +108,29 @@ export interface OracleEdgeContribution {
 
 /** Every number that fed a concept's `priorityScore`, kept alongside it so the score is never asserted without its arithmetic on hand. */
 export interface OracleConceptFactors {
-  /** Every citation across every contributing edge, deduplicated by (sourcePath, questionLabel) and deterministically sorted. Never empty for a `ranked` entry. */
+  /** Every citation across every SURVIVING contributing edge, deduplicated by (sourcePath, questionLabel) and deterministically sorted. Never empty for a `ranked` entry — a concept with none survives no further than `OracleVetoedConcept`. */
   readonly citations: readonly EvidenceQuestionCitation[];
   /** Distinct past-paper sources across `citations`. */
   readonly distinctSourceCount: number;
-  /** One entry per assessment this concept has an edge to in this course, sorted by `contribution` descending (ties by `assessmentPath` ascending). */
+  /** One entry per SURVIVING (non-vetoed) assessment this concept has an edge to in this course, sorted by `contribution` descending (ties by `assessmentPath` ascending). */
   readonly contributions: readonly OracleEdgeContribution[];
-  /** Sum of `contributions[*].contribution` — the score before the mastery multiplier. */
+  /** Edges REMOVED by a veto rather than folded into `contributions` — see `OracleVetoedEdge`. Always present (empty when nothing on this concept was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */
+  readonly vetoedEdges?: readonly OracleVetoedEdge[];
+  /** Sum of `contributions[*].contribution` — the score before the mastery and retrievability multipliers. */
   readonly preMasteryScore: number;
   readonly masteryState: OracleMasteryState;
   /** `options.masteryNeedWeight[masteryState]` — see `./rank.ts` for the ladder and why it is never zero. */
   readonly masteryNeedWeight: number;
-  /** `preMasteryScore * masteryNeedWeight` — restated on the entry itself as `ConceptPriority.priorityScore`. */
+  /**
+   * Per-concept retrievability (FSRS recall probability at `asOf`) as a
+   * blend multiplier — C5.10 names retrievability as one of the SIGNALS,
+   * never a gate. `1` (neutral) whenever `RankOracleInput.retrievability`
+   * omitted this concept or was omitted entirely, which is every caller
+   * today (see that field's doc for the reachability gap). Optional only so
+   * object literals built before this field existed still typecheck.
+   */
+  readonly retrievabilityWeight?: number;
+  /** `preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1)` — restated on the entry itself as `ConceptPriority.priorityScore`. */
   readonly priorityScore: number;
 }
 
@@ -102,6 +169,8 @@ export type CourseOracleRanking =
       readonly course: string;
       readonly status: 'ranked';
       readonly ranked: readonly ConceptPriority[];
+      /** Concepts every one of whose evidence was vetoed away this pass — see `OracleVetoedConcept`. Always present (empty when nothing was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */
+      readonly vetoedConcepts?: readonly OracleVetoedConcept[];
     }
   | {
       readonly course: string;
@@ -182,6 +251,29 @@ export interface RankOracleInput {
    * this).
    */
   readonly mastery?: ReadonlyMap<string, ConceptMasteryResult>;
+  /**
+   * Per-concept retrievability (FSRS recall probability at `asOf`), keyed
+   * exactly like `mastery` above (`ConceptAssessmentEdge.conceptKey`). C5.10
+   * names retrievability as one of the SIGNALS that trades off smoothly in
+   * the blend — never a gate — and this is that signal's seam into
+   * `rankOracle`. **Omitted entirely reads as neutral (1, no adjustment)**
+   * for every concept, the same "an absent signal is neutral, never the
+   * worst case" rule every other factor in this module follows; a value
+   * present for one concept but not another applies only to the one it
+   * names.
+   *
+   * **Known gap (reachability, plan §2.7 clause 5): nothing supplies this
+   * today.** `ConceptMasteryResult` (`../mastery/rollup.ts`) does not carry
+   * retrievability — that module's own doc says so outright ("forgetting…
+   * is not modelled in mastery at all today") — and no vitality-fold output
+   * (`../mastery/vitality.ts`'s `retrievability` port) is threaded into
+   * `composeOracleRanking` yet. Wiring an actual producer touches
+   * `mastery/`/`session/`, outside this bead's owned files (`oracle/`,
+   * `gap/`); this field exists so the blend has a structurally correct,
+   * never-a-gate place for it the moment one lands, rather than that arrival
+   * needing to re-litigate veto-vs-signal from scratch.
+   */
+  readonly retrievability?: ReadonlyMap<string, number>;
   /**
    * The calendar day exam proximity is measured from, `YYYY-MM-DD`.
    * **Explicit, never read from a clock inside this module** — unlike
