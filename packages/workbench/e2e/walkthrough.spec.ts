@@ -5,18 +5,14 @@
  *
  * Steps 7-8 mount the fixture-vault oracle (`oracle-fixture`, D-041), which
  * has its own URL shape (`#/walk/<n>`, not `#/<surface>/<stateId>`) — see
- * `walkthrough.ts`'s module doc — so this file navigates by hand rather than
- * through `helpers.ts`'s `gotoState`, whose `Surface` union does not include
- * `'walk'`.
+ * `walkthrough.ts`'s module doc — so this file navigates via `helpers.ts`'s
+ * `gotoWalkStep` rather than `gotoState`, whose `Surface` union does not
+ * include `'walk'`. `gotoWalkStep` used to be a private copy in this file;
+ * WBF-4 (`ol-opjq`) promoted it to `helpers.ts` so `pane-fit.spec.ts` and
+ * `walkthrough-visual.spec.ts` share the one definition.
  */
 import { expect, test } from '@playwright/test';
-import { frame, gotoState } from './helpers.js';
-
-async function gotoWalkStep(page: import('@playwright/test').Page, step: number): Promise<void> {
-  await page.goto(`/#/walk/${String(step)}?set=obsidian-dark&persona=none`);
-  await expect(page.locator('html')).toHaveAttribute('data-wb-ready', 'true', { timeout: 10_000 });
-  await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
-}
+import { frame, gotoState, gotoWalkStep } from './helpers.js';
 
 test('WBF-3: steps 7 and 8 mount the same real GapView but focus on different parts of it', async ({
   page,

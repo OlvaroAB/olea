@@ -20,7 +20,24 @@
  * when someone changes the viewport without re-checking either.
  */
 import { expect, test } from '@playwright/test';
-import { frame, gotoState, hostFrameElement, REVIEW_STATES, TODAY_STATES } from './helpers.js';
+import {
+  EXPLAIN_STATES,
+  frame,
+  GENERATE_STATES,
+  gotoState,
+  gotoWalkStep,
+  hostFrameElement,
+  ORACLE_STATES,
+  RETRIEVE_STATES,
+  REVIEW_STATES,
+  SESSION_STATES,
+  type Surface,
+  TALL_STATE_VIEWPORTS,
+  TIMELINE_STATES,
+  TODAY_STATES,
+  TRENDS_STATES,
+  WALK_STEP_VIEWPORTS,
+} from './helpers.js';
 
 test.describe.configure({ mode: 'parallel' });
 
@@ -47,24 +64,71 @@ async function measure(page: import('@playwright/test').Page) {
   return { pane, needed };
 }
 
-for (const stateId of [...REVIEW_STATES, ...TODAY_STATES]) {
-  const surface = REVIEW_STATES.includes(stateId as (typeof REVIEW_STATES)[number])
-    ? 'review'
-    : 'today';
+// WBF-4 (`ol-opjq`) widened this from review/today to every flat surface the
+// golden suite now screenshots (`visual-regression.spec.ts`) — the same
+// silent-scroll failure mode applies to any of them, not just the original
+// two.
+const SURFACE_STATES: ReadonlyArray<readonly [Surface, readonly string[]]> = [
+  ['review', REVIEW_STATES],
+  ['today', TODAY_STATES],
+  ['oracle', ORACLE_STATES],
+  ['retrieve', RETRIEVE_STATES],
+  ['generate', GENERATE_STATES],
+  ['timeline', TIMELINE_STATES],
+  ['explain', EXPLAIN_STATES],
+  ['session', SESSION_STATES],
+  ['trends', TRENDS_STATES],
+];
 
-  test(`${surface}/${stateId} fits its pane without scrolling`, async ({ page }) => {
-    await gotoState(page, surface, stateId, SET);
+for (const [surface, stateIds] of SURFACE_STATES) {
+  for (const stateId of stateIds) {
+    test(`${surface}/${stateId} fits its pane without scrolling`, async ({ page }) => {
+      // WBF-4: some oracle/timeline/trends/session states need more pane
+      // than the shared 1280x900 default offers (`TALL_STATE_VIEWPORTS`'s
+      // own header has the measured numbers, and why this is keyed per
+      // STATE rather than per surface) — set it here, per-test, rather than
+      // raising `playwright.config.ts`'s default, which would also reflow
+      // every review/today baseline this bead does not touch.
+      const override = TALL_STATE_VIEWPORTS[stateId];
+      if (override !== undefined) {
+        await page.setViewportSize(override);
+      }
+      await gotoState(page, surface, stateId, SET);
+      const { pane, needed } = await measure(page);
+
+      // 1px of slack for sub-pixel rounding on the pane's border, and no more:
+      // the point of the check is that the margin is known, not that it is
+      // comfortable.
+      expect(
+        needed,
+        `${surface}/${stateId}: the product needs ${String(needed)}px and the pane offers ` +
+          `${String(pane)}px. Either the state grew or the pane shrank — see ol-wzar. ` +
+          `Raise the viewport in playwright.config.ts (pane = viewport - inspector - padding) ` +
+          `rather than accepting a screenshot of a scrolled card.`,
+      ).toBeLessThanOrEqual(pane + 1);
+    });
+  }
+}
+
+// WBF-4 (`ol-opjq`) — the same check, for the twelve walkthrough steps
+// `walkthrough-visual.spec.ts` screenshots. Walk mode's own chrome (title,
+// copy, counter, step list) shrinks the pane further than any flat surface's
+// sidebar+inspector do, so this uses its own per-step overrides
+// (`WALK_STEP_VIEWPORTS`) rather than reusing `TALL_SURFACE_VIEWPORTS`.
+for (let n = 1; n <= 12; n++) {
+  test(`walk/${String(n)} fits its pane without scrolling`, async ({ page }) => {
+    const override = WALK_STEP_VIEWPORTS[n];
+    if (override !== undefined) {
+      await page.setViewportSize(override);
+    }
+    await gotoWalkStep(page, n);
     const { pane, needed } = await measure(page);
 
-    // 1px of slack for sub-pixel rounding on the pane's border, and no more:
-    // the point of the check is that the margin is known, not that it is
-    // comfortable.
     expect(
       needed,
-      `${surface}/${stateId}: the product needs ${String(needed)}px and the pane offers ` +
-        `${String(pane)}px. Either the state grew or the pane shrank — see ol-wzar. ` +
-        `Raise the viewport in playwright.config.ts (pane = viewport - inspector - padding) ` +
-        `rather than accepting a screenshot of a scrolled card.`,
+      `walk/${String(n)}: the product needs ${String(needed)}px and the pane offers ` +
+        `${String(pane)}px. Either the step's content grew or its viewport override ` +
+        `(WALK_STEP_VIEWPORTS in helpers.ts) needs raising — see ol-wzar.`,
     ).toBeLessThanOrEqual(pane + 1);
   });
 }
