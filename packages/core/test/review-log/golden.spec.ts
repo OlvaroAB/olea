@@ -180,9 +180,9 @@ function suspensions(entries: readonly ReviewLogEntry[]): SuspendLogRecord[] {
  */
 function expectFullKeyShape(record: ReviewLogRecord): void {
   const keys = Object.keys(record);
-  expect(keys.filter((k) => !(OPTIONAL_RECORD_KEYS as readonly string[]).includes(k)).sort()).toEqual(
-    RECORD_KEYS,
-  );
+  expect(
+    keys.filter((k) => !(OPTIONAL_RECORD_KEYS as readonly string[]).includes(k)).sort(),
+  ).toEqual(RECORD_KEYS);
   // Every optional key is absent for exactly one reason: nothing was
   // recorded. A key present with an undefined value would be a third state,
   // and `JSON.stringify` would erase the difference on the way to disk.
@@ -876,7 +876,8 @@ describe('review-log golden fixtures — device-workstation (v5, the current wri
 
   it('an explain-back record can name several concepts, record no rating and no mastery (F2.16)', () => {
     const explainBack = reviews(result.records).find(
-      (r) => r.instrumentType === 'explain-back' && r.eventId === '14141414-1414-4141-8141-141414141414',
+      (r) =>
+        r.instrumentType === 'explain-back' && r.eventId === '14141414-1414-4141-8141-141414141414',
     );
     expect(explainBack?.rating).toBeNull();
     expect(explainBack?.durationMs).toBeNull();

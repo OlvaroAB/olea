@@ -40,10 +40,10 @@ import {
   type SchedulingObservation,
   schedulingObservation,
   soloLevel,
+  supportLevel,
   suspendLogRecord,
   suspendLogRecordV3,
   suspendLogRecordV5,
-  supportLevel,
 } from './review-log.js';
 
 const SELECTION_CONTEXT_V4 = {
@@ -150,7 +150,13 @@ describe('v5 is v4 plus three optional fields — nothing else changed', () => {
     const v3Keys = Object.keys(reviewLogRecordV3.shape).sort();
     const v5Keys = Object.keys(reviewLogRecordV5.shape).sort();
     expect(v5Keys).toEqual(
-      [...v3Keys, 'masteryAtTime', 'supportLevelShown', 'explainBackGrade', 'schedulingObservation'].sort(),
+      [
+        ...v3Keys,
+        'masteryAtTime',
+        'supportLevelShown',
+        'explainBackGrade',
+        'schedulingObservation',
+      ].sort(),
     );
   });
 
@@ -183,7 +189,8 @@ describe('supportLevelShown — objective, never her self-rating', () => {
 
   it('rejects a value outside the three-tier ladder', () => {
     expect(
-      reviewLogRecordV5.safeParse(v5ReviewLine({ supportLevelShown: 'reduced-difficulty' })).success,
+      reviewLogRecordV5.safeParse(v5ReviewLine({ supportLevelShown: 'reduced-difficulty' }))
+        .success,
     ).toBe(false);
   });
 
@@ -199,15 +206,13 @@ describe('explainBackGrade and schedulingObservation are gated to explain-back r
   });
 
   it('rejects explainBackGrade on a qa review — SOLO grades a response, and only explain-back is gradable', () => {
-    expect(
-      reviewLogRecordV5.safeParse(v5ReviewLine({ explainBackGrade: GRADE })).success,
-    ).toBe(false);
+    expect(reviewLogRecordV5.safeParse(v5ReviewLine({ explainBackGrade: GRADE })).success).toBe(
+      false,
+    );
   });
 
   it('accepts schedulingObservation on an explain-back review naming a different concept', () => {
-    const parsed = reviewLogRecordV5.parse(
-      explainBackLine({ schedulingObservation: OBSERVATION }),
-    );
+    const parsed = reviewLogRecordV5.parse(explainBackLine({ schedulingObservation: OBSERVATION }));
     expect(parsed.schedulingObservation).toEqual(OBSERVATION);
   });
 
@@ -218,9 +223,9 @@ describe('explainBackGrade and schedulingObservation are gated to explain-back r
   });
 
   it('the refinement fires through the union too, not only on the bare record', () => {
-    expect(
-      reviewLogEntryV5.safeParse(v5ReviewLine({ explainBackGrade: GRADE })).success,
-    ).toBe(false);
+    expect(reviewLogEntryV5.safeParse(v5ReviewLine({ explainBackGrade: GRADE })).success).toBe(
+      false,
+    );
   });
 
   it('both fields can compose on the same explain-back review', () => {
@@ -285,12 +290,8 @@ describe('explainBackGrade.soloLevel — the five-level SOLO enum, never a binar
   });
 
   it('rejects a boolean or numeric stand-in for depth', () => {
-    expect(
-      explainBackGrade.safeParse({ ...GRADE, soloLevel: true }).success,
-    ).toBe(false);
-    expect(
-      explainBackGrade.safeParse({ ...GRADE, soloLevel: 3 }).success,
-    ).toBe(false);
+    expect(explainBackGrade.safeParse({ ...GRADE, soloLevel: true }).success).toBe(false);
+    expect(explainBackGrade.safeParse({ ...GRADE, soloLevel: 3 }).success).toBe(false);
   });
 });
 

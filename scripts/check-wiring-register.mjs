@@ -437,6 +437,16 @@ const KNOWN_FINDINGS = [
       'every non-declaration, non-barrel, non-comment occurrence of the port type name is a ' +
       'doc comment; zero real code references',
   },
+  {
+    port: 'ExplainWhyPort',
+    tasks: ['ol-p3t08'],
+    followUp: 'ol-sn1q',
+    reason:
+      'built and tested, deliberately unwired — round 17 (2026-08-26): ol-p3t08 shipped the F2.7 ' +
+      'service task plus the plugin port and ReviewSession.requestExplainWhy() while main.ts was ' +
+      'owned by a concurrent lane; the composition (port into ReviewSession, real sourceChunks, ' +
+      'view tap) is ol-sn1q',
+  },
 ];
 
 /** Validates `followUp` format on whichever findings list is active (the hardcoded default, or
