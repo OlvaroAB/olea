@@ -50,7 +50,7 @@ import type { EmbeddingProvider, EmbeddingVector, EmbedRequest, EmbedResult } fr
 export const RETRIEVAL_EMBED_TASK_ID = 'retrieval.embed.v1';
 
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
-export const RETRIEVAL_EMBED_CONTRACT_VERSION = 1;
+export const RETRIEVAL_EMBED_CONTRACT_VERSION = 2;
 
 /** One `/v1/task` request envelope — the shape `olea-contracts`' `requestEnvelope` validates. */
 export interface WorkerTaskRequest {

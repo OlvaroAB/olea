@@ -62,7 +62,7 @@ describe('WorkerCorpusRelationVerdict — the frozen vocabulary it mirrors', () 
   });
 
   it('sends the current contract version', () => {
-    expect(CONCEPTS_RELATIONS_CONTRACT_VERSION).toBe(1);
+    expect(CONCEPTS_RELATIONS_CONTRACT_VERSION).toBe(2);
   });
 });
 
@@ -76,7 +76,7 @@ describe('WorkerCorpusRelationVerdict — the request it builds', () => {
     expect(transport.sent).toHaveLength(1);
     const sent = transport.sent[0];
     expect(sent?.taskId).toBe('concepts.relations.v1');
-    expect(sent?.contractVersion).toBe(1);
+    expect(sent?.contractVersion).toBe(2);
     expect(sent?.payload).toEqual({
       candidates: [
         {

@@ -55,7 +55,7 @@ import {
 export const CONCEPTS_CLASSIFY_TASK_ID = 'concepts.classify.v1';
 
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
-export const CONCEPTS_CLASSIFY_CONTRACT_VERSION = 1;
+export const CONCEPTS_CLASSIFY_CONTRACT_VERSION = 2;
 
 /**
  * Anything that went wrong reaching the Worker or reading its reply that is

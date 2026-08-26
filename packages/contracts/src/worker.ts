@@ -19,7 +19,7 @@
  * envelope covers is how every request is versioned, authenticated, stamped,
  * and refused. Those are the seams.
  *
- * Three contract requirements are encoded here rather than left to convention:
+ * Four contract requirements are encoded here rather than left to convention:
  *
  * - **D-011 versioning.** Every request carries the version it was built
  *   against; two are served, the current one and the one before it; anything
@@ -34,6 +34,11 @@
  *   metadata. Nothing here gives the Worker a way to reference her content
  *   across calls — no note ids, no concept ids, no session handles. If a future
  *   task id seems to need one, that is the C6 tripwire firing, not a gap.
+ * - **D-123 usage.** The success stamp carries per-call token counts, cost and
+ *   latency — structural facts, not content — so the usage view (F7.3) can
+ *   show real figures instead of local call counts alone. D-005/D-014 are
+ *   unchanged: `requestTelemetry` stays the only thing persisted server-side,
+ *   and stays write-only to Analytics Engine.
  */
 
 import { z } from 'zod';
@@ -46,8 +51,13 @@ import { z } from 'zod';
  * deletes N−2's fixtures in the same change (D-011). Version skew is normal —
  * she updates the plugin whenever BRAT gets round to it — so the floor is a
  * real runtime condition, not a theoretical one.
+ *
+ * **2 (2026-08-26, [D-123]):** `responseStamp` grows `usage` — a per-call
+ * usage block (token counts, cost, latency, cached-input tokens). Additive
+ * only: an N−1 client that ignores the new field still reads a valid stamp,
+ * which is why this bump carries no removal and needs no N−2 drop yet.
  */
-export const CONTRACT_VERSION = 1 as const;
+export const CONTRACT_VERSION = 2 as const;
 
 /** Versions this build accepts: N and N−1. Below `min`, `update-required`. */
 export const SUPPORTED_CONTRACT_VERSIONS = { min: 1, current: CONTRACT_VERSION } as const;
@@ -78,12 +88,58 @@ export const requestEnvelope = z.object({
 export type RequestEnvelope = z.infer<typeof requestEnvelope>;
 
 /**
+ * Where a usage figure came from ([D-123], `ol-xzah`) — mirrors the
+ * distinction `olea-service`'s response headers already made before the
+ * field had a home in the body:
+ *
+ * - `reported` — the provider returned a usage block and this is its number.
+ * - `derived` — no usage block came back; this is a deliberate upper-bound
+ *   estimate over the exact text sent, not a measurement.
+ * - `unreported` — nothing is known; the accompanying `inputTokens` is `0`
+ *   meaning "no figure", never "no cost".
+ *
+ * A usage view that renders `inputTokens` without this label cannot tell a
+ * measurement from an upper bound from an absence — the same confusion the
+ * headers existed to prevent.
+ */
+export const usageSource = z.enum(['reported', 'derived', 'unreported']);
+export type UsageSource = z.infer<typeof usageSource>;
+
+/**
+ * Per-call usage figures ([D-123], `ol-egov.35`, closed 2026-08-26): structural
+ * facts about one call, not content (D-005/D-014 unchanged) — no note or
+ * concept identifier belongs here, only numbers, a source label, and nothing
+ * that could reconstruct her material.
+ *
+ * `cachedInputTokens` is **optional and typically absent**: it exists so the
+ * usage view can name Slot O's cached-input pricing nuance
+ * (`docs/Olea_v09_implementation_plan.md` D-005, "gets named in the usage view
+ * ... rather than hidden") the moment a slot's cost model starts reporting it.
+ * No current pricing path measures it, so the field carries `undefined` until
+ * one does — that day needs no further contract change.
+ */
+export const usageBlock = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  inputTokensSource: usageSource,
+  /** Input tokens served from a provider-side prompt cache, billed at the discounted cache-read rate. Absent until a slot's cost model reports it. */
+  cachedInputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative(),
+  latencyMs: z.number().int().nonnegative(),
+});
+export type UsageBlock = z.infer<typeof usageBlock>;
+
+/**
  * Provenance stamped on every successful response (D7.3).
  *
  * `promptVersion` and `modelId` are what make "which change caused this
  * regression?" answerable at semester scale. The client persists them onto the
  * artifact the response produced, so the artifact carries its own provenance
  * even after the server has forgotten the call — which it does immediately.
+ *
+ * `usage` ([D-123]): the per-call figures the usage view (F7.3) needs to show
+ * real cost and token counts instead of local call counts alone. Growing this
+ * field is the CONTRACT_VERSION 2 bump — see its doc comment above.
  */
 export const responseStamp = z.object({
   contractVersion: z.number().int().positive(),
@@ -91,6 +147,7 @@ export const responseStamp = z.object({
   promptVersion: z.string().min(1),
   /** The model that produced it, e.g. a Workers AI or gateway model id (C4.6). */
   modelId: z.string().min(1),
+  usage: usageBlock,
 });
 export type ResponseStamp = z.infer<typeof responseStamp>;
 

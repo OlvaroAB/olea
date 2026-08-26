@@ -49,7 +49,7 @@ import type {
 export const GROUNDING_JUDGE_TASK_ID = 'grounding.judge.v1';
 
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
-export const GROUNDING_JUDGE_CONTRACT_VERSION = 1;
+export const GROUNDING_JUDGE_CONTRACT_VERSION = 2;
 
 /**
  * Anything that went wrong reaching the Worker or reading its reply.

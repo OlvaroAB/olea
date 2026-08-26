@@ -40,7 +40,7 @@ describe('WorkerGroundingJudge — the frozen vocabulary it mirrors', () => {
   });
 
   it('sends the current contract version', () => {
-    expect(GROUNDING_JUDGE_CONTRACT_VERSION).toBe(1);
+    expect(GROUNDING_JUDGE_CONTRACT_VERSION).toBe(2);
   });
 });
 
@@ -54,7 +54,7 @@ describe('WorkerGroundingJudge — the request it builds', () => {
     expect(transport.sent).toHaveLength(1);
     const request = transport.sent[0];
     expect(request?.taskId).toBe('grounding.judge.v1');
-    expect(request?.contractVersion).toBe(1);
+    expect(request?.contractVersion).toBe(2);
     expect(request?.payload).toEqual({
       query: 'What is an ERP?',
       context: 'ERPs are voltage deflections.',

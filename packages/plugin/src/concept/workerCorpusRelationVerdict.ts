@@ -60,7 +60,7 @@ import type {
 export const CONCEPTS_RELATIONS_TASK_ID = 'concepts.relations.v1';
 
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
-export const CONCEPTS_RELATIONS_CONTRACT_VERSION = 1;
+export const CONCEPTS_RELATIONS_CONTRACT_VERSION = 2;
 
 /** The two types this stage may emit — mirrors `CORPUS_STAGE_EMITTABLE_TYPES` (`olea-core`) without importing a `Set` across the wire boundary. */
 const CORPUS_ELIGIBLE_WIRE_TYPES: ReadonlySet<string> = new Set(['prerequisite', 'contrasts-with']);

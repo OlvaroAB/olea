@@ -116,7 +116,18 @@ describe('studyPlanArtifact', () => {
     expect(studyPlanArtifact.safeParse(validPlan()).success).toBe(true);
     const stamped = {
       ...validPlan(),
-      stamp: { contractVersion: 1, promptVersion: '2026-08-16.1', modelId: 'test/model' },
+      stamp: {
+        contractVersion: 1,
+        promptVersion: '2026-08-16.1',
+        modelId: 'test/model',
+        usage: {
+          inputTokens: 0,
+          inputTokensSource: 'unreported' as const,
+          outputTokens: 0,
+          costUsd: 0,
+          latencyMs: 0,
+        },
+      },
     };
     expect(studyPlanArtifact.safeParse(stamped).success).toBe(true);
   });

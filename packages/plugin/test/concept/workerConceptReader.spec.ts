@@ -58,7 +58,7 @@ describe('WorkerConceptReader — the frozen vocabulary it mirrors', () => {
   });
 
   it('sends the current contract version', () => {
-    expect(CONCEPTS_EXTRACT_CONTRACT_VERSION).toBe(1);
+    expect(CONCEPTS_EXTRACT_CONTRACT_VERSION).toBe(2);
   });
 });
 
@@ -72,7 +72,7 @@ describe('WorkerConceptReader — the request it builds', () => {
     expect(transport.sent).toHaveLength(1);
     const request = transport.sent[0];
     expect(request?.taskId).toBe('concepts.extract.v1');
-    expect(request?.contractVersion).toBe(1);
+    expect(request?.contractVersion).toBe(2);
     expect(request?.payload).toEqual({
       sourceChunks: [
         'Event-related potentials are voltage deflections time-locked to an event.',

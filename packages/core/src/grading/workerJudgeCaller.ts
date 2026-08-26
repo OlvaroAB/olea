@@ -65,7 +65,7 @@ import type {
 export const EXPLAIN_BACK_JUDGE_TASK_ID = 'explain-back.judge.v1';
 
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
-export const EXPLAIN_BACK_JUDGE_CONTRACT_VERSION = 1;
+export const EXPLAIN_BACK_JUDGE_CONTRACT_VERSION = 2;
 
 /**
  * Anything that went wrong between asking for a grading and having one.
