@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { extractConcepts } from '../concept/extract.js';
 import { FolderSource } from '../vault/folder-source.js';
-import { extractTier3Evidence } from './evidence.js';
-import { extractConcepts } from './extract.js';
+import { extractTier3Evidence } from './build.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 

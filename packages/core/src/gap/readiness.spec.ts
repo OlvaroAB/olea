@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
-import type { SourceCoverage } from '../concept/evidence.js';
 import type { ConceptMasteryResult, EvidenceTier } from '../mastery/rollup.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
+import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { buildGapView, type ConceptMaterialPresence } from './build.js';
 import {

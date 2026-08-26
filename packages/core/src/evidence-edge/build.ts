@@ -6,12 +6,12 @@
 
 import { readAssessments } from '../assessment/read.js';
 import type { AssessmentRecord } from '../assessment/types.js';
-import type { ConceptCitation } from '../concept/evidence.js';
-import { extractTier3Evidence } from '../concept/evidence.js';
 import { extractFromVault } from '../extract/registry.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
 import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
 import type { Source } from '../source/types.js';
+import { extractTier3Evidence } from '../tier3-evidence/build.js';
+import type { ConceptCitation } from '../tier3-evidence/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type {
   BuildConceptAssessmentEdgesOptions,
@@ -54,7 +54,7 @@ export class UnresolvableCitationError extends Error {
  * Every question label a `role: 'past-paper'` `Source` actually produces,
  * re-derived independently of `extractTier3Evidence`'s own internal call to
  * the same segmenter — the trust boundary `resolveCitations` checks against.
- * Two routes, matching `../concept/evidence.js`'s own split:
+ * Two routes, matching `../tier3-evidence/build.js`'s own split:
  *
  *  - **Markdown** (`format === null`): re-read and re-segment with
  *    `segmentPastPaper`, the block-parser segmenter.
@@ -65,7 +65,7 @@ export class UnresolvableCitationError extends Error {
  *    (hypothetically) produced no questions would be — `resolveCitations`
  *    then refuses any stray `kind: 'past-paper'` citation for it rather than
  *    silently treating an empty entry as "zero real questions", and
- *    `../concept/evidence.js`'s own abstention means no such citation is
+ *    `../tier3-evidence/build.js`'s own abstention means no such citation is
  *    ever actually produced for an unsegmented source in the first place.
  */
 export async function buildQuestionIndex(
@@ -117,7 +117,7 @@ export function resolveCitations(
 
 function toEvidenceQuestionCitation(citation: ConceptCitation): EvidenceQuestionCitation {
   // Present by construction for every `kind: 'past-paper'` citation
-  // (`pastPaperCitations` in `../concept/evidence.js` always sets both), and
+  // (`pastPaperCitations` in `../tier3-evidence/build.js` always sets both), and
   // `resolveCitations` has already refused anything that didn't resolve —
   // so a missing label/text here would mean this function was called on the
   // wrong citation kind, which is this module's own bug, not absent evidence.

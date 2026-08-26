@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
-import type { SourceCoverage } from '../concept/evidence.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
+import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 import {
   affordancesFor,

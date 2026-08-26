@@ -7,7 +7,7 @@
  * contain concepts; past papers and objectives give evidence that a concept
  * is examined, with a rank, a confidence, and citations."* This module is
  * that edge, built as a **pure projection** over two sources this package
- * already reads — `../concept/evidence.js`'s tier-3 pass (past-paper
+ * already reads — `../tier3-evidence/build.js`'s tier-3 pass (past-paper
  * citations) and `../assessment/read.js`'s Bases reader (the assessment
  * records themselves) — never stored, always rebuildable from the vault plus
  * her registered past papers.
@@ -45,7 +45,7 @@
  *    evidence; this bead's acceptance criteria names only "past-paper
  *    question citations" as the edge's carried evidence. Implemented per the
  *    acceptance text — objectives citations still feed concept *extraction*
- *    (`../concept/evidence.js`, already shipped), just not this edge's
+ *    (`../tier3-evidence/build.js`, already shipped), just not this edge's
  *    `citations` or its `confidence`/`yieldRank` computation. Flagged as a
  *    discovered-from candidate rather than silently decided either way.
  *
@@ -57,18 +57,18 @@
  */
 
 import type { AssessmentReadReport } from '../assessment/types.js';
+import type { ConceptRecord } from '../concept/types.js';
+import type { Provenance } from '../extract/types.js';
 import type {
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
-} from '../concept/evidence.js';
-import type { ConceptRecord } from '../concept/types.js';
-import type { Provenance } from '../extract/types.js';
+} from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 
 /**
  * One past-paper question or sub-part backing an edge — the acceptance
  * criteria's "past-paper question citations", projected from
- * `ConceptCitation` (`../concept/evidence.js`) down to the fields a citation
+ * `ConceptCitation` (`../tier3-evidence/build.js`) down to the fields a citation
  * consumer needs. `questionLabel`/`questionText` are never optional here
  * (unlike on `ConceptCitation`, which also carries objectives/generated-
  * content citations that lack them) — this type only ever holds

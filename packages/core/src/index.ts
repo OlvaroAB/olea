@@ -98,21 +98,6 @@ export { reconcileCorpusVerdicts } from './concept/corpus-relations/verdict.js';
 // is the one place the derivation is defined). Does not touch course.ts
 // itself.
 export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
-export type {
-  ConceptCitation,
-  ConceptCitationKind,
-  ExtractTier3EvidenceOptions,
-  ExtractTier3EvidenceResult,
-  PastPaperCluster,
-  PastPaperClusterQuestion,
-  // What tier-3 extraction actually read, one row per source, zero-yield rows
-  // included — `ol-cvsc`'s read-path half. `gap/coverage.ts` is its first
-  // user-facing consumer, and needs the row shape nameable outside this
-  // package to be usable from `packages/plugin`.
-  SourceCoverage,
-  SourceLimitation,
-} from './concept/evidence.js';
-export { extractTier3Evidence } from './concept/evidence.js';
 export { extractConcepts } from './concept/extract.js';
 // Knowledge-kind classification (component register row 1.5, `[KCT-1]`,
 // `ol-kxr6`) — a label, or explicitly unclassified, read by component 2.2
@@ -981,6 +966,24 @@ export {
 } from './study-session/duration.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';
 export { buildConceptInstrumentIndex } from './study-session/instrument-index.js';
+export { extractTier3Evidence } from './tier3-evidence/build.js';
+export type {
+  ConceptCitation,
+  ConceptCitationKind,
+  ExtractTier3EvidenceOptions,
+  ExtractTier3EvidenceResult,
+  PastPaperCluster,
+  PastPaperClusterQuestion,
+  // What tier-3 extraction actually read, one row per source, zero-yield rows
+  // included — `ol-cvsc`'s read-path half. `gap/coverage.ts` is its first
+  // user-facing consumer, and needs the row shape nameable outside this
+  // package to be usable from `packages/plugin`.
+  SourceCoverage,
+  SourceLimitation,
+  // [EXT-8] / `ol-ac7g`: relocated from `./concept/evidence.js` — that path
+  // is a compatibility shim now (see its own doc comment), kept alive only
+  // because `./concept/extract.ts` still imports from it.
+} from './tier3-evidence/types.js';
 // The Today panel (F6.1, P2-T09). The whole of what the panel decides lives
 // here so `packages/plugin`'s view stays a renderer — see today/panel.ts.
 export type { CalendarDay } from './today/calendar-day.js';

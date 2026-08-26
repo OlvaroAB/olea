@@ -15,7 +15,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ConceptCitation } from '../concept/evidence.js';
+import type { ConceptCitation } from '../tier3-evidence/types.js';
 import { FolderSource } from '../vault/folder-source.js';
 import {
   buildConceptAssessmentEdges,
@@ -434,10 +434,7 @@ describe('buildConceptAssessmentEdges — a registered PDF past paper (ol-3ux7.1
         '  type:',
       ].join('\n'),
     );
-    await write(
-      '02 Assignments/Quiz 1.md',
-      '---\nclass: TESTP101\ntype: Quiz\n---\n\n# Quiz 1\n',
-    );
+    await write('02 Assignments/Quiz 1.md', '---\nclass: TESTP101\ntype: Quiz\n---\n\n# Quiz 1\n');
   });
 
   afterEach(async () => {
@@ -477,9 +474,7 @@ describe('buildConceptAssessmentEdges — a registered PDF past paper (ol-3ux7.1
       registeredFiles: [{ path: '03 Research/2024.pdf', role: 'past-paper', course: 'TESTP101' }],
     });
 
-    expect(
-      result.edges.some((e) => e.assessmentPath === '02 Assignments/Quiz 1.md'),
-    ).toBe(false);
+    expect(result.edges.some((e) => e.assessmentPath === '02 Assignments/Quiz 1.md')).toBe(false);
     expect(result.assessmentsWithNoEvidence).toEqual(['02 Assignments/Quiz 1.md']);
   });
 });

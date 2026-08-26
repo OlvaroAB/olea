@@ -27,7 +27,7 @@
  * enforced by construction rather than by a caller remembering.
  *
  * **What this module does not do, and why that is not a hedge.** With today's
- * tier-3 vocabulary (Zettelkasten note titles — `concept/evidence.ts`), a
+ * tier-3 vocabulary (Zettelkasten note titles — `tier3-evidence/build.ts`), a
  * concept the oracle can rank is a concept that already has a note of hers, so
  * `'material-gap'` is reachable through this shape but rare-to-absent in
  * practice against the current pipeline. That is a fact about the extraction
@@ -50,7 +50,6 @@
  */
 
 import type { AssessmentRecord } from '../assessment/types.js';
-import type { SourceCoverage } from '../concept/evidence.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { EvidenceQuestionCitation } from '../evidence-edge/types.js';
@@ -61,6 +60,7 @@ import type {
   OracleMasteryState,
   RankOracleResult,
 } from '../oracle/types.js';
+import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { type CoverageScope, summariseCoverageScope } from './coverage.js';
 import {

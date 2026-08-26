@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SourceCoverage } from '../concept/evidence.js';
 import type { ExtractionOutcome } from '../extract/types.js';
+import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { readStateOf, sourcesInState, summariseCoverageScope } from './coverage.js';
 

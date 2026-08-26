@@ -48,9 +48,9 @@
  * recomputable from the same inputs forever.
  */
 
-import type { SourceCoverage } from '../concept/evidence.js';
 import type { ExtractionOutcome, SourceFormat } from '../extract/types.js';
 import type { SourceKind, SourceRole } from '../source/types.js';
+import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 
 /**
