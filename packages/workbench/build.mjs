@@ -95,8 +95,10 @@ const nodeBuiltinGuard = {
         // matching export" for it blocked every workbench build regardless
         // of host. Discovered while verifying `ol-ppxj.11`; filed as
         // `ol-ppxj.12` since it is a real, host-independent defect distinct
-        // from the virtiofs races this bead is scoped to.
-        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, stat = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
+        // from the virtiofs races this bead is scoped to. `unlink` added
+        // the same way when `ol-ppxj.15` promoted delete onto VaultSource
+        // and gave `folder-source.ts` the identical new import shape.
+        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, stat = unreachable, unlink = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
       loader: 'js',
     }));
   },
