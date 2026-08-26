@@ -226,6 +226,167 @@ describe('rankOracle — the past-paper yield signal is load-bearing, not decora
   });
 });
 
+describe('rankOracle — assessment weight is load-bearing, not decoration ([YIELD-2] / ol-3ux7.7)', () => {
+  it('a concept examined by a heavier-weighted assessment outranks an otherwise-identical one, and flattening the weights collapses that order', () => {
+    // Each concept is tied to its OWN single assessment (assessment weight
+    // is a per-assessment property, not a per-edge one), but both
+    // assessments share the same due date and both edges share the same
+    // yieldRank/confidence — so assessment weight is the only thing that
+    // can drive the order below.
+    const heavyAssessment = assessment({
+      path: 'Assessments/Heavy.md',
+      weight: 80,
+      due: '2026-09-01',
+    });
+    const lightAssessment = assessment({
+      path: 'Assessments/Light.md',
+      weight: 5,
+      due: '2026-09-01',
+    });
+    const withSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'concept-a',
+            conceptKey: 'concept-a',
+            assessmentPath: 'Assessments/Heavy.md',
+          }),
+          edge({
+            conceptName: 'concept-b',
+            conceptKey: 'concept-b',
+            assessmentPath: 'Assessments/Light.md',
+          }),
+        ],
+        assessmentsRead: readReport([heavyAssessment, lightAssessment]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const ranked = rankOracle(withSignal);
+    const course = ranked.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+    expect(course.ranked[0]?.priorityScore).toBeGreaterThan(course.ranked[1]?.priorityScore ?? 0);
+
+    // Ablate: flatten both assessments to the same weight, holding every
+    // other factor fixed. If assessment weight were decoration — never
+    // actually driving the order above — this would still differ. It must
+    // not: the two scores collapse to equal, and only the deterministic
+    // name-ascending tie-break decides order.
+    const flattenedLight = assessment({
+      path: 'Assessments/Light.md',
+      weight: 80,
+      due: '2026-09-01',
+    });
+    const withoutSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'concept-a',
+            conceptKey: 'concept-a',
+            assessmentPath: 'Assessments/Heavy.md',
+          }),
+          edge({
+            conceptName: 'concept-b',
+            conceptKey: 'concept-b',
+            assessmentPath: 'Assessments/Light.md',
+          }),
+        ],
+        assessmentsRead: readReport([heavyAssessment, flattenedLight]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const flattened = rankOracle(withoutSignal);
+    const flatCourse = flattened.courses[0];
+    if (flatCourse?.status !== 'ranked') throw new Error('expected ranked');
+    expect(flatCourse.ranked[0]?.priorityScore).toBeCloseTo(
+      flatCourse.ranked[1]?.priorityScore ?? -1,
+      10,
+    );
+    expect(flatCourse.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+  });
+});
+
+describe('rankOracle — exam proximity is load-bearing, not decoration ([YIELD-2] / ol-3ux7.7)', () => {
+  it('a concept tied to a nearer-due assessment outranks an otherwise-identical one, and flattening the due dates collapses that order', () => {
+    // Each concept is tied to its OWN single assessment (due date is a
+    // per-assessment property), but both assessments carry the same weight
+    // and both edges share the same yieldRank/confidence — so exam
+    // proximity is the only thing that can drive the order below.
+    const nearAssessment = assessment({
+      path: 'Assessments/Near.md',
+      weight: 20,
+      due: '2026-08-18', // 2 days from ASOF
+    });
+    const farAssessment = assessment({
+      path: 'Assessments/Far.md',
+      weight: 20,
+      due: '2026-12-01', // months from ASOF
+    });
+    const withSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'concept-a',
+            conceptKey: 'concept-a',
+            assessmentPath: 'Assessments/Near.md',
+          }),
+          edge({
+            conceptName: 'concept-b',
+            conceptKey: 'concept-b',
+            assessmentPath: 'Assessments/Far.md',
+          }),
+        ],
+        assessmentsRead: readReport([nearAssessment, farAssessment]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const ranked = rankOracle(withSignal);
+    const course = ranked.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+    expect(course.ranked[0]?.priorityScore).toBeGreaterThan(course.ranked[1]?.priorityScore ?? 0);
+
+    // Ablate: flatten both assessments to the same due date, holding every
+    // other factor fixed. If exam proximity were decoration, this would
+    // still differ; it must not.
+    const flattenedFar = assessment({
+      path: 'Assessments/Far.md',
+      weight: 20,
+      due: '2026-08-18',
+    });
+    const withoutSignal: RankOracleInput = {
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'concept-a',
+            conceptKey: 'concept-a',
+            assessmentPath: 'Assessments/Near.md',
+          }),
+          edge({
+            conceptName: 'concept-b',
+            conceptKey: 'concept-b',
+            assessmentPath: 'Assessments/Far.md',
+          }),
+        ],
+        assessmentsRead: readReport([nearAssessment, flattenedFar]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const flattened = rankOracle(withoutSignal);
+    const flatCourse = flattened.courses[0];
+    if (flatCourse?.status !== 'ranked') throw new Error('expected ranked');
+    expect(flatCourse.ranked[0]?.priorityScore).toBeCloseTo(
+      flatCourse.ranked[1]?.priorityScore ?? -1,
+      10,
+    );
+    expect(flatCourse.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+  });
+});
+
 describe('rankOracle — reasoning cites the actual strongest contributor (derived, not decorated)', () => {
   it('names the assessment with the highest `contribution`, not the first or last edge in insertion order', () => {
     // Deliberately inserted weakest-first so a bug that trusted array order
@@ -410,6 +571,91 @@ describe('rankOracle — the abstain path (INV-5 shape)', () => {
     expect(course?.status).toBe('ranked');
   });
 });
+
+describe(
+  'rankOracle — floor-correctness audit (component register 3.3: "for each ' +
+    'factor, is silence-at-floor correct?" [YIELD-2] / ol-3ux7.7)',
+  () => {
+    it('yes for a passed assessment: its contribution floors to exactly zero, but that floor is scoped to the one contribution it applies to — a still-relevant assessment on the same concept keeps its full weight', () => {
+      const passed = assessment({ path: 'Assessments/Passed.md', weight: 30, due: '2026-01-01' });
+      const upcoming = assessment({
+        path: 'Assessments/Upcoming.md',
+        weight: 30,
+        due: '2026-09-01',
+      });
+      const passedEdge = edge({ assessmentPath: 'Assessments/Passed.md' });
+      const upcomingEdge = edge({
+        assessmentPath: 'Assessments/Upcoming.md',
+        citations: [citation({ questionLabel: 'Q2' })],
+      });
+      const input: RankOracleInput = {
+        evidence: {
+          edges: [passedEdge, upcomingEdge],
+          assessmentsRead: readReport([passed, upcoming]),
+          assessmentsWithNoEvidence: [],
+        },
+        asOf: ASOF,
+      };
+      const result = rankOracle(input);
+      const course = result.courses[0];
+      if (course?.status !== 'ranked') throw new Error('expected ranked');
+      const entry = course.ranked[0];
+      expect(entry).toBeDefined();
+      const passedContribution = entry?.factors.contributions.find(
+        (c) => c.assessmentPath === 'Assessments/Passed.md',
+      );
+      const upcomingContribution = entry?.factors.contributions.find(
+        (c) => c.assessmentPath === 'Assessments/Upcoming.md',
+      );
+      expect(passedContribution?.examProximityScore).toBe(0);
+      expect(passedContribution?.contribution).toBe(0);
+      expect(upcomingContribution?.contribution).toBeGreaterThan(0);
+      // The floor silences the one contribution it applies to, not the
+      // concept as a whole — the still-relevant assessment's evidence must
+      // keep counting toward the concept's priority.
+      expect(entry?.priorityScore).toBeCloseTo(upcomingContribution?.contribution ?? -1, 10);
+    });
+
+    it('no for no-evidence-yet: a course with zero evidence never surfaces as a floored (zero-score) ranking — abstention is a status a floored-but-present concept never carries', () => {
+      // Contrast case first: an assessment worth 0% of the grade genuinely
+      // floors that edge's contribution to zero, and the concept still
+      // RANKS — evidence is present, only weighted to nothing. This is the
+      // legitimate floor: silence is correct here because a 0%-weighted
+      // assessment cannot inform priority, whatever its yield/confidence.
+      const zeroWeightInput: RankOracleInput = {
+        evidence: {
+          edges: [edge()],
+          assessmentsRead: readReport([assessment({ weight: 0 })]),
+          assessmentsWithNoEvidence: [],
+        },
+        asOf: ASOF,
+      };
+      const zeroWeightResult = rankOracle(zeroWeightInput);
+      const zeroWeightCourse = zeroWeightResult.courses[0];
+      expect(zeroWeightCourse?.status).toBe('ranked');
+      if (zeroWeightCourse?.status !== 'ranked') return;
+      expect(zeroWeightCourse.ranked[0]?.priorityScore).toBe(0);
+
+      // No-evidence case: the course must NOT collapse to the same shape (a
+      // ranked entry sitting at the floor). It must abstain explicitly, so
+      // "we found nothing worth studying" (a real, floored-to-zero verdict)
+      // is never confused with "we could not judge this course at all"
+      // (silence would be WRONG here, per the component register).
+      const noEvidenceInput: RankOracleInput = {
+        evidence: {
+          edges: [],
+          assessmentsRead: readReport([assessment({ path: 'Assessments/NoEvidence.md' })]),
+          assessmentsWithNoEvidence: ['Assessments/NoEvidence.md'],
+        },
+        asOf: ASOF,
+      };
+      const noEvidenceResult = rankOracle(noEvidenceInput);
+      const noEvidenceCourse = noEvidenceResult.courses[0];
+      expect(noEvidenceCourse?.status).toBe('abstained');
+      expect((noEvidenceCourse as { ranked?: unknown }).ranked).toBeUndefined();
+    });
+  },
+);
 
 describe('rankOracle — multiple courses and unattributable assessments', () => {
   it('ranks each course independently, sorted by course name, and surfaces course-less assessments separately', () => {
