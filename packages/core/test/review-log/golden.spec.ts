@@ -1,23 +1,34 @@
-// PERMANENT SUITE (C5.2, D7.1, P2-T03, D-020, `ol-t3sd`) — golden fixtures for
-// the review-log JSONL format. Mirrors the convention
+// PERMANENT SUITE (C5.2, D7.1, P2-T03, D-020, `ol-t3sd`, `ol-tka5`) — golden
+// fixtures for the review-log JSONL format. Mirrors the convention
 // `test/frontmatter/golden.spec.ts` and `test/block/vault-lossless.spec.ts` set:
 // fixtures live under `packages/core/fixtures/`, this suite asserts their exact
 // parsed shape by name, and `fixtures/review-log/README.md` explains what each
 // file is for.
 //
-// INV-2 discipline: extended, never pruned. Every fixture that was ever here is
-// still here, unmodified on disk, and every describe block that was ever here is
-// still here. The v1 file is the frozen evidence that a semester of
-// pre-suspension history still parses; the v2 files are the same kind of
-// evidence for pre-`conceptIds` history; the v3 file is now that evidence for
-// pre-per-concept-mastery history, and it carries the one record in the suite
-// whose mastery value cannot be attributed to a concept. The `ol-t3sd` and
-// `ol-g6zg` bumps each added files and blocks and rewrote no byte of any
-// fixture.
+// INV-2 discipline: extended, never pruned — WITH ONE DELIBERATE EXCEPTION.
+// The v1, v2 and v3 files are exactly as before: still here, unmodified on
+// disk, every describe block that was ever here still here. The v1 file is
+// the frozen evidence that a semester of pre-suspension history still parses;
+// the v2 files are the same kind of evidence for pre-`conceptIds` history;
+// the v3 file is that evidence for pre-per-concept-mastery history, and it
+// carries the one record in the suite whose mastery value cannot be
+// attributed to a concept.
+//
+// **The v4 fixture is the exception, and it is rewritten in place to v5, not
+// kept alongside it** (`ol-tka5`, `[D-109]`). `[D-109]` rules review-log v5 a
+// migrate-in-place bump: no real v4 record ever existed anywhere (prod dark,
+// no BRAT install), so unlike every earlier bump, there is no history at v4
+// this suite protects by keeping the old file — the v4 fixture was itself
+// synthetic test data invented for this suite, not a semester of a real
+// device's output. `2026-08-10.device-workstation.v4.jsonl` is gone;
+// `2026-08-10.device-workstation.v5.jsonl` carries the same six lines with
+// `schemaVersion` bumped, plus a seventh line demonstrating the three new
+// fields this bead adds. v1–v3 are untouched and out of scope for this
+// exception, per `[D-109]`'s own text.
 //
 // What *did* have to move, and the distinction matters: assertions naming "the
 // current version". `parseReviewLog` returns current-shape entries by contract,
-// so a v1 record read today comes back as v4, and an assertion that it comes
+// so a v1 record read today comes back as v5, and an assertion that it comes
 // back as v2 was an assertion about which version was current rather than about
 // the fixture. Those are retargeted. Every assertion about a *frozen* shape —
 // the raw bytes on disk, the field values carried through, the key shape of a
@@ -49,8 +60,13 @@ const TABLET_SUSPEND_FIXTURE = '2026-08-10.device-tablet.v2-suspend.jsonl';
 const PHONE_SUSPEND_FIXTURE = '2026-08-10.device-phone.v2-suspend.jsonl';
 /** The v3 file — frozen history since the `ol-g6zg` bump. */
 const LAPTOP_V3_FIXTURE = '2026-08-10.device-laptop.v3.jsonl';
-/** The v4 file — what the writer produces today (`ol-g6zg`). */
-const WORKSTATION_V4_FIXTURE = '2026-08-10.device-workstation.v4.jsonl';
+/**
+ * The v5 file — what the writer produces today (`ol-tka5`, `[D-109]`).
+ * Rewritten in place from the retired v4 fixture rather than kept alongside
+ * it — see this file's header for why that is the one exception to "extended,
+ * never pruned" here.
+ */
+const WORKSTATION_V5_FIXTURE = '2026-08-10.device-workstation.v5.jsonl';
 
 /** Every v2 file on disk. Guarded as a group so a new one cannot skip the check. */
 const V2_FIXTURES = [
@@ -128,7 +144,22 @@ const RECORD_KEY_ORDER = [
   'selectionContext',
   'conceptIds',
   'masteryAtTime',
+  // `ol-tka5` (v5): appended in schema declaration order, same discipline as
+  // `masteryAtTime` above — all three optional, all three omissible.
+  'supportLevelShown',
+  'explainBackGrade',
+  'schedulingObservation',
 ];
+
+/** Every key a v5 review record may omit — `ol-tka5`'s three additions, plus
+ * `masteryAtTime` from `ol-g6zg` — because nothing produces them for every
+ * record yet. `RECORD_KEYS` below lists only what is mandatory. */
+const OPTIONAL_RECORD_KEYS = [
+  'masteryAtTime',
+  'supportLevelShown',
+  'explainBackGrade',
+  'schedulingObservation',
+] as const;
 
 /** The union's runtime narrowing, used as the test's own reading of `kind`. */
 function reviews(entries: readonly ReviewLogEntry[]): ReviewLogRecord[] {
@@ -149,12 +180,15 @@ function suspensions(entries: readonly ReviewLogEntry[]): SuspendLogRecord[] {
  */
 function expectFullKeyShape(record: ReviewLogRecord): void {
   const keys = Object.keys(record);
-  expect(keys.filter((k) => k !== 'masteryAtTime').sort()).toEqual(RECORD_KEYS);
-  // `masteryAtTime` is the one key that may be absent, and it is absent for
-  // exactly one reason: nothing was recorded. A key present with an undefined
-  // value would be a third state, and `JSON.stringify` would erase the
-  // difference on the way to disk.
-  expect(keys.includes('masteryAtTime')).toBe(record.masteryAtTime !== undefined);
+  expect(keys.filter((k) => !(OPTIONAL_RECORD_KEYS as readonly string[]).includes(k)).sort()).toEqual(
+    RECORD_KEYS,
+  );
+  // Every optional key is absent for exactly one reason: nothing was
+  // recorded. A key present with an undefined value would be a third state,
+  // and `JSON.stringify` would erase the difference on the way to disk.
+  for (const key of OPTIONAL_RECORD_KEYS) {
+    expect(keys.includes(key)).toBe((record as Record<string, unknown>)[key] !== undefined);
+  }
   expect(Object.keys(record.selectionContext).sort()).toEqual(SELECTION_CONTEXT_KEYS);
 }
 
@@ -178,12 +212,13 @@ describe('review-log golden fixtures — device-desktop (frozen v1 history, well
   });
 
   it('upgrades every v1 record to a current review event — never discarded, never guessed at', () => {
-    // Retargeted from 2 to 3 by `ol-t3sd` and from 3 to 4 by `ol-g6zg`, because
-    // `parseReviewLog` returns current-shape entries by contract and the current
-    // shape moved. The assertion itself — "a v1 line comes back as a review
-    // event at the version this build reads, not as a v1 line" — is the same one.
+    // Retargeted from 2 to 3 by `ol-t3sd`, 3 to 4 by `ol-g6zg`, and 4 to 5 by
+    // `ol-tka5`, because `parseReviewLog` returns current-shape entries by
+    // contract and the current shape moved. The assertion itself — "a v1 line
+    // comes back as a review event at the version this build reads, not as a
+    // v1 line" — is the same one.
     for (const record of result.records) {
-      expect(record.schemaVersion).toBe(4);
+      expect(record.schemaVersion).toBe(5);
       expect(record.kind).toBe('review');
     }
   });
@@ -474,7 +509,7 @@ describe('review-log golden fixtures — two devices suspending the same day (D-
     const mobile = parseReviewLog(readFixture(MOBILE_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone);
 
-    expect(merged.records.every((r) => r.schemaVersion === 4)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
     // Chronological, with suspension and review events interleaved.
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
     expect(instants).toEqual([...instants].sort((a, b) => a - b));
@@ -619,7 +654,7 @@ describe('a whole vault of every version merges into one coherent day', () => {
     const laptop = parseReviewLog(readFixture(LAPTOP_V3_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop);
 
-    expect(merged.records.every((r) => r.schemaVersion === 4)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
     expect(merged.records.every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
@@ -722,27 +757,30 @@ describe('migrating the v3 fixture — attribute where you can, decline where yo
 
   it('a v3 suspension only has its version stamped forward', () => {
     const suspend = suspensions(result.records)[0];
-    expect(suspend?.schemaVersion).toBe(4);
+    expect(suspend?.schemaVersion).toBe(5);
     expect(Object.keys(suspend ?? {}).sort()).toEqual(SUSPEND_RECORD_KEYS);
   });
 });
 
-describe('review-log golden fixtures — device-workstation (v4, the current writer output)', () => {
-  const result = parseReviewLog(readFixture(WORKSTATION_V4_FIXTURE));
+describe('review-log golden fixtures — device-workstation (v5, the current writer output, `ol-tka5`)', () => {
+  const result = parseReviewLog(readFixture(WORKSTATION_V5_FIXTURE));
 
-  it('the fixture on disk really is v4, with masteryAtTime on the record and not in the context', () => {
-    const raw = readFixture(WORKSTATION_V4_FIXTURE);
+  it('the fixture on disk really is v5, with masteryAtTime on the record and not in the context', () => {
+    const raw = readFixture(WORKSTATION_V5_FIXTURE);
     for (const line of raw.split('\n').filter((l) => l.trim() !== '')) {
       const parsed = JSON.parse(line) as Record<string, unknown>;
-      expect(parsed.schemaVersion).toBe(4);
+      expect(parsed.schemaVersion).toBe(5);
       expect(parsed).toHaveProperty('conceptIds');
       if (parsed.kind !== 'review') continue;
       expect(parsed.selectionContext).not.toHaveProperty('masteryAtTime');
     }
   });
 
-  it('parses all six lines with zero invalid lines', () => {
-    expect(result.records).toHaveLength(6);
+  it('parses all seven lines with zero invalid lines', () => {
+    // Six lines carried forward from the retired v4 fixture (bumped in
+    // place), plus a seventh added for this bead demonstrating the three new
+    // fields together.
+    expect(result.records).toHaveLength(7);
     expect(result.invalidLines).toEqual([]);
   });
 
@@ -754,7 +792,7 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
     // Not a style check. `merge.ts` compares duplicate `eventId`s by serialised
     // form, so a fixture in a different key order is a different string for the
     // same event and would be reported as a collision rather than a duplicate.
-    const raw = readFixture(WORKSTATION_V4_FIXTURE);
+    const raw = readFixture(WORKSTATION_V5_FIXTURE);
     for (const line of raw.split('\n').filter((l) => l.trim() !== '')) {
       const keys = Object.keys(JSON.parse(line) as Record<string, unknown>);
       const expected = RECORD_KEY_ORDER.filter((k) => keys.includes(k));
@@ -833,33 +871,85 @@ describe('review-log golden fixtures — device-workstation (v4, the current wri
     // It is reachable only as `upgradeV3`'s output for a v3 record, and nothing
     // rewrites a log file, so it can never be written. A fixture carrying one
     // would be describing a state the system cannot reach.
-    expect(readFixture(WORKSTATION_V4_FIXTURE)).not.toContain('not-attributable');
+    expect(readFixture(WORKSTATION_V5_FIXTURE)).not.toContain('not-attributable');
   });
 
   it('an explain-back record can name several concepts, record no rating and no mastery (F2.16)', () => {
-    const explainBack = reviews(result.records).find((r) => r.instrumentType === 'explain-back');
+    const explainBack = reviews(result.records).find(
+      (r) => r.instrumentType === 'explain-back' && r.eventId === '14141414-1414-4141-8141-141414141414',
+    );
     expect(explainBack?.rating).toBeNull();
     expect(explainBack?.durationMs).toBeNull();
     expect(explainBack?.conceptIds).toEqual(['cementation', 'appoggiatura']);
     expect(explainBack?.masteryAtTime).toBeUndefined();
+    // This is the plain "attempted, ungraded" case — no explainBackGrade at
+    // all — which is exactly the gap `ol-tka5`'s bead names: an explain-back
+    // attempt recorded with nowhere to put a verdict, unless one is graded.
+    expect(explainBack?.explainBackGrade).toBeUndefined();
+  });
+
+  // `ol-tka5`: the seventh line, added for this bead's v5 bump. A graded
+  // re-grade of the ungraded attempt above, demonstrating all three new
+  // fields together on one record.
+  describe('the seventh line — supportLevelShown, explainBackGrade and schedulingObservation together', () => {
+    const graded = reviews(result.records).find(
+      (r) => r.eventId === '17171717-1717-4171-8171-171717171717',
+    );
+
+    it('exists, is explain-back, and carries no rating (F2.16)', () => {
+      expect(graded).toBeDefined();
+      expect(graded?.instrumentType).toBe('explain-back');
+      expect(graded?.rating).toBeNull();
+      expect(graded?.durationMs).toBeNull();
+    });
+
+    it('carries an objective support level (D-094, principle 16, F2.20)', () => {
+      expect(graded?.supportLevelShown).toBe('guided');
+    });
+
+    it('carries a graded SOLO verdict pointing at opaque content, never her text (D-005)', () => {
+      expect(graded?.explainBackGrade).toEqual({
+        soloLevel: 'relational',
+        contentRef: 'content:cementation-grade-1',
+        revisionOf: '14141414-1414-4141-8141-141414141414',
+        artifactProvenance: {
+          taskId: 'grade.explain-back.v1',
+          promptVersion: '2026-08-26',
+          modelId: 'workers-ai:test-model',
+        },
+      });
+    });
+
+    it('`revisionOf` names the earlier ungraded attempt on disk in this same file', () => {
+      const original = reviews(result.records).find(
+        (r) => r.eventId === '14141414-1414-4141-8141-141414141414',
+      );
+      expect(original).toBeDefined();
+      expect(graded?.explainBackGrade?.revisionOf).toBe(original?.eventId);
+    });
+
+    it('carries a scheduling observation naming a neighbour concept, never its own subject (C5.11)', () => {
+      expect(graded?.schedulingObservation).toEqual({ neighbourConceptId: 'imbrication' });
+      expect(graded?.conceptIds).not.toContain(graded?.schedulingObservation?.neighbourConceptId);
+    });
   });
 });
 
-describe('a v1 file, a v3 file and a v4 file describing the same event (`ol-g6zg`)', () => {
+describe('a v1 file, a v3 file and a v5 file describing the same event (`ol-g6zg`, `ol-tka5`)', () => {
   const desktopV1 = parseReviewLog(readFixture(DESKTOP_V1_FIXTURE)).records;
   const laptopV3 = parseReviewLog(readFixture(LAPTOP_V3_FIXTURE)).records;
-  const workstationV4 = parseReviewLog(readFixture(WORKSTATION_V4_FIXTURE)).records;
+  const workstationV5 = parseReviewLog(readFixture(WORKSTATION_V5_FIXTURE)).records;
   const SHARED = '11111111-1111-4111-8111-111111111111';
 
-  it('all three paths into v4 serialise identically', () => {
-    // The v4 restatement of the property each earlier bump proved, and the
+  it('all three paths into v5 serialise identically', () => {
+    // The v5 restatement of the property each earlier bump proved, and the
     // reason every hop of the migration returns through `.parse` rather than as
     // an object literal: zod emits keys in schema order, so a record reaching
-    // one device through the full v1→v2→v3→v4 chain, another through v3→v4, and
+    // one device through the full v1→v2→v3→v5 chain, another through v3→v5, and
     // a third natively produce the same bytes for the same event.
     const viaV1 = desktopV1.find((r) => r.eventId === SHARED);
     const viaV3 = laptopV3.find((r) => r.eventId === SHARED);
-    const native = workstationV4.find((r) => r.eventId === SHARED);
+    const native = workstationV5.find((r) => r.eventId === SHARED);
     expect(viaV1).toBeDefined();
     expect(viaV3).toBeDefined();
     expect(native).toBeDefined();
@@ -868,26 +958,26 @@ describe('a v1 file, a v3 file and a v4 file describing the same event (`ol-g6zg
   });
 
   it('they collapse to one event on merge, not to an id collision', () => {
-    const merged = mergeReviewLogRecords(desktopV1, laptopV3, workstationV4);
+    const merged = mergeReviewLogRecords(desktopV1, laptopV3, workstationV5);
     expect(merged.duplicateEventIds).toEqual([SHARED]);
     expect(merged.records.filter((r) => r.eventId === SHARED)).toHaveLength(1);
   });
 });
 
 describe('a whole vault of all four versions merges into one coherent day', () => {
-  it('v1, v2 review, v2 suspension, v3 and v4 files all reach the current shape together', () => {
-    // The real end state after three schema bumps: her vault holds history at
-    // four versions, six devices' files for the same day, and one merged list
-    // has to make sense of all of it.
+  it('v1, v2 review, v2 suspension, v3 and v5 files all reach the current shape together', () => {
+    // The real end state after four schema bumps: her vault holds history at
+    // four readable versions, six devices' files for the same day, and one
+    // merged list has to make sense of all of it.
     const desktopV1 = parseReviewLog(readFixture(DESKTOP_V1_FIXTURE)).records;
     const mobile = parseReviewLog(readFixture(MOBILE_FIXTURE)).records;
     const tablet = parseReviewLog(readFixture(TABLET_SUSPEND_FIXTURE)).records;
     const phone = parseReviewLog(readFixture(PHONE_SUSPEND_FIXTURE)).records;
     const laptop = parseReviewLog(readFixture(LAPTOP_V3_FIXTURE)).records;
-    const workstation = parseReviewLog(readFixture(WORKSTATION_V4_FIXTURE)).records;
+    const workstation = parseReviewLog(readFixture(WORKSTATION_V5_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop, workstation);
 
-    expect(merged.records.every((r) => r.schemaVersion === 4)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
     expect(merged.records.every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));

@@ -4,7 +4,7 @@ import { mergeReviewLogRecords } from './merge.js';
 
 function record(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: 'r1',
     timestamp: '2026-08-10T09:00:00-04:00',
@@ -156,7 +156,7 @@ describe("mergeReviewLogRecords — one device's file is a strict prefix of anot
 describe('mergeReviewLogRecords — suspension events (D-020, F2.6)', () => {
   function suspension(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
     return {
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: 'suspend',
       eventId: 's1',
       timestamp: '2026-08-10T09:20:00-04:00',

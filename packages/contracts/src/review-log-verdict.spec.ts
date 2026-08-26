@@ -1,11 +1,15 @@
 // `ol-548w` (INV-6): the accept/edit/reject verdict, additive to the v4
 // discriminated union the same way `suspend`/`unsuspend` were additive at v2
-// (D-020) — no schemaVersion bump, because nothing about an EXISTING kind's
-// shape changes here. What this file has to prove:
+// (D-020) — no schemaVersion bump was needed for THIS kind's shape at the
+// time it shipped. `ol-tka5`/`[D-109]` later moved every kind in the union to
+// v5 together (the "one version per line" rule), so this file's literals
+// read `schemaVersion: 5` today, but the assertions below are unchanged: they
+// are about the verdict SHAPE, not about which version number currently
+// carries it. What this file has to prove:
 //
-//   1. `reviewLogEntryV4`/`reviewLogEntry` really discriminate all THREE
-//      kinds now — `review`, `suspend`/`unsuspend`, AND `verdict` — the same
-//      concern `review-log.spec.ts`'s header names for the original two;
+//   1. `reviewLogEntry` really discriminates all THREE kinds now — `review`,
+//      `suspend`/`unsuspend`, AND `verdict` — the same concern
+//      `review-log.spec.ts`'s header names for the original two;
 //   2. `kind: 'verdict'` is required, never defaulted or inferred;
 //   3. `conceptIds` is non-empty by schema, same rule every review/suspend
 //      shape enforces, for the same reason (an un-backfillable hole);
@@ -17,10 +21,10 @@ import {
   artifactProvenance,
   artifactVerdict,
   reviewLogEntry,
-  reviewLogRecordV4,
-  suspendLogRecordV4,
+  reviewLogRecordV5,
+  suspendLogRecordV5,
   verdictLogRecord,
-  verdictLogRecordV4,
+  verdictLogRecordV5,
 } from './review-log.js';
 
 const PROVENANCE = {
@@ -31,7 +35,7 @@ const PROVENANCE = {
 
 function verdictLine(over: Record<string, unknown> = {}) {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'verdict',
     eventId: 'v1',
     timestamp: '2026-08-25T09:00:00-04:00',
@@ -61,41 +65,41 @@ describe('artifactProvenance', () => {
   });
 });
 
-describe('verdictLogRecordV4', () => {
+describe('verdictLogRecordV5', () => {
   it('parses a well-formed verdict line', () => {
-    const parsed = verdictLogRecordV4.safeParse(verdictLine());
+    const parsed = verdictLogRecordV5.safeParse(verdictLine());
     expect(parsed.success).toBe(true);
   });
 
   it('requires `kind: "verdict"` — not defaulted, not inferred', () => {
     const { kind: _drop, ...rest } = verdictLine();
-    expect(verdictLogRecordV4.safeParse(rest).success).toBe(false);
+    expect(verdictLogRecordV5.safeParse(rest).success).toBe(false);
   });
 
   it('rejects an empty `conceptIds` — an un-backfillable hole', () => {
-    expect(verdictLogRecordV4.safeParse(verdictLine({ conceptIds: [] })).success).toBe(false);
+    expect(verdictLogRecordV5.safeParse(verdictLine({ conceptIds: [] })).success).toBe(false);
   });
 
   it('preserves every concept the drafting pass named, in order', () => {
-    const parsed = verdictLogRecordV4.parse(
+    const parsed = verdictLogRecordV5.parse(
       verdictLine({ conceptIds: ['concept-prov1:A', 'concept-prov1:B'] }),
     );
     expect(parsed.conceptIds).toEqual(['concept-prov1:A', 'concept-prov1:B']);
   });
 
   it('rejects an unrecognised verdict value', () => {
-    expect(verdictLogRecordV4.safeParse(verdictLine({ verdict: 'ignored' })).success).toBe(false);
+    expect(verdictLogRecordV5.safeParse(verdictLine({ verdict: 'ignored' })).success).toBe(false);
   });
 
-  it('`verdictLogRecord` is the v4 alias', () => {
-    expect(verdictLogRecord).toBe(verdictLogRecordV4);
+  it('`verdictLogRecord` is the v5 alias', () => {
+    expect(verdictLogRecord).toBe(verdictLogRecordV5);
   });
 });
 
-describe('reviewLogEntry / reviewLogEntryV4 — three-way discrimination', () => {
+describe('reviewLogEntry / reviewLogEntryV5 — three-way discrimination', () => {
   it('discriminates review, suspend/unsuspend, and verdict lines', () => {
     const reviewLine = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: 'review',
       eventId: 'r1',
       timestamp: '2026-08-25T09:00:00-04:00',
@@ -114,7 +118,7 @@ describe('reviewLogEntry / reviewLogEntryV4 — three-way discrimination', () =>
       },
     };
     const suspendLine = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       kind: 'suspend',
       eventId: 's1',
       timestamp: '2026-08-25T09:00:00-04:00',
@@ -122,8 +126,8 @@ describe('reviewLogEntry / reviewLogEntryV4 — three-way discrimination', () =>
       conceptIds: ['concept-prov1:Imbrication'],
     };
 
-    expect(reviewLogRecordV4.safeParse(reviewLine).success).toBe(true);
-    expect(suspendLogRecordV4.safeParse(suspendLine).success).toBe(true);
+    expect(reviewLogRecordV5.safeParse(reviewLine).success).toBe(true);
+    expect(suspendLogRecordV5.safeParse(suspendLine).success).toBe(true);
 
     for (const line of [reviewLine, suspendLine, verdictLine()]) {
       const parsed = reviewLogEntry.safeParse(line);

@@ -4,7 +4,7 @@ import { parseReviewLog } from './parse.js';
 
 function record(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     kind: 'review',
     eventId: 'r1',
     timestamp: '2026-08-10T09:00:00-04:00',
@@ -207,7 +207,7 @@ describe('parseReviewLog — version first, never guess', () => {
     expect(result.records.map((r) => r.kind)).toEqual(['suspend', 'unsuspend']);
   });
 
-  it('a v4 line with no kind is invalid — the discriminator is required, never defaulted', () => {
+  it('a v5 line with no kind is invalid — the discriminator is required, never defaulted', () => {
     const { kind: _dropped, ...noKind } = record({ eventId: 'nokind' });
     const result = parseReviewLog(`${JSON.stringify(noKind)}\n`);
     expect(result.records).toEqual([]);
@@ -215,14 +215,25 @@ describe('parseReviewLog — version first, never guess', () => {
   });
 
   it('an unknown FUTURE version is reported, never reinterpreted as the newest one this build knows', () => {
-    // A newer device writing v5 into a synced vault must not have its records
-    // silently re-read as v4 by an older build — that is data loss disguised
+    // A newer device writing v6 into a synced vault must not have its records
+    // silently re-read as v5 by an older build — that is data loss disguised
     // as tolerance, and the log cannot be backfilled to undo it.
-    const future = { ...record({ eventId: 'future' }), schemaVersion: 5 };
+    const future = { ...record({ eventId: 'future' }), schemaVersion: 6 };
     const result = parseReviewLog(`${JSON.stringify(future)}\n`);
     expect(result.records).toEqual([]);
     expect(result.invalidLines).toHaveLength(1);
-    expect(result.invalidLines[0]?.reason).toContain('5');
+    expect(result.invalidLines[0]?.reason).toContain('6');
+  });
+
+  it('v4 is unreadable too — `[D-109]` drops it rather than keeping it as a frozen intermediate (`ol-tka5`)', () => {
+    // No real v4 record exists anywhere (prod dark, no BRAT install), so a v4
+    // line is exactly as unrecognised to this build as a version it never
+    // heard of — there is no `upgradeV4` and no v4 branch to route it to.
+    const v4Line = { ...record({ eventId: 'v4' }), schemaVersion: 4 };
+    const result = parseReviewLog(`${JSON.stringify(v4Line)}\n`);
+    expect(result.records).toEqual([]);
+    expect(result.invalidLines).toHaveLength(1);
+    expect(result.invalidLines[0]?.reason).toContain('4');
   });
 
   it('a line with no schemaVersion at all is reported with a reason saying so', () => {
@@ -253,13 +264,13 @@ describe('parseReviewLog — version first, never guess', () => {
     expect(result.invalidLines).toHaveLength(4);
   });
 
-  it('v1 and v4 lines mixed in one file both parse, in file order', () => {
+  it('v1 and v5 lines mixed in one file both parse, in file order', () => {
     // The real shape of a synced vault mid-upgrade: an old device's file and a
     // new device's file both exist, and one may even have both.
     const content = `${JSON.stringify(v1Record({ eventId: 'old' }))}\n${line(record({ eventId: 'new' }))}\n`;
     const result = parseReviewLog(content);
     expect(result.invalidLines).toEqual([]);
     expect(result.records.map((r) => r.eventId)).toEqual(['old', 'new']);
-    expect(result.records.every((r) => r.schemaVersion === 4)).toBe(true);
+    expect(result.records.every((r) => r.schemaVersion === 5)).toBe(true);
   });
 });

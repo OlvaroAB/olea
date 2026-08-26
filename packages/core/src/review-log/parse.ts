@@ -12,20 +12,24 @@
  * in this bead's acceptance criteria — recovery of everything before the crash,
  * with the crash itself visible for diagnostics rather than silently eaten.
  *
- * **Version first, never guess (D-020, `ol-t3sd`, `ol-g6zg`).** A line's
- * `schemaVersion` is read before any shape is assumed: `1` validates against
- * the frozen `reviewLogRecordV1` and is then routed through core's `upgradeV1`,
- * `upgradeV2` and `upgradeV3` in turn; `2` validates against the frozen
- * `reviewLogEntryV2` union and is routed through `upgradeV2` then `upgradeV3`;
- * `3` validates against the frozen `reviewLogEntryV3` union and is routed
- * through `upgradeV3`; `4` validates against `reviewLogEntry`, the current
- * discriminated union of review and suspension events. Anything else —
- * including a missing or non-numeric version, and including a version *newer*
- * than this build understands — takes the ordinary invalid-line path with a
- * reason saying so. That last case is the one worth stating out loud: a newer
- * device writing v5 into a synced vault must not have its records silently
- * reinterpreted as v4 by an older build. Every caller therefore sees only
- * current-shape entries.
+ * **Version first, never guess (D-020, `ol-t3sd`, `ol-g6zg`, `ol-tka5`).** A
+ * line's `schemaVersion` is read before any shape is assumed: `1` validates
+ * against the frozen `reviewLogRecordV1` and is then routed through core's
+ * `upgradeV1`, `upgradeV2` and `upgradeV3` in turn; `2` validates against the
+ * frozen `reviewLogEntryV2` union and is routed through `upgradeV2` then
+ * `upgradeV3`; `3` validates against the frozen `reviewLogEntryV3` union and
+ * is routed through `upgradeV3`; `5` validates against `reviewLogEntry`, the
+ * current discriminated union of review, suspension and verdict events.
+ * Anything else — including a missing or non-numeric version, a version newer
+ * than this build understands, **and `4`** — takes the ordinary invalid-line
+ * path with a reason saying so. `4` joins that set deliberately, not by
+ * omission: `[D-109]` (`ol-tka5`) rules review-log v5 a migrate-in-place bump
+ * because no real v4 record exists anywhere to stay readable for, so a v4
+ * line is exactly as unreadable to this build as a version it has never heard
+ * of — there is nothing to distinguish it from. The general case is worth
+ * stating out loud regardless: a newer device writing v6 into a synced vault
+ * must not have its records silently reinterpreted as v5 by an older build.
+ * Every caller therefore sees only current-shape entries.
  */
 
 import {
@@ -144,7 +148,7 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
       return;
     }
 
-    if (version === 4) {
+    if (version === 5) {
       const parsed = reviewLogEntry.safeParse(json);
       if (!parsed.success) {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });

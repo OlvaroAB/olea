@@ -1,5 +1,5 @@
 /**
- * The **one** review-log migration site (D-020, `ol-t3sd`, INV-4).
+ * The **one** review-log migration site (D-020, `ol-t3sd`, INV-4, `ol-tka5`).
  *
  * There is exactly one file here and there is deliberately nowhere else in the
  * codebase that turns an old record into a new one. Ad-hoc upgrades scattered
@@ -11,11 +11,21 @@
  * here; everything downstream of `parse.ts` only ever sees the current shape.
  *
  * **One function per hop, chained, rather than one function per pair.** v1
- * reaches v4 as `upgradeV3(upgradeV2(upgradeV1(record)))`. The alternative — a
- * direct `upgradeV1ToV4` alongside `upgradeV1ToV2` — is how the same record
+ * reaches v5 as `upgradeV3(upgradeV2(upgradeV1(record)))`. The alternative — a
+ * direct `upgradeV1ToV5` alongside `upgradeV1ToV2` — is how the same record
  * acquires two migration paths that can disagree; chaining makes that
  * unrepresentable, and each hop stays independently testable against the
  * version it was written for.
+ *
+ * **`upgradeV3` targets v5 directly — there is no `upgradeV4` hop.** `[D-109]`
+ * (`ol-tka5`) rules review-log v5 a migrate-in-place bump: no real v4 record
+ * exists anywhere to migrate FROM (prod dark, no BRAT install), so v4 is
+ * dropped from `REVIEW_LOG_READABLE_VERSIONS` rather than kept as a frozen
+ * intermediate stage. `upgradeV3` therefore does in one hop what would
+ * otherwise have been two — attribute mastery exactly as it always did, and
+ * add the three v5 fields as omitted (their "not recorded" state, matching
+ * `masteryAtTime`'s own v4 precedent), because a v1–v3 record predates every
+ * one of them and there is nothing honest to invent.
  *
  * **Every hop takes one argument, and that is a load-bearing property rather
  * than a coincidence of style.** A migration with a second parameter is a
@@ -36,9 +46,9 @@ import {
   type ReviewLogRecordV2,
   reviewLogRecordV2,
   reviewLogRecordV3,
-  reviewLogRecordV4,
+  reviewLogRecordV5,
   suspendLogRecordV3,
-  suspendLogRecordV4,
+  suspendLogRecordV5,
 } from 'olea-contracts';
 
 /**
@@ -134,8 +144,8 @@ function attributeV3Mastery(
 }
 
 /**
- * Upgrades a v3 entry — review or suspension — to v4 (`ol-g6zg`, implementing
- * `ol-7328`'s ruling).
+ * Upgrades a v3 entry — review or suspension — to **v5** (`ol-g6zg`'s mastery
+ * attribution, `ol-tka5`/`[D-109]`'s migrate-in-place v5 bump).
  *
  * **`selectionContext.masteryAtTime` becomes the record's own `masteryAtTime`,
  * and nothing else moves.** The field leaves `selectionContext` because a map
@@ -146,6 +156,13 @@ function attributeV3Mastery(
  * with the review record so that one daily file never holds two current
  * versions.
  *
+ * **`supportLevelShown`, `explainBackGrade` and `schedulingObservation` are
+ * left OMITTED, never defaulted to a value.** A v3 record predates every one
+ * of D-094, R9/GLOSSARY and D-087 — there is nothing in a v1–v3 record that
+ * could honestly populate any of the three, so omission states a true "not
+ * recorded," the same restraint `masteryAtTime`'s own v4 migration already
+ * established for exactly this situation.
+ *
  * **What it will not do**, and the restraint is inherited directly from
  * `upgradeV2`: it takes no vault, no clock and no mastery rollup, so it
  * *cannot* consult current state even if a future caller wished it would. See
@@ -153,7 +170,7 @@ function attributeV3Mastery(
  * recorded rather than guessed.
  *
  * Produced through `.parse` for the same reason the earlier hops are: zod emits
- * keys in schema order, so a migrated record and a natively-read v4 record of
+ * keys in schema order, so a migrated record and a natively-read v5 record of
  * the same event serialise **byte-identically**, and `merge.ts`'s comparison of
  * duplicate `eventId`s by serialised form does not mistake one for a collision
  * with the other. The map itself is built in `conceptIds` order for the same
@@ -163,21 +180,24 @@ function attributeV3Mastery(
 export function upgradeV3(entry: ReviewLogEntryV3): ReviewLogEntry {
   if (entry.kind !== 'review') {
     const { schemaVersion: _v3, ...rest } = entry;
-    return suspendLogRecordV4.parse({ schemaVersion: 4, ...rest });
+    return suspendLogRecordV5.parse({ schemaVersion: 5, ...rest });
   }
 
   const { schemaVersion: _v3, selectionContext, ...rest } = entry;
   const { masteryAtTime: recorded, ...contextV4 } = selectionContext;
   const attributed = attributeV3Mastery(recorded, entry.conceptIds);
 
-  return reviewLogRecordV4.parse({
-    schemaVersion: 4,
+  return reviewLogRecordV5.parse({
+    schemaVersion: 5,
     ...rest,
     selectionContext: contextV4,
     // Omitted, not set to undefined: `JSON.stringify` drops an
     // undefined-valued key anyway, but the record is compared and merged in
     // memory long before it is serialised, and `{ masteryAtTime: undefined }`
-    // is a key that `Object.keys` reports and an absent field is not.
+    // is a key that `Object.keys` reports and an absent field is not. The
+    // same reasoning is why `supportLevelShown`, `explainBackGrade` and
+    // `schedulingObservation` are simply never assigned below — a v3 record
+    // has nothing honest to say about any of the three.
     ...(attributed === undefined ? {} : { masteryAtTime: attributed }),
   });
 }

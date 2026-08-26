@@ -12,23 +12,59 @@
  * So the shape is frozen here, in `contracts`, before P2-T03 writes a line of
  * the writer — and `olea-service` vendors this same file (plan §2.4).
  *
- * **Versioning (D-020, `ol-t3sd`, `ol-g6zg`).** "Frozen" means *a version* is
- * frozen, not that the file never grows: v1 (`reviewLogRecordV1`) stays here,
- * untouched forever, so records already on disk stay readable; v2 adds the
- * `kind` discriminator that turns the log into a union of review and suspension
- * events; v3 replaces `conceptId` with `conceptIds`, because one instrument
- * may be evidence for every concept its note names; and v4 moves `masteryAtTime`
- * out of `selectionContext` onto the record itself as a per-concept map, because
- * a rating is evidence for every concept the instrument names and each of those
- * concepts has its own mastery; and v4 later gains a third `kind`,
- * `verdictLogRecordV4` (`ol-548w`, INV-6), additive the same way `suspend`/
- * `unsuspend` were additive at v2 — no version bump, because nothing about an
- * existing kind's shape changes. The rule for every reader is the same one v1's
- * doc already stated — **read the version first, never guess** — with exactly
- * one migration site, core's `upgrade.ts` (`upgradeV1`, then `upgradeV2`, then
- * `upgradeV3`). Every version bump so far was taken while the only records in
- * existence at that version were fixtures; that was the last cheap moment each
- * time, which is D-017's argument.
+ * **Versioning (D-020, `ol-t3sd`, `ol-g6zg`, `ol-tka5`).** "Frozen" means *a
+ * version* is frozen, not that the file never grows: v1 (`reviewLogRecordV1`)
+ * stays here, untouched forever, so records already on disk stay readable; v2
+ * adds the `kind` discriminator that turns the log into a union of review and
+ * suspension events; v3 replaces `conceptId` with `conceptIds`, because one
+ * instrument may be evidence for every concept its note names; and v4 moves
+ * `masteryAtTime` out of `selectionContext` onto the record itself as a
+ * per-concept map, because a rating is evidence for every concept the
+ * instrument names and each of those concepts has its own mastery; v4 later
+ * gains a third `kind`, `verdictLogRecordV4` (`ol-548w`, INV-6), additive the
+ * same way `suspend`/`unsuspend` were additive at v2 — no version bump,
+ * because nothing about an existing kind's shape changes. The rule for every
+ * reader is the same one v1's doc already stated — **read the version first,
+ * never guess** — with exactly one migration site, core's `upgrade.ts`
+ * (`upgradeV1`, then `upgradeV2`, then `upgradeV3`). Every version bump so far
+ * was taken while the only records in existence at that version were
+ * fixtures; that was the last cheap moment each time, which is D-017's
+ * argument.
+ *
+ * **v5 (`ol-tka5`, ratified `[D-117]`, design at `olea-service`'s
+ * `docs/dev/verdict-seam-design.md`) is a MIGRATE-IN-PLACE bump, not an
+ * additive one — the one deliberate exception to "every version bump so far
+ * added a hop."** `[D-109]` (closed 2026-08-25, titled for this exact
+ * migration) rules that review-log v5 carries no v4 retention: no real v4
+ * record exists anywhere (prod is dark, no BRAT install, the alpha user has no
+ * review log — `[D-109]`'s own expiry test), so `reviewLogRecordV4`,
+ * `suspendLogRecordV4` and `verdictLogRecordV4` are renamed forward to V5
+ * rather than kept alongside it, `REVIEW_LOG_READABLE_VERSIONS` drops `4`
+ * rather than adding `5` beside it, and core's `upgrade.ts` gains no
+ * `upgradeV4` hop — `upgradeV3` now targets v5 directly. v1–v3 are untouched
+ * and still frozen exactly as before; this exception is scoped to the v4→v5
+ * transition alone, per `[D-109]`'s own text. Three fields land: `supportLevelShown`
+ * (D-094's shown-support ladder, principle 16/F2.20 — record what was shown,
+ * never what she said), `explainBackGrade` (R9's SOLO depth verdict, a
+ * `revisionOf` backward pointer, and a `[D-077]` content-store reference —
+ * explain-back reviews only), and `schedulingObservation` (MAT-4's
+ * non-scoring neighbour-use signal, `[D-087]`, C5.11 — explain-back reviews
+ * only, and the mastery fold must never read it).
+ *
+ * **All three are `.optional()`, not `.nullable()`-required, and that is a
+ * deliberate build-time simplification, not the design doc's literal
+ * schema.** The design draft wrote `supportLevelShown` as required-but-nullable
+ * to match `selectionContext`'s explicit-null discipline; this build instead
+ * follows the same "true absence, not a placeholder" rule v4's `masteryAtTime`
+ * already established, because nothing produces any of the three fields yet
+ * (the grading pipeline has no production caller — `ol-drfy`; D-094's support
+ * ladder has no writer either) and a required field would force every
+ * existing call to `appendReviewLogRecord` to invent a value it does not have.
+ * **What would force a genuine v6 rather than a value inside this baseline:**
+ * if a future ruling requires `supportLevelShown` to be non-omittable (explicit
+ * `null` on every record, matching the older context fields) once D-094 ships
+ * a real writer — that is a schema-shape change (optional → required-nullable),
+ * not a value change, and belongs in its own version.
  *
  * **What v3's migration can and cannot do.** `upgradeV2` maps `conceptId` to
  * `[conceptId]` and nothing cleverer. A v2 record on disk names one concept
@@ -502,9 +538,10 @@ export const masteryAtTime = z.discriminatedUnion('attribution', [
      * One entry per concept the record names, keyed by concept id.
      *
      * Agreement with `conceptIds` is enforced on the **record**
-     * (`reviewLogRecordV4`'s refinement) and cannot be enforced here: this
-     * object cannot see `conceptIds`, which is the structural reason the whole
-     * field moved out of `selectionContext`.
+     * (`reviewLogRecordV5`'s `refineMasteryAgreesWithConcepts` refinement,
+     * inherited unchanged from v4) and cannot be enforced here: this object
+     * cannot see `conceptIds`, which is the structural reason the whole field
+     * moved out of `selectionContext`.
      */
     byConcept: z.record(z.string().min(1), masteryState),
   }),
@@ -589,43 +626,233 @@ function refineMasteryAgreesWithConcepts(
 }
 
 /**
- * One review event, **schema version 4 — the current review record**
- * (`ol-g6zg`, implementing `ol-7328`'s ruling).
+ * Which prompt template and model produced the artifact a verdict is about
+ * (D7.3, D-005). The same two fields `responseStamp` (`../worker.ts`) stamps
+ * onto a generated artifact client-side; a verdict record repeats them here
+ * rather than importing that type, so this record has no compile-time
+ * coupling to the Worker envelope beyond the two fields it actually needs.
  *
- * v3 with `masteryAtTime` moved out of `selectionContext` and onto the record,
- * beside `conceptIds`, as an optional per-concept value. Everything else is
- * derived from v3 so "v4 is v3 with one field relocated" cannot become false by
- * editing.
+ * **Why this is not content, and why it is required rather than optional.**
+ * D-005 forbids her content, never the provenance of a call that produced an
+ * artifact — task id, model id and prompt version are exactly what it
+ * enumerates as permitted. Every verdict is about something Olea drafted, so
+ * every verdict has a generating call to name; there is no honest case for
+ * omitting it, unlike `masteryAtTime` (`ol-g6zg`'s doc above), where absence
+ * states a true "not yet computed".
  *
- * **Optional, and absence means exactly what `null` meant.** v1–v3 wrote
- * `masteryAtTime: null` to say "no mastery was recorded for this item", and
- * D7.1's explicit-null discipline is why the other `selectionContext` fields
- * are never omitted. That discipline is unchanged for them. This field is the
- * one exception and the exception is principled: `null` there was a *scalar
- * absence* in a fixed-shape object, whereas here the alternative to a value is
- * an empty map — which would mean "a mastery map was recorded and it names none
- * of the concepts", a statement no writer wants to make and one the invariant
- * above would reject anyway. Absent is the honest encoding, and it round-trips
- * through `JSON.stringify` without the `undefined`-drops-the-key hazard that
- * makes omission dangerous elsewhere in this record.
- *
- * **Nothing writes it yet.** C5.4's mastery rollup (`ol-p4t06`) is the first
- * and only intended producer; until it exists every vault writer omits the
- * field, which is a true statement rather than a placeholder. The version was
- * taken now rather than then for D-017's reason: at the moment of the bump no
- * real v3 record existed anywhere — v3 landed after `0.9.0-alpha.2`, only
- * `0.9.0-alpha.3` can write it, and the only v3 records in existence were the
- * fixtures in this repo. That was the last cheap moment.
- *
- * **Key order.** `masteryAtTime` lands last, after `conceptIds`; `selectionContext`
- * keeps v3's position because re-declaring an existing key in an object literal
- * replaces its value without moving it. So a v4 record's key order is v3's with
- * one key appended, which keeps the migration's output and a natively-read v4
- * record byte-identical for the same event.
+ * **Moved above the v4 record block by `ol-tka5`'s v5 migration** so that
+ * `explainBackGrade` below can reference it — it was originally declared
+ * between the (now-renamed) suspend and verdict records, where nothing needed
+ * it this early.
  */
-export const reviewLogRecordV4 = z
+export const artifactProvenance = z.object({
+  /** The task id that produced the draft (`../worker.ts`'s `taskId`, not re-imported — see this object's doc). */
+  taskId: z.string().min(1),
+  /** VERSION file of the prompt template that produced it (C4.3, D7.3). */
+  promptVersion: z.string().min(1),
+  /** The model that produced it (C4.6). */
+  modelId: z.string().min(1),
+});
+export type ArtifactProvenance = z.infer<typeof artifactProvenance>;
+
+/**
+ * SOLO taxonomy level (Biggs & Collis 1982; `GLOSSARY.md` "SOLO taxonomy"),
+ * the wire encoding of R9's grading verdict (`ol-tka5`). Five levels, never
+ * fewer — R9's whole argument against a binary correct/incorrect field is
+ * that a flat verdict cannot express "separate ideas integrated under a
+ * principle" versus "listed alongside one another," which is exactly what
+ * the depth gate (R7) tests for. Internal vocabulary only — GLOSSARY's SOLO
+ * rule 5 is explicit that level names are never exposed to the student; the
+ * vocabulary registry's growth-stage display (seed/sprout/sapling/tree) is
+ * the only SOLO-derived thing she ever sees, and it is derived from this by
+ * the mastery fold, not stored here twice.
+ */
+export const soloLevel = z.enum([
+  'prestructural',
+  'unistructural',
+  'multistructural',
+  'relational',
+  'extended-abstract',
+]);
+export type SoloLevel = z.infer<typeof soloLevel>;
+
+/**
+ * The support ladder a review was shown at (`[D-094]`), objectively —
+ * "record what was shown, never what she said" (principle 16, F2.20). Three
+ * tiers, matching D-094's ruling exactly: independent (no support), prompted
+ * (targeted hint on demand), guided (source expandable, elaboration prompt on
+ * incomplete answers). The reduced-difficulty variant D-094 explicitly
+ * excludes from the ladder is not a fourth value here for the same reason it
+ * is not a fourth rung there — a different question is a different
+ * instrument, not a support level.
+ *
+ * Recognition-tier reviews (MCQ) have no ladder (D-094 item 4) — not
+ * schema-enforced, the same choice `rating`'s doc makes for `easy` being
+ * absent at MCQ by rule rather than by narrower type: the log records what
+ * happened, and encoding every domain invariant as a union would make a real
+ * bug (an MCQ review wrongly stamped with a support level) unloggable.
+ */
+export const supportLevel = z.enum(['independent', 'prompted', 'guided']);
+export type SupportLevel = z.infer<typeof supportLevel>;
+
+/**
+ * The grading verdict for one explain-back review (`ol-tka5`) — R9's "the
+ * grader emits a SOLO verdict" made a persisted fact. Present only on
+ * `review`-kind records whose `instrumentType` is `'explain-back'` (enforced
+ * below by `refineExplainBackGradeInstrumentType`); absent everywhere else,
+ * the same "true absence, not a placeholder" discipline `masteryAtTime`
+ * established at v4 — nothing writes this for a declined or abandoned
+ * explain-back attempt, and nothing should default it. **Nothing writes it
+ * yet**: the grading pipeline has no production caller (`ol-drfy`); MAT-5
+ * (`ol-95vv.2`) is the intended producer.
+ */
+export const explainBackGrade = z.object({
+  /** The SOLO level this response reached. Never a number, never averaged — GLOSSARY rule 3. */
+  soloLevel,
+  /**
+   * Opaque reference into the `[D-077]` / `ol-2jod.8` immutable content
+   * store — her answer text, the grader's feedback, and any misconception
+   * detail, kept as immutable files Olea owns, referenced by id, never
+   * inline. This is the field that makes R9's "recomputed when the grading
+   * rule changes, and shown to her with the evidence that produced it"
+   * actually honourable: the verdict alone cannot be replayed, the
+   * referenced content can. D-005 is satisfied because the pointer itself is
+   * an opaque identifier, structurally identical to every other id already
+   * in this file — it is never the text.
+   */
+  contentRef: z.string().min(1),
+  /**
+   * The `eventId` of a PRIOR review event this one re-grades — set only when
+   * the grading pipeline is explicitly re-run against previously-recorded
+   * content (a rubric or prompt version change), never for a fresh attempt
+   * at the same concept. This is the "revision" item from David's six;
+   * "supersession" — the sixth — is deliberately NOT a separate field or
+   * event: GLOSSARY defines depth as "the SOLO level of the MOST RECENT
+   * graded explain-back for the concept," a read-time chronological
+   * resolution the fold already needs (ordering by `(timestamp, eventId)`),
+   * so a plain new attempt superseding an old one needs no field at all.
+   * `revisionOf` exists only for the narrower case ordering alone cannot
+   * distinguish: a re-grade of the *same* recorded answer under a changed
+   * rubric, as opposed to a genuinely new attempt — audit metadata a reader
+   * may show her, never an input the fold needs (strip-invariance, knowledge
+   * model §8 test 5).
+   */
+  revisionOf: z.string().min(1).nullable(),
+  /**
+   * Which prompt template and model produced THIS grade (D7.3, D-005) —
+   * distinct from any `artifactProvenance` on a `verdictLogRecord`, which
+   * stamps the DRAFTING call, not the grading call. Reused rather than
+   * redeclared, same reasoning as `verdictLogRecordV5`'s own field.
+   */
+  artifactProvenance,
+});
+export type ExplainBackGrade = z.infer<typeof explainBackGrade>;
+
+/**
+ * Her demonstrated correct use of a neighbour concept while explaining the
+ * SUBJECT concept (`[D-087]`, C5.11, MAT-4's `SchedulingObservation`,
+ * `ol-tka5`). Marks the reciprocal prompt as likely to succeed; NEVER scores
+ * `neighbourConceptId`, never moves its stage or vitality — C5.11's
+ * exception-free rule against a second scoring target. Present only when the
+ * grading pipeline found demonstrated use; absent otherwise.
+ *
+ * **The mastery fold must never read this field.** Knowledge model §8 test 5
+ * (strip-invariance) is the contract test: folding a log and a copy of it
+ * with every `schedulingObservation` (and every `explainBackGrade.revisionOf`)
+ * stripped must produce byte-identical scoring readings. Exclusion is
+ * enforced by no fold function importing this field, not by filtering an
+ * event kind — the same mechanism the knowledge model already names for this
+ * exact type.
+ */
+export const schedulingObservation = z.object({
+  /** The concept her demonstrated use was evidence about — never conceptIds[0], never scored. */
+  neighbourConceptId: z.string().min(1),
+});
+export type SchedulingObservation = z.infer<typeof schedulingObservation>;
+
+/**
+ * `explainBackGrade`/`schedulingObservation` may only appear on an
+ * explain-back review — SOLO grades a response, and only an explain-back
+ * response is gradable (GLOSSARY SOLO rule 2). Applied with `superRefine` on
+ * the record, the same pattern as `refineMasteryAgreesWithConcepts`, because
+ * the check spans two fields.
+ */
+function refineExplainBackGradeInstrumentType(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly explainBackGrade?: ExplainBackGrade | undefined;
+    readonly schedulingObservation?: SchedulingObservation | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.instrumentType === 'explain-back') return;
+  if (value.explainBackGrade !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['explainBackGrade'],
+      message: 'explainBackGrade may only appear on an explain-back review',
+    });
+  }
+  if (value.schedulingObservation !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['schedulingObservation'],
+      message: 'schedulingObservation may only appear on an explain-back review',
+    });
+  }
+}
+
+/**
+ * `schedulingObservation.neighbourConceptId` must never be a member of the
+ * record's own `conceptIds` — it is explicitly the concept NOT being scored
+ * (C5.11); a record naming its own subject as its neighbour observation would
+ * be the second-scoring-target bug R9/C5.11 forbid, caught structurally
+ * rather than trusted to a caller.
+ */
+function refineSchedulingObservationNotSubject(
+  value: {
+    readonly conceptIds: readonly string[];
+    readonly schedulingObservation?: SchedulingObservation | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const observation = value.schedulingObservation;
+  if (observation === undefined) return;
+  if (value.conceptIds.includes(observation.neighbourConceptId)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['schedulingObservation', 'neighbourConceptId'],
+      message:
+        'schedulingObservation.neighbourConceptId must not be one of the record’s own ' +
+        'conceptIds — it is the concept NOT being scored (C5.11)',
+    });
+  }
+}
+
+/**
+ * One review event, **schema version 5 — the current review record**
+ * (`ol-tka5`, ratified `[D-117]`).
+ *
+ * v4 plus three fields, all optional (see this file's header for why they
+ * are optional rather than required-nullable): `supportLevelShown` (every
+ * recall/explanation review, D-094), `explainBackGrade` (explain-back
+ * reviews only, R9/GLOSSARY SOLO), `schedulingObservation` (explain-back
+ * reviews naming a relation, D-087). Migrated IN PLACE per `[D-109]`: v4 is
+ * not retained as a frozen, readable historical version — no real v4 record
+ * exists anywhere (prod dark, no BRAT install, `[D-109]`'s own expiry test),
+ * so there is nothing to stay compatible with. `reviewLogRecordV4`,
+ * `suspendLogRecordV4` and `verdictLogRecordV4` are renamed to V5
+ * (suspend/verdict: version bump only, no shape change — the "one version
+ * per line" rule `suspendLogRecordV5`'s own doc states forces every kind in
+ * the union to move together).
+ *
+ * Everything through `masteryAtTime` is derived from v4 exactly as v4 was
+ * derived from v3, so "v5 is v4 plus these fields" cannot become false by
+ * editing.
+ */
+export const reviewLogRecordV5 = z
   .object({
-    schemaVersion: z.literal(4),
+    schemaVersion: z.literal(5),
     /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
     kind: z.literal('review'),
     // Every v3 field, verbatim and by derivation.
@@ -640,71 +867,64 @@ export const reviewLogRecordV4 = z
      * writer means today, because C5.4's rollup does not exist yet.
      */
     masteryAtTime: masteryAtTime.optional(),
+    /**
+     * Objective support level presented (principle 16, F2.20, `[D-094]`).
+     * Optional, not required-nullable — nothing writes it yet (no D-094
+     * writer exists), and this file's header explains why that differs from
+     * the design draft's literal schema.
+     */
+    supportLevelShown: supportLevel.optional(),
+    /** Present only for graded explain-back reviews. Nothing writes it yet (`ol-drfy`). */
+    explainBackGrade: explainBackGrade.optional(),
+    /** Present only when this explain-back review demonstrated use of a named neighbour. */
+    schedulingObservation: schedulingObservation.optional(),
   })
-  .superRefine(refineMasteryAgreesWithConcepts);
-export type ReviewLogRecordV4 = z.infer<typeof reviewLogRecordV4>;
+  .superRefine(refineMasteryAgreesWithConcepts)
+  .superRefine(refineExplainBackGradeInstrumentType)
+  .superRefine(refineSchedulingObservationNotSubject);
+export type ReviewLogRecordV5 = z.infer<typeof reviewLogRecordV5>;
 
 /**
- * One suspend or unsuspend event, **schema version 4 — the current one**.
+ * One suspend or unsuspend event, **schema version 5 — the current one**.
  *
- * Identical to v3 in every field, derived from it, with only the version
- * stamped forward. Nothing about the ruling touches a suspension: a suspend is
- * not a review and carries no `selectionContext`, so it has no mastery to
- * attribute.
+ * Identical to v4 in every field, derived from it (renamed forward per
+ * `[D-109]`, `ol-tka5` — v4 is not retained), with only the version stamped
+ * forward. Nothing about the v5 ruling touches a suspension: a suspend is not
+ * a review and carries no `selectionContext`, so it has no mastery, support
+ * level or grade to attribute.
  *
  * It moves anyway, and that is the point of moving it. `schemaVersion` is read
- * per *line*, and the two record types share one daily file, so a build that
- * wrote v4 reviews beside v3 suspensions would be asking every reader — now and
- * in a semester — to hold two current versions at once. One version per line,
- * one current version.
+ * per *line*, and the record types share one daily file, so a build that wrote
+ * v5 reviews beside v4 suspensions would be asking every reader — now and in a
+ * semester — to hold two current versions at once. One version per line, one
+ * current version.
  */
-export const suspendLogRecordV4 = z.object({
-  schemaVersion: z.literal(4),
-  // Every v3 field, verbatim and by derivation.
+export const suspendLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  // Every v3 field, verbatim and by derivation. (v4 made no shape change to
+  // this record, so deriving from v3 directly — as v4 itself did — is
+  // identical to deriving from the now-retired v4.)
   ...suspendLogRecordV3.omit({ schemaVersion: true }).shape,
 });
-export type SuspendLogRecordV4 = z.infer<typeof suspendLogRecordV4>;
+export type SuspendLogRecordV5 = z.infer<typeof suspendLogRecordV5>;
 
 /**
- * Which prompt template and model produced the artifact a verdict is about
- * (D7.3, D-005). The same two fields `responseStamp` (`../worker.ts`) stamps
- * onto a generated artifact client-side; a verdict record repeats them here
- * rather than importing that type, so this record has no compile-time
- * coupling to the Worker envelope beyond the two fields it actually needs.
- *
- * **Why this is not content, and why it is required rather than optional.**
- * D-005 forbids her content, never the provenance of a call that produced an
- * artifact — task id, model id and prompt version are exactly what it
- * enumerates as permitted. Every verdict is about something Olea drafted, so
- * every verdict has a generating call to name; there is no honest case for
- * omitting it, unlike `masteryAtTime` (`ol-g6zg`'s doc above), where absence
- * states a true "not yet computed".
- */
-export const artifactProvenance = z.object({
-  /** The task id that produced the draft (`../worker.ts`'s `taskId`, not re-imported — see this object's doc). */
-  taskId: z.string().min(1),
-  /** VERSION file of the prompt template that produced it (C4.3, D7.3). */
-  promptVersion: z.string().min(1),
-  /** The model that produced it (C4.6). */
-  modelId: z.string().min(1),
-});
-export type ArtifactProvenance = z.infer<typeof artifactProvenance>;
-
-/**
- * One accept/edit/reject verdict, **schema version 4** (`ol-548w`, INV-6).
+ * One accept/edit/reject verdict, **schema version 5** (`ol-548w`, INV-6;
+ * renamed forward from v4 by `ol-tka5`/`[D-109]` — no shape change).
  *
  * A third `kind`, additive to the discriminated union exactly the way
- * `suspend`/`unsuspend` were additive at v2 (D-020) — no `schemaVersion` bump,
- * because nothing about the *shape* of an existing kind changes. Lives in the
- * same daily file as reviews and suspensions (C5.2), append-only: a verdict
- * is a fact about a moment, never revised in place — re-drafting after a
- * reject is a new instrument with its own future verdict, not an edit to this
- * one.
+ * `suspend`/`unsuspend` were additive at v2 (D-020) — the v4→v5 bump moves
+ * this kind forward only because `[D-109]` requires every kind in the union
+ * to share one current version (`suspendLogRecordV5`'s doc), not because
+ * anything about its shape changed. Lives in the same daily file as reviews
+ * and suspensions (C5.2), append-only: a verdict is a fact about a moment,
+ * never revised in place — re-drafting after a reject is a new instrument
+ * with its own future verdict, not an edit to this one.
  *
  * **Keyed on `conceptIds`, the opaque join key (C7.11, `[D-088]`, `[D-109]`,
  * `ol-il6m`).** This is a brand-new writer with no legacy record to stay
  * consistent with, so it keys on `ConceptRecord.key` from day one rather than
- * inheriting the display-name join `reviewLogRecordV4.conceptIds` still
+ * inheriting the display-name join `reviewLogRecordV5.conceptIds` still
  * carries today (see `olea-core`'s `session/enumerate.ts` for why that one
  * has not flipped yet). A future coordinated flip of the review/suspend
  * mint sites does not have to touch this shape at all.
@@ -713,8 +933,8 @@ export type ArtifactProvenance = z.infer<typeof artifactProvenance>;
  * what INV-6's oracle needs — what she decided, and which generating call
  * produced the thing she decided about — and neither carries her text.
  */
-export const verdictLogRecordV4 = z.object({
-  schemaVersion: z.literal(4),
+export const verdictLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
   /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
   kind: z.literal('verdict'),
   /** Stable unique id for this event; makes two-device merges idempotent. */
@@ -734,43 +954,49 @@ export const verdictLogRecordV4 = z.object({
   verdict: artifactVerdict,
   artifactProvenance,
 });
-export type VerdictLogRecordV4 = z.infer<typeof verdictLogRecordV4>;
+export type VerdictLogRecordV5 = z.infer<typeof verdictLogRecordV5>;
 
 /**
  * Every shape a **current-version** review-log line can take, discriminated by
- * `kind` — the union readers parse v4 lines against.
+ * `kind` — the union readers parse v5 lines against.
  *
  * Older records are deliberately *not* members: a reader must read
  * `schemaVersion` first and never guess, then migrate through core's single
  * `upgrade.ts` before anything else sees the record.
  */
-export const reviewLogEntryV4 = z.discriminatedUnion('kind', [
-  reviewLogRecordV4,
-  suspendLogRecordV4,
-  verdictLogRecordV4,
+export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
+  reviewLogRecordV5,
+  suspendLogRecordV5,
+  verdictLogRecordV5,
 ]);
-export type ReviewLogEntryV4 = z.infer<typeof reviewLogEntryV4>;
+export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
 /**
  * Aliases for the current shapes, so consumers that only ever meant "a review
  * happened" keep reading naturally. These always point at the newest version;
  * code that needs a specific version names it explicitly.
  */
-export const reviewLogEntry = reviewLogEntryV4;
-export type ReviewLogEntry = z.infer<typeof reviewLogEntryV4>;
-export const reviewLogRecord = reviewLogRecordV4;
-export type ReviewLogRecord = z.infer<typeof reviewLogRecordV4>;
-export const suspendLogRecord = suspendLogRecordV4;
-export type SuspendLogRecord = z.infer<typeof suspendLogRecordV4>;
-export const verdictLogRecord = verdictLogRecordV4;
-export type VerdictLogRecord = z.infer<typeof verdictLogRecordV4>;
+export const reviewLogEntry = reviewLogEntryV5;
+export type ReviewLogEntry = z.infer<typeof reviewLogEntryV5>;
+export const reviewLogRecord = reviewLogRecordV5;
+export type ReviewLogRecord = z.infer<typeof reviewLogRecordV5>;
+export const suspendLogRecord = suspendLogRecordV5;
+export type SuspendLogRecord = z.infer<typeof suspendLogRecordV5>;
+export const verdictLogRecord = verdictLogRecordV5;
+export type VerdictLogRecord = z.infer<typeof verdictLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
-export const REVIEW_LOG_SCHEMA_VERSION = 4 as const;
+export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;
 
 /**
  * Every version this build can *read*, newest first. `parse.ts` routes on it,
  * and its own error message quotes it, so adding a version cannot leave a
  * reader claiming to understand a set it no longer matches.
+ *
+ * **`4` is dropped, not kept alongside `5`** (`[D-109]`, `ol-tka5`) — the one
+ * deliberate exception to this list's own history of only ever growing. No
+ * real v4 record exists anywhere to stay readable for; a device that
+ * somehow still wrote one takes the ordinary unknown-version path below,
+ * indistinguishable from a version this build has never heard of.
  */
-export const REVIEW_LOG_READABLE_VERSIONS = [4, 3, 2, 1] as const;
+export const REVIEW_LOG_READABLE_VERSIONS = [5, 3, 2, 1] as const;

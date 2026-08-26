@@ -58,7 +58,7 @@ describe('appendReviewLogRecord', () => {
       generateEventId: () => 'fixed-event-1',
     });
 
-    expect(result.record.schemaVersion).toBe(4);
+    expect(result.record.schemaVersion).toBe(5);
     expect(result.record.kind).toBe('review');
     expect(result.record.eventId).toBe('fixed-event-1');
     expect(result.path).toBe(reviewLogPath('2026-08-10', 'desktop'));
@@ -359,7 +359,7 @@ describe('appendSuspendRecord', () => {
       generateEventId: () => 'suspend-1',
     });
 
-    expect(result.record.schemaVersion).toBe(4);
+    expect(result.record.schemaVersion).toBe(5);
     expect(result.record.kind).toBe('suspend');
     expect(result.record.eventId).toBe('suspend-1');
     expect(result.record.instrumentId).toBe('cloze:bioturbation:1');
@@ -482,7 +482,7 @@ describe('appendVerdictRecord (ol-548w, INV-6)', () => {
       generateEventId: () => 'verdict-1',
     });
 
-    expect(result.record.schemaVersion).toBe(4);
+    expect(result.record.schemaVersion).toBe(5);
     expect(result.record.kind).toBe('verdict');
     expect(result.record.eventId).toBe('verdict-1');
     expect(result.record.verdict).toBe('accepted');

@@ -9,18 +9,29 @@ so a reader can see this as "the same invented student's" data, but nothing here
 discriminator and the suspend/unsuspend record type); `ol-t3sd` bumped it to v3 (replacing
 `conceptId` with `conceptIds`, because one instrument may be evidence for every concept its note
 names); `ol-g6zg` bumped it to v4 (moving `masteryAtTime` out of `selectionContext` onto the
-record as a per-concept map, because each concept an instrument names has its own mastery). The
-v1, v2 and v3 files below are *not* stale and must **never** be regenerated or migrated: they are
-the only evidence in the suite that the old read paths and the `upgradeV1` / `upgradeV2` /
-`upgradeV3` migrations still work, and deleting or "fixing" one would delete the test of the
-migration along with the data. `golden.spec.ts` asserts against the raw bytes of each that it
-really is still at its own version, precisely so that a well-meaning migration fails loudly
-instead of silently removing the coverage.
+record as a per-concept map, because each concept an instrument names has its own mastery);
+`ol-tka5` bumped it to v5 (the grading verdict's depth, the shown support level, and a revision
+pointer — `[D-117]`). The v1, v2 and v3 files below are *not* stale and must **never** be
+regenerated or migrated: they are the only evidence in the suite that the old read paths and the
+`upgradeV1` / `upgradeV2` / `upgradeV3` migrations still work, and deleting or "fixing" one would
+delete the test of the migration along with the data. `golden.spec.ts` asserts against the raw
+bytes of each that it really is still at its own version, precisely so that a well-meaning
+migration fails loudly instead of silently removing the coverage.
 
 **The rule, restated because it is the one that gets broken:** this suite is *extended, never
-pruned*. A schema bump adds files at the new version alongside the old ones. It never rewrites a
-file that is already on disk — a fixture at an old version is the evidence that history at that
-version still reads correctly, and there is nowhere else that evidence can come from.
+pruned* — **with one deliberate exception, the v4→v5 transition.** A schema bump normally adds
+files at the new version alongside the old ones and never rewrites a file already on disk, because
+a fixture at an old version is the evidence that history at that version still reads correctly, and
+there is nowhere else that evidence can come from. **That argument does not apply to v4**:
+`[D-109]` (closed 2026-08-25, titled for this exact migration) rules review-log v5 a
+migrate-in-place bump because no real v4 record was ever written anywhere — prod is dark, no BRAT
+install exists, the alpha user has no review log. The v4 fixture below was itself synthetic test
+data invented for this suite, never a semester of a real device's output, so there is no history at
+v4 this rule protects by keeping the old file. `2026-08-10.device-workstation.v4.jsonl` was
+therefore rewritten in place to `2026-08-10.device-workstation.v5.jsonl` rather than kept
+alongside a new file, and `upgrade.ts` carries no `upgradeV4` hop — `upgradeV3` now produces v5
+directly. v1, v2 and v3 are untouched and out of scope for this exception, per `[D-109]`'s own
+text; a future schema bump reverts to the ordinary extend-never-prune discipline.
 
 ## Frozen v1 history — never regenerate
 
@@ -104,10 +115,12 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
   suite is extended, never pruned, which is exactly why the v4 shape had to accommodate the
   fixture rather than the fixture accommodate the shape.
 
-## Current v4 fixtures
+## Current v5 fixtures
 
-- `2026-08-10.device-workstation.v4.jsonl` — a fifth device on the same calendar day, writing
-  what the writer produces today (`ol-g6zg`). Six lines:
+- `2026-08-10.device-workstation.v5.jsonl` — a fifth device on the same calendar day, writing
+  what the writer produces today (`ol-g6zg`, `ol-tka5`). Rewritten in place from the retired v4
+  file per `[D-109]` (see the exception noted above) — every line below except the seventh carried
+  its exact content forward from v4 with only `schemaVersion` bumped. Seven lines:
   - **a v4 copy of the event that also exists as v1 and as v3** (`11111111-...`). Merging all
     three files must collapse it to one, which is the v4 restatement of the property the v1/v2
     and v1/v3 pairs already prove: a record reaching one device through the full migration chain
@@ -153,3 +166,15 @@ still carries `"schemaVersion":2` and a singular `"conceptId"`, and must keep do
   `upgradeV3` reading the v3 laptop fixture — no writer produces it, nothing rewrites a log
   file, so it can never reach disk. Its on-disk evidence is the v3 line it is produced from,
   one section up.
+  - **a graded re-grade of the ungraded explain-back attempt above** (`17171717-...`, `ol-tka5`)
+    — added for this bead's v5 bump, the one genuinely new line in this file. Same instrument as
+    `14141414-...`, naming the same two concepts, but this time carrying all three new fields
+    together: `supportLevelShown: "guided"` (D-094's ladder, objectively recorded — principle 16,
+    F2.20); `explainBackGrade` with `soloLevel: "relational"` (R9/GLOSSARY's five-level SOLO
+    enum, never a binary), an opaque `contentRef` (never her answer text — D-005), and
+    `revisionOf` pointing at `14141414-...`'s `eventId` — this is a re-grade of that same
+    recorded answer, not a fresh attempt, which is exactly the case `revisionOf` exists for
+    (§4 of `docs/dev/verdict-seam-design.md` in `olea-service`); and `schedulingObservation`
+    naming `imbrication` as the demonstrated neighbour concept — deliberately not one of this
+    record's own `conceptIds` (`cementation`, `appoggiatura`), per C5.11's rule against a second
+    scoring target.

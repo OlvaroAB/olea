@@ -118,7 +118,7 @@ describe('review-log wire format', () => {
 
 // D-020. The version bump and the suspension record are persisted decisions, so
 // the same rule applies to them as to everything above: assert the BYTES.
-describe('review-log wire format — schema v4 and suspension events (D-020, `ol-t3sd`, `ol-g6zg`)', () => {
+describe('review-log wire format — current schema version and suspension events (D-020, `ol-t3sd`, `ol-g6zg`, `ol-tka5`)', () => {
   function suspendInput(over: Record<string, unknown> = {}) {
     return {
       kind: 'suspend',
@@ -129,11 +129,11 @@ describe('review-log wire format — schema v4 and suspension events (D-020, `ol
     } as Parameters<typeof appendSuspendRecord>[1];
   }
 
-  it('the writer stamps schemaVersion 4 and kind "review" into the bytes it produces', async () => {
+  it('the writer stamps schemaVersion 5 and kind "review" into the bytes it produces', async () => {
     const { root, source } = newVault();
     await appendReviewLogRecord(source, record(), { deviceId: 'dev' });
     const line = readFileSync(join(root, LOG_PATH), 'utf8').trim();
-    expect(line).toContain('"schemaVersion":4');
+    expect(line).toContain('"schemaVersion":5');
     expect(line).toContain('"kind":"review"');
   });
 

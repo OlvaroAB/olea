@@ -16,10 +16,10 @@ import {
   type ReviewLogRecordV1,
   type ReviewLogRecordV2,
   reviewLogRecordV3,
-  reviewLogRecordV4,
+  reviewLogRecordV5,
   type SuspendLogRecordV2,
   suspendLogRecordV3,
-  suspendLogRecordV4,
+  suspendLogRecordV5,
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { upgradeV1, upgradeV2, upgradeV3 } from './upgrade.js';
@@ -197,9 +197,11 @@ describe('upgradeV1 is unchanged — it still produces v2, not v3', () => {
   });
 });
 
-// `ol-g6zg`. The v3 -> v4 hop is the first migration in this chain that had a
-// genuinely undecidable case in it, and the tests below are mostly about the
-// case it declines rather than the ones it handles.
+// `ol-g6zg`, retargeted to v5 by `ol-tka5`/`[D-109]` (migrate-in-place: no
+// `upgradeV4` hop — `upgradeV3` now produces v5 directly). The v3 -> v5 hop
+// is the first migration in this chain that had a genuinely undecidable case
+// in it, and the tests below are mostly about the case it declines rather
+// than the ones it handles.
 function v3Review(over: Partial<ReviewLogEntryV3> = {}): ReviewLogEntryV3 {
   return reviewLogRecordV3.parse({
     schemaVersion: 3,
@@ -247,11 +249,22 @@ describe('upgradeV3 — one concept, so one place the value can belong', () => {
     expect(upgradeV3.length).toBe(1);
   });
 
-  it('stamps schemaVersion 4 and empties the field out of selectionContext', () => {
+  it('stamps schemaVersion 5 and empties the field out of selectionContext', () => {
     const upgraded = upgradeV3(v3Review());
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');
-    expect(upgraded.schemaVersion).toBe(4);
+    expect(upgraded.schemaVersion).toBe(5);
     expect(upgraded.selectionContext).not.toHaveProperty('masteryAtTime');
+  });
+
+  it('acquires none of the three v5-only fields — a v3 record predates all of them', () => {
+    const upgraded = upgradeV3(v3Review());
+    if (upgraded.kind !== 'review') throw new Error('expected a review entry');
+    expect(upgraded.supportLevelShown).toBeUndefined();
+    expect(upgraded.explainBackGrade).toBeUndefined();
+    expect(upgraded.schedulingObservation).toBeUndefined();
+    expect(Object.hasOwn(upgraded, 'supportLevelShown')).toBe(false);
+    expect(Object.hasOwn(upgraded, 'explainBackGrade')).toBe(false);
+    expect(Object.hasOwn(upgraded, 'schedulingObservation')).toBe(false);
   });
 
   it('carries every other field verbatim — it moves one field, it never rewrites', () => {
@@ -337,7 +350,7 @@ describe('upgradeV3 — several concepts, so nowhere honest to put the value', (
 describe('upgradeV3 — v3 suspension events', () => {
   it('only stamps the version forward: a suspend has no context and no mastery to attribute', () => {
     const upgraded = upgradeV3(v3Suspend());
-    expect(upgraded.schemaVersion).toBe(4);
+    expect(upgraded.schemaVersion).toBe(5);
     expect(upgraded.kind).toBe('suspend');
     expect(Object.keys(upgraded).sort()).toEqual([
       'conceptIds',
@@ -359,14 +372,14 @@ describe('upgradeV3 — v3 suspension events', () => {
   });
 });
 
-describe('every path into v4 serialises identically', () => {
-  it('v1 -> v2 -> v3 -> v4 and a natively-parsed v4 record of the same event are byte-identical', () => {
+describe('every path into v5 serialises identically', () => {
+  it('v1 -> v2 -> v3 -> v5 and a natively-parsed v5 record of the same event are byte-identical', () => {
     // `merge.ts` compares duplicate `eventId`s by serialised form. If the two
     // paths disagreed by so much as key order, the same event arriving from an
     // old device and a new one would look like an id collision and throw.
     const migrated = upgradeV3(upgradeV2(upgradeV1(v1Record())));
-    const native = reviewLogRecordV4.parse({
-      schemaVersion: 4,
+    const native = reviewLogRecordV5.parse({
+      schemaVersion: 5,
       kind: 'review',
       eventId: 'e1',
       timestamp: '2026-08-10T09:00:00-04:00',
@@ -384,14 +397,17 @@ describe('every path into v4 serialises identically', () => {
         planVersion: null,
       },
       masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
+      // supportLevelShown / explainBackGrade / schedulingObservation omitted
+      // on both sides — a v1-3 record predates all three, so the honest
+      // native comparison point also omits them.
     });
     expect(JSON.stringify(migrated)).toBe(JSON.stringify(native));
   });
 
-  it('v3 -> v4 and a natively-parsed v4 suspension of the same event are byte-identical', () => {
+  it('v3 -> v5 and a natively-parsed v5 suspension of the same event are byte-identical', () => {
     const migrated = upgradeV3(upgradeV2(v2Suspend()));
-    const native = suspendLogRecordV4.parse({
-      schemaVersion: 4,
+    const native = suspendLogRecordV5.parse({
+      schemaVersion: 5,
       kind: 'suspend',
       eventId: 's1',
       timestamp: '2026-08-10T09:00:00-04:00',
@@ -410,7 +426,7 @@ describe('every path into v4 serialises identically', () => {
   });
 });
 
-describe('upgradeV2 is unchanged — it still produces v3, not v4', () => {
+describe('upgradeV2 is unchanged — it still produces v3, not v5', () => {
   it('stops at v3 and leaves masteryAtTime where v3 kept it; the third hop is separately testable', () => {
     const upgraded = upgradeV2(v2Record());
     if (upgraded.kind !== 'review') throw new Error('expected a review entry');

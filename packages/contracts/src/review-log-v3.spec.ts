@@ -89,7 +89,9 @@ describe('review-log schema version 3 is frozen, and is no longer the current on
   // the two assertions that said "v3 is what writers stamp" had to move, and
   // they were assertions about which version was current rather than about v3.
   it('the version writers stamp has moved past 3', () => {
-    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(4);
+    // Retargeted again by `ol-tka5` (v5) — the assertion is about "moved past
+    // 3", not about which later version is current.
+    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(5);
   });
 
   it('the current aliases no longer point at the v3 shapes', () => {
