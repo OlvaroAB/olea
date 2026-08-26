@@ -211,3 +211,196 @@ describe('mergeReviewLogRecords — suspension events (D-020, F2.6)', () => {
     expect(() => mergeReviewLogRecords([suspend], [reviewed])).toThrow(/clash/);
   });
 });
+
+// ol-egov.20, ruled 2026-08-26: the total order is (instant, deviceId,
+// eventId). No `[D-*]` alias exists yet for this ruling — cite the bead id.
+function tagged(deviceId: string, records: readonly ReviewLogRecord[]) {
+  return { deviceId, records };
+}
+
+/** Every ordering of `items`, for a small property-style sweep over file order. */
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) return [[...items]];
+  const [head, ...rest] = items;
+  const withoutHead = permutations(rest);
+  const result: T[][] = [];
+  for (const perm of withoutHead) {
+    for (let i = 0; i <= perm.length; i += 1) {
+      result.push([...perm.slice(0, i), head as T, ...perm.slice(i)]);
+    }
+  }
+  return result;
+}
+
+describe('mergeReviewLogRecords — deviceId tiebreak (ol-egov.20)', () => {
+  it('two records sharing an instant are ordered by deviceId, whichever source is merged first', () => {
+    const instant = '2026-08-10T09:00:00-04:00';
+    const fromZeta = record({ eventId: 'e-from-zeta', timestamp: instant });
+    const fromAlpha = record({ eventId: 'e-from-alpha', timestamp: instant });
+
+    // eventId alone (zeta's 'e-from-zeta' vs alpha's 'e-from-alpha') would
+    // already sort alpha-first here, so this only proves the point if the
+    // deviceId tiebreak is checked *before* falling through to eventId —
+    // which it is, since both orderings below agree with deviceId order,
+    // not with whichever source happened to be merged first.
+    const forward = mergeReviewLogRecords(tagged('zeta', [fromZeta]), tagged('alpha', [fromAlpha]));
+    const backward = mergeReviewLogRecords(
+      tagged('alpha', [fromAlpha]),
+      tagged('zeta', [fromZeta]),
+    );
+    expect(forward.records.map((r) => r.eventId)).toEqual(['e-from-alpha', 'e-from-zeta']);
+    expect(backward.records).toEqual(forward.records);
+  });
+
+  it('an untagged (bare-array) source behaves exactly as before this ruling: empty-string deviceId, eventId decides', () => {
+    const instant = '2026-08-10T09:00:00-04:00';
+    const aaa = record({ eventId: 'aaa', timestamp: instant });
+    const zzz = record({ eventId: 'zzz', timestamp: instant });
+    // Same assertion as the pre-ruling "two events sharing one instant" test
+    // above, unchanged: passing bare arrays must still produce the old order.
+    expect(mergeReviewLogRecords([zzz], [aaa]).records.map((r) => r.eventId)).toEqual([
+      'aaa',
+      'zzz',
+    ]);
+  });
+
+  it('a bare (untagged) source and a tagged source can be mixed in one call', () => {
+    const instant = '2026-08-10T09:00:00-04:00';
+    const untaggedRecord = record({ eventId: 'untagged', timestamp: instant });
+    const taggedRecord = record({ eventId: 'tagged', timestamp: instant });
+    // '' (untagged) sorts before any non-empty deviceId lexicographically.
+    const result = mergeReviewLogRecords([untaggedRecord], tagged('alpha', [taggedRecord]));
+    expect(result.records.map((r) => r.eventId)).toEqual(['untagged', 'tagged']);
+  });
+
+  it('a duplicate eventId seen under two different deviceIds is tiebroken by the smaller id, regardless of argument order', () => {
+    const instant = '2026-08-10T09:00:00-04:00';
+    const dup = record({ eventId: 'dup', timestamp: instant });
+    const third = record({ eventId: 'mmm', timestamp: instant }); // sorts between 'alpha' and 'zeta' by eventId alone — irrelevant here
+
+    // 'dup' is seen (identical content) tagged both 'zeta' and 'alpha'; the
+    // smaller, 'alpha', must win the tiebreak no matter which occurrence the
+    // merge happens to encounter first.
+    const orderOne = mergeReviewLogRecords(
+      tagged('zeta', [dup]),
+      tagged('alpha', [dup]),
+      tagged('alpha', [third]),
+    );
+    const orderTwo = mergeReviewLogRecords(
+      tagged('alpha', [dup]),
+      tagged('zeta', [dup]),
+      tagged('alpha', [third]),
+    );
+    expect(orderOne.records).toEqual(orderTwo.records);
+    // 'dup' tagged 'alpha' sorts before 'third' also tagged 'alpha' because
+    // eventId 'dup' < 'mmm'.
+    expect(orderOne.records.map((r) => r.eventId)).toEqual(['dup', 'mmm']);
+  });
+});
+
+// THE acceptance test, exactly as ruled on ol-egov.20 2026-08-26: two device
+// files, interleaved in any file order, fold to byte-identical state.
+describe('mergeReviewLogRecords — acceptance: any file order folds to byte-identical state (ol-egov.20)', () => {
+  it('two device files, fed in either order, produce a deep-equal fold', () => {
+    const deviceAlpha = [
+      record({ eventId: 'a1', timestamp: '2026-08-10T09:00:00-04:00' }),
+      record({ eventId: 'a2', timestamp: '2026-08-10T09:04:00-04:00' }),
+    ];
+    const deviceBeta = [record({ eventId: 'b1', timestamp: '2026-08-10T09:02:00-04:00' })];
+
+    const forward = mergeReviewLogRecords(tagged('alpha', deviceAlpha), tagged('beta', deviceBeta));
+    const backward = mergeReviewLogRecords(
+      tagged('beta', deviceBeta),
+      tagged('alpha', deviceAlpha),
+    );
+    expect(forward.records.map((r) => r.eventId)).toEqual(['a1', 'b1', 'a2']);
+    expect(backward).toEqual(forward);
+  });
+
+  it('property sweep: three device files fold to the identical array under every one of their 6 argument orderings', () => {
+    const sources = [
+      tagged('alpha', [
+        record({ eventId: 'a1', timestamp: '2026-08-10T09:00:00-04:00' }),
+        record({ eventId: 'a2', timestamp: '2026-08-10T09:07:00-04:00' }),
+      ]),
+      tagged('beta', [record({ eventId: 'b1', timestamp: '2026-08-10T09:03:00-04:00' })]),
+      tagged('gamma', [
+        record({ eventId: 'g1', timestamp: '2026-08-10T09:00:00-04:00' }), // ties alpha's a1 on instant
+        record({ eventId: 'g2', timestamp: '2026-08-10T09:05:00-04:00' }),
+      ]),
+    ];
+
+    const results = permutations(sources).map((order) => mergeReviewLogRecords(...order));
+    const [first, ...rest] = results;
+    expect(first).toBeDefined();
+    for (const other of rest) {
+      expect(other).toEqual(first);
+    }
+    // Pin the actual order down too, not just "all orderings agree with each
+    // other" — alpha < gamma lexically, so a1 (alpha) precedes g1 (gamma) at
+    // their shared instant.
+    expect(first?.records.map((r) => r.eventId)).toEqual(['a1', 'g1', 'b1', 'g2', 'a2']);
+  });
+});
+
+// Clock skew: the module doc's claim, pinned down by a test rather than left
+// as prose. See merge.ts's "Clock skew" doc section.
+describe('mergeReviewLogRecords — clock skew does not make the fold depend on file order (ol-egov.20)', () => {
+  it('a device running minutes fast has its whole run shifted wholesale, but the fold is still order-independent', () => {
+    // A "sitting": three quick reviews on the laptop, true local time
+    // 09:00–09:02. The phone's clock runs 5 minutes fast, so a review taken
+    // at true time 09:01 (mid-sitting) is stamped 09:06 by the phone itself —
+    // landing *after* the laptop's whole burst in wall-clock order. That is
+    // the skew shifting the phone's event wholesale, not the merge doing
+    // anything special with it.
+    const laptop = [
+      record({ eventId: 'laptop-1', timestamp: '2026-08-10T09:00:00-04:00' }),
+      record({ eventId: 'laptop-2', timestamp: '2026-08-10T09:01:00-04:00' }),
+      record({ eventId: 'laptop-3', timestamp: '2026-08-10T09:02:00-04:00' }),
+    ];
+    const phone = [record({ eventId: 'phone-1', timestamp: '2026-08-10T09:06:00-04:00' })]; // true 09:01, +5min skew
+
+    const forward = mergeReviewLogRecords(tagged('laptop', laptop), tagged('phone', phone));
+    const backward = mergeReviewLogRecords(tagged('phone', phone), tagged('laptop', laptop));
+
+    // The skewed phone event lands after the whole laptop burst — the merge
+    // does not (cannot, and does not try to) put it "back" mid-sitting.
+    expect(forward.records.map((r) => r.eventId)).toEqual([
+      'laptop-1',
+      'laptop-2',
+      'laptop-3',
+      'phone-1',
+    ]);
+    // The property this ruling actually guarantees: whichever file a
+    // clustering consumer happens to read first, it sees the exact same
+    // folded array — so a skewed device can shift where a cluster boundary
+    // falls, but it cannot make that boundary flip depending on file order.
+    expect(backward).toEqual(forward);
+  });
+
+  it("skew that lands exactly on another device's instant is still broken by deviceId, not by read order", () => {
+    // The unlucky case: the phone's skew happens to put one of its events at
+    // exactly the same instant as a laptop event. Without a deviceId
+    // tiebreak this would fall through to eventId, which is still
+    // deterministic — but this pins down that the deviceId step is reached
+    // and is itself order-independent, which is the property clock skew
+    // makes it easy to stop noticing is being tested at all.
+    const instant = '2026-08-10T09:01:00-04:00';
+    const laptopEvent = record({ eventId: 'zzz-laptop', timestamp: instant });
+    const phoneEvent = record({ eventId: 'aaa-phone', timestamp: instant });
+
+    const forward = mergeReviewLogRecords(
+      tagged('laptop', [laptopEvent]),
+      tagged('phone', [phoneEvent]),
+    );
+    const backward = mergeReviewLogRecords(
+      tagged('phone', [phoneEvent]),
+      tagged('laptop', [laptopEvent]),
+    );
+    // 'laptop' < 'phone' lexically, so the laptop event wins the tie despite
+    // its eventId ('zzz-laptop') sorting after the phone's ('aaa-phone') —
+    // proof the deviceId step actually fires ahead of eventId.
+    expect(forward.records.map((r) => r.eventId)).toEqual(['zzz-laptop', 'aaa-phone']);
+    expect(backward).toEqual(forward);
+  });
+});
