@@ -3,13 +3,21 @@
  *
  * A minimal `VaultSource` fake — no `obsidian` import.
  */
-import type {
-  CorpusConcept,
-  ListOptions,
-  Unsubscribe,
-  VaultEvent,
-  VaultPath,
-  VaultSource,
+import {
+  type CorpusConcept,
+  EmbeddingCacheEngine,
+  type EmbeddingCacheStore,
+  type EmbeddingProvider,
+  type EmbedRequest,
+  type EmbedResult,
+  hashText,
+  type ListOptions,
+  type PersistedEmbeddingCache,
+  type RetrievalChunk,
+  type Unsubscribe,
+  type VaultEvent,
+  type VaultPath,
+  type VaultSource,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { gatherCorpusRelationVaultContext } from '../../src/concept/corpusRelationSignals.js';
@@ -170,5 +178,236 @@ describe('gatherCorpusRelationVaultContext — her-link nomination signal', () =
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
 
     expect(signals).toEqual([{ kind: 'her-link', a: 'Type I error', b: 'Type II error' }]);
+  });
+});
+
+describe('gatherCorpusRelationVaultContext — assessment-cooccurrence nomination signal', () => {
+  it('nominates a pair when both concepts are mentioned in the same classified past-paper document', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+      '03 Research/Midterm.md':
+        '---\nrole: past-paper\n---\nQuestion 1: contrast a Type I error with a Type II error.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals).toEqual([
+      { kind: 'assessment-cooccurrence', a: 'Type I error', b: 'Type II error' },
+    ]);
+  });
+
+  it('nominates nothing when no source classifies as a past paper or objectives document (signal off)', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+      '03 Research/Reading.md':
+        '---\nrole: course-material\n---\nBoth a Type I error and a Type II error are discussed here.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals.filter((s) => s.kind === 'assessment-cooccurrence')).toEqual([]);
+  });
+
+  it('matches against an alias, not only the canonical name', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+      '03 Research/Objectives.md':
+        '---\nrole: objectives\n---\nExplain a Type I error and a Beta error.',
+    });
+    const concepts: CorpusConcept[] = [
+      concept('Type I error', 'A.md', [0, 36]),
+      {
+        name: 'Type II error',
+        aliases: ['Beta error'],
+        anchor: { sourcePath: 'B.md', location: { page: 1, charRange: { start: 0, end: 37 } } },
+      },
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals).toEqual([
+      { kind: 'assessment-cooccurrence', a: 'Type I error', b: 'Type II error' },
+    ]);
+  });
+
+  it('honours a custom sourcesFolder rather than the registerSources default', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+      'Assessments/Midterm.md':
+        '---\nrole: past-paper\n---\nContrast a Type I error with a Type II error.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const withoutFolder = await gatherCorpusRelationVaultContext(vault, concepts);
+    expect(withoutFolder.signals.filter((s) => s.kind === 'assessment-cooccurrence')).toEqual([]);
+
+    const withFolder = await gatherCorpusRelationVaultContext(vault, concepts, {
+      sourcesFolder: 'Assessments',
+    });
+    expect(withFolder.signals).toEqual([
+      { kind: 'assessment-cooccurrence', a: 'Type I error', b: 'Type II error' },
+    ]);
+  });
+
+  it('deduplicates a pair co-occurring in more than one assessment document into one signal', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+      '03 Research/Midterm.md':
+        '---\nrole: past-paper\n---\nContrast a Type I error with a Type II error.',
+      '03 Research/Final.md':
+        '---\nrole: past-paper\n---\nAgain, contrast a Type I error with a Type II error.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals).toHaveLength(1);
+  });
+});
+
+// ---- embedding-proximity nomination signal ---------------------------------
+//
+// Builds a REAL `EmbeddingCacheEngine` (never a duck-typed fake — its
+// constructor is private, so the only way to hand `gatherCorpusRelationVaultContext`
+// a value typed as one is a genuine instance) over a fake store and a fake
+// provider whose vectors are supplied by the test, then seeds it via the same
+// `ensureEmbeddings` a real retrieval drain would call. This module never
+// calls `ensureEmbeddings` itself — see the source file's module doc — so
+// seeding the cache here is exactly what stands in for "retrieval already
+// indexed this passage" in production.
+
+class MemoryEmbeddingCacheStore implements EmbeddingCacheStore {
+  private saved: PersistedEmbeddingCache | null = null;
+  async load(): Promise<PersistedEmbeddingCache | null> {
+    return this.saved;
+  }
+  async save(cache: PersistedEmbeddingCache): Promise<void> {
+    this.saved = cache;
+  }
+}
+
+class FakeEmbeddingProvider implements EmbeddingProvider {
+  constructor(private readonly vectorByText: ReadonlyMap<string, readonly number[]>) {}
+  async embed(request: EmbedRequest): Promise<EmbedResult> {
+    return {
+      vectors: request.texts.map((text) => [...(this.vectorByText.get(text) ?? [0, 0, 0])]),
+    };
+  }
+}
+
+/** Builds a real, already-populated `EmbeddingCacheEngine` — one entry per `vectorByText` key, keyed by the SAME `hashText` this module's own `embedding-proximity` pass looks up by. */
+async function buildEmbeddingCache(
+  vectorByText: ReadonlyMap<string, readonly number[]>,
+): Promise<EmbeddingCacheEngine> {
+  const engine = await EmbeddingCacheEngine.create({
+    store: new MemoryEmbeddingCacheStore(),
+    provider: new FakeEmbeddingProvider(vectorByText),
+    model: 'test-model',
+  });
+  const chunks: RetrievalChunk[] = await Promise.all(
+    [...vectorByText.keys()].map(async (text, index) => ({
+      path: `chunk-${index}.md` as VaultPath,
+      blockIndex: 0,
+      kind: 'paragraph' as const,
+      text,
+      contentHash: await hashText(text),
+    })),
+  );
+  await engine.ensureEmbeddings(chunks);
+  return engine;
+}
+
+describe('gatherCorpusRelationVaultContext — embedding-proximity nomination signal', () => {
+  const TEXT_A = 'A Type I error is a false positive.';
+  const TEXT_B = 'A near-identical false-positive description, worded differently.';
+  const TEXT_C = 'An entirely unrelated passage about sediment transport.';
+
+  it('nominates a pair whose cached embeddings meet the threshold', async () => {
+    const vault = new MemoryVault({ 'A.md': TEXT_A, 'B.md': TEXT_B });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, TEXT_A.length]),
+      concept('Near duplicate', 'B.md', [0, TEXT_B.length]),
+    ];
+    const cache = await buildEmbeddingCache(
+      new Map([
+        [TEXT_A, [1, 0, 0]],
+        [TEXT_B, [1, 0.01, 0]],
+      ]),
+    );
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      embeddingProximity: { cache, threshold: 0.9 },
+    });
+
+    expect(signals).toEqual([
+      { kind: 'embedding-proximity', a: 'Type I error', b: 'Near duplicate' },
+    ]);
+  });
+
+  it('does not nominate a pair below the threshold', async () => {
+    const vault = new MemoryVault({ 'A.md': TEXT_A, 'C.md': TEXT_C });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, TEXT_A.length]),
+      concept('Sediment transport', 'C.md', [0, TEXT_C.length]),
+    ];
+    const cache = await buildEmbeddingCache(
+      new Map([
+        [TEXT_A, [1, 0, 0]],
+        [TEXT_C, [0, 1, 0]],
+      ]),
+    );
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      embeddingProximity: { cache, threshold: 0.9 },
+    });
+
+    expect(signals.filter((s) => s.kind === 'embedding-proximity')).toEqual([]);
+  });
+
+  it('is off by default — omitting embeddingProximity computes no such signal even with a close pair available', async () => {
+    const vault = new MemoryVault({ 'A.md': TEXT_A, 'B.md': TEXT_B });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, TEXT_A.length]),
+      concept('Near duplicate', 'B.md', [0, TEXT_B.length]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals.filter((s) => s.kind === 'embedding-proximity')).toEqual([]);
+  });
+
+  it('nominates nothing for a concept whose introducing passage was never retrieval-indexed (absent from the local cache)', async () => {
+    const vault = new MemoryVault({ 'A.md': TEXT_A, 'B.md': TEXT_B });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, TEXT_A.length]),
+      concept('Near duplicate', 'B.md', [0, TEXT_B.length]),
+    ];
+    // Only TEXT_A was ever embedded — TEXT_B's passage is absent from the cache.
+    const cache = await buildEmbeddingCache(new Map([[TEXT_A, [1, 0, 0]]]));
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      embeddingProximity: { cache, threshold: 0.5 },
+    });
+
+    expect(signals.filter((s) => s.kind === 'embedding-proximity')).toEqual([]);
   });
 });

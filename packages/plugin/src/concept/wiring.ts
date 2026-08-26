@@ -82,7 +82,10 @@ import {
 } from 'olea-core';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
-import { gatherCorpusRelationVaultContext } from './corpusRelationSignals.js';
+import {
+  type EmbeddingProximityOptions,
+  gatherCorpusRelationVaultContext,
+} from './corpusRelationSignals.js';
 import type { ObsidianCorpusRelationStateStore } from './corpusRelationStateStore.js';
 import { WorkerConceptReader } from './workerConceptReader.js';
 import { WorkerCorpusRelationVerdict } from './workerCorpusRelationVerdict.js';
@@ -295,6 +298,23 @@ export interface RunCorpusRelationBatchIfDueOptions {
    * number) rather than silently defaulted to one this module invented.
    */
   readonly n?: number;
+  /**
+   * Forwarded verbatim to `gatherCorpusRelationVaultContext`'s
+   * `sourcesFolder` — overrides where the `assessment-cooccurrence` signal
+   * looks for classified past-paper/objectives sources (`ol-2zfj.13`). Omit
+   * to use `registerSources`' own default.
+   */
+  readonly sourcesFolder?: VaultPath;
+  /**
+   * Forwarded verbatim to `gatherCorpusRelationVaultContext`'s
+   * `embeddingProximity` — wires the `embedding-proximity` signal against an
+   * already-built local embedding cache (`ol-2zfj.13`,
+   * `../retrieval/wiring.js`'s `RetrievalWiring.embeddingCache`). Omitted
+   * (the default) skips that signal entirely; see
+   * `corpusRelationSignals.js`'s `EmbeddingProximityOptions` for why there is
+   * no default cache or threshold to fall back to.
+   */
+  readonly embeddingProximity?: EmbeddingProximityOptions;
 }
 
 export interface CorpusRelationBatchRunOutcome {
@@ -310,11 +330,12 @@ export interface CorpusRelationBatchRunOutcome {
  * The production caller `ol-kw4a` exists to build, closing `[EXT-5]`'s own
  * named gap for `runCorpusRelationBatch`. Reaches it through whatever
  * `CorpusRelationVerdictPort` `buildCorpusRelationWiring` composed, with
- * REAL nomination signals (`./corpusRelationSignals.js`'s `her-link` scan —
- * see that module's doc for why `assessment-cooccurrence` and
- * `embedding-proximity` are named, deferred follow-on work rather than
- * built here) and a REAL, persisted "new concepts since last run" count
- * (`./corpusRelationStateStore.js`).
+ * REAL nomination signals (`./corpusRelationSignals.js`'s `her-link` scan,
+ * always on, plus `assessment-cooccurrence`, always on, plus
+ * `embedding-proximity` when this function's own `embeddingProximity` option
+ * is supplied — `ol-2zfj.13` wired the latter two; see that module's doc for
+ * what each computes and does not) and a REAL, persisted "new concepts since
+ * last run" count (`./corpusRelationStateStore.js`).
  *
  * **Where the resulting edges land** — answered by `ol-2zfj.12`, and no
  * longer nowhere. This function still returns them rather than persisting
@@ -366,6 +387,12 @@ export async function runCorpusRelationBatchIfDue(
   const { signals, passageTextByName } = await gatherCorpusRelationVaultContext(
     options.vault,
     options.allConcepts,
+    {
+      ...(options.sourcesFolder !== undefined ? { sourcesFolder: options.sourcesFolder } : {}),
+      ...(options.embeddingProximity !== undefined
+        ? { embeddingProximity: options.embeddingProximity }
+        : {}),
+    },
   );
 
   const result = await runCorpusRelationBatch(wiring.verdictPort, {
@@ -432,6 +459,10 @@ export interface ReadConceptsAndRelationsOptions {
   readonly n?: number;
   /** Forwarded verbatim to `readConceptsFromVault`. */
   readonly read?: ReadConceptsFromVaultOptions;
+  /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `sourcesFolder` (`ol-2zfj.13`). */
+  readonly sourcesFolder?: VaultPath;
+  /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `embeddingProximity` (`ol-2zfj.13`). */
+  readonly embeddingProximity?: EmbeddingProximityOptions;
 }
 
 /**
@@ -485,6 +516,10 @@ export async function readConceptsAndRelations(
     ingestionSessionClosed: options.ingestionSessionClosed,
     allConcepts: corpusConceptsFrom(read.concepts),
     ...(options.n !== undefined ? { n: options.n } : {}),
+    ...(options.sourcesFolder !== undefined ? { sourcesFolder: options.sourcesFolder } : {}),
+    ...(options.embeddingProximity !== undefined
+      ? { embeddingProximity: options.embeddingProximity }
+      : {}),
   });
 
   return {
