@@ -172,6 +172,14 @@ export function createLocalSessionBuilderProvider(
           // (`ol-63e1`) — already extracted by the instrument walk above, so
           // this pays no second walk.
           concepts: enumeration.concepts,
+          // `[D-087]`/`ol-95vv.1` (RANK-3, `ol-v7r5.4`): the first production
+          // caller to thread real FSRS retrievability into the blend.
+          // `deps.scheduler` and `now` are both already held above for the
+          // SESS-2 replay at `replaySchedulerStates(entries, deps.scheduler)`
+          // below — the same scheduler, the same instant, never a second
+          // instance or a fresh clock read (`ComposeRetrievabilityInput`'s own
+          // doc, `oracle/compose.ts`).
+          retrievability: { scheduler: deps.scheduler, now },
         });
 
         const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> =
