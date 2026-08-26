@@ -22,10 +22,17 @@
  * connection-test protocol and its three-way outcome — lives in a plain,
  * DOM-free module with its own test file (`degradation-statement.ts`,
  * `token-field-copy.ts`, `base-url-field-copy.ts`,
- * `../worker/config-store.ts`, `../worker/test-connection.ts`); this file
- * is only the wiring between those and Obsidian's `Setting` API. See
- * `@manual` scenarios in `features/F7-plugin-surface.md` for how the
- * rendered pane is actually checked.
+ * `support-section-copy.ts`, `../worker/config-store.ts`,
+ * `../worker/test-connection.ts`); this file is only the wiring between
+ * those and Obsidian's `Setting` API. See `@manual` scenarios in
+ * `features/F7-plugin-surface.md` for how the rendered pane is actually
+ * checked.
+ *
+ * **The "Support" section at the bottom (F7.5, `ol-p6t02`) is the in-app
+ * feedback path** — a link to this plugin's own issue tracker, alongside a
+ * pointer at the "Olea: Copy diagnostics" command (F7.5/Q6.3,
+ * `../commands/diagnostics.ts`) that gathers what a report needs without
+ * naming any vault content.
  */
 
 import type { App, Plugin } from 'obsidian';
@@ -52,6 +59,12 @@ import {
   DEGRADATION_STATEMENT_BODY,
   DEGRADATION_STATEMENT_HEADING,
 } from './degradation-statement.js';
+import {
+  REPORT_ISSUE_BUTTON_LABEL,
+  REPORT_ISSUE_URL,
+  SUPPORT_SECTION_HEADING,
+  SUPPORT_SECTION_INTRO,
+} from './support-section-copy.js';
 import {
   TOKEN_FIELD_DESCRIPTION,
   TOKEN_FIELD_DISABLED,
@@ -115,6 +128,16 @@ export class OleaSettingTab extends PluginSettingTab {
       vault: this.privacy.vault,
       dataHost: this.dataHost,
       deviceId: this.privacy.deviceId,
+    });
+
+    // F7.5's in-app feedback path (`ol-p6t02`) — pairs with the "Olea: Copy
+    // diagnostics" command (F7.5/Q6.3), which is the error-reporting half.
+    new Setting(containerEl).setName(SUPPORT_SECTION_HEADING).setHeading();
+    containerEl.createEl('p', { text: SUPPORT_SECTION_INTRO, cls: 'olea-support-intro' });
+    new Setting(containerEl).addButton((button) => {
+      button.setButtonText(REPORT_ISSUE_BUTTON_LABEL).onClick(() => {
+        window.open(REPORT_ISSUE_URL, '_blank', 'noopener');
+      });
     });
   }
 

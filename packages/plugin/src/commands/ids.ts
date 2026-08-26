@@ -47,6 +47,16 @@ export const OLEA_COMMAND_SESSION_BUILD = 'olea-session-build';
  * new ones).
  */
 export const OLEA_COMMAND_BULK_REVIEW_OPEN = 'olea-bulk-review-open';
+/**
+ * F7.5/Q6.3 (`ol-p6t02`): dumps a content-free environment snapshot (plugin
+ * and Obsidian versions, keyword-index document count, ingestion-queue
+ * depth by status, last-reported budget headroom) to the clipboard — see
+ * `diagnostics.ts`'s module doc for exactly what is and isn't in it. Exists
+ * for the Q6.3 support reality: "Olea is broken" often means a conflict
+ * with another plugin, and this is what she pastes into a bug report so
+ * that can be told apart from an Olea defect.
+ */
+export const OLEA_COMMAND_DIAGNOSTICS_COPY = 'olea-diagnostics-copy';
 // `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
 // round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
 // student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea

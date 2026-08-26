@@ -62,6 +62,7 @@
 import {
   OLEA_COMMAND_BULK_REVIEW_OPEN,
   OLEA_COMMAND_CREATE_CARD,
+  OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
   OLEA_COMMAND_REVIEW_START,
@@ -80,11 +81,29 @@ export interface OleaCommandHandlers {
   readonly buildSession: () => void;
   /** `ol-jie3`: opens F3.3's bulk-review triage path — the same accept/edit/reject resolution as first-presentation review, at list density, grouped by document. */
   readonly openBulkReview: () => void;
+  /**
+   * `ol-p6t02` (F7.5/Q6.3): gathers and copies the content-free diagnostics
+   * report to the clipboard. Async internally (`diagnostics-clipboard.ts`);
+   * the handler itself stays a synchronous `() => void`, matching every
+   * other command callback.
+   *
+   * **Optional, on the same terms `ol-p2t10`'s module doc states for "open
+   * Olea"/"explain something back" above: `main.ts`'s `registerOleaCommands`
+   * call is outside this bead's owned paths (`commands/`, `settings/`) and
+   * has live concurrent lane activity on it as of this bead — supplying a
+   * real handler there is a one-line addition this bead's report names by
+   * file:line, not something this bead can do itself.** Until that lands,
+   * `buildOleaCommands` below leaves the command out of the palette
+   * entirely rather than registering one whose click does nothing — the
+   * same choice this file already made for "open Olea" and "explain
+   * something back" while they had no destination.
+   */
+  readonly copyDiagnostics?: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
 export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaCommandSpec[] {
-  return [
+  const specs: OleaCommandSpec[] = [
     {
       id: OLEA_COMMAND_REVIEW_START,
       name: "Olea: Start today's review",
@@ -140,6 +159,22 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       // `ol-uxk9` is the keyboard-bindings follow-up.
     },
   ];
+
+  // F7.5/Q6.3 (`ol-p6t02`): only registered once `main.ts` supplies a real
+  // handler — see this field's doc comment above for why it's conditional
+  // rather than always present. Named "Copy diagnostics", not
+  // "Diagnostics", since running it has exactly one visible effect — the
+  // clipboard. No chord named anywhere in the contract for this one, same
+  // as the three unbound commands above.
+  if (handlers.copyDiagnostics) {
+    specs.push({
+      id: OLEA_COMMAND_DIAGNOSTICS_COPY,
+      name: 'Olea: Copy diagnostics',
+      callback: handlers.copyDiagnostics,
+    });
+  }
+
+  return specs;
 }
 
 /** Registers every Olea command on `registrar` (a real `Plugin` in production, a fake in tests). */
