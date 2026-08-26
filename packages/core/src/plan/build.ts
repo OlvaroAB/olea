@@ -1,6 +1,7 @@
 /**
- * `buildStudyPlan` — a `RankOracleResult` (P5-T04) as the versioned artifact
- * A2.5 and C7.6 describe.
+ * `buildStudyPlan` — a `RankOracleResult` (P5-T04) as a `StudyPlanEnvelope`,
+ * the shared versioned-artifact envelope A2.5 and C7.6 describe
+ * (`[D-122]`/`[BND-3b]`).
  *
  * This module adds no judgment. Every rank, weight, reasoning string and
  * citation below is read straight off the ranking; nothing is recomputed,
@@ -15,8 +16,10 @@
  * C7.6 exists so that a review event can record which plan selected it. That is
  * only answerable if two plans that would order her queue differently have
  * different versions, and two that would order it identically share one. So
- * `planVersion` is a SHA-256 over the **policy body** — the courses, in their
- * canonical form — and deliberately not over `computedAt` or the D7.3 `stamp`.
+ * `policyVersion` (the envelope's field for what this module used to call
+ * `planVersion` — `[D-122]`'s mechanical mapping) is a SHA-256 over the
+ * **policy body** — the courses, in their canonical form — and deliberately
+ * not over `computedAt` or the D7.3 `stamp`.
  *
  * Recomputing an unchanged plan therefore produces the same version. That is
  * the property, not a side effect: A2.5 has the Worker recomputing "daily, or on
@@ -43,23 +46,32 @@
  */
 
 import {
+  ARTIFACT_ENVELOPE_VERSION,
+  GOVERNING_FRESH_FOR_SECONDS,
+  GOVERNING_GOVERNS_FOR_SECONDS,
   type PlannedConcept,
   type ResponseStamp,
-  STUDY_PLAN_FORMAT_VERSION,
-  type StudyPlanArtifact,
+  STUDY_PLAN_BODY_VERSION,
+  STUDY_PLAN_KIND,
   type StudyPlanCourse,
-  studyPlanArtifact,
+  type StudyPlanEnvelope,
+  studyPlanEnvelope,
 } from 'olea-contracts';
 import { hashText } from '../ingestion/hash.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
 
 /**
- * Prefix on every `planVersion`, so a value found in a log line six months from
- * now identifies its own derivation. `sp1` is "study plan, format 1": if the
- * artifact's `formatVersion` ever moves, the prefix moves with it and two
- * versions from different formats can never collide.
+ * Prefix on every `policyVersion`, so a value found in a log line six months
+ * from now identifies its own derivation. `sp1` is "study plan, body format
+ * 1": if the study-plan body's `bodyVersion` ever moves, the prefix moves with
+ * it and two versions from different body formats can never collide.
+ *
+ * Deliberately keyed on `STUDY_PLAN_BODY_VERSION`, not `ARTIFACT_ENVELOPE_VERSION`
+ * — the wrapper and the body are versioned independently (see
+ * `artifact-envelope.ts`'s module doc), and this identity is about the body's
+ * shape, not the wrapper's.
  */
-const PLAN_VERSION_PREFIX = `sp${STUDY_PLAN_FORMAT_VERSION}`;
+const PLAN_VERSION_PREFIX = `sp${STUDY_PLAN_BODY_VERSION}`;
 
 /**
  * How many hex characters of the digest the version carries.
@@ -179,8 +191,11 @@ function canonicalise(value: unknown): unknown {
 }
 
 /**
- * `planVersion` for a policy body — exported so a caller can ask "is the plan I
- * am about to save the same plan I already have?" without building one twice.
+ * `policyVersion` for a policy body — exported so a caller can ask "is the
+ * plan I am about to save the same plan I already have?" without building one
+ * twice. Still named `studyPlanVersion`: the identity it derives has not
+ * moved, only the envelope field it fills has (`planVersion` → `policyVersion`,
+ * `[D-122]`'s mechanical mapping).
  *
  * The `asOf` day is inside the derivation because exam proximity is measured
  * from it: the identical ranking read from a different day is a different
@@ -195,23 +210,32 @@ export async function studyPlanVersion(
 }
 
 /**
- * Build the artifact. Async only because hashing is (`SubtleCrypto`, the one
+ * Build the envelope. Async only because hashing is (`SubtleCrypto`, the one
  * primitive available on desktop *and* mobile — see `ingestion/hash.ts`).
  *
  * The result is validated against the contract schema before it is returned, so
  * a plan that would fail on the way into the cache fails here instead, at the
  * point where the inputs that produced it are still in hand.
+ *
+ * `freshForSeconds`/`governsForSeconds` are the envelope's **governing** class
+ * constants (`GOVERNING_FRESH_FOR_SECONDS`/`GOVERNING_GOVERNS_FOR_SECONDS`,
+ * `artifact-envelope.ts`'s "Declared constants" section) — the study plan
+ * tells her what to do, which is exactly the class those constants were
+ * argued for, not the operating class `[D-110]`'s ranking weights use.
  */
-export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyPlanArtifact> {
+export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyPlanEnvelope> {
   const courses = input.ranking.courses.map(toStudyPlanCourse);
-  const planVersion = await studyPlanVersion(input.ranking.asOf, courses);
-  const plan: StudyPlanArtifact = {
-    formatVersion: STUDY_PLAN_FORMAT_VERSION,
-    planVersion,
+  const policyVersion = await studyPlanVersion(input.ranking.asOf, courses);
+  const envelope: StudyPlanEnvelope = {
+    envelopeVersion: ARTIFACT_ENVELOPE_VERSION,
+    kind: STUDY_PLAN_KIND,
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion,
     computedAt: input.computedAt,
-    asOf: input.ranking.asOf,
+    freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+    governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
     ...(input.stamp === undefined ? {} : { stamp: input.stamp }),
-    courses,
+    body: { asOf: input.ranking.asOf, courses },
   };
-  return studyPlanArtifact.parse(plan);
+  return studyPlanEnvelope.parse(envelope);
 }

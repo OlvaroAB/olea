@@ -97,7 +97,7 @@ describe('buildStudyPlan', () => {
       computedAt: COMPUTED_AT,
     });
 
-    const course = plan.courses[0];
+    const course = plan.body.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected a ranked course');
     expect(course.concepts.map((c) => [c.conceptId, c.rank, c.weight])).toEqual([
       ['concept-alpha', 1, 0.16],
@@ -126,7 +126,7 @@ describe('buildStudyPlan', () => {
       computedAt: COMPUTED_AT,
     });
 
-    const course = plan.courses[0];
+    const course = plan.body.courses[0];
     expect(course?.status).toBe('abstained');
     if (course?.status !== 'abstained') throw new Error('expected an abstention');
     expect(course.assessmentPaths).toEqual(['assessments/b1.md', 'assessments/b2.md']);
@@ -146,7 +146,7 @@ describe('buildStudyPlan', () => {
     ).rejects.toThrow(/must abstain, never rank empty/);
   });
 
-  describe('planVersion', () => {
+  describe('policyVersion', () => {
     it('is identical for the same policy computed at two different instants', async () => {
       const source = ranking([
         { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
@@ -157,7 +157,7 @@ describe('buildStudyPlan', () => {
         computedAt: '2026-08-17T23:45:00.000Z',
       });
 
-      expect(second.planVersion).toBe(first.planVersion);
+      expect(second.policyVersion).toBe(first.policyVersion);
       // ...and the two plans are genuinely different documents, so this is not
       // passing because nothing changed at all.
       expect(second.computedAt).not.toBe(first.computedAt);
@@ -179,7 +179,7 @@ describe('buildStudyPlan', () => {
         computedAt: COMPUTED_AT,
       });
 
-      expect(reweighted.planVersion).not.toBe(base.planVersion);
+      expect(reweighted.policyVersion).not.toBe(base.policyVersion);
     });
 
     it('differs when only the order of two equally-weighted concepts differs', async () => {
@@ -203,7 +203,7 @@ describe('buildStudyPlan', () => {
         computedAt: COMPUTED_AT,
       });
 
-      expect(reversed.planVersion).not.toBe(forward.planVersion);
+      expect(reversed.policyVersion).not.toBe(forward.policyVersion);
     });
 
     it('differs when only asOf differs — the same scores read from a different day are a different policy', async () => {
@@ -219,7 +219,7 @@ describe('buildStudyPlan', () => {
         computedAt: COMPUTED_AT,
       });
 
-      expect(tuesday.planVersion).not.toBe(monday.planVersion);
+      expect(tuesday.policyVersion).not.toBe(monday.policyVersion);
     });
 
     it('is not moved by the D7.3 stamp — provenance is not policy', async () => {
@@ -230,10 +230,21 @@ describe('buildStudyPlan', () => {
       const stamped = await buildStudyPlan({
         ranking: source,
         computedAt: COMPUTED_AT,
-        stamp: { contractVersion: 1, promptVersion: '2026-08-16.1', modelId: 'test/model' },
+        stamp: {
+          contractVersion: 1,
+          promptVersion: '2026-08-16.1',
+          modelId: 'test/model',
+          usage: {
+            inputTokens: 0,
+            inputTokensSource: 'unreported',
+            outputTokens: 0,
+            costUsd: 0,
+            latencyMs: 0,
+          },
+        },
       });
 
-      expect(stamped.planVersion).toBe(bare.planVersion);
+      expect(stamped.policyVersion).toBe(bare.policyVersion);
       expect(stamped.stamp?.modelId).toBe('test/model');
       expect(bare.stamp).toBeUndefined();
     });
@@ -273,7 +284,7 @@ describe('buildStudyPlan', () => {
         computedAt: COMPUTED_AT,
       });
 
-      const course = plan.courses[0];
+      const course = plan.body.courses[0];
       if (course?.status !== 'ranked') throw new Error('expected a ranked course');
       expect(course.concepts[0]?.examProximityDays).toBe(3);
     });
@@ -303,7 +314,7 @@ describe('buildStudyPlan', () => {
         computedAt: COMPUTED_AT,
       });
 
-      const course = plan.courses[0];
+      const course = plan.body.courses[0];
       if (course?.status !== 'ranked') throw new Error('expected a ranked course');
       expect(course.concepts[0]?.examProximityDays).toBeNull();
     });

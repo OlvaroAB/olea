@@ -32,9 +32,20 @@
  * *When* to refresh. A2.5 says "periodically (daily, or on material change)";
  * that is a scheduling policy belonging to whatever owns the reconnection event,
  * and core has no clock. This function refreshes when it is called.
+ *
+ * ## The envelope migration (`[D-122]`, `[BND-3b]`)
+ *
+ * The plan the provider returns and the plan the cache holds are now both
+ * `StudyPlanEnvelope`, read through `readArtifactEnvelope` — the same
+ * discard-and-rebuild discipline `cache.ts` uses for the persisted blob, and
+ * for the same reason: an envelope this build cannot read (an unknown
+ * version, or a blob in the retired pre-envelope `studyPlanArtifact` shape) is
+ * never migrated, only rejected. `now` is required, not defaulted, so this
+ * module never reads a clock on its own — the caller supplies it, same as
+ * every other clock-touching seam in this package.
  */
 
-import { studyPlanArtifact } from 'olea-contracts';
+import { readArtifactEnvelope, STUDY_PLAN_KIND, studyPlanEnvelope } from 'olea-contracts';
 import { loadCachedStudyPlan, saveCachedStudyPlan } from './cache.js';
 import type { StudyPlanProvider, StudyPlanRefreshResult, StudyPlanStore } from './types.js';
 
@@ -46,6 +57,13 @@ export interface RefreshStudyPlanDeps {
    * not a failure, so it produces no `reason`.
    */
   readonly provider?: StudyPlanProvider;
+  /**
+   * When this refresh runs — explicit, never read from a clock in here (see
+   * the module doc). Used only to evaluate the cached envelope's freshness
+   * through `loadCachedStudyPlan`; never applied to whatever the provider
+   * returns.
+   */
+  readonly now: () => Date;
 }
 
 /** The error's own message, or a description of a thrown non-error. Never carries a payload. */
@@ -57,7 +75,7 @@ function describeFailure(cause: unknown): string {
 export async function refreshStudyPlan(
   deps: RefreshStudyPlanDeps,
 ): Promise<StudyPlanRefreshResult> {
-  const cached = await loadCachedStudyPlan(deps.store);
+  const cached = await loadCachedStudyPlan(deps.store, deps.now());
 
   if (deps.provider === undefined) {
     return cached.plan === null
@@ -68,13 +86,13 @@ export async function refreshStudyPlan(
   let reason: string;
   try {
     const raw = await deps.provider.fetchPlan();
-    const parsed = studyPlanArtifact.safeParse(raw);
-    if (parsed.success) {
+    const read = readArtifactEnvelope(studyPlanEnvelope, STUDY_PLAN_KIND, raw);
+    if (read.status === 'ok') {
       // Only now, with a valid plan in hand, is the cache touched.
-      await saveCachedStudyPlan(deps.store, parsed.data);
-      return { plan: parsed.data, source: 'provider', offline: false };
+      await saveCachedStudyPlan(deps.store, read.artifact);
+      return { plan: read.artifact, source: 'provider', offline: false };
     }
-    reason = `provider returned a plan the contract schema rejected (${parsed.error.issues.length} issue${parsed.error.issues.length === 1 ? '' : 's'})`;
+    reason = `provider returned a plan the envelope could not read (${read.reason})`;
   } catch (cause) {
     reason = describeFailure(cause);
   }

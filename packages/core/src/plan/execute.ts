@@ -78,7 +78,7 @@
  * only decides the order of what survived it.
  */
 
-import type { SelectionContextV4, StudyPlanArtifact } from 'olea-contracts';
+import type { SelectionContextV4, StudyPlanEnvelope } from 'olea-contracts';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type { ComposedQueue, DeferredInstrument, QueueItem } from '../queue/types.js';
 import type { SchedulerState } from '../scheduler/types.js';
@@ -123,11 +123,18 @@ export interface ExecutedQueue {
 export interface ExecuteStudyPlanInput {
   readonly queue: ComposedQueue;
   /**
-   * The cached plan, or `null` when none is cached. `null` is the Phase A
+   * The cached plan, or `null` when none is cached (never cached, unreadable,
+   * or expired — `plan/cache.ts`'s `loadCachedStudyPlan` collapses all three
+   * to `null` before this function ever sees them). `null` is the Phase A
    * shape: the queue's own order, and `planVersion`, `yieldRank` and
    * `examProximity` all stated as explicit nulls.
+   *
+   * `StudyPlanEnvelope`, not the retired `StudyPlanArtifact` (`[D-122]`,
+   * `[BND-3b]`): the plan is one instance of the shared versioned-artifact
+   * envelope, and this function reads its `body.courses`/`policyVersion`
+   * exactly where it used to read `courses`/`planVersion` directly.
    */
-  readonly plan: StudyPlanArtifact | null;
+  readonly plan: StudyPlanEnvelope | null;
 }
 
 /** The plan's claim about one concept, flattened across courses for lookup. */
@@ -144,9 +151,9 @@ interface PlannedEntry {
  * per concept per course and a queue has one item per concept per session, so
  * the naive nested scan is quadratic in exactly the numbers that grow together.
  */
-function indexPlan(plan: StudyPlanArtifact): ReadonlyMap<string, PlannedEntry> {
+function indexPlan(plan: StudyPlanEnvelope): ReadonlyMap<string, PlannedEntry> {
   const index = new Map<string, PlannedEntry>();
-  for (const course of plan.courses) {
+  for (const course of plan.body.courses) {
     if (course.status !== 'ranked') continue;
     for (const concept of course.concepts) {
       const existing = index.get(concept.conceptId);
@@ -192,7 +199,7 @@ function bestEntryFor(
  */
 export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
   const { queue, plan } = input;
-  const planVersion = plan === null ? null : plan.planVersion;
+  const planVersion = plan === null ? null : plan.policyVersion;
   const index = plan === null ? new Map<string, PlannedEntry>() : indexPlan(plan);
 
   const placed = queue.items.map((item, order) => {

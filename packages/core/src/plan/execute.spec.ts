@@ -1,8 +1,10 @@
 import {
+  GOVERNING_FRESH_FOR_SECONDS,
+  GOVERNING_GOVERNS_FOR_SECONDS,
   type ReviewLogRecordV4,
   reviewLogRecordV4,
-  type StudyPlanArtifact,
   type StudyPlanCourse,
+  type StudyPlanEnvelope,
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ComposedQueue, QueueItem } from '../queue/types.js';
@@ -49,14 +51,17 @@ function rankedCourse(
 
 function plan(
   courses: readonly StudyPlanCourse[],
-  planVersion = 'sp1-aaaaaaaaaaaaaaaa',
-): StudyPlanArtifact {
+  policyVersion = 'sp1-aaaaaaaaaaaaaaaa',
+): StudyPlanEnvelope {
   return {
-    formatVersion: 1,
-    planVersion,
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: 1,
+    policyVersion,
     computedAt: '2026-08-16T09:00:00.000Z',
-    asOf: '2026-08-16',
-    courses: [...courses],
+    freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+    governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
+    body: { asOf: '2026-08-16', courses: [...courses] },
   };
 }
 

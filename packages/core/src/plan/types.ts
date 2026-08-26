@@ -6,7 +6,7 @@
  * against it."* This directory is the client half of that sentence, and it is
  * three separate things kept separate on purpose:
  *
- * - `build.ts` turns a `RankOracleResult` (P5-T04) into the contract artifact.
+ * - `build.ts` turns a `RankOracleResult` (P5-T04) into the shared envelope.
  * - `cache.ts` persists it through `StudyPlanStore`, in the plugin data folder.
  * - `execute.ts` runs a composed queue against a cached plan — **pure, no
  *   network, no clock, no provider.** That is C5.5's *"works offline from the
@@ -30,7 +30,7 @@
  * never something the daily loop waits on.
  */
 
-import type { StudyPlanArtifact } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
 
 /**
  * The persistence port (A2.5, D-006). Core depends only on this.
@@ -42,12 +42,17 @@ import type { StudyPlanArtifact } from 'olea-contracts';
  *
  * There is deliberately no `clear`. Deleting the cache is the plugin's business
  * (and D-006's rebuildable property is what makes it safe); core's job is to
- * survive its absence, which it does by treating absent, unparseable and
- * unknown-format blobs identically.
+ * survive its absence, which it does by treating absent, unparseable,
+ * unknown-version and expired blobs identically.
+ *
+ * `save` takes the shared `StudyPlanEnvelope` (`[D-122]`, `[BND-3b]`) rather
+ * than the retired `StudyPlanArtifact` — the study plan is now one instance of
+ * the versioned-artifact envelope (`packages/contracts/src/artifact-envelope.ts`),
+ * not a parallel persisted shape.
  */
 export interface StudyPlanStore {
   load(): Promise<unknown>;
-  save(plan: StudyPlanArtifact): Promise<void>;
+  save(plan: StudyPlanEnvelope): Promise<void>;
 }
 
 /**
@@ -58,7 +63,7 @@ export interface StudyPlanStore {
  * a fake, including fakes that throw, that hang up, and that return nonsense —
  * which is the point, since those are the states F7.8 has to survive.
  *
- * It returns `unknown` rather than `StudyPlanArtifact` on purpose. What comes
+ * It returns `unknown` rather than `StudyPlanEnvelope` on purpose. What comes
  * back off a wire is not a plan until the contract schema says it is, and a port
  * typed as though it were would move that check into the implementor's honour
  * system. `refresh.ts` validates before anything reaches the cache.
@@ -88,7 +93,7 @@ export type StudyPlanSource =
  */
 export interface StudyPlanRefreshResult {
   /** The plan now in force, or `null` when there is none to be had. */
-  readonly plan: StudyPlanArtifact | null;
+  readonly plan: StudyPlanEnvelope | null;
   readonly source: StudyPlanSource;
   /**
    * True when the plan in force is not the provider's latest — no provider was
