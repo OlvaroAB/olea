@@ -133,16 +133,31 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
     private readonly httpRequest: HttpRequestFn,
     private readonly config: WorkerConfig,
     /**
-     * F7.3 usage recording (`ol-p3t09`): called once per successful task
-     * response with the D-005-safe subset only — task id plus the response
-     * stamp's prompt version and model id. Never content, never the payload.
-     * Optional so every existing construction site and test double stays
-     * untouched; `usage/log-store.ts` is the production consumer.
+     * F7.3 usage recording (`ol-p3t09`, widened by `ol-ppxj.18` for `[D-123]`):
+     * called once per successful task response with the D-005-safe subset
+     * only — task id, the response stamp's prompt version and model id, and
+     * now (when the stamp carries them) the `[D-123]` usage figures:
+     * `inputTokens`, `inputTokensSource`, `cachedInputTokens`, `outputTokens`,
+     * `costUsd`, `latencyMs`. Never content, never the payload.
+     *
+     * Every usage figure is **optional and never defaulted to `0`** — see
+     * `extractUsageFigures` below. A figure this callback omits must read to
+     * the usage view as "not available", not as a fabricated zero cost or
+     * zero tokens. Optional so every existing construction site and test
+     * double stays untouched; `usage/log-store.ts` is the production
+     * consumer, via `usage/types.ts`'s `UsageLogEntry` (same field names, by
+     * design, so `main.ts`'s wiring is a plain spread).
      */
     private readonly onCallRecorded?: (entry: {
       taskId: string;
       promptVersion: string;
       modelId: string;
+      inputTokens?: number;
+      inputTokensSource?: 'reported' | 'derived' | 'unreported';
+      cachedInputTokens?: number;
+      outputTokens?: number;
+      costUsd?: number;
+      latencyMs?: number;
     }) => void,
   ) {}
 
@@ -161,9 +176,53 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
           taskId: request.taskId,
           promptVersion: stamp.promptVersion,
           modelId: stamp.modelId,
+          ...extractUsageFigures(stamp.usage as Record<string, unknown> | undefined),
         });
       }
     }
     return result;
   }
+}
+
+/**
+ * Picks the `[D-123]` usage figures off `stamp.usage`, field by field, so a
+ * missing or malformed block yields whichever figures ARE well-formed rather
+ * than discarding all of them — and so an absent or wrong-typed figure comes
+ * back as `undefined`, never a fabricated `0`. The usage view (F7.3) must be
+ * able to tell "not available" from "zero cost"/"zero tokens" — defaulting
+ * either case to `0` here would silently erase that distinction for every
+ * downstream reader.
+ */
+function extractUsageFigures(usage: Record<string, unknown> | undefined): {
+  inputTokens?: number;
+  inputTokensSource?: 'reported' | 'derived' | 'unreported';
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  latencyMs?: number;
+} {
+  if (!usage || typeof usage !== 'object') return {};
+  const figures: {
+    inputTokens?: number;
+    inputTokensSource?: 'reported' | 'derived' | 'unreported';
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    costUsd?: number;
+    latencyMs?: number;
+  } = {};
+  if (typeof usage.inputTokens === 'number') figures.inputTokens = usage.inputTokens;
+  if (
+    usage.inputTokensSource === 'reported' ||
+    usage.inputTokensSource === 'derived' ||
+    usage.inputTokensSource === 'unreported'
+  ) {
+    figures.inputTokensSource = usage.inputTokensSource;
+  }
+  if (typeof usage.cachedInputTokens === 'number') {
+    figures.cachedInputTokens = usage.cachedInputTokens;
+  }
+  if (typeof usage.outputTokens === 'number') figures.outputTokens = usage.outputTokens;
+  if (typeof usage.costUsd === 'number') figures.costUsd = usage.costUsd;
+  if (typeof usage.latencyMs === 'number') figures.latencyMs = usage.latencyMs;
+  return figures;
 }

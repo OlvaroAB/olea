@@ -32,10 +32,26 @@ export const obsidianHttpRequest: HttpRequestFn = async ({ url, method, headers,
   return { status: response.status, text: response.text };
 };
 
-/** The real, production `WorkerTaskTransport` — base URL and token in, `requestUrl` underneath. `onCallRecorded` is the F7.3 usage hook; see `transport.ts`. */
+/**
+ * The real, production `WorkerTaskTransport` — base URL and token in,
+ * `requestUrl` underneath. `onCallRecorded` is the F7.3 usage hook,
+ * widened for `[D-123]` (`ol-ppxj.18`); this signature is a pure
+ * pass-through of `transport.ts`'s — see that file for what each field
+ * means and why every usage figure is optional and never defaulted to `0`.
+ */
 export function createObsidianWorkerTransport(
   config: WorkerConfig,
-  onCallRecorded?: (entry: { taskId: string; promptVersion: string; modelId: string }) => void,
+  onCallRecorded?: (entry: {
+    taskId: string;
+    promptVersion: string;
+    modelId: string;
+    inputTokens?: number;
+    inputTokensSource?: 'reported' | 'derived' | 'unreported';
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    costUsd?: number;
+    latencyMs?: number;
+  }) => void,
 ): WorkerHttpTransport {
   return new WorkerHttpTransport(obsidianHttpRequest, config, onCallRecorded);
 }

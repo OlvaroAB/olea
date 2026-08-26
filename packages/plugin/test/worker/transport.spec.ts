@@ -119,6 +119,114 @@ describe('sendWorkerTask — the request it sends', () => {
   });
 });
 
+describe('WorkerHttpTransport — `[D-123]` usage figures reach `onCallRecorded`', () => {
+  it('passes every usage figure through when the stamp carries a well-formed usage block', async () => {
+    const body = {
+      ok: true,
+      stamp: {
+        contractVersion: 2,
+        promptVersion: '1.0.0',
+        modelId: 'm',
+        usage: {
+          inputTokens: 120,
+          inputTokensSource: 'reported',
+          cachedInputTokens: 40,
+          outputTokens: 30,
+          costUsd: 0.0042,
+          latencyMs: 850,
+        },
+      },
+      result: {},
+    };
+    const httpRequest: HttpRequestFn = async () => ({ status: 200, text: JSON.stringify(body) });
+    const recorded: unknown[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, (entry) => recorded.push(entry));
+
+    await transport.send(REQUEST);
+
+    expect(recorded).toEqual([
+      {
+        taskId: REQUEST.taskId,
+        promptVersion: '1.0.0',
+        modelId: 'm',
+        inputTokens: 120,
+        inputTokensSource: 'reported',
+        cachedInputTokens: 40,
+        outputTokens: 30,
+        costUsd: 0.0042,
+        latencyMs: 850,
+      },
+    ]);
+  });
+
+  it('records the base entry with no usage figures — never fabricated zeros — when the stamp omits `usage` entirely', async () => {
+    const body = {
+      ok: true,
+      stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' },
+      result: {},
+    };
+    const httpRequest: HttpRequestFn = async () => ({ status: 200, text: JSON.stringify(body) });
+    const recorded: unknown[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, (entry) => recorded.push(entry));
+
+    await transport.send(REQUEST);
+
+    expect(recorded).toEqual([{ taskId: REQUEST.taskId, promptVersion: '1.0.0', modelId: 'm' }]);
+    const entry = recorded[0] as Record<string, unknown>;
+    expect(entry.inputTokens).toBeUndefined();
+    expect(entry.outputTokens).toBeUndefined();
+    expect(entry.costUsd).toBeUndefined();
+    expect(entry.latencyMs).toBeUndefined();
+    expect(entry.inputTokensSource).toBeUndefined();
+    expect(entry.cachedInputTokens).toBeUndefined();
+  });
+
+  it('carries through only the well-formed figures — never a fabricated `0` — when `usage` is present but partial/malformed', async () => {
+    const body = {
+      ok: true,
+      stamp: {
+        contractVersion: 2,
+        promptVersion: '1.0.0',
+        modelId: 'm',
+        usage: {
+          inputTokens: 100,
+          // inputTokensSource omitted
+          outputTokens: 'not-a-number', // malformed — must be dropped, not coerced or zeroed
+          costUsd: 0.01,
+          // latencyMs omitted
+        },
+      },
+      result: {},
+    };
+    const httpRequest: HttpRequestFn = async () => ({ status: 200, text: JSON.stringify(body) });
+    const recorded: unknown[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, (entry) => recorded.push(entry));
+
+    await transport.send(REQUEST);
+
+    expect(recorded).toEqual([
+      {
+        taskId: REQUEST.taskId,
+        promptVersion: '1.0.0',
+        modelId: 'm',
+        inputTokens: 100,
+        costUsd: 0.01,
+      },
+    ]);
+  });
+
+  it('never calls `onCallRecorded` on an error response, usage figures or not', async () => {
+    const body = { ok: false, code: 'internal-error', message: 'x' };
+    const httpRequest: HttpRequestFn = async () => ({ status: 500, text: JSON.stringify(body) });
+    const recorded: unknown[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, (entry) => recorded.push(entry));
+
+    await transport.send(REQUEST);
+
+    expect(recorded).toHaveLength(0);
+  });
+});
+
 describe('transport.ts never logs — no console call exists in the source at all', () => {
   // Source-level check, the same technique `test/main-wiring.spec.ts` uses
   // for a different reachability property: this is the one instrument that
