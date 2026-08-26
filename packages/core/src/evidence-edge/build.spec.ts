@@ -371,6 +371,169 @@ describe('resolveCitations — the trust boundary an edge’s citations must cle
   });
 });
 
+// ---------------------------------------------------------------------------
+// ol-3ux7.10 — a registered PDF past paper reaches this edge too, once
+// `segmentPlainTextPastPaper` confidently splits it into questions. Every
+// string below is invented, per INV-3.
+// ---------------------------------------------------------------------------
+
+/**
+ * A minimal, valid, single-page PDF with one `Tj` — the same hand-built style
+ * `../concept/evidence.spec.ts` and `../extract/pdf.spec.ts` use, so this
+ * exercises the real extractor rather than a mock of it.
+ */
+function buildPdfBytes(pageText: string): Uint8Array {
+  const escapeLiteral = (text: string): string =>
+    text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const raw = `BT /F1 12 Tf 20 150 Td (${escapeLiteral(pageText)}) Tj ET`;
+  const text =
+    '%PDF-1.4\n' +
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+    '2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n' +
+    '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+    '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R ' +
+    '/Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n' +
+    `5 0 obj\n<< /Length ${raw.length} >>\nstream\n${raw}\nendstream\nendobj\n` +
+    'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n0\n%%EOF';
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+describe('buildConceptAssessmentEdges — a registered PDF past paper (ol-3ux7.10)', () => {
+  let root: string;
+  let source: FolderSource;
+  const PDF_BASE_PATH = '02 Assignments/Assignments.base';
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  async function writePdf(relPath: string, pageText: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, buildPdfBytes(pageText));
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-evidence-edge-pdf-'));
+    source = new FolderSource(root);
+
+    await write('05 Zettelkasten/Widget theory.md', '# Widget theory\n');
+    await write(
+      PDF_BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTP101\ntype: Quiz\n---\n\n# Quiz 1\n',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a PDF past paper that segments produces a real edge, with a resolved question-level citation', async () => {
+    await writePdf('03 Research/2023.pdf', 'Question 1. Explain Widget theory. (10 marks)');
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: PDF_BASE_PATH,
+      concepts: NO_CONCEPTS,
+      registeredFiles: [{ path: '03 Research/2023.pdf', role: 'past-paper', course: 'TESTP101' }],
+    });
+
+    const edge = result.edges.find(
+      (e) => e.assessmentPath === '02 Assignments/Quiz 1.md' && e.conceptName === 'Widget theory',
+    );
+    expect(edge).toBeDefined();
+    expect(edge?.confidence).toBe(1);
+    expect(edge?.citations).toHaveLength(1);
+    expect(edge?.citations[0]?.sourcePath).toBe('03 Research/2023.pdf');
+    expect(edge?.citations[0]?.questionLabel).toBe('1');
+    expect(edge?.citations[0]?.questionText).toContain('Widget theory');
+    expect(result.assessmentsWithNoEvidence).toEqual([]);
+  });
+
+  it('a PDF past paper with no recognisable question numbering abstains — no edge, no throw, reported as no-evidence', async () => {
+    await writePdf(
+      '03 Research/2024.pdf',
+      'Widget theory is covered extensively throughout this booklet.',
+    );
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: PDF_BASE_PATH,
+      concepts: NO_CONCEPTS,
+      registeredFiles: [{ path: '03 Research/2024.pdf', role: 'past-paper', course: 'TESTP101' }],
+    });
+
+    expect(
+      result.edges.some((e) => e.assessmentPath === '02 Assignments/Quiz 1.md'),
+    ).toBe(false);
+    expect(result.assessmentsWithNoEvidence).toEqual(['02 Assignments/Quiz 1.md']);
+  });
+});
+
+describe('buildQuestionIndex — a registered PDF past paper re-extracts and re-segments independently (ol-3ux7.10)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  async function writePdf(relPath: string, pageText: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, buildPdfBytes(pageText));
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-evidence-edge-pdf-index-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('indexes the labels segmentPlainTextPastPaper produces for a binary source', async () => {
+    await writePdf('03 Research/2023.pdf', 'Question 1. Explain Widget theory. (10 marks)');
+
+    const index = await buildQuestionIndex(source, [
+      {
+        path: '03 Research/2023.pdf',
+        role: 'past-paper',
+        course: 'TESTP101',
+        kind: 'registered-file',
+        format: 'pdf',
+      },
+    ]);
+    expect(index.get('03 Research/2023.pdf')).toEqual(new Set(['1']));
+  });
+
+  it('leaves an unsegmentable binary source OUT of the index entirely, rather than an empty entry', async () => {
+    await writePdf('03 Research/2024.pdf', 'Widget theory is covered extensively.');
+
+    const index = await buildQuestionIndex(source, [
+      {
+        path: '03 Research/2024.pdf',
+        role: 'past-paper',
+        course: 'TESTP101',
+        kind: 'registered-file',
+        format: 'pdf',
+      },
+    ]);
+    expect(index.has('03 Research/2024.pdf')).toBe(false);
+  });
+});
+
 describe('buildQuestionIndex — independently re-derives real question labels from the source text', () => {
   let root: string;
   let source: FolderSource;

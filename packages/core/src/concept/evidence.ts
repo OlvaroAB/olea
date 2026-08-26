@@ -68,6 +68,8 @@ import { readList } from '../frontmatter/read.js';
 import { hashContent } from '../ingestion/hash.js';
 import { DEFAULT_SOURCES_FOLDER, registerSources } from '../source/register.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
+import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
+import type { PlainTextPastPaperSegmentationResult } from '../source/segment-past-paper-plaintext.js';
 import type {
   RegisterSourcesOptions,
   Source,
@@ -161,14 +163,20 @@ export interface ExtractTier3EvidenceOptions extends RegisterSourcesOptions {
  * A named thing this pass could NOT do for one source, so a reader is never
  * left inferring it from a citation count (`ol-cvsc`).
  *
- * `'questions-not-segmented'` — the source is a past paper in a binary format.
- * Its text extracts and cites like any other derived material, but its
- * questions are not addressable. `segmentPastPaper` works on the block parser,
- * and extracted PDF text has no block kinds and no headings to build an
- * outline from, so BOTH of that segmenter's documented safety arguments are
- * void for this input (`ol-pdfpastpaper`): reusing it here would inherit its
- * interface and none of its reasoning. Claiming segmentation that did not
- * happen is the silent-wrong-number failure, which is worse than a miss.
+ * `'questions-not-segmented'` — the source is a past paper in a binary format
+ * whose extracted text `../source/segment-past-paper-plaintext.js`'s
+ * `segmentPlainTextPastPaper` could not confidently split into questions
+ * (`ol-3ux7.10`, landing `ol-pdfpastpaper`'s segmenter). `segmentPastPaper`
+ * (the markdown segmenter) works on the block parser, and extracted PDF text
+ * has no block kinds and no headings to build an outline from, so BOTH of
+ * that segmenter's documented safety arguments are void for this input —
+ * reusing it here would inherit its interface and none of its reasoning,
+ * which is exactly why the plain-text sibling exists instead. When it DOES
+ * segment confidently, this limitation is absent and the source contributes
+ * `kind: 'past-paper'` citations the same way a markdown past paper does —
+ * see `collectDerivedSources`. Claiming segmentation that did not happen is
+ * the silent-wrong-number failure, which is worse than a miss, so a source
+ * whose text extracts but does not segment still carries this row.
  *
  * `'no-tier3-reader-for-role'` — a MARKDOWN source registered as
  * `'course-material'`. This pass has readers for the two assessment roles and
@@ -538,6 +546,14 @@ interface DerivedSource {
   readonly pageCount: number;
   readonly pages: readonly DerivedPage[];
   readonly limitations: readonly SourceLimitation[];
+  /**
+   * `segmentPlainTextPastPaper`'s own verdict for this source's extracted
+   * text — present only for `role === 'past-paper'` (`ol-3ux7.10`).
+   * `undefined` for every other role: the plain-text segmenter is specific to
+   * past papers, the same way `segmentPastPaper` never runs against a
+   * markdown objectives document.
+   */
+  readonly pastPaperSegmentation: PlainTextPastPaperSegmentationResult | undefined;
 }
 
 /**
@@ -678,6 +694,16 @@ async function collectDerivedSources(
       }
     }
 
+    // `ol-3ux7.10`: a registered `role: 'past-paper'` source gets one attempt
+    // at question segmentation from its own already-extracted result — the
+    // plain-text sibling of `segmentPastPaper`, honouring the same
+    // honest-degrade contract (`status: 'unsegmented'`, never a fabricated
+    // question). Every other role leaves this `undefined`: the segmenter is
+    // past-paper-specific, and running it against, say, an objectives PDF
+    // would be inventing a question structure nothing asked for.
+    const pastPaperSegmentation =
+      role === 'past-paper' ? segmentPlainTextPastPaper(result) : undefined;
+
     sources.push({
       contentId,
       sourcePath: citing.path,
@@ -689,10 +715,16 @@ async function collectDerivedSources(
       outcome: result.outcome,
       pageCount: result.pages.length,
       pages,
-      // A past paper that arrived as a binary extracts but does not segment.
-      // Said here, on the row, rather than left for a reader to notice from a
-      // missing cluster.
-      limitations: role === 'past-paper' ? ['questions-not-segmented'] : [],
+      pastPaperSegmentation,
+      // A past paper that arrived as a binary extracts but did not
+      // confidently segment. Said here, on the row, rather than left for a
+      // reader to notice from a missing cluster. Absent once
+      // `pastPaperSegmentation.status === 'segmented'` — see
+      // `binaryPastPaperCitations`.
+      limitations:
+        role === 'past-paper' && pastPaperSegmentation?.status !== 'segmented'
+          ? ['questions-not-segmented']
+          : [],
     });
   }
   return sources;
@@ -707,11 +739,28 @@ function generatedContentCitations(
   // registered together. It has to: the rule is "a leading phrase shared by
   // four or more distinct documents is template furniture", and running it
   // separately per route would let a registered deck escape a template its
-  // embedded siblings established.
+  // embedded siblings established. This corpus is untouched by the
+  // past-paper exemption below — a segmented past paper's pages still count
+  // toward what OTHER documents' headings look like template furniture
+  // against; only its own citations are routed elsewhere.
   const heads = detectBoilerplateHeads(pages);
+
+  // `ol-3ux7.10`: a past paper whose questions segmented is cited exclusively
+  // through `binaryPastPaperCitations`'s `kind: 'past-paper'` route below —
+  // mirroring the markdown past-paper route, which never reaches `derived` at
+  // all (`collectCandidates` excludes `format === null`) and therefore never
+  // double-cites through this generated-content leg either. A past paper the
+  // segmenter could not confidently split keeps falling through to this leg
+  // unchanged: some evidence beats the none a stricter exclusion would leave.
+  const exemptSourcePaths = new Set(
+    derived
+      .filter((s) => s.role === 'past-paper' && s.pastPaperSegmentation?.status === 'segmented')
+      .map((s) => s.sourcePath),
+  );
 
   const citations: ConceptCitation[] = [];
   for (const page of pages) {
+    if (exemptSourcePaths.has(page.sourcePath)) continue;
     const terms = findMentionedTermsAfter(page.text, vocabulary, heads.get(page) ?? 0);
     for (const term of terms) {
       for (const course of page.courses) {
@@ -723,6 +772,44 @@ function generatedContentCitations(
           provenance: page.provenance,
           ...(page.duplicateSourcePaths.length > 0
             ? { duplicateSourcePaths: page.duplicateSourcePaths }
+            : {}),
+        });
+      }
+    }
+  }
+  return citations;
+}
+
+/**
+ * `kind: 'past-paper'` citations for one binary `role: 'past-paper'`
+ * `DerivedSource` that `segmentPlainTextPastPaper` confidently segmented
+ * (`ol-3ux7.10`) — the exact shape `pastPaperCitations` produces for a
+ * markdown past paper, so `buildPastPaperClusters` and
+ * `../evidence-edge/build.js`'s `buildConceptAssessmentEdges` need no
+ * kind-specific branch to consume either. Returns `[]` for a source that
+ * degraded to `'unsegmented'` — the segmenter's own abstention propagates
+ * here as "no past-paper citations", never a guess.
+ */
+function binaryPastPaperCitations(
+  source: DerivedSource,
+  vocabulary: readonly string[],
+): readonly ConceptCitation[] {
+  if (source.pastPaperSegmentation?.status !== 'segmented') return [];
+
+  const citations: ConceptCitation[] = [];
+  for (const question of source.pastPaperSegmentation.questions) {
+    for (const term of findMentionedTerms(question.text, vocabulary)) {
+      for (const course of source.courses) {
+        citations.push({
+          conceptName: term,
+          kind: 'past-paper',
+          sourcePath: source.sourcePath,
+          course,
+          provenance: question.provenance,
+          questionLabel: question.label,
+          questionText: question.text,
+          ...(source.duplicateSourcePaths.length > 0
+            ? { duplicateSourcePaths: source.duplicateSourcePaths }
             : {}),
         });
       }
@@ -800,11 +887,16 @@ export async function extractTier3Evidence(
   });
 
   // Markdown sources keep their role-specific readers: a markdown past paper
-  // segments into addressable questions, a markdown objectives document is
-  // read block-by-block. A source in a binary format has neither of those
-  // available and goes to the derived-text route below instead — which is a
-  // real difference in what can be read, so it is reported on the coverage row
-  // rather than papered over.
+  // segments into addressable questions via the block parser
+  // (`segmentPastPaper`), a markdown objectives document is read
+  // block-by-block. A binary objectives document has neither reader
+  // available and goes to the derived-text route below instead — a real
+  // difference in what can be read, so it is reported on the coverage row
+  // rather than papered over. A binary past paper gets its OWN addressable-
+  // question route below too now (`ol-3ux7.10`,
+  // `segmentPlainTextPastPaper`) — see `collectDerivedSources` and
+  // `binaryPastPaperCitations` — so this markdown-only loop is not the whole
+  // past-paper story.
   const markdownSources = sourcesReport.sources.filter((s) => s.format === null);
   const citationLists: (readonly ConceptCitation[])[] = [];
   for (const source of markdownSources) {
@@ -817,6 +909,11 @@ export async function extractTier3Evidence(
 
   const derived = await collectDerivedSources(vault, coursesFolder, sourcesReport.sources);
   citationLists.push(generatedContentCitations(derived, vocabulary));
+  for (const source of derived) {
+    if (source.role === 'past-paper') {
+      citationLists.push(binaryPastPaperCitations(source, vocabulary));
+    }
+  }
 
   const citations = sortCitations(citationLists.flat());
   const pastPaperClusters = buildPastPaperClusters(citations);

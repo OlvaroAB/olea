@@ -34,6 +34,16 @@
  *   pipeline (`../extract/registry.js`) run first, which is real subsystem
  *   work this signal does not also stand up — it degrades to "not counted"
  *   for such a file rather than guessing at its text.
+ *
+ *   **Revisited by `ol-3ux7.10` and left unchanged.** That bead wired a PDF
+ *   past paper's *questions* into `../concept/evidence.js`'s
+ *   `kind: 'past-paper'` citations via
+ *   `../source/segment-past-paper-plaintext.js`. This signal never consumed
+ *   that structure — co-occurrence only needs a document's raw text, not its
+ *   question boundaries — so there is nothing here for that segmenter to
+ *   feed. Lifting the `format === null` filter would still mean standing up
+ *   the extraction pipeline in this module for the first time, the same real
+ *   subsystem work named above, so it stays out of scope here.
  * - **`embedding-proximity`** — reads `codesFor` off an ALREADY-BUILT local
  *   embedding cache (`packages/core/src/retrieval/embeddingCache.ts`'s
  *   `EmbeddingCacheEngine`, composed for real by

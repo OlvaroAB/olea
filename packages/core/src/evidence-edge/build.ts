@@ -8,7 +8,9 @@ import { readAssessments } from '../assessment/read.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptCitation } from '../concept/evidence.js';
 import { extractTier3Evidence } from '../concept/evidence.js';
+import { extractFromVault } from '../extract/registry.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
+import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
 import type { Source } from '../source/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type {
@@ -49,13 +51,22 @@ export class UnresolvableCitationError extends Error {
 }
 
 /**
- * Every question label `segmentPastPaper` actually produces for each
- * markdown `role: 'past-paper'` `Source`, re-derived independently of
- * `extractTier3Evidence`'s own internal call to the same function — the
- * trust boundary `resolveCitations` checks against. A binary past paper
- * (`format !== null`) is not segmentable (`ol-pdfpastpaper`) and never
- * produces `questionLabel`-bearing citations in the first place, so it is
- * not indexed here.
+ * Every question label a `role: 'past-paper'` `Source` actually produces,
+ * re-derived independently of `extractTier3Evidence`'s own internal call to
+ * the same segmenter — the trust boundary `resolveCitations` checks against.
+ * Two routes, matching `../concept/evidence.js`'s own split:
+ *
+ *  - **Markdown** (`format === null`): re-read and re-segment with
+ *    `segmentPastPaper`, the block-parser segmenter.
+ *  - **Binary** (`format !== null`, `ol-3ux7.10`): re-extract with
+ *    `extractFromVault` and re-segment with `segmentPlainTextPastPaper`, the
+ *    plain-text sibling. A source that degrades to `status: 'unsegmented'`
+ *    is left OUT of the index entirely, exactly like a markdown source that
+ *    (hypothetically) produced no questions would be — `resolveCitations`
+ *    then refuses any stray `kind: 'past-paper'` citation for it rather than
+ *    silently treating an empty entry as "zero real questions", and
+ *    `../concept/evidence.js`'s own abstention means no such citation is
+ *    ever actually produced for an unsegmented source in the first place.
  */
 export async function buildQuestionIndex(
   vault: VaultSource,
@@ -63,11 +74,19 @@ export async function buildQuestionIndex(
 ): Promise<ReadonlyMap<VaultPath, ReadonlySet<string>>> {
   const index = new Map<VaultPath, ReadonlySet<string>>();
   for (const source of sources) {
-    if (source.role !== 'past-paper' || source.format !== null) continue;
+    if (source.role !== 'past-paper') continue;
     if (index.has(source.path)) continue;
-    const text = await vault.read(source.path);
-    const { questions } = segmentPastPaper(source.path, text);
-    index.set(source.path, new Set(questions.map((q) => q.label)));
+    if (source.format === null) {
+      const text = await vault.read(source.path);
+      const { questions } = segmentPastPaper(source.path, text);
+      index.set(source.path, new Set(questions.map((q) => q.label)));
+    } else {
+      const result = await extractFromVault(vault, source.path, source.format);
+      const segmentation = segmentPlainTextPastPaper(result);
+      if (segmentation.status === 'segmented') {
+        index.set(source.path, new Set(segmentation.questions.map((q) => q.label)));
+      }
+    }
   }
   return index;
 }

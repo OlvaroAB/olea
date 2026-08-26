@@ -525,18 +525,48 @@ describe('extractTier3Evidence — registration without an embedding note (F3.1,
     expect(row?.kinds).toEqual(['embedded-file', 'registered-file']);
   });
 
-  it('a registered PDF past paper extracts, and says plainly that its questions were not segmented', async () => {
+  it('a registered PDF past paper whose text segments cites via kind: "past-paper", never doubling into generated-content (ol-3ux7.10)', async () => {
     await zettel('Sediment transport');
     await writePdf('Papers/2023.pdf', ['Question 1. Discuss sediment transport. (10 marks)']);
 
     const result = await extractTier3Evidence(source, {
       registeredFiles: [{ path: 'Papers/2023.pdf', role: 'past-paper' }],
     });
-    // The text is reached...
-    expect(result.citations.map((c) => c.conceptName)).toEqual(['Sediment transport']);
-    // ...but no cluster is claimed, because nothing segmented the questions.
-    expect(result.pastPaperClusters).toEqual([]);
+    // `segmentPlainTextPastPaper` recognises the single top-level anchor, so
+    // this now cites exactly the way a markdown past paper does...
+    const pastPaper = result.citations.filter((c) => c.kind === 'past-paper');
+    expect(pastPaper.map((c) => c.conceptName)).toEqual(['Sediment transport']);
+    expect(pastPaper[0]?.questionLabel).toBe('1');
+    expect(pastPaper[0]?.questionText).toContain('Discuss sediment transport');
+    // ...and is never ALSO counted through the generated-content leg — the
+    // same exclusivity a markdown past paper gets for free by never reaching
+    // `collectDerivedSources` at all.
+    expect(result.citations.filter((c) => c.kind === 'generated-content')).toEqual([]);
+    // The cluster is real now — the whole point of segmenting.
+    expect(result.pastPaperClusters.map((c) => c.conceptName)).toEqual(['Sediment transport']);
     const row = result.sourceCoverage.find((r) => r.sourcePath === 'Papers/2023.pdf');
+    expect(row?.limitations).toEqual([]);
+    expect(row?.role).toBe('past-paper');
+  });
+
+  it('a registered PDF past paper with no recognisable question numbering abstains, honestly — no fabricated cluster, no lost evidence (ol-3ux7.10)', async () => {
+    await zettel('Sediment transport');
+    await writePdf('Papers/2024.pdf', [
+      'Sediment transport is discussed at length throughout this chapter.',
+    ]);
+
+    const result = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Papers/2024.pdf', role: 'past-paper' }],
+    });
+    // No question anchor anywhere in the text, so the segmenter abstains —
+    // never a fabricated question or a guessed label.
+    expect(result.citations.filter((c) => c.kind === 'past-paper')).toEqual([]);
+    expect(result.pastPaperClusters).toEqual([]);
+    // The text is still reached through the generated-content fallback leg —
+    // an honest abstention costs the addressable question, not all evidence.
+    expect(result.citations.map((c) => c.conceptName)).toEqual(['Sediment transport']);
+    expect(result.citations[0]?.kind).toBe('generated-content');
+    const row = result.sourceCoverage.find((r) => r.sourcePath === 'Papers/2024.pdf');
     expect(row?.limitations).toEqual(['questions-not-segmented']);
     expect(row?.role).toBe('past-paper');
   });
