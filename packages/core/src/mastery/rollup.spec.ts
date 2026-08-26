@@ -11,14 +11,20 @@
 //
 // Concept and instrument ids below are structural placeholders
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type { ReviewLogEntry, ReviewLogRecord, SuspendLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
+import type { Scheduler, SchedulerState } from '../scheduler/types.js';
+import { replaySchedulerStates } from '../session/replay.js';
 import {
   computeAllConceptMastery,
   computeConceptMastery,
   conceptIdsInLog,
+  conceptVitalityInstruments,
   evidenceTierOf,
   masteryAtTimeForConceptIds,
+  readAllConceptVitality,
+  readConceptVitality,
 } from './rollup.js';
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
@@ -346,5 +352,296 @@ describe('masteryAtTimeForConceptIds — the value a future writer stamps (ol-g6
     const priorHistory = onConsecutiveDays('2026-01-01', 2, () => ({ rating: 'again' }));
     const value = masteryAtTimeForConceptIds(priorHistory, ['concept-a']);
     expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'sprout' } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Register join 1-2 (`[D-087]`, `ol-95vv.1`): `conceptVitalityInstruments`,
+// `readConceptVitality`, `readAllConceptVitality`. `vitality.spec.ts` is the
+// standing proof for the fold itself (min, filter, floor); these tests prove
+// the WIRE — that this module assembles the fold's input correctly from a
+// review log and a scheduler, register join 1 (3.2's replayed state into
+// 3.1's fold) — and re-assert D-087's three promises end to end so a defect
+// in the assembly step (e.g. leaking another concept's instrument in) cannot
+// hide behind an already-green fold test.
+// ---------------------------------------------------------------------------
+
+const NOW = new Date('2026-03-01T09:00:00.000Z');
+
+/**
+ * A `Scheduler` whose recall probability is looked up per instrument id —
+ * the same technique `vitality.spec.ts` uses, so a test can say "this
+ * instrument is faded" without reverse-engineering an FSRS stability that
+ * produces it. `schedule` still returns a real-shaped `SchedulerState`,
+ * because `readConceptVitality`/`readAllConceptVitality` call
+ * `replaySchedulerStates` internally, which needs something to fold.
+ */
+function stubScheduler(byInstrument: Readonly<Record<string, number>>): Scheduler {
+  return {
+    schedule({ instrumentId, now }) {
+      const state: SchedulerState = {
+        schemaVersion: 1,
+        due: now.toISOString(),
+        stability: 1,
+        difficulty: 5,
+        scheduledDays: 1,
+        learningStepIndex: 0,
+        reps: 1,
+        lapses: 0,
+        learningState: 'review',
+        lastReview: now.toISOString(),
+      };
+      return { instrumentId, state, intervalDays: 1 };
+    },
+    retrievability({ instrumentId }) {
+      const recallProbability = byInstrument[instrumentId];
+      if (recallProbability === undefined) {
+        throw new Error(`stubScheduler: no probability configured for ${instrumentId}`);
+      }
+      return { instrumentId, recallProbability };
+    },
+  };
+}
+
+function suspend(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
+  return {
+    schemaVersion: 4,
+    kind: 'suspend',
+    eventId: 's1',
+    timestamp: '2026-01-10T09:00:00-04:00',
+    instrumentId: 'qa:concept-a:1',
+    conceptIds: ['concept-a'],
+    ...overrides,
+  };
+}
+
+describe('conceptVitalityInstruments — register join 1 (3.2 replayed state -> 3.1 instrument list)', () => {
+  it('gathers only the instruments that are evidence for the concept, with their replayed state', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.5, 'qa:concept-b:1': 0.9 });
+    const entries: ReviewLogEntry[] = [
+      review({ eventId: 'a', instrumentId: 'qa:concept-a:1', conceptIds: ['concept-a'] }),
+      review({
+        eventId: 'b',
+        instrumentId: 'qa:concept-b:1',
+        conceptIds: ['concept-b'],
+        timestamp: '2026-01-11T09:00:00-04:00',
+      }),
+    ];
+    const replayed = replaySchedulerStates(entries, scheduler);
+
+    const forA = conceptVitalityInstruments(entries, 'concept-a', replayed);
+    expect(forA).toHaveLength(1);
+    expect(forA[0]?.instrumentId).toBe('qa:concept-a:1');
+    expect(forA[0]?.instrumentType).toBe('qa');
+    expect(forA[0]?.state).not.toBeNull();
+
+    // concept-b's instrument never enters concept-a's list — the join does
+    // not leak another concept's evidence into this one's fold.
+    expect(forA.some((i) => i.instrumentId === 'qa:concept-b:1')).toBe(false);
+  });
+
+  it('reports state: null for an instrument with no completed review — the floor is evidential, not "absent from the log"', () => {
+    const scheduler = stubScheduler({});
+    // Recorded (it is evidence the concept was practised) but never rated —
+    // the frozen record allows this so a real bug stays loggable; it must
+    // never be fed to the scheduler (module doc, `session/replay.ts`).
+    const entries: ReviewLogEntry[] = [review({ eventId: 'a', rating: null })];
+    const replayed = replaySchedulerStates(entries, scheduler);
+
+    const instruments = conceptVitalityInstruments(entries, 'concept-a', replayed);
+    expect(instruments).toHaveLength(1);
+    expect(instruments[0]?.state).toBeNull();
+  });
+
+  it('ignores suspend events entirely — they carry conceptIds but are not evidence', () => {
+    const scheduler = stubScheduler({});
+    const entries: ReviewLogEntry[] = [suspend()];
+    const replayed = replaySchedulerStates(entries, scheduler);
+    expect(conceptVitalityInstruments(entries, 'concept-a', replayed)).toEqual([]);
+  });
+
+  it('returns nothing for a concept the log never mentions', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.9 });
+    const entries: ReviewLogEntry[] = [review()];
+    const replayed = replaySchedulerStates(entries, scheduler);
+    expect(conceptVitalityInstruments(entries, 'concept-nowhere', replayed)).toEqual([]);
+  });
+});
+
+describe('readConceptVitality — the fold is a MINIMUM, not a mean (D-087, end to end)', () => {
+  it('one faded instrument pulls the whole concept to tending, however fresh the rest are', () => {
+    const scheduler = stubScheduler({ fresh: 0.99, alsoFresh: 0.98, faded: 0.4 });
+    const entries: ReviewLogEntry[] = [
+      review({ eventId: 'a', instrumentId: 'fresh' }),
+      review({ eventId: 'b', instrumentId: 'alsoFresh' }),
+      review({ eventId: 'c', instrumentId: 'faded' }),
+    ];
+    // Mean of 0.99/0.98/0.4 is 0.79 — above nothing interesting; the point is
+    // that even a mean of the two FRESH ones (0.985) is not what governs.
+    const reading = readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('tending');
+    expect(reading.weakest?.instrumentId).toBe('faded');
+    expect(reading.instrumentsRead).toBe(3);
+  });
+});
+
+describe('readConceptVitality — evidence tier is a FILTER, never a weight (D-087, end to end)', () => {
+  it('an MCQ instrument for the same concept never enters the fold, however it scores', () => {
+    const scheduler = stubScheduler({ faded: 0.4, 'inst-mcq': 1 });
+    const entries: ReviewLogEntry[] = [
+      review({ eventId: 'a', instrumentId: 'faded' }),
+      review({
+        eventId: 'b',
+        instrumentId: 'inst-mcq',
+        instrumentType: 'mcq',
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['mcq'],
+          planVersion: null,
+        },
+      }),
+    ];
+    const reading = readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('tending');
+    expect(reading.instrumentsRead).toBe(1);
+    expect(reading.weakest?.instrumentId).toBe('faded');
+  });
+});
+
+describe('readConceptVitality — the sufficiency floor fires exactly on the ruled condition (D-087, end to end)', () => {
+  it('reads early on an empty log', () => {
+    const scheduler = stubScheduler({});
+    const reading = readConceptVitality([], 'concept-a', scheduler, NOW, 0.9);
+    expect(reading).toStrictEqual({ value: 'early', weakest: null, instrumentsRead: 0 });
+  });
+
+  it('reads early for a concept the log never mentions, even when other concepts have full evidence', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.99 });
+    const entries: ReviewLogEntry[] = [review()];
+    const reading = readConceptVitality(entries, 'concept-nowhere', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('early');
+  });
+
+  it('reads early when the concept is recognition-only, however well the MCQ is doing', () => {
+    const scheduler = stubScheduler({ 'inst-mcq': 1 });
+    const entries: ReviewLogEntry[] = [
+      review({
+        eventId: 'a',
+        instrumentId: 'inst-mcq',
+        instrumentType: 'mcq',
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['mcq'],
+          planVersion: null,
+        },
+      }),
+    ];
+    const reading = readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('early');
+  });
+
+  it('reads early when the only recall-tier review recorded was never rated (no COMPLETED review)', () => {
+    const scheduler = stubScheduler({});
+    const entries: ReviewLogEntry[] = [review({ eventId: 'a', rating: null })];
+    const reading = readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('early');
+  });
+
+  it('leaves the floor on the first completed recall review, however badly it went', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.1 });
+    const entries: ReviewLogEntry[] = [review()];
+    const reading = readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9);
+    expect(reading.value).toBe('tending');
+    expect(reading.instrumentsRead).toBe(1);
+  });
+});
+
+describe('readAllConceptVitality — batches readConceptVitality over one replay', () => {
+  it('agrees with calling readConceptVitality per concept', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.99, 'qa:concept-b:1': 0.2 });
+    const entries: ReviewLogEntry[] = [
+      review({ eventId: 'a', instrumentId: 'qa:concept-a:1', conceptIds: ['concept-a'] }),
+      review({
+        eventId: 'b',
+        instrumentId: 'qa:concept-b:1',
+        conceptIds: ['concept-b'],
+        timestamp: '2026-01-11T09:00:00-04:00',
+      }),
+    ];
+    const batched = readAllConceptVitality(
+      entries,
+      ['concept-a', 'concept-b'],
+      scheduler,
+      NOW,
+      0.9,
+    );
+    expect(batched.get('concept-a')).toStrictEqual(
+      readConceptVitality(entries, 'concept-a', scheduler, NOW, 0.9),
+    );
+    expect(batched.get('concept-b')).toStrictEqual(
+      readConceptVitality(entries, 'concept-b', scheduler, NOW, 0.9),
+    );
+    expect(batched.get('concept-a')?.value).toBe('holding');
+    expect(batched.get('concept-b')?.value).toBe('tending');
+  });
+
+  it('returns an empty map for an empty conceptIds list, even over a non-empty log', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.99 });
+    const entries: ReviewLogEntry[] = [review()];
+    const batched = readAllConceptVitality(entries, [], scheduler, NOW, 0.9);
+    expect(batched.size).toBe(0);
+  });
+
+  it('returns an empty map for an empty log', () => {
+    const scheduler = stubScheduler({});
+    const batched = readAllConceptVitality([], ['concept-a'], scheduler, NOW, 0.9);
+    expect(batched.get('concept-a')).toStrictEqual({
+      value: 'early',
+      weakest: null,
+      instrumentsRead: 0,
+    });
+  });
+});
+
+describe('readConceptVitality — against the real ts-fsrs port (wire integration, not just the stub)', () => {
+  it('reads holding immediately after a review and decays to tending as the concept is left alone', () => {
+    const scheduler = createFsrsScheduler();
+    const reviewedOn = '2026-03-01T09:00:00-04:00';
+    const entries: ReviewLogEntry[] = [
+      review({
+        eventId: 'a',
+        instrumentId: 'qa:concept-a:1',
+        timestamp: reviewedOn,
+        rating: 'good',
+      }),
+    ];
+    const holdingCut = 0.9;
+
+    const sameDay = readConceptVitality(
+      entries,
+      'concept-a',
+      scheduler,
+      new Date(reviewedOn),
+      holdingCut,
+    );
+    expect(sameDay.value).toBe('holding');
+
+    // The stage would not have moved (no wall clock in computeConceptMastery)
+    // — vitality is the axis that carries this decay.
+    const muchLater = readConceptVitality(
+      entries,
+      'concept-a',
+      scheduler,
+      new Date('2026-06-01T09:00:00.000Z'),
+      holdingCut,
+    );
+    expect(muchLater.value).toBe('tending');
+    expect(muchLater.weakest?.recallProbability).toBeLessThan(
+      sameDay.weakest?.recallProbability ?? 1,
+    );
   });
 });

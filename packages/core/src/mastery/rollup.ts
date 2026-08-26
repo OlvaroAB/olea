@@ -92,20 +92,23 @@
  * merge into one, because the ratified vocabulary has one word where the old
  * ordinal had two.
  *
- * **This module still computes one axis, not two.** F2.11 (D-049) also
- * ratifies a separate `vitality` reading — `holding` / `needs tending` /
+ * **`computeConceptMastery` still computes one axis, not two.** F2.11 (D-049)
+ * also ratifies a separate `vitality` reading — `holding` / `needs tending` /
  * `too early to say`, fluctuating, never a demotion — but that axis is not
- * modelled here: no field on `ConceptMasteryResult` carries it, and the
- * `state` this module returns is the growth-stage axis only. Wiring a real
- * retrievability-based vitality reading is `MAT-2`'s (`ol-95vv`) scope, not
- * this landing's — this module's own windowed, non-monotonic computation
- * (see "Recency and forgetting" above) is exactly the single-ordinal
- * shape the registry's hard clamp ("no implementation may express decay by
- * lowering a stage") means to retire, and doing that properly means
- * splitting this function's output into a monotonic stage plus a fluctuating
- * vitality read from a different (already-ruled, `[D-087]`) arithmetic —
- * real algorithm work this landing does not do. Flagged rather than silently
- * left, per the run charter's Class C discipline.
+ * modelled by `computeConceptMastery`: no field on `ConceptMasteryResult`
+ * carries it, and the `state` that function returns is the growth-stage axis
+ * only. It stays that way deliberately, not as a gap: `computeConceptMastery`
+ * is a pure function of `entries` alone with no clock (see "Purity and
+ * rebuildability" below), which is exactly what growth stage's high-water-mark
+ * contract needs; vitality is a *current* reading and needs `now`, so folding
+ * it in would make growth stage's own purity claim a lie by association.
+ * `readConceptVitality` / `readAllConceptVitality`, below, are vitality's own
+ * functions for that reason — register join 1-2 (`[D-087]`, `ol-95vv.1`):
+ * they replay `../session/replay.ts`'s scheduler states (3.2's per-instrument
+ * retrievability) into `./vitality.ts`'s `readVitality` fold (3.1's vitality
+ * bucketing, already built by `ol-1bjz`/`VIT-1`), so a caller with a log, a
+ * scheduler and an instant gets a per-concept vitality reading without
+ * assembling `VitalityInstrument[]` by hand.
  *
  * 1. **`seed`** — no scored evidence at all for this concept.
  * 2. **`sprout`** — some scored evidence exists and either the recent
@@ -172,7 +175,10 @@ import type {
   Rating,
   ReviewLogEntry,
 } from 'olea-contracts';
+import type { Scheduler } from '../scheduler/types.js';
+import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
+import { readVitality, type VitalityInstrument, type VitalityReading } from './vitality.js';
 
 /** R7's three evidence tiers, ordered weakest to strongest. */
 export type EvidenceTier = 'recognition' | 'recall' | 'explanation';
@@ -503,4 +509,100 @@ export function masteryAtTimeForConceptIds(
     byConcept[id] = computeConceptMastery(entries, id, options).state;
   }
   return { attribution: 'per-concept', byConcept };
+}
+
+// ---------------------------------------------------------------------------
+// Register join 1-2 (`[D-087]`, `ol-95vv.1`): 3.2's per-instrument
+// retrievability, wired into 3.1's vitality fold, per concept.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every instrument that is evidence for `conceptId` (D-031: many-to-many —
+ * this reads `entry.conceptIds`, never a singular field, matching
+ * `conceptScoredEvents` above), paired with its replayed scheduler state —
+ * exactly the shape `./vitality.ts`'s `readVitality` needs to see.
+ *
+ * `replayed` is expected to be `replaySchedulerStates` run over the **whole**
+ * log, not filtered to this concept: an instrument's FSRS state is a property
+ * of the instrument's own review history (R3: scheduling stays on
+ * instruments), not of which concept is asking about it, so filtering the
+ * replay input would be wrong even though filtering the *instrument list*
+ * below is exactly right. `readAllConceptVitality` replays once and reuses
+ * the result across every concept for this reason.
+ *
+ * All instrument types are included, recognition-tier ones too — `vitality.ts`
+ * applies R3's filter itself and documents that the filter belongs there, not
+ * in the caller.
+ */
+export function conceptVitalityInstruments(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+  replayed: ReplayResult,
+): readonly VitalityInstrument[] {
+  const types = new Map<string, InstrumentType>();
+  for (const entry of entries) {
+    if (entry.kind !== 'review') continue;
+    if (!entry.conceptIds.includes(conceptId)) continue;
+    // First-seen type wins. An instrument's type does not change across its
+    // own review events; this is a defensive tie-break, not a modelled case.
+    if (!types.has(entry.instrumentId)) {
+      types.set(entry.instrumentId, entry.instrumentType);
+    }
+  }
+
+  return [...types.entries()].map(([instrumentId, instrumentType]) => ({
+    instrumentId,
+    instrumentType,
+    state: replayedStateOf(replayed, instrumentId),
+  }));
+}
+
+/**
+ * Reads one concept's vitality (R3's fold, `[D-087]`) from the review log:
+ * replays every instrument's scheduler state, gathers the ones that are
+ * evidence for `conceptId`, and folds them through `readVitality`.
+ *
+ * Unlike `computeConceptMastery`, this is not a pure function of `entries`
+ * alone — vitality is a current reading and needs `now` and the (derived,
+ * handed-in, never-defaulted — see `./vitality.ts`) holding cut. See this
+ * module's doc, "computeConceptMastery still computes one axis, not two."
+ *
+ * Replays the whole log on every call. A caller reading vitality for many
+ * concepts from the same log should call `readAllConceptVitality` instead,
+ * which replays once.
+ */
+export function readConceptVitality(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+  scheduler: Scheduler,
+  now: Date,
+  holdingCut: number,
+): VitalityReading {
+  const replayed = replaySchedulerStates(entries, scheduler);
+  const instruments = conceptVitalityInstruments(entries, conceptId, replayed);
+  return readVitality({ instruments, scheduler, now, holdingCut });
+}
+
+/**
+ * `readConceptVitality` for every concept in `conceptIds`, replaying the log
+ * once and reusing the result — the vitality-axis counterpart to
+ * `computeAllConceptMastery` above. Not "every concept the log names": the
+ * caller supplies the set, matching `computeAllConceptMastery`'s own
+ * default-from-log convenience being a separate, explicit choice
+ * (`conceptIdsInLog`) rather than baked into this function.
+ */
+export function readAllConceptVitality(
+  entries: readonly ReviewLogEntry[],
+  conceptIds: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  holdingCut: number,
+): ReadonlyMap<string, VitalityReading> {
+  const replayed = replaySchedulerStates(entries, scheduler);
+  const result = new Map<string, VitalityReading>();
+  for (const id of conceptIds) {
+    const instruments = conceptVitalityInstruments(entries, id, replayed);
+    result.set(id, readVitality({ instruments, scheduler, now, holdingCut }));
+  }
+  return result;
 }
