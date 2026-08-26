@@ -13,6 +13,7 @@
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
 import type { ReviewLogEntry, ReviewLogRecord, SuspendLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import { replaySchedulerStates } from '../session/replay.js';
@@ -295,6 +296,56 @@ describe('rebuild-from-log equivalence and idempotent replay (this task N-013 re
     const forward = computeConceptMastery(entries, 'concept-a');
     const reversed = computeConceptMastery([...entries].reverse(), 'concept-a');
     expect(reversed).toEqual(forward);
+  });
+});
+
+describe("shares review-log/merge.ts's total order (ol-y3ne)", () => {
+  // This module used to keep its own private `byInstantThenEventId`
+  // comparator, duplicating the ruled fold total order that lives in
+  // `../review-log/merge.ts` (`ol-egov.20`). There is now exactly one
+  // comparator — `compareByInstantThenEventId`, imported by this module's
+  // internal fold — and these tests prove agreement directly, not just
+  // assert it, mirroring `session/replay.spec.ts`'s equivalent block for
+  // `ol-2jod.15` (the earlier module that made the same mistake).
+  //
+  // `computeConceptMastery` never exposes its internal event order, so the
+  // probe here is a `recentWindowSize: 1` window: with exactly one event in
+  // the window, the result depends entirely on which event this module
+  // treats as *last* — a directly observable stand-in for "whose order did
+  // the fold use".
+
+  it('same-instant tiebreak by eventId agrees with mergeReviewLogRecords, regardless of input order', () => {
+    const instant = '2026-01-10T09:00:00-04:00';
+    const bbb = review({ eventId: 'bbb', timestamp: instant, rating: 'again' });
+    const aaa = review({ eventId: 'aaa', timestamp: instant, rating: 'easy' });
+
+    const mergedOrder = mergeReviewLogRecords([bbb, aaa]).records.map((r) => r.eventId);
+    expect(mergedOrder).toEqual(['aaa', 'bbb']);
+
+    // 'bbb' ('again', a failure) sorts last per the shared order, so a
+    // one-event window sees a failure whichever order the two entries were
+    // supplied to computeConceptMastery in.
+    const forwards = computeConceptMastery([bbb, aaa], 'concept-a', { recentWindowSize: 1 });
+    const backwards = computeConceptMastery([aaa, bbb], 'concept-a', { recentWindowSize: 1 });
+    expect(forwards.evidence.recentSuccessRate).toBe(0);
+    expect(backwards.evidence.recentSuccessRate).toBe(0);
+    expect(forwards).toEqual(backwards);
+  });
+
+  it("the window's trailing slice lands on the same event mergeReviewLogRecords sorts last, over scrambled input", () => {
+    const e1 = review({ eventId: 'e1', timestamp: '2026-01-10T09:00:00-04:00', rating: 'good' });
+    const e2 = review({ eventId: 'e2', timestamp: '2026-01-11T09:00:00-04:00', rating: 'again' });
+    const e3 = review({ eventId: 'e3', timestamp: '2026-01-12T09:00:00-04:00', rating: 'good' });
+    const scrambled = [e3, e1, e2];
+
+    const mergedOrder = mergeReviewLogRecords(scrambled).records.map((r) => r.eventId);
+    expect(mergedOrder).toEqual(['e1', 'e2', 'e3']);
+
+    // e3 (a success) sorts last, so a one-event window reads a success —
+    // whatever order the same three entries were handed to
+    // computeConceptMastery in.
+    const result = computeConceptMastery(scrambled, 'concept-a', { recentWindowSize: 1 });
+    expect(result.evidence.recentSuccessRate).toBe(1);
   });
 });
 

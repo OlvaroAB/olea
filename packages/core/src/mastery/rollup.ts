@@ -174,7 +174,9 @@ import type {
   MasteryState,
   Rating,
   ReviewLogEntry,
+  ReviewLogRecord,
 } from 'olea-contracts';
+import { compareByInstantThenEventId } from '../review-log/merge.js';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
@@ -309,15 +311,6 @@ interface ScoredEvent {
   readonly day: string | null;
 }
 
-/** Deterministic order, matching `../review-log/merge.ts`'s own tiebreak — see module doc. */
-function byInstantThenEventId(
-  a: { instant: number; eventId: string },
-  b: { instant: number; eventId: string },
-): number {
-  if (a.instant !== b.instant) return a.instant - b.instant;
-  return a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
-}
-
 /**
  * Folds `entries` into every review event that is evidence for `conceptId`
  * (D-031/`ol-t3sd`: many-to-many, so one event is evidence for every concept
@@ -333,7 +326,7 @@ function conceptScoredEvents(
   explainBackAttempts: number;
   tiersPracticed: Record<EvidenceTier, boolean>;
 } {
-  const scored: ScoredEvent[] = [];
+  const scoredEntries: ReviewLogRecord[] = [];
   let explainBackAttempts = 0;
   const tiersPracticed: Record<EvidenceTier, boolean> = {
     recognition: false,
@@ -353,17 +346,23 @@ function conceptScoredEvents(
       continue;
     }
 
-    const instant = Date.parse(entry.timestamp);
-    scored.push({
-      instant,
-      eventId: entry.eventId,
-      instrumentType: entry.instrumentType,
-      success: isSuccessRating(entry.rating),
-      day: calendarDayOfTimestamp(entry.timestamp),
-    });
+    scoredEntries.push(entry);
   }
 
-  scored.sort(byInstantThenEventId);
+  // Ordered via `../review-log/merge.ts`'s shared `compareByInstantThenEventId`
+  // — this used to be a private copy of that tiebreak (`ol-y3ne`) that would
+  // have silently fallen behind if the ruled order ever moved again, exactly
+  // as `session/replay.ts` once did (`ol-2jod.15`). One comparator now, not two.
+  scoredEntries.sort(compareByInstantThenEventId);
+
+  const scored: ScoredEvent[] = scoredEntries.map((entry) => ({
+    instant: Date.parse(entry.timestamp),
+    eventId: entry.eventId,
+    instrumentType: entry.instrumentType,
+    success: isSuccessRating(entry.rating),
+    day: calendarDayOfTimestamp(entry.timestamp),
+  }));
+
   return { scored, explainBackAttempts, tiersPracticed };
 }
 
