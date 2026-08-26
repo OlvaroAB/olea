@@ -14,11 +14,17 @@
  * entries are dropped first (FIFO) so the summary always reflects the most
  * recent activity.
  *
- * **Wiring gap, named rather than silently left:** nothing calls
- * `recordUsageEntry` yet. The one call site that would populate it for
- * real is `worker/transport.ts`'s `sendWorkerTask`, on a successful
- * response — see this bead's report for the exact patch, held out of this
- * file because `worker/transport.ts` is outside `ol-p3t09`'s owned paths.
+ * **Wired into production** (`main.ts`'s `onload()`, via
+ * `WorkerHttpTransport`'s `onCallRecorded` — see that file and
+ * `settings-section.ts`'s module doc). This corrects an earlier version of
+ * this comment which said nothing called `record` yet; that was stale by
+ * the time it was read (`ol-p6t06`, Class A doc correction) — the wiring
+ * landed in the same commit that introduced this file. What is still true:
+ * the entry `main.ts` builds only ever carries `taskId`/`promptVersion`/
+ * `modelId`/`recordedAt` — `types.ts`'s `[D-123]` figures are not populated
+ * because extending that callback's shape touches `worker/transport.ts`,
+ * `worker/obsidian-transport.ts` and `main.ts`, all outside this bead's
+ * owned paths (see this bead's report for the exact proposed patch).
  */
 
 import type { UsageLogEntry } from './types.js';

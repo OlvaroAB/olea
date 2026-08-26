@@ -54,6 +54,26 @@ describe('aggregateUsageByFeature', () => {
   it('never fabricates a cost figure — every summary reports costUsd as null, never zero or invented', () => {
     const summaries = aggregateUsageByFeature([entry()]);
     expect(summaries[0]?.costUsd).toBeNull();
+    expect(summaries[0]?.pricedCallCount).toBe(0);
+  });
+
+  it('sums a real cost figure across every entry that carries one, once one is present ([D-123])', () => {
+    const entries: UsageLogEntry[] = [
+      entry({ costUsd: 0.001 }),
+      entry({ costUsd: 0.002 }),
+      entry({ costUsd: 0.0015 }),
+    ];
+    const [summary] = aggregateUsageByFeature(entries);
+    expect(summary?.costUsd).toBeCloseTo(0.0045, 6);
+    expect(summary?.pricedCallCount).toBe(3);
+  });
+
+  it('sums only the priced calls when a feature has a mix of priced and unpriced entries', () => {
+    const entries: UsageLogEntry[] = [entry({ costUsd: 0.01 }), entry({})];
+    const [summary] = aggregateUsageByFeature(entries);
+    expect(summary?.callCount).toBe(2);
+    expect(summary?.pricedCallCount).toBe(1);
+    expect(summary?.costUsd).toBeCloseTo(0.01, 6);
   });
 
   it('reports the latest recordedAt seen, regardless of input order', () => {

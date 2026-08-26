@@ -1,6 +1,14 @@
 /**
- * `renderUsageSection` — the F7.3 usage view stub, rendered into the
- * settings pane (`ol-p3t09`).
+ * `renderUsageSection` — the F7.3 usage view, rendered into the settings
+ * pane (`ol-p3t09`, extended `ol-p6t06`).
+ *
+ * **Wired into production.** `settings/settings-tab.ts`'s `display()` calls
+ * this (see that file's F7.3 comment) and `main.ts`'s `onload()` wires the
+ * recording side (`usageLogStore.record`, via `WorkerHttpTransport`'s
+ * `onCallRecorded`) — both landed in the same commit that introduced this
+ * file (`ol-p3t09`), even though this file's own module doc previously said
+ * otherwise; that was stale and is corrected here rather than left to
+ * mislead the next reader (Class A doc correction, `ol-p6t06`).
  *
  * **Cannot be unit-tested without a real Obsidian host**, same reasoning as
  * `settings/settings-tab.ts`'s module doc: `Setting`/`createEl` need a live
@@ -10,21 +18,19 @@
  * between those and Obsidian's `Setting` API, and the `@manual` scenarios
  * in `features/F7-plugin-surface.md` are how the rendered section is
  * actually checked.
- *
- * Not wired into `settings-tab.ts` by this bead: that file is outside
- * `ol-p3t09`'s owned paths. See the bead's report for the exact call to
- * add to `OleaSettingTab.display()`.
  */
 
 import type { App } from 'obsidian';
 import { Setting } from 'obsidian';
 import { aggregateUsageByFeature } from './aggregate.js';
 import {
+  describeCostAvailabilityNote,
   describeFeatureUsage,
-  USAGE_COST_UNAVAILABLE_NOTE,
+  USAGE_CACHED_INPUT_NOTE,
   USAGE_SECTION_EMPTY_STATE,
   USAGE_SECTION_HEADING,
   USAGE_SECTION_INTRO,
+  usesCachedInputPricing,
 } from './copy.js';
 import type { ObsidianDataHost } from './log-store.js';
 import { ObsidianUsageLogStore } from './log-store.js';
@@ -51,5 +57,17 @@ export async function renderUsageSection(
   for (const summary of summaries) {
     list.createEl('li', { text: describeFeatureUsage(summary) });
   }
-  containerEl.createEl('p', { text: USAGE_COST_UNAVAILABLE_NOTE, cls: 'olea-usage-cost-note' });
+  containerEl.createEl('p', {
+    text: describeCostAvailabilityNote(summaries),
+    cls: 'olea-usage-cost-note',
+  });
+
+  // D-005's named nuance: only shown once the oracle ranking feature has
+  // actually been called — see copy.ts's `USAGE_CACHED_INPUT_NOTE` doc.
+  if (usesCachedInputPricing(summaries)) {
+    containerEl.createEl('p', {
+      text: USAGE_CACHED_INPUT_NOTE,
+      cls: 'olea-usage-cached-input-note',
+    });
+  }
 }
