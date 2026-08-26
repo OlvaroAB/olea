@@ -278,13 +278,13 @@ export function localToday(now: Date): CalendarDay {
  * things a review log cannot supply: which course a concept belongs to, and
  * what her assessments are worth.
  *
- * **Optional on `TodayPanelDeps`, and that is a wiring gap rather than a
- * design.** A panel built without one renders no trends section at all —
- * `buildTodayPanel` leaves `mastery`/`insights` null and `view.ts` draws
- * nothing, which is why the existing workbench Today states are pixel-identical
- * with this shipped. The production call site is `main.ts`, which this task did
- * not own; see the task report for the one-line wiring it needs and the bead
- * that carries it.
+ * **Optional on `TodayPanelDeps` — a panel built without one renders no trends
+ * section at all.** `buildTodayPanel` leaves `mastery`/`insights` null and
+ * `view.ts` draws nothing in that case, which is why the workbench Today
+ * states with no trends source are pixel-identical with what a bare `main.ts`
+ * wiring would render. **Production passes one**: `main.ts` builds
+ * `createVaultTrendsSource({ vault, assessmentsBasePath })` and hands it to
+ * `loadTodayPanel` as `trends`, so this is reachable, not just buildable.
  */
 export interface TodayTrendsSource {
   /**
