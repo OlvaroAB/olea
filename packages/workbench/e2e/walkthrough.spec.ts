@@ -92,10 +92,15 @@ test('SPRIG-1: the sprig actually reaches the screen on the gap view (step 8)', 
   await gotoWalkStep(page, 8);
   const sprigs = frame(page).locator('.olea-sprig');
   await expect(sprigs.first()).toBeVisible();
-  // Every sprig always draws all five leaf positions — filled ones as fills,
-  // empty ones as outlines. A sprig missing its empty leaves is a different
-  // picture from a sprig with few leaves, and only the first is honest.
-  await expect(sprigs.first().locator('ellipse')).toHaveCount(5);
+  // D-048/D-049 retired the "five fixed leaf positions, filled vs. empty
+  // outline" reading this assertion used to pin (`ol-8bf9`) — geometry is
+  // parameterised per stage instead (`render-sprig.ts`'s `SPRIG_GEOMETRY`):
+  // `seed` draws one ellipse and no stem or leaves, `sprout` a stem plus one
+  // leaf ellipse, `sapling`/`tree` a stem plus three — never a fourth leaf,
+  // and never an empty outline. The first gap row in this fixture (GEOL204,
+  // "Imbrication") is `seed`, which is exactly one `<ellipse>` (the seed
+  // shape itself; `SPRIG_GEOMETRY.seed.leaves` is empty).
+  await expect(sprigs.first().locator('ellipse')).toHaveCount(1);
 });
 
 test('SPRIG-1: the sprig reaches the trends screen too (step 12)', async ({ page }) => {
