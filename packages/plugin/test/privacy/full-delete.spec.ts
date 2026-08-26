@@ -33,7 +33,6 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     const result = await runFullDelete({
       dataHost,
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       workerConfig: { baseUrl: 'https://olea.example.workers.dev', token: 'a-token' },
@@ -60,7 +59,6 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     const result = await runFullDelete({
       dataHost,
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       workerConfig: { baseUrl: '', token: '' },
@@ -84,7 +82,6 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     const result = await runFullDelete({
       dataHost,
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       workerConfig: { baseUrl: 'https://olea.example.workers.dev', token: 'a-token' },
@@ -106,7 +103,6 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     await runFullDelete({
       dataHost,
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       workerConfig: { baseUrl: '', token: '' },

@@ -29,10 +29,9 @@ import {
   KeywordIndexEngine,
   type RetrievalChunk,
 } from 'olea-core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ObsidianKeywordIndexStore } from '../../src/keyword-index/store.js';
 import { purgeCache } from '../../src/privacy/cache-purge.js';
-import type { VaultDeletePort } from '../../src/privacy/types.js';
 import { ObsidianEmbeddingCacheStore } from '../../src/retrieval/embedding-cache-store.js';
 import { FakeDataHost } from './fakes.js';
 
@@ -52,12 +51,19 @@ class DeterministicEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-/** Never called in this test — `purgeCache` only reaches `.olea/drafts/`, which this fixture vault never creates. Throwing (rather than silently no-op'ing) makes that assumption an assertion, not a guess. */
-const unusedVaultDelete: VaultDeletePort = {
-  async delete(path) {
+/**
+ * Asserts `FolderSource.delete` is never called in this test — `purgeCache`
+ * only reaches `.olea/drafts/`, which this fixture vault never creates.
+ * Throwing (rather than silently no-op'ing) makes that assumption an
+ * assertion, not a guess. Was a separate `VaultDeletePort` mock before
+ * `ol-ppxj.15` promoted `delete` onto `VaultSource` itself; now it is a spy
+ * on the real vault's own method.
+ */
+function guardAgainstUnexpectedDelete(vault: FolderSource): void {
+  vi.spyOn(vault, 'delete').mockImplementation(async (path) => {
     throw new Error(`unexpected vault delete during rebuild-equivalence test: ${path}`);
-  },
-};
+  });
+}
 
 describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t01)', () => {
   let root: string;
@@ -86,6 +92,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
       '---\ncourse: SYN101\n---\n\n# Beta\nsynthetic prose about beta\n',
     );
     const vault = new FolderSource(root);
+    guardAgainstUnexpectedDelete(vault);
     const dataHost = new FakeDataHost();
 
     const before = await KeywordIndexEngine.create({
@@ -97,7 +104,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
     const beforeSnapshot = before.toPersisted();
     expect(beforeSnapshot.documents.map((d) => d.path)).toEqual(['Alpha.md', 'Beta.md']);
 
-    await purgeCache({ dataHost, vault, vaultDelete: unusedVaultDelete });
+    await purgeCache({ dataHost, vault });
     expect((dataHost.blob as Record<string, unknown>).keywordIndex).toBeUndefined();
 
     const after = await KeywordIndexEngine.create({
@@ -115,6 +122,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
     await writeFixture('Alpha.md', 'synthetic prose about alpha\n');
     await writeFixture('Beta.md', 'synthetic prose about beta\n');
     const vault = new FolderSource(root);
+    guardAgainstUnexpectedDelete(vault);
     const dataHost = new FakeDataHost();
     const provider = new DeterministicEmbeddingProvider();
 
@@ -140,7 +148,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
     const beforeSnapshot = before.toPersisted();
     expect(beforeSnapshot.entries).toHaveLength(2);
 
-    await purgeCache({ dataHost, vault, vaultDelete: unusedVaultDelete });
+    await purgeCache({ dataHost, vault });
     expect((dataHost.blob as Record<string, unknown>).embeddingCache).toBeUndefined();
 
     const after = await EmbeddingCacheEngine.create({
@@ -160,6 +168,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
       '---\ncourse: SYN101\n---\n\n# Gamma\nsynthetic prose about gamma\n',
     );
     const vault = new FolderSource(root);
+    guardAgainstUnexpectedDelete(vault);
     const dataHost = new FakeDataHost();
     const provider = new DeterministicEmbeddingProvider();
 
@@ -191,7 +200,7 @@ describe('purgeCache — delete-then-rebuild is a pure derivation (D-006, ol-p6t
 
     // The one purge call a real "Delete everything" click makes — both
     // caches at once, not called out separately per engine.
-    const purgeResult = await purgeCache({ dataHost, vault, vaultDelete: unusedVaultDelete });
+    const purgeResult = await purgeCache({ dataHost, vault });
     expect(purgeResult.clearedDataJsonKeys).toContain('keywordIndex');
     expect(purgeResult.clearedDataJsonKeys).toContain('embeddingCache');
 

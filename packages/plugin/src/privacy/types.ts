@@ -1,32 +1,31 @@
 /**
  * Shared types for F7.4 (export + full delete, `ol-p6t01`).
  *
- * Two narrow ports this feature needs and the rest of the plugin does not
- * yet provide:
- *
  * - `ObsidianDataHost` — the same `{ loadData, saveData }` slice every other
  *   `data.json`-backed store in this plugin already depends on
  *   (`plan/store.ts`, `ingestion/queue-store.ts`, etc.). Redeclared locally
  *   rather than imported, following the exact precedent those files set in
  *   their own module docs: each persistence port names what it needs from
  *   `Plugin` on its own, with no coupling between features.
- * - `VaultDeletePort` — new. `olea-core`'s `VaultSource` (`vault/types.ts`)
- *   has no `delete` method at all — confirmed by reading it end to end
- *   while researching this bead. Every other feature in this plugin only
- *   ever reads and writes vault files; F7.4 is the first that needs to
- *   remove one. Adding `delete` to `VaultSource` itself would touch a file
- *   `ol-p6t01` does not own (`packages/core/src/vault/types.ts`) and would
- *   force every implementation across the workspace (`FolderSource`,
- *   `ObsidianSource`, every test fake) to grow a method overnight — exactly
- *   the concern `VaultSource`'s own doc raises about `firstSeen`. So this
- *   bead defines the narrowest possible port here instead, wires an
- *   Obsidian-native implementation in `obsidian-adapters.ts` (bypassing
- *   `ObsidianSource` entirely, via `app.vault.adapter.remove`), and flags
- *   promoting `delete` onto `VaultSource` proper as follow-on work in this
- *   bead's report — a two-line addition once a lane owns that file.
+ *
+ * **`VaultDeletePort` is gone (`ol-ppxj.15`).** F7.4 originally defined it
+ * here because `olea-core`'s `VaultSource` had no `delete` method at all,
+ * and adding one would have touched a file that bead did not own and forced
+ * every `VaultSource` implementation across the workspace to grow a method
+ * overnight. `ol-ppxj.15` did exactly that promotion — `delete` is now an
+ * **optional** method on `VaultSource` itself (`packages/core/src/vault/
+ * types.ts`), the same optionality shape as `firstSeen`, so implementations
+ * that never need it (read-only fixtures, structural test fakes) are
+ * unaffected. Every real backing store this plugin ships against
+ * (`ObsidianSource`, `FolderSource`) implements it. `deleteVaultPath` below
+ * is the thin adapter this file keeps instead of the old port: it exists
+ * only to turn "the injected `VaultSource` happens not to implement delete"
+ * into a clear thrown error rather than `undefined is not a function`,
+ * since privacy's deletion flows need a guaranteed delete and TypeScript
+ * cannot promise one from an optional method.
  */
 
-import type { VaultPath } from 'olea-core';
+import type { VaultPath, VaultSource } from 'olea-core';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this feature needs. */
 export interface ObsidianDataHost {
@@ -35,13 +34,21 @@ export interface ObsidianDataHost {
 }
 
 /**
- * Deletes one vault-relative path. A no-op (never a throw) when the path
- * does not exist — every caller in this feature already checks `exists()`
- * or works from a listing it trusts, but a defensive no-op here means a
- * double-delete (e.g. a retried purge) is still safe.
+ * Deletes one vault-relative path through `vault.delete`, failing loudly if
+ * the injected `VaultSource` does not implement it (see the module doc
+ * above — this should never fire against a real `ObsidianSource` or
+ * `FolderSource`, only against a misconfigured or intentionally read-only
+ * fake). A no-op (never a throw), same as `VaultSource.delete`'s own
+ * contract, when the path does not exist — every caller in this feature
+ * already checks `exists()` or works from a listing it trusts, but a
+ * defensive no-op here means a double-delete (e.g. a retried purge) is
+ * still safe.
  */
-export interface VaultDeletePort {
-  delete(path: VaultPath): Promise<void>;
+export async function deleteVaultPath(vault: VaultSource, path: VaultPath): Promise<void> {
+  if (vault.delete === undefined) {
+    throw new Error(`VaultSource.delete is required for privacy deletion flows (path: ${path})`);
+  }
+  await vault.delete(path);
 }
 
 /**

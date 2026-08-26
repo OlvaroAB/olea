@@ -40,6 +40,12 @@ export class MemoryVault implements VaultSource {
     return Promise.resolve(this.files.has(path));
   }
 
+  /** `VaultSource.delete` (`ol-ppxj.15`) — a no-op on an already-absent path, same as `write` accepting anything. */
+  delete(path: VaultPath): Promise<void> {
+    this.files.delete(path);
+    return Promise.resolve();
+  }
+
   watch(_handler: (event: VaultEvent) => void): Unsubscribe {
     return () => undefined;
   }

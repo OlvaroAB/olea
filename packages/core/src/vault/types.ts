@@ -69,6 +69,36 @@ export interface VaultSource {
   exists(path: VaultPath): Promise<boolean>;
 
   /**
+   * Delete one vault-relative path. A no-op (never a throw) when the path
+   * does not already exist — a caller retrying a purge, or racing another
+   * writer, must be able to call this twice safely.
+   *
+   * **INV-6, absolute: callers may delete only Olea-owned artifacts —
+   * paths under `.olea/` and Olea's own cache keys — and must NEVER delete
+   * anything she authored.** This method itself enforces no such scoping
+   * (same posture as `write`, which also trusts the caller's path), so the
+   * restriction lives entirely in what callers choose to pass, not in this
+   * interface. `packages/plugin/src/privacy/vault-artifact-delete.ts` and
+   * `cache-purge.ts` are the worked examples: both are bounded to
+   * dot-prefixed Olea folders by construction, never by a check here.
+   *
+   * **Optional by design, same reasoning as `firstSeen` above**: promoted
+   * here from F7.4's narrow `VaultDeletePort` (`ol-ppxj.15`), which existed
+   * only because adding a required method to this interface would force
+   * every `VaultSource` implementation across the workspace — several
+   * outside any one bead's ownership, most of them read-only test fakes —
+   * to grow one overnight. A missing method and a real delete are
+   * distinguishable to a caller that needs one (check `vault.delete
+   * === undefined` and fail loudly, as F7.4's privacy code does), which is
+   * different from `firstSeen`'s "no signal" collapse — deletion is a
+   * request that must not be silently skipped. Every implementation this
+   * repo actually deletes through (`FolderSource`, `ObsidianSource`, the
+   * workbench's `MemoryVaultSource`) does implement it; read-only fixtures
+   * are not obliged to.
+   */
+  delete?(path: VaultPath): Promise<void>;
+
+  /**
    * Subscribe to vault changes (C1.5). Events may be coalesced or delivered
    * late, and an implementation may legitimately deliver none — `FolderSource`
    * in a test does not have to watch. Consumers must therefore treat watching

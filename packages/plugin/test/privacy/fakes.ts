@@ -5,16 +5,19 @@
  *
  * Deliberately its own copy rather than importing
  * `test/generation/fakes.ts`'s `MemoryVaultSource` — that file sits outside
- * `ol-p6t01`'s owned paths (`test/privacy/` only), and a test fake gaining a
- * `delete` method for this bead's `VaultDeletePort` is exactly the kind of
- * change that belongs inside owned paths, not bolted onto a file another
- * lane may be editing concurrently.
+ * `ol-ppxj.15`'s owned paths (`test/privacy/` only), and a test fake's
+ * `delete` method is exactly the kind of change that belongs inside owned
+ * paths, not bolted onto a file another lane may be editing concurrently.
+ *
+ * `delete` here implements `VaultSource.delete` directly (`ol-ppxj.15`
+ * promoted it there from F7.4's now-removed narrow `VaultDeletePort`) — a
+ * real delete needs nothing more than removing the map entry.
  */
 import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } from 'olea-core';
-import type { ObsidianDataHost, VaultDeletePort } from '../../src/privacy/types.js';
+import type { ObsidianDataHost } from '../../src/privacy/types.js';
 
-/** A full read/write/delete in-memory `VaultSource`, text-only (no binary needed anywhere in `privacy/`). Also satisfies `VaultDeletePort` directly, since a real delete needs nothing more than removing the map entry. */
-export class MemoryVaultSource implements VaultSource, VaultDeletePort {
+/** A full read/write/delete in-memory `VaultSource`, text-only (no binary needed anywhere in `privacy/`). */
+export class MemoryVaultSource implements VaultSource {
   private readonly files = new Map<string, string>();
 
   constructor(initial: Readonly<Record<string, string>> = {}) {
@@ -53,7 +56,7 @@ export class MemoryVaultSource implements VaultSource, VaultDeletePort {
     return this.files.has(path);
   }
 
-  /** `VaultDeletePort` — a no-op, never a throw, on an already-absent path. */
+  /** `VaultSource.delete` — a no-op, never a throw, on an already-absent path. */
   async delete(path: VaultPath): Promise<void> {
     this.files.delete(path);
   }

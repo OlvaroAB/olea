@@ -118,6 +118,29 @@ export class ObsidianSource implements VaultSource {
   }
 
   /**
+   * `VaultSource.delete` (`ol-ppxj.15`, promoted from F7.4's narrow
+   * `VaultDeletePort` — `packages/plugin/src/privacy/obsidian-adapters.ts`
+   * used to build this over `app.vault.adapter.remove` outside this class
+   * entirely; that adapter is now gone, folded in here).
+   *
+   * Goes straight to `this.vault.adapter` (Obsidian's raw filesystem
+   * adapter) rather than through `TFile`/`vault.delete`, on purpose: this
+   * class's own `list()` never enumerates a dot-prefixed folder
+   * (`.olea/reviews/`, `.olea/misconceptions/`, `.olea/drafts/` all are),
+   * so a path this class cannot list must still be deletable by exact path
+   * — which the adapter's raw `remove` supports and the `TFile`-based API
+   * does not (it requires the file to already be known to the vault
+   * index). A no-op, never a throw, when the path is already gone.
+   */
+  async delete(path: VaultPath): Promise<void> {
+    if (!isVaultPath(path)) {
+      throw new Error(`ObsidianSource: not a valid vault path: ${JSON.stringify(path)}`);
+    }
+    if (!(await this.vault.adapter.exists(path))) return;
+    await this.vault.adapter.remove(path);
+  }
+
+  /**
    * ARRIVE-1 (`ol-4pue`): `VaultSource.firstSeen`, over `TFile.stat.ctime` —
    * Obsidian's own record of when it first saw the file (epoch ms), which is
    * the best "arrival" signal this host exposes and is not the same thing as

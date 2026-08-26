@@ -101,6 +101,17 @@ export class MemoryVaultSource implements VaultSource {
     return Promise.resolve(this.files.has(path));
   }
 
+  /**
+   * `VaultSource.delete` (`ol-ppxj.15`). A no-op, never a throw, on an
+   * already-absent path — same as `write`, this only ever touches the
+   * in-memory map, so nothing on disk is at risk.
+   */
+  delete(path: VaultPath): Promise<void> {
+    const existed = this.files.delete(path);
+    if (existed) this.emit({ kind: 'delete', path });
+    return Promise.resolve();
+  }
+
   watch(handler: (event: VaultEvent) => void): Unsubscribe {
     this.watchers.add(handler);
     return () => {

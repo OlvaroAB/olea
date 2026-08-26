@@ -32,7 +32,7 @@ import {
   reviewLogPath,
 } from 'olea-core';
 import { DEFAULT_LOG_PROBE_DAYS, discoverLogPaths } from './log-discovery.js';
-import type { VaultDeletePort } from './types.js';
+import { deleteVaultPath } from './types.js';
 
 export interface VaultArtifactDeleteResult {
   readonly deletedReviewLogPaths: readonly VaultPath[];
@@ -41,7 +41,6 @@ export interface VaultArtifactDeleteResult {
 
 export interface VaultArtifactDeleteDeps {
   readonly vault: VaultSource;
-  readonly vaultDelete: VaultDeletePort;
   readonly deviceId: string;
   readonly today: CalendarDay;
   /** Defaults to `DEFAULT_LOG_PROBE_DAYS` (`log-discovery.ts`). */
@@ -70,8 +69,8 @@ export async function deleteVaultArtifacts(
     probeDays,
   );
 
-  for (const path of reviewPaths) await deps.vaultDelete.delete(path);
-  for (const path of misconceptionPaths) await deps.vaultDelete.delete(path);
+  for (const path of reviewPaths) await deleteVaultPath(deps.vault, path);
+  for (const path of misconceptionPaths) await deleteVaultPath(deps.vault, path);
 
   return {
     deletedReviewLogPaths: reviewPaths,

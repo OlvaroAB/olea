@@ -22,7 +22,7 @@ describe('purgeCache (F7.4, ol-p6t01)', () => {
     };
     const vault = new MemoryVaultSource();
 
-    const result = await purgeCache({ dataHost, vault, vaultDelete: vault });
+    const result = await purgeCache({ dataHost, vault });
 
     expect(result.clearedDataJsonKeys.slice().sort()).toEqual([...CACHE_DATA_JSON_KEYS].sort());
     const blob = dataHost.blob as Record<string, unknown>;
@@ -44,7 +44,7 @@ describe('purgeCache (F7.4, ol-p6t01)', () => {
     dataHost.blob = { workerConfig: { version: 1, baseUrl: '', token: '' } };
     const vault = new MemoryVaultSource();
 
-    const result = await purgeCache({ dataHost, vault, vaultDelete: vault });
+    const result = await purgeCache({ dataHost, vault });
 
     expect(result.clearedDataJsonKeys).toEqual([]);
     expect(result.deletedDraftPaths).toEqual([]);
@@ -76,7 +76,7 @@ describe('purgeCache (F7.4, ol-p6t01)', () => {
       '.olea/drafts/d2.json': JSON.stringify(draftRecord('d2', 'Beta')),
     });
 
-    const result = await purgeCache({ dataHost, vault, vaultDelete: vault });
+    const result = await purgeCache({ dataHost, vault });
 
     expect(result.deletedDraftPaths.slice().sort()).toEqual(
       ['.olea/drafts/d1.json', '.olea/drafts/d2.json', '.olea/drafts/index.json'].sort(),
@@ -91,7 +91,7 @@ describe('purgeCache (F7.4, ol-p6t01)', () => {
       '.olea/misconceptions/2026-01-01.device-1.jsonl': 'also-irrelevant\n',
     });
 
-    await purgeCache({ dataHost, vault, vaultDelete: vault });
+    await purgeCache({ dataHost, vault });
 
     expect(vault.paths()).toEqual([
       '.olea/misconceptions/2026-01-01.device-1.jsonl',
@@ -104,8 +104,8 @@ describe('purgeCache (F7.4, ol-p6t01)', () => {
     dataHost.blob = { keywordIndex: { some: 'index' } };
     const vault = new MemoryVaultSource();
 
-    const first = await purgeCache({ dataHost, vault, vaultDelete: vault });
-    const second = await purgeCache({ dataHost, vault, vaultDelete: vault });
+    const first = await purgeCache({ dataHost, vault });
+    const second = await purgeCache({ dataHost, vault });
 
     expect(first.clearedDataJsonKeys).toEqual(['keywordIndex']);
     expect(second.clearedDataJsonKeys).toEqual([]);

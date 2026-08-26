@@ -52,7 +52,7 @@ import {
 } from './copy.js';
 import { buildPrivacyExportBundle } from './export-bundle.js';
 import { runFullDelete } from './full-delete.js';
-import { createObsidianVaultDeletePort, obsidianDeleteHttpRequest } from './obsidian-adapters.js';
+import { obsidianDeleteHttpRequest } from './obsidian-adapters.js';
 import type { ObsidianDataHost } from './types.js';
 
 export const PRIVACY_EXPORT_FOLDER = 'Olea exports';
@@ -125,7 +125,6 @@ export function renderPrivacySection(
             await runFullDelete({
               dataHost: deps.dataHost,
               vault: deps.vault,
-              vaultDelete: createObsidianVaultDeletePort(deps.app),
               deviceId: deps.deviceId,
               today: calendarDayFromLocalDate(new Date()),
               workerConfig,

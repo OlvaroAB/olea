@@ -47,7 +47,7 @@ import { INGESTION_QUEUE_STORAGE_KEY } from '../ingestion/queue-store.js';
 import { KEYWORD_INDEX_STORAGE_KEY } from '../keyword-index/store.js';
 import { STUDY_PLAN_STORAGE_KEY } from '../plan/store.js';
 import { EMBEDDING_CACHE_STORAGE_KEY } from '../retrieval/embedding-cache-store.js';
-import type { ObsidianDataHost, VaultDeletePort } from './types.js';
+import { deleteVaultPath, type ObsidianDataHost } from './types.js';
 
 /**
  * The five `data.json` keys D-006 calls a pure derivation. Order is
@@ -71,7 +71,6 @@ export interface CachePurgeResult {
 export interface CachePurgeDeps {
   readonly dataHost: ObsidianDataHost;
   readonly vault: VaultSource;
-  readonly vaultDelete: VaultDeletePort;
 }
 
 export async function purgeCache(deps: CachePurgeDeps): Promise<CachePurgeResult> {
@@ -95,12 +94,12 @@ export async function purgeCache(deps: CachePurgeDeps): Promise<CachePurgeResult
   const deletedDraftPaths: string[] = [];
   for (const draft of drafts) {
     const path = `${DRAFT_CACHE_FOLDER}/${draft.draftId}.json`;
-    await deps.vaultDelete.delete(path);
+    await deleteVaultPath(deps.vault, path);
     deletedDraftPaths.push(path);
   }
   const indexPath = `${DRAFT_CACHE_FOLDER}/index.json`;
   if (await deps.vault.exists(indexPath)) {
-    await deps.vaultDelete.delete(indexPath);
+    await deleteVaultPath(deps.vault, indexPath);
     deletedDraftPaths.push(indexPath);
   }
 

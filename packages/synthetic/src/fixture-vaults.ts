@@ -131,6 +131,13 @@ class InMemoryFixtureVault implements VaultSource {
     return Promise.resolve(this.files.has(path));
   }
 
+  /** `VaultSource.delete` (`ol-ppxj.15`) — refused, same reasoning as `write` above: nothing in this eval should ever mutate a fixture. */
+  delete(_path: VaultPath): Promise<void> {
+    return Promise.reject(
+      new Error('InMemoryFixtureVault is read-only — fixtures are not mutated'),
+    );
+  }
+
   watch(_handler: (event: VaultEvent) => void): Unsubscribe {
     return () => undefined;
   }

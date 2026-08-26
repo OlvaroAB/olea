@@ -28,7 +28,6 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
 
     const result = await deleteVaultArtifacts({
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
     });
@@ -44,7 +43,6 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
 
     const result = await deleteVaultArtifacts({
       vault,
-      vaultDelete: vault,
       // This device has never written anything — the other device's file is
       // still found and deleted, because the host's list() surfaces it.
       deviceId: 'this-device-never-wrote-anything',
@@ -61,7 +59,7 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
       '.olea/drafts/d1.json': '{}',
     });
 
-    await deleteVaultArtifacts({ vault, vaultDelete: vault, deviceId: DEVICE_ID, today: TODAY });
+    await deleteVaultArtifacts({ vault, deviceId: DEVICE_ID, today: TODAY });
 
     expect(vault.paths()).toEqual(['.olea/drafts/d1.json', '.olea/drafts/index.json']);
   });
@@ -71,7 +69,7 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
       '01 Courses/SYN101/Lecture 1.md': '# Lecture 1\n\nQ: What is X?\nA: X is Y.\n',
     });
 
-    await deleteVaultArtifacts({ vault, vaultDelete: vault, deviceId: DEVICE_ID, today: TODAY });
+    await deleteVaultArtifacts({ vault, deviceId: DEVICE_ID, today: TODAY });
 
     expect(vault.raw('01 Courses/SYN101/Lecture 1.md')).toBeDefined();
   });
@@ -83,7 +81,6 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
 
     const result = await deleteVaultArtifacts({
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       probeDays: 10,
@@ -108,7 +105,6 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
 
     const result = await deleteVaultArtifacts({
       vault,
-      vaultDelete: vault,
       deviceId: DEVICE_ID,
       today: TODAY,
       probeDays: 5,

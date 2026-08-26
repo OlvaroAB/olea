@@ -11,7 +11,7 @@
  */
 
 import { watch as fsWatch } from 'node:fs';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 import {
   isVaultPath,
@@ -123,6 +123,21 @@ export class FolderSource implements VaultSource {
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+  }
+
+  /**
+   * `VaultSource.delete` (`ol-ppxj.15`, promoted from F7.4's narrow
+   * `VaultDeletePort`). A no-op, never a throw, when the path is already
+   * gone — the interface doc's contract, exercised here by treating ENOENT
+   * as success rather than an error.
+   */
+  async delete(path: VaultPath): Promise<void> {
+    try {
+      await unlink(this.toAbsolute(path));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;
     }
   }

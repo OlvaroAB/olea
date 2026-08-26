@@ -27,7 +27,7 @@ import {
   deleteServerConfigRecord,
   type ServerConfigDeleteOutcome,
 } from './server-config-delete.js';
-import type { DeleteHttpRequestFn, ObsidianDataHost, VaultDeletePort } from './types.js';
+import type { DeleteHttpRequestFn, ObsidianDataHost } from './types.js';
 import { deleteVaultArtifacts, type VaultArtifactDeleteResult } from './vault-artifact-delete.js';
 
 export interface FullDeleteResult {
@@ -40,7 +40,6 @@ export interface FullDeleteResult {
 export interface RunFullDeleteDeps {
   readonly dataHost: ObsidianDataHost;
   readonly vault: VaultSource;
-  readonly vaultDelete: VaultDeletePort;
   readonly deviceId: string;
   readonly today: CalendarDay;
   readonly probeDays?: number;
@@ -57,12 +56,10 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
   const cache = await purgeCache({
     dataHost: deps.dataHost,
     vault: deps.vault,
-    vaultDelete: deps.vaultDelete,
   });
 
   const vaultArtifacts = await deleteVaultArtifacts({
     vault: deps.vault,
-    vaultDelete: deps.vaultDelete,
     deviceId: deps.deviceId,
     today: deps.today,
     ...(deps.probeDays !== undefined ? { probeDays: deps.probeDays } : {}),
