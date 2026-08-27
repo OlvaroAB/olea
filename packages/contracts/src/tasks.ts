@@ -125,6 +125,26 @@ export const TASK_IDS = {
    * by `[EXT-11]` (`ol-kw4a`), added by `[D-118]`.
    */
   CONCEPTS_RELATIONS: 'concepts.relations.v1',
+  /**
+   * W6 · Slot J — register row 1.4's paid second stage of the two-stage
+   * materiality trigger (`TRG-1`, `ol-tqy3`): given a changed file's
+   * previous and current text, does the change say anything new about the
+   * concepts it touches? A verdict over material already given, not a
+   * generation — grouped with W6 alongside `concepts.classify.v1` and
+   * `grounding.judge.v1` for the same reason those two are, and echoing
+   * their shape rather than `concepts.extract.v1`'s. The free first stage
+   * (hash/debounce/minimum-edit-size gates) runs entirely client-side at
+   * `packages/plugin/src/ingestion/materiality/trigger.ts`'s
+   * `evaluateMaterialityGate` and never reaches this task; the seam this id
+   * joins to is that same directory's `MaterialityJudge` port
+   * (`ingestion/materiality/types.ts`). Payload/response fixed by
+   * `olea-service/src/tasks/materialityJudge.ts`'s
+   * `MaterialityJudgeRequest`/`MaterialityJudgeResponse`. Reserved by
+   * `ol-2zfj.18`, closing the D-072 gap `ol-2zfj.15` left named (the task
+   * was built and tested service-side with no catalogue entry to route
+   * through).
+   */
+  MATERIALITY_JUDGE: 'materiality.judge.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */

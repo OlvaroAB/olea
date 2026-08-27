@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these twelve ids, spelled exactly this way', () => {
+  it('is exactly these thirteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -22,6 +22,7 @@ describe('the closed task-id catalogue', () => {
       'explain-back.judge.v1',
       'explain-why.generate.v1',
       'grounding.judge.v1',
+      'materiality.judge.v1',
       'oracle.rank.v1',
       'quiz.generate.v1',
       'retrieval.embed.v1',
@@ -32,11 +33,12 @@ describe('the closed task-id catalogue', () => {
 
   it('covers every workload shape that reaches a model (cost model §1)', () => {
     // W1 retrieval (×2: embed, rerank), W3 bulk generation (×3), W4 corpus
-    // reasoning (concept extraction), W5 interactive, W6 judgment (×3:
-    // explain-back, grounding support check, knowledge-kind classification),
-    // W7 long-context. W2 perception is deliberately absent: it is reached
-    // *through* an ingestion task rather than called directly by the client
-    // (P3-T04 routes to Slot V below the yield threshold).
+    // reasoning (concept extraction), W5 interactive, W6 judgment (×4:
+    // explain-back, grounding support check, knowledge-kind classification,
+    // materiality verdict), W7 long-context. W2 perception is deliberately
+    // absent: it is reached *through* an ingestion task rather than called
+    // directly by the client (P3-T04 routes to Slot V below the yield
+    // threshold).
     //
     // W4's `concepts.extract.v1` was reserved rather than registered here from
     // P3-T02 onward — this comment used to be the reminder that its absence
@@ -61,7 +63,12 @@ describe('the closed task-id catalogue', () => {
     // real material) rather than with W6's judgments, since a verdict over a
     // candidate pair that may abstain is closer to this stage's own shape than
     // to a closed-label classification.
-    expect(ALL_TASK_IDS).toHaveLength(12);
+    //
+    // `materiality.judge.v1` (register row 1.4, `TRG-1` `ol-tqy3`, reserved by
+    // `ol-2zfj.18`) is the fourth W6 judgment: a verdict over a changed file's
+    // previous/current text, grouped with `concepts.classify.v1` and
+    // `grounding.judge.v1` for the same "judging, not generating" reason.
+    expect(ALL_TASK_IDS).toHaveLength(13);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
