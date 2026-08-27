@@ -56,7 +56,14 @@ describe('extraction eval — differently-shaped fixture vaults', () => {
         // the identical reason: this is a shape-reading oracle, not a
         // size-derivation one — `concept/size.spec.ts` in `olea-core` is
         // where the derivation itself is tested and mutation-checked.
-        const withoutKey = concepts.map(({ key: _key, size: _size, ...rest }) => rest);
+        //
+        // `definition` (`[DF-13]`) is stripped for the identical reason again:
+        // `extract.spec.ts`'s "definition capture at bind time" suite in
+        // `olea-core` is where that derivation is tested and mutation-checked,
+        // not this shape-reading oracle.
+        const withoutKey = concepts.map(
+          ({ key: _key, size: _size, definition: _definition, ...rest }) => rest,
+        );
         expect(withoutKey).toEqual(truth.expectedConcepts);
       });
 

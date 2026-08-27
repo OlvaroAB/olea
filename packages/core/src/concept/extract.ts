@@ -45,8 +45,23 @@
  * confirmation anywhere in the vault. This is a considered call, not the
  * pre-existing tier-1 rule extended casually — see the P5-T02 report for
  * the reasoning and an invitation to revisit it.
+ *
+ * **Definition capture at bind time (`[DF-13]`).** Knowledge model §3 says a
+ * bound concept note is canonical because it "adopts her name, her
+ * definition, and binds to that note" — the name and the binding shipped
+ * with tier-1's original landing, and `ConceptRecord.definition` closes the
+ * remaining gap: whenever `boundNotePath` is set (tier 1 *or* tier 3 — both
+ * bind by the same exact-title match), the bound note is read and its body
+ * captured verbatim via `noteDefinition` below. This is still extraction,
+ * not synthesis: no model call, no rendering, no consumer wired to it yet.
+ * `./read.ts`'s `readConcepts` does not forward this field onto
+ * `ReadConcept` today, so it does not yet reach anything past this module —
+ * that plumbing, and any of F3.2/F3.3/the concept view that would read it,
+ * is out of this bead's scope and unclaimed by any other bead as of this
+ * writing.
  */
 
+import { buildOutline } from '../block/outline.js';
 import { parseDocument } from '../block/parse.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, wikilinkTarget } from '../frontmatter/read.js';
@@ -96,6 +111,55 @@ function resolveTitle(index: ReadonlyMap<string, VaultPath[]>, name: string): Ti
   if (paths === undefined || paths.length === 0) return {};
   if (paths.length === 1) return { bound: paths[0] as VaultPath };
   return { ambiguous: paths };
+}
+
+/**
+ * Her definition, read verbatim from a bound note's own content (`[DF-13]`,
+ * knowledge model §3). Extraction, not synthesis: no model call, no
+ * paraphrase, no markup stripped — the exact prose she wrote, trimmed only
+ * of the surrounding blank lines every one of her notes carries.
+ *
+ * "The note's body" means: the content directly under the outline root whose
+ * heading text matches `title` exactly (her convention — one note, one H1
+ * naming the concept, e.g. `# Imbrication` — see the fixture Zettelkasten).
+ * A sub-heading's content is not included; the concept's own defining prose
+ * sits before its first sub-heading, and pulling everything under every
+ * nested section would fold worked examples and asides into "the
+ * definition" rather than just it.
+ *
+ * Two fallbacks, both honest about being approximations rather than a
+ * second rule: a note with exactly one heading uses it regardless of
+ * whether its text matches `title` (a title-cased or punctuated heading
+ * still names one concept); a note with no heading at all uses its whole
+ * body, since there is no structure to select from. Neither fallback fires
+ * for the fixture and synthetic corpora today — both name their heading
+ * after the bound title, per the convention above — so they exist for a
+ * real vault's rougher edges rather than to satisfy a shape seen here.
+ */
+export function noteDefinition(content: string, title: string): string | undefined {
+  const doc = parseDocument(content);
+  const outline = buildOutline(doc);
+
+  let contentIndices: readonly number[];
+  if (outline.length === 0) {
+    // No heading anywhere in the note — the whole body, less its
+    // frontmatter, is the closest thing to "her definition" there is.
+    contentIndices = doc.blocks
+      .map((_, index) => index)
+      .filter((index) => doc.blocks[index]?.kind !== 'frontmatter');
+  } else {
+    const root =
+      outline.find((node) => node.heading.text === title) ??
+      (outline.length === 1 ? outline[0] : undefined);
+    if (root === undefined) return undefined; // several headings, none matching `title` — ambiguous, not guessed.
+    contentIndices = root.contentIndices;
+  }
+
+  const text = contentIndices
+    .map((index) => doc.blocks[index]?.raw ?? '')
+    .join('')
+    .trim();
+  return text.length > 0 ? text : undefined;
 }
 
 export async function extractConcepts(
@@ -170,22 +234,42 @@ export async function extractConcepts(
     }
   }
 
-  const records: ConceptRecord[] = [];
-  for (const [name, acc] of byName) {
-    const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
-    const sourcePaths = [...acc.sourcePaths].sort();
-    const record: ConceptRecord = {
-      key: provisionalConceptKey({ name, boundNotePath: bound ?? null }),
-      name,
-      tier: bound !== undefined ? 1 : 2,
-      courses: [...acc.courses].sort(),
-      sourcePaths,
-      ...(bound !== undefined ? { boundNotePath: bound } : {}),
-      ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
-      size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
-    };
-    records.push(record);
+  // `[DF-13]`: her definition, read once per bound note regardless of how
+  // many places bind to it (tier-1/2's loop below and the tier-3 mint each
+  // resolve independently, so without this a note whose title is reached
+  // both ways — not possible today given `resolveTitle`'s 1:1 matching, but
+  // cheap to guard against regardless — would be read twice). `vault.read`
+  // only, never a write: definition capture is extraction, and INV-2 holds
+  // by construction because nothing here touches the vault source.
+  const definitionCache = new Map<VaultPath, Promise<string | undefined>>();
+  function definitionFor(path: VaultPath, title: string): Promise<string | undefined> {
+    let cached = definitionCache.get(path);
+    if (cached === undefined) {
+      cached = vault.read(path).then((content) => noteDefinition(content, title));
+      definitionCache.set(path, cached);
+    }
+    return cached;
   }
+
+  const records: ConceptRecord[] = await Promise.all(
+    [...byName].map(async ([name, acc]) => {
+      const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
+      const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
+      const sourcePaths = [...acc.sourcePaths].sort();
+      const record: ConceptRecord = {
+        key: provisionalConceptKey({ name, boundNotePath: bound ?? null }),
+        name,
+        tier: bound !== undefined ? 1 : 2,
+        courses: [...acc.courses].sort(),
+        sourcePaths,
+        ...(bound !== undefined ? { boundNotePath: bound } : {}),
+        ...(definition !== undefined ? { definition } : {}),
+        ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
+        size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
+      };
+      return record;
+    }),
+  );
 
   if (options.includeTier3 === true) {
     // Vocabulary = every Zettelkasten title *plus* every tier-1/2 name
@@ -234,6 +318,10 @@ export async function extractConcepts(
       // on. Recorded as a known limitation on `ol-lzwe` rather than resolved
       // by traversal order.
       if (boundNotePath === undefined) continue;
+      // Same fact as tier 1's: this record's whole identity is a note she
+      // wrote, matched by exact title, so its definition is captured the
+      // same way (`[DF-13]`) even though nothing tagged it as a `topic`.
+      const definition = await definitionFor(boundNotePath, name);
       records.push({
         key: provisionalConceptKey({ name, boundNotePath }),
         name,
@@ -241,6 +329,7 @@ export async function extractConcepts(
         courses: [...courses].sort(),
         sourcePaths: [boundNotePath],
         boundNotePath,
+        ...(definition !== undefined ? { definition } : {}),
         size: conceptRecordSize({ sourcePaths: [boundNotePath], boundNotePath }),
       });
     }

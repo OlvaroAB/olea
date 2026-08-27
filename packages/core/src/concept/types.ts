@@ -154,15 +154,31 @@ export interface ConceptRecord {
   /**
    * Tier-1 binding target: the Zettelkasten note whose filename matches
    * `name` exactly, when one exists. `undefined` for a tier-2-only concept.
-   *
-   * Binding is a path reference only — the knowledge model has a tier-1
-   * record take both its name and its definition from her note, but
-   * extracting the note's
-   * definition text is out of scope for this bead (extraction, not
-   * synthesis); a consumer that needs the definition reads `boundNotePath`
-   * itself.
+   * A tier-3 mint (`./extract.js`'s module doc) also sets this — it binds by
+   * the same exact-title match, just without a `topic` occurrence
+   * corroborating it — which is why `definition` below is captured there too.
    */
   readonly boundNotePath?: VaultPath;
+  /**
+   * Her definition, read verbatim from `boundNotePath` at bind time
+   * (`[DF-13]`, knowledge model §3: a bound concept note is canonical
+   * because it "adopts her name, her definition, and binds to that note").
+   * `undefined` when there is no `boundNotePath`, or when the bound note's
+   * body is empty once its own heading is set aside.
+   *
+   * **Extraction, not synthesis** — see `./extract.js`'s `noteDefinition` for
+   * exactly what "the note's body" means and why nothing here paraphrases,
+   * renders, or strips her markup: her wording is preserved exactly, the same
+   * rule `name` already follows (R1/R2).
+   *
+   * **Instance-layer data (knowledge model §2), not identity-layer** — it is
+   * personal, unlike every other field this record already carries from
+   * identity. It is captured here because extraction is the one place that
+   * already reads the bound note to resolve the binding; nothing downstream
+   * yet reads this field; see `./extract.js`'s module doc for which bead
+   * would wire a consumer.
+   */
+  readonly definition?: string;
   /**
    * The several Zettelkasten notes whose filenames all match `name` exactly,
    * when more than one does — present only in that case, sorted, and always

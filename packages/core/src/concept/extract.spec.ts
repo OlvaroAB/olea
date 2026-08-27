@@ -1,10 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
 import { provisionalConceptKey } from './concept-key.js';
-import { extractConcepts } from './extract.js';
+import { extractConcepts, noteDefinition } from './extract.js';
 import { conceptRecordSize } from './size.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
@@ -101,6 +102,17 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
   it('with tier 3 on, that same concept is minted at tier 3, bound to its note', async () => {
     const concepts = await extractConcepts(source, { includeTier3: true });
 
+    // `[DF-13]`: her definition, read verbatim from the note itself rather
+    // than restated here — a copy-pasted expectation would pass even if
+    // extraction started paraphrasing.
+    const imbricationSource = readFileSync(
+      join(FIXTURE_ROOT, '05 Zettelkasten/Imbrication.md'),
+      'utf8',
+    );
+    const imbricationDefinition = noteDefinition(imbricationSource, 'Imbrication');
+    expect(imbricationDefinition).toBeDefined();
+    expect(imbricationDefinition).toContain('stacked fabric');
+
     expect(concepts.find((c) => c.name === 'Imbrication')).toEqual({
       key: provisionalConceptKey({
         name: 'Imbrication',
@@ -111,6 +123,7 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
       courses: ['GEOL204'],
       sourcePaths: ['05 Zettelkasten/Imbrication.md'],
       boundNotePath: '05 Zettelkasten/Imbrication.md',
+      definition: imbricationDefinition,
       // Grounded in exactly one note — her own concept note, and nothing
       // else names it (`[D-066]`'s err-fine default; `./size.spec.ts` covers
       // the derivation itself).
@@ -124,13 +137,20 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
     expect(pump?.tier).toBe(3);
     expect(pump?.boundNotePath).toBe('05 Zettelkasten/Hummocky stratification.md');
     expect(pump?.courses).toEqual(['GEOL204']);
+    // A tier-3 mint binds by the same exact-title match as tier 1, so it
+    // carries a definition too (`[DF-13]`) — this is the case that proves
+    // capture is not conditional on the concept also being a `topic`.
+    expect(pump?.definition).toBeDefined();
+    expect(pump?.definition?.length).toBeGreaterThan(0);
 
     // Named only in the 2023 past paper's Question 3 — a single-question
     // tier-3 concept is still real evidence, not filtered out for being small.
     const threshold = concepts.find((c) => c.name === 'Bioturbation');
     expect(threshold?.tier).toBe(3);
+    expect(threshold?.definition).toBeDefined();
     const paraconformity = concepts.find((c) => c.name === 'Paraconformity');
     expect(paraconformity?.tier).toBe(3);
+    expect(paraconformity?.definition).toBeDefined();
 
     // Exactly these four are new — no other Zettelkasten note (the MUSTH104
     // ones, or GEOL204's Cementation/Ripple lamination) is mentioned
@@ -232,6 +252,18 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     expect(wm).toBeDefined();
     expect(wm?.tier).toBe(1);
     expect(wm?.boundNotePath).toBe('05 Zettelkasten/Quartz cleavage.md');
+    // `[DF-13]`: her definition rides along with the binding, verbatim.
+    expect(wm?.definition).toBe('Definition text, hers.');
+  });
+
+  it('a topic-tagged note with no bind carries no `definition` field at all (`[DF-13]`)', async () => {
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Basalt weathering]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts[0]).not.toHaveProperty('definition');
   });
 
   it('binding is exact-match only — a near-miss title stays tier 2, unbound', async () => {
@@ -311,6 +343,9 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     expect(concepts.map((c) => c.name)).toEqual(['Quartz cleavage']);
     expect(concepts[0]?.tier).toBe(1);
     expect(concepts[0]?.boundNotePath).toBe('05 Zettelkasten/Quartz cleavage.md');
+    // `[DF-13]`: the wikilink path binds via the same `resolveTitle` as the
+    // bare-string path, so definition capture is identical either way.
+    expect(concepts[0]?.definition).toBe('Definition text, hers.');
   });
 
   it('binds a block-list of wikilink topics, and a wikilink naming no note stays tier 2 under its target name', async () => {
@@ -448,6 +483,159 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     expect(withCustom.find((c) => c.name === 'Quartz cleavage')?.boundNotePath).toBe(
       'Concepts/Quartz cleavage.md',
     );
+  });
+});
+
+// `[DF-13]`. Tier-1 binding recorded `boundNotePath` but not her definition,
+// even though knowledge model §3 says a bound concept note is canonical
+// because it "adopts her name, her definition, and binds to that note." This
+// block is the positive case the bead needed: none of the frozen fixture
+// vault's topics bind at tier 1 by design (see the `describe` above, and
+// `fixtures/vault/README.md`), so every case here is synthetic, the same
+// pattern the R1/R2 describe block above already uses for tier-1 binding
+// itself.
+describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-definition-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  it('a multi-paragraph definition is captured whole, verbatim markup included', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\n' +
+        'A plane of weakness in [[Basalt weathering|the crystal lattice]].\n\n' +
+        'It postdates formation and predates any later fracture.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const wm = concepts.find((c) => c.name === 'Quartz cleavage');
+    // Both paragraphs, the wikilink untouched, no rendering or stripping.
+    expect(wm?.definition).toBe(
+      'A plane of weakness in [[Basalt weathering|the crystal lattice]].\n\n' +
+        'It postdates formation and predates any later fracture.',
+    );
+  });
+
+  it('a sub-heading is not folded into the definition — only the content before it', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\n' +
+        'The defining prose.\n\n## Worked example\n\nNot part of the definition.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const wm = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(wm?.definition).toBe('The defining prose.');
+  });
+
+  it('a note with no heading at all uses its whole body as the definition', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\nJust prose, no heading.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.definition).toBe(
+      'Just prose, no heading.',
+    );
+  });
+
+  it('a note whose only heading does not match the bound title still yields that heading’s content', async () => {
+    // Her heading text need not be byte-identical to the filename she used —
+    // binding already matches on the FILENAME, not the heading, so a single
+    // heading is still unambiguously "the" concept note.
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Cleavage in quartz\n\nThe defining prose.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.definition).toBe(
+      'The defining prose.',
+    );
+  });
+
+  it('a note with an empty body (frontmatter and heading only) has no definition', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')).not.toHaveProperty('definition');
+  });
+
+  it('an ambiguous (duplicate-title) bind has no definition — there is no single note to read it from', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nFirst copy.\n',
+    );
+    await write(
+      '05 Zettelkasten/Outcrop Sketches/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nSecond copy.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.tier).toBe(2);
+    expect(quartz).not.toHaveProperty('definition');
+  });
+
+  // `noteDefinition` itself, exercised directly rather than only through
+  // `extractConcepts` — the unit the previous cases integrate.
+  describe('noteDefinition', () => {
+    it('returns undefined for several headings, none matching the title', () => {
+      const content = '# Alpha\n\nOne.\n\n# Beta\n\nTwo.\n';
+      expect(noteDefinition(content, 'Gamma')).toBeUndefined();
+    });
+
+    it('falls back to the sole heading when there is exactly one, even if its text differs from the title', () => {
+      const content = '# Alpha\n\nOnly section.\n';
+      expect(noteDefinition(content, 'Something else entirely')).toBe('Only section.');
+    });
+
+    it('returns undefined for a fully empty body', () => {
+      const content = '---\ntype: concept\n---\n';
+      expect(noteDefinition(content, 'Anything')).toBeUndefined();
+    });
   });
 });
 
