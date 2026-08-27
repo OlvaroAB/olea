@@ -31,27 +31,38 @@
  * has no Worker route at all yet rather than one that merely isn't
  * configured.
  *
- * **Nothing in `packages/plugin` calls `buildMaterialityWiring` yet.** The
- * natural call site is `main.ts`'s `onload`, alongside
- * `buildKeywordIndexWiring`/`buildRetrievalWiring`/`buildGradingWiring` —
- * `vault.watch(handler)` (already used for the keyword index, see
- * `main.ts`'s existing `this.keywordIndex = await buildKeywordIndexWiring(...)`
- * call) is the exact mechanism row 1.4's `Boundary` ("hashing client") needs
- * to react to `C1.5`'s vault-change events. That file is a concurrently-owned
- * lane's (`ol-sn1q`, in progress) at the time of this bead, so the call is
- * not added here — this is the same reachability shape `grading/wiring.ts`'s
- * module doc already documents for `gradeExplainBackAttempt`/
- * `evaluateConfusionRouting`: real infrastructure, composed against real
- * ports, with the one remaining line — the call from `main.ts`'s `onload` —
- * left for whichever bead next has that file free, or for `main.ts`'s owning
- * lane to add once it lands. **What that line needs**: a `MaterialityTrigger`
- * built via `buildMaterialityWiring({ dataHost: this, clock: { now: () =>
- * Date.now() } })`, and a call to `.evaluate(path, currentText,
- * previousText)` from inside the handler `vault.watch(...)` already
- * receives, on `'modify'` events, with `previousText` sourced from wherever
- * the caller already holds a pre-edit copy (the keyword index's own stored
- * chunk text is the most likely source — this bead does not decide that,
- * since it owns no file able to read the keyword index's cache).
+ * ===========================================================================
+ * `ol-2zfj.15` UPDATE: `main.ts`'s `onload` NOW CALLS THIS — WITH `judge:
+ * null`, AND HERE IS WHY THAT IS STILL RIGHT
+ * ===========================================================================
+ * The paragraph above described a real gap: nothing constructed this trigger
+ * in production. That gap is closed — `main.ts`'s `onload` builds one via
+ * `buildMaterialityWiring({ dataHost: this, clock: { now: () => Date.now() }
+ * , judge: null })` and feeds `.evaluate(path, currentText, previousText)`
+ * from the same `vault.watch(handler)` channel the keyword index subscribes
+ * to, on `'modify'` events only. `previousText` comes from
+ * `previous-text.ts`'s `PreviousTextTracker` — a session-scoped cache local
+ * to this directory, not the keyword index's — see that file's own module
+ * doc for why.
+ *
+ * **`judge: null` is deliberate, not a placeholder left by accident.** No
+ * `MaterialityJudge` implementation is composed here or in `main.ts`. The
+ * paid second stage exists now as a real, tested service task
+ * (`olea-service/src/tasks/materialityJudge.ts`, `materiality.judge.v1`) —
+ * but that task id has not been reserved in the frozen catalogue
+ * (`packages/contracts/src/tasks.ts`), which is what lets
+ * `olea-service/src/tasks/registry.ts` route it at all. Reserving it needs an
+ * edit to a file neither this bead nor its plugin-side sibling owns, so it is
+ * left as the named D-072 gap: the next bead that reserves
+ * `materiality.judge.v1` in the catalogue and adds the one line to
+ * `registry.ts`'s `TASKS` map is also the bead that should build the real,
+ * `WorkerTaskTransport`-backed `MaterialityJudge` this file's `judge`
+ * parameter is waiting for (mirroring `createWorkerJudgeCaller` in
+ * `packages/core/src/grading/workerJudgeCaller.ts`) and pass it in here.
+ * Until then, every evaluation that clears the free gates degrades to
+ * `'judge-unavailable'` — row 1.4 runs its free hash/debounce/floor gates for
+ * real in production from this call onward, and the paid stage is
+ * infrastructure-ready but not yet reachable end to end.
  */
 
 import type { Clock } from 'olea-core';

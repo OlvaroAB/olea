@@ -388,6 +388,49 @@ describe("component 3.3's delivered ranking weights have a real production calle
   });
 });
 
+describe('the materiality trigger is actually constructed and fed (ol-2zfj.15)', () => {
+  // Same defect shape this file's own module doc opens with: `buildMaterialityWiring`,
+  // `MaterialityTrigger` and every free gate under `ingestion/materiality/` were
+  // complete and unit-tested (`test/ingestion/materiality/*.spec.ts`), and
+  // `wiring.ts`'s own module doc named the exact gap — nothing in this package
+  // ever called `buildMaterialityWiring`. These are the source-level checks
+  // that the specific defect (never constructed, not merely untested) cannot
+  // recur silently.
+
+  it('builds the materiality wiring through the tested composer, against the real data host, with no judge configured yet', () => {
+    expect(main).toMatch(
+      /this\.materiality\s*=\s*buildMaterialityWiring\(\{\s*dataHost:\s*this,\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*Date\.now\(\)\s*\},\s*judge:\s*null,/,
+    );
+  });
+
+  it('wires the real vault event stream into it, filtered to modify events', () => {
+    expect(main).toMatch(
+      /vault\.watch\(\(event\)\s*=>\s*\{\s*if\s*\(event\.kind\s*!==\s*'modify'\)\s*return;\s*void this\.evaluateMaterialityChange\(vault,\s*event\.path\);/,
+    );
+  });
+
+  it('registers that subscription for teardown', () => {
+    expect(main).toMatch(/this\.register\(\s*vault\.watch\(\(event\)/);
+  });
+
+  it('feeds the trigger from a real file read, tracked previous-text, and never lets a failure propagate', () => {
+    expect(main).toMatch(/currentText = await vault\.read\(path\);/);
+    expect(main).toMatch(
+      /await this\.materiality\.evaluate\(path,\s*currentText,\s*previousText\);/,
+    );
+    expect(main).toMatch(/this\.materialityPreviousText\.record\(path,\s*currentText\);/);
+  });
+
+  it('imports the real composer and the real previous-text tracker, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildMaterialityWiring,\s*type MaterialityTrigger\s*\}\s*from\s*'\.\/ingestion\/materiality\/wiring\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*createInMemoryPreviousTextTracker,\s*type PreviousTextTracker,?\s*\}\s*from\s*'\.\/ingestion\/materiality\/previous-text\.js'/,
+    );
+  });
+});
+
 describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
   // `OLEA_COMMAND_DRAFT_CARDS` / `DraftCardsModal` shipped in wave-2 round-2
   // and was withdrawn: F4.5 rules out a student-invoked draft verb by name

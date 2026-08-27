@@ -15,6 +15,7 @@ import {
   type RelationSet,
   refreshStudyPlan,
   type Scheduler,
+  type VaultPath,
   type VaultSource,
 } from 'olea-core';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
@@ -47,6 +48,11 @@ import {
   gradeExplainBackAttempt,
 } from './grading/wiring.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
+import {
+  createInMemoryPreviousTextTracker,
+  type PreviousTextTracker,
+} from './ingestion/materiality/previous-text.js';
+import { buildMaterialityWiring, type MaterialityTrigger } from './ingestion/materiality/wiring.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
@@ -163,6 +169,17 @@ export default class OleaPlugin extends Plugin {
   /** `[EXT-11]` (`ol-kw4a`, `[D-118]`) — the corpus-level relation stage's production port, same F7.8 grey-out terms as `concept`/`knowledgeKind` above. */
   private corpusRelation: CorpusRelationWiring | null = null;
   private corpusRelationStateStore: ObsidianCorpusRelationStateStore | null = null;
+  /**
+   * Register row 1.4's materiality trigger (`TRG-1`, `ol-tqy3`, `ol-2zfj.15`)
+   * — built unconditionally, unlike `retrieval`/`grading`/`concept` above: the
+   * free hash/debounce/floor gates need no Worker token, and `judge: null`
+   * (see `onload` below) keeps it running fully offline until a production
+   * `MaterialityJudge` is wired — see `ingestion/materiality/wiring.ts`'s
+   * module doc.
+   */
+  private materiality: MaterialityTrigger | null = null;
+  /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
+  private materialityPreviousText: PreviousTextTracker | null = null;
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -538,12 +555,74 @@ export default class OleaPlugin extends Plugin {
       httpGet: obsidianRankWeightsGet,
     });
 
+    // `ol-2zfj.15`: register row 1.4's materiality trigger goes live —
+    // `buildMaterialityWiring` existed with nothing in this package
+    // constructing it; see `ingestion/materiality/wiring.ts`'s module doc for
+    // exactly what this call site needed and why it waited for a lane with
+    // `main.ts` free. `judge: null`: no `MaterialityJudge` implementation is
+    // wired in here. The paid second stage (`materiality.judge.v1`,
+    // `olea-service/src/tasks/materialityJudge.ts`) is built, zod-validated
+    // and INV-5-guarded service-side, but its task id still awaits
+    // reservation in the frozen catalogue (`packages/contracts/src/tasks.ts`)
+    // before `registry.ts` can route it — see that module's own doc. Until
+    // then `evaluate` degrades to `'judge-unavailable'` for anything that
+    // clears the free gates, the same "grey out, never half-work" contract
+    // `retrieval`/`grading`/`concept` above use for an unconfigured Worker,
+    // applied here to a task with no route at all yet. The free gates
+    // themselves (hash/debounce/floor) run for real, in production, from
+    // this call onward, independent of Worker configuration.
+    this.materiality = buildMaterialityWiring({
+      dataHost: this,
+      clock: { now: () => Date.now() },
+      judge: null,
+    });
+    this.materialityPreviousText = createInMemoryPreviousTextTracker();
+    this.register(
+      vault.watch((event) => {
+        if (event.kind !== 'modify') return;
+        void this.evaluateMaterialityChange(vault, event.path);
+      }),
+    );
+
     this.registerInterval(
       window.setInterval(() => {
         void this.tickIngestionAndMaybeRunCorpusRelations();
         void this.drainEmbeddings(capability);
       }, INGESTION_TICK_INTERVAL_MS),
     );
+  }
+
+  /**
+   * Feeds one observed `'modify'` event into the materiality trigger
+   * (register row 1.4, `TRG-1`). `VaultEvent` carries only a path — no text
+   * payload — so this reads the file fresh, then evaluates it against
+   * whatever text this session last saw for that path
+   * (`materialityPreviousText`), which is `undefined` on the first modify
+   * event ever observed for a path this session (a safe "first sighting",
+   * per `MaterialityTrigger.evaluate`'s own doc — never a guess).
+   *
+   * Never lets a read or evaluation failure propagate: the same
+   * "a downstream failure must never make this look like it misfired"
+   * posture `wiring.ts`'s own `onVerdict` doc argues for the verdict hook
+   * one level in, applied here to the event plumbing that feeds it.
+   */
+  private async evaluateMaterialityChange(vault: VaultSource, path: VaultPath): Promise<void> {
+    if (this.materiality === null || this.materialityPreviousText === null) return;
+    let currentText: string;
+    try {
+      currentText = await vault.read(path);
+    } catch (error) {
+      console.error('Olea: materiality trigger could not read a modified path', error);
+      return;
+    }
+    const previousText = this.materialityPreviousText.get(path);
+    try {
+      await this.materiality.evaluate(path, currentText, previousText);
+    } catch (error) {
+      console.error('Olea: materiality trigger evaluation failed', error);
+    } finally {
+      this.materialityPreviousText.record(path, currentText);
+    }
   }
 
   /**
