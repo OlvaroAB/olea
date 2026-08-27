@@ -236,6 +236,16 @@ export type {
   UnresolvedEmbed,
 } from './extract/embeds.js';
 export { discoverEmbeddedSources } from './extract/embeds.js';
+// The running-head/page-number furniture detector (SCAN-1, ol-738i): is a
+// page's own decoded, threshold-clearing text actually content, or a
+// repeated header/footer/folio? See furniture.ts's module doc.
+export {
+  applyFurnitureDetection,
+  findRunningHeadLines,
+  furnitureStrippedCharCount,
+  isPageNumberLine,
+  RUNNING_HEAD_MIN_PAGES,
+} from './extract/furniture.js';
 // The standing check on the extractor interface: no success with zero yield (N-013).
 export {
   assertHonestExtraction,
@@ -1075,6 +1085,20 @@ export type {
 export { buildMasteryOverview } from './today/mastery-overview.js';
 export type { TodayPanelInput, TodayViewModel } from './today/panel.js';
 export { buildTodayPanel } from './today/panel.js';
+// F6.9's rhythm reading (`ol-v7r5.6`, `RHY-2`) — nameable outside this
+// package so `packages/plugin`'s ingestion and Today-panel wiring can build
+// `RhythmCourseInput`s and read a `TermWindow`, the same reachability need
+// `SourceCoverage` above states for `gap/coverage.ts`.
+export type {
+  RhythmCourseInput,
+  RhythmCourseReading,
+  RhythmInput,
+  RhythmInsight,
+  RhythmMeasured,
+  RhythmStatus,
+  TermWindow,
+} from './today/rhythm.js';
+export { detectRhythm, QUIET_DAYS_THRESHOLD, resolveTermBoundary } from './today/rhythm.js';
 export type { ComputeStreakOptions, StreakDay, StreakSummary } from './today/streak.js';
 export { computeStreak, DEFAULT_WEEK_LENGTH, studyDays } from './today/streak.js';
 export type { StampResult, StampUidOptions } from './uid/stamp.js';

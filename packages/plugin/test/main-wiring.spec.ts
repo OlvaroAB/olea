@@ -397,9 +397,15 @@ describe('the materiality trigger is actually constructed and fed (ol-2zfj.15)',
   // that the specific defect (never constructed, not merely untested) cannot
   // recur silently.
 
-  it('builds the materiality wiring through the tested composer, against the real data host, with no judge configured yet', () => {
+  it('builds the materiality wiring through the tested composer, against the real data host, with the transport-backed judge (ol-2zfj.18)', () => {
     expect(main).toMatch(
-      /this\.materiality\s*=\s*buildMaterialityWiring\(\{\s*dataHost:\s*this,\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*Date\.now\(\)\s*\},\s*judge:\s*null,/,
+      /this\.materiality\s*=\s*buildMaterialityWiring\(\{\s*dataHost:\s*this,\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*Date\.now\(\)\s*\},\s*judge:\s*this\.buildMaterialityJudge\(\),/,
+    );
+  });
+
+  it('the judge helper degrades to null on the same unconfigured-Worker condition as every other AI-gated wiring (F7.8)', () => {
+    expect(main).toMatch(
+      /private buildMaterialityJudge\(\): WorkerMaterialityJudge \| null \{\s*const transport = this\.retrieval\?\.transport;\s*if \(transport === null \|\| transport === undefined\) return null;\s*return new WorkerMaterialityJudge\(\{ transport \}\);/,
     );
   });
 
@@ -423,11 +429,84 @@ describe('the materiality trigger is actually constructed and fed (ol-2zfj.15)',
 
   it('imports the real composer and the real previous-text tracker, not stubs', () => {
     expect(main).toMatch(
-      /import\s*\{\s*buildMaterialityWiring,\s*type MaterialityTrigger\s*\}\s*from\s*'\.\/ingestion\/materiality\/wiring\.js'/,
+      /import\s*\{\s*buildMaterialityWiring,\s*type MaterialityEvaluationResult,\s*type MaterialityTrigger,?\s*\}\s*from\s*'\.\/ingestion\/materiality\/wiring\.js'/,
     );
     expect(main).toMatch(
       /import\s*\{\s*createInMemoryPreviousTextTracker,\s*type PreviousTextTracker,?\s*\}\s*from\s*'\.\/ingestion\/materiality\/previous-text\.js'/,
     );
+  });
+});
+
+describe('C7.9 containment relations reach both session-composition call sites (ol-v7r5.7)', () => {
+  // `session/build.ts`'s own module doc named this exact gap: `this.relations`
+  // was folded on every ingestion-session close and read by nothing, so the
+  // containment co-presence filter (`session/containment.ts`) was a no-op in
+  // both real callers. These are the source-level proof that both now pass
+  // the live, served fold rather than omitting `relations` — the same
+  // reachability shape this file's own module doc opens with.
+
+  it('holds the served-edges helper over the live relation fold, never re-deriving null per call site', () => {
+    expect(main).toMatch(
+      /private servedRelationEdges\(\):\s*readonly ConceptRelation\[\]\s*\{\s*return this\.relations === null \? \[\] : servedRelations\(this\.relations\);/,
+    );
+  });
+
+  it('composeReviewSession (the review command) threads it into openReviewSession', () => {
+    expect(main).toMatch(/relations:\s*this\.servedRelationEdges\(\),\s*\}\);/);
+  });
+
+  it("the Today panel's instrument source is given the same fold", () => {
+    expect(main).toMatch(
+      /instruments:\s*createVaultInstrumentSource\(\{\s*vault,\s*scheduler,\s*deviceId,\s*now:\s*\(\)\s*=>\s*new Date\(\),[\s\S]*?relations:\s*this\.servedRelationEdges\(\),\s*\}\),/,
+    );
+  });
+
+  it('imports servedRelations from olea-core, not a local reimplementation', () => {
+    expect(main).toMatch(/servedRelations,/);
+  });
+});
+
+describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
+  // `packages/core/src/today/rhythm.ts`'s own module doc named the one input
+  // with anywhere to come from — a per-course last-material-arrival
+  // timestamp — and said nothing built it. These are the source-level checks
+  // that `main.ts` actually records one, on the materiality trigger path, and
+  // actually threads the result into the Today panel.
+
+  it('builds both rhythm stores unconditionally in onload, alongside the materiality trigger', () => {
+    expect(main).toMatch(/this\.materialArrivals\s*=\s*new ObsidianMaterialArrivalStore\(this\);/);
+    expect(main).toMatch(/this\.termWindowStore\s*=\s*new ObsidianTermWindowStore\(this\);/);
+  });
+
+  it('records an arrival from the real materiality-evaluation result, not on every raw edit', () => {
+    expect(main).toMatch(
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, result\);/,
+    );
+    expect(main).toMatch(
+      /result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)/,
+    );
+  });
+
+  it('derives course association the same way concept extraction does — her frontmatter, then the course folder', () => {
+    expect(main).toMatch(
+      /notePathCourses\(path, fm === null \? \[\] : readList\(fm, 'course'\)\.items\)/,
+    );
+  });
+
+  it("the Today panel's load call is given the real rhythm source, not omitted", () => {
+    expect(main).toMatch(
+      /rhythm:\s*createRhythmSource\(\{\s*materialArrivals:\s*this\.materialArrivals,\s*termWindow:\s*this\.termWindowStore,\s*\}\),/,
+    );
+  });
+
+  it('imports the real stores and composer, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*ObsidianMaterialArrivalStore\s*\}\s*from\s*'\.\/today\/material-arrival-store\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*ObsidianTermWindowStore\s*\}\s*from\s*'\.\/today\/term-window-store\.js'/,
+    );
+    expect(main).toMatch(/createRhythmSource,/);
   });
 });
 

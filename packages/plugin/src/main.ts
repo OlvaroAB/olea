@@ -3,18 +3,25 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
+  type ConceptRelation,
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
+  calendarDayFromLocalDate,
   createFsrsScheduler,
   type DeviceCapability,
   type ExtractedUnit,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
+  notePathCourses,
   type PendingExplainBackGrading,
+  parseDocument,
+  parseFrontmatter,
   type QueueSnapshot,
   type RelationSet,
+  readList,
   refreshStudyPlan,
   type Scheduler,
+  servedRelations,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -52,7 +59,12 @@ import {
   createInMemoryPreviousTextTracker,
   type PreviousTextTracker,
 } from './ingestion/materiality/previous-text.js';
-import { buildMaterialityWiring, type MaterialityTrigger } from './ingestion/materiality/wiring.js';
+import {
+  buildMaterialityWiring,
+  type MaterialityEvaluationResult,
+  type MaterialityTrigger,
+} from './ingestion/materiality/wiring.js';
+import { WorkerMaterialityJudge } from './ingestion/materiality/workerJudge.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
@@ -84,11 +96,14 @@ import { createLocalSessionBuilderProvider } from './session-builder/provider.js
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
 import { OleaSettingTab } from './settings/settings-tab.js';
 import {
+  createRhythmSource,
   createVaultInstrumentSource,
   createVaultTrendsSource,
   loadTodayPanel,
 } from './today/data-source.js';
+import { ObsidianMaterialArrivalStore } from './today/material-arrival-store.js';
 import { refreshOpenTodayViews } from './today/refresh.js';
+import { ObsidianTermWindowStore } from './today/term-window-store.js';
 import { TodayView, VIEW_TYPE_OLEA_TODAY } from './today/view.js';
 import { ObsidianUsageLogStore } from './usage/log-store.js';
 import { ObsidianSource } from './vault/obsidian-source.js';
@@ -171,15 +186,31 @@ export default class OleaPlugin extends Plugin {
   private corpusRelationStateStore: ObsidianCorpusRelationStateStore | null = null;
   /**
    * Register row 1.4's materiality trigger (`TRG-1`, `ol-tqy3`, `ol-2zfj.15`)
-   * — built unconditionally, unlike `retrieval`/`grading`/`concept` above: the
-   * free hash/debounce/floor gates need no Worker token, and `judge: null`
-   * (see `onload` below) keeps it running fully offline until a production
-   * `MaterialityJudge` is wired — see `ingestion/materiality/wiring.ts`'s
-   * module doc.
+   * — built unconditionally, unlike `retrieval`/`grading`/`concept` above:
+   * the free hash/debounce/floor gates need no Worker token. `ol-2zfj.18`
+   * wires a real `MaterialityJudge` (`buildMaterialityJudge` below) on the
+   * same F7.8 grey-out terms as `retrieval`/`grading`/`concept` — `null`
+   * until a Worker token is pasted, and the trigger degrades to
+   * `'judge-unavailable'` exactly as before that bead.
    */
   private materiality: MaterialityTrigger | null = null;
   /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
   private materialityPreviousText: PreviousTextTracker | null = null;
+  /**
+   * F6.9's per-course material-arrival timestamps (`ol-v7r5.6`) — a local
+   * `data.json` projection, fed by `recordMaterialArrivalIfObserved` below on
+   * the same materiality trigger path as `this.materiality`. Built
+   * unconditionally in `onload`, same posture as `materiality` itself: a
+   * local persisted store needs no Worker token.
+   */
+  private materialArrivals: ObsidianMaterialArrivalStore | null = null;
+  /**
+   * F6.9's asked-once term window (`ol-v7r5.6`) — read by
+   * `today/data-source.ts`'s `createRhythmSource` on every panel open.
+   * `save` has no production caller yet; see `today/term-window-store.ts`'s
+   * module doc for the named F7.2 gap that blocks one.
+   */
+  private termWindowStore: ObsidianTermWindowStore | null = null;
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -190,16 +221,30 @@ export default class OleaPlugin extends Plugin {
    * the exact fragility that clause prevents. The persisted home is a Class C
    * proposal in `olea-service/docs/dev/relation-landing-design.md` §7.1.
    *
-   * **No consumer reads this field yet**, and that gap is named rather than
-   * papered over: the two named readers `[D-070]` gives the corpus types —
-   * the misconception record's confusion pairing and queue ordering — have no
-   * code in this tree, and no clause names a triage surface (design doc §7.2).
-   * What has changed is that the edges are no longer computed and discarded on
-   * every ingestion tick.
+   * **Now read by both session-composition call sites** (`ol-v7r5.7`):
+   * `composeReviewSession` and the Today panel's `createVaultInstrumentSource`
+   * wiring below each pass `this.servedRelationEdges()` into
+   * `buildReviewSession`'s `relations` input, which feeds `session/build.ts`'s
+   * C7.9 containment co-presence filter. The two named readers `[D-070]`
+   * gives the corpus types — the misconception record's confusion pairing and
+   * queue ordering — still have no code in this tree, and no clause names a
+   * triage surface (design doc §7.2); that gap is unchanged by this bead.
    */
   private relations: RelationSet | null = null;
   /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
   private lastIngestionSnapshot: QueueSnapshot | null = null;
+
+  /**
+   * The C7.9 containment filter's edge argument (`ol-v7r5.7`) — every served
+   * edge in `this.relations`, or `[]` before the first corpus-relation batch
+   * has ever folded one in. `servedRelations` applies the `[D-093]`
+   * abstention gate; this method exists only so both session-composition call
+   * sites read the identical, current fold rather than each re-deriving the
+   * `null` case its own way.
+   */
+  private servedRelationEdges(): readonly ConceptRelation[] {
+    return this.relations === null ? [] : servedRelations(this.relations);
+  }
 
   override async onload(): Promise<void> {
     // F7.3 usage view (`ol-p3t09`): every Worker transport built below records
@@ -382,6 +427,11 @@ export default class OleaPlugin extends Plugin {
                 scheduler,
                 deviceId,
                 now: () => new Date(),
+                // C7.9's containment co-presence filter (`ol-v7r5.7`): the
+                // Today count and the review queue must agree on which
+                // candidates a container/part pair drops, so this reads the
+                // same served fold `composeReviewSession` below passes.
+                relations: this.servedRelationEdges(),
               }),
               now: () => new Date(),
               // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
@@ -389,6 +439,18 @@ export default class OleaPlugin extends Plugin {
               // which `createVaultTrendsSource` already reads as "no weights"
               // rather than a guessed folder.
               trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
+              // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
+              // unconditionally in `onload`, same as `materiality` itself, so
+              // this is absent only before `onload` has run — never in a
+              // reachable production render.
+              ...(this.materialArrivals !== null && this.termWindowStore !== null
+                ? {
+                    rhythm: createRhythmSource({
+                      materialArrivals: this.materialArrivals,
+                      termWindow: this.termWindowStore,
+                    }),
+                  }
+                : {}),
             });
           },
           // The panel's one primary action and the command palette entry reach
@@ -559,24 +621,25 @@ export default class OleaPlugin extends Plugin {
     // `buildMaterialityWiring` existed with nothing in this package
     // constructing it; see `ingestion/materiality/wiring.ts`'s module doc for
     // exactly what this call site needed and why it waited for a lane with
-    // `main.ts` free. `judge: null`: no `MaterialityJudge` implementation is
-    // wired in here. The paid second stage (`materiality.judge.v1`,
-    // `olea-service/src/tasks/materialityJudge.ts`) is built, zod-validated
-    // and INV-5-guarded service-side, but its task id still awaits
-    // reservation in the frozen catalogue (`packages/contracts/src/tasks.ts`)
-    // before `registry.ts` can route it — see that module's own doc. Until
-    // then `evaluate` degrades to `'judge-unavailable'` for anything that
-    // clears the free gates, the same "grey out, never half-work" contract
-    // `retrieval`/`grading`/`concept` above use for an unconfigured Worker,
-    // applied here to a task with no route at all yet. The free gates
-    // themselves (hash/debounce/floor) run for real, in production, from
-    // this call onward, independent of Worker configuration.
+    // `main.ts` free. `ol-2zfj.18` closed the judge gap: `materiality.judge.v1`
+    // is reserved in the frozen catalogue (`packages/contracts/src/tasks.ts`),
+    // routed in `olea-service/src/tasks/registry.ts`, and
+    // `buildMaterialityJudge()` below supplies the transport-backed client on
+    // the same F7.8 grey-out terms `retrieval`/`grading`/`concept` above use
+    // for an unconfigured Worker. With no Worker token the judge is `null`
+    // and `evaluate` degrades to `'judge-unavailable'`, unchanged. The free
+    // gates (hash/debounce/floor) run for real either way.
     this.materiality = buildMaterialityWiring({
       dataHost: this,
       clock: { now: () => Date.now() },
-      judge: null,
+      judge: this.buildMaterialityJudge(),
     });
     this.materialityPreviousText = createInMemoryPreviousTextTracker();
+    // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
+    // projections over `this`, same construction shape as `materiality`
+    // above — no Worker token needed for either.
+    this.materialArrivals = new ObsidianMaterialArrivalStore(this);
+    this.termWindowStore = new ObsidianTermWindowStore(this);
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'modify') return;
@@ -617,11 +680,68 @@ export default class OleaPlugin extends Plugin {
     }
     const previousText = this.materialityPreviousText.get(path);
     try {
-      await this.materiality.evaluate(path, currentText, previousText);
+      const result = await this.materiality.evaluate(path, currentText, previousText);
+      await this.recordMaterialArrivalIfObserved(path, currentText, result);
     } catch (error) {
       console.error('Olea: materiality trigger evaluation failed', error);
     } finally {
       this.materialityPreviousText.record(path, currentText);
+    }
+  }
+
+  /**
+   * F6.9's per-course material-arrival timestamp (`ol-v7r5.6`) — recorded the
+   * moment row 1.4's free gates (hash/debounce/floor) judge an edit
+   * significant enough that a judge call would follow. That is
+   * `'judge-unavailable'` in production today, because no `MaterialityJudge`
+   * is wired (`this.materiality`'s own construction, above); once one is
+   * (`ingestion/materiality/wiring.ts`'s named D-072 gap), a `'verdict'`
+   * whose `material` is `true` counts the same way and a `false` one does
+   * not — the free gates having cleared is what F6.9 needs "material
+   * arrived" to mean, and a judge that goes on to say "not really" should
+   * still be believed over them.
+   *
+   * `'unchanged'`, `'formatting-only'`, `'debounced'` and `'below-floor'` are
+   * row 1.4 itself declining to treat the edit as real content movement, and
+   * none of them records an arrival: doing so on every raw edit would make
+   * "material is arriving" mean "she opened the file", which is a different
+   * and much noisier claim than the one F6.9 licenses.
+   *
+   * Course association follows F1.3 exactly — her own `course` frontmatter
+   * first, the course folder the path sits under otherwise
+   * (`notePathCourses`) — the same derivation `concept/extract.ts` already
+   * uses, so a path this fires for and a path concept extraction reads agree
+   * on which course it belongs to. A path resolving to no course records
+   * nothing: F6.9's reading is per-course, and there is no course to
+   * attribute an arrival to.
+   *
+   * Never lets a parse or store failure propagate — same "a downstream
+   * failure must never make the trigger look like it misfired" posture the
+   * caller already holds for `materiality.evaluate` itself.
+   */
+  private async recordMaterialArrivalIfObserved(
+    path: VaultPath,
+    currentText: string,
+    result: MaterialityEvaluationResult,
+  ): Promise<void> {
+    if (this.materialArrivals === null) return;
+    const observed =
+      result.kind === 'judge-unavailable' || (result.kind === 'verdict' && result.verdict.material);
+    if (!observed) return;
+
+    try {
+      const doc = parseDocument(currentText);
+      const first = doc.blocks[0];
+      const fm = first?.kind === 'frontmatter' ? parseFrontmatter(first.inner) : null;
+      const courses = notePathCourses(path, fm === null ? [] : readList(fm, 'course').items);
+      if (courses.length === 0) return;
+
+      const today = calendarDayFromLocalDate(new Date());
+      for (const course of courses) {
+        await this.materialArrivals.recordArrival(course, today);
+      }
+    } catch (error) {
+      console.error('Olea: could not record a material arrival', error);
     }
   }
 
@@ -797,6 +917,18 @@ export default class OleaPlugin extends Plugin {
    * on the same unconfigured-Worker condition as every other AI-gated
    * wiring in this file (F7.8).
    */
+  /**
+   * `ol-2zfj.18`'s production `MaterialityJudge`: the SAME
+   * `WorkerTaskTransport` `this.retrieval.transport` already exposes,
+   * sending `materiality.judge.v1`. `null` on the same unconfigured-Worker
+   * condition as every other AI-gated wiring in this file (F7.8).
+   */
+  private buildMaterialityJudge(): WorkerMaterialityJudge | null {
+    const transport = this.retrieval?.transport;
+    if (transport === null || transport === undefined) return null;
+    return new WorkerMaterialityJudge({ transport });
+  }
+
   private buildExplainWhyPort(): WorkerExplainWhyGenerator | null {
     const transport = this.retrieval?.transport;
     if (transport === null || transport === undefined) return null;
@@ -873,6 +1005,10 @@ export default class OleaPlugin extends Plugin {
       // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): whatever the cache
       // holds pending, read fresh at open time, exactly like the plan above.
       ...(this.generation ? { draftCache: this.generation.cache } : {}),
+      // C7.9's containment co-presence filter (`ol-v7r5.7`, `session/build.ts`):
+      // the live, served relation fold, read fresh at open time — `[]` before
+      // the first corpus-relation batch has run.
+      relations: this.servedRelationEdges(),
     });
     if (!outcome.ok) {
       console.error('Olea: could not compose a review session', outcome.error);
