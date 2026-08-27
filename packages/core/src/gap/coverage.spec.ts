@@ -31,6 +31,10 @@ describe('readStateOf — the four states stay four', () => {
     ['no-pages-found', 0, 'unreadable'],
     ['unreadable', 0, 'unreadable'],
     ['reached-but-unreadable', 4, 'unreadable'],
+    // SCAN-1/ol-738i: the read succeeded (every page decoded fine) and there
+    // is nothing to check her vocabulary against (it was all running-head
+    // furniture) — same bucket as `'empty-document'`, for the same reason.
+    ['furniture-only', 0, 'read-yielded-nothing'],
   ];
 
   for (const [outcome, units, expected] of cases) {

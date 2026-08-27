@@ -17,6 +17,7 @@ describe('imageExtractor', () => {
       textLayer: 'absent',
       route: 'vision',
       units: [],
+      furniture: false,
     });
   });
 

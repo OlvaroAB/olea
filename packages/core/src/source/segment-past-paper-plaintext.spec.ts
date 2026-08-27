@@ -20,12 +20,13 @@ function textPage(page: number, text: string): PageExtraction {
     textLayer: 'readable',
     route: 'text-layer',
     units: [unit],
+    furniture: false,
   };
 }
 
 /** A page that reached the text layer and found nothing usable — the vision route, no units. */
 function visionPage(page: number): PageExtraction {
-  return { page, charCount: 0, textLayer: 'absent', route: 'vision', units: [] };
+  return { page, charCount: 0, textLayer: 'absent', route: 'vision', units: [], furniture: false };
 }
 
 function extraction(pages: readonly PageExtraction[]): ExtractionResult {

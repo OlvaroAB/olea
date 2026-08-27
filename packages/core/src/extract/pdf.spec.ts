@@ -1178,14 +1178,23 @@ describe('pdfExtractor — Form XObject position de-duplication (ol-hpqn)', () =
     // `walkContentTokens` is called fresh per page (see `getPageContent`), so
     // the position memo it owns must not survive between pages by construction
     // — this pins that no *shared* state was accidentally introduced.
-    const pageBody = 'q 1 0 0 1 50 100 cm /Fm1 Do Q';
+    //
+    // Each page also paints a short page-specific sentence of its own,
+    // beyond the shared form's "Repeated label" — without it, both pages'
+    // *entire* text would be the identical two-word line, which SCAN-1's
+    // furniture detector (`furniture.ts`) correctly reads as a running head
+    // repeated across every page with nothing else on it. Adding real,
+    // page-distinct content keeps this test about the de-dup memo alone.
+    const formInvocation = 'q 1 0 0 1 50 100 cm /Fm1 Do Q';
+    const page4Body = `${formInvocation} BT /F1 12 Tf (This page carries its own distinct sentence one) Tj ET`;
+    const page5Body = `${formInvocation} BT /F1 12 Tf (This page carries its own distinct sentence two) Tj ET`;
     const objects =
       '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
       '2 0 obj\n<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 >>\nendobj\n' +
-      `4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /XObject << /Fm1 8 0 R >> >> >>\nendobj\n` +
-      `5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 7 0 R /Resources << /XObject << /Fm1 8 0 R >> >> >>\nendobj\n` +
-      `6 0 obj\n<< /Length ${pageBody.length} >>\nstream\n${pageBody}\nendstream\nendobj\n` +
-      `7 0 obj\n<< /Length ${pageBody.length} >>\nstream\n${pageBody}\nendstream\nendobj\n` +
+      `4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /XObject << /Fm1 8 0 R >> /Font << /F1 3 0 R >> >> >>\nendobj\n` +
+      `5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 7 0 R /Resources << /XObject << /Fm1 8 0 R >> /Font << /F1 3 0 R >> >> >>\nendobj\n` +
+      `6 0 obj\n<< /Length ${page4Body.length} >>\nstream\n${page4Body}\nendstream\nendobj\n` +
+      `7 0 obj\n<< /Length ${page5Body.length} >>\nstream\n${page5Body}\nendstream\nendobj\n` +
       '8 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] ' +
       '/Resources << /Font << /F1 3 0 R >> >> ' +
       '/Length 44 >>\nstream\nBT /F1 12 Tf (Repeated label) Tj ET\nendstream\nendobj\n' +

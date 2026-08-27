@@ -122,7 +122,11 @@ export const docxExtractor: Extractor = {
       // missing or empty, where the honest report is a zero-yield page
       // routed to vision, not a missing one.
       outcome: 'extracted',
-      pages: [{ page: 1, charCount, textLayer, route, units }],
+      // `furniture: false`, always: the running-head/page-number signal
+      // (SCAN-1, ol-738i; `furniture.ts`) needs a line to recur *across*
+      // pages, and a DOCX is exactly one logical page by this format's own
+      // convention above — there is no second page to compare against.
+      pages: [{ page: 1, charCount, textLayer, route, units, furniture: false }],
     };
   },
 };

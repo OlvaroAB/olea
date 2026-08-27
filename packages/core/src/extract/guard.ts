@@ -106,12 +106,14 @@ export function extractionYieldViolations(result: ExtractionResult): readonly st
 
   // R2 — the converse, which is a different lie with the same root: pages
   // were produced and the discriminant denies it, so a caller branching on
-  // `outcome` discards real work. `'reached-but-unreadable'` is the one
-  // non-`'extracted'` outcome that *does* assert page records, which is the
-  // whole of what it means (ol-x1ch).
+  // `outcome` discards real work. `'reached-but-unreadable'` and
+  // `'furniture-only'` are the two non-`'extracted'` outcomes that *do*
+  // assert page records, which is the whole of what each means (ol-x1ch;
+  // SCAN-1/ol-738i).
   if (
     result.outcome !== 'extracted' &&
     result.outcome !== 'reached-but-unreadable' &&
+    result.outcome !== 'furniture-only' &&
     result.pages.length > 0
   ) {
     violations.push(
@@ -196,6 +198,42 @@ export function extractionYieldViolations(result: ExtractionResult): readonly st
         `page ${page.page} reports textLayer 'absent' alongside charCount ${page.charCount} — the quality signal and the count disagree`,
       );
     }
+
+    // R10 — SCAN-1/ol-738i. A page marked furniture has nothing to offer
+    // Slot G, the same posture R8 holds for a page whose characters are not
+    // characters, so it must not claim the text-layer route.
+    if (page.furniture && page.route === 'text-layer') {
+      violations.push(
+        `page ${page.page} is marked furniture but routed to the text layer — a page that is furniture must not be offered to Slot G or quoted`,
+      );
+    }
+
+    // R11 — the R5 shape applied to furniture: a page with nothing to offer
+    // (furniture, by definition) cannot also carry units.
+    if (page.furniture && page.units.length > 0) {
+      violations.push(
+        `page ${page.page} is marked furniture but carries ${page.units.length} unit(s) — a furniture page has nothing to hand to Slot G`,
+      );
+    }
+  }
+
+  // R12 — the R2 shape for the new outcome, checked against the per-page
+  // signal directly (this is a self-consistency check between two fields the
+  // same extractor sets, in the family of R5/R9, not an independent
+  // recomputation like R6/R7: `applyFurnitureDetection` clears `units` on a
+  // furniture page, which is exactly the evidence a from-scratch recompute
+  // would need, so this only asserts the two claims the extractor already
+  // made agree with each other).
+  const anyPageFurniture = result.pages.some((page) => page.furniture);
+  if (result.outcome === 'extracted' && anyPageFurniture) {
+    violations.push(
+      "outcome 'extracted' with a page marked furniture — SCAN-1's discriminator fired and the outcome does not say so",
+    );
+  }
+  if (result.outcome === 'furniture-only' && !anyPageFurniture) {
+    violations.push(
+      "outcome 'furniture-only' with no page marked furniture — either no page supports it or the outcome over-claims",
+    );
   }
 
   return violations;

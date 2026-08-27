@@ -122,6 +122,15 @@ function readStateOfOutcome(outcome: ExtractionOutcome | null, units: number): S
       return units > 0 ? 'read' : 'read-yielded-nothing';
     case 'empty-document':
       return 'read-yielded-nothing';
+    case 'furniture-only':
+      // SCAN-1/ol-738i: the read genuinely succeeded — every page decoded to
+      // plausible characters — and there is still nothing here to check her
+      // vocabulary against, because all of it was a running head or a
+      // page-number stamp (`furniture.ts`). Same consequence as
+      // `'empty-document'`, for the same reason: nothing is wrong, there was
+      // nothing there, and the coverage claim must shrink accordingly rather
+      // than silently counting this source as read content.
+      return 'read-yielded-nothing';
     case 'no-pages-found':
     case 'unreadable':
     case 'reached-but-unreadable':

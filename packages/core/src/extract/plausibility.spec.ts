@@ -30,7 +30,15 @@ function glyphCodes(count: number): string {
 }
 
 function page(textLayer: PageTextLayer, overrides: Partial<PageExtraction> = {}): PageExtraction {
-  return { page: 1, charCount: 0, textLayer, route: 'vision', units: [], ...overrides };
+  return {
+    page: 1,
+    charCount: 0,
+    textLayer,
+    route: 'vision',
+    units: [],
+    furniture: false,
+    ...overrides,
+  };
 }
 
 describe('controlCharShare', () => {

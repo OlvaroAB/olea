@@ -142,6 +142,33 @@ export interface PageExtraction {
   readonly textLayer: PageTextLayer;
   readonly route: RouteDecision;
   readonly units: readonly ExtractedUnit[];
+  /**
+   * Whether this page's own text — decoded fine, plausibly text,
+   * comfortably clearing the routing threshold — is nonetheless *furniture*
+   * rather than content: a running head and/or a page-number stamp repeated
+   * across the document, and nothing else (SCAN-1, ol-738i; see
+   * `furniture.ts`). Non-optional for the same reason `textLayer` is: a
+   * signal that defaults to silence is the exact shape of the defect this
+   * field exists to close (`olea-service/docs/Olea_ai_workload_and_cost_model.md`
+   * §5.1's "quality failure that looks like success" — a scanned page's
+   * 30-60 characters of running-head noise clears `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD`
+   * and would otherwise be handed to Slot G as though it were her content).
+   *
+   * **Always `false` for `'docx'` and `'image'`** — both formats produce
+   * exactly one logical page (see the `page` convention above), and this
+   * signal is inherently cross-page: repetition cannot be observed on a
+   * single page. It is not that a one-page furniture document is impossible,
+   * only that this signal structurally cannot distinguish it from genuine
+   * terse content, so it does not try — see `furniture.ts`'s module doc.
+   *
+   * **When `true`, `route` is always `'vision'` and `units` is always
+   * empty**, exactly as for any other page with nothing to offer Slot G
+   * (`ExtractionOutcome`'s `'furniture-only'` value is the document-level
+   * report of the same fact) — a page that is furniture must not be offered
+   * to Slot G or quoted, the same posture ol-s3xa established for unreadable
+   * text.
+   */
+  readonly furniture: boolean;
 }
 
 /** The four ingestion source formats C3.1 names. */
@@ -193,13 +220,30 @@ export type SourceFormat = 'pdf' | 'pptx' | 'docx' | 'image';
  *    honestly `'absent'` and whose extraction really did succeed. Established
  *    by measuring against real material; the figures stay private, in
  *    `olea-service/findings/H-past-papers-inventory-and-text-layer.md` §5.1.
+ *  - `'furniture-only'` — page records *were* produced, every one of them
+ *    decoded to plausible, readable characters, and none of it was content:
+ *    what came out of every text-layer page is entirely a running head
+ *    and/or a page-number stamp repeated across the document (`PageExtraction.furniture`,
+ *    `furniture.ts`). **This is ol-voen's shape recurring a second way**:
+ *    `charCount` clears `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD` (D-022, unchanged
+ *    by this signal) on real, decodable characters, so the old discriminant —
+ *    and the routing threshold itself — is satisfied honestly and still says
+ *    the wrong thing. This is the measured scan failure mode named in
+ *    `olea-service/docs/Olea_ai_workload_and_cost_model.md` §5.1: a scanned
+ *    page typically yields not zero characters but 30-60 characters of
+ *    running-head/page-number noise, which clears the threshold and would be
+ *    handed to Slot G as though it were content (SCAN-1, ol-738i). Deliberately
+ *    *not* the report for a document that is merely terse — see
+ *    `furniture.ts` for why the check requires the repetition itself, not
+ *    just a low count, and never re-fits `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD`.
  */
 export type ExtractionOutcome =
   | 'extracted'
   | 'empty-document'
   | 'no-pages-found'
   | 'unreadable'
-  | 'reached-but-unreadable';
+  | 'reached-but-unreadable'
+  | 'furniture-only';
 
 /**
  * One source's full extraction outcome — every page it contains, each
@@ -210,7 +254,7 @@ export type ExtractionOutcome =
 export interface ExtractionResult {
   readonly sourcePath: VaultPath;
   readonly format: SourceFormat;
-  /** Never optional — see `ExtractionOutcome`. `pages.length > 0` iff the outcome is `'extracted'` or `'reached-but-unreadable'`. */
+  /** Never optional — see `ExtractionOutcome`. `pages.length > 0` iff the outcome is `'extracted'`, `'reached-but-unreadable'` or `'furniture-only'`. */
   readonly outcome: ExtractionOutcome;
   readonly pages: readonly PageExtraction[];
 }

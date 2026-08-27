@@ -35,6 +35,7 @@ function page(overrides: Partial<PageExtraction> = {}): PageExtraction {
     charCount: 44,
     textLayer: 'readable',
     route: 'text-layer',
+    furniture: false,
     units: [
       {
         text: 'a'.repeat(44),
@@ -322,6 +323,57 @@ describe('extract/guard — a page may never claim a text layer it could not rea
       expect(extractionYieldViolations(result('extracted', [impossible]))).toEqual([
         expect.stringContaining("reports textLayer 'absent' alongside charCount 44"),
       ]);
+    });
+  });
+});
+
+describe('extract/guard — a furniture page may never be offered as content (SCAN-1, ol-738i)', () => {
+  describe('R10: a furniture page routed to the text layer', () => {
+    it('fires — a page that is furniture must not be offered to Slot G', () => {
+      const bad = page({ furniture: true, route: 'text-layer' });
+      expect(extractionYieldViolations(result('extracted', [bad]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('marked furniture but routed to the text layer'),
+        ]),
+      );
+    });
+
+    it('does not fire on the honest report — furniture routed to vision', () => {
+      const honest = page({ furniture: true, route: 'vision', units: [], charCount: 40 });
+      expect(extractionYieldViolations(result('furniture-only', [honest]))).toEqual([]);
+    });
+  });
+
+  describe('R11: a furniture page carrying units', () => {
+    it('fires — a furniture page has nothing to hand to Slot G', () => {
+      const bad = page({ furniture: true, route: 'vision' });
+      expect(extractionYieldViolations(result('extracted', [bad]))).toEqual(
+        expect.arrayContaining([expect.stringContaining('carries 1 unit(s)')]),
+      );
+    });
+  });
+
+  describe('R12: outcome vs the per-page furniture signal', () => {
+    it("fires when a page is marked furniture but outcome says 'extracted'", () => {
+      const furniturePage = page({ furniture: true, route: 'vision', units: [], charCount: 40 });
+      expect(extractionYieldViolations(result('extracted', [furniturePage]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("outcome 'extracted' with a page marked furniture"),
+        ]),
+      );
+    });
+
+    it("fires when outcome says 'furniture-only' but no page agrees", () => {
+      expect(extractionYieldViolations(result('furniture-only', [page()]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("outcome 'furniture-only' with no page marked furniture"),
+        ]),
+      );
+    });
+
+    it('accepts the honest furniture-only report', () => {
+      const furniturePage = page({ furniture: true, route: 'vision', units: [], charCount: 40 });
+      expect(extractionYieldViolations(result('furniture-only', [furniturePage]))).toEqual([]);
     });
   });
 });

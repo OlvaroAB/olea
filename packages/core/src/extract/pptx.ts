@@ -29,6 +29,7 @@
  */
 
 import { strFromU8, unzipSync } from 'fflate';
+import { applyFurnitureDetection } from './furniture.js';
 import { classifyPageText, isReachedButUnreadable } from './plausibility.js';
 import { routePage } from './threshold.js';
 import type {
@@ -136,9 +137,14 @@ function pptxOutcome(
   pages: readonly PageExtraction[],
 ): ExtractionOutcome {
   // ol-x1ch: reaching the slides is no longer the whole of the question. See
-  // `isReachedButUnreadable`.
+  // `isReachedButUnreadable`. SCAN-1/ol-738i: nor is decoding fine — see
+  // `furniture.ts`. `pages` here has already been through
+  // `applyFurnitureDetection`, so this reads `PageExtraction.furniture`
+  // rather than recomputing it.
   if (pages.length > 0) {
-    return isReachedButUnreadable(pages) ? 'reached-but-unreadable' : 'extracted';
+    if (isReachedButUnreadable(pages)) return 'reached-but-unreadable';
+    if (pages.some((page) => page.furniture)) return 'furniture-only';
+    return 'extracted';
   }
   return files['ppt/presentation.xml'] ? 'no-pages-found' : 'empty-document';
 }
@@ -191,14 +197,18 @@ export const pptxExtractor: Extractor = {
             ]
           : [];
 
-      return { page, charCount, textLayer, route, units };
+      // `furniture` is decided below, once every slide's text is known — see
+      // `pdf.ts`'s equivalent comment.
+      return { page, charCount, textLayer, route, units, furniture: false };
     });
+
+    const finalPages = applyFurnitureDetection(pages);
 
     return {
       sourcePath: input.path,
       format: 'pptx',
-      outcome: pptxOutcome(files, pages),
-      pages,
+      outcome: pptxOutcome(files, finalPages),
+      pages: finalPages,
     };
   },
 };

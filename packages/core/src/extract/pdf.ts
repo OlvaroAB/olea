@@ -157,6 +157,7 @@
 
 import { unzlibSync } from 'fflate';
 import { decodeWithFont, type FontDecoder, parseToUnicodeCMap } from './cmap.js';
+import { applyFurnitureDetection } from './furniture.js';
 import { classifyPageText, isReachedButUnreadable } from './plausibility.js';
 import { routePage } from './threshold.js';
 import type {
@@ -1631,6 +1632,11 @@ function getPageContent(
  *    refuses to say — an `/ObjStm` we could not inflate, a page tree behind
  *    a filter we do not implement, an encrypted body. The one thing it is
  *    not is success, which is the entire reason this field exists.
+ *  - **Every page's own text is furniture** (SCAN-1, ol-738i) →
+ *    `'furniture-only'`, checked after `isReachedButUnreadable`: see
+ *    `furniture.ts`. `pages` here has already been through
+ *    `applyFurnitureDetection`, so this reads `PageExtraction.furniture`
+ *    rather than recomputing it.
  */
 function pdfOutcome(
   objects: ReadonlyMap<number, PdfObjectRecord>,
@@ -1644,7 +1650,9 @@ function pdfOutcome(
   // whole question. See `isReachedButUnreadable` for why both of its conjuncts
   // are needed, and in particular why a genuine scan still reads `'extracted'`.
   if (pages.length > 0) {
-    return isReachedButUnreadable(pages) ? 'reached-but-unreadable' : 'extracted';
+    if (isReachedButUnreadable(pages)) return 'reached-but-unreadable';
+    if (pages.some((page) => page.furniture)) return 'furniture-only';
+    return 'extracted';
   }
   return declaredPageCount(pagesRootNum, objects) === 0 ? 'empty-document' : 'no-pages-found';
 }
@@ -1698,14 +1706,20 @@ export const pdfExtractor: Extractor = {
             ]
           : [];
 
-      return { page, charCount, textLayer, route, units };
+      // `furniture` is decided below, once every page's text is known
+      // (SCAN-1 needs the whole document to tell a running head from a
+      // one-off coincidence) — `false` here, possibly overridden by
+      // `applyFurnitureDetection`.
+      return { page, charCount, textLayer, route, units, furniture: false };
     });
+
+    const finalPages = applyFurnitureDetection(pages);
 
     return {
       sourcePath: input.path,
       format: 'pdf',
-      outcome: pdfOutcome(objects, pagesRootNum, pages),
-      pages,
+      outcome: pdfOutcome(objects, pagesRootNum, finalPages),
+      pages: finalPages,
     };
   },
 };

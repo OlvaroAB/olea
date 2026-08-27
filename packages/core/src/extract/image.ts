@@ -38,7 +38,11 @@ export const imageExtractor: Extractor = {
       // to fail to read, which is exactly the distinction `PageTextLayer`
       // exists to draw (ol-x1ch). Vision is the right answer here, not a
       // reported defect.
-      pages: [{ page: 1, charCount: 0, textLayer: 'absent', route, units: [] }],
+      // `furniture: false`, always: a single image is a single page by
+      // construction (SCAN-1's running-head signal needs pages to compare
+      // against; see `furniture.ts`), and it has no text layer at all to be
+      // furniture in the first place.
+      pages: [{ page: 1, charCount: 0, textLayer: 'absent', route, units: [], furniture: false }],
     };
   },
 };
