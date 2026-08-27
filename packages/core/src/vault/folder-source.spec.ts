@@ -246,6 +246,88 @@ describe('FolderSource write, against a temp copy', () => {
   });
 });
 
+describe('FolderSource.listUnder (`ol-df19`, DF-19)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-folder-source-listunder-'));
+    // A realistic C5.2 layout: two devices' logs plus one non-log file, a
+    // nested dot-directory that must stay excluded even inside the named
+    // subtree, and an ordinary note plus `.obsidian/` at the vault root to
+    // prove `list()` remains untouched.
+    await mkdir(join(tempRoot, '.olea', 'reviews', '.hidden'), { recursive: true });
+    await writeFile(join(tempRoot, '.olea', 'reviews', '2026-08-25.deviceA.jsonl'), '{}\n');
+    await writeFile(join(tempRoot, '.olea', 'reviews', '2026-08-26.deviceB.jsonl'), '{}\n');
+    await writeFile(join(tempRoot, '.olea', 'reviews', 'notes.txt'), 'not a log');
+    await writeFile(join(tempRoot, '.olea', 'reviews', '.hidden', 'nested.jsonl'), '{}\n');
+    await mkdir(join(tempRoot, '.obsidian'), { recursive: true });
+    await writeFile(join(tempRoot, '.obsidian', 'workspace.json'), '{}');
+    await writeFile(join(tempRoot, 'note.md'), '# a real note');
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('list() still never sees any dot-directory content — the exclusion `listUnder` must not weaken', async () => {
+    const source = new FolderSource(tempRoot);
+    const paths = await source.list();
+    expect(paths).toEqual(['note.md']);
+    for (const p of paths) {
+      expect(p.split('/').some((segment) => segment.startsWith('.'))).toBe(false);
+    }
+  });
+
+  it("enumerates exactly the named dot-directory's contents — both devices' logs, in sorted order", async () => {
+    const source = new FolderSource(tempRoot);
+    const paths = await source.listUnder('.olea/reviews');
+    expect(paths).toEqual([
+      '.olea/reviews/2026-08-25.deviceA.jsonl',
+      '.olea/reviews/2026-08-26.deviceB.jsonl',
+      '.olea/reviews/notes.txt',
+    ]);
+  });
+
+  it('honours `extensions` the same way `list()` does', async () => {
+    const source = new FolderSource(tempRoot);
+    const paths = await source.listUnder('.olea/reviews', { extensions: ['jsonl'] });
+    expect(paths).toEqual([
+      '.olea/reviews/2026-08-25.deviceA.jsonl',
+      '.olea/reviews/2026-08-26.deviceB.jsonl',
+    ]);
+  });
+
+  it('still excludes a dot-directory nested INSIDE the named subtree — the exclusion is not disabled, only its starting point moves', async () => {
+    const source = new FolderSource(tempRoot);
+    const paths = await source.listUnder('.olea/reviews');
+    expect(paths.some((p) => p.includes('.hidden'))).toBe(false);
+    expect(paths).not.toContain('.olea/reviews/.hidden/nested.jsonl');
+  });
+
+  it('never reaches outside the named subtree — no `.obsidian/` content, no sibling `.olea/` folders', async () => {
+    const source = new FolderSource(tempRoot);
+    const paths = await source.listUnder('.olea/reviews');
+    for (const p of paths) {
+      expect(p.startsWith('.olea/reviews/')).toBe(true);
+    }
+  });
+
+  it('returns an empty list for a dot-path that does not exist, exactly like `list({ under })`', async () => {
+    const source = new FolderSource(tempRoot);
+    expect(await source.listUnder('.olea/does-not-exist')).toEqual([]);
+  });
+
+  it('rejects a path that is not dot-prefixed — this is not a general subtree restriction', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(source.listUnder('01 Courses')).rejects.toThrow(/dot-prefixed/);
+  });
+
+  it('rejects an invalid vault path the same way `list({ under })` does', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(source.listUnder('.olea/../escape')).rejects.toThrow();
+  });
+});
+
 describe('FolderSource watch', () => {
   let tempRoot: string;
 

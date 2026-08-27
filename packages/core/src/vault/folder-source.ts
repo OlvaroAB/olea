@@ -62,6 +62,64 @@ export class FolderSource implements VaultSource {
     return results;
   }
 
+  /**
+   * Enumerate a caller-named DOT-PREFIXED subtree — the escape hatch `list()`
+   * deliberately does not provide (`ol-df19`, DF-19).
+   *
+   * `list()` skips every dotfile/dot-directory it encounters while walking,
+   * by design: `.obsidian/` and `.trash/` must never surface as vault
+   * content, however deep the recursion goes. That is correct for note
+   * discovery and is untouched by this method. But it also means nothing can
+   * discover an UNKNOWN file inside a KNOWN dot-directory — `.olea/reviews/
+   * *.jsonl` (C5.2) is the worked example: the writer and the per-day reader
+   * both address a file by its exact name (`reviewLogPath`), so neither ever
+   * needed `list()`, but a caller that must ask "which devices wrote a log
+   * today?" *without* already knowing every device id has no reader at all.
+   *
+   * `listUnder` is that reader. It takes `dotPath` directly as the walk's
+   * ROOT rather than reaching it by recursing down from the vault root — so
+   * `.olea` is never "seen" as an entry to exclude, it is simply where the
+   * walk starts. The exclusion itself is otherwise unchanged: a dot-entry
+   * nested *inside* `dotPath` is still skipped exactly as `list()` would skip
+   * it (see `walk`'s own check), so this cannot be used to smuggle
+   * `.obsidian/` or `.trash/` out through some deeper path — only the one
+   * subtree named by `dotPath` is exposed, for the duration of this one call.
+   *
+   * Deliberately a separate method rather than a `ListOptions` flag on
+   * `list()`: a flag every caller of the one general-purpose method can flip
+   * widens what a reader has to hold in mind about the *default* surface.
+   * Keeping this on its own, dot-gated name means a reader of a call site
+   * sees the intent (`listUnder('.olea/reviews')`) without having to also
+   * audit every other `list()` call in the codebase for an accidentally-set
+   * flag. `dotPath` is required to start with a dot precisely so this cannot
+   * be reached for an ordinary folder by mistake — plain subtree restriction
+   * is `list({ under })`'s job, unchanged.
+   *
+   * **Not part of the `VaultSource` contract.** `ObsidianSource`'s
+   * `vault.getFiles()` never returns dot-prefixed paths at all (a real host
+   * limitation, not a choice this file makes), so this capability is
+   * necessarily `FolderSource`-specific for now — see `ol-yk1c` (C5.2a) for
+   * the open question of whether/how `ObsidianSource` grows an equivalent.
+   */
+  async listUnder(
+    dotPath: VaultPath,
+    options: { readonly extensions?: readonly string[] } = {},
+  ): Promise<readonly VaultPath[]> {
+    const firstSegment = dotPath.split('/')[0];
+    if (firstSegment === undefined || !firstSegment.startsWith('.')) {
+      throw new Error(
+        `FolderSource.listUnder: expected a dot-prefixed path (e.g. '.olea/reviews'), got: ${JSON.stringify(dotPath)}`,
+      );
+    }
+    const startAbsolute = this.toAbsolute(dotPath);
+    const extensions = options.extensions?.map((ext) => ext.toLowerCase());
+
+    const results: VaultPath[] = [];
+    await this.walk(startAbsolute, extensions, results);
+    results.sort();
+    return results;
+  }
+
   private async walk(
     dir: string,
     extensions: readonly string[] | undefined,
