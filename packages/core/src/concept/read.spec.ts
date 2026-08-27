@@ -680,6 +680,33 @@ describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
     expect(part?.size.band).toBe('fine');
   });
 
+  it("is-a's canonical endpoint reading: `to` is the supertype, and it is the one whose size is refined (ol-2zfj.17)", async () => {
+    // Same containment fold as part-of above, pinning the OTHER directed
+    // type `../relation.js`'s `ProposedRelation` doc names: "X is-a Y" means
+    // `from: X` (the subtype), `to: Y` (the supertype/kind-of it names) —
+    // never the reverse. `applyContainmentEvidence` folds onto whichever
+    // concept is named by `to`, so a swapped edge would mark the SUBTYPE
+    // coarse instead of the supertype.
+    const reader = new ScriptedReader(
+      [
+        proposal('Sparrow', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+        proposal('Bird', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+      ],
+      [{ type: 'is-a', from: 'Sparrow', to: 'Bird', confidence: 0.9 }],
+    );
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const supertype = result.concepts.find((c) => c.name === 'Bird');
+    const subtype = result.concepts.find((c) => c.name === 'Sparrow');
+    // The supertype (`to`) is the one containment evidence lands on.
+    expect(supertype?.size.band).toBe('coarse');
+    expect(supertype?.size.extent.containmentEvidence).toBe(true);
+    // The subtype (`from`) is untouched by this edge.
+    expect(subtype?.size.band).toBe('fine');
+  });
+
   it('a relation whose endpoint is filing-only (no passage anchor) is dropped for missing passage-grain provenance', async () => {
     const vault = new MemoryVault({
       '01 Courses/ABCD101/Lecture One.md':

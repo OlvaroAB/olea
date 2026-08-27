@@ -72,9 +72,11 @@ describe('RELATION_EMISSION_STATUS — the governing test, per type', () => {
     expect(RELATION_EMISSION_STATUS['part-of']).toBe('emitted');
   });
 
-  it('contrasts-with and prerequisite are blocked on the corpus-level stage, not withheld outright', () => {
-    expect(RELATION_EMISSION_STATUS['contrasts-with']).toBe('blocked-on-corpus-stage');
-    expect(RELATION_EMISSION_STATUS.prerequisite).toBe('blocked-on-corpus-stage');
+  it('contrasts-with and prerequisite are emitted via the corpus-level stage, not withheld ([EXT-11]/ol-kw4a, [D-118])', () => {
+    // Was 'blocked-on-corpus-stage' until the corpus stage's production
+    // caller landed 2026-08-25 — corrected 2026-08-26 (`ol-2zfj.16`).
+    expect(RELATION_EMISSION_STATUS['contrasts-with']).toBe('emitted-via-corpus-stage');
+    expect(RELATION_EMISSION_STATUS.prerequisite).toBe('emitted-via-corpus-stage');
   });
 
   it('causes is blocked on its deferred reader — defined now, not a withheld type', () => {
@@ -85,9 +87,31 @@ describe('RELATION_EMISSION_STATUS — the governing test, per type', () => {
     expect(RELATION_EMISSION_STATUS.related).toBe('no-reader');
   });
 
-  it('every status is one of exactly two things: emitted, or a reason it is not yet', () => {
-    const emitted = SIX_RULED_TYPES.filter((t) => RELATION_EMISSION_STATUS[t] === 'emitted');
-    expect(emitted.sort()).toEqual(['is-a', 'part-of']);
+  it('every status names either emitted data (one stage or the other) or a reason it is not yet', () => {
+    const emitted = SIX_RULED_TYPES.filter(
+      (t) =>
+        RELATION_EMISSION_STATUS[t] === 'emitted' ||
+        RELATION_EMISSION_STATUS[t] === 'emitted-via-corpus-stage',
+    );
+    expect(emitted.sort()).toEqual(['contrasts-with', 'is-a', 'part-of', 'prerequisite']);
+  });
+
+  it('is exactly the set stageForRelationType routes to a stage — the two tables agree by construction (ol-2zfj.16)', () => {
+    // The regression this test exists to catch: `stageForRelationType`
+    // (below) and `CORPUS_STAGE_EMITTABLE_TYPES` (`./corpus-relations/
+    // types.js`) both key off the literal `'emitted-via-corpus-stage'`. If a
+    // future edit renamed or removed that literal from `RELATION_EMISSION_
+    // STATUS` without updating `stageForRelationType`'s branch, corpus-stage
+    // edges would silently stop routing to 'corpus' and start being dropped
+    // as `droppedUnemittable` by `deriveRelationSet` — exactly the failure
+    // mode this bead (`ol-2zfj.16`) found and fixed once already.
+    for (const type of SIX_RULED_TYPES) {
+      const hasStage = stageForRelationType(type) !== undefined;
+      const dataOnWire =
+        RELATION_EMISSION_STATUS[type] === 'emitted' ||
+        RELATION_EMISSION_STATUS[type] === 'emitted-via-corpus-stage';
+      expect(hasStage).toBe(dataOnWire);
+    }
   });
 });
 

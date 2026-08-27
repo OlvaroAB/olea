@@ -91,6 +91,33 @@ describe('reconcileCorpusVerdicts — every emitted edge carries both endpoints�
     expect(result.relations[0]?.to).toBe('Advanced idea');
   });
 
+  it("pins prerequisite's canonical endpoint reading: `from` is the prerequisite, `to` is the dependent (ol-2zfj.17)", () => {
+    // The named example `../relation.js`'s `ProposedRelation`/`ConceptRelation`
+    // doc points at: "Foundational Skill" is prerequisite to "Advanced Skill"
+    // — she must be solid on the foundational skill before the advanced one
+    // is attempted. `direction: 'a-to-b'` reads as "a is prerequisite to b",
+    // so `a` (the prerequisite) must land in `from` and `b` (the dependent)
+    // in `to` — never the reverse.
+    const foundational = concept('Foundational Skill');
+    const advanced = concept('Advanced Skill');
+    const result = reconcileCorpusVerdicts(
+      [
+        verdict({
+          a: 'Foundational Skill',
+          b: 'Advanced Skill',
+          type: 'prerequisite',
+          direction: 'a-to-b',
+        }),
+      ],
+      [candidate(foundational, advanced)],
+    );
+    expect(result.relations).toHaveLength(1);
+    // The prerequisite (must be solid first) is `from`.
+    expect(result.relations[0]?.from).toBe('Foundational Skill');
+    // The dependent concept (what requires it) is `to`.
+    expect(result.relations[0]?.to).toBe('Advanced Skill');
+  });
+
   it('drops a directed verdict with no direction stated, rather than guessing one', () => {
     const a = concept('Foundational idea');
     const b = concept('Advanced idea');

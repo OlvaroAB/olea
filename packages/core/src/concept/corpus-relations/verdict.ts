@@ -38,13 +38,18 @@
  * batch and forgets it, the same shape `../read.js`'s `ConceptReaderPort`
  * already uses.
  *
- * **No production implementation, deliberately.** The verdict call needs a
- * task id, and the task-id catalogue is frozen (C4.1–C4.3) — adding one is
- * a Class C decision, same procedure `[D-111]`/`[D-112]` used for
- * `concepts.extract.v1`. This module declares the port and reconciles
- * whatever a real implementation eventually returns; wiring a task id, a
- * prompt and a plugin adapter is the follow-on bead this build files (see
- * this directory's `types.js` doc).
+ * **Has a production implementation, as of `[EXT-11]`/`ol-kw4a` (`[D-118]`,
+ * 2026-08-25) — corrected 2026-08-26, `ol-2zfj.16`.** The task id
+ * (`concepts.relations.v1`) was ratified and entered the frozen catalogue,
+ * and `WorkerCorpusRelationVerdict`
+ * (`packages/plugin/src/concept/workerCorpusRelationVerdict.ts`) implements
+ * this port, wired to a real caller on the existing ingestion-tick interval
+ * (`OleaPlugin.tickIngestionAndMaybeRunCorpusRelations`,
+ * `packages/plugin/src/main.ts`; see `olea-service/docs/dev/
+ * wiring-register.md`'s `CorpusRelationVerdictPort` row). This module still
+ * only declares the port and reconciles whatever an implementation returns
+ * — it does not itself construct or call one — but "no production
+ * implementation" is no longer true of the port as a whole.
  *
  * **Reconciliation mirrors `../reconcile.js` deliberately, not by
  * coincidence.** The concept set is authoritative there; it is
@@ -108,7 +113,9 @@ export interface CorpusVerdictResponse {
 
 /**
  * The service seam for the corpus stage's model call. See this module's
- * doc for why there is deliberately no production implementation yet.
+ * doc: it now has a production implementation, `WorkerCorpusRelationVerdict`
+ * (`[EXT-11]`/`ol-kw4a`, `[D-118]`, 2026-08-25) — corrected 2026-08-26,
+ * `ol-2zfj.16`.
  */
 export interface CorpusRelationVerdictPort {
   verdict(request: CorpusVerdictRequest): Promise<CorpusVerdictResponse>;

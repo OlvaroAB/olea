@@ -123,14 +123,17 @@ export interface ConceptReadResponse {
    * `is-a` and `part-of` proposals — the two relation types C7.10 rules
    * visible inside a single document (`./relation.js`'s
    * `PER_DOCUMENT_EMITTABLE_TYPES`). **Optional, not defaulted to empty by
-   * this type**, because no production `ConceptReaderPort` emits this field
-   * yet: `concepts.extract.v1`'s prompt does not ask for relations today,
-   * and changing that is service-side work this module does not own (see
-   * `../../../../../olea-service/prompts/concepts.extract/` and the
-   * discovered-from bead filed against it). `readConcepts` treats an absent
-   * `relations` field exactly like an empty one — this stage is ready to
-   * reconcile relations the moment a port supplies them, with no further
-   * change here.
+   * this type** — an absent field and an empty array mean the same thing
+   * to `readConcepts`, and both are real: `WorkerConceptReader`
+   * (`packages/plugin/src/concept/workerConceptReader.ts`), the production
+   * `ConceptReaderPort`, has read `concepts.extract.v1` relation proposals
+   * since `[EXT-10]` (C7.10's per-document half, `[D-070]`) — corrected
+   * 2026-08-26, `ol-2zfj.16`: this doc previously said no production port
+   * emitted the field at all, which stopped being true once that bead
+   * landed. Kept optional regardless, because a port implementation that
+   * predates `[EXT-10]`, or one running against an older contract version,
+   * still has no way to populate it and should not be forced to fabricate
+   * an empty array to satisfy the type.
    */
   readonly relations?: readonly ProposedRelation[];
 }

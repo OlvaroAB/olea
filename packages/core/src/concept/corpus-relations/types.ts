@@ -45,11 +45,18 @@ import {
 /**
  * The two types this stage — and only this stage — may emit, derived from
  * `../relation.js`'s own emission table rather than restated as a second
- * literal list. If that table's `'blocked-on-corpus-stage'` entries ever
+ * literal list. If that table's `'emitted-via-corpus-stage'` entries ever
  * change, this set moves with it instead of silently drifting out of sync.
+ *
+ * (Renamed from checking `'blocked-on-corpus-stage'` — `ol-2zfj.16`,
+ * 2026-08-26: that literal implied the corpus stage was still unbuilt, which
+ * stopped being true when `[EXT-11]`/`ol-kw4a` wired a real production
+ * caller on 2026-08-25. The derivation itself, and this set's membership,
+ * are unchanged — only the status literal it keys off was renamed to say
+ * what is actually true today.)
  */
 export const CORPUS_STAGE_EMITTABLE_TYPES: ReadonlySet<RelationType> = new Set(
-  RELATION_TYPES.filter((type) => RELATION_EMISSION_STATUS[type] === 'blocked-on-corpus-stage'),
+  RELATION_TYPES.filter((type) => RELATION_EMISSION_STATUS[type] === 'emitted-via-corpus-stage'),
 );
 
 /**

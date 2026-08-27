@@ -15,11 +15,19 @@
  *   (`./read.js`).
  * - **`contrasts-with`, `prerequisite`** — cross-document facts. Their
  *   readers exist in v0.9 (the misconception record's confusion pairing;
- *   queue ordering and failure diagnosis), but emitting them requires the
+ *   queue ordering and failure diagnosis), and emitting them requires the
  *   corpus-level stage — candidate nomination plus a combined-passage
- *   verdict — which is a **separate, not-yet-built** piece of machinery
- *   (`[EXT-5]`, `ol-2zfj.7`). Defined here; **not emitted** until that stage
- *   exists. This module does not build it, and does not pretend to.
+ *   verdict (`./corpus-relations/`, `[EXT-5]`/`ol-2zfj.7`). That stage is no
+ *   longer unbuilt: `[EXT-11]`/`ol-kw4a` (`[D-118]`) landed a production
+ *   port and wired a real caller on the existing ingestion-tick interval
+ *   (2026-08-25) — see `RELATION_EMISSION_STATUS` below, `'emitted-via-
+ *   corpus-stage'`. **Emitted is not the same claim as "a named reader
+ *   fires on it"** — whether the misconception store's confusion pairing
+ *   and queue ordering actually consume a produced edge yet is a separate,
+ *   stricter question this module does not answer; `packages/core/src/
+ *   checks/relation-reader-health.ts` is where that is checked, and as of
+ *   2026-08-26 it reports these two types' edges are produced and folded
+ *   but not yet read by anything production-reachable.
  * - **`causes` (causes / mechanism-of)** — a named reader exists
  *   (relationship elaboration, the deferred "how does X relate to Y"
  *   instrument, `[REL-3]` / `ol-2jod.14`) but the reader itself is deferred
@@ -80,9 +88,18 @@ export const RELATION_DIRECTEDNESS: Readonly<Record<RelationType, 'directed' | '
  * column. It answers only "is there data on the wire today."
  *
  * - `'emitted'` — the per-document read stage emits it today.
- * - `'blocked-on-corpus-stage'` — reader exists, but only the (unbuilt)
- *   corpus-level stage can produce it; defined, not emitted, until `[EXT-5]`
- *   lands.
+ * - `'emitted-via-corpus-stage'` — the corpus-level stage
+ *   (`./corpus-relations/`) emits it today, since `[EXT-11]`/`ol-kw4a`
+ *   (`[D-118]`) wired a real production caller on 2026-08-25. Kept as a
+ *   literal distinct from bare `'emitted'`, never collapsed into it, because
+ *   `stageForRelationType` below and `./corpus-relations/types.js`'s
+ *   `CORPUS_STAGE_EMITTABLE_TYPES` both derive "which types the corpus stage
+ *   owns" from this exact value — the same single-source-of-truth
+ *   discipline this module already uses for `PER_DOCUMENT_EMITTABLE_TYPES`.
+ *   **This is a statement about whether data reaches the fold, not about
+ *   whether a named downstream reader visibly reacts to it** — see this
+ *   module's own top doc and `packages/core/src/checks/
+ *   relation-reader-health.ts` for that stricter, separate question.
  * - `'blocked-on-deferred-reader'` — reader exists and is named, but the
  *   reader itself is a deferred post-v0.9 instrument; defined, not emitted,
  *   until that instrument ships.
@@ -92,7 +109,7 @@ export const RELATION_DIRECTEDNESS: Readonly<Record<RelationType, 'directed' | '
  */
 export type RelationEmissionStatus =
   | 'emitted'
-  | 'blocked-on-corpus-stage'
+  | 'emitted-via-corpus-stage'
   | 'blocked-on-deferred-reader'
   | 'no-reader';
 
@@ -100,8 +117,8 @@ export const RELATION_EMISSION_STATUS: Readonly<Record<RelationType, RelationEmi
   Object.freeze({
     'is-a': 'emitted',
     'part-of': 'emitted',
-    'contrasts-with': 'blocked-on-corpus-stage',
-    prerequisite: 'blocked-on-corpus-stage',
+    'contrasts-with': 'emitted-via-corpus-stage',
+    prerequisite: 'emitted-via-corpus-stage',
     causes: 'blocked-on-deferred-reader',
     related: 'no-reader',
   });
@@ -135,10 +152,39 @@ export const PER_DOCUMENT_EMITTABLE_TYPES: ReadonlySet<RelationType> = new Set([
  * would be exactly the "constant fitted to nothing" the component register
  * warns against — this module declines to have an opinion; the reader
  * states it.
+ *
+ * **Canonical directed-endpoint reading** (`[D-070]`, C7.10, knowledge model
+ * §5, `ol-2zfj.17`) — for a **directed** type (`RELATION_DIRECTEDNESS`),
+ * `from`/`to` are not interchangeable and this is the canonical,
+ * checked-by-code reading of each:
+ *
+ * - **`is-a`** — `from` is the subtype (the kind), `to` is the supertype
+ *   (the kind-of it names). "X is-a Y" → `from: X, to: Y`.
+ * - **`part-of`** — `from` is the part, `to` is the whole/container. "X
+ *   part-of Y" → `from: X, to: Y`. `./read.js`'s `applyContainmentEvidence`
+ *   is where this is load-bearing rather than merely descriptive: it folds
+ *   containment evidence onto the concept named by **`to`**, never `from`
+ *   — a swapped edge would silently mark the part coarse instead of the
+ *   whole. `read.spec.ts` pins this with `part-of, from: 'Part', to:
+ *   'Whole'` producing containment evidence on `'Whole'`, and the sibling
+ *   is-a case alongside it.
+ * - **`prerequisite`** — `from` is the prerequisite (must be solid before
+ *   `to` is attempted), `to` is the dependent concept. Fixed by
+ *   `./corpus-relations/verdict.js`'s `CorpusVerdict.direction`: `'a-to-b'`
+ *   reads as "a is prerequisite to b" and reconciles to `from: a, to: b` —
+ *   `verdict.spec.ts` pins a named canonical example.
+ * - **`contrasts-with`, `related`** — symmetric; `from`/`to` carry no
+ *   direction at all (`RELATION_DIRECTEDNESS`).
+ * - **`causes`** — directed (subject causes/is-mechanism-of object, `from:
+ *   subject, to: object`), but deferred: no reader mints one yet
+ *   (`RELATION_EMISSION_STATUS.causes`), so this is stated for completeness
+ *   rather than pinned by any running code today.
  */
 export interface ProposedRelation {
   readonly type: RelationType;
+  /** The narrower/earlier end of a directed type — see this interface's own doc for the canonical reading per type. */
   readonly from: string;
+  /** The broader/later end of a directed type — see this interface's own doc for the canonical reading per type. */
   readonly to: string;
   readonly confidence: number;
 }
@@ -176,7 +222,12 @@ export type RelationProvenanceKind = 'hers' | 'model-proposed';
 /**
  * One relation edge after reconciliation (`./reconcile.js`) — the shape a
  * consumer (`./size.js` today; the misconception store and queue ordering
- * once `[EXT-5]` lands) actually reads.
+ * are the named future consumers of the corpus-stage types, `[EXT-5]`/
+ * `ol-2zfj.7` — that stage itself landed and is wired to a production
+ * caller as of 2026-08-25, `[EXT-11]`/`ol-kw4a`; whether either named
+ * consumer actually reads a produced edge yet is tracked separately by
+ * `packages/core/src/checks/relation-reader-health.ts`, not by this doc)
+ * actually reads.
  *
  * **Provenance is at passage grain and names the introducing passages of
  * BOTH endpoints** (C7.10) — never a file path alone, because a path does
@@ -190,7 +241,13 @@ export type RelationProvenanceKind = 'hers' | 'model-proposed';
  */
 export interface ConceptRelation {
   readonly type: RelationType;
-  /** Concept names, matching `ReadConcept.name` post-corroboration. */
+  /**
+   * Concept names, matching `ReadConcept.name` post-corroboration. Same
+   * canonical directed-endpoint reading as `ProposedRelation.from`/`.to`
+   * (see that interface's own doc, `ol-2zfj.17`) — reconciliation
+   * (`./reconcile.js`, `./corpus-relations/verdict.js`) carries `from`/`to`
+   * straight through from the proposal without reordering them.
+   */
   readonly from: string;
   readonly to: string;
   readonly provenance: RelationProvenanceKind;
@@ -252,7 +309,7 @@ export type RelationStage = 'per-document' | 'corpus';
 
 export function stageForRelationType(type: RelationType): RelationStage | undefined {
   if (PER_DOCUMENT_EMITTABLE_TYPES.has(type)) return 'per-document';
-  if (RELATION_EMISSION_STATUS[type] === 'blocked-on-corpus-stage') return 'corpus';
+  if (RELATION_EMISSION_STATUS[type] === 'emitted-via-corpus-stage') return 'corpus';
   return undefined;
 }
 
