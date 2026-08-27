@@ -31,10 +31,11 @@
  * The kinship question C7.8 (`[D-098]`) puts at the same moment — "a
  * continuation of the earlier course?" — is a DIFFERENT control about a
  * DIFFERENT object (the two course records, not this concept-level claim, per
- * the scenario in `features/F8-concepts-scope.md`) and is not built anywhere
- * in this codebase either (course-lifecycle confirmation is unbuilt in full —
- * see the `RECOG-1` report). This module draws nothing that could be mistaken
- * for it.
+ * the scenario in `features/F8-concepts-scope.md`). It is now built at
+ * `./kinship-view.ts`, hosted alongside this module's `renderRecognitionClaims`
+ * by `./confirmation-view.ts` (`ol-0r92.5`), in its own separate `<section>` —
+ * this module still draws nothing that could be mistaken for it, and
+ * `renderRecognitionClaims` itself is unchanged.
  */
 
 import { RECOGNITION_CLAIM_HEADING, type RecognitionClaimCopy } from './copy.js';
