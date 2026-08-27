@@ -6,9 +6,11 @@ import {
   type ConceptRelation,
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
+  type CourseDetectionProposal,
   calendarDayFromLocalDate,
   createFsrsScheduler,
   type DeviceCapability,
+  detectCourseProposals,
   type ExtractedUnit,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
@@ -42,6 +44,7 @@ import {
   readConceptsAndRelations,
   readConceptsFromVault,
 } from './concept/wiring.js';
+import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
@@ -69,6 +72,7 @@ import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
+import { createVaultMisconceptionStore } from './misconception/store.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
@@ -211,6 +215,22 @@ export default class OleaPlugin extends Plugin {
    * module doc for the named F7.2 gap that blocks one.
    */
   private termWindowStore: ObsidianTermWindowStore | null = null;
+
+  /**
+   * C7.8's course-detection surface (`[D-098]` point 1, F1.3, `ol-0r92.7`):
+   * course codes `checkForCourseSetupProposals` has already put in front of
+   * her this session, confirmed or dismissed either way — never asked about
+   * twice in one session, per principle 12's "must not become nagging."
+   * **Session-only memory, not a store.** Persisting which courses are
+   * confirmed is a `CourseRecord`-shaped, Class C schema addition
+   * (`packages/core/src/course/lifecycle.ts`'s module doc); until that lands,
+   * this set is empty on every plugin load and she is asked again about every
+   * course-shaped folder each time Obsidian restarts — an acknowledged gap
+   * this bead stops short of closing, not a silent one.
+   */
+  private courseSetupSeenCodes = new Set<string>();
+  /** At most one course-setup modal open at a time — a second detected course waits for this one to resolve rather than stacking prompts. */
+  private courseSetupModalOpen = false;
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -647,6 +667,24 @@ export default class OleaPlugin extends Plugin {
       }),
     );
 
+    // `ol-0r92.7`: C7.8's course-detection surface (`[D-098]` point 1, F1.3).
+    // `'create'`/`'rename'` are the events that can introduce a course code
+    // `courseFromPath` has not seen before — a `'modify'` inside an already-
+    // known folder never changes which codes exist. Filtered here rather than
+    // inside `checkForCourseSetupProposals`, matching the materiality watch's
+    // own shape immediately above.
+    this.register(
+      vault.watch((event) => {
+        if (event.kind !== 'create' && event.kind !== 'rename') return;
+        this.checkForCourseSetupProposals(vault);
+      }),
+    );
+    // Cold-start scan: a vault opened with course-shaped folders already in
+    // it needs detection to run once without waiting for the next edit.
+    // Never awaited — same "may refresh, must not block onload" posture
+    // `refreshCachedStudyPlan` above documents.
+    this.checkForCourseSetupProposals(vault);
+
     this.registerInterval(
       window.setInterval(() => {
         void this.tickIngestionAndMaybeRunCorpusRelations();
@@ -746,6 +784,72 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * C7.8's course-detection surface (`[D-098]` point 1, F1.3, `ol-0r92.7`) —
+   * the entry point both the cold-start scan and the `'create'`/`'rename'`
+   * watch above call. Fire-and-forget by design (`void` at both call sites):
+   * a listing failure or an in-flight modal must never surface as anything
+   * other than "detection did not run this time," the same posture
+   * `evaluateMaterialityChange` takes for a read failure on its own trigger
+   * path.
+   */
+  private checkForCourseSetupProposals(vault: VaultSource): void {
+    if (this.courseSetupModalOpen) return;
+    void this.openNextCourseSetupProposal(vault);
+  }
+
+  /**
+   * Lists the vault, asks `detectCourseProposals` (`olea-core`) for the first
+   * course code she has not been asked about this session, and — if one
+   * exists — opens `CourseSetupModal` on it. `onConfirm`/`onDismiss` both
+   * mark the code seen and chain to the next proposal, so several
+   * course-shaped folders detected in the same pass are asked about one at a
+   * time rather than stacked.
+   *
+   * **The persistence seam (`ol-0r92.7`'s brief).** `onConfirm` receives a
+   * plain `{ name, kinshipAnswer }` result and does nothing with it beyond a
+   * `Notice` and marking the code seen for this session — writing a
+   * `CourseRecord` is the Class C schema addition this bead stops short of.
+   * `recognitionClaims` is passed as `[]` and `kinshipCandidateCourse` is
+   * omitted for the same reason `../today/earlier-course-recognition.ts`'s
+   * own module doc gives: nothing yet assembles the concepts+entries a real
+   * recognition read needs at proposal time, so an honest "not computed" (the
+   * confirmation view renders neither section when given nothing, by
+   * contract) is what ships here rather than a fabricated claim.
+   */
+  private async openNextCourseSetupProposal(vault: VaultSource): Promise<void> {
+    let paths: readonly VaultPath[];
+    try {
+      paths = await vault.list({ extensions: ['md'] });
+    } catch (error) {
+      console.error('Olea: course detection could not list the vault', error);
+      return;
+    }
+
+    const proposals: readonly CourseDetectionProposal[] = detectCourseProposals(
+      paths,
+      this.courseSetupSeenCodes,
+    );
+    const next = proposals[0];
+    if (next === undefined) return;
+
+    this.courseSetupSeenCodes.add(next.code);
+    this.courseSetupModalOpen = true;
+    new CourseSetupModal(this.app, {
+      proposal: { suggestedName: next.code, rootPath: next.rootPath },
+      recognitionClaims: [],
+      onConfirm: (result) => {
+        this.courseSetupModalOpen = false;
+        new Notice(`Olea: "${result.name}" confirmed as a course.`);
+        void this.openNextCourseSetupProposal(vault);
+      },
+      onDismiss: () => {
+        this.courseSetupModalOpen = false;
+        void this.openNextCourseSetupProposal(vault);
+      },
+    }).open();
+  }
+
+  /**
    * Ticks the ingestion queue, then checks whether that tick just closed an
    * ingestion session — never a per-document event (component register row
    * 1.2a; F1's batch-boundary scenario) — and if so, runs the corpus-level
@@ -773,11 +877,29 @@ export default class OleaPlugin extends Plugin {
       // ahead of confidence (`[D-070]`), with `[D-093]`'s abstention state
       // carried per edge. Nothing is persisted and nothing lands in her layer
       // — `[D-097]` keeps edges gated.
+      // Assessment-error-adjacency records (`ol-2zfj.19`/`ol-2zfj.22`/
+      // `ol-2zfj.23`): a `null` load means "could not read the vault" and
+      // maps to OMITTING the option — absent, not guessed, per
+      // `AssessmentErrorAdjacencyOptions`' own contract. `embeddingProximity`
+      // stays unthreaded: its required similarity threshold is a derived
+      // constant no derivation has produced (`ol-3ux7.11`).
+      const vault = new ObsidianSource(this.app);
+      const deviceId = await ensureDeviceId(this);
+      const misconceptionStore = createVaultMisconceptionStore({
+        vault,
+        deviceId,
+        now: () => new Date(),
+      });
+      const records = await misconceptionStore.load();
       const pass = await readConceptsAndRelations(
         this.concept,
         this.corpusRelation,
         this.corpusRelationStateStore,
-        { vault: new ObsidianSource(this.app), ingestionSessionClosed: true },
+        {
+          vault,
+          ingestionSessionClosed: true,
+          ...(records !== null ? { assessmentErrorAdjacency: { records } } : {}),
+        },
       );
       if (pass === null) return;
       this.relations = pass.relations;

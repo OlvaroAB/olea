@@ -27,16 +27,21 @@
  * then does what its API documents, and whether BRAT's download-and-install path
  * works in a real vault (`ol-bratverify`).
  *
- * The stub below is deliberately small. The bundle touches exactly seven
- * `obsidian` exports (`Plugin`, `PluginSettingTab`, `ItemView`, `Notice`,
- * `Setting`, `TFile`, `Platform`), which is why this is a fake worth having;
- * if that surface grows into something that has to imitate Obsidian's
- * behaviour rather than merely exist, this test should be deleted rather
- * than grown. `Modal` briefly belonged to this list (`ol-odb0`'s
+ * The stub below is deliberately small. The bundle touches exactly eight
+ * `obsidian` exports (`Plugin`, `PluginSettingTab`, `ItemView`, `Modal`,
+ * `Notice`, `Setting`, `TFile`, `Platform`), which is why this is a fake worth
+ * having; if that surface grows into something that has to imitate Obsidian's
+ * behaviour rather than merely exist, this test should be deleted rather than
+ * grown. `Modal` briefly belonged to this list once before (`ol-odb0`'s
  * `DraftCardsModal`) and left it when that command was withdrawn — F4.5
  * rules out a student-invoked draft verb by name, and the command and its
  * modal shipped contrary to that clause and were struck (wave-2 round-2
- * correction).
+ * correction). It is back for a real, permitted surface: `ol-0r92.7`'s
+ * `CourseSetupModal` (C7.8/`[D-098]` point 1, F1.3) — `class X extends Modal`
+ * evaluates at bundle-load time regardless of whether one is ever
+ * instantiated, so the stub needs a real constructor here even though the
+ * fake, empty vault below never has a course-shaped folder to detect and so
+ * never actually opens one.
  *
  * **Never skipped.** This was `describe.skipIf(!bundleBuilt)` until run 11. `main.js`
  * is gitignored, so on a clean checkout there was nothing to load and the whole
@@ -115,6 +120,13 @@ class FakePluginSettingTab {
 class FakeItemView {
   constructor(readonly leaf: unknown) {}
 }
+/** `CourseSetupModal extends Modal` (`ol-0r92.7`) — see this file's module doc for why this exists even though the empty fake vault below never opens one. */
+class FakeModal {
+  contentEl = { empty: () => {} };
+  constructor(readonly app: unknown) {}
+  open(): void {}
+  close(): void {}
+}
 const notices: string[] = [];
 class FakeNotice {
   constructor(message: string) {
@@ -128,6 +140,7 @@ const obsidianStub = {
   Plugin: FakePlugin,
   PluginSettingTab: FakePluginSettingTab,
   ItemView: FakeItemView,
+  Modal: FakeModal,
   Notice: FakeNotice,
   Setting: FakeSetting,
   TFile: FakeTFile,

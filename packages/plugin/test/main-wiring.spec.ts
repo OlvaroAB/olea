@@ -100,9 +100,16 @@ describe('every port the session needs is the real one', () => {
   });
 
   it('threads the stable device id into the review log, not a fresh one', () => {
-    // `ensureDeviceId` is awaited once in `onload`; a second mint would split
-    // this install's history across two filenames (C5.2, `device-id.ts`).
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(1);
+    // `ensureDeviceId` is idempotent (`device-id.ts`): every call after the
+    // first is a read of the already-persisted id, never a re-mint, so a
+    // second call site does not split this install's history across two
+    // filenames (C5.2). `onload` awaits it once, and the ingestion-tick
+    // handler (`ol-2zfj.19`) awaits it again to thread the same id into
+    // `createVaultMisconceptionStore` — there is no `this.deviceId` cache to
+    // reuse instead. The count below tracks known call sites rather than
+    // asserting "exactly once", so a future accidental duplicate still has to
+    // be a deliberate edit to this test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(2);
   });
 });
 
@@ -523,5 +530,61 @@ describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
     expect(main).not.toMatch(/DraftCardsModal/);
     expect(main).not.toMatch(/openDraftCardsModal/);
     expect(main).not.toMatch(/draftCards:/);
+  });
+});
+
+describe('C7.8 course detection has a real trigger and a real host (ol-0r92.7)', () => {
+  // `course-setup/confirmation-view.ts`'s own module doc named this exact
+  // gap: the confirmation surface renders into any container it is given,
+  // but nothing in the plugin ever gave it one, and nothing ever called
+  // `detectCourseProposals` to decide when to. These are the source-level
+  // checks that both now have a real caller in `onload`, following this
+  // file's own established shape for a wiring defect a mocked-port test
+  // cannot see.
+
+  it('imports the real detector from olea-core and the real modal host, not stubs', () => {
+    expect(main).toMatch(/detectCourseProposals,/);
+    expect(main).toMatch(
+      /import\s*\{\s*CourseSetupModal\s*\}\s*from\s*'\.\/course-setup\/setup-modal\.js'/,
+    );
+  });
+
+  it('watches create/rename events, not modify — a new course code arrives only through those', () => {
+    expect(main).toMatch(
+      /if\s*\(event\.kind\s*!==\s*'create'\s*&&\s*event\.kind\s*!==\s*'rename'\)\s*return;\s*this\.checkForCourseSetupProposals\(vault\);/,
+    );
+  });
+
+  it('runs a cold-start scan in onload without awaiting it', () => {
+    expect(main).toMatch(/this\.checkForCourseSetupProposals\(vault\);/);
+  });
+
+  it('lists the vault and calls the real olea-core detector against the session-seen set', () => {
+    expect(main).toMatch(
+      /const proposals:\s*readonly CourseDetectionProposal\[\]\s*=\s*detectCourseProposals\(\s*paths,\s*this\.courseSetupSeenCodes,\s*\);/,
+    );
+  });
+
+  it('opens the real modal host with the proposal, never a placeholder', () => {
+    expect(main).toMatch(
+      /new CourseSetupModal\(this\.app,\s*\{\s*proposal:\s*\{\s*suggestedName:\s*next\.code,\s*rootPath:\s*next\.rootPath\s*\},/,
+    );
+  });
+
+  it('confirming marks the code seen and chains to the next detected proposal, rather than stacking modals', () => {
+    expect(main).toMatch(
+      /onConfirm:\s*\(result\)\s*=>\s*\{\s*this\.courseSetupModalOpen = false;\s*new Notice\(`Olea: "\$\{result\.name\}" confirmed as a course\.`\);\s*void this\.openNextCourseSetupProposal\(vault\);/,
+    );
+  });
+
+  it('dismissing (no confirm) also chains to the next proposal, so one unanswered modal cannot block the rest', () => {
+    expect(main).toMatch(
+      /onDismiss:\s*\(\)\s*=>\s*\{\s*this\.courseSetupModalOpen = false;\s*void this\.openNextCourseSetupProposal\(vault\);/,
+    );
+  });
+
+  it('never persists a CourseRecord at the confirmation call site — no store or schema import for one', () => {
+    expect(main).not.toMatch(/CourseRecord/);
+    expect(main).not.toMatch(/ObsidianCourseStore/);
   });
 });
