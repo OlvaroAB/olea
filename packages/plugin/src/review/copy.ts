@@ -35,6 +35,7 @@
  */
 
 import type { Rating } from 'olea-contracts';
+import type { AcceptedExplainBackGrading } from 'olea-core';
 import { type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
 import type { SessionCompleteSummary } from './session.js';
 import type { ClozeCard, QaCard } from './types.js';
@@ -181,6 +182,116 @@ export const EXPLAIN_WHY_REFUSAL =
  */
 export const EXPLAIN_WHY_UNAVAILABLE =
   "Explain it back isn't available yet — no AI Worker is configured.";
+
+// ---------------------------------------------------------------------------
+// F5 Feynman-mode explain-back: the folded grounding refusal (C4.7, `[D-089]`)
+// ---------------------------------------------------------------------------
+//
+// Foundation item 32, "What Olea is allowed to say" (`docs/foundation/plan.html`
+// in olea-service): "the refusal path for explanations has no shipped text at
+// all — it exists in the development harness only, so the branch would
+// render nothing." `EXPLAIN_WHY_REFUSAL` above closes that gap for F2.7's
+// on-demand channel (`ol-sn1q`). These two close it for the DIFFERENT
+// refusal `[D-089]`'s folded path requires of F5's own graded explain-back
+// (`explain-back.judge.v1`, the Feynman-mode instrument, not F2.7's "why was
+// I wrong"): a two-reason posture, and the two reasons must be
+// distinguishable in both directions — "an error-refusal states the true,
+// transient reason, never the insufficient-notes message" (C4.7).
+//
+// **No production caller renders either string yet.** `gradeExplainBack`
+// (`olea-core`'s grading pipeline) has no wire-level refusal signal at all —
+// every `JudgeCaller` response it models is a graded verdict — and the
+// review UI has no Feynman-mode destination to grade: `ol-tka5` (open,
+// Class C) has not decided where an explain-back verdict is persisted, so
+// `session.ts`'s own `acceptConfusionRoutingOffer` doc explicitly declines
+// to build one ahead of that. Item 32's Done-when is scoped to
+// `packages/plugin/src/**/copy.ts` — the copy itself, not the wiring — so
+// these ship as real, vocabulary-checked text now rather than being invented
+// under time pressure later, the way `EXPLAIN_WHY_REFUSAL` had to be.
+
+/**
+ * The transient half of `[D-089]`'s two-reason refusal: the folded grounding
+ * check errored or timed out, so nothing was graded. States the mechanical
+ * fact and the next step (V3/V4) — never the insufficient-notes wording
+ * below, because a check that failed to run is not evidence her notes are
+ * thin (C4.7: "a false claim about her notes wearing a refusal's clothes").
+ */
+export const EXPLAIN_BACK_CHECK_FAILED_REFUSAL =
+  "Olea couldn't check this explanation against your notes just now, so nothing was graded. Try again in a moment.";
+
+/**
+ * The insufficient-notes half: retrieval genuinely returned too little to
+ * grade against. A **diagnostic** refusal (C4.7) — it may state only what
+ * retrieval actually returned, never a summary claim about the vault beyond
+ * that, so this is parametrised on the block count rather than hard-coded.
+ *
+ * **Leads with her material, not with Olea (V1).** The fact here is about
+ * her notes, not about Olea's own action — V1's own failing example is
+ * exactly this shape written the other way round ("Olea noticed Anatomy is
+ * behind" instead of "Anatomy has received below its minimum share…"), so
+ * this states what her notes have (or don't) rather than what Olea found.
+ */
+export function explainBackInsufficientNotesRefusal(sourceBlockCount: number): string {
+  const evidence =
+    sourceBlockCount <= 0
+      ? "Your notes don't have anything on this yet"
+      : `Your notes have ${sourceBlockCount === 1 ? '1 passage' : `${sourceBlockCount} passages`} on this — not enough`;
+  return `${evidence} to grade the explanation against. Add more to your notes, then try again.`;
+}
+
+/**
+ * F6.8 / V5's "first-ever full-depth explanation" moment — the one
+ * encouragement string this cluster can honestly write, because it is the
+ * only affect-bearing moment on the charter's closed list that an
+ * `AcceptedExplainBackGrading` can evidence at all (the other two, a
+ * growth-stage transition and the first session after an absence, are read
+ * from mastery/scheduling state this pipeline never touches).
+ *
+ * **Evidence-gated, not scheduled.** F6.8 bars a compliment "Olea has not
+ * measured" — praise that could have been written before she did anything
+ * is exactly what item 32 names as noise. This returns `null` unless the
+ * grading is a clean pass: `verdict === 'correct'` AND nothing was missed,
+ * cited or flagged as a misconception. Every field read here is one
+ * `AcceptedExplainBackGrading` actually carries (`gradingPipeline.ts`) —
+ * nothing is invented, and depth itself is never scored by this pipeline
+ * (F5.4's Socratic follow-ups are shed for S3), so "full depth" is read as
+ * this honest proxy: correct, with nothing the grader found to flag.
+ *
+ * **What names the specific evidence** is `grading.feedback` — the grader's
+ * own per-answer text, not a second, separately-invented sentence — appended
+ * after the milestone fact, the same composition `mcqFeedbackSentence` above
+ * already uses for "model text plus one derived clause."
+ *
+ * **`first`, not "first this session":** the caller decides whether this is
+ * actually the first full-depth explanation ever (mastery/stage state this
+ * module does not hold) and only calls this function once that is true —
+ * same "copy derives, callers decide state" split the module doc draws
+ * throughout this file. No caller does so yet; see the section header above.
+ *
+ * The milestone sentence deliberately matches the vocabulary registry's own
+ * V5 worked example verbatim (`docs/Olea_vocabulary_registry.md` §9) rather
+ * than paraphrasing it — the registry's pass case for this exact moment
+ * needs no rewording, and drifting from it would just be a second, unproven
+ * way of saying the one thing V5 already ratified.
+ */
+export function explainBackFullDepthEncouragement(
+  grading: Pick<
+    AcceptedExplainBackGrading,
+    'verdict' | 'missedPoints' | 'citedIssues' | 'misconceptionCandidates' | 'feedback'
+  >,
+): string | null {
+  if (
+    grading.verdict !== 'correct' ||
+    grading.missedPoints.length > 0 ||
+    grading.citedIssues.length > 0 ||
+    grading.misconceptionCandidates.length > 0
+  ) {
+    return null;
+  }
+  const milestone = "That's the first time this concept has been explained at full depth.";
+  const feedback = grading.feedback.trim();
+  return feedback === '' ? milestone : `${milestone} ${feedback}`;
+}
 
 /**
  * What a cloze front shows where the deleted text will appear.

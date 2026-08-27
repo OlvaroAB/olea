@@ -13,10 +13,16 @@
  */
 
 import type { Rating } from 'olea-contracts';
+import type { AcceptedExplainBackGrading } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   actionKeycap,
   CLOZE_BLANK,
+  EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
+  EXPLAIN_WHY_REFUSAL,
+  EXPLAIN_WHY_UNAVAILABLE,
+  explainBackFullDepthEncouragement,
+  explainBackInsufficientNotesRefusal,
   formatCourseList,
   mcqFeedbackSentence,
   mcqOptionKeycap,
@@ -389,5 +395,203 @@ describe('the unavailable screen states a failed read, not an empty deck', () =>
 
   it('does not say a feature is missing, because none is', () => {
     expect(unavailable).not.toMatch(/isn'?t built|not built|coming (in|soon)|later update/i);
+  });
+});
+
+/**
+ * Item 32, "What Olea is allowed to say" (`docs/foundation/plan.html` in
+ * olea-service): "the refusal path for explanations has no shipped text at
+ * all — it exists in the development harness only, so the branch would
+ * render nothing." `ol-0r92.2` [COPY-1].
+ *
+ * `EXPLAIN_BACK_CHECK_FAILED_REFUSAL` and `explainBackInsufficientNotesRefusal`
+ * are F5's own two-reason refusal (C4.7, `[D-089]`'s folded path) — distinct
+ * from `EXPLAIN_WHY_REFUSAL` above, which is F2.7's simpler on-demand
+ * channel. No production caller renders either yet (see `copy.ts`'s module
+ * comment for why: `ol-tka5` is still open), so these are pure functions of
+ * their own text and inputs, asserted directly rather than through a
+ * rendered view.
+ */
+describe('F5 explain-back refusal copy (`[D-089]`, item 32)', () => {
+  it('the transient-error refusal names the mechanical fact and a next step, never sympathy', () => {
+    expect(EXPLAIN_BACK_CHECK_FAILED_REFUSAL).toMatch(/couldn'?t check/i);
+    expect(EXPLAIN_BACK_CHECK_FAILED_REFUSAL).toMatch(/nothing was graded/i);
+    expect(EXPLAIN_BACK_CHECK_FAILED_REFUSAL).toMatch(/try again/i);
+    expect(EXPLAIN_BACK_CHECK_FAILED_REFUSAL.toLowerCase()).not.toContain('sorry');
+  });
+
+  it('the insufficient-notes refusal states what was found, scaled to the count', () => {
+    expect(explainBackInsufficientNotesRefusal(0)).toMatch(/don'?t have anything on this yet/i);
+    expect(explainBackInsufficientNotesRefusal(1)).toContain('1 passage');
+    expect(explainBackInsufficientNotesRefusal(1)).not.toContain('1 passages');
+    expect(explainBackInsufficientNotesRefusal(3)).toContain('3 passages');
+    for (const count of [0, 1, 2, 5]) {
+      const text = explainBackInsufficientNotesRefusal(count);
+      expect(text).toMatch(/add more to your notes, then try again\.$/i);
+    }
+  });
+
+  it('the two reasons are distinguishable in both directions (`[D-089]`)', () => {
+    // An error-refusal never uses the insufficient-notes wording, and the
+    // insufficient-notes refusal never claims a transient/mechanical check
+    // failure — swapping one for the other is exactly the false claim C4.7
+    // calls "a refusal's clothes."
+    expect(EXPLAIN_BACK_CHECK_FAILED_REFUSAL.toLowerCase()).not.toMatch(
+      /don'?t have anything|not enough|passages?/,
+    );
+    for (const count of [0, 1, 3]) {
+      expect(explainBackInsufficientNotesRefusal(count).toLowerCase()).not.toMatch(
+        /couldn'?t check|nothing was graded|try again in a moment/,
+      );
+    }
+  });
+
+  it('leads with her material, not with Olea (V1) — the diagnostic is about her notes', () => {
+    // V1's own failing example is this shape written the other way round:
+    // "Olea noticed Anatomy is behind" instead of leading with the material.
+    for (const count of [0, 1, 4]) {
+      expect(explainBackInsufficientNotesRefusal(count)).toMatch(/^Your notes /);
+    }
+  });
+});
+
+/**
+ * `explainBackFullDepthEncouragement` — F6.8 / V5's "first-ever full-depth
+ * explanation" moment, the one encouragement string this cluster can
+ * honestly write from an `AcceptedExplainBackGrading` (item 32's second
+ * Done-when clause: "encouragement copy names specific evidence").
+ */
+describe('explainBackFullDepthEncouragement (F6.8, V5, item 32)', () => {
+  function grading(
+    overrides: Partial<AcceptedExplainBackGrading> = {},
+  ): AcceptedExplainBackGrading {
+    return {
+      status: 'accepted',
+      verdict: 'correct',
+      feedback: '',
+      missedPoints: [],
+      citedIssues: [],
+      misconceptionCandidates: [],
+      ...overrides,
+    };
+  }
+
+  it('says nothing that could have been written before she did the work', () => {
+    // A partial or incorrect verdict, or any flagged issue, is exactly the
+    // case F6.8 bars — "a claim of progress Olea has not measured."
+    expect(explainBackFullDepthEncouragement(grading({ verdict: 'partial' }))).toBeNull();
+    expect(explainBackFullDepthEncouragement(grading({ verdict: 'incorrect' }))).toBeNull();
+    expect(
+      explainBackFullDepthEncouragement(grading({ missedPoints: ['the mechanism itself'] })),
+    ).toBeNull();
+    expect(
+      explainBackFullDepthEncouragement(
+        grading({
+          citedIssues: [{ kind: 'omission', description: 'x', sourceBlockIds: ['b1'] }],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      explainBackFullDepthEncouragement(
+        grading({
+          misconceptionCandidates: [
+            {
+              concept: 'c1',
+              statement: 'x',
+              correction: 'y',
+              correctionSourceBlockIds: ['b1'],
+            },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('names the milestone as fact, matching the vocabulary registry’s own V5 example', () => {
+    const text = explainBackFullDepthEncouragement(grading());
+    expect(text).toBe("That's the first time this concept has been explained at full depth.");
+  });
+
+  it('appends the grader’s own feedback as the specific evidence, never inventing a second sentence', () => {
+    const text = explainBackFullDepthEncouragement(
+      grading({ feedback: 'Your explanation covered both the mechanism and its limits.' }),
+    );
+    expect(text).toBe(
+      "That's the first time this concept has been explained at full depth. Your explanation covered both the mechanism and its limits.",
+    );
+  });
+
+  it('never states a verdict word or effort/discipline language (V6)', () => {
+    for (const feedback of ['', 'Solid coverage of the mechanism.']) {
+      const text = explainBackFullDepthEncouragement(grading({ feedback })) ?? '';
+      for (const word of ['correct', 'partial', 'incorrect', 'effort', 'discipline', 'late']) {
+        expect(text.toLowerCase()).not.toContain(word);
+      }
+    }
+  });
+});
+
+/**
+ * The voice charter (`[D-096]`, vocabulary registry §9) sweep over every
+ * static string this lane's slice of the explain-back/explain-why cluster
+ * can render — `features/F5-explain-it-back.md`'s "`[D-096]` V1–V6" block,
+ * scoped to `packages/plugin/src/review/copy.ts` (item 32's own `owns`
+ * line). V1/V2/V4/V5/V6 are pass/fail per sentence and checked directly;
+ * V3 is checked as "carries a fact and never substitutes sympathy for one"
+ * rather than a mechanical three-clause parse, matching how
+ * `REVIEW_UNAVAILABLE_BODY` (shipped, unchanged here) already satisfies it.
+ */
+describe('[D-096] V1–V6 — the voice charter over this cluster’s static strings', () => {
+  const STRINGS: readonly string[] = [
+    EXPLAIN_WHY_REFUSAL,
+    EXPLAIN_WHY_UNAVAILABLE,
+    EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
+    explainBackInsufficientNotesRefusal(0),
+    explainBackInsufficientNotesRefusal(1),
+    explainBackInsufficientNotesRefusal(4),
+  ];
+
+  it('V2 — names Olea, or names no actor at all, never "the system" or "I"', () => {
+    for (const text of STRINGS) {
+      expect(text).not.toMatch(/\bthe system\b/i);
+      expect(text).not.toMatch(/\bI\b/);
+      const oleaCount = (text.match(/\bOlea\b/g) ?? []).length;
+      expect(oleaCount).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('V4 — no apology; a self-failure states the defect and the next step', () => {
+    for (const text of STRINGS) {
+      expect(text.toLowerCase()).not.toContain('sorry');
+      expect(text.toLowerCase()).not.toMatch(/something went wrong/);
+    }
+  });
+
+  it('V3 — bad news carries a fact, never bare sympathy in its place', () => {
+    const SYMPATHY_ONLY = /^(sorry|oops|we apologi[sz]e|something went wrong)[.!]?$/i;
+    for (const text of STRINGS) {
+      expect(SYMPATHY_ONLY.test(text.trim())).toBe(false);
+    }
+  });
+
+  it('V5 — no refusal string carries affect; only the one closed-list moment does', () => {
+    // None of these refusals is a celebration moment, so none may read as one.
+    for (const text of STRINGS) {
+      expect(text).not.toMatch(/great|nice|well done|congrat/i);
+    }
+    // The encouragement string, conversely, is the one licensed exception —
+    // and only in its milestone clause, checked in its own describe block above.
+  });
+
+  it('V6 — no verdict, no effort talk, no bare quotient, in any refusal string', () => {
+    for (const text of STRINGS) {
+      for (const word of ['effort', 'discipline', 'lazy', 'behind schedule']) {
+        expect(text.toLowerCase()).not.toContain(word);
+      }
+      // "Not enough" is a fact about a count, not a quotient rendered as a
+      // single number (there is no ratio here at all) — nothing in this set
+      // renders a bare percentage or score.
+      expect(text).not.toMatch(/\d+%/);
+    }
   });
 });
