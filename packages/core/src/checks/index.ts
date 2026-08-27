@@ -4,6 +4,13 @@ export {
   type RecognitionTwinCase,
 } from './earlier-course-recognition.js';
 export {
+  checkFloorLoadLinearity,
+  FLOOR_LOAD_FLATTENING_FLOOR,
+  FLOOR_LOAD_MIN_SAMPLES,
+  type FloorLoadLinearityMeasured,
+  type FloorLoadSample,
+} from './floor-load-linearity.js';
+export {
   checkGapWeightIdentity,
   type GapWeightIdentityMeasured,
 } from './gap-weight-identity.js';

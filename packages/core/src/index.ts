@@ -911,6 +911,8 @@ export { buildReviewSession, toQueueCandidate } from './session/build.js';
 export { toDueInstruments } from './session/due-instruments.js';
 export type { EnumerateVaultInstrumentsOptions } from './session/enumerate.js';
 export { enumerateVaultInstruments } from './session/enumerate.js';
+export type { FloorLoadConcept, FloorLoadTally } from './session/floor-load.js';
+export { floorLoadOf } from './session/floor-load.js';
 export type { ReadReviewLogHistoryOptions, ReviewLogHistory } from './session/history.js';
 export { REVIEW_LOG_EXTENSION, readReviewLogHistory } from './session/history.js';
 export type { InstrumentIdInput, InstrumentIdSource } from './session/instrument-id.js';
