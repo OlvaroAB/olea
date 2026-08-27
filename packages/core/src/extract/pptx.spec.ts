@@ -13,6 +13,26 @@ function slideXml(paragraphs: readonly string[]): string {
   );
 }
 
+/** A slide with a distinct title-placeholder shape plus a separate body shape — the section-label tests need the two told apart, which the uniform single-shape `slideXml` above cannot express. `phType` defaults to `'title'`; pass `'ctrTitle'` for the title-slide-layout variant. */
+function slideXmlWithTitle(
+  title: string,
+  bodyParagraphs: readonly string[],
+  phType: 'title' | 'ctrTitle' = 'title',
+): string {
+  const bodyText = bodyParagraphs.map((p) => `<a:p><a:r><a:t>${p}</a:t></a:r></a:p>`).join('');
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+    'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+    '<p:cSld><p:spTree>' +
+    `<p:sp><p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="${phType}"/></p:nvPr></p:nvSpPr>` +
+    `<p:txBody><a:p><a:r><a:t>${title}</a:t></a:r></a:p></p:txBody></p:sp>` +
+    `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Body"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>` +
+    `<p:txBody>${bodyText}</p:txBody></p:sp>` +
+    '</p:spTree></p:cSld></p:sld>'
+  );
+}
+
 function presentationXml(rIds: readonly string[]): string {
   const sldIds = rIds.map((rId, i) => `<p:sldId id="${256 + i}" r:id="${rId}"/>`).join('');
   return (
@@ -75,6 +95,39 @@ describe('pptxExtractor — presentation-order resolution', () => {
     const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
     expect(result.pages[0]?.units[0]?.text).toBe('first by filename');
     expect(result.pages[1]?.units[0]?.text).toBe('second by filename');
+  });
+});
+
+describe('pptxExtractor — section labels (C3.2, DF-22)', () => {
+  it("tags a slide's unit with its title-placeholder text", async () => {
+    const bytes = buildPptxBytes({
+      'ppt/slides/slide1.xml': slideXmlWithTitle('Mitosis Overview', [
+        'Phase 1: prophase',
+        'Phase 2: metaphase',
+      ]),
+    });
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+    expect(result.pages[0]?.units[0]?.provenance.location.section).toBe('Mitosis Overview');
+  });
+
+  it("recognises the title-slide layout's ctrTitle placeholder the same way", async () => {
+    const bytes = buildPptxBytes({
+      'ppt/slides/slide1.xml': slideXmlWithTitle(
+        'Course Introduction',
+        ['A subtitle line'],
+        'ctrTitle',
+      ),
+    });
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+    expect(result.pages[0]?.units[0]?.provenance.location.section).toBe('Course Introduction');
+  });
+
+  it('never sets section on a slide with no title placeholder — undefined, not a fabricated label', async () => {
+    const bytes = buildPptxBytes({
+      'ppt/slides/slide1.xml': slideXml(['Just a plain text box, no title shape']),
+    });
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+    expect(result.pages[0]?.units[0]?.provenance.location.section).toBeUndefined();
   });
 });
 

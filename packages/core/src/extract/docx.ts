@@ -26,6 +26,17 @@
  * it, because a Word document built around a single pasted scanned image
  * (unusual, but possible) is exactly the "genuinely no text layer" case
  * routing exists to catch.
+ *
+ * **Section labels come from Word's own heading styles, not a guess**
+ * (C3.2, DF-22). Unlike PDF, DOCX genuinely carries author-placed structure:
+ * a paragraph styled `Heading1`-`Heading9` is Word's own signal, the same
+ * kind of thing a markdown `#`/`##` line is to `../block/outline.js`. Every
+ * unit's `provenance.location.section` is the text of the nearest
+ * **preceding** heading-styled paragraph — flattened to one label rather
+ * than a level-aware tree, because a citation needs a name to read out, not
+ * a rebuilt table of contents. A paragraph before the first heading (or a
+ * document with none) carries no `section`, which is the honest answer, not
+ * a missing one — see `types.ts`'s doc comment on `SourceLocation.section`.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
@@ -44,6 +55,10 @@ import { decodeXmlEntities } from './xml-entities.js';
 const BODY_RE = /<w:body>([\s\S]*?)<\/w:body>/;
 const PARAGRAPH_RE = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
 const TEXT_RUN_RE = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g;
+/** `w:pStyle` names the paragraph's style ID, when it has a non-default one — the mandatory `<w:pPr>` wrapper this always sits inside is not itself matched, since the style ID is all extraction needs. */
+const STYLE_RE = /<w:pStyle\b[^>]*\bw:val="([^"]*)"/;
+/** Word's own default English heading-style IDs — `Heading1` through `Heading9`, case-insensitively (a document authored or re-saved with different style-ID casing is still a heading). Not `Title`/`Subtitle`: those name the document's own title, not a section within it. */
+const HEADING_STYLE_RE = /^Heading[1-9]$/i;
 
 /** One paragraph's visible text, runs concatenated in document order. Formatting boundaries within a paragraph (bold/italic runs, etc.) are invisible here on purpose — only the characters matter for extraction and yield counting. */
 function extractParagraphText(paragraphXml: string): string {
@@ -56,14 +71,27 @@ function extractParagraphText(paragraphXml: string): string {
   return text;
 }
 
-/** Every non-empty paragraph's text, in document order. Empty paragraphs (spacing-only) are dropped — they carry no citable content. */
-function extractDocumentParagraphs(documentXml: string): string[] {
+/** Whether a paragraph carries one of Word's own heading styles — see `HEADING_STYLE_RE`. */
+function isHeadingParagraph(paragraphXml: string): boolean {
+  const styleId = STYLE_RE.exec(paragraphXml)?.[1];
+  return styleId !== undefined && HEADING_STYLE_RE.test(styleId);
+}
+
+/** One non-empty paragraph's text plus whether it is itself a heading — see `isHeadingParagraph`. */
+interface DocxParagraph {
+  readonly text: string;
+  readonly isHeading: boolean;
+}
+
+/** Every non-empty paragraph, in document order, each tagged with whether it is itself a heading-styled paragraph. Empty paragraphs (spacing-only) are dropped — they carry no citable content. */
+function extractDocumentParagraphs(documentXml: string): DocxParagraph[] {
   const body = BODY_RE.exec(documentXml)?.[1] ?? documentXml;
-  const paragraphs: string[] = [];
+  const paragraphs: DocxParagraph[] = [];
   let paraMatch = PARAGRAPH_RE.exec(body);
   while (paraMatch !== null) {
-    const text = extractParagraphText(paraMatch[1] ?? '');
-    if (text.length > 0) paragraphs.push(text);
+    const inner = paraMatch[1] ?? '';
+    const text = extractParagraphText(inner);
+    if (text.length > 0) paragraphs.push({ text, isHeading: isHeadingParagraph(inner) });
     paraMatch = PARAGRAPH_RE.exec(body);
   }
   return paragraphs;
@@ -85,7 +113,7 @@ export const docxExtractor: Extractor = {
 
     const documentBytes = files['word/document.xml'];
     const paragraphs = documentBytes ? extractDocumentParagraphs(strFromU8(documentBytes)) : [];
-    const fullText = paragraphs.join('\n');
+    const fullText = paragraphs.map((p) => p.text).join('\n');
     const charCount = fullText.length;
     // OOXML text nodes are already characters, so there is no decode step here
     // to fail the way `pdf.ts`'s does — but the plausibility check still runs,
@@ -98,18 +126,30 @@ export const docxExtractor: Extractor = {
     const units: ExtractedUnit[] = [];
     if (route === 'text-layer') {
       let offset = 0;
+      // The nearest *preceding* heading's text — see `types.ts`'s doc comment
+      // on `SourceLocation.section`. A heading paragraph's own unit is tagged
+      // with whatever section was open *before* it (its parent, or `undefined`
+      // at the top), and only paragraphs after it inherit its own text —
+      // mirroring `../block/outline.ts`'s "a heading's own contentIndices
+      // exclude the heading itself" convention.
+      let currentSection: string | undefined;
       for (const paragraph of paragraphs) {
         const start = offset;
-        const end = start + paragraph.length;
+        const end = start + paragraph.text.length;
         units.push({
-          text: paragraph,
+          text: paragraph.text,
           provenance: {
             sourcePath: input.path,
-            location: { page: 1, charRange: { start, end } },
+            location: {
+              page: 1,
+              charRange: { start, end },
+              ...(currentSection !== undefined ? { section: currentSection } : {}),
+            },
             ...(input.embeddedIn ? { embeddedIn: input.embeddedIn } : {}),
           },
         });
         offset = end + 1; // account for the '\n' joining paragraphs in `fullText`
+        if (paragraph.isHeading) currentSection = paragraph.text;
       }
     }
 

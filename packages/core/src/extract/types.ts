@@ -55,6 +55,40 @@ export interface CharRange {
 export interface SourceLocation {
   readonly page: number;
   readonly charRange: CharRange;
+  /**
+   * The section this location falls within, when — and only when — the
+   * source format carries a genuine, author-placed structural signal an
+   * extractor can read without guessing (C3.2's "headings, sections";
+   * DF-22). `undefined`, never fabricated, means "this format has no
+   * heading concept here", not "the lookup failed" — the same
+   * non-optional-vs-silent-default reasoning this file already applies to
+   * `PageTextLayer` and `ExtractionOutcome` argues for never inventing a
+   * value here, not for making the field non-optional: unlike those two,
+   * "no structure exists" is itself an honest, common answer for two of the
+   * four formats, so `undefined` is not silence, it is the correct report.
+   *
+   *  - DOCX (`docx.ts`): the text of the nearest **preceding** paragraph
+   *    styled `Heading1`-`Heading9` (Word's own default template styles) —
+   *    the same "nearest enclosing heading" reading `../block/outline.ts`
+   *    gives markdown, flattened to one label rather than a level-aware
+   *    tree, because a citation needs a name, not a rebuilt table of
+   *    contents. A paragraph before the first heading, or in a document with
+   *    no heading-styled paragraphs at all, carries no `section`.
+   *  - PPTX (`pptx.ts`): the slide's own title-placeholder text
+   *    (`<p:ph type="title"/>` or `type="ctrTitle"`) when the slide has one
+   *    — PowerPoint's own placeholder typing is the same kind of
+   *    author-placed signal Word's heading styles are, one label per slide.
+   *  - PDF (`pdf.ts`): always `undefined`. A PDF's `/Outlines` bookmark tree
+   *    is unreliable in exactly the office-exporter material this parser
+   *    targets and frequently absent from lecture PDFs outright; inventing a
+   *    "section" from page geometry (largest font on the page, first line)
+   *    would be a guess wearing structure's clothes, which is the dishonest
+   *    kind of citation this field exists to avoid. Page number stays the
+   *    honest grain for PDF citations (DF-22's recorded conclusion).
+   *  - image (`image.ts`): always `undefined` — a single image has no
+   *    internal structure to name.
+   */
+  readonly section?: string;
 }
 
 /**

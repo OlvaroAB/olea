@@ -26,6 +26,17 @@
  * (`ppt/notesSlides/`) are not, since they're not part of what a slide
  * *shows* — a routing/citation decision, not an oversight. No OCR of
  * embedded images within a slide (out of scope — Slot V's job, C3.3).
+ *
+ * **A slide's title placeholder becomes its section label** (C3.2, DF-22).
+ * `<p:ph type="title"/>` (or `type="ctrTitle"`, the title-slide layout's own
+ * variant) is PowerPoint's own placeholder typing — the same kind of
+ * author-placed structural signal Word's heading styles are — so every unit
+ * from a slide with one carries that text as `provenance.location.section`.
+ * A slide with no title placeholder (a divider built entirely from
+ * freeform text boxes, say) carries no `section`, which is the honest
+ * answer — see `types.ts`'s doc comment on `SourceLocation.section`. This
+ * is deliberately per-slide, not a deck-wide outline: unlike a markdown
+ * document, a deck has no nesting for `../block/outline.ts`'s tree to walk.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
@@ -52,6 +63,9 @@ const ATTR_RID_RE = /r:id="([^"]+)"/;
 const SLIDE_FILE_RE = /^ppt\/slides\/slide(\d+)\.xml$/;
 const PARAGRAPH_RE = /<a:p>([\s\S]*?)<\/a:p>/g;
 const TEXT_RUN_RE = /<a:t>([\s\S]*?)<\/a:t>/g;
+const SHAPE_RE = /<p:sp>([\s\S]*?)<\/p:sp>/g;
+const TITLE_PLACEHOLDER_RE = /<p:ph\b[^>]*\btype="(?:title|ctrTitle)"/;
+const TX_BODY_RE = /<p:txBody>([\s\S]*?)<\/p:txBody>/;
 
 /** `Target` in a `.rels` file is relative to the folder the `.rels` file itself describes (here, `ppt/`), or occasionally package-root-absolute (a leading `/`). Normalises both to a full zip-entry path. */
 function resolveRelsTarget(target: string): string {
@@ -125,6 +139,43 @@ function extractSlideText(xml: string): string {
 }
 
 /**
+ * The slide's title-placeholder text, when it has one — see the module doc's
+ * "A slide's title placeholder becomes its section label" (C3.2, DF-22).
+ * Walks each `<p:sp>` shape looking for a `<p:ph type="title"/>` (or
+ * `ctrTitle`) marker; the first one found wins, since a well-formed slide
+ * has at most one title placeholder. Reuses `extractSlideText`'s own
+ * paragraph/run join on just that shape's `<p:txBody>`, so multi-run and
+ * multi-paragraph titles decode exactly the same way slide body text does.
+ *
+ * **`SHAPE_RE.lastIndex` is reset on every call, not just relied on to reach
+ * zero by exhaustion.** This function returns as soon as it finds a title
+ * placeholder — deliberately, since a well-formed slide has at most one —
+ * which means the loop below does not always run `SHAPE_RE.exec` to `null`
+ * the way every other loop in this file does. A global regex's `lastIndex`
+ * only self-resets on a failed match, so an early return here would leave it
+ * pointing partway into *this* slide's XML, and the very next slide's call
+ * would start scanning from that stale offset instead of from the start of
+ * its own (unrelated, differently-sized) string.
+ */
+function extractSlideTitle(xml: string): string | undefined {
+  SHAPE_RE.lastIndex = 0;
+  let shapeMatch = SHAPE_RE.exec(xml);
+  while (shapeMatch !== null) {
+    const shapeXml = shapeMatch[1] ?? '';
+    if (TITLE_PLACEHOLDER_RE.test(shapeXml)) {
+      const txBody = TX_BODY_RE.exec(shapeXml)?.[1];
+      const title = txBody !== undefined ? extractSlideText(txBody).trim() : '';
+      if (title.length > 0) {
+        SHAPE_RE.lastIndex = 0; // don't leave state dangling for the next call
+        return title;
+      }
+    }
+    shapeMatch = SHAPE_RE.exec(xml);
+  }
+  return undefined;
+}
+
+/**
  * Classifies a pptx extraction per `ExtractionOutcome` (ol-voen). The zip
  * opened, so `'unreadable'` is already ruled out by the caller; what is left
  * is telling "this presentation has no slides" from "this presentation has
@@ -169,7 +220,9 @@ export const pptxExtractor: Extractor = {
 
     const pages: PageExtraction[] = order.map((key, idx) => {
       const slideBytes = files[key];
-      const slideText = slideBytes ? extractSlideText(strFromU8(slideBytes)) : '';
+      const slideXml = slideBytes ? strFromU8(slideBytes) : '';
+      const slideText = slideBytes ? extractSlideText(slideXml) : '';
+      const section = slideBytes ? extractSlideTitle(slideXml) : undefined;
       const charCount = slideText.length;
       // A slide with no `<a:t>` runs is `'absent'`, not `'unreadable'`: an
       // image-only slide is ordinary PowerPoint, and calling it a decode
@@ -190,7 +243,11 @@ export const pptxExtractor: Extractor = {
                 text: slideText,
                 provenance: {
                   sourcePath: input.path,
-                  location: { page, charRange: { start: 0, end: slideText.length } },
+                  location: {
+                    page,
+                    charRange: { start: 0, end: slideText.length },
+                    ...(section !== undefined ? { section } : {}),
+                  },
                   ...(input.embeddedIn ? { embeddedIn: input.embeddedIn } : {}),
                 },
               },
