@@ -16,10 +16,11 @@
  *    and her phone's reviews count towards the streak.
  */
 
-import type { VaultSource } from 'olea-core';
+import type { ConceptRelation, VaultSource } from 'olea-core';
 import { createFsrsScheduler } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  createRhythmSource,
   createVaultInstrumentSource,
   DEFAULT_STREAK_WINDOW_DAYS,
   endOfLocalDay,
@@ -27,8 +28,14 @@ import {
   localToday,
   readReviewHistory,
   type TodayInstrumentSource,
+  type TodayRhythmSource,
   unavailableInstrumentSource,
 } from '../../src/today/data-source.js';
+import {
+  EMPTY_MATERIAL_ARRIVALS,
+  ObsidianMaterialArrivalStore,
+} from '../../src/today/material-arrival-store.js';
+import { ObsidianTermWindowStore } from '../../src/today/term-window-store.js';
 
 const DEVICE = 'olea-testdevice1';
 const OTHER_DEVICE = 'olea-herphone01';
@@ -497,6 +504,50 @@ describe('createVaultInstrumentSource — the seam, closed', () => {
     });
     expect(vm.due).toEqual({ total: 0, newCount: 0, courses: [] });
   });
+
+  describe('C7.9 containment co-presence reaches this call site too (ol-v7r5.7)', () => {
+    /** Beta is part of Alpha — `from` is the finer side, `to` the container (`session/containment.ts`'s convention). */
+    const partOfAlphaBeta: ConceptRelation = {
+      type: 'part-of',
+      from: 'Beta',
+      to: 'Alpha',
+      provenance: 'model-proposed',
+      confidence: 0.9,
+      introducingPassages: {
+        from: {
+          sourcePath: 'Courses/MUS/two.md',
+          location: { page: 1, charRange: { start: 0, end: 1 } },
+        },
+        to: {
+          sourcePath: 'Courses/GEO/one.md',
+          location: { page: 1, charRange: { start: 0, end: 1 } },
+        },
+      },
+    };
+
+    it("with no relations threaded, both concepts count (today's no-op baseline)", async () => {
+      const due = await createVaultInstrumentSource({
+        vault: noteVault(),
+        scheduler: createFsrsScheduler(),
+        deviceId: DEVICE,
+        now,
+      }).listDueCandidates();
+      expect(new Set(due?.map((d) => d.courseCode))).toEqual(new Set(['GEO101', 'MUS101']));
+    });
+
+    it('threading a live part-of edge drops the container (GEO101/Alpha), keeping the part (MUS101/Beta)', async () => {
+      const due = await createVaultInstrumentSource({
+        vault: noteVault(),
+        scheduler: createFsrsScheduler(),
+        deviceId: DEVICE,
+        now,
+        relations: [partOfAlphaBeta],
+      }).listDueCandidates();
+      expect(due).not.toBeNull();
+      expect(due?.every((d) => d.courseCode === 'MUS101')).toBe(true);
+      expect(due).toHaveLength(1);
+    });
+  });
 });
 
 describe('loadTodayPanel', () => {
@@ -583,5 +634,119 @@ describe('loadTodayPanel', () => {
       windowDays: 30,
     });
     expect(vm.due).toEqual({ total: 0, newCount: 0, courses: [] });
+  });
+
+  describe('F6.9 rhythm reading (ol-v7r5.6)', () => {
+    it('leaves the rhythm half null when no rhythm source was wired — a third state, not a computed answer', async () => {
+      const { vault } = fakeVault({});
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+      });
+      expect(vm.rhythm).toBeNull();
+    });
+
+    it('threads a wired rhythm source through to a real reading', async () => {
+      const { vault } = fakeVault({});
+      const rhythm: TodayRhythmSource = {
+        async listCourseMaterialArrivals() {
+          return [{ course: 'GEO101', lastMaterialArrivalDay: '2026-07-01' }];
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        rhythm,
+      });
+      expect(vm.rhythm?.status).toBe('observed');
+      expect(vm.rhythm?.measured?.quietestCourse).toBe('GEO101');
+    });
+
+    it('a rhythm source that cannot enumerate degrades to the same "never wired" null, not a thrown error', async () => {
+      const { vault } = fakeVault({});
+      const rhythm: TodayRhythmSource = {
+        async listCourseMaterialArrivals() {
+          return null;
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        rhythm,
+      });
+      expect(vm.rhythm).toBeNull();
+    });
+  });
+});
+
+class FakeDataHost {
+  blob: Record<string, unknown> = {};
+  async loadData(): Promise<unknown> {
+    return this.blob;
+  }
+  async saveData(data: unknown): Promise<void> {
+    this.blob = data as Record<string, unknown>;
+  }
+}
+
+describe('createRhythmSource — the real source, over the two persisted stores', () => {
+  it('lists exactly the courses the arrival store has ever heard from', async () => {
+    const arrivalStore = new ObsidianMaterialArrivalStore(new FakeDataHost());
+    await arrivalStore.recordArrival('GEO101', '2026-08-01');
+    await arrivalStore.recordArrival('MUS101', '2026-08-10');
+    const source = createRhythmSource({
+      materialArrivals: arrivalStore,
+      termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
+    });
+    const arrivals = await source.listCourseMaterialArrivals();
+    expect(arrivals).toEqual(
+      expect.arrayContaining([
+        { course: 'GEO101', lastMaterialArrivalDay: '2026-08-01' },
+        { course: 'MUS101', lastMaterialArrivalDay: '2026-08-10' },
+      ]),
+    );
+    expect(arrivals).toHaveLength(2);
+  });
+
+  it('a fresh install lists no courses at all — the empty state, not a failure', async () => {
+    const source = createRhythmSource({
+      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
+      termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
+    });
+    expect(await source.listCourseMaterialArrivals()).toEqual([]);
+    expect(EMPTY_MATERIAL_ARRIVALS.lastArrivalByCourse).toEqual({});
+  });
+
+  it('resolves a recorded term window through resolveTermBoundary', async () => {
+    const termStore = new ObsidianTermWindowStore(new FakeDataHost());
+    await termStore.save({ start: '2026-08-01', end: '2026-12-15' });
+    const source = createRhythmSource({
+      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
+      termWindow: termStore,
+    });
+    expect(await source.resolveTermWindow()).toEqual({ start: '2026-08-01', end: '2026-12-15' });
+  });
+
+  it('no recorded term window resolves to null — F6.9 never blocks on it', async () => {
+    const source = createRhythmSource({
+      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
+      termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
+    });
+    expect(await source.resolveTermWindow()).toBeNull();
   });
 });

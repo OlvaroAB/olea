@@ -38,6 +38,12 @@ import type { ConceptCourses } from '../insights/types.js';
 import type { CalendarDay } from './calendar-day.js';
 import { type DueInstrument, type DueSummary, summariseDue } from './due.js';
 import { buildMasteryOverview, type MasteryOverview } from './mastery-overview.js';
+import {
+  detectRhythm,
+  type RhythmCourseInput,
+  type RhythmInsight,
+  type TermWindow,
+} from './rhythm.js';
 import { computeStreak, DEFAULT_WEEK_LENGTH, type StreakSummary } from './streak.js';
 
 /** Everything the panel is drawn from. */
@@ -80,6 +86,25 @@ export interface TodayPanelInput {
    * `not-enough-history`, which is the true statement.
    */
   readonly assessments?: readonly WeightedAssessment[];
+  /**
+   * F6.9's rhythm reading: one entry per course a material arrival has ever
+   * been observed for (`ol-v7r5.6`).
+   *
+   * **A third state, the same shape `concepts` documents above.** `undefined`
+   * means no arrival store was wired at all, and the panel renders no rhythm
+   * reading — not a false "not-enough-history" for every course she has.
+   * `[]` is a real answer (an install that has never observed a material
+   * arrival yet) and reaches `detectRhythm`'s own `'no courses were
+   * supplied'` state, which is the true statement for a fresh install.
+   */
+  readonly courseMaterialArrivals?: readonly RhythmCourseInput[];
+  /**
+   * F6.9's asked-once term window, already resolved via `resolveTermBoundary`
+   * (her recorded dates outrank the ask). Omitted or `null` means neither
+   * exists yet — the reading degrades to what is arriving, without a
+   * yardstick, and `detectRhythm` never blocks on its absence.
+   */
+  readonly termWindow?: TermWindow | null;
 }
 
 export interface TodayViewModel {
@@ -99,6 +124,12 @@ export interface TodayViewModel {
    * distinguishable all the way to the renderer.
    */
   readonly insights: InsightsSummary | null;
+  /**
+   * F6.9's rhythm reading, or `null` when no arrival store was wired — see
+   * `TodayPanelInput.courseMaterialArrivals`'s doc for why that is a third
+   * state rather than a computed "no courses" answer.
+   */
+  readonly rhythm: RhythmInsight | null;
   /**
    * How many days of review history the numbers above were computed over —
    * echoed back from `windowDays` so the panel can state its own scope rather
@@ -149,7 +180,21 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
           assessments: input.assessments ?? EMPTY_ASSESSMENTS,
         });
 
-  return { due, streak, mastery, insights, windowDays: input.windowDays };
+  // F6.9 (`ol-v7r5.6`): the same "absent means never asked" third state as
+  // `concepts`/`mastery`/`insights` above, not the detector's own
+  // `'not-enough-history'` — a panel this was never wired for should render
+  // nothing, not a claim about a course list it never received.
+  const courseMaterialArrivals = input.courseMaterialArrivals;
+  const rhythm =
+    courseMaterialArrivals === undefined
+      ? null
+      : detectRhythm({
+          today: input.today,
+          courses: courseMaterialArrivals,
+          ...(input.termWindow !== undefined ? { termWindow: input.termWindow } : {}),
+        });
+
+  return { due, streak, mastery, insights, rhythm, windowDays: input.windowDays };
 }
 
 /** Shared because it is immutable and read-only — no caller can add to it. */

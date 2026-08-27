@@ -49,6 +49,7 @@ import {
   buildTodayPanel,
   type CalendarDay,
   type ConceptCourses,
+  type ConceptRelation,
   calendarDayFromLocalDate,
   calendarDaysEndingOn,
   type DueInstrument,
@@ -56,9 +57,12 @@ import {
   extractConcepts,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
+  type RhythmCourseInput,
   readAssessments,
+  resolveTermBoundary,
   reviewLogPath,
   type Scheduler,
+  type TermWindow,
   type TodayPanelInput,
   type TodayViewModel,
   toDueInstruments,
@@ -66,6 +70,8 @@ import {
   type VaultSource,
   type WeightedAssessment,
 } from 'olea-core';
+import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
+import type { ObsidianTermWindowStore } from './term-window-store.js';
 
 /**
  * How far back the streak reads. 120 days covers a semester's habit without
@@ -208,6 +214,14 @@ export interface VaultInstrumentSourceDeps {
   /** Notes to walk past — documentation *about* the card format is not a corpus. */
   readonly excludePaths?: readonly VaultPath[];
   readonly probeDays?: number;
+  /**
+   * `part-of` edges available at composition time (C7.9; `ol-v7r5.7`) —
+   * forwarded straight to `buildReviewSession`'s `relations` input, so the
+   * Today panel's due count agrees with the review queue about which
+   * container/part candidates the containment co-presence filter drops.
+   * Omitted means none, the same real no-op `buildReviewSession` documents.
+   */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 /**
@@ -245,10 +259,21 @@ export function createVaultInstrumentSource(
           ...(deps.excludePaths !== undefined
             ? { instruments: { excludePaths: deps.excludePaths } }
             : {}),
+          ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
         });
 
+        // `toDueInstruments` maps every enumerated record, not
+        // `session.candidates` — so C7.9's containment filter (`ol-v7r5.7`)
+        // has to be re-applied here by instrument id, the same way suspension
+        // already is, or a `relations` argument would compose the queue
+        // correctly while the Today count kept the container's candidates.
+        const containmentDropped = new Set(
+          session.containmentDropped.map((candidate) => candidate.instrumentId),
+        );
         return toDueInstruments(session.instruments.records, session.replay).filter(
-          (instrument) => !session.suspended.has(instrument.instrumentId),
+          (instrument) =>
+            !session.suspended.has(instrument.instrumentId) &&
+            !containmentDropped.has(instrument.instrumentId),
         );
       } catch {
         // "We could not read your vault" is not "nothing is due". The panel
@@ -358,6 +383,71 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
   };
 }
 
+/**
+ * Where the panel gets F6.9's rhythm reading's two inputs (`ol-v7r5.6`):
+ * every course a material arrival was ever observed for, and her recorded
+ * term window, if any. Implemented for real by `createRhythmSource` below,
+ * over `material-arrival-store.ts`'s and `term-window-store.ts`'s persisted
+ * `data.json` stores — never the vault, never a server (C6).
+ */
+export interface TodayRhythmSource {
+  /**
+   * `null` means "could not read the arrival store", the same third state
+   * `TodayInstrumentSource.listDueCandidates` and `TodayTrendsSource.
+   * listConceptCourses` already draw: not the same as `[]`, which is a real,
+   * common answer for an install that has never observed an arrival yet.
+   */
+  listCourseMaterialArrivals(): Promise<readonly RhythmCourseInput[] | null>;
+  /**
+   * `resolveTermBoundary`'d already: her recorded dates outrank being asked.
+   * `null` means neither exists — F6.9 never blocks on this, so the caller
+   * degrades to the reading with no yardstick rather than treating `null` as
+   * a failure.
+   */
+  resolveTermWindow(): Promise<TermWindow | null>;
+}
+
+export interface RhythmSourceDeps {
+  readonly materialArrivals: ObsidianMaterialArrivalStore;
+  readonly termWindow: ObsidianTermWindowStore;
+}
+
+/**
+ * The real source. `listCourseMaterialArrivals` reads exactly the courses the
+ * arrival store has ever heard from — a course with no observed arrival ever
+ * simply is not in the list, rather than appearing with a `null` day, which
+ * is a considered simplification (see `material-arrival-store.ts`'s module
+ * doc) rather than an oversight: F6.9 has nothing to call "quiet" for a
+ * course Olea has never once seen material from, and `detectRhythm`'s own
+ * `not-enough-history` status already covers that case for the courses it IS
+ * given.
+ */
+export function createRhythmSource(deps: RhythmSourceDeps): TodayRhythmSource {
+  return {
+    async listCourseMaterialArrivals() {
+      try {
+        const persisted = await deps.materialArrivals.load();
+        return Object.entries(persisted.lastArrivalByCourse).map(
+          ([course, lastMaterialArrivalDay]) => ({ course, lastMaterialArrivalDay }),
+        );
+      } catch {
+        return null;
+      }
+    },
+    async resolveTermWindow() {
+      try {
+        const recorded = await deps.termWindow.load();
+        // `asked: null` until F7.2 is amended with an ask-once surface
+        // (`ol-v7r5.6`'s close evidence names the gap) — recorded still
+        // outranks it the moment one exists, with no change here.
+        return resolveTermBoundary({ recorded, asked: null });
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 export interface TodayPanelDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
@@ -367,6 +457,8 @@ export interface TodayPanelDeps {
   readonly windowDays?: number;
   /** Absent means no trends section — see `TodayTrendsSource`. */
   readonly trends?: TodayTrendsSource;
+  /** Absent means no rhythm reading — see `TodayRhythmSource`. */
+  readonly rhythm?: TodayRhythmSource;
 }
 
 /**
@@ -394,14 +486,35 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
     windowDays: history.windowDays,
   };
 
-  if (deps.trends === undefined) return buildTodayPanel(base);
+  // Each half resolves independently and spreads in only when it is a real
+  // answer — under `exactOptionalPropertyTypes`, passing e.g.
+  // `concepts: undefined` is NOT the same as omitting it, and the difference
+  // is exactly the one that matters here: core reads "absent" as "this panel
+  // was never asked", never as "asked, and it read nothing".
+  const trendsFields = await resolveTrendsFields(deps.trends);
+  const rhythmFields = await resolveRhythmFields(deps.rhythm);
 
-  // `concepts` is spread in only when it is a real answer. Under
-  // `exactOptionalPropertyTypes`, passing `concepts: undefined` is NOT the same
-  // as omitting it — and the difference is exactly the one that matters here,
-  // because core reads "absent" as "this panel was never asked".
-  const concepts = await deps.trends.listConceptCourses();
-  if (concepts === null) return buildTodayPanel(base);
-  const assessments = await deps.trends.listAssessmentWeights();
-  return buildTodayPanel({ ...base, concepts, assessments });
+  return buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields });
+}
+
+/** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */
+async function resolveTrendsFields(
+  trends: TodayTrendsSource | undefined,
+): Promise<Pick<TodayPanelInput, 'concepts' | 'assessments'> | Record<string, never>> {
+  if (trends === undefined) return {};
+  const concepts = await trends.listConceptCourses();
+  if (concepts === null) return {};
+  const assessments = await trends.listAssessmentWeights();
+  return { concepts, assessments };
+}
+
+/** F6.9's half of `TodayPanelInput` — `{}` when `rhythm` is absent or could not enumerate. */
+async function resolveRhythmFields(
+  rhythm: TodayRhythmSource | undefined,
+): Promise<Pick<TodayPanelInput, 'courseMaterialArrivals' | 'termWindow'> | Record<string, never>> {
+  if (rhythm === undefined) return {};
+  const courseMaterialArrivals = await rhythm.listCourseMaterialArrivals();
+  if (courseMaterialArrivals === null) return {};
+  const termWindow = await rhythm.resolveTermWindow();
+  return { courseMaterialArrivals, termWindow };
 }

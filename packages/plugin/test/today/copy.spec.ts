@@ -23,6 +23,8 @@ import {
   masteryCountLabel,
   NOTHING_DUE,
   newCountSentence,
+  rhythmQuietClause,
+  rhythmQuietLine,
   showsStartReviewAction,
   spacingRateSentence,
   streakValue,
@@ -338,6 +340,72 @@ describe('effortInsightLine names the course it is about (ol-7j54 / ARC-1)', () 
     const line = effortInsightLine(course);
     expect(line.text).not.toContain('FIXTURE101');
     expect(line.text).not.toMatch(/[A-Z]/);
+  });
+});
+
+describe('rhythmQuietClause / rhythmQuietLine — F6.9, the rhythm reading', () => {
+  // Scenarios: features/F6-today.md, "F6.9 — the rhythm reading states a
+  // fact, never a verdict".
+
+  it("states F6.9's own worked example, day-granular", () => {
+    expect(rhythmQuietClause(21)).toBe('nothing from this course has arrived in 21 days.');
+    expect(rhythmQuietClause(30)).toContain('30 days');
+  });
+
+  it('names no streak, effort score, hours total, completion figure or compliance language', () => {
+    const line = rhythmQuietClause(21).toLowerCase();
+    for (const word of [
+      'streak',
+      'effort',
+      'hours',
+      'complete',
+      'behind',
+      'ahead',
+      'catch up',
+      'should',
+    ]) {
+      expect(line, `"${word}" is exactly what F6.9's forbidden list rules out`).not.toContain(word);
+    }
+  });
+
+  it('rhythmQuietLine bundles the course with the same text rhythmQuietClause produces', () => {
+    const line = rhythmQuietLine('FIXTURE101', 21);
+    expect(line.course).toBe('FIXTURE101');
+    expect(line.text).toBe(rhythmQuietClause(21));
+  });
+
+  it('the bundled text still names no course — only the .course field does (INV-3, ol-p2t08)', () => {
+    const line = rhythmQuietLine('FIXTURE101', 21);
+    expect(line.text).not.toContain('FIXTURE101');
+    expect(line.text).not.toMatch(/[A-Z]/);
+  });
+
+  it('is part of the corpus the panel-wide rules are checked against', () => {
+    expect(allTodayStrings()).toContain(rhythmQuietClause(21));
+  });
+
+  it("F6.9 scenario 'the reading states whether material has arrived, and nothing else' — given a course from which nothing has arrived in three weeks", () => {
+    // features/F6-today.md's own wording: three weeks is QUIET_DAYS_THRESHOLD
+    // (21 days, `olea-core`'s `rhythm.ts`).
+    const clause = rhythmQuietClause(21);
+    expect(clause).toContain('21 days');
+    for (const word of ['streak', 'effort score', 'hours', 'completion']) {
+      expect(clause.toLowerCase()).not.toContain(word);
+    }
+  });
+
+  it("F6.9 scenario 'tempo is an internal yardstick and is never displayed as a figure' — no copy function in this module accepts one", () => {
+    // Tempo (credit weight, expected weekly hours) has no extraction stage
+    // anywhere in this codebase yet (`olea-core`'s `rhythm.ts` module doc),
+    // so the strongest check available today is structural: nothing this
+    // module can produce names or carries a tempo figure at all — not
+    // 'tempo', not 'credit', not 'hours a week'. The day count these
+    // functions DO carry (`quietDays`) is a fact about arrivals, not a
+    // yardstick reading.
+    for (const word of ['tempo', 'credit weight', 'hours a week', 'hours/week']) {
+      expect(rhythmQuietClause(21).toLowerCase()).not.toContain(word);
+      expect(corpus).not.toContain(word);
+    }
   });
 });
 

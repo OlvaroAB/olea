@@ -57,6 +57,7 @@
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
+  ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
   QueueFilter,
@@ -133,6 +134,14 @@ export interface OpenReviewSessionInput {
    * exactly the queue `buildReviewSession` composed, unchanged.
    */
   readonly draftCache?: DraftCacheStore;
+  /**
+   * `part-of` edges available at composition time (C7.9; `ol-v7r5.7`) —
+   * forwarded straight to `buildReviewSession`'s `relations` input, which
+   * runs `session/build.ts`'s containment co-presence filter over them.
+   * Omitted means none, the same real no-op `buildReviewSession` itself
+   * documents rather than a degraded mode this module invents.
+   */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 export type OpenReviewSessionOutcome =
@@ -202,6 +211,7 @@ export async function openReviewSession(
       now,
       reviewLog: { additionalPaths },
       ...(input.filter !== undefined ? { filter: input.filter } : {}),
+      ...(input.relations !== undefined ? { relations: input.relations } : {}),
     });
 
     // C5.5: "the Worker supplies the policy … core executes it". A `null`

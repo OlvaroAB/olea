@@ -53,11 +53,19 @@ const instruments: readonly DueInstrument[] = [
 describe('buildTodayPanel', () => {
   it('is the halves it has and nothing else', () => {
     // Was `['due', 'streak']` until F6.2/F6.5 (`ol-lohq`, `ol-p6t04`) added the
-    // trends half. Kept as an exact field-set assertion rather than relaxed to
-    // `toContain`: the point of it is that a field cannot appear here without
-    // somebody deciding it should.
+    // trends half, and `rhythm` joined it at F6.9 (`ol-v7r5.6`). Kept as an
+    // exact field-set assertion rather than relaxed to `toContain`: the point
+    // of it is that a field cannot appear here without somebody deciding it
+    // should.
     const vm = buildTodayPanel(input());
-    expect(Object.keys(vm).sort()).toEqual(['due', 'insights', 'mastery', 'streak', 'windowDays']);
+    expect(Object.keys(vm).sort()).toEqual([
+      'due',
+      'insights',
+      'mastery',
+      'rhythm',
+      'streak',
+      'windowDays',
+    ]);
   });
 
   it('leaves the trends half null when no concept set was supplied', () => {
@@ -113,6 +121,59 @@ describe('buildTodayPanel', () => {
   it('passes suspension through to the count', () => {
     const vm = buildTodayPanel(input({ instruments, suspendedInstrumentIds: new Set(['a', 'b']) }));
     expect(vm.due?.total).toBe(1);
+  });
+});
+
+describe('buildTodayPanel — F6.9 rhythm reading (ol-v7r5.6)', () => {
+  it('leaves the rhythm half null when no arrival list was supplied — a third state, not a computed answer', () => {
+    const vm = buildTodayPanel(input());
+    expect(vm.rhythm).toBeNull();
+  });
+
+  it('an EMPTY arrival list is a real answer, and reaches detectRhythm as one', () => {
+    const vm = buildTodayPanel(input({ courseMaterialArrivals: [] }));
+    expect(vm.rhythm).toEqual({
+      id: 'rhythm',
+      status: 'not-enough-history',
+      measured: null,
+      reason: 'no courses were supplied',
+    });
+  });
+
+  it('folds a real arrival list through detectRhythm, quiet course named', () => {
+    const vm = buildTodayPanel(
+      input({
+        today: '2026-08-31',
+        courseMaterialArrivals: [
+          { course: 'GEO101', lastMaterialArrivalDay: '2026-08-01' }, // 30 days quiet
+          { course: 'MUS101', lastMaterialArrivalDay: '2026-08-25' }, // 6 days, not quiet
+        ],
+      }),
+    );
+    expect(vm.rhythm?.status).toBe('observed');
+    expect(vm.rhythm?.measured?.quietestCourse).toBe('GEO101');
+    expect(vm.rhythm?.measured?.maxQuietDays).toBe(30);
+  });
+
+  it("threads a resolved term window through, reflected in the measured reading's hadTermWindow", () => {
+    const vm = buildTodayPanel(
+      input({
+        today: '2026-08-31',
+        courseMaterialArrivals: [{ course: 'GEO101', lastMaterialArrivalDay: '2026-08-25' }],
+        termWindow: { start: '2026-08-01', end: '2026-12-15' },
+      }),
+    );
+    expect(vm.rhythm?.measured?.hadTermWindow).toBe(true);
+  });
+
+  it('an absent term window still computes the reading — F6.9 never blocks on it', () => {
+    const vm = buildTodayPanel(
+      input({
+        today: '2026-08-31',
+        courseMaterialArrivals: [{ course: 'GEO101', lastMaterialArrivalDay: '2026-08-25' }],
+      }),
+    );
+    expect(vm.rhythm?.measured?.hadTermWindow).toBe(false);
   });
 });
 

@@ -266,6 +266,15 @@ export function conceptCountLabel(count: number): string {
 export const INSIGHTS_LABEL = 'What the log shows';
 
 /**
+ * The rhythm section's eyebrow (F6.9). A separate section from
+ * `INSIGHTS_LABEL`'s, deliberately: this reading's evidence is a per-course
+ * material-arrival timestamp, not a window of review-log entries, so it
+ * carries no `insightsScopeSentence` footer and must not be folded under a
+ * label that promises one.
+ */
+export const RHYTHM_LABEL = 'What has arrived';
+
+/**
  * Shown when every detector declined for want of history — the degenerate
  * case, and the one a confident empty chart would lie about.
  *
@@ -374,6 +383,51 @@ export function insightsScopeSentence(windowDays: number): string {
 }
 
 /**
+ * F6.9, the rhythm reading: is material arriving? **About her vault, never
+ * about her** — the clause's own words, and the reason every sentence this
+ * function can produce is a fact and a day count, nothing else.
+ *
+ * `rhythmQuietClause`'s text is F6.9's own worked example, almost verbatim:
+ * *"nothing from this course has arrived in three weeks."* This states the
+ * measured day count rather than converting it to a week count — the panel's
+ * other numbers (`streakValue`, `dueTodaySentence`) are all day-granular, and
+ * `olea-core`'s `rhythm.ts` explicitly declines to invent a weeks-or-tempo
+ * conversion it has no ruling behind (see that module's doc); copy is not the
+ * place to invent one either.
+ *
+ * **Forbidden outright, and F6.9 says this is most of the clause:** no
+ * streak, no effort score, no hours total, no completion figure, nothing
+ * that reads as compliance. This sentence names a fact about the vault and
+ * stops — the same restraint `effortShareClause` and `earlyPullSentence`
+ * already hold for F6.5.
+ *
+ * The course itself is never in this text (INV-3, `ol-p2t08`) — see
+ * `rhythmQuietLine` below for the bundled form the view actually reaches for.
+ */
+export function rhythmQuietClause(quietDays: number): string {
+  return `nothing from this course has arrived in ${quietDays} days.`;
+}
+
+/** `rhythmQuietLine`'s return shape: the course a quiet finding is about, paired with the claim. */
+export interface RhythmQuietLine {
+  readonly course: string;
+  readonly text: string;
+}
+
+/**
+ * F6.9, bundled with the course it is true of — same reasoning
+ * `effortInsightLine` states for F6.5(b): a claim like "nothing has arrived"
+ * is meaningless without saying *from where*, and one course going quiet says
+ * nothing about another course on the same panel. This is the one way this
+ * module offers to reach the sentence, and reaching it always carries which
+ * course it measures — no argument-order mistake can separate the two,
+ * because there is only one argument to give.
+ */
+export function rhythmQuietLine(course: string, quietDays: number): RhythmQuietLine {
+  return { course, text: rhythmQuietClause(quietDays) };
+}
+
+/**
  * Every string this panel can put on screen, for the copy test. Functions are
  * sampled across the values that change their wording; anything rendered by
  * `view.ts` that is not reachable from here is a bug in `view.ts`.
@@ -407,6 +461,7 @@ export function allTodayStrings(): readonly string[] {
     MASTERY_LABEL,
     INSIGHTS_LABEL,
     INSIGHTS_TOO_EARLY,
+    RHYTHM_LABEL,
     // Every one of F2.11's five words, at the two counts whose wording could
     // differ. Sampling the vocabulary rather than one state of it is what makes
     // the panel-wide rules apply to all five.
@@ -421,5 +476,8 @@ export function allTodayStrings(): readonly string[] {
     earlyPullSentence(0.38) ?? '',
     effortShareClause(0.57, 0.14),
     insightsScopeSentence(120),
+    // --- F6.9, the rhythm reading ---
+    rhythmQuietClause(21),
+    rhythmQuietClause(30),
   ];
 }

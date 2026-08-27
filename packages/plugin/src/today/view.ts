@@ -59,6 +59,8 @@ import {
   masteryCountLabel,
   NOTHING_DUE,
   newCountSentence,
+  RHYTHM_LABEL,
+  rhythmQuietLine,
   START_REVIEW,
   STREAK_LABEL,
   showsStartReviewAction,
@@ -130,6 +132,7 @@ export class TodayView extends ItemView {
     // that is meant to be last.
     this.renderMastery(body, vm);
     this.renderInsights(body, vm);
+    this.renderRhythm(body, vm);
     this.renderStreak(body, vm.streak.currentDays, vm.streak.atWindowEdge, vm.streak.week);
   }
 
@@ -281,6 +284,36 @@ export class TodayView extends ItemView {
     }
 
     return lines;
+  }
+
+  /**
+   * F6.9 (`ol-v7r5.6`) — is material arriving? A separate section from
+   * `renderInsights`, deliberately: this reading's evidence is a per-course
+   * material-arrival timestamp, not a window of review-log entries, so it
+   * carries no `insightsScopeSentence` footer and would misstate its own
+   * scope if folded under a label that promises one.
+   *
+   * Renders only on `'observed'` — a course actually reached the quiet
+   * threshold. `'not-observed'` (measured, and nothing is quiet) and
+   * `'not-enough-history'` (no arrival store wired, or nothing observed yet)
+   * both render nothing: the same "nothing here fires in the negative
+   * direction" restraint `insightLines`' effort half already holds, applied
+   * to a reading F6.9 states is about the vault and never about her.
+   */
+  private renderRhythm(parent: HTMLElement, vm: TodayViewModel): void {
+    const rhythm = vm.rhythm;
+    if (rhythm === null || rhythm.status !== 'observed') return;
+    const quietest = rhythm.measured?.quietestCourse ?? null;
+    if (quietest === null) return;
+    const reading = rhythm.measured?.courses.find((c) => c.course === quietest);
+    if (reading === undefined || reading.quietDays === null) return;
+
+    const line = rhythmQuietLine(reading.course, reading.quietDays);
+    const section = parent.createDiv({ cls: 'olea-today-insights' });
+    section.createDiv({ cls: 'olea-today-insights-label', text: RHYTHM_LABEL });
+    const insight = section.createDiv({ cls: 'olea-today-insight' });
+    insight.createSpan({ cls: 'olea-today-mastery-code', text: line.course });
+    insight.createSpan({ cls: 'olea-today-insight-text', text: line.text });
   }
 
   private renderDue(parent: HTMLElement, vm: TodayViewModel): void {

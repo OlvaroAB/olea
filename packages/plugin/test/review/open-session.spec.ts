@@ -19,7 +19,7 @@
  */
 
 import { type Rating, STUDY_PLAN_BODY_VERSION, type StudyPlanEnvelope } from 'olea-contracts';
-import type { RandomSource } from 'olea-core';
+import type { ConceptRelation, RandomSource } from 'olea-core';
 import {
   appendReviewLogRecord,
   calendarDayFromLocalDate,
@@ -241,6 +241,63 @@ describe('opening a session composes it from her vault', () => {
     // The empty screen, not a refusal to open: "nothing is due" and "the
     // command is broken" must not be the same experience.
     expect(outcome.session.getViewModel().phase).toBe('empty');
+  });
+});
+
+describe('C7.9 containment co-presence reaches this call site (ol-v7r5.7)', () => {
+  /** Beta is part of Alpha — `from` is the finer side, `to` the container (`session/containment.ts`'s convention). */
+  function partOfAlphaBeta(): ConceptRelation {
+    return {
+      type: 'part-of',
+      from: 'Beta',
+      to: 'Alpha',
+      provenance: 'model-proposed',
+      confidence: 0.9,
+      introducingPassages: {
+        from: {
+          sourcePath: 'Concepts/Beta.md',
+          location: { page: 1, charRange: { start: 0, end: 1 } },
+        },
+        to: {
+          sourcePath: 'Concepts/Alpha.md',
+          location: { page: 1, charRange: { start: 0, end: 1 } },
+        },
+      },
+    };
+  }
+
+  it("with no relations threaded, the container and the part are both offered (today's no-op baseline)", async () => {
+    const vault = studyVault();
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    expect(outcome.itemCount).toBe(2);
+  });
+
+  it('threading a live part-of edge drops the container candidate, keeping the part', async () => {
+    const vault = studyVault();
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault).ports,
+      random: fixedRandom,
+      probeDays: 30,
+      relations: [partOfAlphaBeta()],
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    // Alpha (the container, `Week one.md`) is dropped before composeQueue
+    // ever sees it; only Beta's two instruments (`Week two.md`) remain, and
+    // F2.17 still offers one of them.
+    expect(outcome.itemCount).toBe(1);
+    expect(outcome.deferredCount).toBe(1);
+
+    await outcome.session.start();
+    const vm = outcome.session.getViewModel();
+    if (vm.phase !== 'front' && vm.phase !== 'mcq-open') {
+      throw new Error(`expected an offered item, got phase ${vm.phase}`);
+    }
+    expect(vm.instrument.sourcePath).toBe('Courses/TEST101/Week two.md');
   });
 });
 
