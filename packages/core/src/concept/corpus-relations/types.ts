@@ -103,8 +103,25 @@ export interface CorpusConcept {
  *   `'model-proposed'` — see `./verdict.js`'s doc for the reconciliation
  *   rule and why that is a separate question from what the verdict types
  *   the relation as.
+ * - `'assessment-error-adjacency'` — the grading judge attributed a wrong
+ *   answer to her confusing this concept with another one
+ *   (`../../misconception/types.js`'s `MisconceptionRecord.confusedWithConceptId`,
+ *   surfaced by `workerJudgeCaller.ts`'s `confusedWith` parsing through the
+ *   grading pipeline and the misconception projection — `ol-2zfj.19`, the
+ *   "assessment-error adjacency" producer named in the confusion-pairing
+ *   scoping memo, `docs/direction/papers/confusion-pairing-home/PROPOSAL.md`
+ *   §2(a) in `olea-service`). This is real EVIDENCE that she was confused,
+ *   which the knowledge model (§5) and functional scope (C7.10) both say
+ *   should be able to corroborate a `contrasts-with` HYPOTHESIS, not the same
+ *   fact as one — nominating from it is still only nomination, same as every
+ *   other kind here: `[D-082]`'s combined-passage verdict decides whether the
+ *   pair actually becomes an edge, and this signal never mints one directly.
  */
-export type NominationSignalKind = 'assessment-cooccurrence' | 'embedding-proximity' | 'her-link';
+export type NominationSignalKind =
+  | 'assessment-cooccurrence'
+  | 'embedding-proximity'
+  | 'her-link'
+  | 'assessment-error-adjacency';
 
 /** One occurrence of a cheap signal linking two concept names, unordered. */
 export interface NominationSignal {

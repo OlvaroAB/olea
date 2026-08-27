@@ -83,6 +83,7 @@ import {
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import {
+  type AssessmentErrorAdjacencyOptions,
   type EmbeddingProximityOptions,
   gatherCorpusRelationVaultContext,
 } from './corpusRelationSignals.js';
@@ -315,6 +316,11 @@ export interface RunCorpusRelationBatchIfDueOptions {
    * no default cache or threshold to fall back to.
    */
   readonly embeddingProximity?: EmbeddingProximityOptions;
+  /**
+   * Opt-in assessment-error-adjacency signal (`ol-2zfj.19`) — same shape as
+   * `embeddingProximity`: absent means the signal contributes nothing.
+   */
+  readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
 }
 
 export interface CorpusRelationBatchRunOutcome {
@@ -392,6 +398,9 @@ export async function runCorpusRelationBatchIfDue(
       ...(options.embeddingProximity !== undefined
         ? { embeddingProximity: options.embeddingProximity }
         : {}),
+      ...(options.assessmentErrorAdjacency !== undefined
+        ? { assessmentErrorAdjacency: options.assessmentErrorAdjacency }
+        : {}),
     },
   );
 
@@ -463,6 +472,8 @@ export interface ReadConceptsAndRelationsOptions {
   readonly sourcesFolder?: VaultPath;
   /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `embeddingProximity` (`ol-2zfj.13`). */
   readonly embeddingProximity?: EmbeddingProximityOptions;
+  /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `assessmentErrorAdjacency` (`ol-2zfj.19`). */
+  readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
 }
 
 /**
@@ -519,6 +530,9 @@ export async function readConceptsAndRelations(
     ...(options.sourcesFolder !== undefined ? { sourcesFolder: options.sourcesFolder } : {}),
     ...(options.embeddingProximity !== undefined
       ? { embeddingProximity: options.embeddingProximity }
+      : {}),
+    ...(options.assessmentErrorAdjacency !== undefined
+      ? { assessmentErrorAdjacency: options.assessmentErrorAdjacency }
       : {}),
   });
 

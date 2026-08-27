@@ -12,6 +12,7 @@ import {
   type EmbedResult,
   hashText,
   type ListOptions,
+  type MisconceptionRecord,
   type PersistedEmbeddingCache,
   type RetrievalChunk,
   type Unsubscribe,
@@ -409,5 +410,180 @@ describe('gatherCorpusRelationVaultContext — embedding-proximity nomination si
     });
 
     expect(signals.filter((s) => s.kind === 'embedding-proximity')).toEqual([]);
+  });
+});
+
+// ---- assessment-error-adjacency nomination signal (`ol-2zfj.19`) -----------
+
+const CITATION = { path: 'Courses/Sample/notes.md' as VaultPath, blockIndex: 1 };
+
+function misconceptionRecord(overrides: Partial<MisconceptionRecord> = {}): MisconceptionRecord {
+  return {
+    id: 'm-1',
+    conceptId: 'Type I error',
+    confusedWithConceptId: 'Type II error',
+    statement: 'Believes a false positive and a false negative are the same thing.',
+    correction: 'A Type I error rejects a true null; a Type II error fails to reject a false one.',
+    citation: CITATION,
+    firstSeen: '2026-08-16T09:00:00-04:00',
+    lastSeen: '2026-08-16T09:00:00-04:00',
+    occurrenceCount: 1,
+    status: 'active',
+    originInstrumentId: 'explain-back:Type I error:1',
+    ...overrides,
+  };
+}
+
+describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomination signal', () => {
+  it("nominates a pair from a misconception record's confusedWithConceptId", async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: { records: [misconceptionRecord()] },
+    });
+
+    expect(signals).toEqual([
+      { kind: 'assessment-error-adjacency', a: 'Type I error', b: 'Type II error' },
+    ]);
+  });
+
+  it('is off by default — omitting assessmentErrorAdjacency computes no such signal', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals.filter((s) => s.kind === 'assessment-error-adjacency')).toEqual([]);
+  });
+
+  it('nominates nothing for a record with no confusedWithConceptId', async () => {
+    const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
+    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [misconceptionRecord({ confusedWithConceptId: null })],
+      },
+    });
+
+    expect(signals).toEqual([]);
+  });
+
+  it('nominates nothing when either id does not resolve to a known concept', async () => {
+    const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
+    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [misconceptionRecord({ confusedWithConceptId: 'Some unknown concept' })],
+      },
+    });
+
+    expect(signals).toEqual([]);
+  });
+
+  it('never nominates a self-pair when a record names the same concept on both sides', async () => {
+    const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
+    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [
+          misconceptionRecord({ conceptId: 'Type I error', confusedWithConceptId: 'Type I error' }),
+        ],
+      },
+    });
+
+    expect(signals).toEqual([]);
+  });
+
+  it('deduplicates the same pair nominated by more than one record', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 36]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [
+          misconceptionRecord({ id: 'm-1' }),
+          misconceptionRecord({
+            id: 'm-2',
+            conceptId: 'Type II error',
+            confusedWithConceptId: 'Type I error',
+          }),
+        ],
+      },
+    });
+
+    expect(signals).toHaveLength(1);
+  });
+
+  it('matches against an alias, not only the canonical name', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts: CorpusConcept[] = [
+      concept('Type I error', 'A.md', [0, 36]),
+      {
+        name: 'Type II error',
+        aliases: ['Beta error'],
+        anchor: { sourcePath: 'B.md', location: { page: 1, charRange: { start: 0, end: 37 } } },
+      },
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [misconceptionRecord({ confusedWithConceptId: 'Beta error' })],
+      },
+    });
+
+    expect(signals).toEqual([
+      { kind: 'assessment-error-adjacency', a: 'Type I error', b: 'Type II error' },
+    ]);
+  });
+
+  it('composes with the other three signal kinds when several are wired at once', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error occurs when... see also [[Type II error]] for the converse.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 76]),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: { records: [misconceptionRecord()] },
+    });
+
+    // her-link and assessment-error-adjacency both nominate the same pair here — two
+    // signal occurrences over the same pair, kept distinct by kind (dedup is
+    // per-signal-kind, `nominate.js`'s own job to merge across kinds).
+    expect(signals).toEqual(
+      expect.arrayContaining([
+        { kind: 'her-link', a: 'Type I error', b: 'Type II error' },
+        { kind: 'assessment-error-adjacency', a: 'Type I error', b: 'Type II error' },
+      ]),
+    );
+    expect(signals).toHaveLength(2);
   });
 });

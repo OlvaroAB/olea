@@ -6,8 +6,9 @@
  * mostly the same set of files, so this module does the vault work in one
  * pass rather than three.
  *
- * **All three named signals are wired.** Component register row 1.2a names
- * three nomination-signal sources: assessment-document co-occurrence,
+ * **All three register-row-1.2a-named signals are wired, plus a fourth from
+ * outside that row.** Component register row 1.2a names three
+ * nomination-signal sources: assessment-document co-occurrence,
  * embedding-proximity over the local vector cache, and her own wikilinks
  * between concept notes (`'her-link'`,
  * `packages/core/src/concept/corpus-relations/types.ts`'s
@@ -62,6 +63,29 @@
  *   cache and no default threshold**: see `EmbeddingProximityOptions` below
  *   for why the threshold is a required option with no declared value.
  *
+ * - **`assessment-error-adjacency`** — `ol-2zfj.19`, sourced from the grading
+ *   judge's pairwise confusion evidence rather than from anything this
+ *   module reads out of the vault itself. `workerJudgeCaller.ts` parses a
+ *   `confusedWith` name out of the Worker's response, `gradingPipeline.ts`
+ *   carries it through as `ObservationInput.confusedWith`, and
+ *   `misconception/events.ts`/`project.ts` fold it onto
+ *   `MisconceptionRecord.confusedWithConceptId` — an already-projected,
+ *   already-in-memory read-model by the time it reaches here (see the
+ *   confusion-pairing scoping memo,
+ *   `olea-service/docs/direction/papers/confusion-pairing-home/PROPOSAL.md`
+ *   §2(a), for the full call chain and why this was the first buildable
+ *   producer of the three it considered). **Opt-in, like
+ *   `embedding-proximity` and for an analogous reason**: unlike `her-link`
+ *   and `assessment-cooccurrence`, which only need what this function
+ *   already has in hand (a `VaultSource` and `concepts`), this signal needs
+ *   an extra input — the misconception projection — that no caller of this
+ *   function is wired to supply yet (there is no client-side misconception
+ *   store construction anywhere in `packages/plugin` today). Omitting
+ *   `assessmentErrorAdjacency` computes no such signal, the same
+ *   "absent, not guessed" contract `embeddingProximity` follows. See
+ *   `AssessmentErrorAdjacencyOptions` below for the concept-identity
+ *   assumption this pass makes and why.
+ *
  * **Why this scans every concept's OWN anchor passage, not a dedicated
  * "concept note" folder.** `[D-068]` corroborates concepts from the material
  * itself, her concept notes, and her `topic` property — a concept's
@@ -78,6 +102,7 @@ import {
   cosineSimilarity,
   type EmbeddingCacheEngine,
   hashText,
+  type MisconceptionRecord,
   type NominationSignal,
   registerSources,
   type VaultPath,
@@ -155,15 +180,55 @@ export interface EmbeddingProximityOptions {
   readonly threshold: number;
 }
 
+/**
+ * Wires the `assessment-error-adjacency` nomination signal against an
+ * already-projected misconception read-model — see the module doc's
+ * `assessment-error-adjacency` section for what this does and does not do.
+ *
+ * **`records` is a plain array, not a store handle.** This module has no
+ * vault or network access of its own reason to gain one for this signal
+ * either — `nominate.js`'s own doc makes the identical choice for every
+ * signal source ("this module takes their output as plain data and stays
+ * agnostic to how any of it was computed"). The caller resolves
+ * `projectMisconceptions`'s current read-model once per batch and hands the
+ * result in, same shape any other consumer of the misconception store reads.
+ *
+ * **Concept identity assumption, stated rather than silently relied on.**
+ * `MisconceptionRecord.conceptId`/`confusedWithConceptId` are typed as plain
+ * `string` with no identity-space documented on the misconception module
+ * itself (no reference to `[D-088]`'s opaque `ConceptRecord.key` anywhere in
+ * `packages/core/src/misconception/`), and no production caller populates
+ * `ObservationInput.conceptId` yet — `packages/plugin` has no client-side
+ * misconception store construction today. This pass resolves both ids
+ * against `concepts`' own `name`/`aliases` space, the SAME identity
+ * `her-link` and `assessment-cooccurrence` already key on and that
+ * `relation.ts` itself documents as this stage's deliberate interim choice
+ * ("`from`/`to` are NAMES... [because] C7.11 rules identity is an opaque key
+ * never derived from content" but the opaque-key registry does not exist
+ * yet). An id that resolves to no known concept name/alias nominates
+ * nothing — the same "unrecognised concept nominates nothing" discipline
+ * `nominate.js` itself enforces for a signal naming an unknown name. If a
+ * future misconception-store caller instead stamps `conceptId` with
+ * `[D-088]`'s opaque key, this pass's resolution silently stops matching
+ * (every id looks unrecognised) rather than mismatching silently — a caller
+ * wiring that store for the first time should verify a resolved-pair count
+ * that is not permanently zero.
+ */
+export interface AssessmentErrorAdjacencyOptions {
+  readonly records: readonly MisconceptionRecord[];
+}
+
 export interface CorpusRelationVaultContextOptions {
   /** Assessment-document co-occurrence is always attempted (mirrors `her-link`'s always-on posture); this only overrides where `registerSources` looks. */
   readonly sourcesFolder?: VaultPath;
   /** Omitted (the default) skips the embedding-proximity signal entirely — see `EmbeddingProximityOptions`'s own doc for why there is no default cache or threshold to fall back to. */
   readonly embeddingProximity?: EmbeddingProximityOptions;
+  /** Omitted (the default) skips the assessment-error-adjacency signal entirely — no caller wires a misconception store into this function yet; see `AssessmentErrorAdjacencyOptions`'s own doc. */
+  readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
 }
 
 export interface CorpusRelationVaultContext {
-  /** Every nomination signal found this pass — `her-link` (wikilinks between concept notes), `assessment-cooccurrence` (co-occurrence in a classified past-paper or objectives document) and, when `options.embeddingProximity` is supplied, `embedding-proximity` (cosine proximity over the local embedding cache). See the module doc for what each does and does not compute. */
+  /** Every nomination signal found this pass — `her-link` (wikilinks between concept notes), `assessment-cooccurrence` (co-occurrence in a classified past-paper or objectives document), `embedding-proximity` (cosine proximity over the local embedding cache, when `options.embeddingProximity` is supplied) and `assessment-error-adjacency` (grading-judge confusion evidence, when `options.assessmentErrorAdjacency` is supplied). See the module doc for what each does and does not compute. */
   readonly signals: readonly NominationSignal[];
   /** Every concept's introducing-passage TEXT, keyed by its `name` — `runCorpusRelationBatch`'s `PassageTextLookup` reads from this, pre-resolved because that lookup is synchronous. */
   readonly passageTextByName: ReadonlyMap<string, string>;
@@ -247,6 +312,35 @@ async function embeddingProximitySignals(
 }
 
 /**
+ * The `assessment-error-adjacency` pass: turn every misconception record's
+ * `confusedWithConceptId` into a nomination signal, resolving both ids
+ * against `byName` (concept name or alias -> `CorpusConcept`, the same index
+ * `her-link`'s wikilink resolution uses) — see
+ * `AssessmentErrorAdjacencyOptions`'s own doc for the identity assumption
+ * this makes and why. Pure and synchronous: no vault or network access,
+ * `records` is already the in-memory read-model.
+ */
+function assessmentErrorAdjacencySignals(
+  byName: ReadonlyMap<string, CorpusConcept>,
+  records: readonly MisconceptionRecord[],
+): readonly NominationSignal[] {
+  const seenPairs = new Set<string>();
+  const signals: NominationSignal[] = [];
+
+  for (const record of records) {
+    if (record.confusedWithConceptId === null) continue;
+    const a = byName.get(record.conceptId);
+    const b = byName.get(record.confusedWithConceptId);
+    if (a === undefined || b === undefined || a.name === b.name) continue;
+    const key = unorderedPairKey(a.name, b.name);
+    if (seenPairs.has(key)) continue;
+    seenPairs.add(key);
+    signals.push({ kind: 'assessment-error-adjacency', a: a.name, b: b.name });
+  }
+  return signals;
+}
+
+/**
  * One vault pass over `concepts`' own anchor files, the classified
  * assessment documents `registerSources` finds, and (when wired) the local
  * embedding cache: resolves each concept's introducing-passage text (for
@@ -316,6 +410,12 @@ export async function gatherCorpusRelationVaultContext(
   if (options.embeddingProximity !== undefined) {
     signals.push(
       ...(await embeddingProximitySignals(passageTextByName, options.embeddingProximity)),
+    );
+  }
+
+  if (options.assessmentErrorAdjacency !== undefined) {
+    signals.push(
+      ...assessmentErrorAdjacencySignals(byName, options.assessmentErrorAdjacency.records),
     );
   }
 
