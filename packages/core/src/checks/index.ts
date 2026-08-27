@@ -1,4 +1,9 @@
 export {
+  checkEarlierCourseRecognitionNeutralisedTwin,
+  type RecognitionNeutralisedTwinMeasured,
+  type RecognitionTwinCase,
+} from './earlier-course-recognition.js';
+export {
   checkGapWeightIdentity,
   type GapWeightIdentityMeasured,
 } from './gap-weight-identity.js';
@@ -47,6 +52,11 @@ export {
   type RankFactorAblationMeasured,
 } from './rank-factor-ablation.js';
 export {
+  checkReentryEquality,
+  type ReentryEqualityCase,
+  type ReentryEqualityMeasured,
+} from './reentry-equality.js';
+export {
   checkRelationReaderFires,
   type RelationReaderHealthMeasured,
   type RelationReaderObservation,
@@ -60,4 +70,13 @@ export {
   type RhythmNeutralisedTwinMeasured,
   type RhythmTwinCase,
 } from './rhythm-neutralised-twin.js';
+export {
+  checkSupportLevelRecordShape,
+  checkSupportOfferRateByDepth,
+  type OfferRateBin,
+  type SupportLevelRecordCase,
+  type SupportLevelRecordShapeMeasured,
+  type SupportOfferCase,
+  type SupportOfferRateByDepthMeasured,
+} from './support-level-offer-rate.js';
 export type { CheckVerdict } from './types.js';

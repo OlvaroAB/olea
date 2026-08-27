@@ -982,6 +982,46 @@ export {
 } from './study-session/duration.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';
 export { buildConceptInstrumentIndex } from './study-session/instrument-index.js';
+// Re-entry after absence (register row 3.8, `ol-nhxa`) — the SAME selection rule at a
+// smaller budget, never a second mechanism.
+export type {
+  ComposedReentrySession,
+  ComposeReentrySessionInput,
+  ReentryStudySessionView,
+} from './study-session/reentry.js';
+export {
+  clampReentryBudgetMinutes,
+  composeReentrySession,
+  isReentryDue,
+  REENTRY_ABSENCE_THRESHOLD_DAYS,
+  REENTRY_SIZE_FLOOR_MINUTES,
+} from './study-session/reentry.js';
+// Support-level ladder (register row 3.9, `ol-ry2k`, `[D-094]`) — session-boundary
+// transitions only; self-assessment adjusts the offer, never the persisted level.
+export {
+  advanceSupportLevel,
+  ESCALATION_FAILURE_COUNT,
+  initialSupportLevelState,
+  RECESSION_CLEAN_STREAK_THRESHOLD,
+  SNAPBACK_RECESSION_MULTIPLIER,
+  type SupportLevelState,
+} from './support-level/ladder.js';
+export { type SupportLevelReviewFields, supportLevelReviewFields } from './support-level/record.js';
+export {
+  applySelfAssessment,
+  type SelfAssessmentFeeling,
+} from './support-level/self-assessment.js';
+export {
+  ESCALATION_FAILURE_SHAPES,
+  type FailureShape,
+  isEscalationTrigger,
+  lowerSupportLevel,
+  raiseSupportLevel,
+  type SessionSupportOutcome,
+  SUPPORT_LEVEL_ORDER,
+  type SupportLadderTier,
+  type SupportLevel,
+} from './support-level/types.js';
 export { extractTier3Evidence } from './tier3-evidence/build.js';
 export type {
   ConceptCitation,
@@ -1017,6 +1057,14 @@ export type {
   SummariseDueOptions,
 } from './today/due.js';
 export { isDueThrough, summariseDue } from './today/due.js';
+// Cross-term recognition (F8.7, `[D-058]`, `ol-y6h1`) — a screen over existing data;
+// fires only on exact concept-id match across courses, never a merge.
+export type {
+  EarlierCourseEvidence,
+  EarlierCourseRecognition,
+  EarlierCourseRecognitionInput,
+} from './today/earlier-course-recognition.js';
+export { buildEarlierCourseRecognitions } from './today/earlier-course-recognition.js';
 // F6.2's per-course mastery overview (`ol-lohq`) — grouping over
 // `masteryDistribution`, never a second mastery calculation.
 export type {
