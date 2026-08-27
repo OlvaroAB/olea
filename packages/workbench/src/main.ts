@@ -158,21 +158,21 @@ const DEFAULT_TRENDS_STATE = 'trends-cramming';
  * oracle steps — verbatim wording, non-negotiable placement (inside the host pane, not the
  * sidebar, not the inspector).
  *
- * The FIRST sentence is D-041's ruled wording and is reproduced exactly. Do not edit it here;
- * it is a decision, and changing it is a decision change.
+ * This is D-041's ruled wording and is reproduced exactly. Do not edit it here; it is a
+ * decision, and changing it is a decision change.
  *
- * The SECOND sentence was added by the orchestrator after the build lane reported that every
- * concept on these two steps reads `new`. That is not a bug and not a coincidence: the fixture
- * vault has no review log of its own, so the history behind these rows is borrowed from a
- * synthetic persona stream by positional join, and it does not line up with the concepts it
- * lands on. The rankings are real and the mastery states are not, and a viewer has no way to
- * tell those apart by looking. D-041 ruled on the numbers; nobody had ruled on this, and a
- * caveat that covers half of what is fabricated is worse than none.
+ * A second sentence used to live here, added by the orchestrator after the build lane reported
+ * that every concept on these two steps read `new`: the fixture vault's review history was
+ * borrowed from a synthetic persona stream by positional join, and it did not line up with the
+ * concepts the ranking actually ranked, so mastery was fabricated on top of a real ranking with
+ * nothing on screen to tell the two apart. `ol-0v9n` fixed the underlying cause — see
+ * `oracle/fixture-oracle-history.ts` — rather than widening the caveat: the mastery states below
+ * are now computed the same way the ranking is, from real fixture-vault concept ids, so the
+ * extra sentence is gone rather than reworded.
  */
 const FIXTURE_ORACLE_ILLUSTRATIVE_LABEL =
   'Illustrative. These rankings come from invented course material and are not a measurement of ' +
-  'how well Olea ranks anything. The mastery states are placeholders too — this invented student ' +
-  'has no review history, so every concept reads as new.';
+  'how well Olea ranks anything.';
 
 /**
  * The session surface's illustrative label — shown only on states whose data

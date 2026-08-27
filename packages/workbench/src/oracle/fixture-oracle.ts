@@ -19,32 +19,44 @@
  * ranking numbers are real arithmetic over her real (invented) notes and her
  * real (invented) assignments Base, every time this runs.
  *
- * ## What is still borrowed rather than real: the review history
+ * ## The review history is real now, too (`ol-0v9n`)
  *
- * The fixture vault has no review log of its own — nothing has ever "studied"
- * it. `mastery` needs one, so this module builds one the same way
- * `persona/history.ts`'s `entriesFor` already does for the review/today
- * surfaces: a positional ring-join from a synthetic persona's stream onto the
- * vault's REAL instruments. The one difference from `entriesFor`, and the
- * reason this is not just a call to it: `entriesFor` deliberately keeps
- * `conceptIds` at the persona's own `syn:concept:…` values (Trap 1's
- * self-consistency argument, `oracle/derive.ts`'s module doc) because its
- * consumer is the SYNTHETIC oracle surface. This module's consumer is the
- * fixture-vault oracle, where self-consistency instead means every id —
- * instrument AND concept — is the real vault's own, so `realReviewLog` below
- * overrides `conceptIds` too. `persona/history.ts` is not edited to do this:
- * its own module doc calls "no fixture-vault string" a rule the file is
- * "built around", and this module honours that by staying a separate file
- * rather than asking it to break its own rule for one caller.
+ * This used to build the review history the same way `persona/history.ts`'s
+ * `entriesFor` does for the review/today surfaces: a positional ring-join
+ * from a borrowed synthetic persona stream onto the vault's REAL instruments.
+ * That works for those surfaces because they only need a plausible SHAPE of
+ * history. It did not work here: steps 7 and 8 compute a real ranking over
+ * real fixture-vault concepts, then look up mastery for those concepts — and
+ * the borrowed history landed on whichever instrument the ring happened to
+ * reach, never the concepts actually ranked. Every row read `seed` ("new"),
+ * and the caption had to say so.
+ *
+ * `FIXTURE_ORACLE_HISTORY` (`./fixture-oracle-history.ts`) replaces the
+ * ring-join: a small, deterministic, GENERATED-AND-COMMITTED set of review
+ * events whose `conceptIds` are the fixture vault's own real concept keys —
+ * see that file's own module doc and its generator
+ * (`scripts/generate-fixture-oracle-history.mjs`) for the full argument,
+ * including why a hand-written story rather than a call into
+ * `packages/synthetic` (its generator has no way to target an external
+ * concept id — it mints its own `syn:concept:…` curriculum internally).
+ * The result is real fixture mastery: a spread across all four C5.4 states,
+ * chosen per `ol-0v9n`'s "what to watch" so the screen shows a high-yield
+ * concept she is solid on and a low-yield one she has over-studied without
+ * it sticking — not uniform bad news, and not a flattered best case either.
+ * "High-/low-yield" is each concept's raw course-material importance
+ * (`factors.preMasteryScore`), not the final DISPLAYED rank — `rankOracle`
+ * multiplies that by a mastery-need weight, so the concept she is now solid
+ * on correctly drops in the rank a viewer sees, and the low-yield one stays
+ * near the bottom regardless of how much she has studied it. See the
+ * generator's own module doc for the concept-by-concept argument.
  *
  * `asOf` is `2026-09-14` — the Monday of the fixture vault's "week six"
  * (the daily note at `00 Daily notes/2026-08-10.md` is week one's Monday) —
  * chosen so her real assignments' `due` dates are still ahead of it
  * (`computeExamProximity` in `olea-core`'s `oracle/rank.ts` scores a PAST due
  * date 0, which would flatten every ranking to zero and defeat the whole
- * point of showing scores). The borrowed review history is generated to end
- * the day before that `asOf`, for the same reason `persona/history.ts`
- * anchors its own stream to end the day before `WORKBENCH_NOW`.
+ * point of showing scores). `FIXTURE_ORACLE_HISTORY`'s own events all fall
+ * well before it, for the same reason.
  *
  * ## The illustrative label, not repeated here
  *
@@ -54,7 +66,6 @@
  * placement rule.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildMaterialPresence,
   composeOracleRanking,
@@ -63,7 +74,7 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { buildGapView, buildStudyPlan, type GapViewModel } from '../oracle-bridge.js';
-import { generateStream, INSTRUMENTS, streamSpec } from '../synthetic-bridge.js';
+import { FIXTURE_ORACLE_HISTORY } from './fixture-oracle-history.js';
 import { type PipelineTrace, recordStage, recordStageAsync, type StageRecord } from './trace.js';
 
 /** The Bases assignments table `readAssessments` scans — real, checked-in fixture content. */
@@ -73,59 +84,6 @@ const EXCLUDE_PATHS = ['README.md'];
 
 /** See this file's module doc for why `2026-09-14`. */
 export const FIXTURE_ORACLE_ASOF = '2026-09-14';
-
-const BORROWED_HISTORY_SEED = 'workbench-walkthrough';
-const BORROWED_HISTORY_START_DATE = '2026-06-01';
-/** Ends 2026-09-13 — the day before `FIXTURE_ORACLE_ASOF`. */
-const BORROWED_HISTORY_DAYS = 105;
-
-/**
- * The positional ring-join, extended one field past `persona/history.ts`'s
- * `entriesFor` — see the module doc's "still borrowed" section for why.
- */
-function realReviewLog(
-  instruments: readonly {
-    instrumentId: string;
-    instrumentType: string;
-    conceptIds: readonly string[];
-  }[],
-  streamEntries: readonly ReviewLogEntry[],
-): readonly ReviewLogEntry[] {
-  const ringsByType = new Map<string, string[]>();
-  for (const instrument of INSTRUMENTS) {
-    const ring = ringsByType.get(instrument.instrumentType);
-    if (ring) ring.push(instrument.instrumentId);
-    else ringsByType.set(instrument.instrumentType, [instrument.instrumentId]);
-  }
-
-  const byPersonaInstrument = new Map<string, ReviewLogEntry[]>();
-  for (const entry of streamEntries) {
-    const bucket = byPersonaInstrument.get(entry.instrumentId);
-    if (bucket) bucket.push(entry);
-    else byPersonaInstrument.set(entry.instrumentId, [entry]);
-  }
-
-  const seenPerType = new Map<string, number>();
-  const relabelled: ReviewLogEntry[] = [];
-  for (const instrument of instruments) {
-    const index = seenPerType.get(instrument.instrumentType) ?? 0;
-    seenPerType.set(instrument.instrumentType, index + 1);
-
-    const ring = ringsByType.get(instrument.instrumentType);
-    const personaInstrumentId = ring === undefined ? undefined : ring[index % ring.length];
-    if (personaInstrumentId === undefined) continue;
-
-    for (const entry of byPersonaInstrument.get(personaInstrumentId) ?? []) {
-      relabelled.push({
-        ...entry,
-        instrumentId: instrument.instrumentId,
-        conceptIds: [...instrument.conceptIds],
-        eventId: `${entry.eventId}#${String(index)}`,
-      });
-    }
-  }
-  return relabelled;
-}
 
 export interface FixtureOracleResult {
   readonly gap: GapViewModel;
@@ -148,43 +106,17 @@ export async function buildFixtureOracle(vault: VaultSource): Promise<FixtureOra
   const composeStage = await recordStageAsync(
     'compose',
     async () => {
-      const [{ records }, ranking] = await Promise.all([
+      const [{ records }, concepts] = await Promise.all([
         enumerateVaultInstruments(vault, { excludePaths: EXCLUDE_PATHS }),
-        (async () => {
-          const stream = generateStream(
-            streamSpec('steady-reviewer', BORROWED_HISTORY_SEED, {
-              startDate: BORROWED_HISTORY_START_DATE,
-              days: BORROWED_HISTORY_DAYS,
-              utcOffset: '+00:00',
-            }),
-          );
-          // The instrument walk below is redone here rather than shared,
-          // because the ring-join needs the same `records` the outer walk
-          // just produced and Promise.all cannot see across its own branches.
-          // enumerateVaultInstruments is a pure read over an in-memory vault,
-          // so the second walk costs time, never correctness — see the
-          // "self-consistency" argument in the module doc for why this is
-          // not the one to cache away.
-          const [{ records: instrumentRecords }, innerConcepts] = await Promise.all([
-            enumerateVaultInstruments(vault, { excludePaths: EXCLUDE_PATHS }),
-            extractConcepts(vault, { includeTier3: true }),
-          ]);
-          const reviewLog = realReviewLog(instrumentRecords, stream.entries);
-          return composeOracleRanking({
-            vault,
-            basePath: BASE_PATH,
-            reviewLog,
-            asOf: FIXTURE_ORACLE_ASOF,
-            // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
-            // (`ol-63e1`). Re-extracted here (rather than sharing the outer
-            // `concepts` fetched below) for the same self-consistency reason
-            // this branch already re-walks `enumerateVaultInstruments` — see
-            // the module doc.
-            concepts: innerConcepts,
-          });
-        })(),
+        extractConcepts(vault, { includeTier3: true }),
       ]);
-      const concepts = await extractConcepts(vault, { includeTier3: true });
+      const ranking = await composeOracleRanking({
+        vault,
+        basePath: BASE_PATH,
+        reviewLog: FIXTURE_ORACLE_HISTORY,
+        asOf: FIXTURE_ORACLE_ASOF,
+        concepts,
+      });
       return { records, ranking, concepts };
     },
     ({ records, ranking, concepts }) => ({
