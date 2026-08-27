@@ -127,22 +127,30 @@ declares nothing at all. See the header.
   --olea-dark-line-hover: #3d3d3d;
   --olea-dark-wash: rgba(255, 255, 255, 0.055);
 
-  /* ---- Read from the host (theme-host.css, ported) ---- */
-  --olea-host-bg: var(--background-primary, var(--olea-dark-bg));
+  /* ---- This root's floor for the shared reads (ol-bdeb). The
+     `:is(.olea-review-root, .olea-today-root)` block just below this one
+     declares the `var(--host-var, var(--olea-host-*-floor))` read once for
+     both roots; this element supplies its half — the dark values above — as
+     that indirection's floor. `.olea-today-root` supplies its own, neutral,
+     floor for the same seven properties instead of a second copy of the
+     read itself. ---- */
+  --olea-host-bg-floor: var(--olea-dark-bg);
+  --olea-host-text-floor: var(--olea-dark-text);
+  --olea-host-muted-floor: var(--olea-dark-muted);
+  --olea-host-faint-floor: var(--olea-dark-faint);
+  --olea-host-line-floor: var(--olea-dark-line);
+
+  /* ---- Read from the host (theme-host.css, ported); not shared with
+     `.olea-today-root` — a sidebar pane has no elevation surface, hover
+     wash, focus-ring accent or distinct content font of its own. ---- */
   --olea-host-elev: var(--background-primary-alt, var(--olea-dark-elev));
-  --olea-host-text: var(--text-normal, var(--olea-dark-text));
-  --olea-host-muted: var(--text-muted, var(--olea-dark-muted));
-  --olea-host-faint: var(--text-faint, var(--olea-dark-faint));
-  --olea-host-line: var(--background-modifier-border, var(--olea-dark-line));
   --olea-host-line-hover: var(--background-modifier-border-hover, var(--olea-dark-line-hover));
   --olea-host-wash: var(--background-modifier-hover, var(--olea-dark-wash));
   --olea-host-accent: var(
     --interactive-accent,
     #8a5cf6
   ); /* focus ring only — never painted with otherwise; branch-invariant, so not in the layer (see the header) */
-  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
   --olea-host-content-font: var(--font-text, sans-serif);
-  --olea-host-mono: var(--font-monospace, monospace);
 
   /* ---- Owned by Olea — constant in every host theme (DP-1) ---- */
   --olea-host-brand: #8a9a63; /* olive */
@@ -174,6 +182,45 @@ declares nothing at all. See the header.
   outline: 2px solid var(--olea-host-accent);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* ============================================================
+   ---- Shared host reads: review root + Today pane (ol-bdeb) ----
+   ============================================================
+
+   The seven `--olea-host-*` role reads both `.olea-review-root` and
+   `.olea-today-root` need (bg, text, muted, faint, line, ui-font, mono),
+   declared once here rather than twice, one per view, as `today.css`
+   originally did. Each selector still supplies its OWN floor value through
+   the `--olea-host-*-floor` indirection — `.olea-review-root` feeds in its
+   dark floor (declared above, fed by the `olea-host-fallback` layer);
+   `.olea-today-root` feeds in plain neutral colours (declared just below,
+   with its own rule) — so the two roots keep genuinely different fallback
+   behaviour while the mapping from host CSS variable to Olea role name
+   lives in exactly one place. `--olea-host-ui-font` and `--olea-host-mono`
+   are branch-invariant (see the header above), so they take an inline
+   literal fallback shared by both roots outright, same as
+   `--olea-host-accent` does on the review root alone.
+
+   Deliberately placed OUTSIDE the Today panel's own banner-delimited
+   section, further down this file: `test/today/styles.spec.ts` treats that
+   slice as the pane's own rules, and a selector list naming
+   `.olea-review-root` inside that slice would read as an unreachable class
+   to its coverage check. (This paragraph avoids spelling out either
+   banner's exact text for the same reason — both are markers a test
+   searches for by literal string, and quoting them here would let this
+   prose match first.) The pane's positive host-read assertions therefore
+   check this block by name rather than the Today slice; its negative
+   assertions (no cascade layer, no dark-floor tokens) stay pointed at the
+   Today slice, which this block is not part of. */
+:is(.olea-review-root, .olea-today-root) {
+  --olea-host-bg: var(--background-primary, var(--olea-host-bg-floor));
+  --olea-host-text: var(--text-normal, var(--olea-host-text-floor));
+  --olea-host-muted: var(--text-muted, var(--olea-host-muted-floor));
+  --olea-host-faint: var(--text-faint, var(--olea-host-faint-floor));
+  --olea-host-line: var(--background-modifier-border, var(--olea-host-line-floor));
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
 }
 
 /* ---- Header: progress · Edit note · Suspend ---- */
@@ -679,15 +726,21 @@ button.olea-review-mcq-option:hover {
    term, start review, today in the streak. Nothing else."). Everything
    else on this pane is the host's.
 
-   DUPLICATION, KNOWINGLY KEPT. The `--olea-host-*` reads below duplicate
-   the block `.olea-review-root` already declares above. That duplication
-   is the reason to lift the shared role reads to a common `.olea-root`
-   (or `:is(.olea-review-root, .olea-today-root)`) rather than paste a
-   second copy — noted in the original P2-T09 report and still true; not
-   done here because it is a separate refactor with its own risk (two
-   selectors currently guarded independently by `styles-host-vars.spec.ts`
-   and `styles-contrast.spec.ts`), filed rather than folded into this
-   merge.
+   DE-DUPLICATED (ol-bdeb). The seven `--olea-host-*` reads this root needs
+   (bg, text, muted, faint, line, ui-font, mono) no longer live here: they
+   are declared once, on the shared `:is(...)` block this root and
+   `.olea-review-root` both match, near the top of this file. This root
+   supplies only its OWN half of that shared declaration — the neutral
+   floor values just below, fed through the `--olea-host-*-floor`
+   indirection — never the review root's own cascade layer or its own dark-
+   floor custom properties, either of which would force a dark floor onto a
+   pane that is often correctly light and reintroduce `ol-ro57`'s failure
+   shape one level down. `test/today/styles.spec.ts` asserts this section
+   still declares no cascade layer of its own and reads none of the review
+   view's dark-floor tokens, and separately asserts the shared block reads
+   the host for all seven roles. (This paragraph avoids spelling out those
+   tokens' literal name for the same reason as the shared block's own
+   comment: the test below searches this section for that exact text.)
 
    `--olea-host-faint` (`--text-faint`, ol-nrrm): measured 2.6-3.1:1
    against every ground it is used on in this file, in every variable set
@@ -700,13 +753,15 @@ button.olea-review-mcq-option:hover {
 */
 
 .olea-today-root {
-  --olea-host-bg: var(--background-primary, #ffffff);
-  --olea-host-text: var(--text-normal, #202020);
-  --olea-host-muted: var(--text-muted, #6b6b6b);
-  --olea-host-faint: var(--text-faint, #999999);
-  --olea-host-line: var(--background-modifier-border, #d8d8d8);
-  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
-  --olea-host-mono: var(--font-monospace, monospace);
+  /* This pane's floor for the shared reads declared on the
+     `:is(.olea-review-root, .olea-today-root)` block near the top of this
+     file — plain neutral colours, never the review root's own dark-floor
+     values. See the header above. */
+  --olea-host-bg-floor: #ffffff;
+  --olea-host-text-floor: #202020;
+  --olea-host-muted-floor: #6b6b6b;
+  --olea-host-faint-floor: #999999;
+  --olea-host-line-floor: #d8d8d8;
 
   /* Owned by Olea — constant in every host theme. */
   --olea-host-attention: #e0a94e;

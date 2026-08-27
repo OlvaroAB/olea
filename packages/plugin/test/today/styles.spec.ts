@@ -23,6 +23,20 @@
  * assumption is what silently pulled the gap section's own two `--olea-host-
  * attention`/`--olea-host-brand` declarations into this file's "exactly two
  * colours" and "no unused rules" checks the first time this drifted.
+ *
+ * `ol-bdeb` moved the seven `--olea-host-*` reads this pane shares with
+ * `.olea-review-root` (bg, text, muted, faint, line, ui-font, mono) out of
+ * this section entirely, onto a `:is(.olea-review-root, .olea-today-root)`
+ * block near the top of the file, so they are declared once rather than
+ * once per view. That block sits OUTSIDE the Today slice on purpose — it
+ * names `.olea-review-root`, and a selector naming a class the Today view
+ * never emits would fail this file's own "every rule is reachable from the
+ * view" check if it were included. So the positive host-read coverage
+ * check below reads the shared block directly, by name, rather than the
+ * Today slice; the negative assertions (no `@layer`, no `--olea-dark-*`)
+ * stay pointed at the Today slice, which correctly still has none of
+ * either — the shared block does not carry them, and only the review root's
+ * own section (elsewhere in the file) does.
  */
 
 import { readFileSync } from 'node:fs';
@@ -62,6 +76,27 @@ function todaySection(): string {
 }
 
 const css = todaySection();
+
+const SHARED_ROOT_SELECTOR = ':is(.olea-review-root, .olea-today-root)';
+
+/**
+ * The shared host-reads block both `.olea-review-root` and `.olea-today-root`
+ * carry (`ol-bdeb`) — declared once, outside the Today slice above, so it is
+ * read here by name rather than by slicing.
+ */
+function sharedHostReadsBlock(): string {
+  const start = fullCss.indexOf(`${SHARED_ROOT_SELECTOR} {`);
+  expect(
+    start,
+    `styles.css declares a "${SHARED_ROOT_SELECTOR}" rule for the shared host reads`,
+  ).toBeGreaterThanOrEqual(0);
+  const open = fullCss.indexOf('{', start);
+  const close = fullCss.indexOf('}', open);
+  expect(close, 'the shared host-reads rule is terminated').toBeGreaterThan(open);
+  return fullCss.slice(open + 1, close);
+}
+
+const sharedCss = sharedHostReadsBlock();
 
 /** Every `cls:`/`addClass(...)` string literal the view hands Obsidian. */
 function classesEmittedByView(): readonly string[] {
@@ -122,7 +157,7 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
     expect(owned.map((m) => `${m[1]}:${m[2]}`)).toEqual(['attention:#e0a94e', 'brand:#8a9a63']);
   });
 
-  it('reads the host for every ground, text, border and font role', () => {
+  it('reads the host for every ground, text, border and font role, via the shared block it carries with .olea-review-root', () => {
     for (const hostVar of [
       '--background-primary',
       '--text-normal',
@@ -132,7 +167,28 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
       '--font-interface',
       '--font-monospace',
     ]) {
-      expect(css).toContain(`var(${hostVar}`);
+      expect(sharedCss).toContain(`var(${hostVar}`);
+    }
+  });
+
+  it('declares the --olea-host-* role reads it shares with .olea-review-root once, on the shared block, not locally', () => {
+    const SHARED_ROLES = ['bg', 'text', 'muted', 'faint', 'line', 'ui-font', 'mono'];
+    for (const role of SHARED_ROLES) {
+      const declaration = new RegExp(`--olea-host-${role}\\s*:`, 'g');
+      expect(
+        sharedCss.match(declaration),
+        `--olea-host-${role} is declared on the shared :is(...) block`,
+      ).toHaveLength(1);
+      expect(
+        css,
+        `the Today section no longer re-declares --olea-host-${role} locally`,
+      ).not.toMatch(declaration);
+    }
+  });
+
+  it("supplies its own neutral floor for the shared reads, never the review root's dark one", () => {
+    for (const role of ['bg', 'text', 'muted', 'faint', 'line']) {
+      expect(css).toMatch(new RegExp(`--olea-host-${role}-floor\\s*:\\s*#[0-9a-f]{6}`, 'i'));
     }
   });
 
