@@ -1,9 +1,11 @@
 // Scenarios: features/F2-review.md, "F2.14 — One entry point composes a session
-// from a vault" — @auto:core/session/build.spec
+// from a vault" and "F2.14 — Containment co-presence is filtered at
+// composition (C7.9)" — @auto:core/session/build.spec
 import type { ReviewLogEntry, SelectionContextV4 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
+import type { ConceptRelation } from '../concept/relation.js';
 import { reviewLogPath } from '../review-log/path.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import { buildReviewSession } from './build.js';
@@ -322,6 +324,58 @@ describe('the Today-panel adapter', () => {
     // One row per instrument, never fanned out across its concept's courses.
     expect(due.map((d) => d.instrumentId)).toHaveLength(
       new Set(due.map((d) => d.instrumentId)).size,
+    );
+  });
+});
+
+// `smallVault()`'s concepts carry their own display name (tier 2, unbound —
+// see `unboundKey` above), so `ConceptRelation.from`/`to` can name them
+// directly: 'Alpha', 'Beta', 'Gamma'.
+function partOfEdge(part: string, container: string): ConceptRelation {
+  return {
+    type: 'part-of',
+    from: part,
+    to: container,
+    provenance: 'model-proposed',
+    confidence: 0.9,
+    introducingPassages: {
+      from: { sourcePath: `${part}.md`, location: { page: 1, charRange: { start: 0, end: 1 } } },
+      to: { sourcePath: `${container}.md`, location: { page: 1, charRange: { start: 0, end: 1 } } },
+    },
+  };
+}
+
+describe('C7.9 containment co-presence, wired through buildReviewSession (register row 3.7)', () => {
+  it('is a no-op with no relations supplied — today’s shape for every real caller', async () => {
+    const session = await buildReviewSession({
+      vault: smallVault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    expect(session.containmentDropped).toEqual([]);
+    expect(session.candidates).toHaveLength(4);
+  });
+
+  it('drops the container’s instrument when a part-of edge makes Beta the container of Alpha', async () => {
+    const session = await buildReviewSession({
+      vault: smallVault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      relations: [partOfEdge('Alpha', 'Beta')],
+    });
+
+    // Beta (the container) is the side that yields; Alpha (the part) stays.
+    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Beta')))).toBe(
+      false,
+    );
+    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Alpha')))).toBe(
+      true,
+    );
+    expect(session.containmentDropped).toHaveLength(1);
+    expect(session.containmentDropped[0]?.conceptIds).toContain(unboundKey('Beta'));
+    // Gamma is untouched — the rule is scoped to the edge's own two concepts.
+    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Gamma')))).toBe(
+      true,
     );
   });
 });

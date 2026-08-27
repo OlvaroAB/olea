@@ -30,15 +30,49 @@
  * projection that forgot it would put an instrument she stopped studying back
  * in front of her. This is the component F2.6's scenarios mean when they say
  * "the queue reads the full history".
+ *
+ * ## C7.9's containment co-presence rule, and the plumbing gap it exposes
+ *
+ * `containment.ts`'s `filterContainmentCoPresence` runs here, over `candidates`
+ * and before `composeQueue`, so a broad-area concept and one of its own parts
+ * are never composed into the same session (C7.9; register row 3.7). It is a
+ * real filter with a real caller — this function — not a dangling helper.
+ *
+ * **What it is not, yet: reachable with a live edge set in production.**
+ * `input.relations` is optional and every real caller omits it today, which
+ * makes the filter a no-op everywhere it currently runs. The edges the rule
+ * needs are produced — `WorkerConceptReader`'s per-document read emits
+ * `part-of` on every pass (component register row 1.2) — but nothing threads
+ * them here:
+ *
+ *   - `packages/plugin/src/main.ts:184` holds the live fold as
+ *     `OleaPlugin.relations` (a `RelationSet`, populated at
+ *     `main.ts:584` on every ingestion-session close), and it is read by
+ *     nothing (component register row 1.2a's "read by nothing" finding,
+ *     unchanged by this bead).
+ *   - `packages/plugin/src/review/open-session.ts:199` calls
+ *     `buildReviewSession` — the real "Olea: Start today's review" command —
+ *     without a `relations` argument.
+ *   - `packages/plugin/src/today/data-source.ts:240` calls it a second time,
+ *     for the Today panel's count, also without one.
+ *
+ * Closing that gap means passing `servedRelations(this.relations)` (or
+ * equivalent) from `main.ts` through both call sites above, all three of
+ * which sit outside `packages/core/src/session/`'s ownership for this bead.
+ * Nothing here invents a new persisted store to work around that — `edges`
+ * stays an explicit, transient parameter, matching every other model-derived
+ * value this package accepts rather than caches.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import type { ConceptRelation } from '../concept/relation.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { composeQueue } from '../queue/compose.js';
 import type { ComposedQueue, QueueCandidate, QueueFilter } from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import type { Scheduler } from '../scheduler/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { filterContainmentCoPresence } from './containment.js';
 import type { EnumerateVaultInstrumentsOptions } from './enumerate.js';
 import { enumerateVaultInstruments } from './enumerate.js';
 import type { ReadReviewLogHistoryOptions } from './history.js';
@@ -75,6 +109,15 @@ export interface BuildReviewSessionInput {
   readonly formatPreference?: readonly SchedulableInstrumentType[];
   /** F2.17's per-session dedupe. Defaults to `true`, as `composeQueue` does. */
   readonly dedupeByConcept?: boolean;
+  /**
+   * `part-of` edges available at composition time (C7.9; register row 3.7;
+   * `./containment.js`). Omitted means none, which is a real no-op, not a
+   * degraded mode — see this file's module doc for exactly what still has to
+   * be wired before a real caller can pass one. Edge types other than
+   * `part-of` are ignored rather than rejected, so a caller holding a whole
+   * `RelationSet`'s served edges may pass them through unfiltered.
+   */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 export interface ReviewSession {
@@ -82,8 +125,21 @@ export interface ReviewSession {
   readonly queue: ComposedQueue;
   /** Everything the walk found, including what it refused and why. */
   readonly instruments: VaultInstrumentEnumeration;
-  /** The candidates handed to `composeQueue`, in enumeration order. Exposed for diagnostics and for the Today panel's count. */
+  /**
+   * The candidates handed to `composeQueue`, in enumeration order —
+   * **after** the C7.9 containment co-presence filter, so this is exactly
+   * what `composeQueue` saw. Exposed for diagnostics and for the Today
+   * panel's count.
+   */
   readonly candidates: readonly QueueCandidate[];
+  /**
+   * Candidates the C7.9 containment co-presence filter dropped before
+   * `composeQueue` ran (`./containment.js`) — empty whenever `input.relations`
+   * is omitted, which is every real caller today. Reported rather than folded
+   * silently into `candidates`' absence, the same posture `instruments.unbound`
+   * and `queue.deferred` already take.
+   */
+  readonly containmentDropped: readonly QueueCandidate[];
   /** Replayed scheduling state, by instrument id. Absent means never reviewed. */
   readonly replay: ReplayResult;
   /** F2.6's projection over the whole log. */
@@ -126,7 +182,15 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   const replay = replaySchedulerStates(entries, input.scheduler);
   const suspended = suspendedInstrumentIds(entries);
 
-  const candidates = instruments.records.map((record) => toQueueCandidate(record, replay));
+  const enumeratedCandidates = instruments.records.map((record) =>
+    toQueueCandidate(record, replay),
+  );
+  const containment = filterContainmentCoPresence(
+    enumeratedCandidates,
+    input.relations ?? [],
+    instruments.concepts,
+  );
+  const candidates = containment.candidates;
 
   const queue = composeQueue({
     candidates,
@@ -139,5 +203,14 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
 
   const recordsById = new Map(instruments.records.map((record) => [record.instrumentId, record]));
 
-  return { queue, instruments, candidates, replay, suspended, entries, recordsById };
+  return {
+    queue,
+    instruments,
+    candidates,
+    containmentDropped: containment.dropped,
+    replay,
+    suspended,
+    entries,
+    recordsById,
+  };
 }
