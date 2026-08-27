@@ -46,6 +46,21 @@ export {
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept/concept-key.js';
+export { corroborateConfusionPairs } from './concept/confusion-pairing/corroborate.js';
+export type { ConfusionPairingResolutionHealth } from './concept/confusion-pairing/health.js';
+export { checkConfusionPairingResolution } from './concept/confusion-pairing/health.js';
+// The confusion-pairing corroboration reader (`ol-2zfj.20`) — corroborates
+// `contrasts-with` edges against misconception evidence
+// (`confusedWithConceptId`). Pure, no persistence, no student surface: see
+// `./concept/confusion-pairing/types.ts`'s module doc for the full scope
+// argument and `[D-072]` clause 5's named exception — no production caller
+// yet, gated on the open decision at `ol-2zfj.21`.
+export type {
+  ConfusionCorroborationStanding,
+  ConfusionPairCorroboration,
+  ConfusionPairingConcept,
+  ConfusionPairingResult,
+} from './concept/confusion-pairing/types.js';
 export type {
   PassageTextLookup,
   RunCorpusRelationBatchInput,
@@ -213,6 +228,19 @@ export {
   readConceptSize,
 } from './concept/size.js';
 export type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './concept/types.js';
+// C7.8's course lifecycle (`[D-098]`, `ol-0r92.7`): the BEGINNING slice —
+// detection proposes, never creates (point 1) — plus the mapping shape and
+// its uid-silent re-map / genuine-scatter check. `packages/plugin/src/
+// main.ts` is the one production caller, additive same as `courseFromPath`
+// above: neither `lifecycle.ts` nor `mapping.ts` is touched by this export.
+export type { CourseDetectionProposal } from './course/lifecycle.js';
+export { detectCourseProposals } from './course/lifecycle.js';
+export type {
+  CourseMapping,
+  CourseRemapResult,
+  CourseRootSnapshot,
+} from './course/mapping.js';
+export { buildCourseMapping, pathInCourseMapping, recomputeCourseRoot } from './course/mapping.js';
 export { addDays, daysBetween } from './dates.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
 // pure projection over past-paper citations and the assessments Base, never
