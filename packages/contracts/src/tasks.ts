@@ -91,6 +91,20 @@ export const TASK_IDS = {
   EXPLAIN_WHY_GENERATE: 'explain-why.generate.v1',
   /** W6 · Slot J — grade an explain-back attempt (F5, F4.6, R7). */
   EXPLAIN_BACK_JUDGE: 'explain-back.judge.v1',
+  /**
+   * W6 · Slot J — the SOLO depth verdict on a graded explain-back response
+   * (`ol-95vv.2` [MAT-5], `[D-117]`, knowledge model R7/R9): five-level SOLO
+   * taxonomy structure, never a numeric mastery estimate and never a second
+   * scored concept (R9's structural rule). A separate task from
+   * `explain-back.judge.v1` — that task verdicts correctness against a
+   * reference answer; this one verdicts the STRUCTURE of an answer that
+   * already exists, orthogonal to whether it is right. Payload/response
+   * fixed by `olea-service/src/tasks/explainBackSolo.ts`; the client-side
+   * caller is `packages/core/src/grading/explainBackSolo.ts`'s `gradeSolo`,
+   * fed by `../mastery/gradingInputContract.ts`'s `buildGradingSourceMaterial`
+   * (`[D-083]`).
+   */
+  EXPLAIN_BACK_SOLO: 'explain-back.solo.v1',
   /** W7 · Slot O — the exam oracle's yield ranking (F4.2–F4.4). */
   ORACLE_RANK: 'oracle.rank.v1',
   /**

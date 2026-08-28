@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these thirteen ids, spelled exactly this way', () => {
+  it('is exactly these fourteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -20,6 +20,7 @@ describe('the closed task-id catalogue', () => {
       'concepts.extract.v1',
       'concepts.relations.v1',
       'explain-back.judge.v1',
+      'explain-back.solo.v1',
       'explain-why.generate.v1',
       'grounding.judge.v1',
       'materiality.judge.v1',
@@ -68,7 +69,13 @@ describe('the closed task-id catalogue', () => {
     // `ol-2zfj.18`) is the fourth W6 judgment: a verdict over a changed file's
     // previous/current text, grouped with `concepts.classify.v1` and
     // `grounding.judge.v1` for the same "judging, not generating" reason.
-    expect(ALL_TASK_IDS).toHaveLength(13);
+    //
+    // `explain-back.solo.v1` (`ol-95vv.2` [MAT-5], `[D-117]`) is the fifth W6
+    // judgment: the SOLO depth verdict on an explain-back response that
+    // already exists (structure, not correctness) — grouped with W6 rather
+    // than treated as a second generation task for the same "judging, not
+    // generating" reason `explain-back.judge.v1` itself is.
+    expect(ALL_TASK_IDS).toHaveLength(14);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
