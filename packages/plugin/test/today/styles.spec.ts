@@ -28,10 +28,14 @@
  * `.olea-review-root` (bg, text, muted, faint, line, ui-font, mono) out of
  * this section entirely, onto a `:is(.olea-review-root, .olea-today-root)`
  * block near the top of the file, so they are declared once rather than
- * once per view. That block sits OUTSIDE the Today slice on purpose — it
- * names `.olea-review-root`, and a selector naming a class the Today view
- * never emits would fail this file's own "every rule is reachable from the
- * view" check if it were included. So the positive host-read coverage
+ * once per view. `ol-0r92.8` later folded `.olea-gap-root` and
+ * `.olea-session-root` into the same shared selector, so it now reads
+ * `:is(.olea-review-root, .olea-today-root, .olea-gap-root,
+ * .olea-session-root)` — this spec's `SHARED_ROOT_SELECTOR` constant tracks
+ * that literal text. That block sits OUTSIDE the Today slice on purpose — it
+ * names classes the Today view never emits, and a selector naming them
+ * inside the slice would fail this file's own "every rule is reachable from
+ * the view" check if it were included. So the positive host-read coverage
  * check below reads the shared block directly, by name, rather than the
  * Today slice; the negative assertions (no `@layer`, no `--olea-dark-*`)
  * stay pointed at the Today slice, which correctly still has none of
@@ -77,7 +81,8 @@ function todaySection(): string {
 
 const css = todaySection();
 
-const SHARED_ROOT_SELECTOR = ':is(.olea-review-root, .olea-today-root)';
+const SHARED_ROOT_SELECTOR =
+  ':is(.olea-review-root, .olea-today-root, .olea-gap-root, .olea-session-root)';
 
 /**
  * The shared host-reads block both `.olea-review-root` and `.olea-today-root`
@@ -129,7 +134,10 @@ describe('styles.css covers the Today view', () => {
     const emitted = classesEmittedByView();
     expect(emitted.length).toBeGreaterThan(10);
     expect(emitted).toContain('olea-today-root');
-    expect(emitted).toContain('olea-today-week-mark');
+    // The second probe is a class built dynamically (course rows), so the
+    // sampler proves it sees more than the static literals. Was
+    // `olea-today-week-mark` until D-061 removed the streak (ol-ej59.7).
+    expect(emitted).toContain('olea-today-course-dot');
   });
 
   it('every class the view emits has a rule', () => {
@@ -157,7 +165,7 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
     expect(owned.map((m) => `${m[1]}:${m[2]}`)).toEqual(['attention:#e0a94e', 'brand:#8a9a63']);
   });
 
-  it('reads the host for every ground, text, border and font role, via the shared block it carries with .olea-review-root', () => {
+  it('reads the host for every ground, text, border and font role, via the shared block it carries with the other three roots', () => {
     for (const hostVar of [
       '--background-primary',
       '--text-normal',
@@ -171,7 +179,7 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
     }
   });
 
-  it('declares the --olea-host-* role reads it shares with .olea-review-root once, on the shared block, not locally', () => {
+  it('declares the --olea-host-* role reads it shares with the other three roots once, on the shared block, not locally', () => {
     const SHARED_ROLES = ['bg', 'text', 'muted', 'faint', 'line', 'ui-font', 'mono'];
     for (const role of SHARED_ROLES) {
       const declaration = new RegExp(`--olea-host-${role}\\s*:`, 'g');

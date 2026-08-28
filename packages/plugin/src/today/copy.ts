@@ -15,7 +15,7 @@
  * 1. **The kit's subhead names a weekday by which nothing further falls due;
  *    no such line ships.** It is a forward-looking scheduling claim, and there
  *    is no F-number behind one. F6.1 is a *due-today* summary plus per-course
- *    counts plus a streak; F6.3 is the next-*exam* countdown, not the next
+ *    counts; F6.3 is the next-*exam* countdown, not the next
  *    review. Worse, a claim of that shape cannot be kept true: every rating
  *    she gives moves FSRS due dates, and a card created tomorrow is due
  *    tomorrow, so any named day is falsified by ordinary use of the product.
@@ -34,22 +34,20 @@
  *    course string is hardcoded anywhere in this module; every code and name
  *    on screen comes from the vault at runtime.
  *
- * ## Three kit decisions this panel does take
+ * ## One kit decision this panel does take
  *
- * - **The streak strip marks a missed day exactly as it marks a day that has
- *   not arrived yet** — one neutral state covering both, with no mark that
- *   means *you missed this*. That is F6.1's non-punitive clause, and core
- *   enforces it rather than trusting the renderer (`today/streak.ts`:
- *   `StreakDay` carries no `missed` flag for a view to read).
- * - **The kit's second state — the pane after a run of missed days — differs
- *   from the first only in the streak number.** Nothing else on the surface
- *   reacts. That is also P2-T09's acceptance criterion.
  * - One primary action, and it starts the review.
+ *
+ * The kit's streak strip — a missed day marked exactly as a day that had not
+ * arrived yet, and a second pane state differing from the first only in the
+ * streak number — is not one of them: `[D-061]` removed the streak from F6.1
+ * entirely, so there is no streak decision left for this panel to take or
+ * decline.
  *
  * ## The rule these strings are tested against
  *
  * `test/today/copy.spec.ts` asserts over `allTodayStrings()`: no future
- * scheduling, no completeness claim, no streak-loss language, no instruction
+ * scheduling, no completeness claim, no instruction
  * to keep anything up. Adding a string without adding it to that function is
  * the one way past the test, which is why `view.ts` renders nothing it did not
  * get from here.
@@ -122,12 +120,6 @@ export function showsStartReviewAction(due: { readonly total: number } | null): 
   return due !== null;
 }
 
-/** The streak section's eyebrow. */
-export const STREAK_LABEL = 'Streak';
-
-/** Weekday initials for the trailing strip, indexed by `Date.getUTCDay()` (0 = Sunday). */
-const WEEKDAY_INITIALS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
-
 /** `{n} due today`'s number half is rendered separately; this is the whole line for a screen reader. */
 export function dueTodaySentence(total: number): string {
   return `${total} ${DUE_TODAY_LABEL}`;
@@ -158,37 +150,6 @@ export function newCountSentence(newCount: number): string | null {
 /** `12` for a course row. Separate function so the row markup holds no formatting logic. */
 export function courseCountLabel(count: number): string {
   return String(count);
-}
-
-/**
- * `9 days` · `1 day` · `0 days` · `90+ days`.
- *
- * The `+` form is the honest rendering of `StreakSummary.atWindowEdge`: the
- * run reached the oldest day the panel actually read, so the exact number is
- * not known and is not claimed. Zero renders as `0 days` — a count, flat and
- * without comment, because F6.1 makes the streak a tally and forbids it from
- * pushing her, and the alternatives ("no streak yet", "start one today") are
- * both instructions.
- */
-export function streakValue(days: number, atWindowEdge: boolean): string {
-  const noun = days === 1 && !atWindowEdge ? 'day' : 'days';
-  return `${days}${atWindowEdge ? '+' : ''} ${noun}`;
-}
-
-/** The single letter under a cell of the week strip. */
-export function weekdayInitial(day: string): string {
-  const parsed = Date.parse(`${day}T00:00:00Z`);
-  if (Number.isNaN(parsed)) return '';
-  return WEEKDAY_INITIALS[new Date(parsed).getUTCDay()] ?? '';
-}
-
-/**
- * The accessible name of one cell. States the fact and stops: a day with no
- * reviews says so without saying whether that is because she missed it or
- * because it has not happened yet, exactly as the mark itself does.
- */
-export function weekCellLabel(day: string, studied: boolean): string {
-  return studied ? `${day} — reviewed` : day;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -235,7 +196,7 @@ export function weekCellLabel(day: string, studied: boolean): string {
  *   it cannot be built without the `CourseEffort` the sentence is about.
  * ------------------------------------------------------------------------ */
 
-/** The mastery overview's eyebrow (F6.2). Sits where `STREAK_LABEL` sits. */
+/** The mastery overview's eyebrow (F6.2). */
 export const MASTERY_LABEL = 'Mastery';
 
 /**
@@ -390,7 +351,7 @@ export function insightsScopeSentence(windowDays: number): string {
  * `rhythmQuietClause`'s text is F6.9's own worked example, almost verbatim:
  * *"nothing from this course has arrived in three weeks."* This states the
  * measured day count rather than converting it to a week count — the panel's
- * other numbers (`streakValue`, `dueTodaySentence`) are all day-granular, and
+ * other numbers (`dueTodaySentence`) are all day-granular, and
  * `olea-core`'s `rhythm.ts` explicitly declines to invent a weeks-or-tempo
  * conversion it has no ruling behind (see that module's doc); copy is not the
  * place to invent one either.
@@ -440,7 +401,6 @@ export function allTodayStrings(): readonly string[] {
     NOTHING_DUE,
     DUE_UNAVAILABLE,
     START_REVIEW,
-    STREAK_LABEL,
     dueTodaySentence(0),
     dueTodaySentence(1),
     dueTodaySentence(23),
@@ -450,13 +410,6 @@ export function allTodayStrings(): readonly string[] {
     newCountSentence(12) ?? '',
     courseCountLabel(0),
     courseCountLabel(12),
-    streakValue(0, false),
-    streakValue(1, false),
-    streakValue(9, false),
-    streakValue(90, true),
-    weekCellLabel('2026-08-10', true),
-    weekCellLabel('2026-08-10', false),
-    ...WEEKDAY_INITIALS,
     // --- the trends half (F6.2, F6.5) ---
     MASTERY_LABEL,
     INSIGHTS_LABEL,

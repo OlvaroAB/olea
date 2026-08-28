@@ -27,9 +27,6 @@ import {
   rhythmQuietLine,
   showsStartReviewAction,
   spacingRateSentence,
-  streakValue,
-  weekCellLabel,
-  weekdayInitial,
 } from '../../src/today/copy.js';
 
 const strings = allTodayStrings();
@@ -62,14 +59,6 @@ describe('no forward scheduling promise', () => {
       expect(corpus, `"${word}" is a claim about a day that has not happened`).not.toContain(word);
     }
   });
-
-  it('the weekday initials are the only day vocabulary, and they label real dates', () => {
-    // The strip's letters are derived from the days it actually renders, so
-    // they are labels rather than predictions.
-    expect(weekdayInitial('2026-08-10')).toBe('M');
-    expect(weekdayInitial('2026-08-09')).toBe('S');
-    expect(weekdayInitial('not a day')).toBe('');
-  });
 });
 
 describe('no completeness claim', () => {
@@ -100,8 +89,8 @@ describe('no completeness claim', () => {
   });
 });
 
-describe('the streak states a fact and applies no pressure (F6.1)', () => {
-  it('no streak-loss, warning or exhortation language anywhere', () => {
+describe('no gamification, pressure or compliance language anywhere (F6.1)', () => {
+  it('no loss, warning or exhortation language anywhere', () => {
     const forbidden = [
       'lost',
       'lose',
@@ -139,34 +128,11 @@ describe('the streak states a fact and applies no pressure (F6.1)', () => {
   });
 });
 
-describe('streakValue', () => {
-  it('counts, including zero, flatly', () => {
-    expect(streakValue(0, false)).toBe('0 days');
-    expect(streakValue(1, false)).toBe('1 day');
-    expect(streakValue(9, false)).toBe('9 days');
-  });
-
-  it('states the window edge rather than claiming an exact number past it', () => {
-    expect(streakValue(120, true)).toBe('120+ days');
-    expect(streakValue(1, true)).toBe('1+ days');
-  });
-});
-
 describe('dueTodaySentence and courseCountLabel', () => {
   it('read correctly at one and at zero', () => {
     expect(dueTodaySentence(1)).toBe('1 due today');
     expect(dueTodaySentence(23)).toBe('23 due today');
     expect(courseCountLabel(12)).toBe('12');
-  });
-});
-
-describe('weekCellLabel', () => {
-  it('states the fact and stops', () => {
-    expect(weekCellLabel('2026-08-10', true)).toBe('2026-08-10 — reviewed');
-  });
-
-  it('a day with no reviews says nothing about why', () => {
-    expect(weekCellLabel('2026-08-10', false)).toBe('2026-08-10');
   });
 });
 

@@ -4,7 +4,7 @@
  * Thin by design. Everything the panel *decides* is in `olea-core`'s
  * `today/panel.ts`, everything it *says* is in `./copy.ts`, and everything it
  * *reads* is in `./data-source.ts`. What is left here is DOM: build the header,
- * build the count, build the course rows, build the streak strip. Same reason
+ * build the count, and build the course rows. Same reason
  * `review/view.ts` has no test file and none is expected — `obsidian` has no
  * runtime outside a real host, so the logic worth testing is deliberately
  * somewhere it can run.
@@ -36,13 +36,7 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type {
-  CourseDueCount,
-  CourseMastery,
-  InsightsSummary,
-  StreakDay,
-  TodayViewModel,
-} from 'olea-core';
+import type { CourseDueCount, CourseMastery, InsightsSummary, TodayViewModel } from 'olea-core';
 import { MASTERY_ORDER } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
@@ -62,14 +56,10 @@ import {
   RHYTHM_LABEL,
   rhythmQuietLine,
   START_REVIEW,
-  STREAK_LABEL,
   showsStartReviewAction,
   spacingRateSentence,
-  streakValue,
   TODAY_HEADER_LABEL,
   TODAY_VIEW_TITLE,
-  weekCellLabel,
-  weekdayInitial,
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_TODAY = 'olea-today';
@@ -126,14 +116,9 @@ export class TodayView extends ItemView {
 
     const body = root.createDiv({ cls: 'olea-today-body' });
     this.renderDue(body, vm);
-    // Before the streak, not after: `.olea-today-streak` carries
-    // `margin-top: auto`, so it is pinned to the bottom of the pane by
-    // construction and anything appended after it would sit below the thing
-    // that is meant to be last.
     this.renderMastery(body, vm);
     this.renderInsights(body, vm);
     this.renderRhythm(body, vm);
-    this.renderStreak(body, vm.streak.currentDays, vm.streak.atWindowEdge, vm.streak.week);
   }
 
   /**
@@ -370,37 +355,5 @@ export class TodayView extends ItemView {
       cls: 'olea-today-course-count',
       text: courseCountLabel(course.count),
     });
-  }
-
-  private renderStreak(
-    parent: HTMLElement,
-    currentDays: number,
-    atWindowEdge: boolean,
-    week: readonly StreakDay[],
-  ): void {
-    const section = parent.createDiv({ cls: 'olea-today-streak' });
-
-    const head = section.createDiv({ cls: 'olea-today-streak-head' });
-    head.createSpan({ cls: 'olea-today-streak-label', text: STREAK_LABEL });
-    head.createSpan({
-      cls: 'olea-today-streak-value',
-      text: streakValue(currentDays, atWindowEdge),
-    });
-
-    const strip = section.createDiv({ cls: 'olea-today-week' });
-    for (const day of week) {
-      const cell = strip.createDiv({ cls: 'olea-today-week-cell' });
-      // A missed day and a day that has not happened yet get the same mark.
-      // `StreakDay` carries no flag that separates them (F6.1, and the Pass 1
-      // kit, whose streak strip gives a missed day no colour of its own).
-      const mark = cell.createSpan({ cls: 'olea-today-week-mark' });
-      if (day.studied) mark.addClass('is-studied');
-      if (day.isToday) mark.addClass('is-today');
-      mark.setAttr('aria-label', weekCellLabel(day.day, day.studied));
-      cell.createSpan({
-        cls: 'olea-today-week-day',
-        text: weekdayInitial(day.day),
-      });
-    }
   }
 }
