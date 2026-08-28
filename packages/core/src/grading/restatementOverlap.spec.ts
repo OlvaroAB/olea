@@ -1,10 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import {
-  DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
-  gradeExplainBackWithPrecheck,
-  measureAnswerSourceOverlap,
-  precheckRestatement,
-} from './restatementOverlap.js';
+import { describe, expect, it } from 'vitest';
+import { measureAnswerSourceOverlap, precheckRestatement } from './restatementOverlap.js';
 
 // Synthetic, invented study material — never real vault content (INV-3).
 // Topic and wording made up for this test only.
@@ -81,110 +76,47 @@ describe('measureAnswerSourceOverlap', () => {
 });
 
 describe('precheckRestatement', () => {
-  it('never short-circuits when the threshold is disabled (the shipped default)', () => {
-    expect(DEFAULT_RESTATEMENT_PRECHECK_OPTIONS.thresholdContainment).toBeNull();
+  // Record-only since `[D-138]` deleted the gating threshold: this function
+  // only ever measures and returns an `OverlapMeasurement` — there is no
+  // short-circuit, no fixed grading, and no options field left to disable.
+
+  it('measures containment 1 for a verbatim paste, exactly like measureAnswerSourceOverlap', () => {
+    const result = precheckRestatement({
+      question: 'q',
+      studentAnswer: VERBATIM,
+      referenceAnswer: SOURCE,
+    });
+    expect(result.containment).toBe(1);
+  });
+
+  it('measures containment 0 for a genuine explanation in different words', () => {
+    const result = precheckRestatement({
+      question: 'q',
+      studentAnswer: GENUINE_OWN_WORDS,
+      referenceAnswer: SOURCE,
+    });
+    expect(result.containment).toBe(0);
+  });
+
+  it('folds a supplied sourceExcerpt into the source material measured against', () => {
+    const withExcerpt = precheckRestatement({
+      question: 'q',
+      studentAnswer: PARTIAL_PASTE,
+      referenceAnswer: 'unrelated reference text with no overlap at all',
+      sourceExcerpt: SOURCE,
+    });
+    // PARTIAL_PASTE's opening sentences are verbatim from SOURCE, not from
+    // referenceAnswer — containment is only non-zero once sourceExcerpt is
+    // folded in, proving the two are combined rather than either alone used.
+    expect(withExcerpt.containment).toBeGreaterThan(0);
+  });
+
+  it('passes ngramSize through to measureAnswerSourceOverlap', () => {
     const result = precheckRestatement(
-      { question: 'q', studentAnswer: VERBATIM, referenceAnswer: SOURCE },
-      DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
+      { question: 'q', studentAnswer: 'membrane bound organelles', referenceAnswer: SOURCE },
+      { ngramSize: 8 },
     );
-    expect(result.shortCircuited).toBe(false);
-    expect(result.grading).toBeNull();
-    // Still measures and reports the overlap even when disabled.
-    expect(result.overlap.containment).toBe(1);
-  });
-
-  it('short-circuits a verbatim paste at a moderate threshold, with a non-empty missedPoints', () => {
-    const result = precheckRestatement(
-      { question: 'q', studentAnswer: VERBATIM, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.5 },
-    );
-    expect(result.shortCircuited).toBe(true);
-    expect(result.grading?.verdict).toBe('incorrect');
-    // The literal "source minus answer" is empty for an exact copy (nothing
-    // textually missing) — asserting non-empty here is what would catch a
-    // regression back to the bead's literal proposal, which would silently
-    // reproduce E2a's own `nothing-missed` false-praise criterion.
-    expect(result.grading?.missedPoints.length).toBeGreaterThan(0);
-  });
-
-  it('lets a lightly-edited paraphrase through to the model instead of short-circuiting', () => {
-    const result = precheckRestatement(
-      { question: 'q', studentAnswer: PARAPHRASE_WITH_SYNONYMS, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.5 },
-    );
-    expect(result.shortCircuited).toBe(false);
-    expect(result.grading).toBeNull();
-  });
-
-  it('never short-circuits a genuine explanation', () => {
-    const result = precheckRestatement(
-      { question: 'q', studentAnswer: GENUINE_OWN_WORDS, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.2 },
-    );
-    expect(result.shortCircuited).toBe(false);
-  });
-
-  it('never short-circuits an empty answer, even at threshold 0', () => {
-    const result = precheckRestatement(
-      { question: 'q', studentAnswer: '', referenceAnswer: SOURCE },
-      { thresholdContainment: 0 },
-    );
-    expect(result.shortCircuited).toBe(false);
-    expect(result.grading).toBeNull();
-  });
-
-  it('returns the literal source-minus-answer sentences for a partial paste', () => {
-    const result = precheckRestatement(
-      { question: 'q', studentAnswer: PARTIAL_PASTE, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.3 },
-    );
-    expect(result.shortCircuited).toBe(true);
-    expect(result.grading?.missedPoints).toHaveLength(2);
-    // The two sentences PARTIAL_PASTE never reproduces.
-    expect(result.grading?.missedPoints.join(' ')).toContain('endosymbiotic theory');
-    expect(result.grading?.missedPoints.join(' ')).toContain('inherited separately');
-  });
-});
-
-describe('gradeExplainBackWithPrecheck', () => {
-  it('never calls the model when the pre-check short-circuits (asserted by counting calls)', async () => {
-    const callModel = vi.fn(async () => ({
-      verdict: 'correct' as const,
-      feedback: 'x',
-      missedPoints: [],
-    }));
-    const result = await gradeExplainBackWithPrecheck(
-      { question: 'q', studentAnswer: VERBATIM, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.5 },
-      callModel,
-    );
-    expect(callModel).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ verdict: 'incorrect' });
-  });
-
-  it('calls the model exactly once when the pre-check does not short-circuit', async () => {
-    const modelGrading = { verdict: 'partial' as const, feedback: 'y', missedPoints: ['z'] };
-    const callModel = vi.fn(async () => modelGrading);
-    const result = await gradeExplainBackWithPrecheck(
-      { question: 'q', studentAnswer: GENUINE_OWN_WORDS, referenceAnswer: SOURCE },
-      { thresholdContainment: 0.5 },
-      callModel,
-    );
-    expect(callModel).toHaveBeenCalledTimes(1);
-    expect(result).toBe(modelGrading);
-  });
-
-  it('calls the model when the pre-check is disabled, regardless of overlap', async () => {
-    const callModel = vi.fn(async () => ({
-      verdict: 'incorrect' as const,
-      feedback: 'y',
-      missedPoints: ['z'],
-    }));
-    await gradeExplainBackWithPrecheck(
-      { question: 'q', studentAnswer: VERBATIM, referenceAnswer: SOURCE },
-      DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
-      callModel,
-    );
-    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(result.ngramSize).toBeLessThanOrEqual(3);
+    expect(result.containment).toBe(1);
   });
 });

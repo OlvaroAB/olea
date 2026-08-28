@@ -517,6 +517,47 @@ describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
   });
 });
 
+describe("TRG-1's material verdict is a second consumer feeding F3.3's generation sweep, for the authored-note case (ol-0r92.12, [AUTH-1b])", () => {
+  // `findings/sis4-authored-generation.md` (private, `ol-sis4`) traced the
+  // exact gap: F3.3's generation hook only ever fired from a drained
+  // ingestion job over the four non-markdown formats `KNOWN_FORMATS` covers,
+  // so a markdown note she authors herself could never reach it. David's
+  // ruled mechanism (2026-08-28): TRG-1's material-change verdict, already
+  // computed for F6.9 on every note vault-wide, becomes a second caller of
+  // the SAME `onUnitsLanded` hook the ingestion path drives — no fifth
+  // ingestion format, no markdown ingestion path. These are the
+  // source-level checks that the second caller actually exists and reuses
+  // the same materiality gate rather than inventing its own.
+
+  it('evaluateMaterialityChange calls the new consumer right alongside the F6.9 one, from the same verdict', () => {
+    expect(main).toMatch(
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, result\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(path, currentText, result\);/,
+    );
+  });
+
+  it('the new consumer is gated on the SAME observedMaterialChange reading as F6.9 — no independent debounce', () => {
+    expect(main).toMatch(
+      /private observedMaterialChange\(result: MaterialityEvaluationResult\): boolean \{\s*return \(\s*result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)\s*\);\s*\}/,
+    );
+    expect(main).toMatch(
+      /private async recordMaterialArrivalIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*result: MaterialityEvaluationResult,\s*\): Promise<void> \{\s*if \(this\.materialArrivals === null\) return;\s*if \(!this\.observedMaterialChange\(result\)\) return;/,
+    );
+    expect(main).toMatch(
+      /private async triggerAuthoredNoteGenerationIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*result: MaterialityEvaluationResult,\s*\): Promise<void> \{\s*if \(!this\.observedMaterialChange\(result\)\) return;/,
+    );
+  });
+
+  it('synthesises exactly one ExtractedUnit whose embeddedIn.notePath is the note itself — no new ingestion format', () => {
+    expect(main).toMatch(
+      /embeddedIn:\s*\{\s*notePath:\s*path,\s*blockStart:\s*0,\s*blockEnd:\s*currentText\.length\s*\},/,
+    );
+  });
+
+  it('delegates to onUnitsLanded — the SAME F3.3 hook the ingestion path calls, not a second sweep entry point', () => {
+    expect(main).toMatch(/await this\.onUnitsLanded\(\[unit\]\);/);
+  });
+});
+
 describe('the withdrawn draft-cards command does not exist (F4.5)', () => {
   // `OLEA_COMMAND_DRAFT_CARDS` / `DraftCardsModal` shipped in wave-2 round-2
   // and was withdrawn: F4.5 rules out a student-invoked draft verb by name

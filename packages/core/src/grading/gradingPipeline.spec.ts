@@ -153,35 +153,19 @@ describe('gradeExplainBack — the pipeline (pre-check, model call, grounding)',
     expect(callJudge).not.toHaveBeenCalled();
   });
 
-  it('short-circuits on the mechanical pre-check when a threshold is supplied, with no model call', async () => {
-    const callJudge = vi.fn();
-    const verbatimAnswer = SOURCE_BLOCKS.map((b) => b.text).join(' ');
-    const result = await gradeExplainBack(
-      baseInput({ studentAnswer: verbatimAnswer, sourceBlocks: SOURCE_BLOCKS }),
-      callJudge,
-      { thresholdContainment: 0.5 },
-    );
-    expect(result.shortCircuited).toBe(true);
-    expect(result.grading.verdict).toBe('incorrect');
-    expect(result.grading.citedIssues).toEqual([]);
-    expect(result.grading.misconceptionCandidates).toEqual([]);
-    expect(callJudge).not.toHaveBeenCalled();
-  });
-
-  it('never short-circuits when no threshold is supplied (ol-nvdk default), even for a verbatim paste', async () => {
+  it('always calls the model, even for a verbatim paste — [D-138] deleted the gating threshold', async () => {
     const callJudge = vi.fn().mockResolvedValue(wireResponse());
     const verbatimAnswer = SOURCE_BLOCKS.map((b) => b.text).join(' ');
     const result = await gradeExplainBack(
       baseInput({ studentAnswer: verbatimAnswer, sourceBlocks: SOURCE_BLOCKS }),
       callJudge,
-      // default precheckOptions — thresholdContainment: null
     );
-    expect(result.shortCircuited).toBe(false);
+    // The overlap measurement is still reported — record-only, never gates.
     expect(result.overlap.containment).toBeGreaterThan(0.9);
     expect(callJudge).toHaveBeenCalledTimes(1);
   });
 
-  it('calls the model and grounds its response when the pre-check does not short-circuit', async () => {
+  it('calls the model and grounds its response', async () => {
     const callJudge = vi.fn().mockResolvedValue(
       wireResponse({
         citedIssues: [
@@ -194,7 +178,6 @@ describe('gradeExplainBack — the pipeline (pre-check, model call, grounding)',
       }),
     );
     const result = await gradeExplainBack(baseInput(), callJudge);
-    expect(result.shortCircuited).toBe(false);
     expect(result.grading.citedIssues).toEqual([
       { kind: 'omission', description: 'never mentions W', sourceBlockIds: ['blk-2'] },
     ]);
@@ -268,7 +251,6 @@ describe('acceptExplainBackGrading / discardExplainBackGrading — INV-6', () =>
     // exactly the "defensive, not redundant" case acceptGeneratedMcq argues for.
     const tampered = {
       status: 'pending-review' as const,
-      shortCircuited: false,
       overlap: {
         containment: 0,
         lcsRatio: 0,
@@ -328,7 +310,6 @@ describe('summarizeGradingForTelemetry — never logs content', () => {
         'droppedCitationCount',
         'droppedMisconceptionCount',
         'misconceptionCandidateCount',
-        'shortCircuited',
         'verdict',
       ].sort(),
     );

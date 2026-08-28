@@ -82,6 +82,34 @@ export interface RevisionEvent {
   readonly change: string;
 }
 
+/**
+ * The succession log event's LOGICAL shape — `[D-133]`'s second durable home
+ * (`ol-w00s`), recording only the fact of succession: which instrument was
+ * superseded, which instrument superseded it, and when. **Never a copy of the
+ * predecessor chain** — the metadata-position `predecessor` field on the
+ * successor's own instrument block (`packages/plugin/src/instrument-blocks/`)
+ * is the single source of truth for the chain itself; this event exists so
+ * "was this instrument superseded, and by what" is answerable from the log
+ * alone, the same way `suspendLogRecordV5` already answers "was this
+ * instrument suspended."
+ *
+ * **This is the in-memory shape this module can produce today.** Persisting
+ * it needs a new review-log event kind in `packages/contracts/src/review-log.ts`
+ * (a `successionLogRecordV5` shape, additive to `reviewLogEntryV5` the way
+ * `verdict` was additive at v4/v5) plus a writer in
+ * `packages/core/src/review-log/write.ts` (an `appendSuccessionRecord`
+ * mirroring `appendSuspendRecord`'s shape) — both outside this bead's `owns`.
+ * See `ol-w00s`'s close notes for the exact addition named.
+ */
+export interface SuccessionEvent {
+  /** The instrument this succeeds — the same id `RevisionEvent.instrumentId` names for the 'revised' outcome that led here. */
+  readonly predecessorInstrumentId: string;
+  /** The freshly-materialized successor's own id, known only once it has been written to the vault and stamped (`ol-p3t07b`'s `stampMcqId`-shaped write, out of this module's reach — core holds no vault access). */
+  readonly successorInstrumentId: string;
+  /** Epoch ms, from the caller's `Clock` — same discipline as {@link RevisionEvent.at}. */
+  readonly at: number;
+}
+
 /** One candidate location this passage's exact (or near-exact) text might now live at — supplied by the caller, never searched for by this module (core holds no vault access). */
 export interface RelocationCandidate {
   readonly anchor: Provenance;

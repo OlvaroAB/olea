@@ -410,19 +410,13 @@ export {
   UnusableGradingInputError,
 } from './grading/gradingPipeline.js';
 // Mechanical answer-vs-source overlap pre-check, upstream of Slot J (ol-nvdk).
+// Record-only since [D-138] deleted the gating threshold — see the module.
 export type {
   OverlapMeasurement,
-  RestatementPrecheckGrading,
   RestatementPrecheckInput,
   RestatementPrecheckOptions,
-  RestatementPrecheckResult,
 } from './grading/restatementOverlap.js';
-export {
-  DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
-  gradeExplainBackWithPrecheck,
-  measureAnswerSourceOverlap,
-  precheckRestatement,
-} from './grading/restatementOverlap.js';
+export { measureAnswerSourceOverlap, precheckRestatement } from './grading/restatementOverlap.js';
 // The production `JudgeCaller` (`ol-drfy`): builds the frozen
 // `explain-back.judge.v1` envelope, but leaves the HTTP call itself to an
 // injected `WorkerTaskTransport` — the same seam `WorkerEmbeddingProvider`

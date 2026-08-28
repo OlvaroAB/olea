@@ -753,6 +753,14 @@ export default class OleaPlugin extends Plugin {
    * event ever observed for a path this session (a safe "first sighting",
    * per `MaterialityTrigger.evaluate`'s own doc — never a guess).
    *
+   * TRG-1's verdict has **two** consumers from this one evaluation: F6.9's
+   * material-arrival timestamp (`recordMaterialArrivalIfObserved`, original),
+   * and, per `ol-0r92.12` [AUTH-1b] (David's ruled mechanism, 2026-08-28),
+   * F3.3's generation sweep for the authored-note case
+   * (`triggerAuthoredNoteGenerationIfObserved`). Both read the same
+   * `observedMaterialChange` verdict — the materiality gate is the one churn
+   * control for both, not a second, independent one.
+   *
    * Never lets a read or evaluation failure propagate: the same
    * "a downstream failure must never make this look like it misfired"
    * posture `wiring.ts`'s own `onVerdict` doc argues for the verdict hook
@@ -771,6 +779,7 @@ export default class OleaPlugin extends Plugin {
     try {
       const result = await this.materiality.evaluate(path, currentText, previousText);
       await this.recordMaterialArrivalIfObserved(path, currentText, result);
+      await this.triggerAuthoredNoteGenerationIfObserved(path, currentText, result);
     } catch (error) {
       console.error('Olea: materiality trigger evaluation failed', error);
     } finally {
@@ -779,22 +788,31 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * Whether one `MaterialityTrigger.evaluate` result counts as a real
+   * content change — the single reading both of row 1.4's consumers
+   * (`recordMaterialArrivalIfObserved` for F6.9, `triggerAuthoredNoteGeneration
+   * IfObserved` for F3.3's authored-note case, `ol-0r92.12`) key on, so the
+   * free gates (hash/debounce/floor) stay the one churn control rather than
+   * each consumer inventing its own. `'judge-unavailable'` counts the same
+   * way a `'verdict'` with `material: true` does — no `MaterialityJudge` is
+   * wired in production today (`this.materiality`'s own construction,
+   * above), so the free gates clearing is what "material changed" means
+   * until a judge exists; a judge that later says "not really" is still
+   * believed over them. `'unchanged'`, `'formatting-only'`, `'debounced'`
+   * and `'below-floor'` are row 1.4 itself declining to treat the edit as
+   * real content movement, for neither consumer.
+   */
+  private observedMaterialChange(result: MaterialityEvaluationResult): boolean {
+    return (
+      result.kind === 'judge-unavailable' || (result.kind === 'verdict' && result.verdict.material)
+    );
+  }
+
+  /**
    * F6.9's per-course material-arrival timestamp (`ol-v7r5.6`) — recorded the
    * moment row 1.4's free gates (hash/debounce/floor) judge an edit
-   * significant enough that a judge call would follow. That is
-   * `'judge-unavailable'` in production today, because no `MaterialityJudge`
-   * is wired (`this.materiality`'s own construction, above); once one is
-   * (`ingestion/materiality/wiring.ts`'s named D-072 gap), a `'verdict'`
-   * whose `material` is `true` counts the same way and a `false` one does
-   * not — the free gates having cleared is what F6.9 needs "material
-   * arrived" to mean, and a judge that goes on to say "not really" should
-   * still be believed over them.
-   *
-   * `'unchanged'`, `'formatting-only'`, `'debounced'` and `'below-floor'` are
-   * row 1.4 itself declining to treat the edit as real content movement, and
-   * none of them records an arrival: doing so on every raw edit would make
-   * "material is arriving" mean "she opened the file", which is a different
-   * and much noisier claim than the one F6.9 licenses.
+   * significant enough that a judge call would follow. See
+   * `observedMaterialChange` for exactly what counts.
    *
    * Course association follows F1.3 exactly — her own `course` frontmatter
    * first, the course folder the path sits under otherwise
@@ -814,9 +832,7 @@ export default class OleaPlugin extends Plugin {
     result: MaterialityEvaluationResult,
   ): Promise<void> {
     if (this.materialArrivals === null) return;
-    const observed =
-      result.kind === 'judge-unavailable' || (result.kind === 'verdict' && result.verdict.material);
-    if (!observed) return;
+    if (!this.observedMaterialChange(result)) return;
 
     try {
       const doc = parseDocument(currentText);
@@ -832,6 +848,66 @@ export default class OleaPlugin extends Plugin {
     } catch (error) {
       console.error('Olea: could not record a material arrival', error);
     }
+  }
+
+  /**
+   * `ol-0r92.12` [AUTH-1b]'s second consumer of TRG-1's material verdict —
+   * David's ruled mechanism (2026-08-28) for closing the authored-note gap
+   * `findings/sis4-authored-generation.md` (private, `olea-service`) traced:
+   * F3.3's generation hook only ever fired from a drained ingestion job over
+   * the four non-markdown formats `KNOWN_FORMATS` covers
+   * (`packages/core/src/ingestion/extraction-runner.ts`), so a markdown note
+   * she authors herself — Zettelkasten, Research, anywhere — could never
+   * reach it, structurally, regardless of which folder it sat in.
+   *
+   * **No fifth ingestion format, no markdown ingestion path.** TRG-1 already
+   * runs its free gates on every note vault-wide; this reuses that verdict
+   * (the same `observedMaterialChange` reading `recordMaterialArrivalIfObserved`
+   * above uses, so the materiality gate — not a second, independent debounce
+   * — is the one churn control for both consumers) as a second caller of
+   * `onUnitsLanded`, the SAME hook the ingestion path already drives. It
+   * synthesises exactly one `ExtractedUnit` whose `provenance.embeddedIn
+   * .notePath` is the note's OWN path — the only field `runGenerationSweep`'s
+   * `embeddingNotePaths` reads (`generation/pipeline.ts`) to decide which
+   * note, and therefore which course, "landed." `provenance.location` is a
+   * placeholder (`page: 1`, the whole canonicalised text as one range): the
+   * sweep never reads a synthesised unit's `text` or its non-`embeddedIn`
+   * provenance fields, only `embeddedIn.notePath` — see that file's module
+   * doc.
+   *
+   * By the same construction, the note's own path is also
+   * `materializeAcceptedDraft`'s insertion target
+   * (`generation/materialize-mcq.ts`'s module doc: "a draft's `sourcePath`
+   * is always the note that embedded the material it was drafted from") — so
+   * an authored note's drafted instrument lands back inside that same note,
+   * and only at accept, through the existing passive-accept review flow
+   * (`[D-097]`). That flow — not this method — is the consent gesture INV-6
+   * requires; nothing here writes to the vault.
+   *
+   * A note outside every course folder (`courseFromPath` finds none) is a
+   * silent, disclosed no-op — `runGenerationSweep` already returns its zero
+   * report for an empty course-code set, the same course-folder scope
+   * `ol-2zfj.33`'s finding names for the ingested case; this bead does not
+   * widen that scope. Delegates to `onUnitsLanded`, which already never lets
+   * a sweep failure propagate.
+   */
+  private async triggerAuthoredNoteGenerationIfObserved(
+    path: VaultPath,
+    currentText: string,
+    result: MaterialityEvaluationResult,
+  ): Promise<void> {
+    if (!this.observedMaterialChange(result)) return;
+
+    const unit: ExtractedUnit = {
+      text: currentText,
+      provenance: {
+        sourcePath: path,
+        location: { page: 1, charRange: { start: 0, end: currentText.length } },
+        embeddedIn: { notePath: path, blockStart: 0, blockEnd: currentText.length },
+      },
+    };
+
+    await this.onUnitsLanded([unit]);
   }
 
   /**
@@ -1067,11 +1143,16 @@ export default class OleaPlugin extends Plugin {
 
   /**
    * F3.3's "generate automatically when material lands" trigger
-   * (`ol-p3t07a`), fired by `ingestion/wiring.ts`'s `onUnitsLanded` hook
-   * once per drained job. Never throws into the ingestion path it rides on
-   * — a generation failure is not an extraction failure (see that hook's
-   * own doc); `GenerationWiring.sweep` itself already no-ops honestly when
-   * the Worker isn't configured (F7.8) or `units` is empty.
+   * (`ol-p3t07a`). **Two production callers now feed it**: `ingestion
+   * /wiring.ts`'s `onUnitsLanded` hook, once per drained ingestion job over
+   * the four non-markdown formats; and, per `ol-0r92.12` [AUTH-1b],
+   * `triggerAuthoredNoteGenerationIfObserved` above, once per authored
+   * markdown note TRG-1's free gates judge materially changed. Never throws
+   * into whichever path rides on it — a generation failure is not an
+   * extraction or trigger failure (see that hook's own doc and
+   * `evaluateMaterialityChange`'s); `GenerationWiring.sweep` itself already
+   * no-ops honestly when the Worker isn't configured (F7.8) or `units` is
+   * empty.
    */
   private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
     if (this.generation === null) return;

@@ -45,15 +45,12 @@
  *    proves the model handles that correctly, and the mechanical pre-check
  *    below also treats it as "let the model see it" rather than as a reason
  *    to refuse — see `restatementOverlap.ts`'s own reasoning.)
- * 2. **Measure, and maybe short-circuit (`ol-nvdk`).** `precheckRestatement`
+ * 2. **Measure, record-only (`ol-nvdk`, `[D-138]`).** `precheckRestatement`
  *    always runs and its `overlap` measurement is always returned to the
- *    caller, whether or not it short-circuits. It short-circuits — zero
- *    model calls — only when the caller's own `precheckOptions` supplies a
- *    non-null `thresholdContainment`; this pipeline never supplies one
- *    itself and never ratifies `ol-nvdk`'s deferred threshold. The default,
- *    `DEFAULT_RESTATEMENT_PRECHECK_OPTIONS`, is `thresholdContainment: null`
- *    — measure, never gate — carried through unchanged.
- * 3. **Otherwise, call the model** through the caller-supplied `JudgeCaller`
+ *    caller. `[D-138]` deleted the threshold that used to let a caller gate
+ *    on this measurement — there is no way to short-circuit the model call
+ *    from `overlap` any more, and this pipeline never invents one.
+ * 3. **Then call the model** through the caller-supplied `JudgeCaller`
  *    — this module does not perform the HTTP call itself (no client-side
  *    `/v1/task` transport exists yet anywhere in this repo; that is a
  *    separate, not-yet-built concern), only the request/response shape and
@@ -128,7 +125,6 @@
 
 import type { MisconceptionDigestEntry } from '../misconception/digest.js';
 import {
-  DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
   type OverlapMeasurement,
   precheckRestatement,
   type RestatementPrecheckOptions,
@@ -290,27 +286,27 @@ export function groundCitations(
 }
 
 // ---------------------------------------------------------------------------
-// The pipeline: pre-check -> (maybe) model call -> grounding -> pending
+// The pipeline: pre-check (record-only) -> model call -> grounding -> pending
 // ---------------------------------------------------------------------------
 
 export interface PendingExplainBackGrading {
   readonly status: 'pending-review';
   readonly grading: GroundedGrading;
+  /** Record-only (`ol-nvdk`, `[D-138]`) — never gates the model call below. */
   readonly overlap: OverlapMeasurement;
-  /** True when the mechanical pre-check produced `grading` with no model call. */
-  readonly shortCircuited: boolean;
 }
 
 /**
- * The whole client-side pipeline. See the module header for the five-step
- * shape. `precheckOptions` defaults to `DEFAULT_RESTATEMENT_PRECHECK_OPTIONS`
- * (`thresholdContainment: null`) — this function does not ratify `ol-nvdk`'s
- * deferred threshold and never supplies one on the caller's behalf.
+ * The whole client-side pipeline. See the module header for the four-step
+ * shape. `precheckOptions` only tunes `precheckRestatement`'s measurement
+ * (e.g. `ngramSize`) — `[D-138]` deleted the threshold that used to let it
+ * gate the model call, so there is nothing left here to ratify or supply on
+ * the caller's behalf.
  */
 export async function gradeExplainBack(
   input: GradeExplainBackInput,
   callJudge: JudgeCaller,
-  precheckOptions: RestatementPrecheckOptions = DEFAULT_RESTATEMENT_PRECHECK_OPTIONS,
+  precheckOptions: RestatementPrecheckOptions = {},
 ): Promise<PendingExplainBackGrading> {
   if (input.referenceAnswer.trim() === '') {
     throw new UnusableGradingInputError(
@@ -322,7 +318,7 @@ export async function gradeExplainBack(
   // `exactOptionalPropertyTypes` means an explicit `sourceExcerpt: undefined`
   // is not the same as omitting the key — so the key is present only when
   // there is a real excerpt to give it.
-  const pre = precheckRestatement(
+  const overlap = precheckRestatement(
     {
       question: input.question,
       studentAnswer: input.studentAnswer,
@@ -334,27 +330,6 @@ export async function gradeExplainBack(
     precheckOptions,
   );
 
-  if (pre.shortCircuited && pre.grading) {
-    return {
-      status: 'pending-review',
-      shortCircuited: true,
-      overlap: pre.overlap,
-      grading: {
-        verdict: pre.grading.verdict,
-        feedback: pre.grading.feedback,
-        missedPoints: pre.grading.missedPoints,
-        // The mechanical pre-check identifies restatement, not omissions,
-        // errors, confusions or misconceptions — it has no basis to cite a
-        // block or name a misconception, so it never invents either.
-        citedIssues: [],
-        misconceptionCandidates: [],
-        citationsAvailable: input.sourceBlocks.length > 0,
-        droppedCitationCount: 0,
-        droppedMisconceptionCount: 0,
-      },
-    };
-  }
-
   const wire = await callJudge({
     question: input.question,
     studentAnswer: input.studentAnswer,
@@ -364,8 +339,7 @@ export async function gradeExplainBack(
   });
   return {
     status: 'pending-review',
-    shortCircuited: false,
-    overlap: pre.overlap,
+    overlap,
     grading: groundCitations(wire, input.sourceBlocks),
   };
 }
@@ -440,7 +414,6 @@ export function discardExplainBackGrading(_pending: PendingExplainBackGrading): 
 
 export interface GradingTelemetrySummary {
   readonly verdict: 'correct' | 'partial' | 'incorrect';
-  readonly shortCircuited: boolean;
   readonly containment: number;
   readonly citedIssueCount: number;
   readonly misconceptionCandidateCount: number;
@@ -454,7 +427,6 @@ export function summarizeGradingForTelemetry(
 ): GradingTelemetrySummary {
   return {
     verdict: pending.grading.verdict,
-    shortCircuited: pending.shortCircuited,
     containment: pending.overlap.containment,
     citedIssueCount: pending.grading.citedIssues.length,
     misconceptionCandidateCount: pending.grading.misconceptionCandidates.length,

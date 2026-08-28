@@ -20,6 +20,7 @@ export {
   normalizeWhitespace,
   RELOCATION_NEAR_MATCH_FLOOR,
 } from './relocate.js';
+export { buildSuccessionEvent } from './succession.js';
 export type {
   CitedPassageInput,
   CitedPassageRevisionOutcome,
@@ -29,4 +30,5 @@ export type {
   RevisionJudgeInput,
   RevisionJudgePort,
   RevisionJudgeVerdict,
+  SuccessionEvent,
 } from './types.js';
