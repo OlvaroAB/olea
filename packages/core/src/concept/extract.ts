@@ -46,6 +46,27 @@
  * pre-existing tier-1 rule extended casually — see the P5-T02 report for
  * the reasoning and an invitation to revisit it.
  *
+ * **Course attribution is widened, layered on top of `topic:` frontmatter,
+ * never replacing it (`ol-2zfj.33`, F1.3).** `findings/embedding-proximity-
+ * threshold.md` Part II §12 (`olea-service`) measured production's course
+ * association — a course-folder note's `topic:` property naming a concept —
+ * against a reference-based rule: a concept note acquires the course of
+ * **any** note under the course folder that plainly wikilinks it. On her real
+ * vault the first rule reaches 29 of 131 concept notes; the second reaches
+ * 115. Both run here: the `topic:` loop below is unchanged, and a second pass
+ * scans every course-folder note's own body (its frontmatter already read for
+ * `topic:`, so only the rest of the note is new work) for a `[[...]]` whose
+ * target matches a Zettelkasten title exactly, and folds the citing note's
+ * course into that record the same way a `topic:` citation would. The two
+ * sources merge into one `courses` set per name; a concept named by both
+ * carries the union, never a preference between them. **This is a course
+ * fact, not a concept-identity one** — it does not touch tier's meaning
+ * (`tier` still means "does the name match a Zettelkasten note exactly",
+ * regardless of which of the two sources supplied it), and it does not widen
+ * what tier 3 is allowed to mint: a reference match still requires an exact
+ * Zettelkasten title on the other end, the same precision `topic:` already
+ * has, not the vocabulary-matching tier `[D-068]`/`[EXT-2]` ruled off.
+ *
  * **Definition capture at bind time (`[DF-13]`).** Knowledge model §3 says a
  * bound concept note is canonical because it "adopts her name, her
  * definition, and binds to that note" — the name and the binding shipped
@@ -64,10 +85,10 @@
 import { buildOutline } from '../block/outline.js';
 import { parseDocument } from '../block/parse.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
-import { readList, wikilinkTarget } from '../frontmatter/read.js';
+import { extractWikilinks, readList, wikilinkTarget } from '../frontmatter/read.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
-import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
+import { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractTier3Evidence } from './evidence.js';
 import { conceptRecordSize } from './size.js';
 import type { ConceptRecord, ExtractConceptsOptions } from './types.js';
@@ -191,13 +212,25 @@ export async function extractConcepts(
 
   const byName = new Map<string, Accumulator>();
 
+  function accumulatorFor(name: string): Accumulator {
+    let acc = byName.get(name);
+    if (acc === undefined) {
+      acc = { courses: new Set(), sourcePaths: new Set() };
+      byName.set(name, acc);
+    }
+    return acc;
+  }
+
   for (const path of notePaths) {
     const content = await vault.read(path);
     const doc = parseDocument(content);
     const first = doc.blocks[0];
-    if (first?.kind !== 'frontmatter') continue;
+    // A note with no frontmatter at all (a scratch note, say) contributes no
+    // `topic:` citation — nothing to read — but it can still be a
+    // course-folder note whose body wikilinks a concept, so this no longer
+    // `continue`s past it; see the reference-based pass below.
+    const fm = first?.kind === 'frontmatter' ? parseFrontmatter(first.inner) : undefined;
 
-    const fm = parseFrontmatter(first.inner);
     // Her live convention writes `topic` values as wikilinks pointing at the
     // Zettelkasten note — `topic: [[Quartz cleavage]]` — so a `topic` item
     // that is entirely one link is read as that link's target and a bare
@@ -208,29 +241,66 @@ export async function extractConcepts(
     // alias, or normalises punctuation, and a value that is not wholly a
     // link keeps its own text (see `wikilinkTarget`). Read per item rather
     // than per property so a property mixing both conventions loses neither.
-    const topics = readList(fm, 'topic').items.map((item) => wikilinkTarget(item) ?? item);
-    if (topics.length === 0) continue;
+    const topics =
+      fm !== undefined
+        ? readList(fm, 'topic').items.map((item) => wikilinkTarget(item) ?? item)
+        : [];
 
     // F1.3, `ol-jbnu`: her `course` property when the note carries one,
     // otherwise the course folder it lives under. Reading only the property
     // meant every record came back with `courses: []` on a vault that does
     // not use that key — and empty is not an error anywhere downstream, so
     // the Today panel's course rows and F2.5's course filter each degraded
-    // silently rather than reporting anything. See `./course.js`.
-    const courses = notePathCourses(path, readList(fm, 'course').items, coursesFolder);
+    // silently rather than reporting anything. See `./course.js`. Computed
+    // once per note regardless of `topics`, because the reference-based pass
+    // below needs the same answer.
+    const courses = notePathCourses(
+      path,
+      fm !== undefined ? readList(fm, 'course').items : [],
+      coursesFolder,
+    );
 
     // `ol-t3sd`. Every value in her list is a concept this note contributes to
     // and whose instruments it supplies — all of them, not the first one with
     // the rest recorded as losses. Her order still matters and is carried
     // through `session/enumerate.ts`; it just no longer *selects*.
     for (const topic of topics) {
-      let acc = byName.get(topic);
-      if (!acc) {
-        acc = { courses: new Set(), sourcePaths: new Set() };
-        byName.set(topic, acc);
-      }
+      const acc = accumulatorFor(topic);
       acc.sourcePaths.add(path);
       for (const course of courses) acc.courses.add(course);
+    }
+
+    // F1.3 widened — course-reference (`ol-2zfj.33`, module doc above).
+    // Eligibility is path-based, same test `./course.js`'s `courseFromPath`
+    // already makes for "is this a course-folder note at all": a note loose
+    // in `coursesFolder` itself, or outside it entirely, contributes nothing
+    // here, same as it always has for `notePathCourses`'s fallback.
+    if (courseFromPath(path, coursesFolder) !== undefined) {
+      // Every non-frontmatter block, concatenated — reusing the same parsed
+      // `doc` rather than re-reading or re-parsing the note a second time.
+      // Frontmatter is excluded because its wikilinks are `topic:`'s (and any
+      // other property's) to interpret, not this pass's.
+      const body = doc.blocks
+        .filter((block) => block.kind !== 'frontmatter')
+        .map((block) => block.raw)
+        .join('');
+      // A body link may carry a pipe alias or a heading anchor
+      // (`[[Suspension|the returning held notes]]`, `[[Target#Heading]]`);
+      // neither is part of the title a Zettelkasten note is matched against.
+      const targets = new Set(
+        extractWikilinks(body).map((link) =>
+          link.replace(/\|.*$/s, '').replace(/#.*$/s, '').trim(),
+        ),
+      );
+      for (const target of targets) {
+        // Only a link that lands on one of her actual concept notes counts —
+        // the same precision `topic:` already has, deliberately not the
+        // vocabulary-matching tier-3 pass mines free text for (module doc).
+        if (!zettelByTitle.has(target)) continue;
+        const acc = accumulatorFor(target);
+        acc.sourcePaths.add(path);
+        for (const course of courses) acc.courses.add(course);
+      }
     }
   }
 

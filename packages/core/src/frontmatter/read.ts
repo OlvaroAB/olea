@@ -27,8 +27,18 @@ const EMPTY: InterpretedValue = { scalar: '', items: [], wikilinks: [] };
  * the module where getting the regex wrong reproduces the exact bug this
  * whole engine exists to avoid; see the P1-T02 report for the worked
  * example.
+ *
+ * **Exported** (`ol-2zfj.33`, F1.3's widened course-reference rule) so
+ * `../concept/extract.js` can scan a note's *body* text for wikilinks the
+ * same way this module already scans a frontmatter value — one regex, two
+ * callers, rather than a second copy of it growing up beside this one. A
+ * body wikilink can carry a pipe alias or a heading anchor
+ * (`[[Target|shown as]]`, `[[Target#Heading]]`) that a frontmatter value
+ * never does; this function still returns the raw capture unstripped, same
+ * as always, and it is the caller's job to normalise that when the target
+ * half is what matters.
  */
-function extractWikilinks(raw: string): string[] {
+export function extractWikilinks(raw: string): string[] {
   const links: string[] = [];
   const re = /\[\[([^[\]]+)\]\]/g;
   for (const match of raw.matchAll(re)) {

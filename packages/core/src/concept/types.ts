@@ -116,12 +116,16 @@ export interface ConceptRecord {
   /** Exactly as written in her vault — see the R1/R2 note above. Mutable: two extraction runs may see two different names for the same `key` if she renames in between. */
   readonly name: string;
   /**
-   * 1 when a `topic`-derived name also matches a Zettelkasten note exactly,
-   * 2 when only `topic`-derived, 3 when minted purely from tier-3 material
-   * (`includeTier3: true`, `./evidence.js`) with no `topic` occurrence
-   * anywhere in the vault — even though such a record still carries
-   * `boundNotePath`. See `./extract.js`'s module doc for why tier 3 is the
-   * honest label there rather than 1.
+   * 1 when a `topic`-derived or course-reference-derived name (`./extract.js`
+   * module doc, `ol-2zfj.33`, F1.3) also matches a Zettelkasten note exactly,
+   * 2 when only `topic`- or reference-derived with no such match, 3 when
+   * minted purely from tier-3 material (`includeTier3: true`, `./evidence.js`)
+   * with no `topic` occurrence anywhere in the vault — even though such a
+   * record still carries `boundNotePath`. See `./extract.js`'s module doc for
+   * why tier 3 is the honest label there rather than 1. Tier answers "does
+   * the name match a Zettelkasten note exactly", never "which of the two
+   * course-attribution sources supplied it" — that is `courses`' concern, not
+   * this field's.
    */
   readonly tier: ConceptTier;
   /**
@@ -138,15 +142,26 @@ export interface ConceptRecord {
    * a note that names its own course is still believed over its location.
    * Empty when neither is available, which is a statement and not a failure —
    * nothing is guessed. Sorted for a deterministic result.
+   *
+   * **Two contributing-note rules, unioned (`ol-2zfj.33`, F1.3, widened Aug
+   * 2026).** A note contributes its course here either by naming this
+   * concept in its own `topic:` property, or — new — by being a note under
+   * the course folder whose body plainly wikilinks the Zettelkasten note this
+   * concept is bound to. Production's `topic:`-only rule reached 29 of a real
+   * vault's 131 concept notes; adding the reference rule reaches 115 (see
+   * `olea-service/findings/embedding-proximity-threshold.md` Part II §12). A
+   * concept named by both carries the union of the two note sets' courses,
+   * never a preference between them.
    */
   readonly courses: readonly string[];
   /**
-   * Vault-relative paths of every note whose `topic` property named this
-   * concept, for a tier-1/2 record. For a tier-3-only record (no `topic`
-   * occurrence anywhere — see `tier`'s doc), this is `[boundNotePath]`
-   * instead: her own concept note is the one path that authoritatively
-   * names it. Richer tier-3 evidence (every past-paper question, every
-   * generated-content citation) lives in `./evidence.js`'s
+   * Vault-relative paths of every note whose `topic` property, or whose body
+   * wikilink into this concept's bound Zettelkasten note (`ol-2zfj.33`,
+   * F1.3), named this concept — for a tier-1/2 record. For a tier-3-only
+   * record (no `topic` occurrence anywhere — see `tier`'s doc), this is
+   * `[boundNotePath]` instead: her own concept note is the one path that
+   * authoritatively names it. Richer tier-3 evidence (every past-paper
+   * question, every generated-content citation) lives in `./evidence.js`'s
    * `ExtractTier3EvidenceResult`, not folded in here. Sorted for a
    * deterministic result.
    */

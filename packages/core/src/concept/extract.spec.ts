@@ -1,33 +1,45 @@
-import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
-import { provisionalConceptKey } from './concept-key.js';
 import { extractConcepts, noteDefinition } from './extract.js';
-import { conceptRecordSize } from './size.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 
 describe('extractConcepts — tier 2, against the synthetic fixture vault', () => {
   const source = new FolderSource(FIXTURE_ROOT);
 
-  it('extracts one concept per distinct `topic` string across the whole vault', async () => {
+  it('extracts one concept per distinct `topic` string, plus one per Zettelkasten title a course-folder note wikilinks (F1.3 widened, `ol-2zfj.33`)', async () => {
     const concepts = await extractConcepts(source);
     const names = concepts.map((c) => c.name).sort();
     // The eight topic vocab terms named in fixtures/vault/README.md — four
     // per course, deliberately shared within each course, never across the
-    // two courses in this fixture.
+    // two courses in this fixture — PLUS the nine of the fixture's twelve
+    // Zettelkasten titles that some course-folder note's body plainly
+    // wikilinks (`./course.js`'s `courseFromPath`, applied per note). The
+    // remaining three (Consecutive fifths, Deceptive cadence — cited only
+    // from `03 Research`, outside the course folders — and Tierce picarde,
+    // cited nowhere at all) are exactly the ones the tier-3 describe block
+    // below still finds absent.
     expect(names).toEqual([
+      'Appoggiatura',
+      'Bioturbation',
       'Cadential preparation',
+      'Cementation',
       'Chromatic harmony',
       'Clastic deposition',
       'Contrapuntal doubling',
       'Diagenetic burial',
       'Harmonic progression',
+      'Hummocky stratification',
+      'Imbrication',
+      'Paraconformity',
+      'Plagal cadence',
+      'Ripple lamination',
       'Sediment provenance',
       'Stratigraphic succession',
+      'Suspension',
     ]);
   });
 
@@ -58,10 +70,43 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     );
   });
 
-  it('none of the fixture vault topics bind to a tier-1 Zettelkasten note (topics and zettels are deliberately different grains)', async () => {
+  it('none of the fixture vault `topic` strings collide with a Zettelkasten title — topics and zettels are deliberately different grains, so every `topic`-only name stays tier 2, unbound', async () => {
     const concepts = await extractConcepts(source);
-    expect(concepts.every((c) => c.tier === 2)).toBe(true);
-    expect(concepts.every((c) => c.boundNotePath === undefined)).toBe(true);
+    const topicOnlyNames = [
+      'Cadential preparation',
+      'Chromatic harmony',
+      'Clastic deposition',
+      'Contrapuntal doubling',
+      'Diagenetic burial',
+      'Harmonic progression',
+      'Sediment provenance',
+      'Stratigraphic succession',
+    ];
+    for (const name of topicOnlyNames) {
+      const c = concepts.find((x) => x.name === name);
+      expect(c?.tier).toBe(2);
+      expect(c?.boundNotePath).toBeUndefined();
+    }
+  });
+
+  it('every course-reference-derived name binds at tier 1, to the exact Zettelkasten note a course-folder note wikilinked (F1.3 widened, `ol-2zfj.33`)', async () => {
+    const concepts = await extractConcepts(source);
+    const referencedTitles = [
+      'Appoggiatura',
+      'Bioturbation',
+      'Cementation',
+      'Hummocky stratification',
+      'Imbrication',
+      'Paraconformity',
+      'Plagal cadence',
+      'Ripple lamination',
+      'Suspension',
+    ];
+    for (const title of referencedTitles) {
+      const c = concepts.find((x) => x.name === title);
+      expect(c?.tier).toBe(1);
+      expect(c?.boundNotePath).toBe(`05 Zettelkasten/${title}.md`);
+    }
   });
 
   it('a note with `topic: []` (the Lecture Note Template) contributes nothing', async () => {
@@ -71,8 +116,15 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     }
   });
 
-  it('a note with no frontmatter at all (scratch-thoughts) is skipped, not an error', async () => {
+  it('a note with no frontmatter at all (scratch-thoughts) no longer skips entirely — its body still counts as a course-reference (F1.3 widened, `ol-2zfj.33`)', async () => {
     await expect(extractConcepts(source)).resolves.toBeDefined();
+    // scratch-thoughts.md carries no frontmatter at all, but it sits under
+    // `01 Courses/GEOL204/` and its body wikilinks `[[Paraconformity]]` — so
+    // it now names a course the same way a `topic:`-tagged note would, even
+    // though it has never had a `topic:` property to read.
+    const concepts = await extractConcepts(source);
+    const paraconformity = concepts.find((c) => c.name === 'Paraconformity');
+    expect(paraconformity?.sourcePaths).toContain('01 Courses/GEOL204/WEEK 3/scratch-thoughts.md');
   });
 
   it('is deterministic across repeated calls (stable sort order)', async () => {
@@ -91,81 +143,85 @@ describe('extractConcepts — tier 3, on (F4.1, P5-T02)', () => {
     expect(withFlagOff).toEqual(withoutFlag);
   });
 
-  it('with tier 3 off, a Zettelkasten concept never named by any `topic` property does not exist at all', async () => {
+  // `ol-2zfj.33` (F1.3 widened) changed what this section can show against
+  // THIS fixture. Imbrication, Hummocky stratification, Bioturbation and
+  // Paraconformity used to be reachable ONLY through tier-3 evidence (a
+  // past-paper or generated-content citation, with no `topic:` anywhere) —
+  // that was the whole point of the section below. They are now ALSO reached
+  // by the widened course-reference rule (a course-folder note's own body
+  // wikilinks each of them, see the describe block above), and that rule
+  // runs regardless of `includeTier3`. Since `./extract.js`'s tier-3 minting
+  // loop only mints a name **absent** from `byName` ("enrichment only" —
+  // see its own comment), a name the reference rule already placed in
+  // `byName` is never re-minted at tier 3, even with the flag on: tier 1
+  // (the more precise, exact-title-linked source) wins by construction,
+  // never by a tie-break this module has to make. Verified against a real
+  // run of both variants: with `includeTier3` on or off, this fixture
+  // produces the exact same 17 records — tier 3 contributes nothing new
+  // here any more. What tier 3 still *can* mint — a concept reached by
+  // neither `topic:` nor a course-folder reference — is proved on an
+  // isolated synthetic vault below, where the fixture's coincidental overlap
+  // can't hide the mechanism.
+  it('with tier 3 off, a concept named by neither `topic:` nor a course-folder reference does not exist at all', async () => {
     const concepts = await extractConcepts(source);
-    expect(concepts.find((c) => c.name === 'Imbrication')).toBeUndefined();
-    expect(concepts.find((c) => c.name === 'Hummocky stratification')).toBeUndefined();
-    expect(concepts.find((c) => c.name === 'Bioturbation')).toBeUndefined();
-    expect(concepts.find((c) => c.name === 'Paraconformity')).toBeUndefined();
+    // Consecutive fifths and Deceptive cadence are cited only from
+    // `03 Research`, outside the course folders the reference rule reads;
+    // Tierce picarde is cited nowhere in this fixture at all.
+    expect(concepts.find((c) => c.name === 'Consecutive fifths')).toBeUndefined();
+    expect(concepts.find((c) => c.name === 'Deceptive cadence')).toBeUndefined();
+    expect(concepts.find((c) => c.name === 'Tierce picarde')).toBeUndefined();
   });
 
-  it('with tier 3 on, that same concept is minted at tier 3, bound to its note', async () => {
-    const concepts = await extractConcepts(source, { includeTier3: true });
+  it('turning tier 3 on adds nothing on this fixture any more — the widened reference rule already covers every name tier 3 used to mint here', async () => {
+    const withoutTier3 = await extractConcepts(source);
+    const withTier3 = await extractConcepts(source, { includeTier3: true });
+    expect(withTier3).toEqual(withoutTier3);
+    expect(withTier3.some((c) => c.tier === 3)).toBe(false);
+  });
 
-    // `[DF-13]`: her definition, read verbatim from the note itself rather
-    // than restated here — a copy-pasted expectation would pass even if
-    // extraction started paraphrasing.
-    const imbricationSource = readFileSync(
-      join(FIXTURE_ROOT, '05 Zettelkasten/Imbrication.md'),
-      'utf8',
-    );
-    const imbricationDefinition = noteDefinition(imbricationSource, 'Imbrication');
-    expect(imbricationDefinition).toBeDefined();
-    expect(imbricationDefinition).toContain('stacked fabric');
+  it('a concept reached by neither `topic:` nor a course-folder reference is still minted at tier 3 from a past-paper citation, isolated on a synthetic vault', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'olea-concept-tier3-isolated-'));
+    try {
+      const isolated = new FolderSource(root);
+      async function write(relPath: string, content: string): Promise<void> {
+        const full = join(root, ...relPath.split('/'));
+        await mkdir(join(full, '..'), { recursive: true });
+        await writeFile(full, content, 'utf8');
+      }
 
-    expect(concepts.find((c) => c.name === 'Imbrication')).toEqual({
-      key: provisionalConceptKey({
-        name: 'Imbrication',
-        boundNotePath: '05 Zettelkasten/Imbrication.md',
-      }),
-      name: 'Imbrication',
-      tier: 3,
-      courses: ['GEOL204'],
-      sourcePaths: ['05 Zettelkasten/Imbrication.md'],
-      boundNotePath: '05 Zettelkasten/Imbrication.md',
-      definition: imbricationDefinition,
-      // Grounded in exactly one note — her own concept note, and nothing
-      // else names it (`[D-066]`'s err-fine default; `./size.spec.ts` covers
-      // the derivation itself).
-      size: conceptRecordSize({
-        sourcePaths: ['05 Zettelkasten/Imbrication.md'],
-        boundNotePath: '05 Zettelkasten/Imbrication.md',
-      }),
-    });
+      await write(
+        '05 Zettelkasten/Quartz cleavage.md',
+        '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHer definition.\n',
+      );
+      // Named in a past paper's question text, verbatim — not a wikilink,
+      // not a `topic:` — the one path tier 3 still owns.
+      await write(
+        '03 Research/COURSEA Past Paper 2024.md',
+        '---\nrole: past-paper\ncourse: COURSEA\nyear: 2024\n---\n\n' +
+          '# COURSEA Past Paper — 2024\n\n## Question 1 (10 marks)\n\n' +
+          'Explain the mechanism behind Quartz cleavage in a metamorphic setting.\n',
+      );
+      // A course-folder note that names and links nothing at all, so the
+      // widened reference rule (and `topic:`) genuinely find no path here.
+      await write(
+        '01 Courses/COURSEA/WEEK 1/Lecture.md',
+        '---\ncourse: COURSEA\n---\n\n# Lecture\n\nNothing here names or links the concept.\n',
+      );
 
-    const pump = concepts.find((c) => c.name === 'Hummocky stratification');
-    expect(pump?.tier).toBe(3);
-    expect(pump?.boundNotePath).toBe('05 Zettelkasten/Hummocky stratification.md');
-    expect(pump?.courses).toEqual(['GEOL204']);
-    // A tier-3 mint binds by the same exact-title match as tier 1, so it
-    // carries a definition too (`[DF-13]`) — this is the case that proves
-    // capture is not conditional on the concept also being a `topic`.
-    expect(pump?.definition).toBeDefined();
-    expect(pump?.definition?.length).toBeGreaterThan(0);
+      const withoutTier3 = await extractConcepts(isolated);
+      expect(withoutTier3.find((c) => c.name === 'Quartz cleavage')).toBeUndefined();
 
-    // Named only in the 2023 past paper's Question 3 — a single-question
-    // tier-3 concept is still real evidence, not filtered out for being small.
-    const threshold = concepts.find((c) => c.name === 'Bioturbation');
-    expect(threshold?.tier).toBe(3);
-    expect(threshold?.definition).toBeDefined();
-    const paraconformity = concepts.find((c) => c.name === 'Paraconformity');
-    expect(paraconformity?.tier).toBe(3);
-    expect(paraconformity?.definition).toBeDefined();
-
-    // Exactly these four are new — no other Zettelkasten note (the MUSTH104
-    // ones, or GEOL204's Cementation/Ripple lamination) is mentioned
-    // verbatim anywhere in the fixture's past papers, objectives, or
-    // generated content, so no other tier-3 record is minted.
-    const tier3Names = concepts
-      .filter((c) => c.tier === 3)
-      .map((c) => c.name)
-      .sort();
-    expect(tier3Names).toEqual([
-      'Bioturbation',
-      'Hummocky stratification',
-      'Imbrication',
-      'Paraconformity',
-    ]);
+      const withTier3 = await extractConcepts(isolated, { includeTier3: true });
+      const mint = withTier3.find((c) => c.name === 'Quartz cleavage');
+      expect(mint?.tier).toBe(3);
+      expect(mint?.boundNotePath).toBe('05 Zettelkasten/Quartz cleavage.md');
+      expect(mint?.courses).toEqual(['COURSEA']);
+      // `[DF-13]`: a tier-3 mint binds by the same exact-title match as
+      // tier 1, so it carries a definition too.
+      expect(mint?.definition).toBe('Her definition.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('turning tier 3 on never changes an existing tier-1/2 record', async () => {
@@ -875,5 +931,169 @@ describe('extractConcepts — course association derives from folder structure (
 
     const concepts = await extractConcepts(source, { coursesFolder: 'Papers' });
     expect(concepts.find((c) => c.name === 'Basalt weathering')?.courses).toEqual(['COURSEA']);
+  });
+});
+
+// F1.3 widened (`ol-2zfj.33`), layered on top of the `topic:` rule above,
+// never replacing it. `findings/embedding-proximity-threshold.md` Part II
+// §12 (`olea-service`) measured production's `topic:`-only course
+// association against a reference-based rule — a concept note acquires the
+// course of any note under the course folder that plainly wikilinks it — on
+// a real vault: 29 of 131 concept notes against 115. This describe block
+// proves the mechanism synthetically, the same pattern the R1/R2 block above
+// uses for tier-1 binding: real vault findings are cited by path, never by
+// content, so what is asserted here is coined.
+describe('extractConcepts — course-reference course attribution (F1.3 widened, `ol-2zfj.33`)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-reference-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  it('a course-folder note that merely wikilinks a Zettelkasten note attributes its course, with no `topic:` anywhere', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHer definition.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]] for the mechanism.\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz).toBeDefined();
+    expect(quartz?.tier).toBe(1);
+    expect(quartz?.boundNotePath).toBe('05 Zettelkasten/Quartz cleavage.md');
+    expect(quartz?.courses).toEqual(['COURSEA']);
+    expect(quartz?.sourcePaths).toEqual(['01 Courses/COURSEA/WEEK 1/Lecture.md']);
+    // `[DF-13]` rides along, same as any other tier-1 bind.
+    expect(quartz?.definition).toBe('Her definition.');
+  });
+
+  it('a concept note linked from two different courses carries the union — the bridging case the corpus-relation `shareACourse` check already handles', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# A\n\nCompare [[Quartz cleavage]].\n',
+    );
+    await write(
+      '01 Courses/COURSEB/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEB\n---\n\n# B\n\nAlso see [[Quartz cleavage]] here.\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.courses).toEqual(['COURSEA', 'COURSEB']);
+    expect(quartz?.sourcePaths).toEqual(
+      ['01 Courses/COURSEA/WEEK 1/Lecture.md', '01 Courses/COURSEB/WEEK 1/Lecture.md'].sort(),
+    );
+  });
+
+  it('a `topic:` citation and a separate course-folder reference merge into ONE record, courses unioned — neither source is preferred over the other', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# A\n',
+    );
+    await write(
+      '01 Courses/COURSEB/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEB\n---\n\n# B\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const matches = concepts.filter((c) => c.name === 'Quartz cleavage');
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.courses).toEqual(['COURSEA', 'COURSEB']);
+    expect(matches[0]?.tier).toBe(1);
+    expect(matches[0]?.sourcePaths).toEqual(
+      ['01 Courses/COURSEA/WEEK 1/Lecture.md', '01 Courses/COURSEB/WEEK 1/Lecture.md'].sort(),
+    );
+  });
+
+  it('a pipe alias or a heading anchor on the link still resolves to the plain title', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Alias.md',
+      '---\ncourse: COURSEA\n---\n\n# Alias\n\nSee [[Quartz cleavage|the mineral property]].\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 2/Anchor.md',
+      '---\ncourse: COURSEA\n---\n\n# Anchor\n\nSee [[Quartz cleavage#Detail]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.courses).toEqual(['COURSEA']);
+    expect(quartz?.sourcePaths).toEqual(
+      ['01 Courses/COURSEA/WEEK 1/Alias.md', '01 Courses/COURSEA/WEEK 2/Anchor.md'].sort(),
+    );
+  });
+
+  it('a wikilink that does not land on an actual Zettelkasten note mints nothing — the same precision `topic:` already has', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Some Other Course Note]] for background.\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts).toEqual([]);
+  });
+
+  it('a Zettelkasten note cross-linking another Zettelkasten note attributes no course — only a note under the COURSE folder counts', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nSee [[Basalt weathering]].\n',
+    );
+    await write('05 Zettelkasten/Basalt weathering.md', '---\ntype: concept\n---\n\n# B\n');
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Basalt weathering')).toBeUndefined();
+  });
+
+  it('a research-folder note wikilinking a concept note attributes no course — `03 Research` sits outside the course folders (F7.9-adjacent, out of scope here)', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '03 Research/Some Paper.md',
+      '---\nrole: past-paper\n---\n\n# Some Paper\n\nCites [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')).toBeUndefined();
+  });
+
+  it('a note loose directly in the course folder root wikilinking a concept attributes no course — a file is not a course code (F1.3)', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write('01 Courses/Loose note.md', '# Loose\n\nSee [[Quartz cleavage]] in passing.\n');
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')).toBeUndefined();
+  });
+
+  it('a course-folder note carrying an explicit two-course `course:` property attributes both, not just its folder', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Cross-listed.md',
+      '---\ncourse: [COURSEA, COURSEB]\n---\n\n# Cross-listed\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.courses).toEqual([
+      'COURSEA',
+      'COURSEB',
+    ]);
   });
 });
