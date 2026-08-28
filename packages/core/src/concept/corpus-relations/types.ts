@@ -79,6 +79,31 @@ export interface CorpusConcept {
   readonly aliases: readonly string[];
   /** This concept's own introducing passage (`[D-082]`'s passage-grain provenance). */
   readonly anchor: Provenance;
+  /**
+   * Which course(s) this concept was seen in, M:N — mirrors
+   * `../read.js`'s `ReadConcept.courses` ("Empty is a statement, not a
+   * failure"). Feeds `./nominate.js`'s course-overlap check: contract C7.10
+   * and `[D-082]` both rule the corpus-level stage runs **"over a course's
+   * concept set"** (D-082's close reason, verbatim: "the pairwise space over
+   * a course's concept set"), never across every course in the vault at
+   * once (`ol-x3qg`).
+   *
+   * **Optional, not merely absent-by-convenience.** A caller that has this
+   * information supplies it as a (possibly empty) array, exactly as
+   * `ReadConcept.courses` does. `undefined` means *this caller does not yet
+   * thread course affiliation through* — as of this writing,
+   * `packages/plugin/src/concept/wiring.ts`'s `corpusConceptsFrom` is such a
+   * caller (`ol-x3qg`'s findings paper names the one-line fix still
+   * outstanding there) — and is read by `./nominate.js` as "do not filter on
+   * course," so a not-yet-updated caller keeps today's behaviour rather than
+   * silently having every candidate dropped. Once a caller supplies real
+   * `courses` data, the filter engages: an empty array (`[]`) is a concept
+   * confirmed to sit in no course, and `./nominate.js` reads C7.10 literally
+   * — such a concept belongs to no course's set, so it is excluded from
+   * pairing on either side, the same "ineligible for this stage" posture
+   * `anchor` above already holds for provenance.
+   */
+  readonly courses?: readonly string[];
 }
 
 /**

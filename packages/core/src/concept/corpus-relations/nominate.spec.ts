@@ -17,8 +17,17 @@ function anchor(sourcePath: VaultPath, start = 0, end = 10): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start, end } } };
 }
 
-function concept(name: string, sourcePath: VaultPath = 'Lecture 1.md'): CorpusConcept {
-  return { name, aliases: [], anchor: anchor(sourcePath) };
+function concept(
+  name: string,
+  sourcePath: VaultPath = 'Lecture 1.md',
+  courses?: readonly string[],
+): CorpusConcept {
+  return {
+    name,
+    aliases: [],
+    anchor: anchor(sourcePath),
+    ...(courses !== undefined ? { courses } : {}),
+  };
 }
 
 function signal(kind: NominationSignal['kind'], a: string, b: string): NominationSignal {
@@ -109,5 +118,66 @@ describe('nominateCorpusRelationCandidates', () => {
       [],
     );
     expect(result).toEqual([]);
+  });
+
+  describe("COURSE SCOPE (C7.10 / [D-082], ol-x3qg): the corpus stage runs over a course's concept set", () => {
+    it('nominates a pair that shares a course', () => {
+      const result = nominateCorpusRelationCandidates(
+        [concept('Osmosis', 'Lecture 1.md', ['BIO101'])],
+        [
+          concept('Osmosis', 'Lecture 1.md', ['BIO101']),
+          concept('Membrane transport', 'Lecture 2.md', ['BIO101']),
+        ],
+        [signal('embedding-proximity', 'Osmosis', 'Membrane transport')],
+      );
+      expect(result).toHaveLength(1);
+    });
+
+    it('drops a pair whose two concepts share no course', () => {
+      const result = nominateCorpusRelationCandidates(
+        [concept('Osmosis', 'Lecture 1.md', ['BIO101'])],
+        [
+          concept('Osmosis', 'Lecture 1.md', ['BIO101']),
+          concept('Colonialism', 'Lecture 2.md', ['HIST201']),
+        ],
+        [signal('embedding-proximity', 'Osmosis', 'Colonialism')],
+      );
+      expect(result).toHaveLength(0);
+    });
+
+    it("drops a pair where one endpoint belongs to no course at all (`courses: []`) — C7.10 read literally, in no course's set", () => {
+      const result = nominateCorpusRelationCandidates(
+        [concept('Osmosis', 'Lecture 1.md', ['BIO101'])],
+        [concept('Osmosis', 'Lecture 1.md', ['BIO101']), concept('Orphan note', 'Zettel.md', [])],
+        [signal('embedding-proximity', 'Osmosis', 'Orphan note')],
+      );
+      expect(result).toHaveLength(0);
+    });
+
+    it('nominates a pair via a concept that bridges two courses (her real cross-course linking behaviour)', () => {
+      const bridge = concept('Research methods', 'Zettel.md', ['BIO101', 'PSYCH200']);
+      const result = nominateCorpusRelationCandidates(
+        [bridge],
+        [
+          bridge,
+          concept('Osmosis', 'Lecture 1.md', ['BIO101']),
+          concept('Confounding variable', 'Lecture 3.md', ['PSYCH200']),
+        ],
+        [
+          signal('embedding-proximity', 'Research methods', 'Osmosis'),
+          signal('embedding-proximity', 'Research methods', 'Confounding variable'),
+        ],
+      );
+      expect(result).toHaveLength(2);
+    });
+
+    it('stays permissive when a caller has not threaded course data through yet (`courses: undefined` on either side)', () => {
+      const result = nominateCorpusRelationCandidates(
+        [concept('Osmosis')], // no `courses` argument — undefined, the pre-migration caller shape
+        [concept('Osmosis'), concept('Membrane transport')],
+        [signal('embedding-proximity', 'Osmosis', 'Membrane transport')],
+      );
+      expect(result).toHaveLength(1);
+    });
   });
 });
