@@ -5,13 +5,20 @@
  * (`packages/core/fixtures/vault/`), never `packages/synthetic`'s coined
  * corpus. F2.7 has two halves; only one is this file's job:
  *
- * - The PROSE half (`explain-why.generate.v1`) is BLOCKED — `ol-rem6` is
- *   open, the task id is absent from `olea-service`'s `TASKS` map, and there
- *   is no prompt directory. This file makes no Worker call, records no
- *   cassette, and spends no model token. Full stop.
  * - The GROUNDING half — quoting her own notes and citing the source
  *   paragraph a missed answer should have come from — is real, local and
  *   free, and is everything this file does.
+ * - The PROSE half (`explain-why.generate.v1`) is no longer blocked —
+ *   `ol-rem6`/`ol-p3t08` registered the task in `olea-service`'s `TASKS` map
+ *   and wrote its prompt directory, and `ol-4k45` [XWY-2] recorded one
+ *   cassette entry against THIS file's own fixture-vault grounding query
+ *   (`packages/workbench/scripts/precompute-generation.mjs`). It is still not
+ *   this file's job: `../explain/generate.ts`'s `generateExplainProse` is the
+ *   separate function that turns this file's `GroundExplanationResult` into
+ *   prose, replaying that cassette — see its module doc and
+ *   `../explain-scenarios.ts` for where the two are composed. This file
+ *   still makes no Worker call and records no cassette; that boundary is
+ *   unchanged, only the "blocked" half of the split is gone.
  *
  * Shaped the same way `oracle/retrieve.ts` shapes the synthetic retrieval
  * driver (a plain async function returning one `PipelineTrace`-carrying

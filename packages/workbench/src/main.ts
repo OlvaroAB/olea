@@ -983,16 +983,21 @@ async function main(): Promise<void> {
 
     async function mountExplain(stateId: string): Promise<void> {
       // Self-contained, same reasoning as `mountRetrieve`: no product view
-      // exists for a bare grounding result (the prose half is blocked on
-      // `ol-rem6`), so this surface reports through the inspector only.
+      // exists for F2.7's grounding-plus-prose result (the review view's own
+      // on-demand trigger is the real surface — see `explain/generate.ts`'s
+      // module doc), so this reports through the inspector only.
       host.createDiv({
         cls: 'wb-detached',
         text:
-          "F2.7's grounding half has no product view to mount — the explanation " +
-          'itself is not written yet. See the inspector for the query and the grounding result.',
+          "F2.7's two halves both run for real here: the grounding half quotes her own notes " +
+          '(real fixture-vault text, real keyword search), and `explain-why.generate.v1` writes ' +
+          'the explanation from those exact quotes (a recorded call, replayed — see the inspector ' +
+          'for the query, the cited passages, the prose and the pipeline trace).',
       });
 
-      const scenario = await buildExplainScenario(stateId, vault);
+      const generationCassette = await ensureGenerationCassette();
+      if (run !== generation) return;
+      const scenario = await buildExplainScenario(stateId, vault, generationCassette);
       if (run !== generation) return;
 
       renderExplainInspector(inspector, { setNote: activeSet.note, scenario });
@@ -1879,10 +1884,31 @@ function renderExplainInspector(inspector: HTMLElement, input: ExplainInspectorI
     }
   }
 
+  // The prose half (`ol-4k45` [XWY-2]) — `null` for `explanation-refused-no-grounding`, which
+  // never calls the generative task (see `explain-scenarios.ts`'s module doc).
+  if (scenario.prose !== null) {
+    const { prose } = scenario;
+    const proseRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+    proseRow.createSpan({ cls: 'wb-inspector-label', text: 'explanation' });
+    proseRow.createSpan({
+      cls: 'wb-inspector-value',
+      text: prose.refused
+        ? 'refused — explain-why.generate.v1 returned zero explanations'
+        : `cites source #${String(prose.citedChunkIndex)}`,
+    });
+    if (!prose.refused && prose.text !== null) {
+      inspector.createEl('pre', { cls: 'wb-inspector-log-json', text: prose.text });
+    }
+  }
+
   const traceHeading = inspector.createDiv({ cls: 'wb-inspector-note', text: 'pipeline trace' });
   void traceHeading;
   const traceList = inspector.createDiv({ cls: 'wb-inspector-log' });
-  for (const stage of scenario.result.trace.stages) {
+  const stages =
+    scenario.prose === null
+      ? scenario.result.trace.stages
+      : [...scenario.result.trace.stages, ...scenario.prose.trace.stages];
+  for (const stage of stages) {
     const row = traceList.createDiv({ cls: 'wb-inspector-row' });
     row.createSpan({ cls: 'wb-inspector-label', text: stage.stage });
     row.createSpan({

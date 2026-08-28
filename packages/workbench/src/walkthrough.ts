@@ -183,15 +183,13 @@ const WALKTHROUGH_STEP_DEFINITIONS: readonly WalkStepDefinition[] = [
       'She asks, and the answer quotes her own notes back with a link to the paragraph it came ' +
       'from. This is the difference between a study tool and a chatbot: the answer is grounded ' +
       'in her material or it does not get made.',
+    // Was `partial` — `ol-rem6` named the Worker not serving the explain task at all. That
+    // stopped being true while this file was being written: `ol-p3t08` registered
+    // `explain-why.generate.v1` in `olea-service`, and `ol-4k45` [XWY-2] recorded one cassette
+    // entry against this exact grounding query so the workbench can replay real prose rather
+    // than stopping at the grounding half. Live.
     surface: 'explain',
     stateId: 'explanation-grounded',
-    partial: {
-      what:
-        'The grounding half is real — these are the actual passages from her own notes that an ' +
-        'explanation would be built on. The explanation itself is not written yet: the Worker ' +
-        'does not serve the explain task.',
-      bead: 'ol-rem6',
-    },
   },
   {
     n: 7,

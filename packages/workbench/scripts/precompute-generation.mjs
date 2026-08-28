@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// precompute-generation.mjs — the one paid `quiz.generate.v1` pass behind the workbench's
-// Generation states (`ol-opmb.3` [TB-3]).
+// precompute-generation.mjs — the paid generative passes behind the workbench's Generation
+// states (`ol-opmb.3` [TB-3]) AND the explain surface's prose half (`ol-4k45` [XWY-2]).
 //
 // ================================================================================================
 // WHAT THIS IS
@@ -17,23 +17,44 @@
 // shape `olea-synthetic`'s `generation-cassette.ts` defines. `packages/workbench/build.mjs` copies
 // it into `dist/` verbatim when present (`copyGenerationCassette`), so the workbench's browser
 // bundle fetches it as a static asset and never calls a model itself (D-021, INV-1 — see
-// `oracle/generate.ts`'s module doc).
+// `oracle/generate.ts`'s module doc). One file, TWO task ids: the key already carries `taskId`
+// (`generation-cassette.ts`'s own module doc argues for exactly this), so `quiz.generate.v1` and
+// `explain-why.generate.v1` entries coexist in the same store without conflict, each looked up
+// independently by its own `(taskId, payloadHash)` pair.
 //
-// Requires the EMBEDDING cassette to already exist (`.embedding-cassette/cassette.json`,
-// `ol-opmb.2` [TB-2]'s pass) — the retrieval half of every scenario here replays it, never
-// re-embeds anything, so this script spends nothing on Slot E.
+// ================================================================================================
+// TWO INDEPENDENT REQUEST-BUILDING PATHS — never mix their corpora
+// ================================================================================================
+// `quiz.generate.v1` (the ORIGINAL pass, `ol-opmb.3`): requests are built from `olea-synthetic`'s
+// coined corpus and queries, replaying the already-recorded EMBEDDING cassette
+// (`.embedding-cassette/cassette.json`, `ol-opmb.2` [TB-2]'s pass) via `node-pipeline.mjs`'s
+// `retrieveOverCassette` — never `eval/data/`, never the vault snapshot, never a real course code
+// (see `generate-scenarios.ts`'s module doc for why `courseCode`/`conceptName` are coined
+// `syn:course:…`/`syn:concept:…` tokens, restated here rather than imported because
+// `generate-scenarios.ts` is not Node-importable — see `node-pipeline.mjs`'s own module doc for
+// exactly why).
 //
-// Only ever builds requests from `olea-synthetic`'s own corpus and queries — never `eval/data/`,
-// never the vault snapshot, never a real course code (see `generate-scenarios.ts`'s module doc for
-// why `courseCode`/`conceptName` are coined `syn:course:…`/`syn:concept:…` tokens, restated here
-// rather than imported because `generate-scenarios.ts` is not Node-importable — see
-// `node-pipeline.mjs`'s own module doc for exactly why).
+// `explain-why.generate.v1` (added by `ol-4k45`): requests are built from the REAL, checked-in
+// FIXTURE vault (`packages/core/fixtures/vault/`) instead — the same corpus
+// `packages/workbench/src/explain/ground.ts` and `explain-scenarios.ts` already use for the
+// grounding half, and the same GEOL204/MUSTH104 vocabulary `check-fixture-vocabulary.mjs`
+// sanctions for the PUBLIC workbench bundle (INV-3: this cassette ships inline to a public Pages
+// URL — see `scripts/check-workbench-bundle.mjs`). No embedding cassette is used or needed here:
+// this corpus has no recorded embeddings (`ground.ts`'s own module doc explains why none should
+// exist), so `buildExplainWhyRequests` below reimplements `ground.ts`'s zero-embedding,
+// keyword-only demo directly against `olea-core`'s BUILT DIST — real fixture-vault keyword search,
+// real refusal logic, degrading exactly the way `retrieve()`'s own module doc says an unreachable
+// embedding provider always degrades. This is the Node-safe restatement, not a second copy of the
+// logic maintained by hand: it calls the same `buildFullIndex`/`retrieve` functions `ground.ts`
+// calls, from the same package, just loaded from dist rather than source (see `node-pipeline.mjs`'s
+// module doc for exactly why `ground.ts` itself — which imports `../oracle-bridge.js` — cannot be
+// `import`ed from a plain Node script).
 //
 // ================================================================================================
 // USAGE (from packages/workbench/)
 // ================================================================================================
 //   node scripts/precompute-generation.mjs                 # plan only, spends nothing
-//   node scripts/precompute-generation.mjs --spend          # the real pass
+//   node scripts/precompute-generation.mjs --spend          # the real pass, both task groups
 //   node scripts/precompute-generation.mjs --target local   # against a local wrangler dev Worker
 //
 // Requires OLEA_STAGING_URL / OLEA_STAGING_TOKEN (or OLEA_LOCAL_* for --target local) in the
@@ -43,13 +64,19 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadCoreDist, retrieveOverCassette, sourceChunksFrom } from './node-pipeline.mjs';
+import {
+  loadCoreDist,
+  memoryEmbeddingCacheStore,
+  retrieveOverCassette,
+  sourceChunksFrom,
+} from './node-pipeline.mjs';
 
 const here = resolve(fileURLToPath(import.meta.url), '..');
 const WORKBENCH_ROOT = resolve(here, '..');
 const OLEA_ROOT = resolve(WORKBENCH_ROOT, '..', '..');
 const OLEA_SERVICE_ROOT = resolve(OLEA_ROOT, '..', 'olea-service');
 const CORE_DIST = resolve(OLEA_ROOT, 'packages', 'core', 'dist');
+const FIXTURE_VAULT_DIR = resolve(OLEA_ROOT, 'packages', 'core', 'fixtures', 'vault');
 const EMBEDDING_CASSETTE_PATH = join(WORKBENCH_ROOT, '.embedding-cassette', 'cassette.json');
 const GENERATION_CASSETTE_PATH = join(WORKBENCH_ROOT, '.generation-cassette', 'cassette.json');
 
@@ -58,6 +85,9 @@ function serviceUrl(...segments) {
 }
 function oleaUrl(...segments) {
   return pathToFileURL(join(OLEA_ROOT, ...segments)).href;
+}
+function coreDistUrl(...segments) {
+  return pathToFileURL(join(CORE_DIST, ...segments)).href;
 }
 
 // --- olea-service's harness machinery, imported (never modified) --------------------------------
@@ -80,20 +110,32 @@ const { SLOT_MODEL_CONFIG } = await import(serviceUrl('src', 'slots.ts'));
 const { baseUrlFor, fileLedgerStore, HarnessError, parseArgs, tokenFor } = await import(
   serviceUrl('scripts', 'harness', 'lib.mjs')
 );
-const { runTaskCassetted, GenerationCassetteMismatchError } = await import(
+const { runTaskCassetted, GenerationCassetteMismatchError, readTaskCassetteStore } = await import(
   serviceUrl('scripts', 'harness', 'cassette.mjs')
 );
+const { hashGenerationPayload, findGenerationEntryByRequest } = await import(
+  oleaUrl('packages', 'synthetic', 'src', 'generation-cassette.ts')
+);
 
-const TASK_ID = 'quiz.generate.v1';
-const task = getTaskDefinition(TASK_ID);
-if (!task) {
-  throw new HarnessError(
-    `precompute-generation.mjs: "${TASK_ID}" is not routed (src/tasks/registry.ts).`,
-  );
+function requireTask(taskId) {
+  const task = getTaskDefinition(taskId);
+  if (!task) {
+    throw new HarnessError(
+      `precompute-generation.mjs: "${taskId}" is not routed (src/tasks/registry.ts).`,
+    );
+  }
+  return task;
 }
-const MODEL_ID = SLOT_MODEL_CONFIG[task.slot].modelId;
 
-// --- olea-synthetic's own corpus + queries + cassette shape --------------------------------------
+const QUIZ_TASK_ID = 'quiz.generate.v1';
+const quizTask = requireTask(QUIZ_TASK_ID);
+const QUIZ_MODEL_ID = SLOT_MODEL_CONFIG[quizTask.slot].modelId;
+
+const EXPLAIN_WHY_TASK_ID = 'explain-why.generate.v1';
+const explainWhyTask = requireTask(EXPLAIN_WHY_TASK_ID);
+const EXPLAIN_WHY_MODEL_ID = SLOT_MODEL_CONFIG[explainWhyTask.slot].modelId;
+
+// --- olea-synthetic's own corpus + queries + cassette shape (quiz.generate.v1 only) --------------
 const { buildRetrievalIndex } = await import(
   oleaUrl('packages', 'synthetic', 'src', 'retrieval-corpus.ts')
 );
@@ -110,7 +152,7 @@ const ILMENOR_COURSE = 'syn:course:quorbin';
 const ILMENOR_CONCEPT = 'syn:concept:ilmenor';
 
 /** The two scenarios `generate-scenarios.ts`'s three states need — `generation-accepted` replays the SAME grounded request as `generation-pending-accept`, so there is nothing extra to record for it. */
-const SCENARIOS = [
+const QUIZ_SCENARIOS = [
   {
     queryId: 'ans-01',
     courseCode: MELSPAR_COURSE,
@@ -124,6 +166,130 @@ const SCENARIOS = [
     retrieveOptions: {},
   },
 ];
+
+/**
+ * F2.7's grounded query — the SAME string `explain-scenarios.ts`'s `GROUNDED_QUERY` uses,
+ * restated here rather than imported for the same reason as the synthetic vocabulary above: this
+ * is a plain Node script and that file transitively reaches `oracle-bridge.ts`. It is also the
+ * `question` sent to `explain-why.generate.v1` below, matching production wiring
+ * (`retrieveExplainWhySourceChunks` in `packages/plugin/src/review/explainWhy.ts` uses the review
+ * item's own question text as the retrieval query, never a second string) — echoes the fixture
+ * vault's own lecture-note title (`01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast
+ * Imbrication.md`), never invented.
+ */
+const EXPLAIN_WHY_QUESTION = 'What causes clast imbrication in a rolling bedload?';
+/** GEOL204's own `05 Zettelkasten/Imbrication.md` note — real, public, checked-in fixture content. */
+const EXPLAIN_WHY_COURSE_CODE = 'GEOL204';
+const EXPLAIN_WHY_CONCEPT_NAME = 'Imbrication';
+/** A plausible wrong answer — the opposite of the note's actual claim (upstream vs. downstream dip) — never a real student's words, since none exist for fixture-vault fiction. */
+const EXPLAIN_WHY_STUDENT_ANSWER =
+  'The current pushes the flat side of each clast so it settles facing downstream.';
+const EXPLAIN_WHY_CORRECT_ANSWER =
+  'Clasts tip so their long axis dips upstream as the bed rolls, recording the last flow strong ' +
+  'enough to move the whole grain skeleton.';
+
+/** Not a note of hers — same exclusion `ground.ts` applies, restated here for the same reason as the rest of this file's fixture-vault path. */
+const FIXTURE_EXCLUDED_PATHS = ['README.md'];
+
+/**
+ * Rebuilds `ground.ts`'s zero-embedding, keyword-only retrieval over the real fixture vault, from
+ * `olea-core`'s BUILT DIST — see this file's module doc for why `ground.ts` itself cannot be
+ * imported here. Returns `sourceChunks` exactly as `explain-scenarios.ts`'s grounded state would
+ * produce them: `[]` on any refusal, chunk text on a grounded result.
+ */
+async function retrieveExplainWhySourceChunksOverFixtureVault(query) {
+  const { FolderSource } = await import(coreDistUrl('vault', 'folder-source.js'));
+  const { buildFullIndex } = await import(coreDistUrl('keyword-index', 'build.js'));
+  const { retrieve } = await import(coreDistUrl('retrieval', 'engine.js'));
+  const { EmbeddingCacheEngine } = await import(coreDistUrl('retrieval', 'embeddingCache.js'));
+
+  const vault = new FolderSource(FIXTURE_VAULT_DIR);
+  const built = await buildFullIndex({ vault });
+  if (built.status === 'cancelled') {
+    throw new HarnessError(
+      'precompute-generation.mjs: unexpected cancellation building the fixture keyword index.',
+    );
+  }
+  const documents = built.index.documents.filter(
+    (doc) => !FIXTURE_EXCLUDED_PATHS.includes(doc.path),
+  );
+  const index = { version: built.index.version, documents };
+
+  /** Always rejects — the provider this demo ships, deliberately, matching `ground.ts`'s `NoEmbeddingProvider`. No cassette exists for this corpus and none should be recorded for a zero-spend workbench surface. */
+  const provider = {
+    embed: () =>
+      Promise.reject(
+        new Error(
+          'precompute-generation.mjs: no embedding provider for the fixture vault — this demo ' +
+            "always degrades to keyword-only retrieval by design; see ground.ts's module doc.",
+        ),
+      ),
+  };
+  const cache = await EmbeddingCacheEngine.create({
+    store: memoryEmbeddingCacheStore(),
+    provider,
+    model: 'workbench-explain/no-embedding-provider',
+  });
+
+  const result = await retrieve(
+    { keywordIndex: index, embeddingCache: cache, embeddingProvider: provider },
+    query,
+    {},
+  );
+  return { status: result.status, sourceChunks: sourceChunksFrom(result) };
+}
+
+/** The one `explain-why.generate.v1` scenario `explain-scenarios.ts`'s `explanation-grounded` state needs. `explanation-refused-no-grounding` stays local/zero-spend — see that file's own note. */
+async function buildExplainWhyRequests() {
+  const { status, sourceChunks } =
+    await retrieveExplainWhySourceChunksOverFixtureVault(EXPLAIN_WHY_QUESTION);
+  const payload = {
+    courseCode: EXPLAIN_WHY_COURSE_CODE,
+    conceptName: EXPLAIN_WHY_CONCEPT_NAME,
+    question: EXPLAIN_WHY_QUESTION,
+    studentAnswer: EXPLAIN_WHY_STUDENT_ANSWER,
+    correctAnswer: EXPLAIN_WHY_CORRECT_ANSWER,
+    sourceChunks,
+  };
+  return [
+    {
+      taskId: EXPLAIN_WHY_TASK_ID,
+      queryId: 'explain-imbrication-wrong-answer',
+      retrieveStatus: status,
+      payload,
+    },
+  ];
+}
+
+async function buildQuizRequests(core, embeddingCassette) {
+  const index = buildRetrievalIndex();
+  const requests = [];
+  for (const scenario of QUIZ_SCENARIOS) {
+    const query = findQuery(scenario.queryId);
+    if (!query)
+      throw new HarnessError(`unknown synthetic query id ${JSON.stringify(scenario.queryId)}`);
+    const result = await retrieveOverCassette({
+      core,
+      index,
+      embeddingCassette,
+      query: query.query,
+      options: scenario.retrieveOptions,
+    });
+    const sourceChunks = sourceChunksFrom(result);
+    const payload = {
+      courseCode: scenario.courseCode,
+      conceptName: scenario.conceptName,
+      sourceChunks,
+    };
+    requests.push({
+      taskId: QUIZ_TASK_ID,
+      queryId: scenario.queryId,
+      retrieveStatus: result.status,
+      payload,
+    });
+  }
+  return requests;
+}
 
 // ------------------------------------------------------------------------------------------------
 // arguments
@@ -140,7 +306,7 @@ const options = {
   json: args.json === 'true',
 };
 
-/** This LANE's own hard cap (`ol-opmb.3`'s brief: 20,000 neurons). Checked BEFORE the shared guard's own reservation. */
+/** This LANE's own hard cap (`ol-opmb.3`'s brief: 20,000 neurons) — checked BEFORE the shared guard's own reservation. `ol-4k45`'s own brief caps its addition far lower (~150 neurons worst case; the orchestrator's own hard ceiling for that run is 500) but that is an operator-side check on the printed estimate, not a second constant to maintain here. */
 const LANE_CAP_NEURONS = 20_000;
 
 try {
@@ -163,12 +329,19 @@ try {
   throw error;
 }
 
+function modelIdFor(taskId) {
+  return taskId === QUIZ_TASK_ID ? QUIZ_MODEL_ID : EXPLAIN_WHY_MODEL_ID;
+}
+function taskDefinitionFor(taskId) {
+  return taskId === QUIZ_TASK_ID ? quizTask : explainWhyTask;
+}
+
 async function main() {
   if (!existsSync(EMBEDDING_CASSETTE_PATH)) {
     throw new HarnessError(
       `no embedding cassette at ${EMBEDDING_CASSETTE_PATH}. Run ` +
-        '`node scripts/precompute-embeddings.mjs --spend` first (ol-opmb.2) — generation requests ' +
-        'need real retrieval results, never a hand-built context.',
+        '`node scripts/precompute-embeddings.mjs --spend` first (ol-opmb.2) — quiz.generate.v1 ' +
+        'requests need real retrieval results, never a hand-built context.',
     );
   }
   const embeddingCassette = readCassette(
@@ -180,33 +353,14 @@ async function main() {
   );
 
   const core = await loadCoreDist(CORE_DIST);
-  const index = buildRetrievalIndex();
 
   // --- build every request first (no spend yet) — retrieval replay costs nothing -----------------
-  const requests = [];
-  for (const scenario of SCENARIOS) {
-    const query = findQuery(scenario.queryId);
-    if (!query)
-      throw new HarnessError(`unknown synthetic query id ${JSON.stringify(scenario.queryId)}`);
-    const result = await retrieveOverCassette({
-      core,
-      index,
-      embeddingCassette,
-      query: query.query,
-      options: scenario.retrieveOptions,
-    });
-    const sourceChunks = sourceChunksFrom(result);
-    const payload = {
-      courseCode: scenario.courseCode,
-      conceptName: scenario.conceptName,
-      sourceChunks,
-    };
-    requests.push({ ...scenario, retrieveStatus: result.status, payload });
-  }
+  const quizRequests = await buildQuizRequests(core, embeddingCassette);
+  const explainWhyRequests = await buildExplainWhyRequests();
+  const requests = [...quizRequests, ...explainWhyRequests];
 
   // --- what's already cached vs what needs a real call -------------------------------------------
   const cassettePath = GENERATION_CASSETTE_PATH;
-  const { readTaskCassetteStore } = await import(serviceUrl('scripts', 'harness', 'cassette.mjs'));
   let cassette;
   try {
     cassette = readTaskCassetteStore(cassettePath);
@@ -218,28 +372,32 @@ async function main() {
 
   const missing = [];
   for (const req of requests) {
-    const { hashGenerationPayload, findGenerationEntryByRequest } = await import(
-      oleaUrl('packages', 'synthetic', 'src', 'generation-cassette.ts')
-    );
     const payloadHash = await hashGenerationPayload(req.payload);
-    const found = findGenerationEntryByRequest(cassette, { taskId: TASK_ID, payloadHash });
+    const found = findGenerationEntryByRequest(cassette, { taskId: req.taskId, payloadHash });
     if (found === undefined) missing.push({ ...req, payloadHash });
   }
 
   let estimatedNeurons = 0;
   for (const req of missing) {
+    const task = taskDefinitionFor(req.taskId);
     const { system, user } = task.buildPrompt(req.payload);
-    estimatedNeurons += neuronsFor(MODEL_ID, estimateTokens(system) + estimateTokens(user), 4096);
+    estimatedNeurons += neuronsFor(
+      modelIdFor(req.taskId),
+      estimateTokens(system) + estimateTokens(user),
+      4096,
+    );
   }
 
   console.log('');
-  console.log('SLOT G GENERATION PASS — ESTIMATE (quiz.generate.v1)');
+  console.log('GENERATION PASS — ESTIMATE (quiz.generate.v1 + explain-why.generate.v1)');
   console.log(`  scenarios total           ${requests.length}`);
   console.log(
     `  already cached            ${requests.length - missing.length} / ${requests.length}`,
   );
   console.log(`  missing (to call)         ${missing.length}`);
-  console.log(`  model                     ${MODEL_ID}`);
+  for (const req of missing) {
+    console.log(`    - ${req.taskId} :: ${req.queryId} (model ${modelIdFor(req.taskId)})`);
+  }
   console.log(
     `  ESTIMATE                  ${estimatedNeurons.toFixed(3)} neurons (~US$${neuronsToUsd(estimatedNeurons).toFixed(6)})`,
   );
@@ -258,7 +416,7 @@ async function main() {
   if (estimatedNeurons > LANE_CAP_NEURONS) {
     throw new HarnessError(
       `estimated ${estimatedNeurons.toFixed(3)} neurons exceeds this lane's own cap of ` +
-        `${LANE_CAP_NEURONS} — stopping per ol-opmb.3's brief. Report the arithmetic; do not raise the cap here.`,
+        `${LANE_CAP_NEURONS} — stopping. Report the arithmetic; do not raise the cap here.`,
     );
   }
 
@@ -277,7 +435,7 @@ async function main() {
   for (const req of missing) {
     const outcome = await runTaskCassetted({
       cassettePath,
-      taskId: TASK_ID,
+      taskId: req.taskId,
       payload: req.payload,
       target: options.target,
       baseUrl,
@@ -290,7 +448,7 @@ async function main() {
       spentNeurons += outcome.neurons ?? 0;
     }
     console.log(
-      `  recorded ${req.queryId} (${req.retrieveStatus}) — replayed: ${outcome.replayed}, ` +
+      `  recorded ${req.taskId} :: ${req.queryId} (${req.retrieveStatus}) — replayed: ${outcome.replayed}, ` +
         `response.ok: ${outcome.response.ok}, neurons: ${(outcome.neurons ?? 0).toFixed(3)}`,
     );
   }
