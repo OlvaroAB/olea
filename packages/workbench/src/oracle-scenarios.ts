@@ -8,19 +8,30 @@
  * Every state renders the plugin's **real** `GapView`
  * (`../../plugin/src/gap/view.js`, re-exported through `plugin-bridge.js` and
  * `oracle-bridge.js`) against a `SyntheticWorld` — never a hand-built
- * `GapViewModel`. Six of the eight states share one derivation
+ * `GapViewModel`. Six of the ten states share one derivation
  * (`deriveClosedLoop` over `steady-reviewer`) and differ only in which row or
  * fact the state's `note` points at, which is honest rather than a
  * shortcut: `oracle-ranked`, `oracle-abstained`, `gap-mastery`,
  * `gap-coverage`, `gap-material` and `coverage-unreadable-source` are all
  * simultaneously true of the SAME world (`curriculum.ts`'s module doc says
  * why: one course ranks, one abstains, and the three gap classes are three
- * different rows of the same course by construction). `plan-fresh` and
- * `plan-stale-offline` are genuinely different code paths — `refreshStudyPlan`
- * against a provider that succeeds vs. one that throws — and get their own
- * derivation. A ninth state, `oracle-struggling`, is not in the parent bead's
- * list but exists for the same reason `strugglingCourseReadsWorse` does: Trap
- * 2's defence belongs on screen, not only in a spec file.
+ * different rows of the same course by construction). `plan-fresh`,
+ * `plan-stale-offline` and `plan-expired-offline` are genuinely different
+ * code paths through `refreshStudyPlan` — a provider that succeeds; one that
+ * throws against a cached plan still inside `[D-122]`'s 7-day governing
+ * window (stale but usable); and one that throws against a cached plan past
+ * that horizon (expired, discarded) — and each gets its own derivation,
+ * built from `buildStaleCachedPlan` at a different `asOf` offset
+ * (`STALE_BUT_GOVERNING_OFFSET_DAYS`, `EXPIRED_OFFSET_DAYS`) rather than one
+ * shared "stale" plan reused for both. `ol-ppxj.22` bisected the previous
+ * shared offset (10 days, past the horizon) to first-bad-commit 00bcae2: it
+ * left `plan-stale-offline` demonstrating the expired-and-discarded regime
+ * while naming the cache-fallback one. `plan-expired-offline` gives the
+ * expired regime — which exists by design, not by bug — real coverage
+ * instead of accidental coverage. A ninth state, `oracle-struggling`, is not
+ * in the parent bead's list but exists for the same reason
+ * `strugglingCourseReadsWorse` does: Trap 2's defence belongs on screen, not
+ * only in a spec file.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
@@ -106,6 +117,13 @@ export const ORACLE_STATES: readonly OracleWorkbenchState[] = [
     note: "refreshStudyPlan against a provider that throws: the plan already on disk (computed at an earlier asOf, a genuinely different planVersion) is kept — source 'cache', offline true, with a reason. F7.8: review keeps working with no AI at all.",
   },
   {
+    id: 'plan-expired-offline',
+    label: 'Plan — expired, offline (past governing horizon)',
+    group: 'oracle',
+    persona: 'steady-reviewer',
+    note: "refreshStudyPlan against a provider that throws AND a cached plan already past [D-122]'s 7-day governing horizon: the cached plan is discarded rather than kept — source 'none', offline true, with a reason. This is the honest counterpart to plan-stale-offline: past the horizon, applying the old plan would mean pretending to know something no longer evidenced, so nothing is shown rather than a stale answer dressed up as current.",
+  },
+  {
     id: 'oracle-struggling',
     label: 'Ground truth surfaces (Trap 2)',
     group: 'oracle',
@@ -141,6 +159,17 @@ const WORLD_START_DATE = '2026-10-17';
 const WORLD_DAYS = 90;
 const WORLD_ASSESSMENT_DAY_OFFSETS: readonly number[] = [42, 93];
 
+// `[D-122]`'s freshness envelope for a governing artifact: fresh for 1 day,
+// governs for 7. `STALE_BUT_GOVERNING_OFFSET_DAYS` sits inside that 7-day
+// window (past the 1-day fresh boundary, well short of the 7-day governing
+// one) so `plan-stale-offline` demonstrates the cache-fallback regime it
+// names. `EXPIRED_OFFSET_DAYS` sits past the 7-day horizon — the same offset
+// `plan-stale-offline` used to use by accident (`ol-ppxj.22`) — so
+// `plan-expired-offline` demonstrates the discard-and-report regime on
+// purpose.
+const STALE_BUT_GOVERNING_OFFSET_DAYS = 3;
+const EXPIRED_OFFSET_DAYS = 10;
+
 function worldFor(persona: PersonaId) {
   return buildWorld({
     persona,
@@ -164,14 +193,23 @@ function createMemoryStudyPlanStore(seed: unknown): StudyPlanStore {
   };
 }
 
-/** A plan built from the SAME world at an earlier `asOf` — genuinely stale, not a copy relabelled. */
-async function buildStaleCachedPlan(persona: PersonaId): Promise<StudyPlanEnvelope> {
+/**
+ * A plan built from the SAME world at an earlier `asOf` — genuinely stale,
+ * not a copy relabelled. `offsetDays` decides which freshness regime the
+ * result falls into once `refreshStudyPlan` evaluates it against
+ * `WORKBENCH_NOW` (see the two named constants above).
+ */
+async function buildStaleCachedPlan(
+  persona: PersonaId,
+  offsetDays: number,
+): Promise<StudyPlanEnvelope> {
   const world = worldFor(persona);
-  const staleAsOf = utcDate(new Date(WORKBENCH_NOW.getTime() - 10 * 86_400_000));
+  const offsetMs = offsetDays * 86_400_000;
+  const staleAsOf = utcDate(new Date(WORKBENCH_NOW.getTime() - offsetMs));
   const { result } = await deriveOracle({
     world,
     asOf: staleAsOf,
-    computedAt: new Date(WORKBENCH_NOW.getTime() - 10 * 86_400_000).toISOString(),
+    computedAt: new Date(WORKBENCH_NOW.getTime() - offsetMs).toISOString(),
   });
   return result.plan;
 }
@@ -194,8 +232,14 @@ export async function buildOracleScenario(stateId: string): Promise<OracleScenar
   const load: GapViewDeps['load'] = () =>
     Promise.resolve<GapViewState>({ kind: 'model', model: withSyntheticDisplayNames(closed.gap) });
 
-  if (stateId === 'plan-fresh' || stateId === 'plan-stale-offline') {
-    const stalePlan = await buildStaleCachedPlan(state.persona);
+  if (
+    stateId === 'plan-fresh' ||
+    stateId === 'plan-stale-offline' ||
+    stateId === 'plan-expired-offline'
+  ) {
+    const cachedOffsetDays =
+      stateId === 'plan-expired-offline' ? EXPIRED_OFFSET_DAYS : STALE_BUT_GOVERNING_OFFSET_DAYS;
+    const stalePlan = await buildStaleCachedPlan(state.persona, cachedOffsetDays);
     const store = createMemoryStudyPlanStore(stalePlan);
     const provider: StudyPlanProvider =
       stateId === 'plan-fresh'

@@ -1,5 +1,5 @@
 /**
- * `@auto-web` — the oracle surface's nine states (F4.2, F4.3, F4.5, F4.9,
+ * `@auto-web` — the oracle surface's ten states (F4.2, F4.3, F4.5, F4.9,
  * F4.10; `ol-opmb.1` [TB-1]), driven in a real browser against the real
  * `GapView` and a synthetic curriculum + corpus. Zero model spend, no
  * fixture-vault dependency (see `oracle-scenarios.ts`'s module doc).
@@ -77,6 +77,16 @@ test('plan-stale-offline: refreshStudyPlan against a throwing provider falls bac
   const value = await inspectorRowValue(page, 'refreshStudyPlan');
   expect(value).toContain('source: cache');
   expect(value).toContain('offline: true');
+});
+
+test('plan-expired-offline: refreshStudyPlan discards a plan past the governing horizon (D-122)', async ({
+  page,
+}) => {
+  await gotoState(page, 'oracle', 'plan-expired-offline', 'obsidian-dark');
+  const value = await inspectorRowValue(page, 'refreshStudyPlan');
+  expect(value).toContain('source: none');
+  expect(value).toContain('offline: true');
+  expect(value).toContain('reason:');
 });
 
 test('oracle-struggling: the declared struggling course is visible on the real gap view', async ({

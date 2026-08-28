@@ -48,6 +48,7 @@ export const ORACLE_STATES = [
   'coverage-unreadable-source',
   'plan-fresh',
   'plan-stale-offline',
+  'plan-expired-offline',
   'oracle-struggling',
 ] as const;
 
@@ -150,7 +151,9 @@ export type Surface =
  * states left out below all fit the default pane unaided.
  */
 export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; height: number }>> = {
-  // Oracle — all 9 states measure the same (779px real content).
+  // Oracle — all 10 states measure the same (779px real content): the host
+  // pane renders the identical real GapView/world per persona regardless of
+  // which plan-refresh regime the inspector (outside the pane) is reporting.
   'oracle-ranked': { width: 1280, height: 1120 },
   'oracle-abstained': { width: 1280, height: 1120 },
   'gap-mastery': { width: 1280, height: 1120 },
@@ -159,6 +162,7 @@ export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; heigh
   'coverage-unreadable-source': { width: 1280, height: 1120 },
   'plan-fresh': { width: 1280, height: 1120 },
   'plan-stale-offline': { width: 1280, height: 1120 },
+  'plan-expired-offline': { width: 1280, height: 1120 },
   'oracle-struggling': { width: 1280, height: 1120 },
   // Timeline — all 4 states measure the same (761px real content).
   'timeline-steady': { width: 1280, height: 1120 },
