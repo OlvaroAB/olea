@@ -66,17 +66,18 @@
  * `gradeExplainBack` in before its own follow-on (`ol-p4t05`-adjacent) wired
  * it into `main.ts`.
  *
- * `contentRef` (the `[D-077]` content store pointer) is likewise never
- * manufactured here — `buildExplainBackGradeReviewFields` takes it as a
- * required input. The `[D-077]` content store itself (`ol-2jod.8`) does not
- * exist anywhere in this repo as of this writing (checked: no
- * `content-store.ts` file anywhere under `packages/core/src`, despite
- * `features/F5-explain-it-back.md` citing a `content-store.spec` test that
- * does not exist either — a pre-existing dangling citation, not one this
- * bead introduces or fixes). A caller cannot honestly have a real
- * `contentRef` until that store is built; this module refuses to fabricate
- * one and says so at the parameter, not in a comment nobody reads at the call
- * site.
+ * `contentRef` (the `[D-077]` content store pointer) is still never
+ * manufactured INSIDE `buildExplainBackGradeReviewFields` — it stays pure and
+ * takes `contentRef` as a required input, on purpose (see its own doc). The
+ * `[D-077]` content store itself now exists (`ol-0r92.10`,
+ * `../review-log/content-store.ts`), so this module's one impure export,
+ * `writeSoloGradingContent` below, mints a REAL id by writing this grading's
+ * evidence there — a caller composes `writeSoloGradingContent` then
+ * `buildExplainBackGradeReviewFields`, in that order, rather than fabricating
+ * a placeholder string. The actual call site that does this (and then calls
+ * `appendReviewLogRecord`) still lives in `packages/core/src/study-session/`,
+ * outside this bead's `owns` — this only closes the "nothing mints a real id"
+ * half of `ol-95vv.3`'s dependency, not the wiring itself.
  *
  * `CandidateEdgeNomination` (surfaced unchanged on `PendingSoloGrading`,
  * exactly as `buildGradingSourceMaterial` produced it) is likewise not turned
@@ -95,6 +96,8 @@ import type {
   CandidateEdgeNomination,
   GradingSourceMaterial,
 } from '../mastery/gradingInputContract.js';
+import { type WriteContentOptions, writeContentRecord } from '../review-log/content-store.js';
+import type { VaultSource } from '../vault/types.js';
 import type { SourceBlockRef } from './gradingPipeline.js';
 
 export type { SoloLevel };
@@ -390,6 +393,68 @@ export function buildExplainBackGradeReviewFields(
       ? { neighbourConceptId: input.neighbourConceptId as string }
       : undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Minting a real contentRef ([D-077]) — the ONE impure export in this module
+// ---------------------------------------------------------------------------
+
+export interface MintSoloGradingContentInput {
+  readonly accepted: AcceptedSoloGrading;
+  /**
+   * Her explanation text this grading was produced from. Not carried on
+   * `AcceptedSoloGrading` itself (see `GradeSoloInput.studentAnswer`) — the
+   * caller threads it through here explicitly rather than this function
+   * reaching back into the grading input.
+   */
+  readonly studentAnswer: string;
+  /**
+   * Present only when this grading surfaced a misconception — decided by the
+   * caller (this module never inspects `accepted.rationale` looking for one);
+   * `misconception/` owns that classification and is out of this bead's
+   * `owns`.
+   */
+  readonly misconceptionDetail?: string;
+}
+
+/**
+ * Writes this grading's evidence — her answer text, the grader's rationale as
+ * feedback, and misconception detail when present — to the `[D-077]` content
+ * store (`../review-log/content-store.ts`), and returns a REAL `contentRef`
+ * fit to pass into `buildExplainBackGradeReviewFields`.
+ *
+ * **This is the one function in this module that performs I/O** — every
+ * other export here is pure (see the module header). It exists because
+ * `buildExplainBackGradeReviewFields` deliberately stays pure and refuses to
+ * manufacture a `contentRef` itself; minting a real one requires a
+ * `VaultSource` write, and this is the narrowest place to do it without
+ * reaching into `study-session/`, which is outside this bead's `owns`.
+ *
+ * **Reachability, named rather than hidden (`[D-072]`'s escape hatch):**
+ * calling this closes the "nothing can mint a real id" half of
+ * `ol-95vv.3`'s dependency on `ol-0r92.10`. It does not by itself finish
+ * `ol-95vv.3` — the actual call site that sequences this before
+ * `buildExplainBackGradeReviewFields` and then `appendReviewLogRecord` still
+ * lives in `packages/core/src/study-session/`, a module this bead does not
+ * own.
+ */
+export async function writeSoloGradingContent(
+  vault: VaultSource,
+  input: MintSoloGradingContentInput,
+  options: WriteContentOptions,
+): Promise<string> {
+  const { contentId } = await writeContentRecord(
+    vault,
+    {
+      studentAnswer: input.studentAnswer,
+      feedback: input.accepted.rationale,
+      ...(input.misconceptionDetail !== undefined
+        ? { misconceptionDetail: input.misconceptionDetail }
+        : {}),
+    },
+    options,
+  );
+  return contentId;
 }
 
 // ---------------------------------------------------------------------------

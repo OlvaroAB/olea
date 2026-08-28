@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   CandidateEdgeNomination,
   GradingSourceMaterial,
 } from '../mastery/gradingInputContract.js';
+import { readContentRecord } from '../review-log/content-store.js';
+import { FolderSource } from '../vault/folder-source.js';
 import {
   type AcceptedSoloGrading,
   acceptSoloGrading,
@@ -14,6 +19,7 @@ import {
   groundSoloResponse,
   type PendingSoloGrading,
   summarizeSoloGradingForTelemetry,
+  writeSoloGradingContent,
 } from './explainBackSolo.js';
 import type { SourceBlockRef } from './gradingPipeline.js';
 
@@ -285,6 +291,101 @@ describe('buildExplainBackGradeReviewFields', () => {
       artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
     });
     expect(fields.explainBackGrade.revisionOf).toBe('evt-prior-123');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeSoloGradingContent — mints a real [D-077] contentRef (ol-95vv.3)
+// ---------------------------------------------------------------------------
+
+describe('writeSoloGradingContent', () => {
+  const accepted: AcceptedSoloGrading = {
+    status: 'accepted',
+    soloLevel: 'relational',
+    rationale: 'Connects both mechanisms under one principle.',
+    citedBlockIds: ['blk-1'],
+  };
+
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-solo-content-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('writes her answer and the grader rationale, and returns an id readable back from the content store', async () => {
+    const vault = new FolderSource(tempRoot);
+    const contentRef = await writeSoloGradingContent(
+      vault,
+      { accepted, studentAnswer: 'Old memories block new ones.' },
+      { deviceId: 'desktop-1' },
+    );
+
+    expect(typeof contentRef).toBe('string');
+    expect(contentRef.length).toBeGreaterThan(0);
+
+    const stored = await readContentRecord(vault, contentRef);
+    expect(stored).toEqual({
+      status: 'found',
+      record: {
+        contentId: contentRef,
+        studentAnswer: 'Old memories block new ones.',
+        feedback: accepted.rationale,
+      },
+    });
+  });
+
+  it('carries misconceptionDetail through when the caller supplies one', async () => {
+    const vault = new FolderSource(tempRoot);
+    const contentRef = await writeSoloGradingContent(
+      vault,
+      {
+        accepted,
+        studentAnswer: 'Old memories block new ones.',
+        misconceptionDetail: 'treats interference as forgetting rather than competition',
+      },
+      { deviceId: 'desktop-1' },
+    );
+
+    const stored = await readContentRecord(vault, contentRef);
+    expect(stored.status === 'found' && stored.record.misconceptionDetail).toBe(
+      'treats interference as forgetting rather than competition',
+    );
+  });
+
+  it('the returned contentRef is fit to pass straight into buildExplainBackGradeReviewFields', async () => {
+    const vault = new FolderSource(tempRoot);
+    const contentRef = await writeSoloGradingContent(
+      vault,
+      { accepted, studentAnswer: 'Old memories block new ones.' },
+      { deviceId: 'desktop-1' },
+    );
+
+    const fields = buildExplainBackGradeReviewFields({
+      accepted,
+      contentRef,
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+    });
+    expect(fields.explainBackGrade.contentRef).toBe(contentRef);
+  });
+
+  it('two devices minting content for the same grading moment never collide', async () => {
+    const vault = new FolderSource(tempRoot);
+    const a = await writeSoloGradingContent(
+      vault,
+      { accepted, studentAnswer: 'from desktop' },
+      { deviceId: 'desktop' },
+    );
+    const b = await writeSoloGradingContent(
+      vault,
+      { accepted, studentAnswer: 'from mobile' },
+      { deviceId: 'mobile' },
+    );
+    expect(a).not.toBe(b);
   });
 });
 
