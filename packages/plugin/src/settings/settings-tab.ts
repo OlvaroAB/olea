@@ -60,6 +60,12 @@ import {
   DEGRADATION_STATEMENT_HEADING,
 } from './degradation-statement.js';
 import {
+  EXPLAIN_BACK_AUDIT_GATE_BODY,
+  EXPLAIN_BACK_AUDIT_GATE_HEADING,
+  isExplainBackKilled,
+  ObsidianExplainBackAuditGateStore,
+} from './explain-back-audit-gate.js';
+import {
   REPORT_ISSUE_BUTTON_LABEL,
   REPORT_ISSUE_URL,
   SUPPORT_SECTION_HEADING,
@@ -75,6 +81,8 @@ import {
 export class OleaSettingTab extends PluginSettingTab {
   private readonly configStore: ObsidianWorkerConfigStore;
   private readonly studyPlanConfigStore: ObsidianStudyPlanSettingsStore;
+  /** F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — see `explain-back-audit-gate.ts`'s module doc. */
+  private readonly explainBackAuditGateStore: ObsidianExplainBackAuditGateStore;
   /** Kept for the F7.3 usage section (`ol-p3t09`), which reads its own `data.json` key through the same host. */
   private readonly dataHost: ObsidianDataHost;
 
@@ -94,6 +102,7 @@ export class OleaSettingTab extends PluginSettingTab {
     // ranking needs no model call), which is why it renders in its own
     // section rather than inside the "AI" one.
     this.studyPlanConfigStore = new ObsidianStudyPlanSettingsStore(dataHost);
+    this.explainBackAuditGateStore = new ObsidianExplainBackAuditGateStore(dataHost);
     this.dataHost = dataHost;
   }
 
@@ -116,6 +125,13 @@ export class OleaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('AI').setHeading();
     void this.renderWorkerFields(containerEl);
+
+    // F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — a SECOND, honestly
+    // worded reason explaining back may be greyed, distinct from the
+    // degradation statement above. Renders nothing when the gate is clear
+    // (the common case, and the only case until `ol-g3a0`'s audit exists to
+    // set it) — see `explain-back-audit-gate.ts`'s module doc.
+    void this.renderExplainBackAuditGate(containerEl);
 
     // F7.3 usage view (`ol-p3t09`) — informational in v0.9, the future quota
     // surface. Same async-render terms as the field renderers above.
@@ -156,6 +172,17 @@ export class OleaSettingTab extends PluginSettingTab {
           void this.studyPlanConfigStore.save({ version: 1, assignmentsBasePath });
         });
       });
+  }
+
+  /** F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — see this class's `display()` call site and `explain-back-audit-gate.ts`'s module doc. */
+  private async renderExplainBackAuditGate(containerEl: HTMLElement): Promise<void> {
+    const gate = await this.explainBackAuditGateStore.load();
+    if (!isExplainBackKilled(gate)) return;
+    new Setting(containerEl).setName(EXPLAIN_BACK_AUDIT_GATE_HEADING).setHeading();
+    containerEl.createEl('p', {
+      text: EXPLAIN_BACK_AUDIT_GATE_BODY,
+      cls: 'olea-explain-back-audit-gate',
+    });
   }
 
   private async renderWorkerFields(containerEl: HTMLElement): Promise<void> {

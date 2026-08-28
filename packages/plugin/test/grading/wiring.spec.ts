@@ -18,6 +18,7 @@ import {
   evaluateConfusionRouting,
   gradeExplainBackAttempt,
 } from '../../src/grading/wiring.js';
+import { EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY } from '../../src/settings/explain-back-audit-gate.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
 import type { WorkerConfig } from '../../src/worker/transport.js';
@@ -163,6 +164,72 @@ describe('gradeExplainBackAttempt', () => {
       gradeExplainBackAttempt(wiring, { ...baseInput, referenceAnswer: '   ' }),
     ).rejects.toThrow(/UnusableGradingInputError|referenceAnswer/i);
     expect(transport.calls).toHaveLength(0);
+  });
+});
+
+// ---- the E2b kill-switch (ol-g3a0.1, F7.8 as amended by [D-127]) --------
+
+describe('buildGradingWiring / gradeExplainBackAttempt — the E2b kill-switch', () => {
+  it('killedBySustainedAuditFailure is false when nothing has ever set the gate', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeTransport(),
+    });
+    expect(wiring.killedBySustainedAuditFailure).toBe(false);
+  });
+
+  it('a killed gate greys explain-back even though the Worker IS configured — a SECOND, independent reason for the same null', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    host.blob = {
+      ...(host.blob as Record<string, unknown>),
+      [EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY]: { version: 1, sustainedFailure: true },
+    };
+    const transport = fakeTransport();
+
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    expect(wiring.judgeCaller).not.toBeNull(); // the Worker itself is fine
+    expect(wiring.killedBySustainedAuditFailure).toBe(true);
+
+    const result = await gradeExplainBackAttempt(wiring, baseInput);
+
+    expect(result).toBeNull();
+    expect(transport.calls).toHaveLength(0); // never reaches the Worker once killed
+  });
+
+  it('an UNKILLED gate on a configured Worker grades normally — the switch defaults open', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    host.blob = {
+      ...(host.blob as Record<string, unknown>),
+      [EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY]: { version: 1, sustainedFailure: false },
+    };
+    const transport = fakeTransport();
+
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    const result = await gradeExplainBackAttempt(wiring, baseInput);
+
+    expect(transport.calls).toHaveLength(1);
+    expect(result?.status).toBe('pending-review');
+  });
+
+  it('an unconfigured Worker AND a killed gate both report null the same way — one grey-out, two reasons', async () => {
+    const host = new FakeDataHost();
+    host.blob = { [EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY]: { version: 1, sustainedFailure: true } };
+
+    const wiring = await buildGradingWiring({
+      dataHost: host,
+      createTransport: () => fakeTransport(),
+    });
+    expect(wiring.judgeCaller).toBeNull();
+    expect(wiring.killedBySustainedAuditFailure).toBe(true);
+    expect(await gradeExplainBackAttempt(wiring, baseInput)).toBeNull();
   });
 });
 

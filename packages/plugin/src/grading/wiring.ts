@@ -75,6 +75,24 @@
  * shows, not a Feynman-mode input. `gradeExplainBackAttempt` immediately
  * below still has no caller anywhere in this package, and that gap is not
  * closed by this update.
+ *
+ * ===========================================================================
+ * `ol-g3a0.1` UPDATE: A SECOND, INDEPENDENT REASON THIS RETURNS `null`
+ * ===========================================================================
+ * F7.8 as amended by `[D-127]` adds a kill-switch: sustained failure of
+ * E2b's live calibration audit (`ol-g3a0`, private repo, not yet built)
+ * greys explain-back honestly, the same shape as the
+ * `judgeCaller === null` grey-out above but carrying a different message.
+ * `GradingWiring.killedBySustainedAuditFailure` and
+ * `../settings/explain-back-audit-gate.ts` are that switch — see that
+ * file's module doc for the full story, including why a KV flag and not a
+ * new endpoint, and why the write side is a tested setter rather than a
+ * real producer today. `gradeExplainBackAttempt`'s "no caller anywhere in
+ * this package" gap, above, is UNCHANGED by this update: this wiring makes
+ * the kill-switch itself provably effective (`ol-g3a0.1`'s acceptance
+ * criterion), and inherits, rather than closes, the pre-existing reachability
+ * gap on the function it greys — closing that is `ol-tka5`/`ol-548w`'s job,
+ * not this bead's.
  */
 
 import {
@@ -88,6 +106,10 @@ import {
   type PendingExplainBackGrading,
   type WorkerTaskTransport,
 } from 'olea-core';
+import {
+  isExplainBackKilled,
+  ObsidianExplainBackAuditGateStore,
+} from '../settings/explain-back-audit-gate.js';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 
@@ -109,15 +131,29 @@ export interface GradingWiring {
    * for `this.retrieval`/`this.ingestion`.
    */
   readonly judgeCaller: JudgeCaller | null;
+  /**
+   * `true` when E2b's live calibration audit (`ol-g3a0`) has observed
+   * sustained grading failure — F7.8's kill-switch, `[D-127]`. A SECOND,
+   * independent reason `gradeExplainBackAttempt` returns `null`, distinct
+   * from `judgeCaller === null`: see `../settings/explain-back-audit-gate.ts`
+   * and this file's `ol-g3a0.1` module-doc update.
+   */
+  readonly killedBySustainedAuditFailure: boolean;
 }
 
 export async function buildGradingWiring(deps: GradingWiringDeps): Promise<GradingWiring> {
   const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
   const config = await configStore.load();
-  if (!isWorkerConfigured(config)) return { judgeCaller: null };
+  const auditGateStore = new ObsidianExplainBackAuditGateStore(deps.dataHost);
+  const killedBySustainedAuditFailure = isExplainBackKilled(await auditGateStore.load());
+
+  if (!isWorkerConfigured(config)) return { judgeCaller: null, killedBySustainedAuditFailure };
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
-  return { judgeCaller: createWorkerJudgeCaller({ transport }) };
+  return {
+    judgeCaller: createWorkerJudgeCaller({ transport }),
+    killedBySustainedAuditFailure,
+  };
 }
 
 /**
@@ -134,12 +170,19 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
  * nothing here calls it on her behalf, and nothing here persists the result
  * — `ol-tka5` (where a verdict lives) and `ol-548w` (what the accept step
  * records) are both open Class C questions this function does not answer.
+ *
+ * Returns `null` for either of TWO independent reasons — the Worker isn't
+ * configured, or `[D-127]`'s kill-switch has tripped — and deliberately does
+ * not distinguish them in its own return type: the caller-facing contract
+ * ("no grading available right now") is identical either way, and the two
+ * reasons carry different STUDENT-FACING wording only in the settings pane
+ * (`../settings/settings-tab.ts`), never here.
  */
 export async function gradeExplainBackAttempt(
   wiring: GradingWiring,
   input: GradeExplainBackInput,
 ): Promise<PendingExplainBackGrading | null> {
-  if (wiring.judgeCaller === null) return null;
+  if (wiring.judgeCaller === null || wiring.killedBySustainedAuditFailure) return null;
   return gradeExplainBack(input, wiring.judgeCaller);
 }
 
