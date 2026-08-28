@@ -18,7 +18,12 @@ import type { AssessmentFormat } from '../gap/readiness.js';
 import type { McqInstrumentRecord, QaInstrumentRecord } from '../session/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { buildStudySession } from './build.js';
-import { type DurationModel, estimateInstrumentDurations } from './duration.js';
+import {
+  type DurationEstimateSource,
+  type DurationModel,
+  estimateInstrumentDurations,
+} from './duration.js';
+import type { AcceptedExplainBack } from './explain-back.js';
 import { buildConceptInstrumentIndex, type ConceptInstrumentIndex } from './instrument-index.js';
 
 const AS_OF = '2026-09-14';
@@ -158,6 +163,49 @@ function flatDurations(seconds: number): DurationModel {
     totalSampleCount: 0,
     secondsFor: () => seconds,
     sourceFor: () => 'assumed',
+  };
+}
+
+/** `AcceptedExplainBack` fixture (F2.14a, `[D-126]`) — a given fact, never a `GapRow`-derived candidate. */
+function acceptedExplainBack(instrumentId: string, conceptName: string): AcceptedExplainBack {
+  return {
+    instrumentId,
+    conceptName,
+    course: 'CRS101',
+    notePath: `05 Zettelkasten/${instrumentId}.md` as VaultPath,
+    noteTitle: instrumentId,
+  };
+}
+
+/**
+ * A `DurationModel` whose candidate estimates (qa/cloze/mcq) and accepted
+ * explain-back estimate can be independently sourced 'measured' or
+ * 'assumed', for exercising {@link StudySessionModel.durationBasis}'s
+ * F2.14a combination rule without a real review-log history.
+ */
+function durationsWithExplainBack(
+  candidateSource: DurationEstimateSource,
+  explainBackSource: DurationEstimateSource,
+): DurationModel {
+  const estimates = (['qa', 'cloze', 'mcq'] as const).map((instrumentType) => ({
+    instrumentType,
+    seconds: 90,
+    source: candidateSource,
+    sampleCount: candidateSource === 'measured' ? 5 : 0,
+  }));
+  return {
+    estimates,
+    basis: candidateSource,
+    totalSampleCount: candidateSource === 'measured' ? 15 : 0,
+    explainBack: {
+      instrumentType: 'explain-back',
+      seconds: 90,
+      source: explainBackSource,
+      sampleCount: explainBackSource === 'measured' ? 5 : 0,
+    },
+    secondsFor: () => 90,
+    sourceFor: (instrumentType) =>
+      instrumentType === 'explain-back' ? explainBackSource : candidateSource,
   };
 }
 
@@ -860,6 +908,166 @@ describe('the session says where its times came from', () => {
     });
     expect(session.durationBasis).toBe('assumed');
     expect(session.items[0]?.durationSource).toBe('assumed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accepted explain-back (F2.14a, `[D-126]`) — priced, never a candidate the
+// fill selects. See ol-2jod.16, `./explain-back.ts`'s module doc, and the
+// F4.6 scenarios "an accepted explain-back is priced against the declared
+// budget" et al. in `features/F4-oracle.md` (olea-service).
+// ---------------------------------------------------------------------------
+
+describe('accepted explain-back is priced, never selected (F2.14a, `[D-126]`)', () => {
+  it('prices an accepted explain-back into plannedSeconds and explainBackItems, never into items', () => {
+    const session = buildStudySession({
+      rows: [],
+      instruments: emptyIndex(),
+      budgetMinutes: 20,
+      durations: flatDurations(90),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'Alpha')],
+    });
+
+    expect(session.items).toEqual([]);
+    expect(session.explainBackItems).toHaveLength(1);
+    expect(session.explainBackItems?.[0]).toMatchObject({
+      instrumentId: 'eb1',
+      conceptName: 'Alpha',
+      instrumentType: 'explain-back',
+      estimatedSeconds: 90,
+      durationSource: 'assumed',
+    });
+    expect(session.plannedSeconds).toBe(90);
+  });
+
+  it("an accepted explain-back's cost comes out of the declared target before the candidate fill runs", () => {
+    const rows = rankedRows([
+      { conceptName: 'A', gapScore: 9 },
+      { conceptName: 'B', gapScore: 8 },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]);
+
+    // 3 minutes = 180s target. The explain-back alone costs 90s, leaving 90s
+    // of room for the candidate fill — exactly one 90s candidate, not two.
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 3,
+      durations: flatDurations(90),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'Gamma')],
+    });
+
+    expect(session.items.map((i) => i.conceptName)).toEqual(['A']);
+    expect(session.plannedSeconds).toBe(180);
+    expect(session.leftOut.map((o) => o.conceptName)).toEqual(['B']);
+  });
+
+  it('an explain-back costing more than the whole target still admits it — the declared target is never a cap (`[D-091]`)', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 1, // 60s target
+      durations: flatDurations(90),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'Solo')],
+    });
+
+    expect(session.explainBackItems).toHaveLength(1);
+    // No room left for the candidate fill (90s already spent against a 60s
+    // target, clamped at zero rather than negative) — A is left out, never
+    // silently dropped.
+    expect(session.items).toEqual([]);
+    expect(session.plannedSeconds).toBe(90);
+    expect(session.leftOut.map((o) => o.conceptName)).toEqual(['A']);
+  });
+
+  it('no accepted explain-backs reads as an empty list, never an absent field', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+    expect(session.explainBackItems).toEqual([]);
+  });
+
+  it('several accepted explain-backs are each priced independently and summed', () => {
+    const session = buildStudySession({
+      rows: [],
+      instruments: emptyIndex(),
+      budgetMinutes: 20,
+      durations: flatDurations(90),
+      asOf: AS_OF,
+      acceptedExplainBacks: [
+        acceptedExplainBack('eb1', 'Alpha'),
+        acceptedExplainBack('eb2', 'Beta'),
+      ],
+    });
+    expect(session.explainBackItems).toHaveLength(2);
+    expect(session.plannedSeconds).toBe(180);
+  });
+
+  it('an accepted explain-back never enters the gap-row candidate fill: F2.21 still holds structurally', () => {
+    // Same concept name as a real row, to prove the explain-back event and
+    // the row's own candidate instrument are never merged or deduped
+    // against each other — they are different mechanisms entirely.
+    const rows = rankedRows([{ conceptName: 'Alpha', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['Alpha'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'Alpha')],
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(session.items[0]?.instrumentType).toBe('qa');
+    expect(session.explainBackItems).toHaveLength(1);
+    expect(session.explainBackItems?.[0]?.instrumentType).toBe('explain-back');
+  });
+
+  it('a mixed session honestly reads mixed when candidates are measured and the accepted explain-back price is still assumed', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 20,
+      durations: durationsWithExplainBack('measured', 'assumed'),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'A')],
+    });
+    expect(session.durationBasis).toBe('mixed');
+  });
+
+  it('an all-measured session, candidates and the accepted explain-back alike, reads measured — not mixed', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 20,
+      durations: durationsWithExplainBack('measured', 'measured'),
+      asOf: AS_OF,
+      acceptedExplainBacks: [acceptedExplainBack('eb1', 'A')],
+    });
+    expect(session.durationBasis).toBe('measured');
+  });
+
+  it('with no accepted explain-back this session, durationBasis describes the candidates alone even when the explain-back estimate itself is assumed', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 20,
+      durations: durationsWithExplainBack('measured', 'assumed'),
+      asOf: AS_OF,
+    });
+    expect(session.durationBasis).toBe('measured');
   });
 });
 

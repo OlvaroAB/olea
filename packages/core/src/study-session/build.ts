@@ -63,6 +63,22 @@
  * threshold — swapping it for depth-first is a change to this loop and to
  * nothing else.
  *
+ * ## Accepted explain-back (F2.14a, `[D-126]`)
+ *
+ * `input.acceptedExplainBacks` prices explain-backs she already accepted and
+ * produced during this session (`./explain-back.js`) and folds their cost
+ * into {@link StudySessionModel.plannedSeconds} and {@link
+ * StudySessionModel.explainBackItems} — **never** into `items` or the
+ * candidate fill below. They are a given fact, not a candidate: nothing here
+ * ranks them against `rows`, and they never compete for or get chosen from a
+ * `GapRow`. F2.14a's own requirement is only that "minutes spent inside a
+ * time-bounded session come out of that session's declared budget rather
+ * than being invisible to the number on screen" — so their total is
+ * subtracted from the target before the candidate fill runs (whatever room
+ * is left, never negative), and added back into `plannedSeconds` once it is
+ * done, so the final total is honest either way. See `./explain-back.js`'s
+ * module doc for why this is a separate shape from `StudySessionItem`.
+ *
  * ## Leaving out is information, not truncation
  *
  * Every considered row that contributed no instrument appears in
@@ -95,6 +111,12 @@ import type { CalendarDay } from '../today/calendar-day.js';
 import { isCalendarDay } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
 import type { DurationEstimateSource, DurationModel, DurationModelBasis } from './duration.js';
+import {
+  type AcceptedExplainBack,
+  type ComposedExplainBackItem,
+  priceAcceptedExplainBacks,
+  totalExplainBackSeconds,
+} from './explain-back.js';
 import type { ConceptInstrumentIndex } from './instrument-index.js';
 
 /**
@@ -176,17 +198,31 @@ export interface StudySessionModel {
   readonly budgetMinutes: number;
   readonly budgetSeconds: number;
   /**
-   * Sum of the chosen items' estimates.
+   * Sum of the chosen items' estimates, **plus every accepted explain-back's
+   * price** (F2.14a, `[D-126]`) — the number on screen accounts for both.
    *
    * **May exceed {@link budgetSeconds}** — `[D-091]` (component register
    * §3.7) rules the budget "a declared target never a cap", and she is
-   * "always free to outrun it". The fill (see the module doc) keeps taking
-   * items while `plannedSeconds` is still below the target and stops once it
-   * is at or past it, so at most one item's worth of overshoot is possible,
-   * never more (`ol-zji3` [BUD-1]).
+   * "always free to outrun it". The candidate fill (see the module doc)
+   * keeps taking items while its running total is still below whatever of
+   * the target remains after `explainBackItems` and stops once it is at or
+   * past it, so at most one candidate item's worth of overshoot is possible
+   * from the fill (`ol-zji3` [BUD-1]) — an accepted explain-back can push the
+   * total further past target on top of that, honestly, because F2.14a
+   * prices it rather than disclaiming it.
    */
   readonly plannedSeconds: number;
   readonly items: readonly StudySessionItem[];
+  /**
+   * Every explain-back she accepted and produced during this session,
+   * priced (F2.14a, `[D-126]`). **Never a member of {@link items}** and
+   * never chosen by the fill below — see `./explain-back.js`'s module doc
+   * for why this is a separate array rather than a fourth `StudySessionItem`
+   * shape. Optional so a hand-built `StudySessionModel` fixture predating
+   * F2.14a remains valid; `buildStudySession` always sets it, empty when the
+   * caller reports no accepted explain-backs.
+   */
+  readonly explainBackItems?: readonly ComposedExplainBackItem[];
   readonly leftOut: readonly StudySessionOmission[];
   /** Instruments across the considered rows that the session does not contain. A count, because naming every unchosen card is a different screen. */
   readonly leftOutInstrumentCount: number;
@@ -203,7 +239,14 @@ export interface StudySessionModel {
   /** The format the fill preferred (F4.8), derived from {@link nextAssessment}. `'unknown'` prefers nothing and reorders nothing. */
   readonly formatPreference: AssessmentFormat;
   readonly nextAssessment: SessionAssessmentCountdown | null;
-  /** Whether the times above rest on her review history or on Olea's assumptions — `./duration.ts`'s own basis, passed through. */
+  /**
+   * Whether the times above rest on her review history or on Olea's
+   * assumptions — `./duration.ts`'s own basis for the candidate items,
+   * folded with the accepted explain-back's own source when
+   * {@link explainBackItems} is non-empty (a session with only measured
+   * cards and one 'assumed' explain-back honestly reads `'mixed'`, never
+   * silently `'measured'`).
+   */
   readonly durationBasis: DurationModelBasis;
   /** The concept the caller asked the session to start from, if any (the gap view's `build-session` affordance). Echoed so the surface can say what it did. */
   readonly focusConcept: string | null;
@@ -253,6 +296,13 @@ export interface BuildStudySessionInput {
    * still applies either way.
    */
   readonly order?: 'gapScore' | 'given';
+  /**
+   * Explain-backs she already accepted and produced during this session
+   * (F2.14a, `[D-126]`) — a given fact, never a candidate the fill selects.
+   * Omitted or empty means none happened; see the module doc's "Accepted
+   * explain-back" section and `./explain-back.js`.
+   */
+  readonly acceptedExplainBacks?: readonly AcceptedExplainBack[];
 }
 
 const SECONDS_PER_MINUTE = 60;
@@ -474,6 +524,14 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   const formatPreference: AssessmentFormat = nextAssessment?.format ?? 'unknown';
   const budgetSeconds = budgetMinutes * SECONDS_PER_MINUTE;
 
+  // F2.14a (`[D-126]`): priced here, never selected — see the module doc's
+  // "Accepted explain-back" section and `./explain-back.js`. Their total
+  // comes out of the declared target before the candidate fill below runs,
+  // so the fill sees however much of the budget genuinely remains.
+  const explainBackItems = priceAcceptedExplainBacks(input.acceptedExplainBacks ?? [], durations);
+  const explainBackSeconds = totalExplainBackSeconds(explainBackItems);
+  const candidateBudgetSeconds = Math.max(0, budgetSeconds - explainBackSeconds);
+
   // Per row: its instruments in fill order, and how far the fill has walked
   // that list. Built once so the passes below are a walk rather than a
   // repeated lookup.
@@ -492,7 +550,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
 
   const chosenInstrumentIds = new Set<string>();
   const items: StudySessionItem[] = [];
-  let plannedSeconds = 0;
+  let candidatePlannedSeconds = 0;
 
   for (;;) {
     let addedThisPass = false;
@@ -515,8 +573,11 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
         // the running total has REACHED the target nothing further is taken;
         // until then, the next instrument is taken regardless of its own
         // length, so the fill rounds up to the item that crosses the line
-        // rather than refusing it (`ol-zji3` [BUD-1]).
-        if (plannedSeconds >= budgetSeconds) {
+        // rather than refusing it (`ol-zji3` [BUD-1]). Measured against
+        // `candidateBudgetSeconds`, not `budgetSeconds` — F2.14a already
+        // spent `explainBackSeconds` of the declared target before this loop
+        // started.
+        if (candidatePlannedSeconds >= candidateBudgetSeconds) {
           // Do NOT advance `at`: this instrument is still a candidate if a
           // later pass has room, and skipping past it would drop it silently.
           sawUnaffordable = true;
@@ -528,7 +589,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
         );
         queue.at += 1;
         chosenInstrumentIds.add(record.instrumentId);
-        plannedSeconds += seconds;
+        candidatePlannedSeconds += seconds;
         items.push({
           position: items.length + 1,
           instrumentId: record.instrumentId,
@@ -581,14 +642,33 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     asOf,
     budgetMinutes,
     budgetSeconds,
-    plannedSeconds,
+    plannedSeconds: candidatePlannedSeconds + explainBackSeconds,
     items,
+    explainBackItems,
     leftOut,
     leftOutInstrumentCount,
     consideredRowCount: ordered.length,
     formatPreference,
     nextAssessment,
-    durationBasis: durations.basis,
+    durationBasis: combinedDurationBasis(durations.basis, durations, explainBackItems),
     focusConcept: input.focusConceptName ?? null,
   };
+}
+
+/**
+ * Folds the accepted explain-back's own source into the candidate basis
+ * (see {@link StudySessionModel.durationBasis}'s doc). Returns
+ * `candidateBasis` untouched when no explain-back was accepted this session
+ * — its estimate source is not a fact about "the times above" when nothing
+ * priced by it appears there.
+ */
+function combinedDurationBasis(
+  candidateBasis: DurationModelBasis,
+  durations: DurationModel,
+  explainBackItems: readonly ComposedExplainBackItem[],
+): DurationModelBasis {
+  if (explainBackItems.length === 0) return candidateBasis;
+  const explainBackSource = durations.sourceFor('explain-back');
+  if (candidateBasis === 'mixed') return 'mixed';
+  return candidateBasis === explainBackSource ? candidateBasis : 'mixed';
 }

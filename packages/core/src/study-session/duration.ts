@@ -60,14 +60,38 @@
  * shapes of work above. Nothing here forecloses a finer model later — the
  * result is a lookup, and a caller cannot tell how the number was grouped.
  *
+ * ## The fourth type — accepted explain-back (`[D-126]`, F2.14a)
+ *
+ * Explain-back stays excluded from {@link SESSION_INSTRUMENT_TYPES}: that
+ * list names the FSRS-schedulable, gap-row-ranked candidates
+ * `study-session/build.ts`'s greedy fill chooses from, and F2.14/F2.21 keep
+ * explain-back out of exactly that selection — it is never FSRS-scheduled and
+ * never a rankable candidate. **What changed under F2.14a is not that list;
+ * it is that an ACCEPTED explain-back now has a price at all.** Once she
+ * accepts one and produces it, {@link EXPLAIN_BACK_ASSUMED_SECONDS} prices
+ * the act the same way `secondsFor`/`sourceFor` price every other type — via
+ * the widened `InstrumentType` parameter below — and it is superseded by the
+ * median of her own measured `durationMs` on explain-back reviews through
+ * the identical mechanism, once {@link DEFAULT_MIN_MEASURED_REVIEWS} of them
+ * exist. See {@link DurationModel.explainBack}. A *proposed* explanation
+ * (F2.21) never reaches this module at all — it produces no review, so it
+ * has no `durationMs` and nothing to price.
+ *
  * **INV-1 / §7.1.** Pure. No `obsidian`, no I/O, no clock; the history is an
  * argument, never a read.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { InstrumentType, ReviewLogEntry } from 'olea-contracts';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 
-/** Every instrument type a session can contain. `'explain-back'` is excluded by `SchedulableInstrumentType` — it is not scheduled and produces no rating (F2.16). */
+/**
+ * The FSRS-schedulable, gap-row-ranked candidates `build.ts`'s greedy fill
+ * selects from. **Not** "every instrument type a session can contain" any
+ * more — `'explain-back'` can now appear in a composed session too (F2.14a,
+ * `[D-126]`), just never as a member of this list: it is priced, not
+ * scheduled, and it is never chosen by the fill's ranking (F2.14, F2.21). See
+ * this module's doc, "The fourth type".
+ */
 export const SESSION_INSTRUMENT_TYPES: readonly SchedulableInstrumentType[] = [
   'qa',
   'cloze',
@@ -94,6 +118,35 @@ export const ASSUMED_INSTRUMENT_SECONDS: Readonly<Record<SchedulableInstrumentTy
 };
 
 /**
+ * The cold-start estimate for an ACCEPTED explain-back, in seconds.
+ * **Declared, not derived** (`[D-126]`, contract clause F2.14a,
+ * `docs/Olea_alpha_functional_scope.md`) — same posture as
+ * {@link ASSUMED_INSTRUMENT_SECONDS}, kept as its own named export because it
+ * prices a type outside that record's `SchedulableInstrumentType` domain.
+ *
+ * A *proposed* explanation is never priced at all — F2.21 keeps it outside
+ * the session's time budget entirely, and it produces no review, so it never
+ * reaches this module. Only the accepted case — she produced the explanation
+ * (F5.1) — is priced.
+ *
+ * Plain-English defence, extending this module's own effort ordering one
+ * step further: cloze 30s < mcq 40s < qa 45s < explain-back 90s. F5.1 bounds
+ * the act itself to "a few sentences," not an essay, but composing and
+ * stating a multi-sentence explanation is more demanding than recalling one
+ * fact (qa) or picking one option (mcq) — heavier than every existing card
+ * type, without claiming any precision beyond "meaningfully longer than a
+ * card, not an order of magnitude longer."
+ *
+ * Superseded by the same rule the other three already run: once
+ * {@link DEFAULT_MIN_MEASURED_REVIEWS} of her explain-back reviews carry a
+ * non-null `durationMs`, {@link estimateInstrumentDurations} reports their
+ * median instead (`DurationModel.explainBack`) — the field is already
+ * written on every review (`duration.ts`'s own doc on the measured half),
+ * so no new logging is needed for this revisit condition to fire.
+ */
+export const EXPLAIN_BACK_ASSUMED_SECONDS = 90;
+
+/**
  * How many of her reviews of one type must carry a non-null `durationMs`
  * before the median of them is preferred to the assumption above.
  *
@@ -118,9 +171,16 @@ export const DEFAULT_MIN_MEASURED_REVIEWS = 5;
  */
 export const MINIMUM_ESTIMATE_SECONDS = 1;
 
-/** One instrument type's estimate, with the evidence behind it kept inspectable rather than folded away. */
+/**
+ * One instrument type's estimate, with the evidence behind it kept
+ * inspectable rather than folded away.
+ *
+ * `instrumentType` is the full `InstrumentType`, not `SchedulableInstrumentType`
+ * — {@link DurationModel.explainBack} is one of these too (F2.14a, `[D-126]`),
+ * and it is priced, never scheduled.
+ */
 export interface InstrumentDurationEstimate {
-  readonly instrumentType: SchedulableInstrumentType;
+  readonly instrumentType: InstrumentType;
   /** Seconds per instrument. Never below {@link MINIMUM_ESTIMATE_SECONDS}. */
   readonly seconds: number;
   readonly source: DurationEstimateSource;
@@ -138,13 +198,32 @@ export interface InstrumentDurationEstimate {
 export type DurationModelBasis = 'measured' | 'assumed' | 'mixed';
 
 export interface DurationModel {
-  /** One entry per {@link SESSION_INSTRUMENT_TYPES} member, in that order. Every type is always present — an absent entry would be a third state nothing needs. */
+  /** One entry per {@link SESSION_INSTRUMENT_TYPES} member, in that order. Every type is always present — an absent entry would be a third state nothing needs. Deliberately excludes explain-back — see {@link explainBack}. */
   readonly estimates: readonly InstrumentDurationEstimate[];
+  /**
+   * `basis`/`totalSampleCount` describe {@link estimates} only — the
+   * FSRS-schedulable candidates a session's greedy fill selects from. They do
+   * not fold in {@link explainBack}: whether an accepted explain-back's price
+   * rests on measurement is a fact about that one instance, surfaced on
+   * {@link explainBack} itself, not blended into a scalar that pre-dates
+   * F2.14a and describes a different set of types.
+   */
   readonly basis: DurationModelBasis;
   /** How many reviews across all types contributed a duration. Zero means she has no measured history at all, which is a different sentence from "not enough of it". */
   readonly totalSampleCount: number;
-  secondsFor(instrumentType: SchedulableInstrumentType): number;
-  sourceFor(instrumentType: SchedulableInstrumentType): DurationEstimateSource;
+  /**
+   * The accepted-explain-back estimate (F2.14a, `[D-126]`) — optional so a
+   * hand-built `DurationModel` fixture predating this field remains valid;
+   * the real {@link estimateInstrumentDurations} always sets it. Priced by
+   * the identical measured-median-supersedes-declared-assumption mechanism
+   * as {@link estimates}, kept as its own field rather than a fourth member
+   * of that array because it is never a member of
+   * {@link SESSION_INSTRUMENT_TYPES} — it is not a candidate the fill ranks.
+   */
+  readonly explainBack?: InstrumentDurationEstimate;
+  /** `instrumentType` is the full `InstrumentType` — pricing covers explain-back too (F2.14a), even though it is never in {@link SESSION_INSTRUMENT_TYPES}. */
+  secondsFor(instrumentType: InstrumentType): number;
+  sourceFor(instrumentType: InstrumentType): DurationEstimateSource;
 }
 
 export interface EstimateDurationsOptions {
@@ -161,6 +240,35 @@ function median(sorted: readonly number[]): number {
 }
 
 /**
+ * One type's estimate: the declared assumption, or the measured median once
+ * enough samples exist. The single mechanism `[D-126]`/F2.14a requires
+ * explain-back to share with `qa`/`cloze`/`mcq` — extracted so there is
+ * exactly one place it is implemented, per this module's own "the same
+ * mechanism" claim.
+ */
+function buildEstimate(
+  instrumentType: InstrumentType,
+  sortedValues: readonly number[],
+  assumedSeconds: number,
+  minMeasured: number,
+): InstrumentDurationEstimate {
+  if (sortedValues.length < minMeasured) {
+    return {
+      instrumentType,
+      seconds: assumedSeconds,
+      source: 'assumed',
+      sampleCount: sortedValues.length,
+    };
+  }
+  return {
+    instrumentType,
+    seconds: Math.max(MINIMUM_ESTIMATE_SECONDS, median(sortedValues) / 1000),
+    source: 'measured',
+    sampleCount: sortedValues.length,
+  };
+}
+
+/**
  * Build the duration model from a review-log history.
  *
  * Only `kind: 'review'` records contribute. A suspend or unsuspend record
@@ -169,8 +277,9 @@ function median(sorted: readonly number[]): number {
  * review is exactly the collapse the log's shape exists to prevent.
  *
  * An empty history is not an error and does not throw: it produces three
- * `'assumed'` estimates and `basis: 'assumed'`, which is the honest reading of
- * a vault nobody has reviewed in yet.
+ * `'assumed'` estimates plus an `'assumed'` {@link DurationModel.explainBack},
+ * and `basis: 'assumed'` — the honest reading of a vault nobody has reviewed
+ * in yet.
  */
 export function estimateInstrumentDurations(
   history: readonly ReviewLogEntry[],
@@ -185,36 +294,39 @@ export function estimateInstrumentDurations(
 
   const samples = new Map<SchedulableInstrumentType, number[]>();
   for (const type of SESSION_INSTRUMENT_TYPES) samples.set(type, []);
+  // Collected, never discarded — F2.14a's whole revisit condition rests on
+  // this history existing already (the plugin has written `durationMs` on
+  // every explain-back review since the field's first schema version) and
+  // this loop is the first reader of it.
+  const explainBackSamples: number[] = [];
 
   for (const entry of history) {
     if (entry.kind !== 'review') continue;
     if (entry.durationMs === null) continue;
-    // `instrumentType` on a review record can be `'explain-back'`, which is
-    // not schedulable and never appears in a session — so it is skipped here
-    // rather than given a bucket it would never be read from.
-    if (entry.instrumentType === 'explain-back') continue;
+    if (entry.instrumentType === 'explain-back') {
+      explainBackSamples.push(entry.durationMs);
+      continue;
+    }
     const bucket = samples.get(entry.instrumentType);
     if (bucket === undefined) continue;
     bucket.push(entry.durationMs);
   }
 
-  const estimates: InstrumentDurationEstimate[] = SESSION_INSTRUMENT_TYPES.map((instrumentType) => {
-    const values = (samples.get(instrumentType) ?? []).slice().sort((a, b) => a - b);
-    if (values.length < minMeasured) {
-      return {
-        instrumentType,
-        seconds: ASSUMED_INSTRUMENT_SECONDS[instrumentType],
-        source: 'assumed',
-        sampleCount: values.length,
-      };
-    }
-    return {
+  const estimates: InstrumentDurationEstimate[] = SESSION_INSTRUMENT_TYPES.map((instrumentType) =>
+    buildEstimate(
       instrumentType,
-      seconds: Math.max(MINIMUM_ESTIMATE_SECONDS, median(values) / 1000),
-      source: 'measured',
-      sampleCount: values.length,
-    };
-  });
+      (samples.get(instrumentType) ?? []).slice().sort((a, b) => a - b),
+      ASSUMED_INSTRUMENT_SECONDS[instrumentType],
+      minMeasured,
+    ),
+  );
+
+  const explainBack = buildEstimate(
+    'explain-back',
+    explainBackSamples.slice().sort((a, b) => a - b),
+    EXPLAIN_BACK_ASSUMED_SECONDS,
+    minMeasured,
+  );
 
   const measuredCount = estimates.filter((e) => e.source === 'measured').length;
   const basis: DurationModelBasis =
@@ -226,10 +338,13 @@ export function estimateInstrumentDurations(
     estimates,
     basis,
     totalSampleCount: estimates.reduce((total, e) => total + e.sampleCount, 0),
-    secondsFor(instrumentType: SchedulableInstrumentType): number {
+    explainBack,
+    secondsFor(instrumentType: InstrumentType): number {
+      if (instrumentType === 'explain-back') return explainBack.seconds;
       return byType.get(instrumentType)?.seconds ?? ASSUMED_INSTRUMENT_SECONDS[instrumentType];
     },
-    sourceFor(instrumentType: SchedulableInstrumentType): DurationEstimateSource {
+    sourceFor(instrumentType: InstrumentType): DurationEstimateSource {
+      if (instrumentType === 'explain-back') return explainBack.source;
       return byType.get(instrumentType)?.source ?? 'assumed';
     },
   };

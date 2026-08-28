@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ASSUMED_INSTRUMENT_SECONDS,
   DEFAULT_MIN_MEASURED_REVIEWS,
+  EXPLAIN_BACK_ASSUMED_SECONDS,
   estimateInstrumentDurations,
   MINIMUM_ESTIMATE_SECONDS,
   SESSION_INSTRUMENT_TYPES,
@@ -187,11 +188,77 @@ describe('estimateInstrumentDurations — what does not count', () => {
     expect(model.secondsFor('qa')).toBe(30);
   });
 
-  it('ignores explain-back, which is not schedulable and never appears in a session (F2.16)', () => {
+  it("explain-back's samples never leak into the candidate types' buckets, and vice versa (F2.14a, `[D-126]`)", () => {
     const history = Array.from({ length: 20 }, () => review('explain-back', 300_000));
     const model = estimateInstrumentDurations(history);
+    // `basis`/`totalSampleCount`/`estimates` describe the FSRS-schedulable
+    // candidates only (`SESSION_INSTRUMENT_TYPES`) — explain-back is priced
+    // through a separate field, not folded into these (see duration.ts's
+    // `DurationModel` doc), so 20 explain-back samples move neither.
     expect(model.basis).toBe('assumed');
     expect(model.totalSampleCount).toBe(0);
+    for (const type of SESSION_INSTRUMENT_TYPES) {
+      expect(model.sourceFor(type)).toBe('assumed');
+    }
+  });
+});
+
+describe('estimateInstrumentDurations — accepted explain-back (F2.14a, `[D-126]`)', () => {
+  it('prices an accepted explain-back at the declared 90s assumption with no history', () => {
+    const model = estimateInstrumentDurations([]);
+    expect(EXPLAIN_BACK_ASSUMED_SECONDS).toBe(90);
+    expect(model.secondsFor('explain-back')).toBe(EXPLAIN_BACK_ASSUMED_SECONDS);
+    expect(model.sourceFor('explain-back')).toBe('assumed');
+    expect(model.explainBack?.instrumentType).toBe('explain-back');
+    expect(model.explainBack?.sampleCount).toBe(0);
+  });
+
+  it('holds the assumption while explain-back samples are below the stated minimum', () => {
+    const history = Array.from({ length: DEFAULT_MIN_MEASURED_REVIEWS - 1 }, () =>
+      review('explain-back', 40_000),
+    );
+    const model = estimateInstrumentDurations(history);
+    expect(model.sourceFor('explain-back')).toBe('assumed');
+    expect(model.secondsFor('explain-back')).toBe(EXPLAIN_BACK_ASSUMED_SECONDS);
+    expect(model.explainBack?.sampleCount).toBe(DEFAULT_MIN_MEASURED_REVIEWS - 1);
+  });
+
+  it('the declared 90s is superseded by the median of her own measured explain-back durations, via the identical mechanism the other three types run', () => {
+    const history = [
+      review('explain-back', 100_000),
+      review('explain-back', 110_000),
+      review('explain-back', 120_000),
+      review('explain-back', 130_000),
+      review('explain-back', 140_000),
+    ];
+    const model = estimateInstrumentDurations(history);
+    expect(model.sourceFor('explain-back')).toBe('measured');
+    expect(model.secondsFor('explain-back')).toBe(120);
+    expect(model.explainBack?.sampleCount).toBe(5);
+    // Superseding explain-back's own estimate does not touch the candidate
+    // types' estimates — the same per-type isolation `duration.ts` already
+    // guarantees for qa/cloze/mcq.
+    for (const type of SESSION_INSTRUMENT_TYPES) {
+      expect(model.sourceFor(type)).toBe('assumed');
+      expect(model.secondsFor(type)).toBe(ASSUMED_INSTRUMENT_SECONDS[type]);
+    }
+  });
+
+  it('a review whose durationMs was never measured is ignored, not read as zero, for explain-back too', () => {
+    const history = [
+      ...Array.from({ length: 5 }, () => review('explain-back', 90_000)),
+      review('explain-back', null),
+      review('explain-back', null),
+    ];
+    const model = estimateInstrumentDurations(history);
+    expect(model.explainBack?.sampleCount).toBe(5);
+    expect(model.secondsFor('explain-back')).toBe(90);
+  });
+
+  it('explain-back is priced but never joins the FSRS-schedulable candidate set', () => {
+    const model = estimateInstrumentDurations([]);
+    expect(model.estimates.map((e) => e.instrumentType)).not.toContain('explain-back');
+    expect(SESSION_INSTRUMENT_TYPES).not.toContain('explain-back');
   });
 });
 

@@ -1039,10 +1039,19 @@ export type {
 export {
   ASSUMED_INSTRUMENT_SECONDS,
   DEFAULT_MIN_MEASURED_REVIEWS,
+  EXPLAIN_BACK_ASSUMED_SECONDS,
   estimateInstrumentDurations,
   MINIMUM_ESTIMATE_SECONDS,
   SESSION_INSTRUMENT_TYPES,
 } from './study-session/duration.js';
+// Accepted explain-back's presence inside a composed session (F2.14a,
+// `[D-126]`) — priced, never selected. See explain-back.ts's module doc for
+// why this is a separate shape from `StudySessionItem`.
+export type { AcceptedExplainBack, ComposedExplainBackItem } from './study-session/explain-back.js';
+export {
+  priceAcceptedExplainBacks,
+  totalExplainBackSeconds,
+} from './study-session/explain-back.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';
 export { buildConceptInstrumentIndex } from './study-session/instrument-index.js';
 // Re-entry after absence (register row 3.8, `ol-nhxa`) — the SAME selection rule at a
