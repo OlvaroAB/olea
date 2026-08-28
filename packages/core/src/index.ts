@@ -404,6 +404,11 @@ export {
   EXPLAIN_BACK_JUDGE_TASK_ID,
   WorkerJudgeError,
 } from './grading/workerJudgeCaller.js';
+// Question-shaped heading detection (F2.10, `ol-f210bead`) — the detection
+// half only. See heading-offer/detect.ts's module doc for the rules, the
+// "has no card" coverage window, and the wiring seam this stops short of.
+export { detectHeadingOffers, isQuestionShapedHeading } from './heading-offer/detect.js';
+export type { HeadingOfferCandidate, HeadingQuestionRule } from './heading-offer/types.js';
 export {
   backoffDelayMs,
   classifyHeadroom,
@@ -662,6 +667,22 @@ export type {
 } from './misconception/digest.js';
 export { buildMisconceptionDigest } from './misconception/digest.js';
 export type {
+  TextEmbeddingBackend,
+  TextEmbeddingRequest,
+  TextEmbeddingResult,
+} from './misconception/embedder.js';
+export { WorkerMisconceptionEmbedder } from './misconception/embedder.js';
+export type {
+  CachedMisconceptionEmbeddingEntry,
+  MisconceptionEmbeddingCacheStore,
+  PersistedMisconceptionEmbeddingCache,
+} from './misconception/embedding-cache.js';
+export {
+  emptyMisconceptionEmbeddingCache,
+  MISCONCEPTION_EMBEDDING_CACHE_VERSION,
+  MisconceptionEmbeddingCacheEngine,
+} from './misconception/embedding-cache.js';
+export type {
   BuildObservationEventOptions,
   BuildObservationEventResult,
   BuildResolutionEvidenceEventOptions,
@@ -683,6 +704,8 @@ export {
 } from './misconception/matcher.js';
 export type { MergeMisconceptionLogResult } from './misconception/merge.js';
 export { mergeMisconceptionEvents } from './misconception/merge.js';
+export type { BuildObservationEventWithEmbeddingDeps } from './misconception/observe.js';
+export { buildObservationEventWithEmbedding } from './misconception/observe.js';
 export type {
   InvalidMisconceptionLogLine,
   ParseMisconceptionLogResult,

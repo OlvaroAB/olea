@@ -33,8 +33,17 @@ export interface ObservationInput {
 }
 
 export interface BuildObservationEventOptions {
-  /** The new statement's embedding, computed by the caller's `MisconceptionEmbedder` before calling this. */
-  readonly statementEmbedding: EmbeddingVector;
+  /**
+   * The new statement's embedding, computed by the caller's
+   * `MisconceptionEmbedder` before calling this. **Omit the field entirely**
+   * — never pass an empty array in its place — when no embedder is
+   * available (F7.8: AI features grey out rather than half-work;
+   * `MisconceptionEmbedder`'s only production implementation,
+   * `./embedder.ts`'s `WorkerMisconceptionEmbedder`, needs a configured
+   * Worker). See this function's doc for what omitting it does to the
+   * matching decision (`ol-nagi`).
+   */
+  readonly statementEmbedding?: EmbeddingVector;
   /** Existing misconceptions eligible to reabsorb this occurrence — already filtered to `input.conceptId` by the caller (`./project.js`'s output, `active`/`fading` records, typically). */
   readonly candidates: readonly MisconceptionMatchCandidate[];
   /** M1's threshold. Defaults to the conservative `DEFAULT_M1_THRESHOLD`. */
@@ -60,17 +69,27 @@ function defaultGenerateId(): string {
  * `MisconceptionObservedEvent`. This is the one call site that decides
  * "same misconception again" versus "a new one" — see `./matcher.js`'s doc
  * for why the threshold defaults conservative.
+ *
+ * **No-embedder fallback (`ol-nagi`).** When `options.statementEmbedding` is
+ * omitted — no `MisconceptionEmbedder` was available to the caller — M1's
+ * comparison never runs at all and this always mints a fresh id
+ * (`matchedExisting: false`), regardless of what `options.candidates`
+ * contains. This is the same conservative default the module doc already
+ * argues for ("creating two records for one misunderstanding is a much
+ * smaller harm than merging two distinct ones"), applied to the case where
+ * there is nothing at all to compare rather than to a low-scoring
+ * comparison — the honest response to "no similarity signal" is "record it
+ * as new," never "guess."
  */
 export function buildObservationEvent(
   input: ObservationInput,
   options: BuildObservationEventOptions,
 ): BuildObservationEventResult {
   const threshold = options.threshold ?? DEFAULT_M1_THRESHOLD;
-  const matchedId = matchExistingMisconception(
-    options.statementEmbedding,
-    options.candidates,
-    threshold,
-  );
+  const matchedId =
+    options.statementEmbedding === undefined
+      ? null
+      : matchExistingMisconception(options.statementEmbedding, options.candidates, threshold);
   const generateEventId = options.generateEventId ?? defaultGenerateId;
   const generateMisconceptionId = options.generateMisconceptionId ?? defaultGenerateId;
 

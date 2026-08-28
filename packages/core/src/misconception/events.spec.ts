@@ -82,6 +82,28 @@ describe('buildObservationEvent', () => {
     );
     expect(result.event.confusedWithConceptId).toBe('concept-beta');
   });
+
+  describe('no-embedder fallback (ol-nagi)', () => {
+    it('mints a fresh id and skips M1 entirely when statementEmbedding is omitted, even with a candidate that would otherwise match', () => {
+      const result = buildObservationEvent(baseObservationInput(), {
+        // No `statementEmbedding` at all — the F7.8 grey-out case: no
+        // MisconceptionEmbedder was available to the caller.
+        candidates: [{ id: 'misconception-existing', embedding: [1, 0, 0, 0] }],
+        generateEventId: () => 'event-no-embedder',
+        generateMisconceptionId: () => 'misconception-fresh-no-embedder',
+      });
+
+      expect(result.matchedExisting).toBe(false);
+      expect(result.event.misconceptionId).toBe('misconception-fresh-no-embedder');
+    });
+
+    it('still stamps every other field correctly with no embedding available', () => {
+      const result = buildObservationEvent(baseObservationInput(), { candidates: [] });
+      expect(result.event.kind).toBe('observed');
+      expect(result.event.conceptId).toBe('concept-alpha');
+      expect(result.event.schemaVersion).toBe(1);
+    });
+  });
 });
 
 function baseResolutionInput(

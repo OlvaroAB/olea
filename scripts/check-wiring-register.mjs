@@ -427,17 +427,11 @@ function parseArgs(argv) {
 // `packages/plugin/src/concept/wiring.ts:102`), closing the D-072 escape hatch this entry named.
 // ------------------------------------------------------------------------------------------
 
-const KNOWN_FINDINGS = [
-  {
-    port: 'MisconceptionEmbedder',
-    tasks: ['ol-p4t04'],
-    followUp: 'ol-nagi',
-    reason:
-      'declared seam, no implementation — re-verified 2026-08-16 against findTypeReference: ' +
-      'every non-declaration, non-barrel, non-comment occurrence of the port type name is a ' +
-      'doc comment; zero real code references',
-  },
-];
+// `MisconceptionEmbedder` left this list 2026-08-28 (round 23, `ol-nagi` closed): the
+// implementation landed (`packages/core/src/misconception/embedder.ts`), so the finding is
+// resolved and the ratchet requires the entry's deletion. The port's remaining caller gap is
+// register-row content (escape-hatch terms, bead `ol-4053`), not a finding.
+const KNOWN_FINDINGS = [];
 
 /** Validates `followUp` format on whichever findings list is active (the hardcoded default, or
  * a `--known-findings` test override) — unconditionally, before any register/scan work happens.
