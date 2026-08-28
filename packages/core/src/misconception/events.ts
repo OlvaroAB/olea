@@ -81,6 +81,10 @@ function defaultGenerateId(): string {
  * comparison — the honest response to "no similarity signal" is "record it
  * as new," never "guess."
  */
+// See olea-service findings/pjs7-misconception-aggregation-proposal.md
+// (ol-pjs7) for a proposed second construction path — an already-resolved
+// misconceptionId from a distractor-binding lookup, bypassing M1 — for MCQ-
+// origin selections. Proposal only; this function's contract is unchanged.
 export function buildObservationEvent(
   input: ObservationInput,
   options: BuildObservationEventOptions,

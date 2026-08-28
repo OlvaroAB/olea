@@ -85,6 +85,10 @@ interface MisconceptionEventCommon {
  * reuses an existing id or mints a new one — see its doc for the conservative
  * threshold argument.
  */
+// Distractor-level aggregation (ol-pjs7) is a proposal, not yet a schema
+// change — see olea-service findings/pjs7-misconception-aggregation-proposal.md
+// for the record-shape sketch and its dependency on ol-il6m's concept-key
+// outcome. Nothing below is altered by that proposal.
 export interface MisconceptionObservedEvent extends MisconceptionEventCommon {
   readonly kind: 'observed';
   readonly misconceptionId: string;
