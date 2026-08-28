@@ -64,6 +64,16 @@
  * `main.ts` renders D-041's illustrative label inside the host pane next to
  * whatever this module returns — see that file for the exact wording and
  * placement rule.
+ *
+ * ## All three gap classes, genuinely (`ol-m3ty`)
+ *
+ * `buildFixtureOracle` reads through `withGapClassExtension`
+ * (`./fixture-oracle-vault.js`), a small, read-only overlay adding exactly
+ * enough to the vault it is given that a real `mastery-gap` and a real
+ * `material-gap` row are reachable, alongside the coverage-gap rows the
+ * unmodified fixture vault already produces — see that file's own module doc
+ * for the mechanism and why the extension lives here rather than in
+ * `packages/core/fixtures/vault/` itself.
  */
 
 import {
@@ -75,6 +85,7 @@ import {
 } from 'olea-core';
 import { buildGapView, buildStudyPlan, type GapViewModel } from '../oracle-bridge.js';
 import { FIXTURE_ORACLE_HISTORY } from './fixture-oracle-history.js';
+import { withGapClassExtension } from './fixture-oracle-vault.js';
 import { type PipelineTrace, recordStage, recordStageAsync, type StageRecord } from './trace.js';
 
 /** The Bases assignments table `readAssessments` scans — real, checked-in fixture content. */
@@ -96,22 +107,26 @@ export interface FixtureOracleResult {
 
 /**
  * Builds one fixture-vault oracle result: real ranking, real gap view, real
- * plan, all over `vault`. Cheap enough to call once per walkthrough render —
- * no caching here, matching `oracle-scenarios.ts`'s own discipline for its
- * (much smaller) synthetic world.
+ * plan, all over `vault` — extended by `withGapClassExtension`
+ * (`./fixture-oracle-vault.js`, `ol-m3ty`) so all three of `classifyGap`'s
+ * gap classes are genuinely reachable, not just `coverage-gap`. Cheap enough
+ * to call once per walkthrough render — no caching here, matching
+ * `oracle-scenarios.ts`'s own discipline for its (much smaller) synthetic
+ * world.
  */
 export async function buildFixtureOracle(vault: VaultSource): Promise<FixtureOracleResult> {
   const stages: StageRecord[] = [];
+  const extendedVault = withGapClassExtension(vault);
 
   const composeStage = await recordStageAsync(
     'compose',
     async () => {
       const [{ records }, concepts] = await Promise.all([
-        enumerateVaultInstruments(vault, { excludePaths: EXCLUDE_PATHS }),
-        extractConcepts(vault, { includeTier3: true }),
+        enumerateVaultInstruments(extendedVault, { excludePaths: EXCLUDE_PATHS }),
+        extractConcepts(extendedVault, { includeTier3: true }),
       ]);
       const ranking = await composeOracleRanking({
-        vault,
+        vault: extendedVault,
         basePath: BASE_PATH,
         reviewLog: FIXTURE_ORACLE_HISTORY,
         asOf: FIXTURE_ORACLE_ASOF,

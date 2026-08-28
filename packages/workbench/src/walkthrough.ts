@@ -210,21 +210,16 @@ const WALKTHROUGH_STEP_DEFINITIONS: readonly WalkStepDefinition[] = [
     n: 8,
     title: 'Where the holes are',
     copy:
-      'Every concept below is the same kind of hole: she has notes on it and nothing to ' +
-      'practise with. Olea separates that from being shaky on something, and from a topic ' +
-      "that isn't in her materials at all — and it will not offer to generate what it cannot " +
-      'ground.',
-    // Live for the same reason as step 7 — see the note there.
+      'Three kinds of hole show below: a concept she is shaky on (cards exist, mastery is ' +
+      "weak), one she has notes on and nothing to practise with, and one that isn't in her " +
+      'materials at all. Olea tells them apart because it changes what it offers — it will ' +
+      'draft cards only where there is something of hers to ground them in, never on a topic ' +
+      'her material does not cover.',
+    // Live for the same reason as step 7 — see the note there. `ol-m3ty`:
+    // `fixture-oracle-vault.ts` extends the fixture vault so all three gap classes are
+    // genuinely reachable, so this step no longer needs a `partial` block.
     surface: 'oracle-fixture',
     stateId: 'gap-coverage',
-    partial: {
-      what:
-        'The gap classes are real and the screen computes them, but this invented vault only ' +
-        'produces one of the three: every concept its past papers cite has notes and no cards. ' +
-        'So the other two are described above rather than shown. The copy used to promise all ' +
-        'three, which the screen could never have delivered.',
-      bead: 'ol-m3ty',
-    },
   },
   {
     n: 9,
