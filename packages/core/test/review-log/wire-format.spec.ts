@@ -109,7 +109,14 @@ describe('review-log wire format', () => {
     const parsed = parseReviewLog(afterTwo.toString('utf8'));
     // The record written before the crash and the one written after it both
     // survive — a corrupt line costs exactly itself and nothing either side.
-    expect(parsed.records.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
+    // (`[D-133]`'s `succession` kind carries no `instrumentId` — narrowed away
+    // here even though nothing in this suite ever writes one, so the static
+    // type of `.records`, the whole current-version union, still checks.)
+    expect(
+      parsed.records
+        .filter((r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession')
+        .map((r) => r.instrumentId),
+    ).toEqual(['inst-1', 'inst-2']);
     // And the corpse is reported rather than silently swallowed: a log that
     // quietly drops unreadable lines is a log that under-reports her study.
     expect(parsed.invalidLines).toHaveLength(1);
@@ -212,7 +219,11 @@ describe('review-log wire format — current schema version and suspension event
     });
 
     const parsed = parseReviewLog(readFileSync(abs, 'utf8'));
-    expect(parsed.records.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
+    expect(
+      parsed.records
+        .filter((r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession')
+        .map((r) => r.instrumentId),
+    ).toEqual(['inst-1', 'inst-2']);
     expect(parsed.invalidLines).toHaveLength(1);
     expect(suspendedInstrumentIds(parsed.records)).toEqual(new Set(['inst-1', 'inst-2']));
   });

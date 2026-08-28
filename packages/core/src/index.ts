@@ -448,6 +448,13 @@ export {
   pacingDelayMs,
 } from './ingestion/budget.js';
 export { type EngineDeps, IngestionQueueEngine, type TickResult } from './ingestion/engine.js';
+export {
+  DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
+  ENQUEUE_DEBOUNCE_MS,
+  type EnqueueDebounceDecision,
+  type EnqueueDebouncePolicy,
+  evaluateEnqueueDebounce,
+} from './ingestion/enqueue-debounce.js';
 export type {
   EmptyExtractionReport,
   ExtractedUnitSink,
@@ -541,14 +548,17 @@ export type {
   McqSerializeOptions,
   StampMcqIdOptions,
   StampMcqIdResult,
+  StampMcqPredecessorResult,
 } from './instrument/mcq-format.js';
 export {
   insertMcqBlock,
   MCQ_FENCE_INFO,
+  MCQ_FIELD_PREDECESSOR,
   parseMcqBlocks,
   serializeMcq,
   serializeMcqInstrument,
   stampMcqId,
+  stampMcqPredecessor,
 } from './instrument/mcq-format.js';
 export type { GeneratedMcqCandidate } from './instrument/mcq-generated.js';
 export { acceptGeneratedMcq } from './instrument/mcq-generated.js';
@@ -832,6 +842,33 @@ export type {
   QueueItem,
   QueueSelectionContext,
 } from './queue/types.js';
+export { buildRegistryModel } from './registry/build.js';
+// The concept and instrument registry (F8.4/F8.4a/F8.5, `[REG-1]`,
+// `ol-4v2l`, amended acceptance `[D-135]`) — the browsable inventory over
+// concepts, their course associations, their instrument mix, and their
+// two-axis mastery. `buildRegistryModel` computes nothing new (see its own
+// module doc); `./registry/overrides.ts`'s pure transforms are the local
+// rename/prune state F8.4 calls "cache state no Obsidian affordance can
+// reach". Split/merge are `[D-135]`'s explicit non-scope — no export here
+// names an offshoot or a merge candidate.
+export {
+  aliasesFor,
+  EMPTY_REGISTRY_OVERRIDES,
+  isConceptPruned,
+  pruneConcept,
+  renameConcept,
+  resolvedDisplayName,
+  unpruneConcept,
+} from './registry/overrides.js';
+export type {
+  BuildRegistryModelInput,
+  RegistryConceptEntry,
+  RegistryExplainBackSummary,
+  RegistryInstrumentSummary,
+  RegistryModel,
+  RegistryOverrides,
+  RegistryRenameOverride,
+} from './registry/types.js';
 // Retrieval — embeddings, hybrid keyword+cosine retrieval, grounding refusal
 // (C2.3, C2.5, C4.7, D-004, INV-5, P3-T05). Builds on the keyword index
 // above rather than duplicating it — see retrieval/chunks.ts.
@@ -988,14 +1025,17 @@ export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdi
 export type {
   AppendReviewLogOptions,
   AppendReviewLogResult,
+  AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
   ReviewLogRecordInput,
+  SuccessionLogRecordInput,
   SuspendLogRecordInput,
   VerdictLogRecordInput,
 } from './review-log/write.js';
 export {
   appendReviewLogRecord,
+  appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
 } from './review-log/write.js';

@@ -133,6 +133,7 @@ function mcq(instrumentId: string, conceptIds: readonly string[]): McqInstrument
     mcq: {
       type: 'mcq',
       id: instrumentId,
+      predecessor: null,
       stem: 'Which?',
       answer: 'This one.',
       distractors: ['a', 'b', 'c'],

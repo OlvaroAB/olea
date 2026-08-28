@@ -45,10 +45,52 @@
  * added), not the code block's own span. This re-parses the resulting
  * content and finds the one `McqInstrument` whose own span falls inside
  * `insertedSpan` — there is exactly one, since nothing else changed.
+ *
+ * ## The `[D-133]` succession hookup (`ol-w00s` / `ol-2zfj.37`)
+ *
+ * When `input.predecessorInstrumentId` is supplied, this successor is being
+ * materialized FROM a revision proposal (`concept/revision/`'s `'revised'`
+ * outcome — see that module's doc for the sequence that leads here). Two
+ * more things happen, after the ordinary id-stamp above and in the same
+ * write: the successor's block gets a `predecessor:` field naming the old
+ * instrument, and a `succession` review-log record is appended naming both
+ * ids and when.
+ *
+ * **Composed, not reimplemented.** The block field is stamped by
+ * `instrument-blocks/predecessor.ts`'s `stampPredecessorField` — the
+ * block-agnostic write `[D-133]`'s first durable home already built,
+ * deliberately independent of this module's own `olea-mcq` knowledge — and
+ * the event is shaped by `olea-core`'s `buildSuccessionEvent` before
+ * `appendSuccessionRecord` (also `olea-core`) validates and appends it.
+ * Nothing here re-derives either mechanic.
+ *
+ * **One vault write, not two.** The predecessor field is spliced into
+ * `stamped.content` (the same in-memory string the id was just stamped
+ * into) before that content ever reaches `vault.write` — so a successor
+ * instrument's id and its predecessor field always land in the same byte
+ * range write, never as two separate mutations of the note.
+ *
+ * **Reachability (`[D-072]`'s escape hatch, honestly not yet closed).** No
+ * caller in this repo supplies `predecessorInstrumentId` today.
+ * `accept.ts`'s `DraftAcceptPort.accept` — the only production caller of
+ * this function — calls it with `{ sourcePath, question }` alone, and
+ * `DraftQuestion`/`DraftRecord` (`./types.js`, outside this bead's `owns`)
+ * carry no predecessor field for it to forward. The other end is equally
+ * unwired: `concept/revision/enqueue.ts` shapes an `'instrument-revision'`
+ * job payload naming the predecessor, but no `JobRunner` in this repo
+ * recognises that `kind` yet, so nothing ever reaches the draft cache this
+ * way either. This function is the materialization-side half of `[D-133]`'s
+ * wiring trio and is unit-tested directly (`materialize-mcq.spec.ts`)
+ * rather than through a caller that does not exist; threading a revision's
+ * predecessor id through the ingestion queue, the draft cache
+ * (`DraftRecord`), and `accept.ts` into this parameter is the remaining,
+ * separate integration.
  */
 
 import {
   acceptGeneratedMcq,
+  appendSuccessionRecord,
+  buildSuccessionEvent,
   insertMcqBlock,
   parseDocument,
   parseMcqBlocks,
@@ -56,11 +98,34 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { stampPredecessorField } from '../instrument-blocks/predecessor.js';
+import { isoWithLocalOffset } from '../review/ports.js';
 import type { DraftQuestion } from './types.js';
 
 export interface MaterializeAcceptedDraftInput {
   readonly sourcePath: VaultPath;
   readonly question: DraftQuestion;
+  /**
+   * `[D-133]`: the id of the instrument this successor supersedes, when this
+   * draft was materializing a revision's successor rather than an ordinary
+   * new item. `undefined` for every draft today — see the module doc's
+   * reachability note.
+   */
+  readonly predecessorInstrumentId?: string;
+}
+
+/**
+ * Only consulted when `predecessorInstrumentId` is supplied — see the module
+ * doc. `deviceId` is required in that case (the review-log's C5.2 daily-file
+ * path is keyed on it, same as every other append) and this function throws
+ * rather than guess one.
+ */
+export interface MaterializeAcceptedDraftDeps {
+  readonly deviceId?: string;
+  /** Injectable clock for the succession event's timestamp; defaults to the real one. */
+  readonly now?: () => Date;
+  /** Injectable for deterministic tests; defaults to `crypto.randomUUID()`, same as `appendSuccessionRecord` itself. */
+  readonly generateEventId?: () => string;
 }
 
 export interface MaterializeAcceptedDraftResult {
@@ -70,6 +135,7 @@ export interface MaterializeAcceptedDraftResult {
 export async function materializeAcceptedDraft(
   vault: VaultSource,
   input: MaterializeAcceptedDraftInput,
+  deps: MaterializeAcceptedDraftDeps = {},
 ): Promise<MaterializeAcceptedDraftResult> {
   const source = await vault.read(input.sourcePath);
 
@@ -107,7 +173,51 @@ export async function materializeAcceptedDraft(
   }
 
   const stamped = stampMcqId(content, inserted.span);
-  await vault.write(input.sourcePath, stamped.content);
+
+  if (input.predecessorInstrumentId === undefined) {
+    await vault.write(input.sourcePath, stamped.content);
+    return { instrumentId: stamped.id };
+  }
+
+  if (deps.deviceId === undefined) {
+    throw new Error(
+      'materializeAcceptedDraft: deps.deviceId is required when predecessorInstrumentId is supplied (the succession record needs it for its C5.2 daily-file path)',
+    );
+  }
+
+  // Re-locate the just-stamped block: `stampMcqId`'s own span (`inserted.span`)
+  // is stale once its content has grown by the inserted `id:` line.
+  const { instruments: withId } = parseMcqBlocks(stamped.content);
+  const successor = withId.find((instrument) => instrument.id === stamped.id);
+  if (successor === undefined) {
+    throw new Error(
+      'materializeAcceptedDraft: could not locate the freshly id-stamped MCQ block before stamping its predecessor field',
+    );
+  }
+
+  const predecessorStamp = stampPredecessorField(
+    stamped.content,
+    successor.span,
+    input.predecessorInstrumentId,
+  );
+  await vault.write(input.sourcePath, predecessorStamp.content);
+
+  const now = deps.now ?? (() => new Date());
+  const event = buildSuccessionEvent(input.predecessorInstrumentId, stamped.id, {
+    now: () => now().getTime(),
+  });
+  await appendSuccessionRecord(
+    vault,
+    {
+      timestamp: isoWithLocalOffset(new Date(event.at)),
+      predecessorInstrumentId: event.predecessorInstrumentId,
+      successorInstrumentId: event.successorInstrumentId,
+    },
+    {
+      deviceId: deps.deviceId,
+      ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+    },
+  );
 
   return { instrumentId: stamped.id };
 }

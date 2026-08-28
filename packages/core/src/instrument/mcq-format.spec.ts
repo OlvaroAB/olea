@@ -17,6 +17,7 @@ import {
   serializeMcq,
   serializeMcqInstrument,
   stampMcqId,
+  stampMcqPredecessor,
 } from './mcq-format.js';
 import { MIN_DISTRACTOR_POOL } from './types.js';
 
@@ -56,6 +57,30 @@ describe('parseMcqBlocks — a hand-typed block', () => {
     );
     expect(instruments[0]?.feedback).toBe('because of the thing');
     expect(instruments[0]?.id).toBe('item-1');
+  });
+
+  // `[D-133]` regression guard: before this landed, `predecessor` was not a
+  // recognised field and a block carrying one was rejected wholesale
+  // (`unknown-field`) — see `types.ts`'s doc on `McqInstrument.predecessor`.
+  it('carries the optional predecessor when it is there, and is null when absent (ol-2zfj.37)', () => {
+    const withPredecessor = parseMcqBlocks(
+      block([...validLines, 'id: item-2', 'predecessor: item-1']),
+    ).instruments[0];
+    expect(withPredecessor?.predecessor).toBe('item-1');
+
+    const without = parseMcqBlocks(block(validLines)).instruments[0];
+    expect(without?.predecessor).toBeNull();
+  });
+
+  it('a predecessor-carrying block parses (not `unknown-field`) and round-trips byte-identically (INV-2, ol-2zfj.37)', () => {
+    const source = block([...validLines, 'id: item-2', 'predecessor: item-1']);
+    const { instruments, invalid } = parseMcqBlocks(source);
+    expect(invalid).toHaveLength(0);
+    expect(instruments).toHaveLength(1);
+    const instrument = instruments[0];
+    if (!instrument) throw new Error('no instrument');
+    expect(instrument.predecessor).toBe('item-1');
+    expect(serializeMcqInstrument(instrument)).toBe(instrument.raw);
   });
 
   it('ignores a fenced block that is not ours', () => {
@@ -158,6 +183,31 @@ describe('serializeMcq — the canonical form', () => {
         ...POOL.map((d) => `distractor: ${d}`),
         'feedback: because of the thing',
         'id: item-1',
+        '```',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('emits predecessor last, after id — both machine fields, id first (ol-2zfj.37)', () => {
+    expect(
+      serializeMcq({
+        stem: 'which one is it?',
+        answer: 'the right one',
+        distractors: POOL,
+        feedback: 'because of the thing',
+        id: 'item-2',
+        predecessor: 'item-1',
+      }),
+    ).toBe(
+      [
+        '```' + MCQ_FENCE_INFO,
+        'stem: which one is it?',
+        'answer: the right one',
+        ...POOL.map((d) => `distractor: ${d}`),
+        'feedback: because of the thing',
+        'id: item-2',
+        'predecessor: item-1',
         '```',
         '',
       ].join('\n'),
@@ -370,5 +420,85 @@ describe('stampMcqId — the write half of D-030, option (b)', () => {
     expect(() => stampMcqId(source, { start: codeBlock.start, end: codeBlock.end })).toThrowError(
       /does not parse as an MCQ instrument/,
     );
+  });
+});
+
+// `[D-133]`'s revision-chain field, MCQ-format-aware write half
+// (ol-w00s / ol-2zfj.37). Mirrors `stampMcqId`'s own suite structure, field
+// for field — the two functions share every mechanic except that this one
+// never generates the value it stamps.
+describe('stampMcqPredecessor — the MCQ-aware write half of [D-133]', () => {
+  const unstamped = ['her own line above', '', block(validLines), 'and prose below'].join('\n');
+  const unstampedSpan = (() => {
+    const { instruments } = parseMcqBlocks(unstamped);
+    const span = instruments[0]?.span;
+    if (!span) throw new Error('fixture has no MCQ block');
+    return span;
+  })();
+
+  it('stamps a predecessor id when the block has none', () => {
+    const result = stampMcqPredecessor(unstamped, unstampedSpan, 'item-1');
+    expect(result.changed).toBe(true);
+    expect(result.predecessor).toBe('item-1');
+    const reparsed = parseMcqBlocks(result.content);
+    expect(reparsed.invalid).toHaveLength(0);
+    expect(reparsed.instruments[0]?.predecessor).toBe('item-1');
+  });
+
+  it('writes exactly one new line — the predecessor field — and touches nothing else (C1.2, INV-2)', () => {
+    const result = stampMcqPredecessor(unstamped, unstampedSpan, 'item-1');
+    if (!result.insertedSpan) throw new Error('expected a span for a changed stamp');
+    expect(removeSpans(result.content, [result.insertedSpan])).toBe(unstamped);
+    const insertedText = result.content.slice(result.insertedSpan.start, result.insertedSpan.end);
+    expect(insertedText).toBe('predecessor: item-1\n');
+  });
+
+  it('stamps after an existing id, keeping "human fields first, machine fields last"', () => {
+    const withId = stampMcqId(unstamped, unstampedSpan, { generateId: () => 'item-2' }).content;
+    const idSpan = parseMcqBlocks(withId).instruments[0]?.span;
+    if (!idSpan) throw new Error('no instrument after id stamp');
+    const result = stampMcqPredecessor(withId, idSpan, 'item-1');
+    const { instruments, invalid } = parseMcqBlocks(result.content);
+    expect(invalid).toHaveLength(0);
+    const instrument = instruments[0];
+    if (!instrument) throw new Error('no instrument');
+    expect(instrument).toMatchObject({ id: 'item-2', predecessor: 'item-1' });
+    expect(serializeMcqInstrument(instrument)).toBe(instrument.raw);
+  });
+
+  it('is idempotent: stamping an already-stamped block is a byte-identical no-op, read-then-mint (never recompute)', () => {
+    const first = stampMcqPredecessor(unstamped, unstampedSpan, 'item-1');
+    const restamped = parseMcqBlocks(first.content).instruments[0]?.span;
+    if (!restamped) throw new Error('no instrument after first stamp');
+    const second = stampMcqPredecessor(first.content, restamped, 'a-different-predecessor');
+    expect(second.changed).toBe(false);
+    expect(second.content).toBe(first.content);
+    expect(second.predecessor).toBe('item-1');
+  });
+
+  it('throws on an empty predecessorInstrumentId', () => {
+    expect(() => stampMcqPredecessor(unstamped, unstampedSpan, '')).toThrowError(
+      /must not be empty/,
+    );
+    expect(() => stampMcqPredecessor(unstamped, unstampedSpan, '   ')).toThrowError(
+      /must not be empty/,
+    );
+  });
+
+  it('throws rather than stamp a block that is not there', () => {
+    expect(() => stampMcqPredecessor(unstamped, { start: 0, end: 3 }, 'item-1')).toThrowError(
+      /no code block/,
+    );
+  });
+
+  it('throws rather than stamp a block that fails to parse as an MCQ', () => {
+    const invalidBlock = block(['stem: q', 'answer: a', 'distractor: only-one']);
+    const source = `${invalidBlock}\n`;
+    const doc = parseDocument(source);
+    const codeBlock = doc.blocks.find((b) => b.kind === 'code');
+    if (!codeBlock) throw new Error('no code block in fixture');
+    expect(() =>
+      stampMcqPredecessor(source, { start: codeBlock.start, end: codeBlock.end }, 'item-1'),
+    ).toThrowError(/does not parse as an MCQ instrument/);
   });
 });

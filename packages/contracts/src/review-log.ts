@@ -957,6 +957,50 @@ export const verdictLogRecordV5 = z.object({
 export type VerdictLogRecordV5 = z.infer<typeof verdictLogRecordV5>;
 
 /**
+ * One succession event, **schema version 5** (`[D-133]`, `ol-w00s` /
+ * `ol-2zfj.37`). A fourth `kind`, additive to the discriminated union
+ * exactly the way `verdict` was additive at v4/v5 (this record's own doc
+ * comment above) — no version bump, because nothing about the *shape* the
+ * union already carries changes; a new literal `kind` value is exactly
+ * what "additive" means here.
+ *
+ * **Records only the FACT of succession — never a copy of the chain.**
+ * Which instrument superseded which, and when: nothing else. The
+ * metadata-position `predecessor:` field on the successor's own instrument
+ * block (`packages/core/src/instrument/mcq-format.ts`'s
+ * `MCQ_FIELD_PREDECESSOR`, and the plugin's block-agnostic
+ * `instrument-blocks/predecessor.ts`) is the single source of truth for the
+ * chain itself; this event exists so "was this instrument superseded, and
+ * by what" is answerable from the log alone, the same way
+ * `suspendLogRecordV5` already answers "was this instrument suspended" —
+ * see that record's own doc for why a log-side fact still earns its place
+ * beside a block-side field that could, in principle, be walked instead.
+ *
+ * **No `instrumentType`, no `conceptIds`.** Unlike `verdictLogRecordV5`,
+ * this is not a judgment about an instrument's content and does not need
+ * the concept binding a verdict or suspend event needs to answer "what did
+ * she stop studying" — a successor's own verdict/suspend records (if any)
+ * already carry that. Widening this record to duplicate them would be the
+ * exact copy this record's doc says it deliberately is not.
+ *
+ * **No content, per D-005.** Both ids are opaque instrument identifiers.
+ */
+export const successionLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+  kind: z.literal('succession'),
+  /** Stable unique id for this event; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset. The offset matters: "when did succession happen" is local. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The instrument this succeeds — the one the successor now supersedes. */
+  predecessorInstrumentId: z.string().min(1),
+  /** The freshly-materialized successor's own id. */
+  successorInstrumentId: z.string().min(1),
+});
+export type SuccessionLogRecordV5 = z.infer<typeof successionLogRecordV5>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v5 lines against.
  *
@@ -968,6 +1012,7 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   reviewLogRecordV5,
   suspendLogRecordV5,
   verdictLogRecordV5,
+  successionLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
@@ -984,6 +1029,8 @@ export const suspendLogRecord = suspendLogRecordV5;
 export type SuspendLogRecord = z.infer<typeof suspendLogRecordV5>;
 export const verdictLogRecord = verdictLogRecordV5;
 export type VerdictLogRecord = z.infer<typeof verdictLogRecordV5>;
+export const successionLogRecord = successionLogRecordV5;
+export type SuccessionLogRecord = z.infer<typeof successionLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;

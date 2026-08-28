@@ -123,6 +123,19 @@ export interface McqInstrument {
    * queue composition, and is filed rather than smuggled in here.
    */
   readonly id: string | null;
+  /**
+   * The `predecessor:` field — `[D-133]`'s revision-chain link, or `null` for
+   * a block with none (every hand-authored MCQ, and any generated one that
+   * is not a successor). Written once, by whatever materializes a successor
+   * instrument (`packages/plugin/src/generation/materialize-mcq.ts`), never
+   * recomputed thereafter — the same read-then-mint discipline `id` follows.
+   * Names the PREDECESSOR instrument's id; this block's own id (above) is
+   * the successor. The metadata-position field is the single source of
+   * truth for the chain (see `packages/plugin/src/instrument-blocks/
+   * predecessor.ts`'s module doc) — the review log's `succession` kind
+   * records only the fact that succession happened, never a copy of it.
+   */
+  readonly predecessor: string | null;
   readonly stem: string;
   readonly answer: string;
   /** At least `MIN_DISTRACTOR_POOL` of them, guaranteed by the parser. */

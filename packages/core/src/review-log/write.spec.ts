@@ -9,9 +9,11 @@ import { suspendedInstrumentIds } from './suspension.js';
 import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
   appendReviewLogRecord,
+  appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
   type ReviewLogRecordInput,
+  type SuccessionLogRecordInput,
   type SuspendLogRecordInput,
   type VerdictLogRecordInput,
 } from './write.js';
@@ -560,5 +562,109 @@ describe('appendVerdictRecord (ol-548w, INV-6)', () => {
     expect(result.record.eventId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
+  });
+});
+
+// `[D-133]` (`ol-w00s` / `ol-2zfj.37`). The fact of succession only — which
+// instrument this superseded, which superseded it, and when. The chain
+// itself lives in the successor's own `predecessor:` field
+// (`../instrument/mcq-format.ts`), never duplicated here.
+describe('appendSuccessionRecord ([D-133])', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-succession-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function successionInput(
+    overrides: Partial<SuccessionLogRecordInput> = {},
+  ): SuccessionLogRecordInput {
+    return {
+      timestamp: '2026-08-28T09:20:00-04:00',
+      predecessorInstrumentId: 'mcq:appoggiatura:1',
+      successorInstrumentId: 'mcq:appoggiatura:2',
+      ...overrides,
+    };
+  }
+
+  it('appends a succession event carrying only the two ids and a timestamp, into the same C5.2 daily file as reviews', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendSuccessionRecord(source, successionInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'succession-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('succession');
+    expect(result.record.eventId).toBe('succession-1');
+    expect(result.record.predecessorInstrumentId).toBe('mcq:appoggiatura:1');
+    expect(result.record.successorInstrumentId).toBe('mcq:appoggiatura:2');
+    expect(result.path).toBe(reviewLogPath('2026-08-28', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('interleaves with reviews and verdicts in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-08-28T09:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    const beforeSuccession = await readFile(
+      join(tempRoot, reviewLogPath('2026-08-28', 'desktop')),
+      'utf8',
+    );
+    const succession = await appendSuccessionRecord(source, successionInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'sc1',
+    });
+    const after = await readFile(join(tempRoot, succession.path), 'utf8');
+
+    expect(after.startsWith(beforeSuccession)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'succession']);
+  });
+
+  it('validates before writing: a missing predecessorInstrumentId never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const { predecessorInstrumentId, ...withoutPredecessor } = successionInput();
+    await expect(
+      appendSuccessionRecord(source, withoutPredecessor as SuccessionLogRecordInput, {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-08-28', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: an empty successorInstrumentId never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendSuccessionRecord(source, successionInput({ successorInstrumentId: '' }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendSuccessionRecord(source, successionInput(), {
+      deviceId: 'desktop',
+    });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('rejects an invalid device id before writing', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendSuccessionRecord(source, successionInput(), { deviceId: 'has/slash' }),
+    ).rejects.toThrow();
   });
 });

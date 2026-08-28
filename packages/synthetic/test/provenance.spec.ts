@@ -81,7 +81,12 @@ describe('synthetic provenance', () => {
 
   it('every invented concept and instrument id is namespaced too', () => {
     for (const stream of STREAMS) {
-      for (const entry of stream.entries) {
+      // This generator never emits a `[D-133]` `succession` line — narrowed
+      // away only so `.conceptIds`/`.instrumentId`, absent from that one
+      // kind, still type-check against the full current-version union.
+      for (const entry of stream.entries.filter(
+        (e): e is Exclude<typeof e, { kind: 'succession' }> => e.kind !== 'succession',
+      )) {
         for (const conceptId of entry.conceptIds) {
           expect(conceptId.startsWith(SYNTHETIC_ID_PREFIX)).toBe(true);
         }

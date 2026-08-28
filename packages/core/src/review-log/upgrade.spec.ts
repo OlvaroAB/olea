@@ -368,6 +368,9 @@ describe('upgradeV3 — v3 suspension events', () => {
 
   it('a multi-concept suspend is untouched — nothing about it was ever ambiguous', () => {
     const upgraded = upgradeV3(v3Suspend({ conceptIds: ['imbrication', 'bioturbation'] }));
+    if (upgraded.kind !== 'suspend' && upgraded.kind !== 'unsuspend') {
+      throw new Error('expected a suspend/unsuspend entry');
+    }
     expect(upgraded.conceptIds).toEqual(['imbrication', 'bioturbation']);
   });
 });

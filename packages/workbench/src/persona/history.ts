@@ -328,9 +328,15 @@ export function buildPersonaHistory(id: WorkbenchPersonaId): PersonaHistory {
     else ringsByType.set(instrument.instrumentType, [instrument.instrumentId]);
   }
 
-  /** Persona instrument id -> its whole stream, in the order the generator emitted it. */
-  const byPersonaInstrument = new Map<string, ReviewLogEntry[]>();
+  /**
+   * Persona instrument id -> its whole stream, in the order the generator
+   * emitted it. No persona stream emits a `[D-133]` `succession` line (it
+   * names no `instrumentId` to key this map on) — filtered out here so
+   * every bucketed entry is one of the kinds that does.
+   */
+  const byPersonaInstrument = new Map<string, Exclude<ReviewLogEntry, { kind: 'succession' }>[]>();
   for (const entry of stream.entries) {
+    if (entry.kind === 'succession') continue;
     const bucket = byPersonaInstrument.get(entry.instrumentId);
     if (bucket) bucket.push(entry);
     else byPersonaInstrument.set(entry.instrumentId, [entry]);

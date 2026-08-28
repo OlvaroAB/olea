@@ -81,6 +81,9 @@ import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
+import { createObsidianEditInstrumentPort } from './registry/obsidian-ports.js';
+import { createLocalRegistryProvider } from './registry/provider.js';
+import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
   buildRetrievalWiring,
@@ -447,6 +450,24 @@ export default class OleaPlugin extends Plugin {
       },
     });
 
+    // `ol-4v2l` (F8.4, `[REG-1]`): the registry's open command, registered
+    // directly rather than through `commands/register-commands.ts`/`ids.ts`
+    // — this bead's owned paths are `registry/`, this file (view + command
+    // registration only) and `packages/core/src/registry/`, and the shared
+    // command-palette module is neither. `Plugin.addCommand` is the same
+    // API `registerOleaCommands` calls internally, so this is a real,
+    // working command today (unbound, like every other Olea command with no
+    // chord named in the contract), not a placeholder — folding it into the
+    // shared module for consistency with the other command ids is a Class A
+    // naming tidy-up a later lane can do without touching behaviour.
+    this.addCommand({
+      id: 'olea-registry-open',
+      name: 'Olea: Open concept and instrument registry',
+      callback: () => {
+        void this.revealRegistryView();
+      },
+    });
+
     // Same store, same "read fresh on every call, never cached" discipline
     // `plan/provider.ts`, `gap/provider.ts` and `session-builder/provider.ts`
     // already hold for `assignmentsBasePath` — a settings change she makes
@@ -599,6 +620,29 @@ export default class OleaPlugin extends Plugin {
         acceptToVault: (reading) => provider.acceptToVault(reading),
       });
     });
+
+    // `ol-4v2l` (F8.4/F8.5, `[REG-1]`, amended acceptance `[D-135]`): the
+    // concept and instrument registry — the one browsable inventory over
+    // her concept spine, since tiers 2/3 of it never touch the vault (see
+    // `registry/provider.ts`'s module doc). `createLocalRegistryProvider`
+    // recomputes on every `load()` — no cache, same posture every other
+    // local provider in this file holds. `createObsidianEditInstrumentPort`
+    // is the one Obsidian-backed piece (INV-1) — everything else the
+    // provider needs is a `VaultSource` and a device id.
+    this.registerView(
+      VIEW_TYPE_OLEA_REGISTRY,
+      (leaf) =>
+        new RegistryView(
+          leaf,
+          createLocalRegistryProvider({
+            vault,
+            deviceId,
+            settingsHost: this,
+            now: () => new Date(),
+            editPort: createObsidianEditInstrumentPort(this.app),
+          }),
+        ),
+    );
 
     // Read once and shared by every drain below — D-002's "mobile enqueues,
     // desktop drains" applies to the keyword index rebuild and the embedding
@@ -1546,6 +1590,29 @@ export default class OleaPlugin extends Plugin {
     }
     await workspace.revealLeaf(leaf);
     await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_RETROSPECTIVE);
+  }
+
+  /**
+   * Opens the concept and instrument registry (F8.4, `ol-4v2l`), or reveals
+   * the one already open — the same reuse-don't-stack shape as
+   * `revealGapView`/`revealRetrospectiveView`, for the same reason.
+   *
+   * Always refreshes on the way out (`ol-h3wy`'s pattern): a rename or a
+   * withdraw/restore already refreshes the leaf that issued it
+   * (`RegistryView`'s own button handlers call `this.refresh()`), but a
+   * second open leaf, or a session completed elsewhere since this one last
+   * drew, should not need a manual reload to show current mastery.
+   */
+  private async revealRegistryView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_REGISTRY);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_REGISTRY, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_REGISTRY);
   }
 
   override onunload(): void {

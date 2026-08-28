@@ -1,7 +1,11 @@
 /**
  * `IngestionQueueEngine` — the client-side ingestion queue itself (D-002,
  * P3-T03). See `types.ts` for the domain model and `budget.ts` for the pure
- * scheduling policy this class applies; this file is the stateful glue.
+ * DRAIN scheduling policy this class applies; this file is the stateful
+ * glue. `enqueue-debounce.ts` is the pure ENQUEUE-side policy — a settle
+ * delay before a changed path becomes a job at all, opt-in via `EngineDeps
+ * .enqueueDebounce` (`ol-84my` `[TRG-1]`) — see that module's doc for why
+ * ENQUEUE and DRAIN are two separate knobs, not one.
  *
  * **Execution model.** One job in flight at a time. `tick()` is the only
  * thing that starts work, and the host (the plugin) decides when to call
@@ -42,6 +46,8 @@
  */
 
 import { backoffDelayMs, classifyHeadroom, nextUtcMidnightMs, pacingDelayMs } from './budget.js';
+import type { EnqueueDebouncePolicy } from './enqueue-debounce.js';
+import { evaluateEnqueueDebounce } from './enqueue-debounce.js';
 import type {
   Clock,
   DeviceCapability,
@@ -77,6 +83,17 @@ export interface EngineDeps {
   readonly clock?: Clock;
   /** Defaults to `Math.random`. Override in tests for determinism. */
   readonly random?: RandomSource;
+  /**
+   * Opt-in ENQUEUE debounce (`enqueue-debounce.ts`, `ol-84my` `[TRG-1]`) —
+   * distinct from every DRAIN-side policy above. Omitted (the default):
+   * `enqueue` behaves exactly as before this option existed. Supplied: an
+   * `enqueue` call that also carries `EnqueueInput.lastChangedAt` may come
+   * back `{ status: 'debounced', resumeNotBefore }` instead of `'queued'`
+   * when the path settled too recently. A caller that never sets
+   * `lastChangedAt` sees no change in behaviour even with this configured —
+   * both sides must opt in.
+   */
+  readonly enqueueDebounce?: EnqueueDebouncePolicy;
 }
 
 /** Any job left `in-flight` belongs to a session that died before recording an outcome — requeue it (see the module doc's "persist-before-await" note). Returns the corrected array and whether anything changed. */
@@ -105,6 +122,7 @@ export class IngestionQueueEngine {
   private readonly runner: JobRunner;
   private readonly clock: Clock;
   private readonly random: RandomSource;
+  private readonly enqueueDebounce: EnqueueDebouncePolicy | null;
 
   private jobs: PersistedJob[];
   private headroom: number | null;
@@ -125,6 +143,7 @@ export class IngestionQueueEngine {
     this.runner = deps.runner;
     this.clock = deps.clock ?? defaultClock;
     this.random = deps.random ?? defaultRandom;
+    this.enqueueDebounce = deps.enqueueDebounce ?? null;
     this.jobs = [...jobs];
     this.headroom = headroom;
     this.budgetResumeAt = budgetResumeAt;
@@ -163,10 +182,32 @@ export class IngestionQueueEngine {
     this.jobs = this.jobs.map((j) => (j.contentHash === job.contentHash ? job : j));
   }
 
-  /** Idempotent by content hash (D-002): a hash already on record — in *any* status — is never added or re-run. */
+  /**
+   * Idempotent by content hash (D-002): a hash already on record — in *any*
+   * status — is never added or re-run. Checked before the ENQUEUE debounce
+   * below so a duplicate of an already-settled job is never held up by a
+   * gate meant for genuinely new churn.
+   *
+   * The ENQUEUE debounce itself (`enqueue-debounce.ts`) only ever fires when
+   * BOTH `EngineDeps.enqueueDebounce` was supplied at construction AND this
+   * call's `input.lastChangedAt` is not `undefined` — see `EnqueueInput`'s
+   * own doc. Every existing caller supplies neither, so this is purely
+   * additive: unchanged behaviour until a caller opts in on both sides.
+   */
   async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
     const existing = this.jobs.find((j) => j.contentHash === input.contentHash);
     if (existing) return { status: 'duplicate', existingStatus: existing.status };
+
+    if (this.enqueueDebounce !== null && input.lastChangedAt !== undefined) {
+      const decision = evaluateEnqueueDebounce({
+        lastChangedAt: input.lastChangedAt,
+        now: this.clock.now(),
+        policy: this.enqueueDebounce,
+      });
+      if (decision.kind === 'debounced') {
+        return { status: 'debounced', resumeNotBefore: decision.resumeNotBefore };
+      }
+    }
 
     const job: PersistedJob = {
       contentHash: input.contentHash,

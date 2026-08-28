@@ -172,12 +172,33 @@ export interface EnqueueInput {
   readonly contentHash: string;
   readonly label: string;
   readonly payload: unknown;
+  /**
+   * Opt-in hook for the ENQUEUE debounce (`enqueue-debounce.ts`, `ol-84my`
+   * `[TRG-1]`) — when the path this content came from was last observed
+   * changing, or `null` for a first sighting. Omitted (`undefined`, the
+   * default for every existing caller) means "this caller doesn't debounce
+   * enqueues" and `enqueue` behaves exactly as before, unconditionally. Only
+   * consulted when the engine was also constructed with `EngineDeps
+   * .enqueueDebounce` — both sides must opt in before a job can come back
+   * `'debounced'` instead of `'queued'`.
+   */
+  readonly lastChangedAt?: number | null;
 }
 
 export type EnqueueResult =
   | { readonly status: 'queued' }
   /** Already known under this content hash — nothing was added or re-run. */
-  | { readonly status: 'duplicate'; readonly existingStatus: JobStatus };
+  | { readonly status: 'duplicate'; readonly existingStatus: JobStatus }
+  /**
+   * The ENQUEUE debounce declined this attempt — the path settled too
+   * recently. Returned only when both the caller supplied `EnqueueInput
+   * .lastChangedAt` and the engine was constructed with `EngineDeps
+   * .enqueueDebounce`; see `enqueue-debounce.ts`. Nothing was queued —
+   * the caller owns retrying (typically by re-evaluating on the next vault
+   * event for the same path, the same shape `MaterialityTrigger`'s
+   * `'debounced'` outcome already uses one layer up).
+   */
+  | { readonly status: 'debounced'; readonly resumeNotBefore: number };
 
 /** The subset of a job a `JobRunner` needs — never the engine's own bookkeeping fields. */
 export interface JobRunnerView {

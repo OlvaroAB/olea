@@ -186,6 +186,13 @@ export async function deriveOracleTimeline(
     const nextDayLowerMs = Date.parse(`${asOf}T00:00:00.000Z`);
     const nextDayUpperMs = Date.parse(`${asOf}T23:59:59.999Z`);
     const nextDayEvents: TimelineEventSummary[] = world.stream.entries
+      // No persona stream emits a `[D-133]` `succession` line — narrowed away
+      // only so `.instrumentId`/`.conceptIds`, absent from that one kind,
+      // still type-check against the full current-version union.
+      .filter(
+        (entry): entry is Exclude<typeof entry, { kind: 'succession' }> =>
+          entry.kind !== 'succession',
+      )
       .filter((entry) => {
         const ms = Date.parse(entry.timestamp);
         return ms >= nextDayLowerMs && ms <= nextDayUpperMs;

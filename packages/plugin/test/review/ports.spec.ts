@@ -127,7 +127,13 @@ describe('createVaultSuspendPort', () => {
 
     const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
     expect(parsed.invalidLines).toEqual([]);
-    expect(parsed.records.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
-    expect(new Set(parsed.records.map((r) => r.eventId)).size).toBe(2);
+    // `[D-133]`'s `succession` kind carries no `instrumentId` — narrowed away
+    // here even though this suite never writes one, so the static type of
+    // `.records`, the whole current-version union, still checks.
+    const suspensions = parsed.records.filter(
+      (r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession',
+    );
+    expect(suspensions.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
+    expect(new Set(suspensions.map((r) => r.eventId)).size).toBe(2);
   });
 });

@@ -17,9 +17,10 @@
  *   broken or truncated build fails here rather than in her vault;
  * - its default export really is a class extending Obsidian's `Plugin`, which is
  *   the one contract Obsidian itself checks when it loads a plugin;
- * - `onload()` runs to completion and registers all five view types and all
- *   seven commands (P2-T10's acceptance criterion, plus `ol-f77commands`,
- *   `ol-2tyj`, `ol-p5t06b` and `ol-jie3`'s later additions), through the
+ * - `onload()` runs to completion and registers all seven view types and all
+ *   ten commands (P2-T10's acceptance criterion, plus `ol-f77commands`,
+ *   `ol-2tyj`, `ol-p5t06b`, `ol-jie3`, `ol-r68l` and `ol-4v2l`'s later
+ *   additions), through the
  *   *bundled* code path rather than the source one, so a tree-shaking or
  *   bundling regression that dropped a registration would be caught.
  *
@@ -216,7 +217,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all six view types and all nine commands when onload runs', async () => {
+  it('registers all seven view types and all ten commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -234,6 +235,11 @@ describe('the built bundle is what Obsidian can load', () => {
         // same accept/edit/reject resolution `olea-review` offers.
         'olea-bulk-review',
         'olea-gap',
+        // `ol-4v2l` (F8.4/F8.5, `[REG-1]`, amended acceptance `[D-135]`): the
+        // browsable concept-and-instrument registry — browse, per-concept
+        // instrument mix and mastery, edit (delegated to Obsidian), rename
+        // and withdraw/restore. No split or merge affordance (`[D-135]`).
+        'olea-registry',
         // `ol-r68l` (F8.8, `[D-134]`): the post-assessment retrospective's
         // dedicated view — David's ruling on DSN-2's open question 10.
         'olea-retrospective',
@@ -263,6 +269,12 @@ describe('the built bundle is what Obsidian can load', () => {
         // no student-invoked draft verb, because Olea is already drafting.
         'olea-gap-open',
         'olea-open',
+        // `ol-4v2l` (F8.4, `[REG-1]`): opens the concept-and-instrument
+        // registry's dedicated view. Registered directly via
+        // `this.addCommand` rather than through `commands/ids.ts` —
+        // `docs/dev/surface-register.md` (olea-service) names the
+        // ownership-boundary reason and the follow-up.
+        'olea-registry-open',
         // `ol-r68l` (F8.8, `[D-134]`): opens the retrospective's dedicated view.
         'olea-retrospective-open',
         'olea-review-start',

@@ -35,7 +35,9 @@ import {
   type ReviewLogEntry,
   type ReviewLogRecord,
   reviewLogRecord,
+  type SuccessionLogRecord,
   type SuspendLogRecord,
+  successionLogRecord,
   suspendLogRecord,
   type VerdictLogRecord,
   verdictLogRecord,
@@ -69,6 +71,17 @@ export type SuspendLogRecordInput = Omit<SuspendLogRecord, 'schemaVersion' | 'ev
  */
 export type VerdictLogRecordInput = Omit<VerdictLogRecord, 'schemaVersion' | 'eventId' | 'kind'>;
 
+/**
+ * Every `SuccessionLogRecord` field the caller supplies (`[D-133]`); the
+ * writer stamps the rest. `kind` is stamped, not asked for — the same
+ * reason `VerdictLogRecordInput` stamps it: this writer produces succession
+ * events and only succession events.
+ */
+export type SuccessionLogRecordInput = Omit<
+  SuccessionLogRecord,
+  'schemaVersion' | 'eventId' | 'kind'
+>;
+
 export interface AppendReviewLogOptions {
   /**
    * Stable per-install identifier. Becomes part of the file name (C5.2: one
@@ -98,6 +111,13 @@ export interface AppendSuspendLogResult {
 export interface AppendVerdictLogResult {
   /** The full, validated record actually written (schemaVersion and eventId included). */
   readonly record: VerdictLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+export interface AppendSuccessionLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: SuccessionLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -280,6 +300,50 @@ export async function appendVerdictRecord(
   if (!parsed.success) {
     throw new Error(
       `appendVerdictRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one succession event
+ * (`[D-133]`, `ol-w00s` / `ol-2zfj.37`).
+ *
+ * The fourth sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`, sharing the same append path and the same
+ * durability discipline. Records only the fact of succession — which
+ * instrument this superseded, which instrument superseded it, and when —
+ * never a copy of the chain itself, which lives in the successor's own
+ * `predecessor:` field (`../instrument/mcq-format.ts`'s
+ * `MCQ_FIELD_PREDECESSOR`; `packages/plugin/src/instrument-blocks/
+ * predecessor.ts` for the block-agnostic write).
+ *
+ * **Reachability.** Composed from `packages/plugin/src/generation/
+ * materialize-mcq.ts`'s `materializeAcceptedDraft`, when its caller supplies
+ * a `predecessorInstrumentId` — see that file's module doc for the current
+ * caller state.
+ */
+export async function appendSuccessionRecord(
+  vault: VaultSource,
+  input: SuccessionLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendSuccessionLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'succession',
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = successionLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendSuccessionRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

@@ -193,6 +193,11 @@ describe('FSRS coherence', () => {
         sawUnsuspend = true;
         continue;
       }
+      // Neither this generator nor `[D-133]` produces a `succession` line in
+      // a synthetic stream — narrowed away only so `.instrumentId`, absent
+      // from that one kind, still type-checks against the full current-
+      // version union.
+      if (entry.kind === 'succession') continue;
       expect(suspended.has(entry.instrumentId)).toBe(false);
     }
     expect(sawSuspend).toBe(true);

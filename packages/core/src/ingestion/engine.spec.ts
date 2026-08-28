@@ -157,6 +157,119 @@ describe('enqueue — idempotent by content hash', () => {
   });
 });
 
+describe('enqueue debounce — opt-in via EngineDeps.enqueueDebounce (ol-84my [TRG-1])', () => {
+  it('behaves exactly as before when enqueueDebounce is not configured, even if lastChangedAt is supplied', async () => {
+    const clock = new ManualClock(10_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+    });
+    const result = await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: 9_999, // 1ms of quiet — would debounce if the policy were active
+    });
+    expect(result).toEqual({ status: 'queued' });
+  });
+
+  it('behaves exactly as before when configured but the caller never supplies lastChangedAt', async () => {
+    const clock = new ManualClock(10_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+      enqueueDebounce: { debounceMs: 60_000 },
+    });
+    const result = await engine.enqueue({ contentHash: 'abc123', label: 'Lecture 1', payload: {} });
+    expect(result).toEqual({ status: 'queued' });
+  });
+
+  it('declines to queue a path that settled too recently, reporting resumeNotBefore', async () => {
+    const clock = new ManualClock(10_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+      enqueueDebounce: { debounceMs: 60_000 },
+    });
+    const result = await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: 9_000, // only 1s of quiet against a 60s policy
+    });
+    expect(result).toEqual({ status: 'debounced', resumeNotBefore: 69_000 });
+    expect(engine.snapshot().queued).toBe(0);
+  });
+
+  it('queues once the settle window has elapsed', async () => {
+    const clock = new ManualClock(70_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+      enqueueDebounce: { debounceMs: 60_000 },
+    });
+    const result = await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: 9_000, // 61s of quiet against a 60s policy
+    });
+    expect(result).toEqual({ status: 'queued' });
+    expect(engine.snapshot().queued).toBe(1);
+  });
+
+  it('a first sighting (lastChangedAt: null) always settles, even with a policy configured', async () => {
+    const clock = new ManualClock(10_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+      enqueueDebounce: { debounceMs: 60_000 },
+    });
+    const result = await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: null,
+    });
+    expect(result).toEqual({ status: 'queued' });
+  });
+
+  it('an already-known content hash is reported as a duplicate ahead of the debounce check', async () => {
+    const clock = new ManualClock(10_000);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+      clock,
+      enqueueDebounce: { debounceMs: 60_000 },
+    });
+    await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: null,
+    });
+    clock.advance(1); // 1ms of quiet — would debounce a genuinely new attempt
+    const result = await engine.enqueue({
+      contentHash: 'abc123',
+      label: 'Lecture 1',
+      payload: {},
+      lastChangedAt: 10_000,
+    });
+    expect(result).toEqual({ status: 'duplicate', existingStatus: 'queued' });
+  });
+});
+
 describe('persistence across restarts', () => {
   it('a fresh engine constructed from a persisted store continues where the last one left off', async () => {
     const store = new MemoryStore();

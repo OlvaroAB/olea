@@ -171,6 +171,20 @@ function suspensions(entries: readonly ReviewLogEntry[]): SuspendLogRecord[] {
 }
 
 /**
+ * None of this suite's fixtures carry a `succession` line (`[D-133]` postdates
+ * every one of them) — this exists only so `.conceptIds`, a field every OTHER
+ * kind shares, keeps type-checking on a merged list whose static type is the
+ * whole union. Narrows away the one kind that does not carry it.
+ */
+function excludingSuccession(
+  entries: readonly ReviewLogEntry[],
+): ReadonlyArray<Exclude<ReviewLogEntry, { kind: 'succession' }>> {
+  return entries.filter(
+    (e): e is Exclude<ReviewLogEntry, { kind: 'succession' }> => e.kind !== 'succession',
+  );
+}
+
+/**
  * Fails a future edit that starts *omitting* a nullable key instead of
  * writing `null` for it — the regression this bead's acceptance criteria
  * names explicitly. Checked directly against the on-disk golden fixtures
@@ -228,7 +242,7 @@ describe('review-log golden fixtures — device-desktop (frozen v1 history, well
     // captured. `upgradeV2` maps it to a one-element list and stops; anything
     // longer here would mean a second binding had been guessed at from current
     // vault state and written into her append-only history as a fact.
-    for (const record of result.records) {
+    for (const record of reviews(result.records)) {
       expect(record.conceptIds).toHaveLength(1);
     }
   });
@@ -711,7 +725,7 @@ describe('a whole vault of every version merges into one coherent day', () => {
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop);
 
     expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
-    expect(merged.records.every((r) => r.conceptIds.length >= 1)).toBe(true);
+    expect(excludingSuccession(merged.records).every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
     expect(instants).toEqual([...instants].sort((a, b) => a - b));
@@ -719,7 +733,7 @@ describe('a whole vault of every version merges into one coherent day', () => {
     // Exactly one record in the whole merged day names more than one concept,
     // and it is the one that was *written* at v3. Every migrated record names
     // one, because that is all its file ever held.
-    const multi = merged.records.filter((r) => r.conceptIds.length > 1);
+    const multi = excludingSuccession(merged.records).filter((r) => r.conceptIds.length > 1);
     expect(multi.map((r) => r.eventId).sort()).toEqual([
       '66666666-6666-4666-8666-666666666666',
       '77777777-7777-4777-8777-777777777777',
@@ -1035,7 +1049,7 @@ describe('a whole vault of all four versions merges into one coherent day', () =
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop, workstation);
 
     expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
-    expect(merged.records.every((r) => r.conceptIds.length >= 1)).toBe(true);
+    expect(excludingSuccession(merged.records).every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
     expect(instants).toEqual([...instants].sort((a, b) => a - b));
