@@ -189,3 +189,77 @@ describe('discoverEmbeddedSources — resolution rules', () => {
     ).toContain('![[b.pdf]]');
   });
 });
+
+describe('discoverEmbeddedSources — embed syntax quoted as code is not a real embed (DF-23, ol-embedcodespan)', () => {
+  // A note explaining Obsidian's embed syntax quotes it in backticks. The
+  // quoted target names a file that genuinely exists in the vault, so if the
+  // parser mistakes the quoted syntax for a real embed it would *resolve*
+  // rather than merely misfire as 'not-found' — the strongest possible proof
+  // that the code span, not the target's existence, is what suppresses it.
+
+  it('does not match embed syntax inside a single-backtick inline code span', async () => {
+    const vault = new MemoryVaultSource({
+      'note.md': 'Type `![[Geol204-Week2-Slides.pdf]]` to embed a PDF.',
+      'Geol204-Week2-Slides.pdf': 'stand-in',
+    });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    expect(result.resolved).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('does not match embed syntax inside a double-backtick inline code span (which may itself contain a backtick)', async () => {
+    const vault = new MemoryVaultSource({
+      'note.md': 'The syntax is `` ![[deck.pdf]] `` — note the literal backtick ` earlier.',
+      'deck.pdf': 'stand-in',
+    });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    expect(result.resolved).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('does not match embed syntax inside a fenced code block', async () => {
+    const source = ['Some prose.', '', '```', '![[deck.pdf]]', '```', ''].join('\n');
+    const vault = new MemoryVaultSource({ 'note.md': source, 'deck.pdf': 'stand-in' });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    expect(result.resolved).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('treats an unterminated backtick conservatively, suppressing rather than falsely matching what follows it', async () => {
+    const vault = new MemoryVaultSource({
+      'note.md': 'A stray ` backtick with no partner, then ![[deck.pdf]] later in the block.',
+      'deck.pdf': 'stand-in',
+    });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    // Conservative: the dangling backtick's scope is treated as running to
+    // the end of the block, so the embed that follows it is skipped (a false
+    // negative) rather than risk the opposite mistake elsewhere.
+    expect(result.resolved).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('still resolves a genuine embed on the same line as a closed, unrelated code span', async () => {
+    const vault = new MemoryVaultSource({
+      'note.md': 'See `inline code` and then ![[deck.pdf]] for slides.',
+      'deck.pdf': 'stand-in',
+    });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]?.path).toBe('deck.pdf');
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('still resolves a genuine embed that sits in its own paragraph, unaffected by an unrelated fenced block elsewhere in the note', async () => {
+    const source = ['```', 'not an embed: ![[fake.pdf]]', '```', '', '![[real.pdf]]', ''].join(
+      '\n',
+    );
+    const vault = new MemoryVaultSource({
+      'note.md': source,
+      'real.pdf': 'stand-in',
+    });
+    const result = await discoverEmbeddedSources(vault, 'note.md');
+    expect(result.resolved).toHaveLength(1);
+    expect(result.resolved[0]?.rawTarget).toBe('real.pdf');
+    expect(result.unresolved).toEqual([]);
+  });
+});

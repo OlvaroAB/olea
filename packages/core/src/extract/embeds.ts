@@ -78,6 +78,54 @@ function dirname(path: VaultPath): string {
   return slash === -1 ? '' : path.slice(0, slash);
 }
 
+/** A `[start, end)` range within a block's raw text that is inline code and must not be scanned for embeds. */
+type CodeSpanRange = readonly [start: number, end: number];
+
+/**
+ * Finds inline code spans in `text` (CommonMark-style: a run of N backticks
+ * opens a span, closed by the *next* run of exactly N backticks — a run of a
+ * different length inside the span is literal content, not a delimiter).
+ *
+ * An unterminated opening run — no closing run of the same length anywhere
+ * after it — is treated conservatively as covering the rest of `text`. This
+ * is a deliberate false-negative: real Markdown renders a dangling backtick
+ * literally, so an embed after it would in fact be genuine. But this parser
+ * cannot tell "genuinely unterminated" apart from "the closing backtick is
+ * just further down than this block happened to be sliced", and the whole
+ * point of this fix is to stop treating quoted embed syntax as a real embed
+ * — so an ambiguous case is resolved toward *not* matching rather than
+ * toward reintroducing the false positive this exists to remove.
+ */
+function inlineCodeSpanRanges(text: string): readonly CodeSpanRange[] {
+  const ranges: CodeSpanRange[] = [];
+  const openRe = /`+/g;
+  let open = openRe.exec(text);
+  while (open !== null) {
+    const openStart = open.index;
+    const openLen = open[0].length;
+    const closeRe = /`+/g;
+    closeRe.lastIndex = openStart + openLen;
+    let close = closeRe.exec(text);
+    while (close !== null && close[0].length !== openLen) {
+      close = closeRe.exec(text);
+    }
+    if (close === null) {
+      ranges.push([openStart, text.length]);
+      break;
+    }
+    const closeEnd = close.index + close[0].length;
+    ranges.push([openStart, closeEnd]);
+    openRe.lastIndex = closeEnd;
+    open = openRe.exec(text);
+  }
+  return ranges;
+}
+
+/** Whether `[start, end)` overlaps any of `ranges`. */
+function overlapsAnyRange(start: number, end: number, ranges: readonly CodeSpanRange[]): boolean {
+  return ranges.some(([rangeStart, rangeEnd]) => start < rangeEnd && end > rangeStart);
+}
+
 type ResolveOutcome = { readonly path: VaultPath } | { readonly candidates: readonly VaultPath[] };
 
 async function resolveTarget(
@@ -141,9 +189,24 @@ export async function discoverEmbeddedSources(
   const unresolved: UnresolvedEmbed[] = [];
 
   for (const block of doc.blocks) {
+    // A fenced code block (```...```/~~~...~~~) is never prose: anything
+    // inside it — including something that looks like `![[embed]]` syntax —
+    // is source-code-shaped example text, not a real embed.
+    if (block.kind === 'code') continue;
+
+    const codeSpans = inlineCodeSpanRanges(block.raw);
     const pattern = embedPattern();
     let match = pattern.exec(block.raw);
     while (match !== null) {
+      const matchStart = match.index;
+      const matchEnd = matchStart + match[0].length;
+      if (overlapsAnyRange(matchStart, matchEnd, codeSpans)) {
+        // Quoted inside an inline code span (single or double backtick) —
+        // e.g. a note explaining the syntax with `![[file.pdf]]`. Not a
+        // real embed; skip without recording it as 'not-found' noise.
+        match = pattern.exec(block.raw);
+        continue;
+      }
       const rawTarget = (match[1] ?? '').trim();
       const format = formatFromExtension(rawTarget);
       if (format !== null) {
