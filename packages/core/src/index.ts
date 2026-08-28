@@ -209,6 +209,10 @@ export {
   stageForRelationType,
   TRIAGE_STANDING_BY_PROVENANCE,
 } from './concept/relation.js';
+// `[CORP-3]` (`ol-2zfj.2`) — citation-grain material-change detection and the
+// in-memory revision event; applied at the orchestrator's merge per the lane's
+// shared-file diff. See `./concept/revision/index.js`'s module doc.
+export * from './concept/revision/index.js';
 // Concept size (`[D-066]`, component register row 1.3) — a deterministic,
 // material-grounded floor read by two named consumers outside this package:
 // honest scope counting (F8.1, F8.3) and session composition (F2.17). See
@@ -353,6 +357,33 @@ export {
   DEFAULT_MCQ_RECOGNITION_WEIGHT,
   readinessFactorsFor,
 } from './gap/readiness.js';
+export type { CardAuthorship, ClassifiedCard, StyleProfile } from './generate/style-profile.js';
+export {
+  computeStyleProfile,
+  DEFAULT_STYLE_PROFILE,
+  MIN_SAMPLE_FOR_PROFILE,
+} from './generate/style-profile.js';
+// The generation-side [D-101] consumers (F3.8 voice fidelity, F3.9 card-style
+// profile; `[D-008]` transient personalization context, `ol-p3t07c`). Pure,
+// bounded projections in the same shape as `misconception/digest.js` — see
+// each file's own module doc for the F1/F3 boundary and the shed line.
+export type {
+  AssembleVoiceExemplarsOptions,
+  ClassifiedPassage,
+  PassageAuthorship,
+  PassageCurationAuthority,
+  VoiceExemplars,
+} from './generate/voice-sources.js';
+export { assembleVoiceExemplars } from './generate/voice-sources.js';
+// `[D-077]`'s content-store minting seam for the SOLO grading pipeline
+// (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
+// this is the one impure export in that file, and why calling it only
+// partially discharges `ol-95vv.3` rather than finishing it. Only the
+// contentRef-minting surface is exported here; the rest of
+// `explainBackSolo.ts`'s API (gradeSolo, acceptSoloGrading, ...) is
+// `ol-95vv.2`/`ol-95vv.3` territory, out of this bead's `owns`.
+export type { MintSoloGradingContentInput } from './grading/explainBackSolo.js';
+export { writeSoloGradingContent } from './grading/explainBackSolo.js';
 // The explain-back grading pipeline: pre-check -> (maybe) model call ->
 // citation grounding -> accept step (ol-p4t02).
 export type {
@@ -653,6 +684,18 @@ export {
   confusionRoutingPromptLine,
   evaluateConfusionRouting,
 } from './misconception/confusion-routing.js';
+// The confusion-pairing corroboration reader (`ol-2zfj.32`, `[D-130]`) — a
+// thin, honest-empty-input wrapper over `ol-2zfj.20`'s already-built join
+// (`./concept/confusion-pairing/corroborate.js`), wired as a named
+// production reader at `packages/plugin/src/main.ts`'s ingestion-tick call
+// site. See `./misconception/corroboration.js`'s module doc for the reuse
+// argument and the honest-empty-input fix.
+export type {
+  ConfusionPairingConcept as ConfusionPairingCorroborationConcept,
+  ConfusionPairingVerdict,
+  ConfusionPairingVerdictKind,
+} from './misconception/corroboration.js';
+export { corroborateConfusionPairings } from './misconception/corroboration.js';
 // `MisconceptionDigestEntry` is aliased below to avoid a name collision with
 // `./grading/gradingPipeline.js`'s identically-named type. The two are
 // deliberately different shapes for different layers, not duplicates: this
@@ -881,6 +924,24 @@ export {
   WorkerEmbeddingError,
   WorkerEmbeddingProvider,
 } from './retrieval/workerProvider.js';
+// [D-077] / C6.2a's immutable content store — her explanation text, the
+// grader's feedback and misconception detail, referenced from a review
+// event's explainBackGrade.contentRef by id. See review-log/content-store.ts
+// for the write-once and referential-integrity discipline.
+export type {
+  ContentReadResult,
+  ContentStoreRecord,
+  WriteContentOptions,
+  WriteContentResult,
+} from './review-log/content-store.js';
+export {
+  CONTENT_STORE_FOLDER,
+  contentStorePath,
+  isValidContentId,
+  readContentForGrade,
+  readContentRecord,
+  writeContentRecord,
+} from './review-log/content-store.js';
 export type { MergeReviewLogResult } from './review-log/merge.js';
 export { mergeReviewLogRecords } from './review-log/merge.js';
 export type { InvalidReviewLogLine, ParseReviewLogResult } from './review-log/parse.js';
@@ -1068,6 +1129,19 @@ export {
   REENTRY_ABSENCE_THRESHOLD_DAYS,
   REENTRY_SIZE_FLOOR_MINUTES,
 } from './study-session/reentry.js';
+export type { SupportLevelPresentation } from './study-session/support-level-chooser.js';
+export {
+  chooseSupportLevel,
+  supportLevelStateFromHistory,
+} from './study-session/support-level-chooser.js';
+// Component register 3.9's CHOOSER (SUPP-1, `ol-7883`) — picks the support
+// level an instrument is presented with from a concept's real review
+// evidence, at a granularity finer than card-level correctness, and lets it
+// recede as she demonstrates she no longer needs it. `./support-level/`
+// (round 19/20) built the ladder rules this folds over; nothing built the
+// fold itself before this.
+export type { GradedReviewEvidence } from './study-session/support-level-signal.js';
+export { deriveFailureShape } from './study-session/support-level-signal.js';
 // Support-level ladder (register row 3.9, `ol-ry2k`, `[D-094]`) — session-boundary
 // transitions only; self-assessment adjusts the offer, never the persisted level.
 export {
@@ -1163,6 +1237,27 @@ export type {
 export { detectRhythm, QUIET_DAYS_THRESHOLD, resolveTermBoundary } from './today/rhythm.js';
 export type { ComputeStreakOptions, StreakDay, StreakSummary } from './today/streak.js';
 export { computeStreak, DEFAULT_WEEK_LENGTH, studyDays } from './today/streak.js';
+// F5.1 voice input: audio -> transcript -> the SAME `GradeExplainBackInput`
+// typed input already uses (`ol-p4t01`, `[D-007]`). Voice is an input method,
+// not a new grading path — see transcription/transcribe.ts's module doc for
+// the reachability seam this stops at (no plugin wiring, no recording UI).
+export type {
+  ExplainBackPromptContext,
+  TranscribeAudioWireRequest,
+  TranscribeAudioWireResponse,
+  TranscriptionCaller,
+} from './transcription/transcribe.js';
+export { buildGradeExplainBackInputFromTranscript } from './transcription/transcribe.js';
+// The production `TranscriptionCaller`, mirroring `createWorkerJudgeCaller`
+// exactly: builds the frozen `audio.transcribe.v1` envelope, leaves the HTTP
+// call to an injected `WorkerTaskTransport`.
+export type { WorkerTranscriptionCallerDeps } from './transcription/workerTranscriptionCaller.js';
+export {
+  AUDIO_TRANSCRIBE_CONTRACT_VERSION,
+  AUDIO_TRANSCRIBE_TASK_ID,
+  createWorkerTranscriptionCaller,
+  WorkerTranscriptionError,
+} from './transcription/workerTranscriptionCaller.js';
 export type { StampResult, StampUidOptions } from './uid/stamp.js';
 export { appendEmptyEntry, OLEA_UID_KEY, stampUid } from './uid/stamp.js';
 export type { BuildUidTableResult, UidTableEntry, UidTableOptions } from './uid/table.js';
