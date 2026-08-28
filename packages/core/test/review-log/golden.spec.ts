@@ -517,6 +517,62 @@ describe('review-log golden fixtures — two devices suspending the same day (D-
   });
 });
 
+describe('a verdict event never flips the suspended set (`ol-548w`, `ol-inv2remainder`)', () => {
+  // `suspension.ts`'s own doc calls this out by name: the projection uses an
+  // EXPLICIT allow-list (`kind === 'suspend' || kind === 'unsuspend'`), not a
+  // `kind !== 'review'` skip, precisely because a third kind — `'verdict'` —
+  // now shares the union and is not an opinion about suspension either. A
+  // `!== 'review'` skip would silently treat a later-timestamped verdict as
+  // an unsuspend. Added because that mutation (swapping the allow-list for a
+  // `!== 'review'` skip) left every test in this file, and the entire core
+  // suite, green — nothing anywhere exercised a `kind: 'verdict'` entry
+  // alongside a suspend event before this.
+  function verdictLine(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'verdict-after-suspend',
+      timestamp: '2026-08-10T11:00:00-04:00',
+      instrumentId: 'cloze:bioturbation:1',
+      instrumentType: 'cloze',
+      conceptIds: ['bioturbation'],
+      verdict: 'accepted',
+      artifactProvenance: {
+        taskId: 'draft.cloze.v1',
+        promptVersion: '2026-08-10',
+        modelId: 'workers-ai:test-model',
+      },
+      ...overrides,
+    });
+  }
+
+  it('parses as a well-formed verdict entry, not an invalid line', () => {
+    const result = parseReviewLog(`${verdictLine()}\n`);
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.kind).toBe('verdict');
+  });
+
+  it('a verdict timestamped AFTER a suspend leaves the instrument suspended — it is not an unsuspend in disguise', () => {
+    // Same instrument the tablet fixture suspends at 09:20 (`cloze:bioturbation:1`,
+    // never unsuspended in that file); the verdict below is timestamped after it.
+    const suspendOnly = parseReviewLog(readFixture(TABLET_SUSPEND_FIXTURE)).records.filter(
+      (r) => r.kind === 'suspend' && r.instrumentId === 'cloze:bioturbation:1',
+    );
+    expect(suspendOnly).toHaveLength(1);
+
+    const verdict = parseReviewLog(`${verdictLine()}\n`).records;
+    expect(suspendedInstrumentIds([...suspendOnly, ...verdict])).toEqual(
+      new Set(['cloze:bioturbation:1']),
+    );
+  });
+
+  it('a verdict for an instrument with no suspend history contributes nothing to the suspended set either way', () => {
+    const verdict = parseReviewLog(`${verdictLine()}\n`).records;
+    expect(suspendedInstrumentIds(verdict)).toEqual(new Set());
+  });
+});
+
 describe('every v2 fixture on disk really is still v2 — the files are extended, never migrated', () => {
   // The exact guard the v1 file has carried since D-020, extended to the v2
   // files by `ol-t3sd` for the same reason: if someone "helpfully" migrates one,
