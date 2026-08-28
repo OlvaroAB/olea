@@ -88,6 +88,7 @@ import type {
   SessionBuilderState,
   SessionBuilderViewDeps,
 } from '../../plugin/src/session-builder/view.js';
+import { withoutCourseCrossReferences } from './vault/session-no-cards-vault.js';
 
 /** The Bases assignments table `readAssessments` scans — real, checked-in fixture content. */
 const BASE_PATH = '02 Assignments/Assignments.base' as VaultPath;
@@ -364,8 +365,15 @@ function rankedTargetsOf(
 
 async function composeWorld(
   state: SessionWorkbenchState,
-  vault: VaultSource,
+  rawVault: VaultSource,
 ): Promise<SessionWorld> {
+  // `session-no-cards-vault.ts`'s module doc: F1.3's course-attribution
+  // widening reads the SAME lecture-note prose this surface's
+  // `'session-no-cards-yet'` state depends on being card-less, so every
+  // state composes over the corrected overlay rather than the raw fixture
+  // vault. Every other state borrows its instruments wholesale
+  // (`borrowedInstruments` below) and never reads what the overlay changes.
+  const vault = withoutCourseCrossReferences(rawVault);
   const sourcesOption =
     state.sourcesFolder !== undefined ? { sourcesFolder: state.sourcesFolder } : {};
 

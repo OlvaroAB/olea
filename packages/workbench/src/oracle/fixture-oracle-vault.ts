@@ -68,11 +68,38 @@
  * `classifyGap` ever runs — see `gap/build.ts`'s `buildRow`) does not read
  * `materialPresence` at all, so neither change moves any row's rank.
  *
+ * **A third responsibility, added when course attribution widened
+ * (`ol-2zfj.33`, F1.3): undoing its collateral sweep over these same four
+ * concepts.** F1.3 gave `extractConcepts` a second course-attribution path —
+ * a course-folder note's own BODY, not just its `topic:` — and, per
+ * `ConceptRecord.sourcePaths`'s own doc, that path feeds `sourcePaths` the
+ * same way `topic:` always has. `session/enumerate.ts` binds an INSTRUMENT to
+ * a concept by `sourcePaths`, not by whether the instrument is actually about
+ * it, so a lecture note that merely cross-references a concept in passing
+ * prose — "Compare against [[Hummocky stratification]]", "see
+ * [[Bioturbation]]" — now hands that concept every card the note happens to
+ * carry, real evidence or not. The fixture vault's WEEK 1–3 GEOL204 notes
+ * cross-link Hummocky stratification, Bioturbation and Paraconformity this
+ * way, in prose, precisely because that is how her real notes read — and
+ * that reading swept all three into `mastery-gap` before this file's own
+ * additions ever ran, collapsing the three-class demonstration this suite
+ * exists to keep working. Restoring it without touching `extract.ts` (the
+ * widening is correct — a body cross-reference genuinely is evidence of a
+ * course association, `ol-2zfj.33`'s whole point) means undoing only the
+ * BYTES this overlay is already licensed to touch: `BODY_LINK_STRIPS` below
+ * removes exactly the six passing cross-reference wikilinks that would
+ * otherwise hand Hummocky/Bioturbation/Paraconformity someone else's cards —
+ * turning `[[Hummocky stratification]]` into plain, unlinked prose so the
+ * words she'd still read are there, just no longer resolvable as a citation.
+ * Imbrication's own two cross-references are left alone — one is exactly
+ * what this file's mastery-gap addition wants a ranked concept to have.
+ *
  * Nothing here is written back — this vault is discarded on reload, exactly
  * like `MemoryVaultSource`'s own writes.
  */
 
 import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } from 'olea-core';
+import { requireReplace } from '../vault/require-replace.js';
 
 /** `Lecture - Grain Provenance and Clast Imbrication.md`'s real, committed frontmatter topic line — matched literally so this file fails loudly (not silently) if that note's topics ever change upstream. */
 const IMBRICATION_LECTURE_PATH =
@@ -93,6 +120,22 @@ const HUMMOCKY_DUPLICATE_CONTENT =
   'A second pass at this note, started over in a new session and never merged with the first ' +
   "one — same title, different folder, her mistake rather than Olea's invention.\n";
 
+/**
+ * F1.3's collateral sweep, undone (module doc's third responsibility). Six
+ * passing cross-reference wikilinks, across the four GEOL204 lecture notes
+ * that actually carry instruments, each turned into the same words unlinked —
+ * so a reader sees no change and `extractWikilinks` sees no citation. Every
+ * literal is matched exactly once per `requireReplace`, so a note whose prose
+ * moves upstream fails this loudly rather than silently leaving the sweep in
+ * place.
+ */
+const INTRO_TO_CLASTIC_PATH =
+  '01 Courses/GEOL204/WEEK 1/Lecture - Introduction to Clastic Sediment.md' as VaultPath;
+const DEPOSITION_PATH =
+  '01 Courses/GEOL204/WEEK 2/Lecture - Deposition & Bedform Stratification.md' as VaultPath;
+const CEMENTATION_PATH =
+  '01 Courses/GEOL204/WEEK 3/Lecture - Cementation and Burial Diagenesis.md' as VaultPath;
+
 function withImbricationCard(original: string): string {
   if (!original.includes(IMBRICATION_LECTURE_ORIGINAL_TOPIC_LINE)) {
     throw new Error(
@@ -105,7 +148,55 @@ function withImbricationCard(original: string): string {
     IMBRICATION_LECTURE_ORIGINAL_TOPIC_LINE,
     IMBRICATION_LECTURE_EXTENDED_TOPIC_LINE,
   );
-  return `${withTopic.trimEnd()}\n${IMBRICATION_NEW_CARD}`;
+  // The other two ranked concepts this note's prose casually cross-references
+  // — Hummocky stratification (once) and Paraconformity (twice) — stripped so
+  // this note's real cards (plus the one just appended) do not also become
+  // material presence for them. Imbrication's own cross-reference two lines
+  // below is left exactly as she wrote it.
+  const withoutHummockyRef = requireReplace(
+    withTopic,
+    'Compare against [[Hummocky stratification]].',
+    'Compare against Hummocky stratification.',
+    IMBRICATION_LECTURE_PATH,
+  );
+  const withoutFirstParaconformityRef = requireReplace(
+    withoutHummockyRef,
+    '5. The [[Paraconformity]] above may then remove all record of what came next',
+    '5. The Paraconformity above may then remove all record of what came next',
+    IMBRICATION_LECTURE_PATH,
+  );
+  const withoutSecondParaconformityRef = requireReplace(
+    withoutFirstParaconformityRef,
+    '- The [[Paraconformity]] marks a pause long enough for the fabric to be cemented in place',
+    '- The Paraconformity marks a pause long enough for the fabric to be cemented in place',
+    IMBRICATION_LECTURE_PATH,
+  );
+  return `${withoutSecondParaconformityRef.trimEnd()}\n${IMBRICATION_NEW_CARD}`;
+}
+
+/** Strips the one line that hands both Hummocky stratification and Bioturbation this note's real cards. */
+function withoutIntroCrossReferences(original: string): string {
+  return requireReplace(
+    original,
+    'See [[Hummocky stratification]] and [[Bioturbation]].',
+    'See Hummocky stratification and Bioturbation.',
+    INTRO_TO_CLASTIC_PATH,
+  );
+}
+
+/** Strips the one line that hands Bioturbation this note's MCQ. */
+function withoutDepositionCrossReference(original: string): string {
+  return requireReplace(original, 'see [[Bioturbation]].', 'see Bioturbation.', DEPOSITION_PATH);
+}
+
+/** Strips the one (pipe-aliased) line that hands Bioturbation this note's cards. */
+function withoutCementationCrossReference(original: string): string {
+  return requireReplace(
+    original,
+    'never reaches [[Bioturbation|the burrowed interval]] as a compaction surface',
+    'never reaches the burrowed interval as a compaction surface',
+    CEMENTATION_PATH,
+  );
 }
 
 const EXTRA_FILES: ReadonlyMap<VaultPath, string> = new Map([
@@ -114,6 +205,9 @@ const EXTRA_FILES: ReadonlyMap<VaultPath, string> = new Map([
 
 const OVERRIDDEN_FILES: ReadonlyMap<VaultPath, (original: string) => string> = new Map([
   [IMBRICATION_LECTURE_PATH, withImbricationCard],
+  [INTRO_TO_CLASTIC_PATH, withoutIntroCrossReferences],
+  [DEPOSITION_PATH, withoutDepositionCrossReference],
+  [CEMENTATION_PATH, withoutCementationCrossReference],
 ]);
 
 function extensionOf(path: string): string | undefined {
