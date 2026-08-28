@@ -11,6 +11,19 @@
  * `olea-core`'s own `SessionFormatMatch` vocabulary rather than guessing it, so
  * the check fails if a fourth match state is ever added and the stylesheet is
  * not updated to match.
+ *
+ * `ol-0r92.8` moved the seven `--olea-host-*` reads this pane shares with
+ * `.olea-review-root`, `.olea-today-root` and `.olea-gap-root` (bg, text,
+ * muted, faint, line, ui-font, mono) out of this section entirely, onto the
+ * shared `:is(...)` block near the top of the file (`ol-bdeb` put
+ * `.olea-review-root` and `.olea-today-root` on it first). That block sits
+ * OUTSIDE the session slice on purpose — it names classes the session builder
+ * never emits, and a selector naming them inside the slice would fail this
+ * file's own "every rule is reachable from the view" check if it were
+ * included. So the positive host-read coverage check below reads the shared
+ * block directly, by name, rather than the session slice; the negative
+ * assertions (no `@layer`, no `--olea-dark-*`) stay pointed at the session
+ * slice, which correctly still has none of either.
  */
 
 import { readFileSync } from 'node:fs';
@@ -41,6 +54,28 @@ function sessionSection(): string {
 }
 
 const css = sessionSection();
+
+const SHARED_ROOT_SELECTOR =
+  ':is(.olea-review-root, .olea-today-root, .olea-gap-root, .olea-session-root)';
+
+/**
+ * The shared host-reads block `.olea-session-root` carries with the other
+ * three roots (`ol-bdeb`, `ol-0r92.8`) — declared once, outside the session
+ * slice above, so it is read here by name rather than by slicing.
+ */
+function sharedHostReadsBlock(): string {
+  const start = fullCss.indexOf(`${SHARED_ROOT_SELECTOR} {`);
+  expect(
+    start,
+    `styles.css declares a "${SHARED_ROOT_SELECTOR}" rule for the shared host reads`,
+  ).toBeGreaterThanOrEqual(0);
+  const open = fullCss.indexOf('{', start);
+  const close = fullCss.indexOf('}', open);
+  expect(close, 'the shared host-reads rule is terminated').toBeGreaterThan(open);
+  return fullCss.slice(open + 1, close);
+}
+
+const sharedCss = sharedHostReadsBlock();
 
 /** Every `SessionFormatMatch` value, read from the real vocabulary rather than hard-coded. */
 const FORMAT_MATCHES: readonly SessionFormatMatch[] = [
@@ -118,16 +153,38 @@ describe('the session section is a sidebar pane, like the gap view and the Today
     expect(css).not.toContain('--olea-dark-');
   });
 
-  it('reads the host for every ground, text, border and font role', () => {
+  it('reads the host for every ground, text, border and font role, via the shared block it carries with the other three roots', () => {
     for (const hostVar of [
       '--background-primary',
       '--text-normal',
       '--text-muted',
+      '--text-faint',
       '--background-modifier-border',
       '--font-interface',
       '--font-monospace',
     ]) {
-      expect(css).toContain(`var(${hostVar}`);
+      expect(sharedCss).toContain(`var(${hostVar}`);
+    }
+  });
+
+  it('declares the --olea-host-* role reads it shares with the other three roots once, on the shared block, not locally', () => {
+    const SHARED_ROLES = ['bg', 'text', 'muted', 'faint', 'line', 'ui-font', 'mono'];
+    for (const role of SHARED_ROLES) {
+      const declaration = new RegExp(`--olea-host-${role}\\s*:`, 'g');
+      expect(
+        sharedCss.match(declaration),
+        `--olea-host-${role} is declared on the shared :is(...) block`,
+      ).toHaveLength(1);
+      expect(
+        css,
+        `the session section no longer re-declares --olea-host-${role} locally`,
+      ).not.toMatch(declaration);
+    }
+  });
+
+  it("supplies its own neutral floor for the shared reads, never the review root's dark one", () => {
+    for (const role of ['bg', 'text', 'muted', 'faint', 'line']) {
+      expect(css).toMatch(new RegExp(`--olea-host-${role}-floor\\s*:\\s*#[0-9a-f]{6}`, 'i'));
     }
   });
 
