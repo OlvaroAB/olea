@@ -419,6 +419,60 @@ describe('draftQuizCardsForConcept — refusal and "grounded but zero cards" are
   });
 });
 
+describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, `[D-101]`, ol-p3t07c)', () => {
+  it('defaults every chunk to unknown/unknown when deps.classifyPassage is absent — empty exemplars, sent honestly rather than omitted', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    const payload = transport.calls[0]?.payload as {
+      personalization?: { voiceExemplars: { phrasing: string[]; terminology: string[] } };
+    };
+    expect(payload.personalization?.voiceExemplars).toEqual({ phrasing: [], terminology: [] });
+  });
+
+  it('threads deps.classifyPassage through to voice exemplars — hers phrasing, instructor terminology', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      classifyPassage: (chunk) =>
+        chunk.path === TARGET_PATH
+          ? { authorship: 'hers', curationAuthority: 'unknown' }
+          : { authorship: 'unknown', curationAuthority: 'unknown' },
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    const payload = transport.calls[0]?.payload as {
+      personalization?: { voiceExemplars: { phrasing: string[]; terminology: string[] } };
+    };
+    expect(payload.personalization?.voiceExemplars.phrasing).toEqual([TARGET_TEXT]);
+    expect(payload.personalization?.voiceExemplars.terminology).toEqual([]);
+  });
+
+  it('personalization never affects the refusal decision — a below-band request still refuses with zero transport sends regardless of classifyPassage', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      classifyPassage: () => ({ authorship: 'hers', curationAuthority: 'instructor' }),
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(transport.calls).toHaveLength(0);
+  });
+});
+
 describe('draftQuizCardsForConcept — N-013: the band is load-bearing at this call site (ol-i0y6)', () => {
   it('the same below-band input this call site refuses would GROUND if `band` were ever dropped from it', async () => {
     const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);

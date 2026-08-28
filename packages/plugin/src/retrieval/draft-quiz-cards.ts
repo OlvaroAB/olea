@@ -25,6 +25,27 @@
  * `request.conceptName` through as the band's `query` for escalation; this
  * call site does not need to repeat it.
  *
+ * ===========================================================================
+ * PERSONALIZATION CONTEXT (`[D-008]`, F3.8/F3.9, `ol-p3t07c`)
+ * ===========================================================================
+ * `payload.personalization.voiceExemplars` is assembled here, per request,
+ * from `deps.classifyPassage` — an injectable, OPTIONAL hook, the same
+ * opt-in shape `pipeline.ts`'s `deps.routing` already uses for the identical
+ * reason: `[D-101]`'s passage-classification engine (authorship/curation
+ * authority) is F1's block and has no production implementation yet, so this
+ * call site cannot assume one exists. When `deps.classifyPassage` is
+ * absent, every grounded chunk classifies as `authorship: 'unknown',
+ * curationAuthority: 'unknown'` — `assembleVoiceExemplars` already handles
+ * that correctly (empty exemplar sets, never a wrong one), which is the
+ * honest state of the world until `[D-101]` lands.
+ * `payload.personalization.styleProfile` is `olea-core`'s
+ * `DEFAULT_STYLE_PROFILE` — F3.9's own declared numbers from the functional
+ * scope clause — until a real per-student card-corpus feed exists
+ * (`computeStyleProfile` is built and tested for that day; nothing here
+ * calls it yet because nothing here reads her card corpus). Neither ever
+ * affects the grounding decision above: an empty-context refusal happens
+ * before this section runs.
+ *
  * **The judge is constructed here, from `deps.transport`, not injected as a
  * new field on `DraftQuizCardsDeps`.** That is deliberate: `DraftQuizCardsDeps`
  * is what the live F3.3 pipeline lane is building against this same round,
@@ -70,8 +91,15 @@
  */
 
 import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
-import type { WorkerTaskTransport } from 'olea-core';
+import type {
+  ClassifiedPassage,
+  PassageAuthorship,
+  PassageCurationAuthority,
+  VoiceExemplars,
+  WorkerTaskTransport,
+} from 'olea-core';
 import {
+  assembleVoiceExemplars,
   D112_GROUNDING_BAND,
   type GroundingRefusalReason,
   type RetrieveDeps,
@@ -89,13 +117,18 @@ import { WorkerGroundingJudge } from './workerGroundingJudge.js';
  * match with `olea-service/src/tasks/quizGenerate.ts`'s `quizGenerateRequest`
  * zod schema (private; read for shape only, never quoted): `courseCode` and
  * `conceptName` are both required, `sourceChunks` is a plain string array,
- * `questionCount` is optional.
+ * `questionCount` is optional. `personalization` is new (`ol-p3t07c`, F3.8):
+ * transient `[D-008]` context, mirroring `quizGenerateRequest`'s own
+ * `personalization` field one-for-one.
  */
 export interface QuizGenerateRequestPayload {
   readonly courseCode: string;
   readonly conceptName: string;
   readonly sourceChunks: readonly string[];
   readonly questionCount?: number;
+  readonly personalization?: {
+    readonly voiceExemplars: VoiceExemplars;
+  };
 }
 
 /**
@@ -138,6 +171,20 @@ export interface DraftQuizCardsDeps {
   readonly retrieve: RetrieveDeps;
   /** Sends the `quiz.generate.v1` envelope. The SAME transport instance `RetrievalWiring.transport` exposes is the intended one — see that field's doc — but any `WorkerTaskTransport` works, which is what makes this testable without a real Worker. */
   readonly transport: WorkerTaskTransport;
+  /**
+   * `[D-101]`'s passage classification, injected the same opt-in way
+   * `pipeline.ts`'s `deps.routing` is (see the module doc's PERSONALIZATION
+   * CONTEXT section) — absent today because the classifier has no
+   * production implementation, and every real caller of this function
+   * currently supplies nothing. Returning `undefined` for a chunk is
+   * equivalent to `{authorship: 'unknown', curationAuthority: 'unknown'}`.
+   */
+  readonly classifyPassage?: (chunk: { readonly path: string; readonly text: string }) =>
+    | {
+        readonly authorship: PassageAuthorship;
+        readonly curationAuthority: PassageCurationAuthority;
+      }
+    | undefined;
 }
 
 /**
@@ -179,11 +226,26 @@ export async function draftQuizCardsForConcept(
     return { status: 'refused', reason: grounding.reason };
   }
 
+  // F3.8 (`[D-101]`) — see the module doc's PERSONALIZATION CONTEXT section.
+  // `deps.classifyPassage` degrades to `'unknown'`/`'unknown'` for every
+  // chunk when absent, which is today's honest default: `[D-101]`'s
+  // classifier is not wired anywhere yet.
+  const classifiedPassages: ClassifiedPassage[] = grounding.chunks.map((chunk) => {
+    const classified = deps.classifyPassage?.(chunk);
+    return {
+      text: chunk.text,
+      authorship: classified?.authorship ?? 'unknown',
+      curationAuthority: classified?.curationAuthority ?? 'unknown',
+    };
+  });
+  const voiceExemplars = assembleVoiceExemplars(classifiedPassages);
+
   const payload: QuizGenerateRequestPayload = {
     courseCode: request.courseCode,
     conceptName: request.conceptName,
     sourceChunks: grounding.chunks.map((chunk) => chunk.text),
     ...(request.questionCount === undefined ? {} : { questionCount: request.questionCount }),
+    personalization: { voiceExemplars },
   };
 
   const response = await deps.transport.send({
