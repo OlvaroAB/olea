@@ -9,8 +9,14 @@
 
 export type { TwoProportionResult } from './analysis.js';
 export { abInstrumentShareEffect, twoProportionEffect, Z_CRITICAL_ALPHA_05 } from './analysis.js';
-export type { SyntheticCorpus, SyntheticNote } from './corpus.js';
-export { buildCorpus, NOTES, SOURCE_COVERAGE, sourceDisplayName } from './corpus.js';
+export type { CorpusVariant, SyntheticCorpus, SyntheticNote } from './corpus.js';
+export {
+  buildCorpus,
+  NOTES,
+  SOURCE_COVERAGE,
+  SOURCE_COVERAGE_ALL_READ,
+  sourceDisplayName,
+} from './corpus.js';
 export type { SyntheticCurriculum } from './curriculum.js';
 export {
   assessmentDisplayName,

@@ -31,6 +31,7 @@
 // embedding-cassette shape the precompute pass and `oracle/embedding-provider.ts`
 // share.
 export type {
+  CorpusVariant,
   EmbeddingCassette,
   EmbeddingCassetteEntry,
   // The generation cassette (`ol-opmb.3` [TB-3]) — same shape family as the
@@ -92,6 +93,7 @@ export {
   readCassette,
   readGenerationCassette,
   retrievalCorpusBlockCount,
+  SOURCE_COVERAGE_ALL_READ,
   SPARSE_CONCEPT_TOKENS,
   SYNTHETIC_EVENT_ID_PREFIX,
   SYNTHETIC_LOG_FOLDER,

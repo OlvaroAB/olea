@@ -25,7 +25,10 @@ import { deriveOracleTimeline } from '../src/oracle/timeline.js';
 import { coverageClosingLine, newCountSentence, readinessNote } from '../src/plugin-bridge.js';
 import { buildWorld, type WorldSpec } from '../src/synthetic-bridge.js';
 
-function specFor(persona: WorldSpec['persona']): WorldSpec {
+function specFor(
+  persona: WorldSpec['persona'],
+  corpusVariant?: WorldSpec['corpusVariant'],
+): WorldSpec {
   return {
     persona,
     seed: 'feedback-point-spec',
@@ -34,6 +37,7 @@ function specFor(persona: WorldSpec['persona']): WorldSpec {
     deviceId: 'syn-laptop',
     utcOffset: '+00:00',
     assessmentDayOffsets: [42, 93],
+    ...(corpusVariant === undefined ? {} : { corpusVariant }),
   };
 }
 
@@ -201,18 +205,33 @@ describe('feedback point: gap-row material-gap ("missing from your materials")',
 // ---------------------------------------------------------------------------
 // FP5 — gap/copy.ts's `coverageClosingLine` ("Nothing else in the N sources
 // we could read is missing from your materials"): the positive exhaustiveness
-// claim. FINDING, not a passing test: this can never be made to fire in the
-// workbench, because `corpus.ts`'s fixed `SOURCE_COVERAGE` always includes
+// claim.
+//
+// This point has two branches and each needs its own demonstration:
+// withdrawal (the claim is unavailable) and the reassurance itself (the claim
+// fires). `corpus.ts`'s default `'mixed'` `SOURCE_COVERAGE` always includes
 // one 'unreadable' and one 'read-yielded-nothing' row BY CONSTRUCTION
-// (`ol-cvsc`'s own deliberate design — see that file's module doc), so
-// `canStateExhaustiveness` is always false, for every persona, on every day.
-// Reported here rather than papered over: this feedback point's POSITIVE case
-// (she has, in fact, read everything and nothing is missing) has no
-// demonstration anywhere in this workbench today.
+// (`ol-cvsc`'s own deliberate design — see that file's module doc), so with
+// that corpus alone `canStateExhaustiveness` is always false, for every
+// persona, on every day — the withdrawal test below pins exactly that.
+//
+// `ol-opmb.5` [TB-4]'s FP5 finding (`ol-jji7`) was that this left the OTHER
+// branch — she has, in fact, read everything and nothing is missing — with no
+// demonstration anywhere in this workbench: a claim that can never be made to
+// fire is not a passing test, it is an untested surface wearing one. The fix
+// is `corpus.ts`'s `'all-read'` `CorpusVariant` (`SOURCE_COVERAGE_ALL_READ`):
+// the same two past papers and lecture notes, minus the two deliberately
+// imperfect rows, so `canStateExhaustiveness` is true by the same
+// by-construction logic that keeps it false in the default corpus. The
+// reassurance test below exercises that variant end to end (persona, day
+// loop, real `coverageClosingLine`) rather than only unit-testing the pure
+// function — the copy module's own spec (`packages/plugin/test/gap/copy.spec.ts`)
+// already does that half in isolation; this is the demonstration that the
+// full pipeline can actually produce the scope the copy function needs.
 // ---------------------------------------------------------------------------
 
-describe('FINDING: gap-scope exhaustiveness closing line never fires in this workbench', () => {
-  it('canStateExhaustiveness is false, and coverageClosingLine is null, for every persona across a whole semester', async () => {
+describe('feedback point: gap-scope exhaustiveness closing line — withdrawal branch', () => {
+  it('canStateExhaustiveness is false, and coverageClosingLine is null, for every persona across a whole semester (default corpus)', async () => {
     const personas: readonly WorldSpec['persona'][] = [
       'steady-reviewer',
       'crammer',
@@ -227,6 +246,28 @@ describe('FINDING: gap-scope exhaustiveness closing line never fires in this wor
         expect(day.result.gap.scope.canStateExhaustiveness).toBe(false);
         expect(coverageClosingLine(day.result.gap.scope)).toBeNull();
       }
+    }
+  });
+});
+
+describe('feedback point: gap-scope exhaustiveness closing line — reassurance branch', () => {
+  it("fires for the steady reviewer once every source in the 'all-read' corpus variant has been read", async () => {
+    const world = buildWorld(specFor('steady-reviewer', 'all-read'));
+    const timeline = await deriveOracleTimeline({ world, totalDays: 20, computedAtFor });
+    // Day 0 already has a full corpus (the corpus is time-invariant — see
+    // `world.ts`'s module doc), so the claim is available from the first day,
+    // not only once evidence accumulates.
+    const day0 = timeline.days[0];
+    if (day0 === undefined) throw new Error('expected a day 0');
+    expect(day0.result.gap.scope.canStateExhaustiveness).toBe(true);
+    expect(coverageClosingLine(day0.result.gap.scope)).toBe(
+      'Nothing else in the 3 sources we could read is missing from your materials.',
+    );
+    // Holds for the whole semester, not just day 0 — the claim does not
+    // silently withdraw as more history accumulates.
+    for (const day of timeline.days) {
+      expect(day.result.gap.scope.canStateExhaustiveness).toBe(true);
+      expect(coverageClosingLine(day.result.gap.scope)).not.toBeNull();
     }
   });
 });

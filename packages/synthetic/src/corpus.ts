@@ -36,15 +36,25 @@
  *  - `tirasp` — a note, one instrument → a second `mastery-gap`, so the view
  *    is never a single instance of a class away from looking hand-picked.
  *
- * ## The deliberately imperfect read (`ol-cvsc`)
+ * ## The deliberately imperfect read (`ol-cvsc`), and its sibling (`ol-jji7` / FP5)
  *
- * `SOURCE_COVERAGE` always includes one `'unreadable'` row and one
- * `'read-yielded-nothing'` row alongside two ordinary `'read'` ones, so
+ * `SOURCE_COVERAGE` (the `'mixed'` variant, and `buildCorpus`'s default)
+ * always includes one `'unreadable'` row and one `'read-yielded-nothing'` row
+ * alongside two ordinary `'read'` ones, so
  * `summariseCoverageScope(...).canStateExhaustiveness` is `false` by
  * construction — the false-reassurance case `ol-cvsc` exists for, on screen
- * rather than only in a unit test. There is no "clean" variant: a corpus that
- * always reads perfectly would never exercise the one sentence this feature
- * is not allowed to say by accident.
+ * rather than only in a unit test.
+ *
+ * That same construction made the OTHER branch of the exhaustiveness claim —
+ * `canStateExhaustiveness: true`, `coverageClosingLine`'s reassuring text —
+ * undemonstrated anywhere in this workbench (`ol-opmb.5` [TB-4]'s FP5
+ * finding, `ol-jji7`): with the mixed variant as the only corpus, no
+ * persona on any day could ever read every source cleanly. `SOURCE_COVERAGE_ALL_READ`
+ * and `buildCorpus`'s `'all-read'` variant are that demonstration — the same
+ * two past papers plus the lecture notes, none of the two problematic rows —
+ * so the positive branch has somewhere to render. The mixed variant stays the
+ * default and stays exactly as imperfect as before: this adds a second scope,
+ * it does not soften the first.
  *
  * ## INV-3 and N-015
  *
@@ -115,81 +125,103 @@ const SOURCE_LECTURE_NOTES: VaultPath = `${SYNTHETIC_ID_PREFIX}source:vantrel:le
 const SOURCE_APPENDIX_SCAN: VaultPath = `${SYNTHETIC_ID_PREFIX}source:vantrel:appendix-scan`;
 const SOURCE_HANDOUT: VaultPath = `${SYNTHETIC_ID_PREFIX}source:quorbin:handout`;
 
+const PAPER_1_ROW: SourceCoverage = {
+  sourcePath: SOURCE_PAPER_1,
+  kinds: ['registered-file'],
+  role: 'past-paper',
+  format: 'pdf',
+  duplicateSourcePaths: [],
+  courses: [COURSE_VANTREL],
+  outcome: 'extracted',
+  pages: 5,
+  units: 12,
+  citations: 3,
+  limitations: [],
+};
+
+const PAPER_2_ROW: SourceCoverage = {
+  sourcePath: SOURCE_PAPER_2,
+  kinds: ['registered-file'],
+  role: 'past-paper',
+  format: 'pdf',
+  duplicateSourcePaths: [],
+  courses: [COURSE_VANTREL],
+  outcome: 'extracted',
+  pages: 4,
+  units: 9,
+  citations: 3,
+  limitations: [],
+};
+
+const LECTURE_NOTES_ROW: SourceCoverage = {
+  sourcePath: SOURCE_LECTURE_NOTES,
+  kinds: ['embedded-file'],
+  role: 'course-material',
+  format: null,
+  duplicateSourcePaths: [],
+  courses: [COURSE_VANTREL],
+  outcome: null,
+  pages: 0,
+  units: 0,
+  citations: 0,
+  limitations: [],
+};
+
+/** The `ol-cvsc` case: reached, and could not be read. Must never look like a clean zero — see `olea-core`'s `gap/coverage.ts` module doc. Present only in the `'mixed'` variant. */
+const APPENDIX_SCAN_ROW: SourceCoverage = {
+  sourcePath: SOURCE_APPENDIX_SCAN,
+  kinds: ['embedded-file'],
+  role: 'course-material',
+  format: 'image',
+  duplicateSourcePaths: [],
+  courses: [COURSE_VANTREL],
+  outcome: 'unreadable',
+  pages: 0,
+  units: 0,
+  citations: 0,
+  limitations: [],
+};
+
+/** Read successfully; there was nothing in it. A different state from 'unreadable' and must not collapse into it. Present only in the `'mixed'` variant. */
+const HANDOUT_ROW: SourceCoverage = {
+  sourcePath: SOURCE_HANDOUT,
+  kinds: ['registered-file'],
+  role: 'course-material',
+  format: 'pdf',
+  duplicateSourcePaths: [],
+  courses: ['syn:course:quorbin'],
+  outcome: 'empty-document',
+  pages: 3,
+  units: 0,
+  citations: 0,
+  limitations: [],
+};
+
 /**
- * Four rows, one per `SourceReadState` (`olea-core`'s `gap/coverage.js`) —
- * `'read'` (×2), `'read-yielded-nothing'`, `'unreadable'` — so
- * `canStateExhaustiveness` is always `false`. See the module doc.
+ * Five rows, one per `SourceReadState` (`olea-core`'s `gap/coverage.js`) —
+ * `'read'` (×2), `'read-yielded-nothing'`, `'unreadable'` — plus the
+ * lecture-notes row, so `canStateExhaustiveness` is always `false`. See the
+ * module doc.
  */
 export const SOURCE_COVERAGE: readonly SourceCoverage[] = [
-  {
-    sourcePath: SOURCE_PAPER_1,
-    kinds: ['registered-file'],
-    role: 'past-paper',
-    format: 'pdf',
-    duplicateSourcePaths: [],
-    courses: [COURSE_VANTREL],
-    outcome: 'extracted',
-    pages: 5,
-    units: 12,
-    citations: 3,
-    limitations: [],
-  },
-  {
-    sourcePath: SOURCE_PAPER_2,
-    kinds: ['registered-file'],
-    role: 'past-paper',
-    format: 'pdf',
-    duplicateSourcePaths: [],
-    courses: [COURSE_VANTREL],
-    outcome: 'extracted',
-    pages: 4,
-    units: 9,
-    citations: 3,
-    limitations: [],
-  },
-  {
-    sourcePath: SOURCE_LECTURE_NOTES,
-    kinds: ['embedded-file'],
-    role: 'course-material',
-    format: null,
-    duplicateSourcePaths: [],
-    courses: [COURSE_VANTREL],
-    outcome: null,
-    pages: 0,
-    units: 0,
-    citations: 0,
-    limitations: [],
-  },
-  {
-    // The `ol-cvsc` case: reached, and could not be read. Must never look like
-    // a clean zero — see `olea-core`'s `gap/coverage.ts` module doc.
-    sourcePath: SOURCE_APPENDIX_SCAN,
-    kinds: ['embedded-file'],
-    role: 'course-material',
-    format: 'image',
-    duplicateSourcePaths: [],
-    courses: [COURSE_VANTREL],
-    outcome: 'unreadable',
-    pages: 0,
-    units: 0,
-    citations: 0,
-    limitations: [],
-  },
-  {
-    // Read successfully; there was nothing in it. A different state from
-    // 'unreadable' and must not collapse into it.
-    sourcePath: SOURCE_HANDOUT,
-    kinds: ['registered-file'],
-    role: 'course-material',
-    format: 'pdf',
-    duplicateSourcePaths: [],
-    courses: ['syn:course:quorbin'],
-    outcome: 'empty-document',
-    pages: 3,
-    units: 0,
-    citations: 0,
-    limitations: [],
-  },
+  PAPER_1_ROW,
+  PAPER_2_ROW,
+  LECTURE_NOTES_ROW,
+  APPENDIX_SCAN_ROW,
+  HANDOUT_ROW,
+];
+
+/**
+ * The same three cleanly-read rows from `SOURCE_COVERAGE`, with the
+ * deliberately-unreadable and deliberately-empty rows left out —
+ * `canStateExhaustiveness` is always `true` here (`ol-jji7` / FP5). See the
+ * module doc's "sibling" section for why this exists alongside
+ * `SOURCE_COVERAGE` rather than instead of it.
+ */
+export const SOURCE_COVERAGE_ALL_READ: readonly SourceCoverage[] = [
+  PAPER_1_ROW,
+  PAPER_2_ROW,
+  LECTURE_NOTES_ROW,
 ];
 
 /**
@@ -234,10 +266,21 @@ export interface SyntheticCorpus {
 }
 
 /**
- * The whole corpus, deterministic and unseeded — same discipline as
- * `curriculum.ts`'s `buildCurriculum`.
+ * Which `sourceCoverage` a built corpus carries. `'mixed'` (the default,
+ * unchanged from before `ol-jji7`) is the deliberately-imperfect read
+ * `ol-cvsc` exists to exercise; `'all-read'` is `SOURCE_COVERAGE_ALL_READ` —
+ * the demonstration this bead adds. `notes`/`materialPresence` do not vary by
+ * variant: only what a tier-3 pass is said to have read does.
  */
-export function buildCorpus(): SyntheticCorpus {
+export type CorpusVariant = 'mixed' | 'all-read';
+
+/**
+ * The whole corpus, deterministic and unseeded — same discipline as
+ * `curriculum.ts`'s `buildCurriculum`. `variant` defaults to `'mixed'`, so
+ * every existing caller of `buildCorpus()` is unaffected by this parameter's
+ * addition.
+ */
+export function buildCorpus(variant: CorpusVariant = 'mixed'): SyntheticCorpus {
   const concepts: ConceptRecord[] = NOTES.map((note) => {
     const sourcePaths: readonly VaultPath[] = [note.path];
     return {
@@ -267,7 +310,7 @@ export function buildCorpus(): SyntheticCorpus {
   return {
     notes: NOTES,
     materialPresence: buildMaterialPresence(concepts, instrumentCountsByNotePath),
-    sourceCoverage: SOURCE_COVERAGE,
+    sourceCoverage: variant === 'all-read' ? SOURCE_COVERAGE_ALL_READ : SOURCE_COVERAGE,
   };
 }
 
