@@ -97,6 +97,45 @@ export const DEFAULT_MAX_PASSAGES_PER_READ = 60;
 /** See the module doc's "THE BUDGET" section. */
 export const DEFAULT_PASSAGES_PER_CALL = 20;
 
+/**
+ * The `embedding-proximity` nomination signal's cosine-similarity cutoff
+ * (`EmbeddingProximityOptions.threshold`, `./corpusRelationSignals.js`) —
+ * **DECLARED-adopted, not derived here.** `[D-DERIVE-EMB]` (`ol-u2uj`,
+ * ratified by David 2026-08-28) adopts 0.50 on the quantised-cosine scale as
+ * the provisional threshold, per the round-23 derivation
+ * (`olea-service/findings/embedding-proximity-threshold.md`, zero spend):
+ * 89% clean-arm positive retention, 24% background nomination, lift 3.7,
+ * bracketed [0.495, 0.505] by two independent selection rules; honest
+ * ceiling on record — topic-matched AUC 0.659, the verdict stage carries
+ * precision, not this signal.
+ *
+ * Four revisit conditions, any ONE of which requires re-derivation before
+ * this number may be relied on further:
+ *   1. the corpus batch becomes course-scoped;
+ *   2. the first 50 model verdicts land on proximity-nominated pairs;
+ *   3. a real `readConcepts` run against the snapshot;
+ *   4. any embedding-model change.
+ *
+ * **Condition 1 fires the instant `ol-2zfj.29` lands** — that bead threads
+ * `courses` through `corpusConceptsFrom` above, making the corpus batch
+ * course-scoped in production for the first time. The derivation this
+ * constant is measured against ran on the OLD, unscoped candidate space
+ * (the pre-`ol-x3qg` wiring), where the signal's discriminating power was
+ * substantially a topic detector across the whole vault — most of that
+ * power is expected to disappear within a single course. Re-derivation is
+ * `ol-3ux7.26` (zero spend — the corpus is already embedded), running
+ * concurrently with this change; until it is ratified, production runs
+ * course-scoped nomination against a threshold derived under the wrong
+ * scope. This is a KNOWN, recorded consequence of landing `ol-2zfj.29` —
+ * course-scoped candidates are strictly narrower than unscoped ones, so the
+ * signal cannot become MORE permissive than the derivation measured — but
+ * its recall/volume trade-off is stale until `ol-3ux7.26` closes.
+ *
+ * This constant moves only via a decision bead (Class C) — never edited in
+ * place on a hunch, per the run charter's numbers-are-decided-by-data rule.
+ */
+export const EMBEDDING_PROXIMITY_THRESHOLD = 0.5;
+
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this module needs — same narrow-port pattern every other store in this plugin uses. */
 export interface ObsidianDataHost {
   loadData(): Promise<unknown>;
@@ -265,13 +304,29 @@ export async function buildCorpusRelationWiring(
  * `CorpusConcept[]` (this stage's own narrower input) — dropping every
  * concept with no `anchor`, exactly as `ReadConcept.anchor`'s own doc says
  * such a concept must be: "ineligible for the corpus-level relation stage."
+ *
+ * **Threads `courses` through (`ol-2zfj.29`, `ol-x3qg`).** C7.10 and
+ * `[D-082]` both scope the corpus-level stage to "a course's concept set,"
+ * not the whole vault at once; `nominate.ts`'s `shareACourse` check
+ * (`packages/core`) was landed inert by `ol-x3qg` because this function was
+ * dropping `ReadConcept.courses` on the floor, leaving every caller
+ * permissive (`courses: undefined`) regardless of what the read actually
+ * knew. Carrying it through is what makes that check live: `courses: []`
+ * (a concept confirmed to sit in no course) excludes it from pairing on
+ * either side, the same "ineligible for this stage" posture `anchor` already
+ * holds here.
  */
 export function corpusConceptsFrom(concepts: readonly ReadConcept[]): readonly CorpusConcept[] {
   return concepts
     .filter(
       (concept): concept is ReadConcept & { anchor: Provenance } => concept.anchor !== undefined,
     )
-    .map((concept) => ({ name: concept.name, aliases: concept.aliases, anchor: concept.anchor }));
+    .map((concept) => ({
+      name: concept.name,
+      aliases: concept.aliases,
+      anchor: concept.anchor,
+      courses: concept.courses,
+    }));
 }
 
 export interface RunCorpusRelationBatchIfDueOptions {

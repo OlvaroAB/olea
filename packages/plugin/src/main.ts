@@ -39,6 +39,7 @@ import {
   type ConceptWiring,
   type CorpusRelationWiring,
   classifyConceptKnowledgeKind,
+  EMBEDDING_PROXIMITY_THRESHOLD,
   type KnowledgeKindWiring,
   type ReadConceptsFromVaultOptions,
   readConceptsAndRelations,
@@ -880,9 +881,26 @@ export default class OleaPlugin extends Plugin {
       // Assessment-error-adjacency records (`ol-2zfj.19`/`ol-2zfj.22`/
       // `ol-2zfj.23`): a `null` load means "could not read the vault" and
       // maps to OMITTING the option — absent, not guessed, per
-      // `AssessmentErrorAdjacencyOptions`' own contract. `embeddingProximity`
-      // stays unthreaded: its required similarity threshold is a derived
-      // constant no derivation has produced (`ol-3ux7.11`).
+      // `AssessmentErrorAdjacencyOptions`' own contract.
+      //
+      // `embeddingProximity` (`ol-2zfj.23` round-2, `ol-2zfj.13`) is now
+      // threaded too: `[D-DERIVE-EMB]` (`ol-u2uj`) ratified the required
+      // `threshold` this option needs (`EMBEDDING_PROXIMITY_THRESHOLD`, see
+      // `concept/wiring.ts`'s doc for the measured basis and the four
+      // revisit conditions), and it reads off `this.retrieval.embeddingCache`
+      // — the SAME already-built local cache `drainEmbeddings` feeds, never a
+      // new embedding call. Omitted, same F7.8-shaped posture as every other
+      // option here, when the Worker isn't configured yet and that cache is
+      // `null`.
+      //
+      // **Known, recorded consequence of `ol-2zfj.29` landing alongside this
+      // round:** that bead threads `courses` through `corpusConceptsFrom`,
+      // making the corpus batch course-scoped in production for the first
+      // time — which fires `[D-DERIVE-EMB]`'s revisit condition 1 the moment
+      // it lands. Production therefore now runs course-scoped nomination
+      // against a threshold measured under the OLD, unscoped candidate
+      // space, pending `ol-3ux7.26`'s re-derivation (zero spend, already
+      // filed and running concurrently) and its ratification.
       const vault = new ObsidianSource(this.app);
       const deviceId = await ensureDeviceId(this);
       const misconceptionStore = createVaultMisconceptionStore({
@@ -891,6 +909,7 @@ export default class OleaPlugin extends Plugin {
         now: () => new Date(),
       });
       const records = await misconceptionStore.load();
+      const embeddingCache = this.retrieval?.embeddingCache;
       const pass = await readConceptsAndRelations(
         this.concept,
         this.corpusRelation,
@@ -899,6 +918,14 @@ export default class OleaPlugin extends Plugin {
           vault,
           ingestionSessionClosed: true,
           ...(records !== null ? { assessmentErrorAdjacency: { records } } : {}),
+          ...(embeddingCache !== null && embeddingCache !== undefined
+            ? {
+                embeddingProximity: {
+                  cache: embeddingCache,
+                  threshold: EMBEDDING_PROXIMITY_THRESHOLD,
+                },
+              }
+            : {}),
         },
       );
       if (pass === null) return;
