@@ -57,6 +57,17 @@ export const OLEA_COMMAND_BULK_REVIEW_OPEN = 'olea-bulk-review-open';
  * that can be told apart from an Olea defect.
  */
 export const OLEA_COMMAND_DIAGNOSTICS_COPY = 'olea-diagnostics-copy';
+/**
+ * `[POST-1]`/`ol-r68l`, mechanics ruled `[D-134]`: opens F8.8's post-
+ * assessment retrospective as its own dedicated view — David's ruling on
+ * DSN-2's open question 10 ("which surface hosts it, mechanically"). The
+ * standing offer card (`[D-134]` Q1: "offered from Home and the grove") is a
+ * separate affordance this command does not itself provide — see
+ * `packages/plugin/src/retrospective/offer-card.ts`'s module doc for why
+ * neither host surface exists yet in this plugin, and this command is the
+ * one honestly-reachable door onto the retrospective until they do.
+ */
+export const OLEA_COMMAND_RETROSPECTIVE_OPEN = 'olea-retrospective-open';
 // `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
 // round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
 // student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea

@@ -13,6 +13,7 @@ import {
   OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
+  OLEA_COMMAND_RETROSPECTIVE_OPEN,
   OLEA_COMMAND_REVIEW_START,
   OLEA_COMMAND_SESSION_BUILD,
   OLEA_COMMAND_TODAY_OPEN,
@@ -42,12 +43,13 @@ function fakeHandlers(): OleaCommandHandlers {
     openGap: vi.fn(),
     buildSession: vi.fn(),
     openBulkReview: vi.fn(),
+    openRetrospective: vi.fn(),
     copyDiagnostics: vi.fn(),
   };
 }
 
 describe('buildOleaCommands', () => {
-  it('registers exactly the eight command ids (review, create, today, open, gap, session, bulk-review, diagnostics) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-p6t02 added "diagnostics"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
+  it('registers exactly the nine command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
     const commands = buildOleaCommands(fakeHandlers());
     expect(commands.map((c) => c.id).sort()).toEqual(
       [
@@ -56,6 +58,7 @@ describe('buildOleaCommands', () => {
         OLEA_COMMAND_DIAGNOSTICS_COPY,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_OPEN,
+        OLEA_COMMAND_RETROSPECTIVE_OPEN,
         OLEA_COMMAND_REVIEW_START,
         OLEA_COMMAND_SESSION_BUILD,
         OLEA_COMMAND_TODAY_OPEN,
@@ -80,6 +83,7 @@ describe('buildOleaCommands', () => {
     expect(byId[OLEA_COMMAND_GAP_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_SESSION_BUILD]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_BULK_REVIEW_OPEN]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.hotkeys).toBeUndefined();
   });
 
@@ -95,6 +99,7 @@ describe('buildOleaCommands', () => {
     byId[OLEA_COMMAND_GAP_OPEN]?.callback();
     byId[OLEA_COMMAND_SESSION_BUILD]?.callback();
     byId[OLEA_COMMAND_BULK_REVIEW_OPEN]?.callback();
+    byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.callback();
     byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.callback();
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
@@ -107,6 +112,7 @@ describe('buildOleaCommands', () => {
     expect(handlers.openGap).toHaveBeenCalledTimes(1);
     expect(handlers.buildSession).toHaveBeenCalledTimes(1);
     expect(handlers.openBulkReview).toHaveBeenCalledTimes(1);
+    expect(handlers.openRetrospective).toHaveBeenCalledTimes(1);
     expect(handlers.copyDiagnostics).toHaveBeenCalledTimes(1);
   });
 
@@ -129,7 +135,7 @@ describe('registerOleaCommands', () => {
     const registrar = new FakeCommandRegistrar();
     registerOleaCommands(registrar, fakeHandlers());
 
-    expect(registrar.registered).toHaveLength(8);
+    expect(registrar.registered).toHaveLength(9);
     expect(registrar.registered.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_BULK_REVIEW_OPEN,
@@ -137,6 +143,7 @@ describe('registerOleaCommands', () => {
         OLEA_COMMAND_DIAGNOSTICS_COPY,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_OPEN,
+        OLEA_COMMAND_RETROSPECTIVE_OPEN,
         OLEA_COMMAND_REVIEW_START,
         OLEA_COMMAND_SESSION_BUILD,
         OLEA_COMMAND_TODAY_OPEN,

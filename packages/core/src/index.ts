@@ -924,6 +924,27 @@ export {
   WorkerEmbeddingError,
   WorkerEmbeddingProvider,
 } from './retrieval/workerProvider.js';
+// F8.8's post-assessment retrospective (`[POST-1]`, `ol-r68l`, `[D-134]`) —
+// what held, what faded, and what carries, over a caller-resolved scope (see
+// `retrospective/types.ts`'s module doc for why the scope itself is never
+// derived here). `hasAssessmentPassed`/`resolveRetrospectiveOfferStatus` are
+// the pure half of the offer mechanism; see `retrospective/offer.ts`'s
+// module doc for what is deliberately NOT persisted by this package.
+export { buildRetrospective } from './retrospective/build.js';
+export {
+  hasAssessmentPassed,
+  type RetrospectiveOfferEvent,
+  type RetrospectiveOfferStatus,
+  resolveRetrospectiveOfferStatus,
+} from './retrospective/offer.js';
+export type {
+  RetrospectiveCarriesLine,
+  RetrospectiveConceptCoverage,
+  RetrospectiveConceptLine,
+  RetrospectiveInput,
+  RetrospectiveReading,
+  RetrospectiveScopeOrigin,
+} from './retrospective/types.js';
 // [D-077] / C6.2a's immutable content store — her explanation text, the
 // grader's feedback and misconception detail, referenced from a review
 // event's explainBackGrade.contentRef by id. See review-log/content-store.ts
@@ -942,6 +963,18 @@ export {
   readContentRecord,
   writeContentRecord,
 } from './review-log/content-store.js';
+// [EVID-1] (`ol-0r92.1`) — the per-instrument explain-back history is a
+// projection over the review log, never a second write; entries carry
+// contentRef only and compose with content-store.ts to resolve evidence.
+export type {
+  ExplainBackHistoryEntry,
+  GradedExplainBackReview,
+} from './review-log/explain-back-history.js';
+export {
+  explainBackGradeEvents,
+  explainBackGradeHistoryByInstrument,
+  latestExplainBackGradeByInstrument,
+} from './review-log/explain-back-history.js';
 export type { MergeReviewLogResult } from './review-log/merge.js';
 export { mergeReviewLogRecords } from './review-log/merge.js';
 export type { InvalidReviewLogLine, ParseReviewLogResult } from './review-log/parse.js';

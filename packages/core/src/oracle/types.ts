@@ -202,12 +202,16 @@ export interface RankOracleOptions {
    */
   readonly proximityHalfLifeDays?: number;
   /**
-   * Divisor normalizing `AssessmentRecord.weight` (assumed a percentage of
-   * course grade, per the Bases table's own `Sum` summary) into `[0, 1]`.
-   * Default 100. If a course's weights are entered on a different scale
-   * this silently under- or over-weights that course relative to others —
-   * flagged rather than guarded against, since nothing in the contract
-   * states the scale is always 0–100.
+   * Divisor mapping `AssessmentRecord.weight` into `[0, 1]`. **Default 1
+   * since `[D-143]`** (was 100): the weight is canonically a *fraction* of
+   * the course grade, normalised at ingest
+   * (`../assessment/weight.ts`), so the default is an identity and a
+   * half-the-grade assessment scores 0.5. The scale-mismatch hazard this
+   * field used to only flag is now handled rather than tolerated — a
+   * percentage-basis value is converted, not silently mis-scaled. See
+   * `rank.ts`'s `DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR` for the
+   * re-derivation and for why the seam is kept even though the fallback is
+   * now declared rather than derived.
    */
   readonly assessmentWeightDivisor?: number;
   /**

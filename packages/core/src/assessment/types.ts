@@ -4,6 +4,7 @@
  */
 
 import type { VaultPath } from '../vault/types.js';
+import type { AssessmentWeightBasis } from './weight.js';
 
 /** The semantic fields an Assessment record carries (knowledge model §4). */
 export type AssessmentField = 'course' | 'type' | 'weight' | 'due' | 'status';
@@ -28,6 +29,16 @@ export const REQUIRED_ASSESSMENT_FIELDS: readonly AssessmentField[] = [
  * one; `weightRaw` keeps the untouched source text alongside it so a caller
  * can tell "weight was 0" from "weight didn't parse".
  *
+ * **`weight` is a FRACTION of the course grade, `0..1` (`[D-143]`)** — the
+ * one field this reader does reinterpret, and it says so rather than
+ * leaving two bases in circulation. A source value above 1 is read as a
+ * percentage and divided by 100 on ingest; `weightBasis` records which
+ * reading was applied and `weightRaw` still carries the untouched text. The
+ * invariant is what lets component 3.3 score the weight as an identity
+ * instead of a scale nobody downstream can check (`../oracle/rank.ts`); a
+ * record built by hand rather than by this reader should be normalised
+ * through `./weight.ts` for the same reason.
+ *
  * Any field this reader could not resolve a column for is `undefined` here
  * — never a fabricated default — and the field's name appears in the
  * report's `unresolvedFields` so that is never mistaken for "she has no
@@ -38,6 +49,17 @@ export interface AssessmentRecord {
   readonly course: string | undefined;
   readonly type: string | undefined;
   readonly weight: number | undefined;
+  /**
+   * Which reading `[D-143]` gave `weightRaw` — `'percentage'` when the
+   * source value was above 1 and was divided by 100, `'fraction'` when it
+   * was taken as-is. `undefined` when no weight was readable at all, which
+   * is the same absence `weight: undefined` reports and never a claim that
+   * the weight was zero. Optional so a hand-built record (a fixture, a
+   * synthetic corpus) is not forced to assert a basis it has no source text
+   * for; a consumer that needs the guarantee should normalise through
+   * `./weight.ts` rather than infer one from the number's magnitude.
+   */
+  readonly weightBasis?: AssessmentWeightBasis | undefined;
   readonly weightRaw: string | undefined;
   readonly due: string | undefined;
   readonly status: string | undefined;

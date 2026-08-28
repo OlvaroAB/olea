@@ -42,15 +42,33 @@ describe('readAssessments — against the real Assignments.base fixture', () => 
     expect(types).toEqual(new Set(['Quiz', 'Assignment', 'Lab', 'Test']));
   });
 
-  it('parses weight as a number and each course sums to 100', async () => {
+  // `[D-143]`: weights are canonically FRACTIONS of the course grade, and
+  // this fixture records them on the percentage basis — so a full course now
+  // sums to 1, not 100. The sum is the check worth keeping (it is the Base's
+  // own `Sum` summary), and it is now basis-independent: whichever way she
+  // writes them, a complete course comes to the whole grade.
+  it('parses weight as a number and each course sums to the whole grade (1.0) after [D-143] normalization', async () => {
     const report = await readAssessments(source, BASE_PATH);
     const byCourse = new Map<string, number>();
     for (const r of report.records) {
       if (r.course === undefined || r.weight === undefined) continue;
       byCourse.set(r.course, (byCourse.get(r.course) ?? 0) + r.weight);
     }
-    expect(byCourse.get('GEOL204')).toBe(100);
-    expect(byCourse.get('MUSTH104')).toBe(100);
+    expect(byCourse.get('GEOL204') ?? 0).toBeCloseTo(1, 10);
+    expect(byCourse.get('MUSTH104') ?? 0).toBeCloseTo(1, 10);
+  });
+
+  it('records which basis [D-143] read each weight on, rather than normalizing silently', async () => {
+    const report = await readAssessments(source, BASE_PATH);
+    const withWeight = report.records.filter((r) => r.weight !== undefined);
+    expect(withWeight.length).toBeGreaterThan(0);
+    // This fixture is percentage-basis throughout, so every readable weight
+    // must say so — a record reporting `'fraction'` here would mean a value
+    // at or below 1 slipped through, which is the ambiguity worth surfacing.
+    for (const r of withWeight) {
+      expect(r.weightBasis).toBe('percentage');
+      expect(r.weight ?? 0).toBeLessThanOrEqual(1);
+    }
   });
 
   it('reads a specific known record correctly end to end', async () => {
@@ -62,7 +80,11 @@ describe('readAssessments — against the real Assignments.base fixture', () => 
       path: '02 Assignments/Quiz 1 - Grainsize and Roundness.md',
       course: 'GEOL204',
       type: 'Quiz',
-      weight: 5,
+      // `5` in her note, read as 5% of the course grade and normalized to
+      // the canonical fraction basis ([D-143]); `weightRaw` still carries
+      // exactly what she typed.
+      weight: 0.05,
+      weightBasis: 'percentage',
       weightRaw: '5',
       due: '2026-08-14',
       status: 'done',
@@ -142,10 +164,12 @@ describe('readAssessments — tolerant column matching and honest reporting (syn
         path: 'Work/Essay.md',
         course: 'COURSEA',
         type: 'Essay',
-        weight: 30,
+        weight: 0.3,
+        weightBasis: 'percentage',
         weightRaw: '30',
         due: '2026-09-01',
         status: 'upcoming',
+        scope: undefined,
       },
     ]);
   });

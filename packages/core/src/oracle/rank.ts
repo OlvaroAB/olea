@@ -106,6 +106,7 @@
 
 import type { MasteryState } from 'olea-contracts';
 import type { AssessmentRecord } from '../assessment/types.js';
+import { normalizeAssessmentWeight } from '../assessment/weight.js';
 import { daysBetween } from '../dates.js';
 import type { ConceptAssessmentEdge, EvidenceQuestionCitation } from '../evidence-edge/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -136,13 +137,42 @@ import type {
 const DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS = 14;
 
 /**
- * DECLARED FALLBACK (`[D-110]`) — used only when `options` does not supply
- * `assessmentWeightDivisor`. **Plain-English defense:** assessment weights
- * are conventionally recorded as a percentage of the course grade (the
- * Bases table's own `Sum` summary reads up to 100); dividing by 100 is the
- * plain reading of that convention, not a number fitted against any corpus.
+ * DECLARED FALLBACK (`[D-110]`, re-derived and re-classified by `[D-143]` /
+ * `ol-3ux7.30`) — used only when `options` does not supply
+ * `assessmentWeightDivisor`.
+ *
+ * **It was 100, and 100 stopped being right once the basis was fixed.** The
+ * old value assumed weights arrive as percentages (`ol-3ux7.17`). `[D-143]`
+ * rules the canonical basis to be **fractions of the course grade, `0..1`**,
+ * normalised at ingest (`../assessment/weight.ts`). Against fraction-basis
+ * inputs a divisor of 100 pushed the whole weight factor into roughly
+ * `[1e-4, 5e-3]` of its `[0, 1]` range — muted, and visible to her, because
+ * `buildReasoning` renders this score at two decimal places and nearly every
+ * assessment then read as `weight score 0.00`.
+ *
+ * **Why 1, and why this is DECLARED rather than derived.** Once the input is
+ * a fraction of the course grade, the score this factor wants *is* that
+ * fraction: an assessment worth half the grade should score 0.5 on a
+ * `[0, 1]` factor. The divisor becomes an identity, defensible in one
+ * sentence with no corpus behind it — which is the register's own test for a
+ * declared constant rather than a derived one. The `assessmentWeightDivisor`
+ * seam stays exactly as it was (the envelope still carries it, a delivered
+ * value still overrides), so nothing about the artifact contract changes.
+ *
+ * **What the corpus was asked, and what it could NOT answer.** Within a
+ * course the ranking sums `evidenceStrength × weightScore × proximity`, and
+ * no consumer thresholds on the magnitude — every downstream use of
+ * `priorityScore`/`gapScore` is a comparison. So while no weight clamps, the
+ * divisor is a uniform positive scale and the ordering is **identical for
+ * every divisor at or above the largest normalised weight**: an unbounded
+ * plateau, on which order-based evidence discriminates nothing at all. Below
+ * that point the clamp starts tying genuinely different weights together and
+ * destroys distinctions. The measured derivation is therefore about
+ * *fidelity*, not order, and 1 is picked out of that plateau by the
+ * plain-English argument above rather than by a fit. The measurement itself
+ * stays private — it was run against her vault (`ol-3ux7.30`).
  */
-const DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR = 100;
+const DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR = 1;
 
 /**
  * DECLARED FALLBACK (`[D-110]`) — used only when `options` does not supply
@@ -237,15 +267,28 @@ function computeYieldScore(yieldRank: number): number {
  * Assessment weight normalized to `[0, 1]`. Unknown weight is **neutral**
  * (1), never a silent 0 — a missing `weight` field must not zero out a
  * concept's otherwise-real evidence.
+ *
+ * **`[D-143]` is re-applied here, and that is belt-and-braces rather than a
+ * second opinion.** `../assessment/read.ts` already normalises on ingest, and
+ * `normalizeAssessmentWeight` is idempotent over every realistic value, so
+ * for a record that came through the reader this is the identity. It is here
+ * for the records that did NOT: a fixture, a synthetic corpus or a test
+ * builds `AssessmentRecord` by hand and is under no obligation to know about
+ * the ruling. Without it, the divisor's move from 100 to 1 would silently
+ * clamp every such percentage-basis weight to exactly 1.0 and tie them all
+ * together — the ranking would still *run*, and the weight factor would be
+ * dead in precisely the way `ol-3ux7.17` found it dead, which is the failure
+ * mode worth spending three lines to make impossible.
  */
 function computeAssessmentWeightScore(
   weight: number | undefined,
   divisor: number,
 ): { readonly known: boolean; readonly score: number } {
-  if (weight === undefined || !Number.isFinite(weight)) {
+  const { value } = normalizeAssessmentWeight(weight);
+  if (value === undefined) {
     return { known: false, score: 1 };
   }
-  return { known: true, score: Math.max(0, Math.min(1, weight / divisor)) };
+  return { known: true, score: Math.max(0, Math.min(1, value / divisor)) };
 }
 
 /**

@@ -42,6 +42,7 @@ import {
   type ColumnMapping,
   REQUIRED_ASSESSMENT_FIELDS,
 } from './types.js';
+import { normalizeAssessmentWeight } from './weight.js';
 
 /** Known aliases for each semantic field, already lowercased/normalised — see `normalizeKey`. */
 const FIELD_ALIASES: Record<AssessmentField, readonly string[]> = {
@@ -169,13 +170,20 @@ export async function readAssessments(
             };
 
             const weightRaw = readField('weight');
-            const weight = weightRaw === undefined ? undefined : Number(weightRaw);
+            // `[D-143]`: this reader is an INGEST point, so it is where the
+            // canonical fraction basis is established — see ./weight.ts.
+            // Everything downstream (`oracle/rank.ts` and what is built on
+            // it) may then assume `weight` is a fraction of the course grade.
+            const normalizedWeight = normalizeAssessmentWeight(
+              weightRaw === undefined ? undefined : Number(weightRaw),
+            );
 
             return {
               path,
               course: readField('course'),
               type: readField('type'),
-              weight: weight !== undefined && Number.isFinite(weight) ? weight : undefined,
+              weight: normalizedWeight.value,
+              weightBasis: normalizedWeight.basis,
               weightRaw,
               due: readField('due'),
               status: readField('status'),

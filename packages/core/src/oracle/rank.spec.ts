@@ -117,7 +117,11 @@ describe('rankOracle — a single well-evidenced concept', () => {
     // Independently recomputed, not copied from the implementation.
     const yieldScore = 1 / 1; // yieldRank 1
     const confidence = 1;
-    const weightScore = 20 / 100; // AssessmentRecord.weight / default divisor
+    // `20` is percentage-basis, so [D-143] normalizes it to 0.2 and the
+    // default divisor is then the identity (1) — the same 0.2 the old
+    // 20/100 produced, which is why percentage-basis fixtures are unaffected
+    // by the divisor's move.
+    const weightScore = 20 / 100;
     const daysUntilDue = Math.round(
       (Date.parse('2026-09-01T00:00:00.000Z') - Date.parse('2026-08-16T00:00:00.000Z')) /
         86_400_000,
@@ -422,6 +426,54 @@ describe('rankOracle — reasoning cites the actual strongest contributor (deriv
     expect(entry?.factors.contributions[0]?.assessmentPath).toBe('Assessments/Strong.md');
     expect(entry?.reasoning).toContain('Strongest link: Assessments/Strong.md');
     expect(entry?.reasoning).not.toContain('Strongest link: Assessments/Weak.md');
+  });
+});
+
+describe('rankOracle — assessment weight basis ([D-143] / ol-3ux7.30)', () => {
+  const weightScoreFor = (weight: number): number => {
+    const result = rankOracle({
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment({ weight, weightRaw: String(weight) })]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    });
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const score = course.ranked[0]?.factors.contributions[0]?.assessmentWeightScore;
+    if (score === undefined) throw new Error('expected a contribution');
+    return score;
+  };
+
+  // The defect `ol-3ux7.17` found: with the old divisor of 100, a
+  // fraction-basis weight scored ~1/100th of what it meant, and the factor
+  // was effectively dead. This is the assertion that fails if the divisor is
+  // ever put back.
+  it('a fraction-basis weight scores as itself, not as a hundredth of itself', () => {
+    expect(weightScoreFor(0.5)).toBeCloseTo(0.5, 10);
+    expect(weightScoreFor(0.05)).toBeCloseTo(0.05, 10);
+    // Half the course grade must outscore a twentieth of it by 10x, not by
+    // a difference invisible at the two decimal places `buildReasoning`
+    // renders.
+    expect(weightScoreFor(0.5) / weightScoreFor(0.05)).toBeCloseTo(10, 6);
+  });
+
+  it('a percentage-basis weight is converted, and lands where the old divisor put it — so percentage fixtures are unaffected', () => {
+    expect(weightScoreFor(20)).toBeCloseTo(20 / 100, 10);
+    expect(weightScoreFor(100)).toBeCloseTo(1, 10);
+  });
+
+  it('the basis boundary is inclusive-to-fraction at exactly 1 — the whole course grade, not one percent', () => {
+    expect(weightScoreFor(1)).toBeCloseTo(1, 10);
+    // Just above the boundary reads as a percentage, so the score drops
+    // sharply. That discontinuity is the ruling's, made visible rather than
+    // smoothed over: [D-143] chose a predictable rule over a per-note guess.
+    expect(weightScoreFor(1.01)).toBeCloseTo(0.0101, 10);
+  });
+
+  it('a zero weight still scores 0 and stays KNOWN, on either basis', () => {
+    expect(weightScoreFor(0)).toBe(0);
   });
 });
 
@@ -894,7 +946,7 @@ describe('rankOracle — declared fallback vs. delivered weights (D-110, ol-egov
     ...(options !== undefined ? { options } : {}),
   });
 
-  it('with no options supplied, resolves to the declared fallback (half-life 14, divisor 100)', () => {
+  it('with no options supplied, resolves to the declared fallback (half-life 14, divisor 1 since [D-143])', () => {
     const result = rankOracle(singleEdgeInput());
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
@@ -914,7 +966,10 @@ describe('rankOracle — declared fallback vs. delivered weights (D-110, ol-egov
   it('a delivered options object (as if decoded from an artifact envelope) overrides every field it supplies', () => {
     const delivered: RankOracleInput['options'] = {
       proximityHalfLifeDays: 7,
-      assessmentWeightDivisor: 50,
+      // Fraction-basis now that [D-143] normalizes on ingest: 0.5 halves the
+      // weight score relative to the identity default, the same *direction*
+      // the old percentage-basis 50-vs-100 pair expressed.
+      assessmentWeightDivisor: 0.5,
       masteryNeedWeight: { seed: 1, sprout: 0.9, sapling: 0.5, tree: 0.3, unknown: 1 },
     };
     const withFallback = rankOracle(singleEdgeInput());
@@ -931,13 +986,13 @@ describe('rankOracle — declared fallback vs. delivered weights (D-110, ol-egov
       return course.ranked[0];
     })();
 
-    // A smaller divisor (50 vs 100) scores the same 20%-weighted assessment
-    // higher, and a shorter half-life (7 vs 14 days) decays proximity faster
-    // for the same days-until-due — so the delivered priority score must
-    // differ from the fallback one, proving the input actually drives the
-    // arithmetic rather than being silently ignored.
+    // A smaller divisor (0.5 vs the identity 1) scores the same 20%-weighted
+    // assessment higher, and a shorter half-life (7 vs 14 days) decays
+    // proximity faster for the same days-until-due — so the delivered
+    // priority score must differ from the fallback one, proving the input
+    // actually drives the arithmetic rather than being silently ignored.
     expect(deliveredEntry?.factors.contributions[0]?.assessmentWeightScore).toBeCloseTo(
-      20 / 50,
+      0.2 / 0.5,
       10,
     );
     expect(deliveredEntry?.priorityScore).not.toBeCloseTo(fallbackEntry?.priorityScore ?? 0, 5);

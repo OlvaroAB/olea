@@ -65,6 +65,7 @@ import {
   OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
+  OLEA_COMMAND_RETROSPECTIVE_OPEN,
   OLEA_COMMAND_REVIEW_START,
   OLEA_COMMAND_SESSION_BUILD,
   OLEA_COMMAND_TODAY_OPEN,
@@ -81,6 +82,8 @@ export interface OleaCommandHandlers {
   readonly buildSession: () => void;
   /** `ol-jie3`: opens F3.3's bulk-review triage path — the same accept/edit/reject resolution as first-presentation review, at list density, grouped by document. */
   readonly openBulkReview: () => void;
+  /** `ol-r68l` (F8.8, `[D-134]`): opens the post-assessment retrospective's dedicated view. */
+  readonly openRetrospective: () => void;
   /**
    * `ol-p6t02` (F7.5/Q6.3): gathers and copies the content-free diagnostics
    * report to the clipboard. Async internally (`diagnostics-clipboard.ts`);
@@ -157,6 +160,16 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       // No chord named anywhere in the contract for this one, matching the
       // gap/session-builder commands above. Click-only this round —
       // `ol-uxk9` is the keyboard-bindings follow-up.
+    },
+    {
+      id: OLEA_COMMAND_RETROSPECTIVE_OPEN,
+      // F8.8's own words ("what held, what faded, what carries") rather than
+      // "post-assessment" — the palette entry names what she will see, same
+      // convention as "Build a study session" above.
+      name: 'Olea: Open assessment retrospective',
+      callback: handlers.openRetrospective,
+      // No chord named anywhere in the contract for this one, same as the
+      // other unbound commands above.
     },
   ];
 

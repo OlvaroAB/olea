@@ -216,7 +216,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all five view types and all eight commands when onload runs', async () => {
+  it('registers all six view types and all nine commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -234,6 +234,9 @@ describe('the built bundle is what Obsidian can load', () => {
         // same accept/edit/reject resolution `olea-review` offers.
         'olea-bulk-review',
         'olea-gap',
+        // `ol-r68l` (F8.8, `[D-134]`): the post-assessment retrospective's
+        // dedicated view — David's ruling on DSN-2's open question 10.
+        'olea-retrospective',
         'olea-review',
         // `ol-p5t06b`: the session builder (F4.6/F4.7/F4.8), the destination
         // the gap view's `build-session` affordance had been advertising and
@@ -260,6 +263,8 @@ describe('the built bundle is what Obsidian can load', () => {
         // no student-invoked draft verb, because Olea is already drafting.
         'olea-gap-open',
         'olea-open',
+        // `ol-r68l` (F8.8, `[D-134]`): opens the retrospective's dedicated view.
+        'olea-retrospective-open',
         'olea-review-start',
         // `ol-p5t06b`, and F4.6 is the decision behind it: "Build a 20-minute
         // session" is a thing she asks for directly, not only a follow-on from

@@ -87,6 +87,9 @@ import {
   drainIntoEmbeddingCache,
   type RetrievalWiring,
 } from './retrieval/wiring.js';
+import { ObsidianRetrospectiveOfferStore } from './retrospective/offer-store.js';
+import { createLocalRetrospectiveProvider } from './retrospective/provider.js';
+import { RetrospectiveView, VIEW_TYPE_OLEA_RETROSPECTIVE } from './retrospective/view.js';
 import { retrieveExplainWhySourceChunks, WorkerExplainWhyGenerator } from './review/explainWhy.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
@@ -428,6 +431,13 @@ export default class OleaPlugin extends Plugin {
       openBulkReview: () => {
         void this.revealBulkReviewView();
       },
+      // `ol-r68l` (F8.8, `[D-134]`): the retrospective's one honestly-
+      // reachable door until a Home or grove view exists to host the
+      // standing offer card — see `retrospective/offer-card.ts`'s module
+      // doc.
+      openRetrospective: () => {
+        void this.revealRetrospectiveView();
+      },
       copyDiagnostics: () => {
         void copyDiagnosticsToClipboard({
           pluginVersion: this.manifest.version,
@@ -562,6 +572,33 @@ export default class OleaPlugin extends Plugin {
           }),
         ),
     );
+
+    // `ol-r68l` (F8.8, `[D-134]`): the post-assessment retrospective.
+    // `createLocalRetrospectiveProvider` recomputes on every `load()` — no
+    // cache, same posture `createLocalGapProvider`/`createLocalSessionBuilder
+    // Provider` already hold — so this factory closure captures nothing that
+    // goes stale.
+    this.registerView(VIEW_TYPE_OLEA_RETROSPECTIVE, (leaf) => {
+      const provider = createLocalRetrospectiveProvider({
+        vault,
+        deviceId,
+        offerStore: new ObsidianRetrospectiveOfferStore(this),
+        settingsHost: this,
+        now: () => new Date(),
+      });
+      return new RetrospectiveView(leaf, {
+        load: async () => {
+          try {
+            const result = await provider.load();
+            return result === null ? { kind: 'none' } : { kind: 'reading', result };
+          } catch {
+            return { kind: 'unavailable' };
+          }
+        },
+        markOpened: (assessmentPath) => provider.markOpened(assessmentPath),
+        acceptToVault: (reading) => provider.acceptToVault(reading),
+      });
+    });
 
     // Read once and shared by every drain below — D-002's "mobile enqueues,
     // desktop drains" applies to the keyword index rebuild and the embedding
@@ -1404,6 +1441,30 @@ export default class OleaPlugin extends Plugin {
     }
     await workspace.revealLeaf(leaf);
     await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_BULK_REVIEW);
+  }
+
+  /**
+   * Opens F8.8's retrospective (`ol-r68l`, `[D-134]`) in the right sidebar,
+   * or reveals the one already there — the same reuse-don't-stack shape as
+   * `revealGapView`/`revealBulkReviewView`, for the same reason.
+   *
+   * Always refreshes on the way out, mirroring `revealBulkReviewView`'s own
+   * `ol-h3wy` reasoning — a passed assessment noticed between two opens (or
+   * an offer opened/dismissed on another device) must not need a reload to
+   * show. `RetrospectiveView.refresh` is also where opening is recorded
+   * (`deps.markOpened`), so this reveal is the moment F8.8's "offered once"
+   * actually fires, not merely a redraw.
+   */
+  private async revealRetrospectiveView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_RETROSPECTIVE);
+    const leaf = existing[0] ?? workspace.getRightLeaf(false);
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_RETROSPECTIVE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_RETROSPECTIVE);
   }
 
   override onunload(): void {
