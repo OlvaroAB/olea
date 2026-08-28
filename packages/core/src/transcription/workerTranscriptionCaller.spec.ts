@@ -75,7 +75,7 @@ describe('createWorkerTranscriptionCaller — reading the response', () => {
     expect(result).toEqual({ transcript: 'a heap is a tree', durationSeconds: 3.25 });
   });
 
-  it('parses an honest empty transcript (the Worker\'s own no-speech refusal) without treating it as an error', async () => {
+  it("parses an honest empty transcript (the Worker's own no-speech refusal) without treating it as an error", async () => {
     const transport = new RecordingTransport(() =>
       okResponse({ transcript: '', durationSeconds: 2.0 }),
     );

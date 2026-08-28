@@ -45,7 +45,13 @@ describe('buildGradeExplainBackInputFromTranscript — voice is an input method,
       context,
     );
     expect(Object.keys(input).sort()).toEqual(
-      ['question', 'studentAnswer', 'referenceAnswer', 'sourceBlocks', 'misconceptionDigest'].sort(),
+      [
+        'question',
+        'studentAnswer',
+        'referenceAnswer',
+        'sourceBlocks',
+        'misconceptionDigest',
+      ].sort(),
     );
   });
 });
