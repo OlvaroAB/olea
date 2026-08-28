@@ -11,10 +11,11 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these fourteen ids, spelled exactly this way', () => {
+  it('is exactly these fifteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
+      'audio.transcribe.v1',
       'cards.generate.v1',
       'concepts.classify.v1',
       'concepts.extract.v1',
@@ -75,7 +76,13 @@ describe('the closed task-id catalogue', () => {
     // already exists (structure, not correctness) — grouped with W6 rather
     // than treated as a second generation task for the same "judging, not
     // generating" reason `explain-back.judge.v1` itself is.
-    expect(ALL_TASK_IDS).toHaveLength(14);
+    //
+    // `audio.transcribe.v1` (`ol-p4t01`, `[D-007]`, F5.1) carries no W-number
+    // at all — see this id's own doc comment in `tasks.ts`. It is reserved,
+    // not yet served: `whisper-large-v3-turbo` has no measured output ceiling
+    // (`ol-91sr`'s "measure before pinning" rule), so the length below counts
+    // it as spellable, not as live.
+    expect(ALL_TASK_IDS).toHaveLength(15);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

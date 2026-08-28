@@ -159,6 +159,34 @@ export const TASK_IDS = {
    * through).
    */
   MATERIALITY_JUDGE: 'materiality.judge.v1',
+  /**
+   * Slot A — audio transcription for F5.1's spoken explain-back input
+   * (`ol-p4t01`, `[D-007]`). Carries no W-number the way W1–W7 do: the cost
+   * model doc's own Slot A entry
+   * (`docs/Olea_ai_workload_and_cost_model.md` §2, `olea-service` repo) gives
+   * it none either, because voice is an input *method* for F5's existing
+   * flow, not a new generative workload.
+   *
+   * **Voice is an input method, not a new grading path.** This task turns
+   * spoken audio into text; the transcript is handed to
+   * `explain-back.judge.v1` / `explain-back.solo.v1` exactly as typed input
+   * would be — it produces no verdict of its own. Payload/response fixed by
+   * `olea-service/src/tasks/audioTranscribe.ts`
+   * (`@cf/openai/whisper-large-v3-turbo`, per that repo's `src/slots.ts` Slot
+   * A pin). The client-side port is `packages/core/src/transcription/`'s
+   * `TranscriptionCaller`, feeding `GradeExplainBackInput.studentAnswer`
+   * (`gradingPipeline.ts`) — no new grading input shape.
+   *
+   * **Reserved, not yet routed** — the same status `retrieval.rerank.v1` and
+   * `retrieval.embed.v1` once had, for a different reason: `whisper-large-v3-turbo`
+   * carries no `NEURON_PRICING` row and no measured output ceiling in
+   * `olea-service/src/modelCeilings.ts` (`ol-91sr`'s standing "measure before
+   * pinning" rule). The service-side dispatch exists
+   * (`olea-service/src/audioDispatch.ts`) but is deliberately not wired into
+   * `POST /v1/task` — that wiring is the pin-completion act `ol-91sr` gates,
+   * not a client-side concern.
+   */
+  AUDIO_TRANSCRIBE: 'audio.transcribe.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */
