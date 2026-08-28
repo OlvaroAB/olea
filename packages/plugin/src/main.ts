@@ -4,10 +4,12 @@ import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
   type ConceptRelation,
+  type ConfusionPairingVerdict,
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
   type CourseDetectionProposal,
   calendarDayFromLocalDate,
+  corroborateConfusionPairings,
   createFsrsScheduler,
   type DeviceCapability,
   detectCourseProposals,
@@ -246,12 +248,23 @@ export default class OleaPlugin extends Plugin {
    * `composeReviewSession` and the Today panel's `createVaultInstrumentSource`
    * wiring below each pass `this.servedRelationEdges()` into
    * `buildReviewSession`'s `relations` input, which feeds `session/build.ts`'s
-   * C7.9 containment co-presence filter. The two named readers `[D-070]`
-   * gives the corpus types — the misconception record's confusion pairing and
-   * queue ordering — still have no code in this tree, and no clause names a
-   * triage surface (design doc §7.2); that gap is unchanged by this bead.
+   * C7.9 containment co-presence filter. Of `[D-070]`'s two corpus-type
+   * readers, the misconception record's confusion pairing now has real code
+   * and a real caller (`ol-2zfj.32`, `[D-130]`, `tickIngestionAndMaybeRunCorpusRelations`
+   * below); queue ordering does not. No clause names a triage surface (design
+   * doc §7.2); that gap is unchanged by this bead.
    */
   private relations: RelationSet | null = null;
+  /**
+   * The most recent pass's confusion-pairing corroboration verdicts
+   * (`ol-2zfj.32`, `[D-130]`) — `corroborateConfusionPairings` run against
+   * `this.relations` and the misconception projection, held in memory for the
+   * process lifetime same as `this.relations` itself and never persisted.
+   * `[D-130]` names no student surface for this reader; nothing here reads
+   * this field yet, which is the "no surface" half of that ruling rather than
+   * a gap — a future consumer bead is what would give it one.
+   */
+  private confusionPairingVerdicts: readonly ConfusionPairingVerdict[] = [];
   /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
   private lastIngestionSnapshot: QueueSnapshot | null = null;
 
@@ -930,6 +943,22 @@ export default class OleaPlugin extends Plugin {
       );
       if (pass === null) return;
       this.relations = pass.relations;
+
+      // `ol-2zfj.32` (`[D-130]`): the confusion-pairing corroboration
+      // reader's first production caller — makes `relation-reader-check.mjs`'s
+      // `contrasts-with` observation real rather than audited. `records`
+      // already loaded above for the nomination signal; `null` means "could
+      // not read the vault" and is skipped here too, same absent-not-guessed
+      // posture (a store read failure must never read as "zero confusions").
+      // Pure, no persistence, no surface — see `corroborateConfusionPairings`'s
+      // module doc.
+      if (records !== null) {
+        this.confusionPairingVerdicts = corroborateConfusionPairings(
+          pass.relations,
+          records,
+          pass.read.concepts.map((concept) => ({ name: concept.name, aliases: concept.aliases })),
+        );
+      }
     } catch (error) {
       console.error('Olea: corpus relation batch failed', error);
     }
