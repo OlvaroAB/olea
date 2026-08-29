@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these fifteen ids, spelled exactly this way', () => {
+  it('is exactly these sixteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -30,17 +30,23 @@ describe('the closed task-id catalogue', () => {
       'retrieval.embed.v1',
       'retrieval.rerank.v1',
       'sections.summarize.v1',
+      'vision.extract.v1',
     ]);
   });
 
   it('covers every workload shape that reaches a model (cost model §1)', () => {
-    // W1 retrieval (×2: embed, rerank), W3 bulk generation (×3), W4 corpus
-    // reasoning (concept extraction), W5 interactive, W6 judgment (×4:
-    // explain-back, grounding support check, knowledge-kind classification,
-    // materiality verdict), W7 long-context. W2 perception is deliberately
-    // absent: it is reached *through* an ingestion task rather than called
-    // directly by the client (P3-T04 routes to Slot V below the yield
-    // threshold).
+    // W1 retrieval (×2: embed, rerank), W2 perception (vision extraction), W3
+    // bulk generation (×3), W4 corpus reasoning (concept extraction), W5
+    // interactive, W6 judgment (×4: explain-back, grounding support check,
+    // knowledge-kind classification, materiality verdict), W7 long-context.
+    //
+    // `vision.extract.v1` (`[D-153]` / `ol-egov.53`, built by `ol-3ux7.33`) is
+    // W2's entry, minted once `[D-141]`'s deferral condition (`ol-5ggh`)
+    // fired — see its own doc comment in `tasks.ts` for the measurement
+    // history and for why it is reserved-and-routed but deliberately not yet
+    // functional (no image forwarding, no grounding contract — both are the
+    // consuming feature's job, flagged there as a hand-back rather than a
+    // silent gap).
     //
     // W4's `concepts.extract.v1` was reserved rather than registered here from
     // P3-T02 onward — this comment used to be the reminder that its absence
@@ -82,7 +88,7 @@ describe('the closed task-id catalogue', () => {
     // not yet served: `whisper-large-v3-turbo` has no measured output ceiling
     // (`ol-91sr`'s "measure before pinning" rule), so the length below counts
     // it as spellable, not as live.
-    expect(ALL_TASK_IDS).toHaveLength(15);
+    expect(ALL_TASK_IDS).toHaveLength(16);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

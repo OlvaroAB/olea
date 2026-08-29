@@ -187,6 +187,42 @@ export const TASK_IDS = {
    * not a client-side concern.
    */
   AUDIO_TRANSCRIBE: 'audio.transcribe.v1',
+  /**
+   * W2 · Slot V — perception: OCR/vision over a digitally-generated page
+   * image (slide pages, screenshots, diagrams), component register row 1.6,
+   * cost model §2 Slot V. Absent from this catalogue since the freeze as a
+   * DELIBERATE omission (`ol-visiontaskid`), then twice measured
+   * (`ol-6e11`, `ol-3ux7.12`) and deferred with a named revisit (`[D-141]` /
+   * `ol-5ggh`). **Minted by `[D-141]`'s own revisit condition firing:**
+   * `[D-153]` (`ol-egov.53`) ruled MINT once both measurement halves closed,
+   * on the corrected ~10.7% boilerplate-adjusted visual-need figure.
+   *
+   * **Reserved and routed, not yet functional — mirrors `audio.transcribe.v1`'s
+   * own reserve-then-route shape (`ol-p4t01`/`ol-3ux7.29`), built by
+   * `ol-3ux7.33`.** Unlike that task, this one IS a standard chat-completion
+   * `TaskDefinition` (`olea-service/src/tasks/registry.ts`) — Slot V's
+   * pinned model (`@cf/meta/llama-4-scout-17b-16e-instruct`) is reached
+   * through the same call shape every Slot G/J/O task uses, so no new port
+   * or dispatch table was needed the way Whisper's bespoke call shape
+   * required one. Payload/response fixed by
+   * `olea-service/src/tasks/visionExtract.ts`, which also records — loudly,
+   * in its own module doc — that image bytes are NOT forwarded to the model
+   * by this build (`WorkersAiClient.run` sends only text messages) and that
+   * `grounding`/`groundResponse` are deliberately `null` as a FLAGGED
+   * DEFERRAL, not a judgement that this task is exempt from INV-5. Real
+   * OCR/vision behaviour — actually reading a page image, grounding the
+   * extracted text against it, and a real `GroundingContract` for the
+   * confabulation risk this task genuinely carries — is the consuming
+   * feature's job (DF-21's `vision-page` job /
+   * `packages/core/src/ingestion/extraction-runner.ts`'s `visionRunner`
+   * seam in this repo), which designs the real request/response shape
+   * against that caller rather than having it guessed here. This
+   * reservation exists so `ol-91sr`'s standing "measure the output ceiling
+   * before treating a pin as complete" rule has something to probe
+   * (`ol-3ux7.31`) — the same reason `retrieval.rerank.v1` and
+   * `retrieval.embed.v1` were once reserved ahead of their own completion.
+   */
+  VISION_EXTRACT: 'vision.extract.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */
