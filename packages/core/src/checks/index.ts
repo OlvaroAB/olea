@@ -78,6 +78,11 @@ export {
   type RhythmTwinCase,
 } from './rhythm-neutralised-twin.js';
 export {
+  checkScheduleFreshnessNeutralisedTwin,
+  type ScheduleFreshnessNeutralisedTwinMeasured,
+  type ScheduleFreshnessTwinCase,
+} from './schedule-freshness-neutralised-twin.js';
+export {
   checkSupportLevelRecordShape,
   checkSupportOfferRateByDepth,
   type OfferRateBin,

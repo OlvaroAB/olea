@@ -455,6 +455,116 @@ describe('rhythmYardstickClause / rhythmYardstickLine — RHY-3 (`ol-at1a`)', ()
   });
 });
 
+/**
+ * `[D-047]`'s forbidden-framing list, mirrored as a flat, lowercased
+ * substring array in `review/contest.ts`'s own `FORBIDDEN_CONTEST_STRINGS`
+ * shape — the same "so a copy test can assert against it rather than
+ * against a reviewer's memory" reasoning. `[D-047]`'s close reason states
+ * ground 1 as the one that binds: "streaks, effort scores, hours totals and
+ * any compliance representation remain forbidden outright." F6.9's own
+ * clause adds the comparative half — "nothing that reads as compliance"
+ * and never a verdict framed as behind or ahead — which is the tension
+ * `RHY-3-offloading-and-spacing-tension.md` §2 names and tests the drawn
+ * copy against line by line ("does the sentence survive being read on a bad
+ * week?"). This list is that same test, pinned against the SHIPPED
+ * production strings rather than the design-time kit copy it was run
+ * against there.
+ */
+const RHYTHM_BAD_WEEK_FORBIDDEN_FRAMINGS: readonly string[] = [
+  // Streaks — any consecutive-days representation.
+  'streak',
+  'in a row',
+  'consecutive',
+  // Effort scores — any number standing for how hard she tried.
+  'effort score',
+  'effort level',
+  // Hours-studied totals.
+  'hours total',
+  'hours studied',
+  'hours logged',
+  // Any compliance or discipline representation whatsoever.
+  'compliance',
+  'discipline',
+  'keeping up',
+  'catching up',
+  'catch up',
+  // The comparative behind/ahead framing F6.9's own tension paragraph names
+  // as the thing forbidding streaks constrains the tone of without
+  // dissolving — a verdict on how she has been doing, not a fact about the
+  // vault.
+  'behind schedule',
+  'falling behind',
+  "you're behind",
+  'behind',
+  'ahead',
+  'should have',
+  'you should',
+];
+
+describe("F6.9's bad-week test, mechanised: shipped strings pinned against a named forbidden-framing list (D-047, RHY-3-offloading-and-spacing-tension.md §2)", () => {
+  // The design-time check (RHY-3-offloading-and-spacing-tension.md §2) ran
+  // its "survives a bad week?" table against the Pass 5 kit's drawn copy,
+  // line by line. These assertions run the same test against the actual
+  // shipped functions, at the worst constructed magnitudes available to
+  // each — a whole term of silence, and the most overdue calendar/
+  // extrapolated readings — rather than trusting that a design-time pass
+  // over kit copy still describes the strings that ship.
+
+  it('a whole term of silence still names only a fact and a day count — no forbidden framing', () => {
+    // 90 days: the same "a term of silence" magnitude
+    // `rhythm-neutralised-twin.spec.ts`'s own corpus uses for its worst case.
+    const clause = rhythmQuietClause(90).toLowerCase();
+    for (const framing of RHYTHM_BAD_WEEK_FORBIDDEN_FRAMINGS) {
+      expect(clause, `"${framing}" is exactly what F6.9's bad-week test rules out`).not.toContain(
+        framing,
+      );
+    }
+  });
+
+  it('the most overdue observed calendar reading still names only the fact — no forbidden framing', () => {
+    const clause = rhythmYardstickClause('2026-01-05', 'observed').toLowerCase();
+    for (const framing of RHYTHM_BAD_WEEK_FORBIDDEN_FRAMINGS) {
+      expect(clause, `"${framing}" is exactly what F6.9's bad-week test rules out`).not.toContain(
+        framing,
+      );
+    }
+  });
+
+  it('the most overdue extrapolated reading still hedges on basis alone — no forbidden framing', () => {
+    // Extrapolated readings carry their own hedge ("based on its usual
+    // pattern", "expected around") — the bad-week test is that the hedge
+    // never slides into a behind/ahead verdict even at the least confident,
+    // most overdue construction.
+    const clause = rhythmYardstickClause('2026-01-05', 'extrapolated').toLowerCase();
+    for (const framing of RHYTHM_BAD_WEEK_FORBIDDEN_FRAMINGS) {
+      expect(clause, `"${framing}" is exactly what F6.9's bad-week test rules out`).not.toContain(
+        framing,
+      );
+    }
+  });
+
+  it('every rhythm string sampled in the panel-wide corpus clears the same named list', () => {
+    // Redundant with the per-function checks above by construction, and
+    // deliberately so: this is the one assertion that would catch a future
+    // rhythm string added to `allTodayStrings()` without also being run
+    // through the two focused checks above.
+    const rhythmCorpus = [
+      rhythmQuietClause(21),
+      rhythmQuietClause(30),
+      rhythmYardstickClause('2026-08-11', 'observed'),
+      rhythmYardstickClause('2026-08-18', 'extrapolated'),
+    ]
+      .join(' \n ')
+      .toLowerCase();
+    for (const framing of RHYTHM_BAD_WEEK_FORBIDDEN_FRAMINGS) {
+      expect(
+        rhythmCorpus,
+        `"${framing}" is exactly what F6.9's bad-week test rules out`,
+      ).not.toContain(framing);
+    }
+  });
+});
+
 describe('pickRhythmYardstickReading — selects at most one course (`ol-at1a`)', () => {
   it('returns null when the signal could not be computed at all', () => {
     expect(pickRhythmYardstickReading(null)).toBeNull();
