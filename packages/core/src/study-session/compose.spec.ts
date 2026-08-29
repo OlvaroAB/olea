@@ -39,6 +39,7 @@ interface RowSpec {
   readonly course?: string;
   readonly gapScore?: number;
   readonly masteryState?: OracleMasteryState;
+  readonly targetAssessmentPath?: VaultPath | null;
 }
 
 function row(spec: RowSpec, rank: number): GapRow {
@@ -59,7 +60,7 @@ function row(spec: RowSpec, rank: number): GapRow {
       weight: 1,
     },
     masteryState: spec.masteryState ?? 'seed',
-    targetAssessmentPath: null,
+    targetAssessmentPath: spec.targetAssessmentPath ?? null,
     assessmentFormat: 'unknown' as AssessmentFormat,
     citations: [],
     distinctSourceCount: 1,
@@ -512,6 +513,174 @@ describe('composeSessionRows', () => {
     // Course B's block (unmet, precedence 0) sorts ahead of course A's (elective, precedence 3).
     expect(result.orderedRows.map((r) => r.course)).toEqual(['B', 'A']);
   });
+
+  // -------------------------------------------------------------------------
+  // F2.19 — within-block grouping: relatedness absent a near assessment,
+  // shifting toward the assessment's own scope as one approaches. See
+  // features/F2-review.md (olea-service) and compose.ts's own "F2.19"
+  // module-doc section for the data path and the declared, reused half-life
+  // constant.
+  // -------------------------------------------------------------------------
+
+  it('F2.19: with no assessment near, within-block adjacent placement favours concept relatedness', () => {
+    // Alpha and Charlie are C7.10-related to each other; Bravo is related to
+    // neither. All three tie exactly on overdueDays (comparably due) and on
+    // gapScore, so relatedness is the only signal left to decide order —
+    // nothing here is a near assessment (`assessmentContext` is omitted
+    // entirely, which is F2.19's "no assessment near" case).
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Bravo', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Charlie', gapScore: 5, masteryState: 'sprout' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['Alpha']),
+      qa('b1', ['Bravo']),
+      qa('c1', ['Charlie']),
+    ]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+    });
+
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      relatedConceptKeys: new Map([
+        ['Alpha', new Set(['Charlie'])],
+        ['Charlie', new Set(['Alpha'])],
+      ]),
+    });
+
+    // Alpha and Charlie's shared relation pulls them adjacent, ahead of
+    // unrelated Bravo — never `[Alpha, Bravo, Charlie]`, which is exactly
+    // what plain `overdue-first` (ignoring relatedness, falling through to
+    // alphabetical `conceptKey`) would produce instead.
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Charlie', 'Bravo']);
+  });
+
+  it("F2.19: a dated assessment approaching shifts within-block placement toward that assessment's own scope (F1.7)", () => {
+    const midterm = '05 Assessments/Midterm.md' as VaultPath;
+    // Zulu is named in Midterm's resolved scope; Alpha targets the SAME
+    // assessment (the oracle's strongest-contributing edge) but is not named
+    // in its scope; Mike has no assessment at all. All three tie on
+    // overdueDays and gapScore. Names are deliberately chosen so plain
+    // alphabetical `conceptKey` order (`Alpha, Mike, Zulu`) DISAGREES with
+    // the scope-favoured order this test expects — a mutation that dropped
+    // the grouping score back to `overdue-first` alone would silently pass
+    // a test whose expectation happened to already be alphabetical, which
+    // this naming rules out.
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout', targetAssessmentPath: midterm },
+      { conceptName: 'Mike', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Zulu', gapScore: 5, masteryState: 'sprout', targetAssessmentPath: midterm },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['Alpha']),
+      qa('m1', ['Mike']),
+      qa('z1', ['Zulu']),
+    ]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      m1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      z1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+    });
+
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      // Due TODAY — the continuous proximity weight is at its maximum here,
+      // never a discrete "near" flag — so the blend collapses almost
+      // entirely onto scope membership for this ordering.
+      assessmentContext: new Map([
+        [midterm, { dueDay: AS_OF, scopeConceptKeys: new Set(['Zulu']) }],
+      ]),
+    });
+
+    // Zulu (named in the imminent assessment's own scope) moves to the
+    // front; Alpha, though targeting the same assessment, is not named in
+    // its scope and gets no benefit from merely sharing a target — it ties
+    // with unrelated Mike and falls back to plain `conceptKey` order.
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Zulu', 'Alpha', 'Mike']);
+  });
+
+  it('F2.19 / F4.7: a passed assessment exerts no placement weight, even though it names the concept in its own scope', () => {
+    const quiz = '05 Assessments/Quiz.md' as VaultPath;
+    // Zulu targets an assessment that named it in scope but is now ONE DAY
+    // PAST due — F4.7 says a passed assessment "exerts no prioritisation
+    // weight", so Zulu must get no placement credit for it. Alpha carries no
+    // assessment at all. Both tie on overdueDays and gapScore, so the only
+    // question is whether Zulu's passed assessment still shifts it — if a
+    // future edit dropped the passed-assessment guard, Zulu would jump
+    // ahead of Alpha here (a real conceptKey-comparison would otherwise put
+    // Alpha first).
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Zulu', gapScore: 5, masteryState: 'sprout', targetAssessmentPath: quiz },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('z1', ['Zulu'])]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      z1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+    });
+
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      // One day before AS_OF — passed, per F4.7.
+      assessmentContext: new Map([
+        [quiz, { dueDay: '2026-09-13', scopeConceptKeys: new Set(['Zulu']) }],
+      ]),
+    });
+
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Zulu']);
+  });
+
+  it('F2.19: relatedConceptKeys/assessmentContext with no signal for the rows present leaves overdue-first order unchanged (no-op proof)', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Bravo', gapScore: 5, masteryState: 'sprout' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('b1', ['Bravo'])]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+    });
+    const base = {
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+    };
+
+    const withoutSignals = composeSessionRows(base);
+    const withIrrelevantSignals = composeSessionRows({
+      ...base,
+      relatedConceptKeys: new Map([['SomeOtherConcept', new Set(['AnotherOne'])]]),
+      assessmentContext: new Map([
+        ['Unrelated.md' as VaultPath, { dueDay: AS_OF, scopeConceptKeys: new Set(['AnotherOne']) }],
+      ]),
+    });
+
+    expect(withIrrelevantSignals.orderedRows.map((r) => r.conceptName)).toEqual(
+      withoutSignals.orderedRows.map((r) => r.conceptName),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -733,11 +902,12 @@ describe('buildComposedStudySession', () => {
 //
 // This does NOT test the other half of F2.19's claim (that grouping favours
 // relatedness absent a near assessment, and shifts toward the assessment's
-// own scope as one approaches): `compose.ts` has no code implementing that
-// grouping at all today — the only within-block ordering it does is
-// `overdue-first` (days waiting, then gapScore, then conceptKey), which
-// reads no relatedness graph and no assessment scope. See the handback note
-// for that half.
+// own scope as one approaches) — that half is covered by the three
+// `F2.19: ...` scenarios inside the `composeSessionRows` describe block
+// above (`withinBlockOrder`/`withinBlockGroupingScore` in `compose.ts`),
+// plus the no-op equivalence proof alongside them. This block only proves
+// the shapes those functions read and write stay free of a persisted
+// classification.
 // ---------------------------------------------------------------------------
 
 describe('F2.19 — no phase/stage/term-position field in the schema this module reads or writes', () => {

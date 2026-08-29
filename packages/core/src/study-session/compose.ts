@@ -89,6 +89,65 @@
  * rows in the order it is handed, once per pass, so a course-blocked row
  * order interleaves concepts within the block for free.
  *
+ * ## F2.19 — within-block grouping, layered strictly inside a tie
+ *
+ * F2.19 asks for a *further* grouping inside one course's block: absent a
+ * near assessment, adjacent placement favours concept relatedness (C7.10);
+ * as a dated assessment approaches, placement shifts toward that
+ * assessment's own scope (F1.7); both continuous, never a stored phase.
+ * `[D-113]` item 3's `overdue-first` rule stays the block's PRIMARY order —
+ * F2.19 is a refinement among concepts already **exactly tied on
+ * `overdueDays`** ("comparably due", with no invented fuzziness-window: two
+ * concepts either share the same days-waiting number or they don't), never
+ * a second axis competing with urgency. See {@link withinBlockOrder}.
+ *
+ * **The data path, and where it stops.** Both signals are caller-resolved,
+ * matching the `arrivalDays` pattern above exactly, because this module
+ * stays pure (INV-1) and neither signal lives in a `GapRow`:
+ *
+ * - **Relatedness** ({@link ComposeSessionRowsInput.relatedConceptKeys}) —
+ *   `concept/relation.ts`'s `ConceptRelation.from`/`.to` are concept
+ *   **names**; this module partitions and joins on `conceptKey`
+ *   (`ol-63e1`), so a caller resolving names to keys is required either way,
+ *   the same resolution `retrospective/build.ts`'s `conceptCourses` already
+ *   performs for a different join. **No production caller does that
+ *   resolution yet** — same shape of gap as `ARRIVE-1`'s `arrivalDays`
+ *   before it was wired: this module is ready for the signal the day a
+ *   caller supplies it, and degrades identically (see below) until then.
+ *   Deliberately type-agnostic over C7.10's six relation types — the clause
+ *   says "concepts that connect to each other", not one type, so which
+ *   edges count as "connected" is the caller's call.
+ * - **Assessment scope** ({@link ComposeSessionRowsInput.assessmentContext})
+ *   — keyed by the exact `VaultPath` a row's own {@link GapRow.targetAssessmentPath}
+ *   already names (the oracle's own strongest-contributing assessment for
+ *   that concept, F4.2/F4.7 weight-and-yield already blended into which
+ *   assessment that is — this module does not re-derive assessment
+ *   `weight`, only reads that assessment's `dueDay` and F1.7's resolved
+ *   `scopeConceptKeys`). Building this map means resolving `AssessmentScope.text`
+ *   (`assessment/scope.ts`) to concept keys — free text, no code path exists
+ *   for that resolution yet — so this is a second, separate reachability
+ *   gap from relatedness's, left to the production caller for the same
+ *   reason.
+ *
+ * **Both maps are optional, and their absence is a no-op, provably.** With
+ * either or both omitted, {@link withinBlockGroupingScore} reads 0 for
+ * every row (no relation entry, no assessment context), so every row in a
+ * tie band scores equal and the stable sort falls through to
+ * {@link overdueFirst}'s own `gapScore`/`conceptKey` tiebreak — byte-for-byte
+ * today's behaviour. `compose.spec.ts` pins this equivalence explicitly.
+ *
+ * **The proximity weight is continuous, never a "near" threshold.** A
+ * concept's own target assessment contributes a weight that decays smoothly
+ * with `daysUntilDue` (half-life {@link WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS}),
+ * the same declared-fallback shape `../oracle/rank.ts`'s
+ * `DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS` already uses for the same
+ * F4.7 arithmetic (`[D-110]`) — reused here, not re-derived, because it is
+ * the same "how fast does an approaching date start to matter" judgement
+ * applied to a second consumer. **F4.7's stop-at-the-assessment rule is
+ * enforced by construction**: a `dueDay` that has passed (or is unknown)
+ * reads as weight 0, which hands the row's placement entirely to
+ * relatedness — never a negative or inverted push from a sat exam.
+ *
  * ## Overflow is not a student-visible surface (C5.9, F6.7)
  *
  * {@link ComposeSessionRowsResult.overflow} is a count per obligation class
@@ -148,6 +207,7 @@ import {
   isCalendarDay,
   shiftCalendarDay,
 } from '../today/calendar-day.js';
+import type { VaultPath } from '../vault/types.js';
 import {
   type BuildStudySessionInput,
   buildStudySession,
@@ -344,6 +404,137 @@ function overdueFirst(a: ClassifiedRow, b: ClassifiedRow): number {
   return a.row.conceptKey < b.row.conceptKey ? -1 : a.row.conceptKey > b.row.conceptKey ? 1 : 0;
 }
 
+/**
+ * F1.7's per-assessment date and resolved scope, keyed by the same
+ * `VaultPath` a row's own `GapRow.targetAssessmentPath` names. See the
+ * module doc's "F2.19 — within-block grouping" section for the data path
+ * and why `weight` is deliberately not re-modelled here.
+ */
+export interface AssessmentGroupingContext {
+  /** F4.7's dated arithmetic input. `null` reads as "no known deadline" — the same honest-unknown posture `daysUntilDue: null` gets in `../oracle/rank.ts`, never a fabricated date. */
+  readonly dueDay: CalendarDay | null;
+  /** F1.7's resolved scope (`../assessment/scope.ts`'s `AssessmentScope.text`), already turned into concept keys by the caller — the same shape `../retrospective/build.ts`'s `RetrospectiveConceptCoverage` already is for a different consumer. */
+  readonly scopeConceptKeys: ReadonlySet<string>;
+}
+
+/**
+ * The half-life (days) an assessment's continuous placement-shift weight
+ * decays over as its due date recedes — see the module doc. **Declared, not
+ * derived**: reused verbatim from `../oracle/rank.ts`'s
+ * `DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS` (`[D-110]`), which is itself
+ * argued there as a client-side default rather than a fitted number. This
+ * module applies the identical argument to a second, structurally identical
+ * question ("how fast does an approaching date start to matter") rather than
+ * inventing a second constant for the same judgement.
+ */
+export const WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS = 14;
+
+/**
+ * F4.7's continuous countdown, applied to ONE row's own target assessment.
+ * `0` for "no known deadline" and, by construction, for a **passed**
+ * assessment (`daysUntilDue < 0`) — F4.7's "exerts no weight" enforced as a
+ * value rather than a branch a caller could forget. Never negative, never
+ * above 1.
+ */
+function withinBlockAssessmentProximity(dueDay: CalendarDay | null, asOf: CalendarDay): number {
+  if (dueDay === null) return 0;
+  const daysUntilDue = daysBetweenCalendarDays(asOf, dueDay);
+  if (daysUntilDue < 0) return 0;
+  return 1 / (1 + daysUntilDue / WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS);
+}
+
+/**
+ * How connected `conceptKey` is to its `peers` (the rest of its tie band,
+ * same course) — the fraction of peers it shares a C7.10 edge with, `0` when
+ * `related` is absent/empty or there are no peers to compare against. This is
+ * the "adjacent placement favours relatedness" half of F2.19: a concept
+ * connected to more of its comparably-due neighbours scores higher and sorts
+ * toward the rest of that cluster, without this module ever building a
+ * clustering structure of its own.
+ */
+function withinBlockRelatedness(
+  conceptKey: string,
+  peers: readonly string[],
+  related: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+): number {
+  if (related === undefined || peers.length === 0) return 0;
+  const own = related.get(conceptKey);
+  if (own === undefined || own.size === 0) return 0;
+  const connected = peers.filter((peer) => own.has(peer)).length;
+  return connected / peers.length;
+}
+
+/**
+ * One row's F2.19 placement-affinity score within its tie band — higher
+ * sorts earlier. `(1 - proximity) * relatedness + proximity * scopeMembership`:
+ * a continuous blend, never a staged switch, so "no assessment near favours
+ * relatedness" and "an approaching assessment favours its own scope" are the
+ * SAME formula read at different points on one continuous weight, exactly as
+ * F2.19 requires. `0` for every row when neither optional map is supplied —
+ * see the module doc's no-op proof.
+ */
+function withinBlockGroupingScore(
+  c: ClassifiedRow,
+  peers: readonly string[],
+  relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  asOf: CalendarDay,
+): number {
+  const relatedness = withinBlockRelatedness(c.row.conceptKey, peers, relatedConceptKeys);
+  const context =
+    c.row.targetAssessmentPath !== null
+      ? assessmentContext?.get(c.row.targetAssessmentPath)
+      : undefined;
+  if (context === undefined) return relatedness;
+  const proximity = withinBlockAssessmentProximity(context.dueDay, asOf);
+  const scopeMembership = context.scopeConceptKeys.has(c.row.conceptKey) ? 1 : 0;
+  return (1 - proximity) * relatedness + proximity * scopeMembership;
+}
+
+/**
+ * F2.19: reorders each course-block's `overdue-first` bucket WITHIN its own
+ * exact-`overdueDays` tie bands only — see the module doc for why equality is
+ * the tie-band boundary (zero invented fuzziness) and why this cannot move a
+ * row across bands (urgency is never overridden). Bands are scored
+ * independently and concatenated back in `overdueFirst`'s own band order;
+ * ties within a band fall back to `overdueFirst` itself (`gapScore`, then
+ * `conceptKey`), so with no relatedness/assessment-context signal this is
+ * `overdueFirst` unchanged.
+ */
+function withinBlockOrder(
+  bucket: readonly ClassifiedRow[],
+  relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  asOf: CalendarDay,
+): readonly ClassifiedRow[] {
+  const sorted = [...bucket].sort(overdueFirst);
+  const result: ClassifiedRow[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    const first = sorted[i];
+    if (first === undefined) break;
+    let j = i + 1;
+    while (j < sorted.length && sorted[j]?.overdueDays === first.overdueDays) j += 1;
+    const band = sorted.slice(i, j);
+    const keys = band.map((c) => c.row.conceptKey);
+    const scored = band.map((c) => ({
+      c,
+      // Exclude self from its own peer set.
+      score: withinBlockGroupingScore(
+        c,
+        keys.filter((k) => k !== c.row.conceptKey),
+        relatedConceptKeys,
+        assessmentContext,
+        asOf,
+      ),
+    }));
+    scored.sort((a, b) => (a.score !== b.score ? b.score - a.score : overdueFirst(a.c, b.c)));
+    result.push(...scored.map((s) => s.c));
+    i = j;
+  }
+  return result;
+}
+
 function groupByCourse(rows: readonly ClassifiedRow[]): ReadonlyMap<string, ClassifiedRow[]> {
   const byCourse = new Map<string, ClassifiedRow[]>();
   for (const c of rows) {
@@ -423,11 +614,24 @@ function courseBudgetsFor(
   return out;
 }
 
-/** F2.18: course blocks, ordered by the most urgent obligation class present; concepts within a block kept in `overdue-first` order. See the module doc. */
-function blockByCoursePresentation(chosen: readonly ClassifiedRow[]): readonly ClassifiedRow[] {
+/**
+ * F2.18: course blocks, ordered by the most urgent obligation class present;
+ * concepts within a block kept in `overdue-first` order, refined by F2.19's
+ * within-tie-band grouping (see {@link withinBlockOrder} and the module
+ * doc) when `relatedConceptKeys`/`assessmentContext` are supplied.
+ */
+function blockByCoursePresentation(
+  chosen: readonly ClassifiedRow[],
+  relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  asOf: CalendarDay,
+): readonly ClassifiedRow[] {
   const byCourse = groupByCourse(chosen);
-  for (const bucket of byCourse.values()) bucket.sort(overdueFirst);
-  const blocks = [...byCourse.entries()].sort((a, b) => {
+  const ordered = new Map<string, readonly ClassifiedRow[]>();
+  for (const [course, bucket] of byCourse) {
+    ordered.set(course, withinBlockOrder(bucket, relatedConceptKeys, assessmentContext, asOf));
+  }
+  const blocks = [...ordered.entries()].sort((a, b) => {
     const best = (items: readonly ClassifiedRow[]) =>
       items.reduce((m, c) => Math.min(m, CLASS_PRECEDENCE[c.klass]), Number.POSITIVE_INFINITY);
     const diff = best(a[1]) - best(b[1]);
@@ -480,6 +684,20 @@ export interface ComposeSessionRowsInput {
    * section for why 0 is the honest fallback.
    */
   readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
+  /**
+   * F2.19: C7.10 relation adjacency, keyed by `conceptKey`, each value the
+   * set of OTHER `conceptKey`s it connects to. **Optional and safe to omit
+   * entirely** — see the module doc's "F2.19" section for the data path and
+   * the no-op proof when this is absent.
+   */
+  readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * F2.19: F1.7's per-assessment date and resolved scope, keyed by the exact
+   * `VaultPath` a row's own `targetAssessmentPath` names. **Optional and
+   * safe to omit entirely** — see {@link AssessmentGroupingContext} and the
+   * module doc's "F2.19" section.
+   */
+  readonly assessmentContext?: ReadonlyMap<VaultPath, AssessmentGroupingContext>;
 }
 
 export interface ComposeSessionRowsResult {
@@ -501,7 +719,17 @@ export interface ComposeSessionRowsResult {
  * slightly tight candidate set — never a wrong final session.
  */
 export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessionRowsResult {
-  const { rows, instruments, replay, durations, asOf, budgetSeconds, arrivalDays } = input;
+  const {
+    rows,
+    instruments,
+    replay,
+    durations,
+    asOf,
+    budgetSeconds,
+    arrivalDays,
+    relatedConceptKeys,
+    assessmentContext,
+  } = input;
 
   const classified: ClassifiedRow[] = rows.map((row) => {
     const { lastRetrievalDay, recallDueDay } = obligationSignalsFor(
@@ -557,7 +785,12 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     spent += c.cost;
   }
 
-  const orderedRows = blockByCoursePresentation(chosen).map((c) => c.row);
+  const orderedRows = blockByCoursePresentation(
+    chosen,
+    relatedConceptKeys,
+    assessmentContext,
+    asOf,
+  ).map((c) => c.row);
   const overflow = buildOverflow(classified, chosenKeys);
 
   return { orderedRows, overflow, courseShares: shares, forcedCourses: forced };
@@ -570,6 +803,10 @@ export interface BuildComposedStudySessionInput
   readonly replay: ReplayResult;
   /** ARRIVE-1 — see `ComposeSessionRowsInput.arrivalDays`, passed straight through. */
   readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
+  /** F2.19 — see `ComposeSessionRowsInput.relatedConceptKeys`, passed straight through. */
+  readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** F2.19 — see `ComposeSessionRowsInput.assessmentContext`, passed straight through. */
+  readonly assessmentContext?: ReadonlyMap<VaultPath, AssessmentGroupingContext>;
 }
 
 export interface ComposedStudySession {
@@ -613,6 +850,12 @@ export function buildComposedStudySession(
     asOf: input.asOf,
     budgetSeconds,
     ...(input.arrivalDays !== undefined ? { arrivalDays: input.arrivalDays } : {}),
+    ...(input.relatedConceptKeys !== undefined
+      ? { relatedConceptKeys: input.relatedConceptKeys }
+      : {}),
+    ...(input.assessmentContext !== undefined
+      ? { assessmentContext: input.assessmentContext }
+      : {}),
   });
 
   const model = buildStudySession({
