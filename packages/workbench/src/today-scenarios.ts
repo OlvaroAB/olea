@@ -219,22 +219,19 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       return {
         deps: {
           load: () =>
-            Promise.resolve({
-              ...buildTodayPanel({
+            Promise.resolve(
+              // `ol-ksw7`: `courseFreshness` is now a `TodayPanelInput` field
+              // `buildTodayPanel` itself resolves to `null` when omitted —
+              // this state never wires a rhythm source, so no `courseFreshness`
+              // input is needed to get that same "no rhythm source wired" null.
+              buildTodayPanel({
                 entries: [],
                 instruments: [],
                 today,
                 dueThrough,
                 windowDays: DEFAULT_STREAK_WINDOW_DAYS,
               }),
-              // `ol-at1a` widened `TodayViewDeps.load` to
-              // `TodayViewModelWithSchedule` (RHY-3's calendar-schedule
-              // freshness signal). This state hand-builds a `TodayViewModel`
-              // straight from `buildTodayPanel` and never wires that source —
-              // `null` is its own documented "no rhythm source wired" case,
-              // not a fabricated empty reading.
-              scheduleFreshness: null,
-            }),
+            ),
           startReview,
         },
         logged,
@@ -245,17 +242,16 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       return {
         deps: {
           load: () =>
-            Promise.resolve({
-              ...buildTodayPanel({
+            Promise.resolve(
+              // See `today-nothing-due`'s comment above.
+              buildTodayPanel({
                 entries: [],
                 instruments: null,
                 today,
                 dueThrough,
                 windowDays: DEFAULT_STREAK_WINDOW_DAYS,
               }),
-              // See `today-nothing-due`'s comment above.
-              scheduleFreshness: null,
-            }),
+            ),
           startReview,
         },
         logged,

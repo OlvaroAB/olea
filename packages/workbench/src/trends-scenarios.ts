@@ -280,17 +280,17 @@ export function buildTrendsScenario(stateId: string): TrendsScenario {
   if (state === undefined)
     throw new Error(`workbench: unknown trends state ${JSON.stringify(stateId)}`);
 
-  // `ol-at1a` widened `TodayViewDeps.load` to `TodayViewModelWithSchedule`
-  // (RHY-3's calendar-schedule freshness signal). This surface replays a
-  // persona stream through `buildTodayPanel` and never wires that source —
-  // `null` is its own documented "no rhythm source wired" case. Widened
-  // ONCE, here, rather than inside `deps.load`'s closure: `viewModel` below
-  // is the exact object both `load()` resolves to and this scenario returns
-  // as `viewModel`, and `renderTrendsInspector`'s own doc promises the
-  // inspector "re-states the same `viewModel` the pane rendered from, never
-  // a second computation" — a fresh object per `load()` call would break
-  // that identity.
-  const viewModel = { ...buildTrendsViewModel(state.id), scheduleFreshness: null };
+  // `courseFreshness` is a `TodayPanelInput` field now (`ol-ksw7`), which
+  // `buildTrendsViewModel`'s `buildTodayPanel` call already resolves to
+  // `null` by omitting it — this surface never wires a rhythm source, so no
+  // extra widening is needed to get that "no rhythm source wired" null.
+  // Read once, here, rather than inside `deps.load`'s closure: `viewModel`
+  // below is the exact object both `load()` resolves to and this scenario
+  // returns as `viewModel`, and `renderTrendsInspector`'s own doc promises
+  // the inspector "re-states the same `viewModel` the pane rendered from,
+  // never a second computation" — a fresh object per `load()` call would
+  // break that identity.
+  const viewModel = buildTrendsViewModel(state.id);
 
   return {
     deps: {

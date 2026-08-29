@@ -35,6 +35,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import type { WeightedAssessment } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
+import type { CourseFreshnessReading } from '../schedule/freshness.js';
 import type { CalendarDay } from './calendar-day.js';
 import { type DueInstrument, type DueSummary, summariseDue } from './due.js';
 import { buildMasteryOverview, type MasteryOverview } from './mastery-overview.js';
@@ -105,6 +106,34 @@ export interface TodayPanelInput {
    * yardstick, and `detectRhythm` never blocks on its absence.
    */
   readonly termWindow?: TermWindow | null;
+  /**
+   * RHY-3's calendar-schedule freshness signal (`ol-4chx` -> `ol-r6s0` ->
+   * `ol-hna1` -> `ol-at1a`; migrated in from a plugin-local widening by
+   * `ol-ksw7`) — one reading per course the calendar-events note's matched
+   * events cover, from `computeScheduleFreshness`.
+   *
+   * **Arrives pre-computed, unlike `mastery`/`insights`/`rhythm` above.**
+   * Producing a reading needs `discoverScheduleEvents`'s vault-wide scan,
+   * which this pure function does not perform — the caller (`olea-core`'s
+   * schedule-extraction chain, driven today from `packages/plugin/src/
+   * today/data-source.ts`'s `resolveScheduleFreshness`) computes the full
+   * list and hands it over already resolved; this field is a pass-through,
+   * not a derivation.
+   *
+   * **`undefined` (never supplied) and `null` (supplied, but the signal
+   * could not be computed — no rhythm source wired yet, or the vault read
+   * failed) both degrade to the same output** — see `TodayViewModel.
+   * courseFreshness`. A caller that has a rhythm source wired always passes
+   * one of `null` or a real reading list, never omits the key; the
+   * `undefined` case exists for every other caller (tests, the workbench)
+   * that has not been taught about this signal at all. `[]` is a real,
+   * common answer: a vault with a calendar note but nothing overdue for any
+   * course it names, or no calendar note discovered anywhere — both degrade
+   * to "no yardstick" for every course, which is what a copy layer
+   * (`packages/plugin/src/today/copy.ts`'s `pickRhythmYardstickReading`)
+   * already does with an empty array.
+   */
+  readonly courseFreshness?: readonly CourseFreshnessReading[] | null;
 }
 
 export interface TodayViewModel {
@@ -130,6 +159,14 @@ export interface TodayViewModel {
    * state rather than a computed "no courses" answer.
    */
   readonly rhythm: RhythmInsight | null;
+  /**
+   * RHY-3's calendar-schedule freshness reading, echoed straight from
+   * `TodayPanelInput.courseFreshness` — `undefined` there becomes `null`
+   * here, the same "always a key, possibly null" posture `due`/`mastery`/
+   * `insights`/`rhythm` above already take. See that field's doc for the
+   * full state table; this function performs no further computation on it.
+   */
+  readonly courseFreshness: readonly CourseFreshnessReading[] | null;
   /**
    * How many days of review history the numbers above were computed over —
    * echoed back from `windowDays` so the panel can state its own scope rather
@@ -194,7 +231,12 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
           ...(input.termWindow !== undefined ? { termWindow: input.termWindow } : {}),
         });
 
-  return { due, streak, mastery, insights, rhythm, windowDays: input.windowDays };
+  // `ol-ksw7`: arrives pre-computed (see `TodayPanelInput.courseFreshness`'s
+  // doc) — nothing to derive here beyond the same "undefined input becomes
+  // null output" resolution every optional field on this function performs.
+  const courseFreshness = input.courseFreshness ?? null;
+
+  return { due, streak, mastery, insights, rhythm, courseFreshness, windowDays: input.windowDays };
 }
 
 /** Shared because it is immutable and read-only — no caller can add to it. */

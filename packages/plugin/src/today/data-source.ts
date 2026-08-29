@@ -480,39 +480,22 @@ export interface TodayPanelDeps {
 }
 
 /**
- * `TodayViewModel` widened with RHY-3's calendar-schedule freshness signal
- * (`ol-4chx` -> `ol-r6s0` -> `ol-hna1` -> `ol-at1a`) — see
- * `resolveScheduleFreshness` below for how it is computed and `view.ts`'s
- * `renderRhythmBody` for how it feeds the already-drawn rhythm empty state.
- *
- * **Kept as a plugin-local widening, not a new `TodayPanelInput`/
- * `TodayViewModel` field.** Those two types belong to `olea-core`'s
- * `today/panel.ts`, outside this bead's `owns` scope
- * (`packages/plugin/src/today/`, `packages/core/src/schedule/`) — adding the
- * field there instead is the more natural long-term home (the same place
- * `rhythm` itself lives) and is named as the exact diff in this bead's
- * hand-back, not attempted here.
- */
-export type TodayViewModelWithSchedule = TodayViewModel & {
-  /**
-   * One reading per course the calendar-events note's matched events cover.
-   * `null` when the signal could not be computed at all (no rhythm source
-   * wired yet — pre-`onload`, never a reachable production render — or its
-   * arrival store could not be read; `resolveRhythmFields`'s own absent
-   * case). `[]` is a real, common answer: a vault with a calendar note but
-   * nothing overdue for any course it names, or no calendar note discovered
-   * anywhere (RHY-3 §6 row 1) — both degrade to "no yardstick" for every
-   * course, which is exactly what an empty array, read by
-   * `pickRhythmYardstickReading`, already produces.
-   */
-  readonly scheduleFreshness: readonly CourseFreshnessReading[] | null;
-};
-
-/**
  * Loads both halves and folds them through core's one entry point. This is the
  * whole of what `view.ts` calls; everything it then does is DOM.
+ *
+ * **RHY-3's calendar-schedule freshness signal is resolved here, before the
+ * call, and passed in as `TodayPanelInput.courseFreshness`** (`ol-ksw7`) —
+ * no longer a plugin-local widening of the return value
+ * (`TodayViewModelWithSchedule`, `ol-at1a`). The field's home is now
+ * `olea-core`'s `today/panel.ts`, since it is the same shape of signal
+ * `rhythm` already is; only the *computation* stays here, because producing
+ * a reading needs `discoverScheduleEvents`'s vault-wide scan, which
+ * `buildTodayPanel` (a pure function over already-resolved inputs) does not
+ * perform. See `resolveScheduleFreshness` below for how it is computed and
+ * `view.ts`'s `renderRhythmBody` for how it feeds the already-drawn rhythm
+ * empty state.
  */
-export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewModelWithSchedule> {
+export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewModel> {
   const now = deps.now();
   const today = localToday(now);
   // Resolved here rather than forwarded as `undefined`: under
@@ -541,21 +524,16 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   const trendsFields = await resolveTrendsFields(deps.trends);
   const rhythmFields = await resolveRhythmFields(deps.rhythm);
 
-  const vm = await buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields });
-
-  // RHY-3's calendar-schedule freshness — computed alongside `buildTodayPanel`
-  // rather than through it (see `TodayViewModelWithSchedule`'s doc). Reuses
-  // the same "last arrival per course" fact `rhythmFields` already read,
-  // rather than reading the arrival store a second time.
+  // RHY-3's calendar-schedule freshness — reuses the same "last arrival per
+  // course" fact `rhythmFields` already read, rather than reading the
+  // arrival store a second time. Resolved before `buildTodayPanel` now that
+  // `courseFreshness` travels in through `TodayPanelInput` rather than being
+  // spliced onto the return afterwards.
   const courseMaterialArrivals =
     'courseMaterialArrivals' in rhythmFields ? rhythmFields.courseMaterialArrivals : null;
-  const scheduleFreshness = await resolveScheduleFreshness(
-    deps.vault,
-    courseMaterialArrivals,
-    today,
-  );
+  const courseFreshness = await resolveScheduleFreshness(deps.vault, courseMaterialArrivals, today);
 
-  return { ...vm, scheduleFreshness };
+  return buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields, courseFreshness });
 }
 
 /** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */

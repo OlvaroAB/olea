@@ -706,7 +706,7 @@ describe('loadTodayPanel', () => {
         now,
         windowDays: 30,
       });
-      expect(vm.scheduleFreshness).toBeNull();
+      expect(vm.courseFreshness).toBeNull();
     });
 
     it('is null when the wired rhythm source cannot enumerate arrivals, not a thrown error', async () => {
@@ -727,7 +727,7 @@ describe('loadTodayPanel', () => {
         windowDays: 30,
         rhythm,
       });
-      expect(vm.scheduleFreshness).toBeNull();
+      expect(vm.courseFreshness).toBeNull();
     });
 
     it('is an empty list, not null, when a rhythm source is wired but no calendar note is discoverable', async () => {
@@ -748,7 +748,7 @@ describe('loadTodayPanel', () => {
         windowDays: 30,
         rhythm,
       });
-      expect(vm.scheduleFreshness).toEqual([]);
+      expect(vm.courseFreshness).toEqual([]);
     });
 
     it('reports a with-yardstick reading for a course whose calendar sessions are unmatched by any arrival', async () => {
@@ -780,7 +780,7 @@ describe('loadTodayPanel', () => {
         windowDays: 30,
         rhythm,
       });
-      expect(vm.scheduleFreshness).toEqual([
+      expect(vm.courseFreshness).toEqual([
         expect.objectContaining({
           courseCode: 'FIXTURE101',
           status: 'not-arrived-with-yardstick',

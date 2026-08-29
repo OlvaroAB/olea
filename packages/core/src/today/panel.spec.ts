@@ -53,12 +53,14 @@ const instruments: readonly DueInstrument[] = [
 describe('buildTodayPanel', () => {
   it('is the halves it has and nothing else', () => {
     // Was `['due', 'streak']` until F6.2/F6.5 (`ol-lohq`, `ol-p6t04`) added the
-    // trends half, and `rhythm` joined it at F6.9 (`ol-v7r5.6`). Kept as an
-    // exact field-set assertion rather than relaxed to `toContain`: the point
-    // of it is that a field cannot appear here without somebody deciding it
-    // should.
+    // trends half, `rhythm` joined it at F6.9 (`ol-v7r5.6`), and
+    // `courseFreshness` joined it at `ol-ksw7` (migrated in from a
+    // plugin-local widening). Kept as an exact field-set assertion rather
+    // than relaxed to `toContain`: the point of it is that a field cannot
+    // appear here without somebody deciding it should.
     const vm = buildTodayPanel(input());
     expect(Object.keys(vm).sort()).toEqual([
+      'courseFreshness',
       'due',
       'insights',
       'mastery',
@@ -174,6 +176,43 @@ describe('buildTodayPanel — F6.9 rhythm reading (ol-v7r5.6)', () => {
       }),
     );
     expect(vm.rhythm?.measured?.hadTermWindow).toBe(false);
+  });
+});
+
+describe('buildTodayPanel — RHY-3 calendar-schedule freshness pass-through (`ol-ksw7`)', () => {
+  // Migrated in from a plugin-local widening (`TodayViewModelWithSchedule` in
+  // `packages/plugin/src/today/data-source.ts`, `ol-at1a`) — this function
+  // performs no computation on the field, only the same "undefined input
+  // becomes null output" resolution every other optional field here takes.
+  // INV-3: every course code below is coined for this test.
+
+  it('is null when the field was never supplied — the same third state every other optional input takes', () => {
+    const vm = buildTodayPanel(input());
+    expect(vm.courseFreshness).toBeNull();
+  });
+
+  it('is null when the field was explicitly supplied as null — "the signal could not be computed"', () => {
+    const vm = buildTodayPanel(input({ courseFreshness: null }));
+    expect(vm.courseFreshness).toBeNull();
+  });
+
+  it('an EMPTY list is a real answer, distinct from null, and passes through unchanged', () => {
+    const vm = buildTodayPanel(input({ courseFreshness: [] }));
+    expect(vm.courseFreshness).toEqual([]);
+  });
+
+  it('a real reading list passes through verbatim, with no reshaping', () => {
+    const readings = [
+      {
+        courseCode: 'FIXTURE101',
+        status: 'not-arrived-with-yardstick' as const,
+        expectedSessionDate: '2026-08-05',
+        basis: 'observed' as const,
+        reason: 'test fixture reading',
+      },
+    ];
+    const vm = buildTodayPanel(input({ courseFreshness: readings }));
+    expect(vm.courseFreshness).toBe(readings);
   });
 });
 
