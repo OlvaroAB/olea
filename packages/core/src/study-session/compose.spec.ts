@@ -560,6 +560,59 @@ describe('buildComposedStudySession', () => {
     expect(composed.model).toEqual(expectedModel);
   });
 
+  // F2.18 — "within a course's block, concepts interleave rather than
+  // exhausting one before the next" (features/F2-review.md, olea-service).
+  // `compose.ts`'s own module doc says this needs no code in THIS module:
+  // `blockByCoursePresentation` only decides which course-block goes first
+  // and, within a block, orders concepts `overdue-first` — it never groups a
+  // concept's own instruments together. The interleaving is a property of
+  // `buildStudySession`'s breadth-first fill (one instrument per row per
+  // pass) applied to that row order. This test exercises the two modules
+  // together, end to end, because that is the only place the claim is
+  // observable: a regression to a depth-first fill (all of one concept's
+  // instruments before moving to the next) would leave `composeSessionRows`
+  // unchanged and only show up here.
+  it('F2.18: within a course block, two concepts each with two due instruments interleave rather than running one concept to exhaustion first', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', course: 'CRS101', gapScore: 5, masteryState: 'sprout' },
+      { conceptName: 'Beta', course: 'CRS101', gapScore: 5, masteryState: 'sprout' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('alpha1', ['Alpha']),
+      qa('alpha2', ['Alpha']),
+      qa('beta1', ['Beta']),
+      qa('beta2', ['Beta']),
+    ]);
+    // Alpha more overdue (44 days since) than Beta (13 days since), both past
+    // sprout's 5-day baseline rung — `overdue-first` orders Alpha ahead of
+    // Beta within the (single) course block, deterministically.
+    const theReplay = replay({
+      alpha1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      alpha2: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      beta1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      beta2: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+    });
+
+    const composed = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    // Interleaved: Alpha, Beta, Alpha, Beta — never Alpha, Alpha, Beta, Beta
+    // (which is exactly what a depth-first, one-concept-to-exhaustion fill
+    // would produce instead).
+    expect(composed.model.items.map((item) => item.conceptName)).toEqual([
+      'Alpha',
+      'Beta',
+      'Alpha',
+      'Beta',
+    ]);
+  });
+
   it('passes supportHistory/supportSelfAssessment straight through to buildStudySession (row 3.9, `[SUPP-2]`) — this layer adds no seam of its own', () => {
     const theRows = rows([{ conceptName: 'A', gapScore: 9, masteryState: 'sprout' }]);
     const instruments = buildConceptInstrumentIndex([qa('a1', ['A'])]);
@@ -665,5 +718,53 @@ describe('buildComposedStudySession', () => {
     expect(Object.keys(composed).sort()).toEqual(
       ['courseShares', 'forcedCourses', 'model', 'overflow'].sort(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2.19 — "no phase field, phase enum or stage label exists anywhere in the
+// schema" (features/F2-review.md, olea-service). This is the schema half of
+// F2.19's claim: the course/concept/student shapes this module reads and
+// writes carry no persisted classification for the grouping to be read off
+// of — it is recomputed from calendar arithmetic every time (F4.7). A future
+// edit that added, say, a `coursePhase`/`termStage`/`termPosition` field to
+// `GapRow`, `ObligationSignals` or `ObligationClassification` — the exact
+// shape of regression this scenario exists to catch — would fail this test.
+//
+// This does NOT test the other half of F2.19's claim (that grouping favours
+// relatedness absent a near assessment, and shifts toward the assessment's
+// own scope as one approaches): `compose.ts` has no code implementing that
+// grouping at all today — the only within-block ordering it does is
+// `overdue-first` (days waiting, then gapScore, then conceptKey), which
+// reads no relatedness graph and no assessment scope. See the handback note
+// for that half.
+// ---------------------------------------------------------------------------
+
+describe('F2.19 — no phase/stage/term-position field in the schema this module reads or writes', () => {
+  const FORBIDDEN_SUBSTRINGS = ['phase', 'stage', 'termposition', 'term_position'];
+
+  function suspectKeys(value: object): readonly string[] {
+    return Object.keys(value).filter((key) =>
+      FORBIDDEN_SUBSTRINGS.some((forbidden) => key.toLowerCase().includes(forbidden)),
+    );
+  }
+
+  it('a GapRow — the course/concept shape this module partitions and blocks by — carries no phase, stage or term-position field', () => {
+    const theRow = row({ conceptName: 'Alpha', course: 'CRS101' }, 1);
+    expect(suspectKeys(theRow)).toEqual([]);
+  });
+
+  it("classifyObligation's input (the student-progress signals) and output (the obligation classification) carry no phase, stage or term-position field", () => {
+    const signals = {
+      masteryState: 'sprout' as const,
+      lastRetrievalDay: '2026-09-01',
+      recallDueDay: null,
+      arrivalDay: null,
+      asOf: AS_OF,
+    };
+    const result = classifyObligation(signals);
+
+    expect(suspectKeys(signals)).toEqual([]);
+    expect(suspectKeys(result)).toEqual([]);
   });
 });
