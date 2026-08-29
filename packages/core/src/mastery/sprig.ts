@@ -22,56 +22,31 @@
  *
  * So there is no separate "sprig data model" to invent here beyond what
  * those two modules already produce. This file's whole job is composing
- * them: `computeConceptMastery`'s state, resolved through
- * `MASTERY_DISPLAY`'s leaves/label/meaning, into the one shape a rendering
- * layer (the plugin, out of this task's ownership) needs to draw either
- * surface the acceptance criteria name:
+ * them for **the Today mastery overview (F6.2)** — `masteryDistribution`,
+ * feeding `TodayMastery.jsx`'s "row of sprigs or a compact distribution...
+ * readable in two seconds."
  *
- * - **a single sprig** — `conceptSprig`, feeding `ConceptMastery.jsx`'s
- *   detail view and any inline sprig beside a concept name;
- * - **the Today mastery overview (F6.2)** — `masteryDistribution`, feeding
- *   `TodayMastery.jsx`'s "row of sprigs or a compact distribution... readable
- *   in two seconds."
+ * A single-concept counterpart, `conceptSprig`, once lived here to feed a
+ * concept-detail surface (`ConceptMastery.jsx` in the design system). No such
+ * surface exists in the plugin and no contract clause defines one, so per
+ * `ol-sp9v` it was deleted rather than left unreached indefinitely — see
+ * `docs/dev/wiring-register.md`'s sprig section for the finding and this
+ * deletion. Re-add it if a concept-detail surface is ever actually built.
  *
- * Both are pure functions of the review log (plus, for the distribution, the
- * set of concepts to summarise) — same inputs, same output, nothing cached,
- * nothing written. No Obsidian dependency, no styling, no SVG: that is the
- * plugin's job, same separation `./display.ts`'s own module doc already
- * draws ("this module holds no Obsidian dependency and no styling").
+ * `masteryDistribution` is a pure function of the review log and the set of
+ * concepts to summarise — same inputs, same output, nothing cached, nothing
+ * written. No Obsidian dependency, no styling, no SVG: that is the plugin's
+ * job, same separation `./display.ts`'s own module doc already draws ("this
+ * module holds no Obsidian dependency and no styling").
  */
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
-import { MASTERY_DISPLAY, MASTERY_ORDER, type MasteryDisplay } from './display.js';
+import { MASTERY_ORDER } from './display.js';
 import {
-  type ConceptMasteryEvidence,
   computeAllConceptMastery,
-  computeConceptMastery,
   conceptIdsInLog,
   type MasteryRollupOptions,
 } from './rollup.js';
-
-/** Everything a sprig rendering needs for one concept: the state, its display, and why. */
-export interface ConceptSprig {
-  readonly conceptId: string;
-  readonly state: MasteryState;
-  readonly display: MasteryDisplay;
-  readonly evidence: ConceptMasteryEvidence;
-}
-
-/** Rolls up one concept's mastery and resolves it through F2.11's one vocabulary site. */
-export function conceptSprig(
-  entries: readonly ReviewLogEntry[],
-  conceptId: string,
-  options?: MasteryRollupOptions,
-): ConceptSprig {
-  const result = computeConceptMastery(entries, conceptId, options);
-  return {
-    conceptId: result.conceptId,
-    state: result.state,
-    display: MASTERY_DISPLAY[result.state],
-    evidence: result.evidence,
-  };
-}
 
 /**
  * How many concepts (of the given set, or every concept the log names) sit

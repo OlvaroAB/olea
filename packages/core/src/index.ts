@@ -667,8 +667,8 @@ export { masteryAtTimeForConceptIds } from './mastery/rollup.js';
 // The sprig data (F2.3, F2.11, P4-T06) and the distribution F6.2's overview is
 // rendered from. Reachable only inside core until now; the Today panel is its
 // first consumer outside it (`ol-lohq`).
-export type { ConceptSprig, MasteryDistribution } from './mastery/sprig.js';
-export { conceptSprig, masteryDistribution } from './mastery/sprig.js';
+export type { MasteryDistribution } from './mastery/sprig.js';
+export { masteryDistribution } from './mastery/sprig.js';
 // F2.11's second axis (knowledge model R3, `[D-087]`; `VIT-1` / `ol-1bjz`).
 // The fold from per-instrument retrievability to a concept's `holding` /
 // `tending` / `early` reading. **It has no consumer outside core yet** — the
@@ -1171,6 +1171,30 @@ export {
   type ScheduleAssociationReport,
   type UnmatchedScheduleEvent,
 } from './schedule/associate.js';
+// RHY-3's schedule-extraction build chain, step 3 (`ol-4chx` -> `ol-r6s0` ->
+// `ol-hna1` -> `ol-at1a`): weekday recurrence detection over step 2's matched
+// events, forward extrapolation past a stale synced window, and the
+// freshness measure combining both with a caller-supplied "last arrival"
+// fact. No production caller yet — `ol-at1a` wires the freshness signal
+// into the displayed rhythm surface; see `./schedule/freshness.ts`'s module
+// doc for the exact scope boundary and RHY-3 §8's four Class C stops this
+// build must not cross.
+export {
+  ARRIVAL_GRACE_DAYS,
+  computeCourseFreshness,
+  computeScheduleFreshness,
+  type CourseFreshnessBasis,
+  type CourseFreshnessReading,
+  type CourseFreshnessStatus,
+  EXTRAPOLATION_BOUND_WEEKS,
+  MIN_HISTORICAL_SESSIONS_TO_TRUST,
+} from './schedule/freshness.js';
+export {
+  type CourseRecurrencePattern,
+  detectRecurrencePattern,
+  mostRecentExpectedOccurrence,
+  type RecurringWeekday,
+} from './schedule/recurrence.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
   // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported

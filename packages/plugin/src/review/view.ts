@@ -351,7 +351,7 @@ export class ReviewView extends ItemView {
   private moveFocus(direction: 'up' | 'down'): void {
     const controls = this.focusableControls();
     if (controls.length === 0) return;
-    const activeIndex = controls.indexOf(document.activeElement as HTMLElement);
+    const activeIndex = controls.indexOf(this.contentEl.ownerDocument.activeElement as HTMLElement);
     const base = activeIndex === -1 ? 0 : activeIndex;
     const delta = direction === 'down' ? 1 : -1;
     const next = controls[(base + delta + controls.length) % controls.length];
@@ -372,7 +372,7 @@ export class ReviewView extends ItemView {
 
   private render(): void {
     const root = this.contentEl;
-    const hadFocus = root.contains(document.activeElement);
+    const hadFocus = root.contains(root.ownerDocument.activeElement);
     root.empty();
 
     if (this.session === null) {

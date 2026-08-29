@@ -115,3 +115,53 @@ export interface ScheduleAssociationReport {
   readonly matched: readonly AssociatedScheduleEvent[];
   readonly unmatched: readonly UnmatchedScheduleEvent[];
 }
+
+/**
+ * The three per-course states this build chain can resolve (`ol-hna1`,
+ * RHY-3 §3, `RHY-3-multicourse-composition.md` §2.0). A fourth state named
+ * there — "not in scope this week" (pre-start/archived) — is explicitly left
+ * unresolved by RHY-3 §7 and is never produced here; a caller composing the
+ * full per-course picture supplies that filter from elsewhere.
+ *
+ * - `arrived`: no gap to report — either nothing overdue was found, or
+ *   nothing about this course could be flagged with any confidence.
+ * - `not-arrived-with-yardstick`: a session this signal can point to (an
+ *   observed calendar line or an extrapolated weekday) is unmatched by any
+ *   arrival, past the grace margin.
+ * - `not-arrived-no-yardstick`: not enough trusted history to say anything —
+ *   too few historical sessions, or the synced window has gone stale past
+ *   what the recurring pattern can be trusted to bridge.
+ */
+export type CourseFreshnessStatus =
+  | 'arrived'
+  | 'not-arrived-with-yardstick'
+  | 'not-arrived-no-yardstick';
+
+/**
+ * Which kind of evidence `CourseFreshnessReading.expectedSessionDate` rests
+ * on (`ol-hna1`, RHY-3 §4). `observed` — a date the calendar note itself
+ * records — is the strongest claim this signal can make; `extrapolated` — a
+ * date projected from a trusted recurring weekday past the synced window —
+ * is weaker, and RHY-3 §4 is explicit that copy must never state it with the
+ * same confidence as an observed date. `undefined` (on `CourseFreshnessReading`)
+ * when there is no yardstick to attribute a basis to.
+ */
+export type CourseFreshnessBasis = 'observed' | 'extrapolated';
+
+/**
+ * One course's freshness reading (`ol-hna1`, RHY-3 §3). `expectedSessionDate`
+ * and `basis` are internal only — F6.9 forbids ever displaying the yardstick
+ * itself, so both exist for a copy layer's confidence choice and for
+ * tests/diagnostics, never for direct display (same posture as
+ * `../today/rhythm.ts`'s `quietDays`).
+ */
+export interface CourseFreshnessReading {
+  readonly courseCode: string;
+  readonly status: CourseFreshnessStatus;
+  /** `undefined` exactly when `status` is not `not-arrived-with-yardstick`. */
+  readonly expectedSessionDate: CalendarDay | undefined;
+  /** `undefined` exactly when `expectedSessionDate` is `undefined`. */
+  readonly basis: CourseFreshnessBasis | undefined;
+  /** Short, content-free — for tests and a workbench inspector. Never rendered to her, never logged. */
+  readonly reason: string;
+}
