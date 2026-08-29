@@ -637,6 +637,16 @@ export class ReviewSession {
       wasUnsure,
       durationMs,
       selectionContext: item.selectionContext,
+      // Row 3.9's write seam ([SUPP-3], `ol-lpl4`): `item.instrument.supportLevel`
+      // is the chooser decision `queue-adapter.ts` computed at adaptation time
+      // (`undefined` for an `'mcq'` item or a caller with no `supportHistory`
+      // wired) — conditional spread, not `supportLevel: item.instrument.supportLevel`,
+      // because `RecordReviewInput.supportLevel` is optional under
+      // `exactOptionalPropertyTypes` and an explicit `undefined` value is not
+      // the same as an absent key there.
+      ...(item.instrument.supportLevel !== undefined
+        ? { supportLevel: item.instrument.supportLevel }
+        : {}),
     });
 
     // Called directly (rather than through `previewSingleInterval`) because

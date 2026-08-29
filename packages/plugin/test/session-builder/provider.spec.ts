@@ -27,7 +27,7 @@
  * this suite having to reconstruct the pre-bead call itself.
  */
 import type { ReviewLogRecord } from 'olea-contracts';
-import type { Scheduler, SchedulerState } from 'olea-core';
+import type { Scheduler, SchedulerState, StudySessionModel } from 'olea-core';
 import { enumerateVaultInstruments, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -272,5 +272,56 @@ describe('createLocalSessionBuilderProvider — retrievability threading (RANK-3
     const itemA = findWidgetItem(stateA.model);
     const itemB = findWidgetItem(stateB.model);
     expect(itemA.gapScore).toBe(itemB.gapScore);
+  });
+});
+
+/** Full-shape lookup — `findWidgetItem` above narrows to `{ conceptName, gapScore }` for RANK-3's own suite, so `.supportLevel` needs its own finder rather than widening a helper other tests already rely on. */
+function widgetSessionItem(model: StudySessionModel) {
+  const item = model.items.find((i) => i.conceptName === 'Widget theory');
+  if (item === undefined) throw new Error('expected "Widget theory" in the composed session');
+  return item;
+}
+
+// [SUPP-3] (`ol-lpl4`): row 3.9's chooser now reaches this F4.6 preview
+// session too — `provider.ts` builds a `SupportLevelHistoryLookup` from the
+// same `entries` it already reads for the mastery join and SESS-2's replay,
+// and passes it to `buildComposedStudySession`, which was already forwarding
+// `supportHistory` straight through to `buildStudySession` since [SUPP-2]
+// (`ol-95vv.4`) — this suite is the first production caller to actually
+// supply it.
+describe('createLocalSessionBuilderProvider — row 3.9’s chooser reaches the composed session (ol-lpl4)', () => {
+  it('an "again" recall-tier review for the concept raises the offered level off the [D-094] cold start', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({ [instrumentId]: 1 }),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const item = widgetSessionItem(state.model);
+    expect(item.supportLevel).toEqual({ level: 'guided', provenance: 'evidence-thin' });
+  });
+
+  it('with no review history at all, the [D-094] cold start ("prompted") is still offered, never a fabricated "independent"', async () => {
+    const vault = vaultWithReviewLog([]);
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const item = widgetSessionItem(state.model);
+    expect(item.supportLevel).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
   });
 });

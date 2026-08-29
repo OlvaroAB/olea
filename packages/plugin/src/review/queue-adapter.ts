@@ -56,21 +56,161 @@
  * ownership), and `open-session.ts` calls the new one with an executed
  * queue's items. Both share every presentation helper below; only which
  * `selectionContext` reaches the view differs.
+ *
+ * ## Row 3.9's chooser, threaded here rather than in `queue/compose.ts` ([SUPP-3], `ol-lpl4`)
+ *
+ * `study-session/build.ts` already folds a concept's review history through
+ * `chooseSupportLevel` at COMPOSITION time (`[SUPP-2]`, `ol-95vv.4`), but this
+ * queue has a different production caller downstream: `open-session.ts` always
+ * runs `composeQueue`'s output through `plan/execute.ts`'s `executeStudyPlan`
+ * before it ever reaches an adapter, and that module rebuilds `PlannedQueueItem`
+ * from an explicit field list rather than a spread (`{ instrumentId, ...,
+ * planWeight }` — see its own source) — it is out of this lane's ownership, and
+ * any field added to `QueueItem` in `queue/compose.ts` would be silently
+ * dropped there before `adaptExecutedReviewQueue` ever saw it. Computing the
+ * decision here, in ADAPTATION, sidesteps that: `PlannedQueueItem` (and
+ * `QueueItem`) both carry `instrumentType`/`conceptIds` verbatim regardless,
+ * which is all {@link supportLevelForRecord} needs.
+ *
+ * {@link buildSupportLevelHistoryLookup} is this queue's equivalent of what
+ * `session-builder/provider.ts` demonstrates for the F4.6 preview path
+ * (folding `readReviewLogHistory`'s entries through `deriveFailureShape`) —
+ * built from raw `ReviewLogEntry[]`, which `buildReviewSession`'s own return
+ * shape (`ReviewSession.entries`, `packages/core/src/session/build.ts`)
+ * already carries, so the live caller has this data in hand without a second
+ * vault read. Wiring `open-session.ts` to actually pass it is outside this
+ * lane's ownership — see that file's hand-back note in the lane report.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   ComposedQueue,
+  GradedReviewEvidence,
   McqInstrumentRecord,
   PlannedQueueItem,
   QueueItem,
   RandomSource,
+  SchedulableInstrumentType,
+  SelfAssessmentFeeling,
+  SessionSupportOutcome,
+  SupportLadderTier,
+  SupportLevelPresentation,
   VaultInstrumentRecord,
 } from 'olea-core';
-import { mathRandomSource, presentMcq } from 'olea-core';
+import { chooseSupportLevel, deriveFailureShape, mathRandomSource, presentMcq } from 'olea-core';
 import type { McqOption, ReviewInstrument, ReviewQueueItem, SelectionContextV4 } from './types.js';
 
 /** Option keys in presentation order — the same letters `keymap.ts` binds. */
 const OPTION_IDS = 'abcdefghij';
+
+/**
+ * Row 3.9's chooser input for this queue ([SUPP-3], `ol-lpl4`) — the same
+ * shape `study-session/build.ts`'s `SupportLevelHistoryLookup` states,
+ * re-declared here rather than imported: `study-session/` is a sibling
+ * branch of `packages/core`'s pipeline, not a dependency of `queue/`, and
+ * this interface's only two members are cheap to restate rather than reach
+ * across that boundary for.
+ */
+export interface SupportLevelHistoryLookup {
+  outcomesFor(conceptId: string, tier: SupportLadderTier): readonly SessionSupportOutcome[];
+}
+
+/**
+ * `[D-094]`'s scope clause, restated for this queue's instrument types:
+ * recognition (`mcq`) has no ladder at all ("its options are its
+ * scaffolding"), and `qa`/`cloze` are both scored at the `'recall'` tier —
+ * this queue never renders `explain-back` (F2.14) so `'explanation'` never
+ * arises here. Mirrors `study-session/build.ts`'s private
+ * `supportLadderTierFor`, which this module cannot import (`study-session/`
+ * is out of this lane's ownership).
+ */
+function supportLadderTierFor(instrumentType: SchedulableInstrumentType): SupportLadderTier | null {
+  return instrumentType === 'mcq' ? null : 'recall';
+}
+
+/**
+ * Build a `SupportLevelHistoryLookup` from raw review-log entries — this
+ * queue's equivalent of what `session-builder/provider.ts` demonstrates for
+ * the F4.6 preview path. Folds every past `qa`/`cloze` review's outcome
+ * (`deriveFailureShape`) into every concept it names, at the `'recall'` tier,
+ * in the order `entries` is given — `session/history.ts` documents that as
+ * `(timestamp, eventId)` order, oldest first, which is exactly the ordering
+ * `chooseSupportLevel`'s fold requires (see its own module doc's "ordering
+ * rule").
+ *
+ * `mcq` and `explain-back` review-kind entries are skipped: an `mcq` review
+ * has no ladder tier to attribute (see {@link supportLadderTierFor}), and this
+ * queue never offers `explain-back` (F2.14) so its entries carry no signal
+ * this queue's own chooser calls will ever ask for. A `qa`/`cloze` entry with
+ * a `null` rating is skipped too rather than guessed at — the schema's own
+ * doc says `rating` is nullable only for `explain-back`, so a null rating on
+ * a recall-tier entry is not a shape this fold has an honest reading for.
+ *
+ * `hintUptake` is always `false` — `deriveFailureShape`'s own module doc: no
+ * review-log field records hint use, so the honest default is "not used",
+ * never a fabricated positive.
+ */
+export function buildSupportLevelHistoryLookup(
+  entries: readonly ReviewLogEntry[],
+): SupportLevelHistoryLookup {
+  const byKey = new Map<string, SessionSupportOutcome[]>();
+  for (const entry of entries) {
+    if (entry.kind !== 'review') continue;
+    if (entry.instrumentType !== 'qa' && entry.instrumentType !== 'cloze') continue;
+    if (entry.rating === null) continue;
+
+    const evidence: GradedReviewEvidence = {
+      instrumentType: entry.instrumentType,
+      rating: entry.rating,
+    };
+    const outcome: SessionSupportOutcome = {
+      failureShape: deriveFailureShape(evidence),
+      hintUptake: false,
+    };
+    for (const conceptId of entry.conceptIds) {
+      const key = `${conceptId} recall`;
+      const bucket = byKey.get(key);
+      if (bucket === undefined) byKey.set(key, [outcome]);
+      else bucket.push(outcome);
+    }
+  }
+  return {
+    outcomesFor(conceptId, tier) {
+      return byKey.get(`${conceptId} ${tier}`) ?? [];
+    },
+  };
+}
+
+/**
+ * Row 3.9's chooser decision for one instrument, or `undefined` when no
+ * decision was made — an `'mcq'` record (out of `[D-094]`'s ladder scope) or
+ * a caller that supplied no `supportHistory` at all. Mirrors
+ * `study-session/build.ts`'s fill-loop call exactly: fold `outcomesFor` for
+ * the concept, apply the transient self-assessment for this offer only.
+ *
+ * **The first of the record's `conceptIds`, not all of them** — the same
+ * reversible, stated convention this file's own `courseCodeOf` and
+ * `queue/compose.ts`'s `blockedBy` already use for a multi-concept
+ * instrument (R1/R2: her authored order, never re-sorted). A concept-level
+ * decision has to name one concept when an instrument is evidence for
+ * several, and "the first she listed" is the convention already established
+ * twice over in this exact pipeline rather than a new one invented here.
+ */
+function supportLevelForRecord(
+  record: VaultInstrumentRecord,
+  supportHistory: SupportLevelHistoryLookup | undefined,
+  supportSelfAssessment: SelfAssessmentFeeling | undefined,
+): SupportLevelPresentation | undefined {
+  if (supportHistory === undefined) return undefined;
+  const tier = supportLadderTierFor(record.instrumentType);
+  if (tier === null) return undefined;
+  const conceptId = record.conceptIds[0];
+  if (conceptId === undefined) return undefined;
+  return chooseSupportLevel(
+    supportHistory.outcomesFor(conceptId, tier),
+    supportSelfAssessment ?? null,
+  );
+}
 
 export interface AdaptReviewQueueInput {
   /** What `buildReviewSession` composed. Only `items` is read; `deferred` is the caller's to report. */
@@ -79,6 +219,20 @@ export interface AdaptReviewQueueInput {
   readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
   /** Injected for deterministic tests. Production takes the default, which is `Math.random`. */
   readonly random?: RandomSource;
+  /**
+   * Row 3.9's chooser input ([SUPP-3], `ol-lpl4`) — see
+   * {@link buildSupportLevelHistoryLookup}. Omitted entirely means no support
+   * level is computed for any item, exactly today's (pre-`ol-lpl4`) behaviour
+   * — every existing caller and fixture needs no change.
+   */
+  readonly supportHistory?: SupportLevelHistoryLookup;
+  /**
+   * The session's one pre-session self-assessment (F2.20), applied to every
+   * item this adapter scores — same singular reading `study-session/build.ts`
+   * gives `BuildStudySessionInput.supportSelfAssessment`. Ignored entirely
+   * when {@link AdaptReviewQueueInput.supportHistory} is not supplied.
+   */
+  readonly supportSelfAssessment?: SelfAssessmentFeeling;
 }
 
 /**
@@ -94,7 +248,7 @@ function courseCodeOf(record: VaultInstrumentRecord): string {
   return record.courses[0] ?? '';
 }
 
-function common(record: VaultInstrumentRecord) {
+function common(record: VaultInstrumentRecord, supportLevel: SupportLevelPresentation | undefined) {
   return {
     instrumentId: record.instrumentId,
     conceptIds: record.conceptIds,
@@ -107,6 +261,11 @@ function common(record: VaultInstrumentRecord) {
     // `ol-p3t07a`'s new-badge items come from `generation/review-adapter.ts`
     // instead, which sets this to the draft's own id.
     draftId: null,
+    // Row 3.9's chooser decision ([SUPP-3], `ol-lpl4`) — `undefined` (never a
+    // fabricated value) produces no field at all under `exactOptionalPropertyTypes`,
+    // matching `RecordReviewInput.supportLevel`'s own "absent means no decision"
+    // discipline (`review/ports.ts`).
+    ...(supportLevel !== undefined ? { supportLevel } : {}),
   } as const;
 }
 
@@ -120,14 +279,23 @@ function presentOptions(record: McqInstrumentRecord, random: RandomSource): read
   }));
 }
 
-/** The presentation shape for one enumerated instrument. */
+/**
+ * The presentation shape for one enumerated instrument.
+ *
+ * `supportLevel` is row 3.9's chooser decision for this instrument
+ * ([SUPP-3], `ol-lpl4`), computed by the caller (`adaptReviewQueue`/
+ * `adaptExecutedReviewQueue` below, via {@link supportLevelForRecord}) and
+ * passed in rather than derived here — this function stays a pure
+ * `record -> instrument` mapping, unaware of history lookups or self-assessment.
+ */
 export function toReviewInstrument(
   record: VaultInstrumentRecord,
   random: RandomSource = mathRandomSource,
+  supportLevel?: SupportLevelPresentation,
 ): ReviewInstrument {
   if (record.instrumentType === 'qa') {
     return {
-      ...common(record),
+      ...common(record, supportLevel),
       type: 'qa',
       question: record.card.front,
       answer: record.card.back,
@@ -135,7 +303,7 @@ export function toReviewInstrument(
   }
   if (record.instrumentType === 'cloze') {
     return {
-      ...common(record),
+      ...common(record, supportLevel),
       type: 'cloze',
       before: record.card.before,
       clozeText: record.card.clozeText,
@@ -147,7 +315,7 @@ export function toReviewInstrument(
     };
   }
   return {
-    ...common(record),
+    ...common(record, supportLevel),
     type: 'mcq',
     stem: record.mcq.stem,
     options: presentOptions(record, random),
@@ -189,7 +357,11 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
     const record = input.recordsById.get(item.instrumentId);
     if (record === undefined) continue;
     items.push({
-      instrument: toReviewInstrument(record, random),
+      instrument: toReviewInstrument(
+        record,
+        random,
+        supportLevelForRecord(record, input.supportHistory, input.supportSelfAssessment),
+      ),
       priorState: item.priorState,
       selectionContext: toSelectionContext(item),
     });
@@ -205,6 +377,17 @@ export interface AdaptExecutedReviewQueueInput {
   readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
   /** Injected for deterministic tests. Production takes the default, which is `Math.random`. */
   readonly random?: RandomSource;
+  /**
+   * Row 3.9's chooser input ([SUPP-3], `ol-lpl4`) — see
+   * {@link AdaptReviewQueueInput.supportHistory}. This is the field
+   * `open-session.ts` (the live "Olea: Start today's review" caller) needs to
+   * pass — see this file's module doc for why it must build it from
+   * `ReviewSession.entries` (`buildReviewSession`'s own return) rather than
+   * from anything `executeStudyPlan` hands over.
+   */
+  readonly supportHistory?: SupportLevelHistoryLookup;
+  /** See {@link AdaptReviewQueueInput.supportSelfAssessment}. */
+  readonly supportSelfAssessment?: SelfAssessmentFeeling;
 }
 
 /**
@@ -227,7 +410,11 @@ export function adaptExecutedReviewQueue(
     const record = input.recordsById.get(item.instrumentId);
     if (record === undefined) continue;
     items.push({
-      instrument: toReviewInstrument(record, random),
+      instrument: toReviewInstrument(
+        record,
+        random,
+        supportLevelForRecord(record, input.supportHistory, input.supportSelfAssessment),
+      ),
       priorState: item.priorState,
       selectionContext: item.selectionContext,
     });

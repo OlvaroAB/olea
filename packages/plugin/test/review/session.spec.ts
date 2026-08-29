@@ -384,6 +384,48 @@ describe('review-log write shape (D7.1, F2.14)', () => {
 
     expect(reviewLog.calls[0]?.durationMs).toBe(4200);
   });
+
+  // [SUPP-3] (`ol-lpl4`): `queue-adapter.ts` computes `instrument.supportLevel`
+  // at adaptation time; this is the write-seam half — `logAndAdvance` must
+  // carry it straight into `RecordReviewInput.supportLevel` unchanged, the
+  // same seam `ports.ts` already merges into `supportLevelShown` ([SUPP-2]).
+  it('carries the instrument’s chooser decision into RecordReviewInput.supportLevel', async () => {
+    const item = queueItem(
+      qaFixture({ supportLevel: { level: 'guided', provenance: 'evidence-thin' } }),
+    );
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(reviewLog.calls[0]?.supportLevel).toEqual({
+      level: 'guided',
+      provenance: 'evidence-thin',
+    });
+  });
+
+  it('an instrument with no chooser decision writes no supportLevel field at all', async () => {
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
+  });
+
+  it('an MCQ item (no ladder tier, [D-094]) writes no supportLevel field either', async () => {
+    const item = queueItem(mcqFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
+  });
 });
 
 describe('F2.16 — the session maps through core, and holds no mapping of its own', () => {

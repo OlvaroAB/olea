@@ -15,7 +15,7 @@
  */
 
 import type { InstrumentType, Rating, SelectionContextV4 } from 'olea-contracts';
-import type { SchedulerState } from 'olea-core';
+import type { SchedulerState, SupportLevelPresentation } from 'olea-core';
 
 /** The three instrument types the review view actually renders (F2.14: `explain-back` is never queued/rated here — F2.12/F5 territory, not this bead). */
 export type ReviewInstrumentType = Extract<InstrumentType, 'qa' | 'cloze' | 'mcq'>;
@@ -47,6 +47,21 @@ export interface ReviewInstrumentCommon {
    * the real one — see `generation/review-adapter.ts`'s module doc.
    */
   readonly draftId: string | null;
+  /**
+   * Row 3.9's chooser decision for this instrument ([SUPP-3], `ol-lpl4`) —
+   * mirrors `olea-core`'s `StudySessionItem.supportLevel` ([SUPP-2],
+   * `ol-95vv.4`), threaded here rather than left off this queue's own item
+   * shape entirely: `session.ts`'s `logAndAdvance` reads it straight off
+   * `item.instrument` to fill `RecordReviewInput.supportLevel` (`ports.ts`),
+   * which is the write seam that turns it into `supportLevelShown`.
+   * `undefined` when no decision was made — an `'mcq'` item (`[D-094]`'s
+   * ladder has no recognition tier) or a caller that supplied no
+   * `supportHistory` to `queue-adapter.ts`'s `adaptReviewQueue`/
+   * `adaptExecutedReviewQueue` at all. Never a fabricated `'independent'`/
+   * `'not-offered'` value standing in for "we did not ask" — same discipline
+   * `StudySessionItem.supportLevel`'s own doc states.
+   */
+  readonly supportLevel?: SupportLevelPresentation;
 }
 
 export interface QaCard extends ReviewInstrumentCommon {

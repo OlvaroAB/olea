@@ -15,7 +15,11 @@ import {
   provisionalConceptKey,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { adaptExecutedReviewQueue, adaptReviewQueue } from '../../src/review/queue-adapter.js';
+import {
+  adaptExecutedReviewQueue,
+  adaptReviewQueue,
+  buildSupportLevelHistoryLookup,
+} from '../../src/review/queue-adapter.js';
 
 /** `ol-63e1`: `conceptIds` now carries the opaque key, never the display name — 'Alpha' here is unbound (no matching Zettelkasten note). */
 function unboundKey(name: string): string {
@@ -388,5 +392,241 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
     const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
     expect(adapted?.selectionContext.planVersion).toBe(plan.policyVersion);
     expect(adapted?.selectionContext.yieldRank).toBe(1);
+  });
+});
+
+// [SUPP-3] (`ol-lpl4`): row 3.9's chooser input, built from raw review-log
+// entries and threaded through both adapters — the live queue's equivalent of
+// `study-session/build.ts`'s composition-time wiring ([SUPP-2], `ol-95vv.4`).
+function reviewLogEntry(overrides: {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly instrumentType: 'qa' | 'cloze' | 'mcq';
+  readonly rating: 'again' | 'hard' | 'good' | 'easy' | null;
+  readonly conceptIds: readonly string[];
+}) {
+  return {
+    schemaVersion: 5 as const,
+    kind: 'review' as const,
+    eventId: overrides.eventId,
+    timestamp: overrides.timestamp,
+    instrumentId: `inst-${overrides.eventId}`,
+    instrumentType: overrides.instrumentType,
+    rating: overrides.rating,
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'new' as const,
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: [overrides.instrumentType],
+      planVersion: null,
+    },
+    conceptIds: [...overrides.conceptIds],
+  };
+}
+
+describe('buildSupportLevelHistoryLookup — folds raw review-log entries into row 3.9’s chooser input', () => {
+  it('an empty log offers no outcomes for any concept or tier', () => {
+    const lookup = buildSupportLevelHistoryLookup([]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([]);
+  });
+
+  it('an "again" qa/cloze rating derives a wrong-concept failure at the recall tier', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+
+  it('a non-"again" rating derives no failure at all', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'cloze',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('an mcq review contributes no outcome at all — [D-094] gives recognition no ladder', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'mcq',
+        rating: 'again',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('a review with no rating (schema-nullable) is skipped rather than guessed at', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: null,
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('a multi-concept review is folded into every one of its concepts', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: ['concept-a', 'concept-b'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toHaveLength(1);
+    expect(lookup.outcomesFor('concept-b', 'recall')).toHaveLength(1);
+  });
+
+  it('outcomes come back oldest-first, matching the entries’ own order', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-01T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: ['concept-a'],
+      }),
+      reviewLogEntry({
+        eventId: 'e2',
+        timestamp: '2026-08-10T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+});
+
+describe('supportLevel threads through both adapters ([SUPP-3])', () => {
+  it('omitting supportHistory leaves every instrument’s supportLevel undefined — unchanged behaviour', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const items = adaptReviewQueue({ queue: session.queue, recordsById: session.recordsById });
+    for (const item of items) {
+      expect(Object.hasOwn(item.instrument, 'supportLevel')).toBe(false);
+    }
+  });
+
+  it('a qa/cloze item carries the chooser’s decision when supportHistory is supplied', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const qaRecord = [...session.recordsById.values()].find((r) => r.instrumentType === 'qa');
+    if (qaRecord === undefined) throw new Error('expected a qa record');
+    const conceptId = qaRecord.conceptIds[0];
+    if (conceptId === undefined) throw new Error('expected the qa record to name a concept');
+
+    // One escalation-triggering ("again") prior review for the qa card's
+    // concept raises the ladder one rung off `[D-094]`'s 'prompted' cold
+    // start — see `advanceSupportLevel`/`raiseSupportLevel`.
+    const supportHistory = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: [conceptId],
+      }),
+    ]);
+
+    const items = adaptReviewQueue({
+      queue: session.queue,
+      recordsById: session.recordsById,
+      supportHistory,
+    });
+
+    const qa = items.find((i) => i.instrument.type === 'qa');
+    expect(qa?.instrument.supportLevel).toEqual({ level: 'guided', provenance: 'evidence-thin' });
+
+    const mcq = items.find((i) => i.instrument.type === 'mcq');
+    expect(Object.hasOwn(mcq?.instrument ?? {}, 'supportLevel')).toBe(false);
+  });
+
+  it('adaptExecutedReviewQueue threads the same decision through a planned item', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const qaRecord = [...session.recordsById.values()].find((r) => r.instrumentType === 'qa');
+    if (qaRecord === undefined) throw new Error('expected a qa record');
+    const conceptId = qaRecord.conceptIds[0];
+    if (conceptId === undefined) throw new Error('expected the qa record to name a concept');
+
+    const supportHistory = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: [conceptId],
+      }),
+    ]);
+
+    // `executeStudyPlan` (out of this lane's ownership) rebuilds `PlannedQueueItem`
+    // from `QueueItem` by an explicit field list — this asserts the decision
+    // survives that reconstruction because it is computed here, in adaptation,
+    // from `instrumentType`/`conceptIds`, both of which `executeStudyPlan`
+    // preserves verbatim.
+    const executed = executeStudyPlan({ queue: session.queue, plan: null });
+    const items = adaptExecutedReviewQueue({
+      items: executed.items,
+      recordsById: session.recordsById,
+      supportHistory,
+    });
+
+    const qa = items.find((i) => i.instrument.type === 'qa');
+    expect(qa?.instrument.supportLevel).toEqual({ level: 'guided', provenance: 'evidence-thin' });
+  });
+
+  it('supportSelfAssessment is ignored when supportHistory is not supplied', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const items = adaptReviewQueue({
+      queue: session.queue,
+      recordsById: session.recordsById,
+      supportSelfAssessment: 'confident',
+    });
+    for (const item of items) {
+      expect(Object.hasOwn(item.instrument, 'supportLevel')).toBe(false);
+    }
   });
 });

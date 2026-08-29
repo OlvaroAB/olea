@@ -72,6 +72,12 @@ import {
   type ObsidianDataHost,
   ObsidianStudyPlanSettingsStore,
 } from '../plan/settings-store.js';
+// Row 3.9's chooser input ([SUPP-3], `ol-lpl4`): the same history-lookup
+// builder the live review queue needs (`queue-adapter.ts`'s module doc
+// explains why it lives there rather than in `packages/core`), reused here so
+// the F4.6 preview session gets the identical fold over the identical
+// `entries` read below rather than a second, possibly-disagreeing one.
+import { buildSupportLevelHistoryLookup } from '../review/queue-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { SessionBuilderRequest, SessionBuilderState, SessionBuilderViewDeps } from './view.js';
 
@@ -227,6 +233,13 @@ export function createLocalSessionBuilderProvider(
           // pass-through, and re-reading the Base separately would let the
           // ranking and the countdown disagree about the same assessment.
           assessments: edges.assessmentsRead.records,
+          // Row 3.9's chooser input ([SUPP-3], `ol-lpl4`): built from the same
+          // `entries` read above for the mastery join and the SESS-2 replay —
+          // a fold over data already in hand, never a second log read. No
+          // self-assessment input exists on this surface yet (`request` names
+          // no such field), so the fill scores the evidence-derived level with
+          // none to adjust it, same as any caller that omits it.
+          supportHistory: buildSupportLevelHistoryLookup(entries),
           ...(request.focusConceptName !== undefined
             ? { focusConceptName: request.focusConceptName }
             : {}),
