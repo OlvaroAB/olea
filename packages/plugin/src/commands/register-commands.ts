@@ -57,6 +57,16 @@
  * location for the fuller citation; `draftQuizCardsForConcept` and its
  * supporting modules are unaffected, called instead by the F3.3 automatic
  * pipeline and the P3-T07a accept/triage flow.
+ *
+ * **`OLEA_COMMAND_REGISTRY_OPEN` (`ol-l5og.11`) is the same "handler supplied
+ * from outside this bead's owned files" shape `OLEA_COMMAND_DIAGNOSTICS_COPY`
+ * states just above, one paragraph up.** `main.ts` still registers
+ * `'olea-registry-open'` directly (`ol-4v2l`'s own choice, at the time the
+ * only door reaching a real destination); this module now offers the same
+ * id through the shared palette, conditional on `handlers.openRegistry` the
+ * same way `copyDiagnostics` is conditional, so the two registrations never
+ * both fire until `main.ts`'s own edit lands — see this bead's report for
+ * that hand-back diff.
  */
 
 import {
@@ -65,6 +75,7 @@ import {
   OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_OPEN,
+  OLEA_COMMAND_REGISTRY_OPEN,
   OLEA_COMMAND_RETROSPECTIVE_OPEN,
   OLEA_COMMAND_REVIEW_START,
   OLEA_COMMAND_SESSION_BUILD,
@@ -102,6 +113,17 @@ export interface OleaCommandHandlers {
    * something back" while they had no destination.
    */
   readonly copyDiagnostics?: () => void;
+  /**
+   * `ol-4v2l` (F8.4, `[REG-1]`): opens the concept and instrument registry.
+   * Optional on the same terms `copyDiagnostics` states just above —
+   * `main.ts`'s own `this.addCommand({ id: 'olea-registry-open', ... })` is
+   * outside this bead's owned paths (`commands/`) and has to be removed by
+   * whoever edits `main.ts` at the same time this handler is supplied there,
+   * or the id registers twice. Until that lands, `buildOleaCommands` leaves
+   * this entry out of the palette it builds — `main.ts`'s own direct
+   * registration is what actually serves the command in the meantime.
+   */
+  readonly openRegistry?: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -184,6 +206,20 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       id: OLEA_COMMAND_DIAGNOSTICS_COPY,
       name: 'Olea: Copy diagnostics',
       callback: handlers.copyDiagnostics,
+    });
+  }
+
+  // `ol-l5og.11`: only registered once `main.ts` supplies a real handler AND
+  // removes its own direct `addCommand` for the same id — see this field's
+  // doc comment on `OleaCommandHandlers.openRegistry` above for why this is
+  // conditional rather than always present, same shape as `copyDiagnostics`
+  // just above. Named for F8.4's own destination, matching the palette name
+  // `ol-4v2l` already shipped.
+  if (handlers.openRegistry) {
+    specs.push({
+      id: OLEA_COMMAND_REGISTRY_OPEN,
+      name: 'Olea: Open concept and instrument registry',
+      callback: handlers.openRegistry,
     });
   }
 

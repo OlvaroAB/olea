@@ -114,7 +114,21 @@ describe('review-log wire format', () => {
     // type of `.records`, the whole current-version union, still checks.)
     expect(
       parsed.records
-        .filter((r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession')
+        .filter(
+          (
+            r,
+          ): r is Exclude<
+            typeof r,
+            | { kind: 'succession' }
+            | { kind: 'retrospective-offered' }
+            | { kind: 'retrospective-opened' }
+            | { kind: 'retrospective-dismissed' }
+          > =>
+            r.kind !== 'succession' &&
+            r.kind !== 'retrospective-offered' &&
+            r.kind !== 'retrospective-opened' &&
+            r.kind !== 'retrospective-dismissed',
+        )
         .map((r) => r.instrumentId),
     ).toEqual(['inst-1', 'inst-2']);
     // And the corpse is reported rather than silently swallowed: a log that
@@ -221,7 +235,21 @@ describe('review-log wire format — current schema version and suspension event
     const parsed = parseReviewLog(readFileSync(abs, 'utf8'));
     expect(
       parsed.records
-        .filter((r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession')
+        .filter(
+          (
+            r,
+          ): r is Exclude<
+            typeof r,
+            | { kind: 'succession' }
+            | { kind: 'retrospective-offered' }
+            | { kind: 'retrospective-opened' }
+            | { kind: 'retrospective-dismissed' }
+          > =>
+            r.kind !== 'succession' &&
+            r.kind !== 'retrospective-offered' &&
+            r.kind !== 'retrospective-opened' &&
+            r.kind !== 'retrospective-dismissed',
+        )
         .map((r) => r.instrumentId),
     ).toEqual(['inst-1', 'inst-2']);
     expect(parsed.invalidLines).toHaveLength(1);

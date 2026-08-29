@@ -26,10 +26,10 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { resolveOfferCards } from '../retrospective/offer-card.js';
-import type { ObsidianDataHost } from '../retrospective/offer-store.js';
-import { ObsidianRetrospectiveOfferStore } from '../retrospective/offer-store.js';
+import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import type { HomeViewState } from './view.js';
 
@@ -63,7 +63,11 @@ async function safeAssessmentRecords(
 
 export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): HomeDataDeps {
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
-  const offerStore = new ObsidianRetrospectiveOfferStore(deps.settingsHost);
+  const offerStore = createRetrospectiveOfferEventLog({
+    vault: deps.vault,
+    deviceId: deps.deviceId,
+    now: deps.now,
+  });
   const retrospective = createLocalRetrospectiveProvider({
     vault: deps.vault,
     deviceId: deps.deviceId,

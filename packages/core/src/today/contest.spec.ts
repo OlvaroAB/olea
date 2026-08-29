@@ -176,7 +176,7 @@ describe('a held reading is acknowledged once and then left alone', () => {
       timestamp: '2026-08-21T09:00:00+02:00',
       claimKind: 'reading',
       claimRendering: 'mastery-reading',
-      conceptIds: claim.conceptIds,
+      conceptIds: [...claim.conceptIds],
       evidenceBasis: claim.evidenceBasis,
       effect: 'held',
     };

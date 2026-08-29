@@ -102,14 +102,16 @@ describe('every port the session needs is the real one', () => {
   it('threads the stable device id into the review log, not a fresh one', () => {
     // `ensureDeviceId` is idempotent (`device-id.ts`): every call after the
     // first is a read of the already-persisted id, never a re-mint, so a
-    // second call site does not split this install's history across two
-    // filenames (C5.2). `onload` awaits it once, and the ingestion-tick
-    // handler (`ol-2zfj.19`) awaits it again to thread the same id into
-    // `createVaultMisconceptionStore` — there is no `this.deviceId` cache to
-    // reuse instead. The count below tracks known call sites rather than
-    // asserting "exactly once", so a future accidental duplicate still has to
-    // be a deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(2);
+    // further call site does not split this install's history across two
+    // filenames (C5.2). `onload` awaits it once, the ingestion-tick handler
+    // (`ol-2zfj.19`) awaits it again to thread the same id into
+    // `createVaultMisconceptionStore`, and the citation-revision batch pass
+    // (`ol-2zfj.35` [CORP-3b]) awaits it a third time to thread the same id
+    // into `createVaultSuspendPort` — there is no `this.deviceId` cache to
+    // reuse instead in any of the three. The count below tracks known call
+    // sites rather than asserting "exactly once", so a future accidental
+    // duplicate still has to be a deliberate edit to this test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(3);
   });
 });
 

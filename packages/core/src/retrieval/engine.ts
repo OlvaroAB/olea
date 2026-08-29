@@ -29,10 +29,22 @@
  * different mechanisms, an exception and a `GroundingResult`, which is
  * exactly the kind of seam a caller forgets to handle on one of the two
  * paths. One return type, always.
+ *
+ * **Alias-aware keyword search, when `deps.registryOverrides` is supplied
+ * (`ol-l5og.11`).** `aliasExpansion.ts`'s `expandQueryWithAliases` runs
+ * against `query` before it reaches `searchKeywordIndex` — see that
+ * module's doc for exactly what "alias-aware" does and does not promise, and
+ * why it touches keyword search only, never the embedding query or a
+ * reranker's. `registryOverrides` is optional and defaults to no expansion:
+ * a caller that does not yet assemble one (every caller as of this bead —
+ * see that bead's report for the two named call sites still to wire) sees
+ * byte-identical behaviour to before this option existed.
  */
 
 import { searchKeywordIndex } from '../keyword-index/query.js';
 import type { PersistedKeywordIndex } from '../keyword-index/types.js';
+import type { RegistryOverrides } from '../registry/types.js';
+import { expandQueryWithAliases } from './aliasExpansion.js';
 import { chunksFromIndex } from './chunks.js';
 import type { CompositeGroundingThresholds } from './compositeSignals.js';
 import { computeCompositeGroundingSignals } from './compositeSignals.js';
@@ -51,6 +63,15 @@ export interface RetrieveDeps {
   readonly keywordIndex: PersistedKeywordIndex;
   readonly embeddingCache: EmbeddingCacheEngine;
   readonly embeddingProvider: EmbeddingProvider;
+  /**
+   * The registry's local rename history (`../registry/overrides.ts`),
+   * consulted only to expand the KEYWORD half of this call — see this
+   * module's doc and `aliasExpansion.ts`. Omit for the pre-existing
+   * behaviour (no expansion); there is no default that reaches into a store
+   * for it, since `retrieve()` has no vault or plugin access of its own
+   * (INV-1) and must not acquire one just for this.
+   */
+  readonly registryOverrides?: RegistryOverrides;
 }
 
 export interface RetrieveOptions {
@@ -105,7 +126,10 @@ export async function retrieve(
   options: RetrieveOptions = {},
 ): Promise<GroundingResult> {
   const chunks = await chunksFromIndex(deps.keywordIndex);
-  const keywordHits = searchKeywordIndex(deps.keywordIndex, query);
+  const keywordQuery = deps.registryOverrides
+    ? expandQueryWithAliases(query, deps.registryOverrides)
+    : query;
+  const keywordHits = searchKeywordIndex(deps.keywordIndex, keywordQuery);
 
   // Best-effort: fills in whatever embeddings are missing, but never blocks
   // or fails retrieval if the provider is unreachable (see module doc).

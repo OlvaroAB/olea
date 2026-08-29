@@ -52,10 +52,11 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { localToday, readReviewHistory } from '../today/data-source.js';
 import { writeRetrospectiveNote } from './note-writer.js';
-import type { ObsidianDataHost, ObsidianRetrospectiveOfferStore } from './offer-store.js';
+import type { RetrospectiveOfferEventLog } from './offer-events.js';
 
 /** How far back the review-log read spans — a whole academic year with margin, matching `today/data-source.ts`'s own `SCHEDULING_HISTORY_PROBE_DAYS` bound for the same reason: a term's worth of evidence, not the Today panel's shorter streak window. */
 const RETROSPECTIVE_HISTORY_WINDOW_DAYS = 400;
@@ -73,7 +74,15 @@ export interface RetrospectiveLoadResult {
 export interface RetrospectiveProviderDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
-  readonly offerStore: ObsidianRetrospectiveOfferStore;
+  /**
+   * Reads/writes offer/open/dismiss review-log events (`[D-134]` Q5,
+   * `ol-0r92.16`) — `./offer-events.ts`'s `createRetrospectiveOfferEventLog`
+   * in production. Replaces the interim `ObsidianRetrospectiveOfferStore`
+   * (`./offer-store.ts`, deleted by that same bead); the field name is kept
+   * so callers built against the old shape change only their constructor
+   * call, not this interface's shape.
+   */
+  readonly offerStore: RetrospectiveOfferEventLog;
   /**
    * Same store `gap/provider.ts`/`session-builder/provider.ts` read from on
    * every `load()` — a settings change she makes between two opens must not

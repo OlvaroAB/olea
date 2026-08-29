@@ -120,3 +120,36 @@ export function resolvedDisplayName(
 export function aliasesFor(overrides: RegistryOverrides, key: string): readonly string[] {
   return overrides.renames[key]?.aliases ?? [];
 }
+
+/**
+ * Every name a renamed concept has ever carried — current `displayName` plus
+ * every demoted `aliases` entry (which, per `renameConcept`, already includes
+ * the concept's original vault-derived name once a rename has happened) —
+ * grouped so a caller can go from ANY one of those names to the whole set.
+ *
+ * Read by `../retrieval/aliasExpansion.ts` to wire F8.4/`[D-088]`'s "retrieval
+ * keeps matching material written before the rename" clause
+ * (`features/F8-concepts-scope.md`'s "her old wording still resolves after
+ * the rename" scenario) — this function only ever equates names THIS run's
+ * `overrides` blob already says are the same concept's history, never a
+ * `key`. That matters because C7.11's key is still provisional
+ * (`../concept/types.ts`'s own doc): it is stable within one extraction run
+ * but not across one, so nothing downstream of this function may cache its
+ * result across runs or assume a group survives a re-extraction — recompute
+ * it fresh from that run's own `overrides` every time, exactly as this
+ * module's other reads already do.
+ *
+ * A concept with no rename override contributes nothing — there is only ever
+ * one name to group, and grouping a singleton would just be `resolvedDisplayName`
+ * again under a different name.
+ */
+export function aliasEquivalenceGroups(
+  overrides: RegistryOverrides,
+): ReadonlyMap<string, readonly string[]> {
+  const groups = new Map<string, readonly string[]>();
+  for (const override of Object.values(overrides.renames)) {
+    const names = [override.displayName, ...override.aliases];
+    for (const name of names) groups.set(name, names);
+  }
+  return groups;
+}

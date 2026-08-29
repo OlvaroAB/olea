@@ -2,25 +2,29 @@
  * Offer memory (F8.8, `[D-134]` Q1/Q5/Q7/Q8) — pure functions over caller-
  * supplied events. Two things this module is honest about NOT being:
  *
- * 1. **Not a persistence layer.** D-134 Q5 rules the offer/open/dismiss
- *    events "ordinary events in the local event log... no new storage,
- *    second device converges" — meaning a new `EventKind` in
- *    `packages/contracts/src/review-log.ts`. That file is outside this
- *    bead's owned paths (`ol-r68l` owns `packages/core/src/retrospective/`,
- *    `packages/core/src/today/`, `packages/core/src/oracle/`, and the
- *    matching plugin/register paths — never `packages/contracts` or
- *    `packages/core/src/review-log/`). `RetrospectiveOfferEvent` below is
- *    shaped to slot into that union once a follow-up bead with contracts
- *    ownership adds it; this module reads whatever array of these a caller
- *    hands it and does not care where they came from.
+ * 1. **Not a persistence layer.** `D-134` Q5's own words: offer/open/dismiss
+ *    are "ordinary events in the local event log... no new storage, second
+ *    device converges." That log is the review log, and `RetrospectiveOfferEvent`
+ *    below is now the runtime shape of `packages/contracts/src/review-log.ts`'s
+ *    `retrospectiveOfferLogRecordV5` — `ol-0r92.16` landed the schema
+ *    (`kind`/`assessmentPath`/`timestamp`, matching this interface field for
+ *    field) and the real writer/reader (`olea-core`'s `review-log/write.ts`'s
+ *    `appendRetrospectiveOfferRecord`, and `review-log/read.ts`/`session/
+ *    history.ts`'s `readReviewLogHistory` for the read side, wrapped by
+ *    `packages/plugin/src/retrospective/offer-events.ts`). This module still
+ *    does not read or write anything itself — it stays pure over whatever
+ *    array of events a caller hands it, exactly as before; only where those
+ *    events now durably live changed.
  * 2. **Not a trigger.** Same posture `earlier-course-recognition.ts` takes
  *    for its own missing course-setup hook: deciding WHEN to check
  *    `resolveRetrospectiveOfferStatus` (on vault open, on a course view
  *    render, ...) is a caller's job.
  *
- * See `packages/plugin/src/retrospective/offer-store.ts` for the interim
- * production persistence this bead actually ships — a small Olea-owned vault
- * file under `.olea/`, not the review log — and the honest gap that names.
+ * **Retired: the interim per-install store.** `ol-r68l`'s round-27 build
+ * shipped `packages/plugin/src/retrospective/offer-store.ts` (a `data.json`
+ * key) because this bead's own schema addition had not landed yet. That file
+ * is deleted by `ol-0r92.16` — `offer-events.ts` is its replacement, and it
+ * reads/writes the real review log rather than a per-install blob.
  */
 
 /**

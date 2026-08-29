@@ -84,9 +84,9 @@ describe('synthetic provenance', () => {
       // This generator never emits a `[D-133]` `succession` line — narrowed
       // away only so `.conceptIds`/`.instrumentId`, absent from that one
       // kind, still type-check against the full current-version union.
-      for (const entry of stream.entries.filter(
-        (e): e is Exclude<typeof e, { kind: 'succession' }> => e.kind !== 'succession',
-      )) {
+      for (const entry of stream.entries) {
+        if (!('conceptIds' in entry) || !('instrumentId' in entry)) continue;
+        if (entry.instrumentId === undefined) continue;
         for (const conceptId of entry.conceptIds) {
           expect(conceptId.startsWith(SYNTHETIC_ID_PREFIX)).toBe(true);
         }

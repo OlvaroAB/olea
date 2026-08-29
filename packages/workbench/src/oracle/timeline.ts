@@ -186,12 +186,24 @@ export async function deriveOracleTimeline(
     const nextDayLowerMs = Date.parse(`${asOf}T00:00:00.000Z`);
     const nextDayUpperMs = Date.parse(`${asOf}T23:59:59.999Z`);
     const nextDayEvents: TimelineEventSummary[] = world.stream.entries
-      // No persona stream emits a `[D-133]` `succession` line — narrowed away
-      // only so `.instrumentId`/`.conceptIds`, absent from that one kind,
-      // still type-check against the full current-version union.
+      // No persona stream emits a `[D-133]` `succession`, `[D-046]` `dispute`
+      // or `[D-134]` retrospective-offer line — narrowed structurally (the
+      // entry must carry both fields) so `.instrumentId`/`.conceptIds` still
+      // type-check against the full current-version union.
       .filter(
-        (entry): entry is Exclude<typeof entry, { kind: 'succession' }> =>
-          entry.kind !== 'succession',
+        (
+          entry,
+        ): entry is typeof entry & {
+          kind: 'review' | 'suspend' | 'unsuspend' | 'verdict';
+          instrumentId: string;
+          conceptIds: readonly string[];
+        } =>
+          (entry.kind === 'review' ||
+            entry.kind === 'suspend' ||
+            entry.kind === 'unsuspend' ||
+            entry.kind === 'verdict') &&
+          'instrumentId' in entry &&
+          entry.instrumentId !== undefined,
       )
       .filter((entry) => {
         const ms = Date.parse(entry.timestamp);

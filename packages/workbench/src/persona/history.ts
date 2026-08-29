@@ -334,9 +334,16 @@ export function buildPersonaHistory(id: WorkbenchPersonaId): PersonaHistory {
    * names no `instrumentId` to key this map on) — filtered out here so
    * every bucketed entry is one of the kinds that does.
    */
-  const byPersonaInstrument = new Map<string, Exclude<ReviewLogEntry, { kind: 'succession' }>[]>();
+  type InstrumentBearingEntry = Extract<ReviewLogEntry, { instrumentId: string }>;
+  const byPersonaInstrument = new Map<string, InstrumentBearingEntry[]>();
   for (const entry of stream.entries) {
-    if (entry.kind === 'succession') continue;
+    if (
+      entry.kind !== 'review' &&
+      entry.kind !== 'suspend' &&
+      entry.kind !== 'unsuspend' &&
+      entry.kind !== 'verdict'
+    )
+      continue;
     const bucket = byPersonaInstrument.get(entry.instrumentId);
     if (bucket) bucket.push(entry);
     else byPersonaInstrument.set(entry.instrumentId, [entry]);

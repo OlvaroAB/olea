@@ -3,15 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
+import { mergeReviewLogRecords } from './merge.js';
 import { parseReviewLog } from './parse.js';
 import { reviewLogPath } from './path.js';
 import { suspendedInstrumentIds } from './suspension.js';
 import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
+  appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
+  type RetrospectiveOfferLogRecordInput,
   type ReviewLogRecordInput,
   type SuccessionLogRecordInput,
   type SuspendLogRecordInput,
@@ -666,5 +669,151 @@ describe('appendSuccessionRecord ([D-133])', () => {
     await expect(
       appendSuccessionRecord(source, successionInput(), { deviceId: 'has/slash' }),
     ).rejects.toThrow();
+  });
+});
+
+// [D-134] Q5, `ol-0r92.16`: "offer/open/dismiss are ordinary events in the
+// local event log... no new storage, second device converges" — this suite
+// is the F8.8 scenario "offer, open and dismiss are ordinary events in the
+// local event log" asserted headless, at the append/parse layer a two-device
+// convergence actually depends on.
+describe('appendRetrospectiveOfferRecord ([D-134] Q5)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-retrospective-offer-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function offerInput(
+    overrides: Partial<RetrospectiveOfferLogRecordInput> = {},
+  ): RetrospectiveOfferLogRecordInput {
+    return {
+      kind: 'retrospective-offered',
+      timestamp: '2026-08-28T09:20:00-04:00',
+      assessmentPath: 'Courses/TESTC101/Final.md',
+      ...overrides,
+    };
+  }
+
+  it('appends an offer event into the same C5.2 daily file every other kind lives in', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendRetrospectiveOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('retrospective-offered');
+    expect(result.record.eventId).toBe('offer-1');
+    expect(result.record.assessmentPath).toBe('Courses/TESTC101/Final.md');
+    expect(result.path).toBe(reviewLogPath('2026-08-28', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('writes all three kinds — offered, opened, dismissed — and each parses as a valid, current-shape entry, never an invalidLine', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendRetrospectiveOfferRecord(source, offerInput({ kind: 'retrospective-offered' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+    await appendRetrospectiveOfferRecord(source, offerInput({ kind: 'retrospective-opened' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-2',
+    });
+    const last = await appendRetrospectiveOfferRecord(
+      source,
+      offerInput({ kind: 'retrospective-dismissed' }),
+      { deviceId: 'desktop', generateEventId: () => 'offer-3' },
+    );
+
+    const raw = await readFile(join(tempRoot, last.path), 'utf8');
+    const parsed = parseReviewLog(raw);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual([
+      'retrospective-offered',
+      'retrospective-opened',
+      'retrospective-dismissed',
+    ]);
+  });
+
+  it('interleaves with reviews in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-08-28T09:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    const beforeOffer = await readFile(
+      join(tempRoot, reviewLogPath('2026-08-28', 'desktop')),
+      'utf8',
+    );
+    const offer = await appendRetrospectiveOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+    const after = await readFile(join(tempRoot, offer.path), 'utf8');
+
+    expect(after.startsWith(beforeOffer)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'retrospective-offered']);
+  });
+
+  it('validates before writing: an empty assessmentPath never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendRetrospectiveOfferRecord(source, offerInput({ assessmentPath: '' }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-08-28', 'desktop'))).toBe(false);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendRetrospectiveOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+    });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('a second device converges on the same offer history — merge-by-eventId, no bespoke sync (D-134 Q5)', async () => {
+    const source = new FolderSource(tempRoot);
+    // Device A offers, then dismisses.
+    await appendRetrospectiveOfferRecord(source, offerInput({ kind: 'retrospective-offered' }), {
+      deviceId: 'device-a',
+      generateEventId: () => 'offer-a',
+    });
+    await appendRetrospectiveOfferRecord(source, offerInput({ kind: 'retrospective-dismissed' }), {
+      deviceId: 'device-a',
+      generateEventId: () => 'dismiss-a',
+    });
+    // Device B independently opens the SAME assessment before syncing —
+    // convergence is exactly the ordinary `eventId`-keyed merge every other
+    // kind in this union already gets (`./merge.ts`), never a device-local or
+    // server-side store.
+    await appendRetrospectiveOfferRecord(source, offerInput({ kind: 'retrospective-opened' }), {
+      deviceId: 'device-b',
+      generateEventId: () => 'open-b',
+    });
+
+    const rawA = await readFile(join(tempRoot, reviewLogPath('2026-08-28', 'device-a')), 'utf8');
+    const rawB = await readFile(join(tempRoot, reviewLogPath('2026-08-28', 'device-b')), 'utf8');
+    const merged = mergeReviewLogRecords(
+      parseReviewLog(rawA).records,
+      parseReviewLog(rawB).records,
+    );
+
+    expect(merged.duplicateEventIds).toEqual([]);
+    expect(merged.records.map((r) => r.kind).sort()).toEqual(
+      ['retrospective-dismissed', 'retrospective-offered', 'retrospective-opened'].sort(),
+    );
   });
 });

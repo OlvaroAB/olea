@@ -15,8 +15,16 @@
 import type { VaultPath } from '../vault/types.js';
 import type { IndexedDocument, PersistedKeywordIndex } from './types.js';
 
-/** Splits on runs of non-letter/non-digit characters and lowercases. Shared by both the query and every block's text, so a match means the same thing on both sides. */
-function tokenize(text: string): readonly string[] {
+/**
+ * Splits on runs of non-letter/non-digit characters and lowercases. Shared by
+ * both the query and every block's text, so a match means the same thing on
+ * both sides. Exported so `../retrieval/aliasExpansion.ts` can decide whether
+ * a concept name appears in a query using the identical rule this module
+ * uses to decide whether a query token appears in a block — "expanded the
+ * query with an alias" and "the alias would actually match" must agree, or
+ * the expansion is just noise appended to the query string.
+ */
+export function tokenize(text: string): readonly string[] {
   return text
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)

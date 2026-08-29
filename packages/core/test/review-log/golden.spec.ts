@@ -176,11 +176,23 @@ function suspensions(entries: readonly ReviewLogEntry[]): SuspendLogRecord[] {
  * kind shares, keeps type-checking on a merged list whose static type is the
  * whole union. Narrows away the one kind that does not carry it.
  */
+type ConceptBearingEntry = Exclude<
+  ReviewLogEntry,
+  | { kind: 'succession' }
+  | { kind: 'retrospective-offered' }
+  | { kind: 'retrospective-opened' }
+  | { kind: 'retrospective-dismissed' }
+>;
+
 function excludingSuccession(
   entries: readonly ReviewLogEntry[],
-): ReadonlyArray<Exclude<ReviewLogEntry, { kind: 'succession' }>> {
+): ReadonlyArray<ConceptBearingEntry> {
   return entries.filter(
-    (e): e is Exclude<ReviewLogEntry, { kind: 'succession' }> => e.kind !== 'succession',
+    (e): e is ConceptBearingEntry =>
+      e.kind !== 'succession' &&
+      e.kind !== 'retrospective-offered' &&
+      e.kind !== 'retrospective-opened' &&
+      e.kind !== 'retrospective-dismissed',
   );
 }
 

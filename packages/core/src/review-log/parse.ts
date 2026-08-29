@@ -40,7 +40,7 @@ import {
   reviewLogEntryV3,
   reviewLogRecordV1,
 } from 'olea-contracts';
-import { type DisputeLogRecord, safeParseDisputeLogRecord } from './contest-record.js';
+import type { DisputeLogRecord } from './contest-record.js';
 import { upgradeV1, upgradeV2, upgradeV3 } from './upgrade.js';
 
 export interface InvalidReviewLogLine {
@@ -70,15 +70,15 @@ export interface ParseReviewLogResult {
    * Dispute events (`[D-046]` clause 4 / `[D-095]`, `ol-fgba` [DISP-1]), in
    * file order — the record that makes a contest more than a dismiss button.
    *
-   * **A separate field rather than a member of `records`, deliberately.** The
-   * schema is not yet in `olea-contracts`' `reviewLogEntry` union (a new
-   * persisted kind is Class C; see `./contest-record.ts`'s header for the
-   * pending additive diff), and keeping disputes out of `records` means no
-   * consumer that switches exhaustively over `ReviewLogEntry['kind']` has to
-   * change to accommodate a kind it has nothing to say about. When the schema
-   * moves into contracts, this field can stay exactly as it is — the
-   * separation earns its keep either way, because "every review event" and
-   * "every dispute about a claim" are different questions.
+   * **A separate field rather than a member of `records`, deliberately, and
+   * still true now that `disputeLogRecordV5` IS a member of `olea-contracts`'
+   * `reviewLogEntry` union (`ol-qs72` moved the schema; this separation did
+   * not move with it — see this module's own doc above for why).** Keeping
+   * disputes out of `records` means no consumer that switches exhaustively
+   * over `ReviewLogEntry['kind']` has to grow a `'dispute'` arm it has
+   * nothing to say about — "every review event" and "every dispute about a
+   * claim" stay different questions, the same reasoning `./contest-record.
+   * ts`'s header carries in full.
    */
   readonly disputes: readonly DisputeLogRecord[];
 }
@@ -166,38 +166,24 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
     }
 
     if (version === 5) {
-      // Dispute events (`[D-046]` clause 4 / `[D-095]`, `ol-fgba`) share this
-      // daily file with every other kind and are routed FIRST, on their own
-      // `kind` literal, because their schema is not yet a member of
-      // `reviewLogEntry`'s discriminated union — it lives in
-      // `./contest-record.ts` pending the Class C move into
-      // `packages/contracts/src/review-log.ts` (that file's header carries the
-      // exact additive diff). Routing them here rather than widening the union
-      // keeps every consumer that switches exhaustively over
-      // `ReviewLogEntry['kind']` untouched, and keeps a dispute line out of
+      // `reviewLogEntry` (contracts) is the current union, and `disputeLogRecordV5`
+      // is a member of it since `ol-qs72` moved the schema there. A dispute
+      // line validates and routes through the SAME `discriminatedUnion` every
+      // other v5 kind does — it is pulled OUT into `disputes` afterward, on
+      // its own `kind` literal, rather than left in `records`. That split is
+      // `./parse.ts`'s own choice, not a schema limitation (see
+      // `ParseReviewLogResult.disputes`'s doc): it keeps a dispute line out of
       // `invalidLines` — a persisted event this build wrote and then reported
-      // as corrupt would be the worst of both.
-      if (
-        typeof json === 'object' &&
-        json !== null &&
-        (json as Record<string, unknown>).kind === 'dispute'
-      ) {
-        const parsedDispute = safeParseDisputeLogRecord(json);
-        if (!parsedDispute.success) {
-          invalidLines.push({
-            lineNumber: index + 1,
-            raw: rawLine,
-            reason: parsedDispute.error.message,
-          });
-          return;
-        }
-        disputes.push(parsedDispute.data);
-        return;
-      }
-
+      // as corrupt would be the worst of both — while sparing every consumer
+      // that switches exhaustively over `ReviewLogEntry['kind']` a `'dispute'`
+      // arm it has nothing to say about.
       const parsed = reviewLogEntry.safeParse(json);
       if (!parsed.success) {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
+        return;
+      }
+      if (parsed.data.kind === 'dispute') {
+        disputes.push(parsed.data);
         return;
       }
       records.push(parsed.data);

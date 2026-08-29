@@ -127,11 +127,24 @@ describe('createVaultSuspendPort', () => {
 
     const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
     expect(parsed.invalidLines).toEqual([]);
-    // `[D-133]`'s `succession` kind carries no `instrumentId` — narrowed away
-    // here even though this suite never writes one, so the static type of
-    // `.records`, the whole current-version union, still checks.
+    // `[D-133]`'s `succession` kind and `[D-134]` Q5's three retrospective
+    // offer kinds carry no `instrumentId` — narrowed away here even though
+    // this suite never writes them, so the static type of `.records`, the
+    // whole current-version union, still checks.
     const suspensions = parsed.records.filter(
-      (r): r is Exclude<typeof r, { kind: 'succession' }> => r.kind !== 'succession',
+      (
+        r,
+      ): r is Exclude<
+        typeof r,
+        | { kind: 'succession' }
+        | { kind: 'retrospective-offered' }
+        | { kind: 'retrospective-opened' }
+        | { kind: 'retrospective-dismissed' }
+      > =>
+        r.kind !== 'succession' &&
+        r.kind !== 'retrospective-offered' &&
+        r.kind !== 'retrospective-opened' &&
+        r.kind !== 'retrospective-dismissed',
     );
     expect(suspensions.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
     expect(new Set(suspensions.map((r) => r.eventId)).size).toBe(2);

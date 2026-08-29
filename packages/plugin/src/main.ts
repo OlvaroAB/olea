@@ -65,6 +65,12 @@ import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
+import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash-store.js';
+import {
+  adaptMaterialityJudgeAsRevisionJudge,
+  buildCitationRevisionWiring,
+  type CitationRevisionTrigger,
+} from './ingestion/materiality/citation-revision-wiring.js';
 import {
   createInMemoryPreviousTextTracker,
   type PreviousTextTracker,
@@ -88,13 +94,14 @@ import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js
 import { createObsidianEditInstrumentPort } from './registry/obsidian-ports.js';
 import { createLocalRegistryProvider } from './registry/provider.js';
 import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
+import { buildClassifyPassageHook } from './retrieval/classify-passage.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
   buildRetrievalWiring,
   drainIntoEmbeddingCache,
   type RetrievalWiring,
 } from './retrieval/wiring.js';
-import { ObsidianRetrospectiveOfferStore } from './retrospective/offer-store.js';
+import { createRetrospectiveOfferEventLog } from './retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from './retrospective/provider.js';
 import { RetrospectiveView, VIEW_TYPE_OLEA_RETROSPECTIVE } from './retrospective/view.js';
 import { createVaultGradeContestPort } from './review/contest.js';
@@ -218,6 +225,18 @@ export default class OleaPlugin extends Plugin {
   private materiality: MaterialityTrigger | null = null;
   /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
   private materialityPreviousText: PreviousTextTracker | null = null;
+  /**
+   * `[CORP-3b]` (`ol-2zfj.35`) — the citation-grain sibling of `materiality`
+   * above: `[D-093]`'s "did THIS instrument's own cited passage change"
+   * question, one batch pass per ingestion tick rather than per `'modify'`
+   * event. Built unconditionally, same posture as `materiality`: the free
+   * hash comparison and the store need no Worker token; only the judge call
+   * for a genuinely changed passage does (F7.8). See
+   * `ingestion/materiality/citation-revision-wiring.ts`'s module doc for the
+   * MCQ-only, batch-pass scoping and `citation-hash-store.ts`'s for what
+   * "the cited passage" means for this caller.
+   */
+  private citationRevision: CitationRevisionTrigger | null = null;
   /**
    * F6.9's per-course material-arrival timestamps (`ol-v7r5.6`) — a local
    * `data.json` projection, fed by `recordMaterialArrivalIfObserved` below on
@@ -467,22 +486,10 @@ export default class OleaPlugin extends Plugin {
           loadIndex: () => new ObsidianKeywordIndexStore(this).load(),
         });
       },
-    });
-
-    // `ol-4v2l` (F8.4, `[REG-1]`): the registry's open command, registered
-    // directly rather than through `commands/register-commands.ts`/`ids.ts`
-    // — this bead's owned paths are `registry/`, this file (view + command
-    // registration only) and `packages/core/src/registry/`, and the shared
-    // command-palette module is neither. `Plugin.addCommand` is the same
-    // API `registerOleaCommands` calls internally, so this is a real,
-    // working command today (unbound, like every other Olea command with no
-    // chord named in the contract), not a placeholder — folding it into the
-    // shared module for consistency with the other command ids is a Class A
-    // naming tidy-up a later lane can do without touching behaviour.
-    this.addCommand({
-      id: 'olea-registry-open',
-      name: 'Olea: Open concept and instrument registry',
-      callback: () => {
+      // `ol-l5og.11`: the registry's open command, folded into the shared
+      // command module (`commands/ids.ts` / `register-commands.ts`) — the
+      // Class A tidy `ol-4v2l`'s direct registration named for a later lane.
+      openRegistry: () => {
         void this.revealRegistryView();
       },
     });
@@ -672,7 +679,7 @@ export default class OleaPlugin extends Plugin {
       const provider = createLocalRetrospectiveProvider({
         vault,
         deviceId,
-        offerStore: new ObsidianRetrospectiveOfferStore(this),
+        offerStore: createRetrospectiveOfferEventLog({ vault, deviceId, now: () => new Date() }),
         settingsHost: this,
         now: () => new Date(),
       });
@@ -870,6 +877,18 @@ export default class OleaPlugin extends Plugin {
       judge: this.buildMaterialityJudge(),
     });
     this.materialityPreviousText = createInMemoryPreviousTextTracker();
+    // `ol-2zfj.35` [CORP-3b]: the citation-grain sibling's production caller
+    // — see `citationRevision`'s own field doc and
+    // `ingestion/materiality/citation-revision-wiring.ts`'s module doc.
+    // Reuses the SAME `WorkerMaterialityJudge` construction as `materiality`
+    // above (`RevisionJudgePort` is shape-identical to `MaterialityJudge` —
+    // `concept/revision/types.ts`'s own doc), adapted rather than relied on
+    // via TS method bivariance (`adaptMaterialityJudgeAsRevisionJudge`).
+    this.citationRevision = buildCitationRevisionWiring({
+      store: new ObsidianCitationHashStore(this),
+      clock: { now: () => Date.now() },
+      judge: adaptMaterialityJudgeAsRevisionJudge(this.buildMaterialityJudge()),
+    });
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`
     // above — no Worker token needed for either.
@@ -904,6 +923,7 @@ export default class OleaPlugin extends Plugin {
       window.setInterval(() => {
         void this.tickIngestionAndMaybeRunCorpusRelations();
         void this.drainEmbeddings(capability);
+        void this.tickCitationRevisions();
       }, INGESTION_TICK_INTERVAL_MS),
     );
   }
@@ -1242,6 +1262,62 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `[CORP-3b]` (`ol-2zfj.35`): one batch pass of the citation-grain revision
+   * caller — see `citationRevision`'s own field doc and
+   * `ingestion/materiality/citation-revision-wiring.ts`'s module doc for why
+   * this runs per ingestion tick rather than per `'modify'` event.
+   *
+   * **The reachable chain, end to end, this method closes:** a vault-wide
+   * walk (`enumerateVaultInstruments`, inside `CitationRevisionTrigger.tick`)
+   * finds a changed MCQ citation → `evaluateCitedPassageRevision`
+   * (`olea-core`) judges it → a `'revised'` outcome calls back into
+   * `actions.suspend` (this method's `createVaultSuspendPort(vault,
+   * deviceId).suspend`, F2.6's existing durable suspend write, no new field)
+   * and `actions.enqueue` (`this.ingestion.engine.enqueue`, the SAME
+   * `IngestionQueueEngine` `createRevisionAwareJobRunner` is already composed
+   * into via `buildIngestionRunner`'s `revision` option above) — which is
+   * exactly the confirmation-queue admission `revision-job-runner.ts`'s own
+   * module doc names as the one remaining gap ("nothing yet calls
+   * `evaluateCitedPassageRevision`... to produce a real `'instrument-revision'`
+   * job in the first place").
+   *
+   * A fresh `ObsidianSource`/`deviceId` per call, not the `onload`-scoped
+   * ones — same posture `tickIngestionAndMaybeRunCorpusRelations` above
+   * takes, and for the same reason: this method stands alone rather than
+   * depending on `onload`'s closure. Never lets a failure propagate into the
+   * interval, same posture every tick in this file takes.
+   */
+  private async tickCitationRevisions(): Promise<void> {
+    if (this.citationRevision === null) return;
+    try {
+      const vault = new ObsidianSource(this.app);
+      const deviceId = await ensureDeviceId(this);
+      const suspendPort = createVaultSuspendPort(vault, deviceId);
+      await this.citationRevision.tick(vault, {
+        enqueue: (input) =>
+          this.ingestion === null
+            ? Promise.resolve(undefined)
+            : this.ingestion.engine.enqueue(input),
+        suspend: (instrumentId, conceptIds) => suspendPort.suspend(instrumentId, conceptIds),
+        // `[D-093]` forbids healing a near-match re-bind silently. Surfacing
+        // it to her is the structural-proposal registry's own admission path
+        // (`features/F3-learn-from-anything.md`'s `core/accept/*` cluster) —
+        // a different lane's `owns` (see this bead's close notes for the
+        // hand-back). No content, no path, no instrument identifier logged
+        // here (D-005) — a structural notice only, so a re-bind is never
+        // silently dropped even though nothing yet surfaces it to her.
+        onRelocationProposed: () => {
+          console.info(
+            'Olea: a citation relocation proposal is pending confirmation-registry admission (ol-2zfj.35 hand-back)',
+          );
+        },
+      });
+    } catch (error) {
+      console.error('Olea: citation-revision batch pass failed', error);
+    }
+  }
+
+  /**
    * Feeds whatever the ingestion sink and the keyword index currently hold
    * into the embedding cache (`ol-odb0.1`). A no-op, cheaply, whenever the
    * Worker isn't configured (`this.retrieval.embeddingCache` is `null`),
@@ -1302,6 +1378,15 @@ export default class OleaPlugin extends Plugin {
         embeddingProvider,
       },
       transport,
+      // `ol-2zfj.36` ([D-101], F3.8/F3.9): the source-materiality hook —
+      // categorical facts for presentation (hers→phrasing,
+      // instructor→terminology), never an evidence weight. Absent frontmatter
+      // degrades to 'unknown', same as before this hook existed.
+      classifyPassage: buildClassifyPassageHook({
+        frontmatterHost: {
+          frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
+        },
+      }),
     };
   }
 

@@ -32,10 +32,20 @@
  * a local, per-install override — `{ displayName, aliases }` keyed by
  * whatever key this run's extraction minted — that this browse surface
  * overlays on top of the raw `ConceptRecord.name` every time it loads. It is
- * never written into her vault (INV-6) and it does not yet feed retrieval or
- * the keyword index — "her old wording still resolves" (F8.4) is a promise
- * this override does not keep on its own; a follow-up bead wires the alias
- * into whatever reads concept names for matching, once C7.11's key is real.
+ * never written into her vault (INV-6).
+ *
+ * **`../retrieval/aliasExpansion.ts`'s `expandQueryWithAliases` (`ol-l5og.11`) now reads this
+ * override's alias history to keep F8.4's "her old wording still resolves" promise for keyword
+ * search**, via `./overrides.ts`'s `aliasEquivalenceGroups` — grouping a concept's current
+ * `displayName` with every demoted alias, both directions, from THIS run's `RegistryOverrides`
+ * alone. It deliberately never waits on C7.11's key becoming real: every lookup equates NAMES a
+ * live override already says are the same concept's history, not a `key`, which is the strictly
+ * narrower and honestly deliverable claim while `../concept/types.ts`'s key stays provisional.
+ * `../retrieval/engine.ts`'s `retrieve()` applies it to the keyword half of a call only, and only
+ * when a caller supplies the new optional `RetrieveDeps.registryOverrides` — see
+ * `./rename.spec.ts` for the end-to-end proof. Neither current production caller of `retrieve()`
+ * assembles that field yet (`ol-l5og.11`'s report names the two, and the one-line addition each
+ * needs), so a real generative call does not exercise this today.
  */
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';

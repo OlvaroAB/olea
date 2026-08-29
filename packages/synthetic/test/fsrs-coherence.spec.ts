@@ -197,7 +197,7 @@ describe('FSRS coherence', () => {
       // a synthetic stream — narrowed away only so `.instrumentId`, absent
       // from that one kind, still type-checks against the full current-
       // version union.
-      if (entry.kind === 'succession') continue;
+      if (!('instrumentId' in entry) || entry.instrumentId === undefined) continue;
       expect(suspended.has(entry.instrumentId)).toBe(false);
     }
     expect(sawSuspend).toBe(true);

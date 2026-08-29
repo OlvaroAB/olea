@@ -43,11 +43,11 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
 import { resolveOfferCards } from '../retrospective/offer-card.js';
-import type { ObsidianDataHost } from '../retrospective/offer-store.js';
-import { ObsidianRetrospectiveOfferStore } from '../retrospective/offer-store.js';
+import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GroveConceptRow, GroveCourseSection, GroveViewState } from './view.js';
@@ -101,7 +101,11 @@ async function safeAssessmentRecords(
 
 export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): GroveDataDeps {
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
-  const offerStore = new ObsidianRetrospectiveOfferStore(deps.settingsHost);
+  const offerStore = createRetrospectiveOfferEventLog({
+    vault: deps.vault,
+    deviceId: deps.deviceId,
+    now: deps.now,
+  });
   // Same store `RegistryView` reads (`registry/overrides-store.ts`) — a
   // concept withdrawn there (F8.5) stays withdrawn here too, rather than
   // this read-only browse reintroducing it through a second, unaware path.

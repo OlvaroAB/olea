@@ -68,6 +68,19 @@ export const OLEA_COMMAND_DIAGNOSTICS_COPY = 'olea-diagnostics-copy';
  * one honestly-reachable door onto the retrospective until they do.
  */
 export const OLEA_COMMAND_RETROSPECTIVE_OPEN = 'olea-retrospective-open';
+/**
+ * `ol-4v2l` (F8.4, `[REG-1]`): opens the concept and instrument registry —
+ * the browsable inventory over her concepts, their course associations,
+ * their instrument mix, and their two-axis mastery. Registered directly on
+ * `Plugin` at `main.ts` when `ol-4v2l` shipped it (that bead's owned paths
+ * were `registry/`, `main.ts` and `packages/core/src/registry/`, not this
+ * module) — `docs/dev/surface-register.md` named the fold into `ids.ts`/
+ * `register-commands.ts` as the Class A follow-up this id and
+ * `OLEA_COMMAND_REGISTRY_OPEN` complete (`ol-l5og.11`). `main.ts` still
+ * needs to stop registering the id directly and start passing a handler
+ * here instead — see this bead's report for the exact hand-back diff.
+ */
+export const OLEA_COMMAND_REGISTRY_OPEN = 'olea-registry-open';
 // `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
 // round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
 // student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea

@@ -1001,6 +1001,181 @@ export const successionLogRecordV5 = z.object({
 export type SuccessionLogRecordV5 = z.infer<typeof successionLogRecordV5>;
 
 /**
+ * `[D-095]`'s three kinds a claim can be — the effect on a contest is fixed
+ * by which of these the disputed claim was, never by what she picked
+ * (`disputeLogRecordV5`'s own doc).
+ */
+export const contestedClaimKind = z.enum(['reading', 'structural', 'grade']);
+export type ContestedClaimKind = z.infer<typeof contestedClaimKind>;
+
+/**
+ * What the contest did at the moment she made it. Stored rather than derived
+ * so a record stays readable if the routing table ever changes: what
+ * happened to her claim is a fact about that moment.
+ *
+ * `returned-to-candidate` is deliberately not called deletion or removal —
+ * vocabulary registry §3's hard clamp, and the ruled mechanic besides: the
+ * claim entered service through her confirmation and a contest withdraws
+ * that confirmation.
+ */
+export const contestEffect = z.enum(['held', 'returned-to-candidate', 'quarantined']);
+export type ContestEffect = z.infer<typeof contestEffect>;
+
+/** The six routed renderings, matching `olea-core`'s `review-log/contest.ts` `CLAIM_ROUTING`. */
+export const contestedClaimRendering = z.enum([
+  'mastery-reading',
+  'cross-term-recognition',
+  'retrospective-reading',
+  'concept-relation-edge',
+  'cross-course-match',
+  'explain-back-grade',
+]);
+export type ContestedClaimRendering = z.infer<typeof contestedClaimRendering>;
+
+/**
+ * Whether a dispute record's resolution fields are present together or
+ * absent together — a resolving dispute carries both `resolves` and
+ * `outcome`; an opening one carries neither. Half of either pair would leave
+ * the acknowledgment `[D-095]` §2 requires with nothing to point at.
+ */
+function refineDisputeResolutionPairing(
+  value: {
+    readonly resolves?: string | undefined;
+    readonly outcome?: 'upheld' | 'corrected' | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const hasResolves = value.resolves !== undefined;
+  const hasOutcome = value.outcome !== undefined;
+  if (hasResolves === hasOutcome) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: hasResolves ? ['outcome'] : ['resolves'],
+    message:
+      'a resolving dispute record carries both `resolves` and `outcome`, and an opening one ' +
+      'carries neither',
+  });
+}
+
+/**
+ * One dispute event, schema version 5 — a fifth `kind` in the review log's
+ * daily file (C5.2), append-only. `[D-046]` clause 4's "recorded either
+ * way", shaped by `[D-095]` (`ol-egov.19`).
+ *
+ * **Moved here from `olea-core`'s `review-log/contest-record.ts`
+ * (`ol-qs72`), additive to the discriminated union exactly the way
+ * `successionLogRecordV5` was — no version bump, because nothing about the
+ * shape the union already carries changes; a new literal `kind` value is
+ * what additive means here.** `ol-fgba` [DISP-1] originally built this
+ * record in core because that lane did not own `packages/contracts/` and
+ * `olea-core` deliberately has no zod dependency; the wire shape is
+ * byte-identical to what that lane shipped — this is a paste plus a union
+ * member, not a redesign.
+ *
+ * **No content, per D-005.** What she disputed, which kind of claim it was,
+ * which concepts and instrument it concerned, what the contest did, and an
+ * opaque fingerprint of the evidence the claim rested on. Never her wording,
+ * never the rendered sentence, never a reason she typed — and deliberately
+ * **no reason field at all**, because `[D-095]` fixes the effect by what she
+ * touched and never by what she picked.
+ *
+ * **Append-only, like every other record in this file family.** A
+ * resolution is a SECOND dispute record carrying `resolves` (the opening
+ * event's id) and `outcome` — never an edit to the first. That is what
+ * makes the compensating event `[D-095]` §2 requires able to name her
+ * contest as its catalyst: a real, durable event id, written where she can
+ * see it.
+ */
+export const disputeLogRecordV5 = z
+  .object({
+    schemaVersion: z.literal(5),
+    /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+    kind: z.literal('dispute'),
+    /** Stable unique id; makes two-device merges idempotent, and is the catalyst id. */
+    eventId: z.string().min(1),
+    /** ISO-8601 with offset. The offset matters: "when did she disagree" is local. */
+    timestamp: z.string().datetime({ offset: true }),
+    claimKind: contestedClaimKind,
+    claimRendering: contestedClaimRendering,
+    /**
+     * Every concept the claim was about. Non-empty for the same reason
+     * `verdictLogRecordV5.conceptIds` is: a dispute naming no concept is
+     * invisible to every later question.
+     */
+    conceptIds: z.array(z.string().min(1)).min(1),
+    /** Present for a grade, and for a structural claim that names an instrument. */
+    instrumentId: z.string().min(1).optional(),
+    /**
+     * Opaque fingerprint of the evidence the claim rested on when she
+     * disputed it — the hinge of evidence-relative aging (`[D-095]` §3).
+     * Never a copy of the evidence, and never her text.
+     */
+    evidenceBasis: z.string().min(1),
+    effect: contestEffect,
+    /** The opening dispute this record resolves. Absent on an opening dispute. */
+    resolves: z.string().min(1).optional(),
+    /** How the re-derivation landed. Present exactly when `resolves` is. */
+    outcome: z.enum(['upheld', 'corrected']).optional(),
+  })
+  .superRefine(refineDisputeResolutionPairing);
+export type DisputeLogRecordV5 = z.infer<typeof disputeLogRecordV5>;
+
+/**
+ * The three retrospective-offer events (`[D-134]` Q5, F8.8) — additive to
+ * the discriminated union the same way `suspendLogRecordV5` is: one record
+ * shape spanning three `kind` literals (`suspendEventKind`'s own pattern)
+ * rather than three near-identical shapes, because "offered", "opened" and
+ * "dismissed" carry the same two fields and differ only in which happened.
+ *
+ * **`[D-134]` Q5's own words: "offer/open/dismiss are ordinary events in
+ * the local event log... no new storage, second device converges."**
+ * `ol-r68l`'s round-27 build shipped an interim per-install store
+ * (`packages/plugin/src/retrospective/offer-store.ts`'s `data.json`
+ * pattern) because this file sat outside that lane's ownership —
+ * `ol-0r92.16` is the follow-up that lands the ruling's own mechanism and
+ * retires the interim store. The review log is the "local event log" the
+ * ruling names: the same append-only, per-device-per-day file every other
+ * kind in this union already lives in (C5.2), so a second device converges
+ * on the same offer/open/dismiss history the ordinary merge-by-`eventId`
+ * discipline (`./merge.ts`) already gives every other kind.
+ *
+ * **No separate family.** The ruling's own wording — "ordinary events in
+ * the local event log" — names the review log itself, not a new log
+ * alongside it; a second event family would need its own append/merge/parse
+ * discipline this project already has and gains nothing by duplicating.
+ *
+ * **`kind` carries the vocabulary D-134's ruling itself uses** —
+ * `'retrospective-offered' | 'retrospective-opened' | 'retrospective-dismissed'`
+ * — matching `olea-core`'s pre-existing `RetrospectiveOfferEvent['kind']`
+ * exactly, so a reviewLogEntry of this shape and a `RetrospectiveOfferEvent`
+ * are structurally the same object (the extra `schemaVersion`/`eventId` on
+ * the persisted record are simply ignored by code that only reads the three
+ * fields `RetrospectiveOfferEvent` names).
+ *
+ * **No content, per D-005.** `assessmentPath` is the vault path of the
+ * assessment note the offer concerns — a location, not her wording about
+ * it.
+ */
+export const retrospectiveOfferEventKind = z.enum([
+  'retrospective-offered',
+  'retrospective-opened',
+  'retrospective-dismissed',
+]);
+export type RetrospectiveOfferEventKind = z.infer<typeof retrospectiveOfferEventKind>;
+
+export const retrospectiveOfferLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  kind: retrospectiveOfferEventKind,
+  /** Stable unique id; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset. The offset matters: "when did she open/dismiss it" is local. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The vault path of the assessment note this offer/open/dismiss concerns. */
+  assessmentPath: z.string().min(1),
+});
+export type RetrospectiveOfferLogRecordV5 = z.infer<typeof retrospectiveOfferLogRecordV5>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v5 lines against.
  *
@@ -1013,6 +1188,8 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   suspendLogRecordV5,
   verdictLogRecordV5,
   successionLogRecordV5,
+  disputeLogRecordV5,
+  retrospectiveOfferLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
@@ -1031,6 +1208,10 @@ export const verdictLogRecord = verdictLogRecordV5;
 export type VerdictLogRecord = z.infer<typeof verdictLogRecordV5>;
 export const successionLogRecord = successionLogRecordV5;
 export type SuccessionLogRecord = z.infer<typeof successionLogRecordV5>;
+export const disputeLogRecord = disputeLogRecordV5;
+export type DisputeLogRecord = z.infer<typeof disputeLogRecordV5>;
+export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV5;
+export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;

@@ -31,9 +31,13 @@
  */
 
 import {
+  type DisputeLogRecord,
+  disputeLogRecord,
   REVIEW_LOG_SCHEMA_VERSION,
+  type RetrospectiveOfferLogRecord,
   type ReviewLogEntry,
   type ReviewLogRecord,
+  retrospectiveOfferLogRecord,
   reviewLogRecord,
   type SuccessionLogRecord,
   type SuspendLogRecord,
@@ -43,11 +47,7 @@ import {
   verdictLogRecord,
 } from 'olea-contracts';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import {
-  type DisputeLogRecord,
-  type DisputeLogRecordInput,
-  safeParseDisputeLogRecord,
-} from './contest-record.js';
+import type { DisputeLogRecordInput } from './contest-record.js';
 import { reviewLogPath } from './path.js';
 
 export type { DisputeLogRecordInput } from './contest-record.js';
@@ -136,6 +136,26 @@ export interface AppendDisputeLogResult {
   readonly path: VaultPath;
 }
 
+/**
+ * Every `RetrospectiveOfferLogRecord` field the caller supplies (`[D-134]`
+ * Q5); the writer stamps the rest. `kind` **is** part of the input, unlike
+ * `ReviewLogRecordInput`/`VerdictLogRecordInput`/`SuccessionLogRecordInput` —
+ * the same reason `SuspendLogRecordInput` carries it: which of the three
+ * (`retrospective-offered`/`-opened`/`-dismissed`) happened is the caller's
+ * actual decision, not a constant this writer knows.
+ */
+export type RetrospectiveOfferLogRecordInput = Omit<
+  RetrospectiveOfferLogRecord,
+  'schemaVersion' | 'eventId'
+>;
+
+export interface AppendRetrospectiveOfferLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: RetrospectiveOfferLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
 function defaultGenerateEventId(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -171,10 +191,14 @@ function localDateOf(timestamp: string): string {
  * a suspend event cannot acquire subtly different durability properties from a
  * review event by having its own copy of the logic. The record is already
  * validated by the time it arrives here.
+ *
+ * Takes `ReviewLogEntry` alone (not `ReviewLogEntry | DisputeLogRecord` as
+ * before `ol-qs72`) — `disputeLogRecordV5` is now a member of the contracts
+ * union, so every kind this file writes already fits the one type.
  */
 async function appendEntryLine(
   vault: VaultSource,
-  entry: ReviewLogEntry | DisputeLogRecord,
+  entry: ReviewLogEntry,
   deviceId: string,
 ): Promise<VaultPath> {
   const path = reviewLogPath(localDateOf(entry.timestamp), deviceId);
@@ -378,11 +402,12 @@ export async function appendSuccessionRecord(
  * and `outcome`, never an edit to the first, which is what lets the
  * compensating event name her contest as its catalyst by a durable event id.
  *
- * **The schema it validates against lives in `./contest-record.ts`, not in
- * `olea-contracts`** — a new persisted event kind is Class C and this lane
- * does not own `packages/contracts/`. See that file's header for the exact
- * additive diff waiting to land and why the wire shape does not change when
- * it does.
+ * **The schema it validates against lives in `packages/contracts/src/
+ * review-log.ts` (`disputeLogRecordV5`), moved there by `ol-qs72`** — a
+ * fifth `kind` literal, additive to `reviewLogEntryV5`, no version bump.
+ * `./contest-record.ts` re-exports the same names it always did, so this
+ * function's own body is unchanged by the move beyond which schema
+ * `disputeLogRecord` resolves to.
  *
  * **Recording is not optional garnish.** Every caller of `contestClaim`
  * appends through here; an affordance that computed an effect and wrote
@@ -402,10 +427,60 @@ export async function appendDisputeRecord(
     ...input,
   };
 
-  const parsed = safeParseDisputeLogRecord(candidate);
+  const parsed = disputeLogRecord.safeParse(candidate);
   if (!parsed.success) {
     throw new Error(
       `appendDisputeRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **retrospective-offer**
+ * event — `offered`, `opened` or `dismissed` (`[D-134]` Q5, F8.8).
+ *
+ * The sixth sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`/`appendSuccessionRecord`/`appendDisputeRecord`,
+ * sharing the same append path and the same durability discipline. `kind`
+ * is part of `input`, not stamped — the same reason `appendSuspendRecord`
+ * takes it: which of the three happened is the caller's actual decision.
+ *
+ * **Moved here from the interim per-install store (`ol-0r92.16`).**
+ * `ol-r68l`'s round-27 build wrote these events into `packages/plugin/src/
+ * retrospective/offer-store.ts`'s `data.json` because `packages/contracts/`
+ * and this file sat outside that lane's ownership. `[D-134]` Q5's own words
+ * — "ordinary events in the local event log... no new storage, second
+ * device converges" — name exactly this file's append path; the interim
+ * store is deleted by the same bead that adds this function.
+ *
+ * **Reachability.** Called from `packages/plugin/src/retrospective/
+ * offer-events.ts`'s `createRetrospectiveOfferEventLog(...).append`, itself
+ * called from `packages/plugin/src/retrospective/provider.ts`'s
+ * `markOpened`/`markDismissed` and from `../home/provider.ts` /
+ * `../grove/provider.ts`'s `dismiss` (both delegate to the same
+ * `provider.ts` method — see that file's own module doc).
+ */
+export async function appendRetrospectiveOfferRecord(
+  vault: VaultSource,
+  input: RetrospectiveOfferLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendRetrospectiveOfferLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = retrospectiveOfferLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendRetrospectiveOfferRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

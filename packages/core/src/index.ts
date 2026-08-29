@@ -852,6 +852,7 @@ export { buildRegistryModel } from './registry/build.js';
 // reach". Split/merge are `[D-135]`'s explicit non-scope — no export here
 // names an offshoot or a merge candidate.
 export {
+  aliasEquivalenceGroups,
   aliasesFor,
   EMPTY_REGISTRY_OVERRIDES,
   isConceptPruned,
@@ -872,6 +873,10 @@ export type {
 // Retrieval — embeddings, hybrid keyword+cosine retrieval, grounding refusal
 // (C2.3, C2.5, C4.7, D-004, INV-5, P3-T05). Builds on the keyword index
 // above rather than duplicating it — see retrieval/chunks.ts.
+// `expandQueryWithAliases` (`ol-l5og.11`) is the F8.4/`[D-088]` follow-up:
+// alias-aware keyword search, wired into `retrieve()` via the optional
+// `RetrieveDeps.registryOverrides` below — see `retrieval/aliasExpansion.ts`.
+export { expandQueryWithAliases } from './retrieval/aliasExpansion.js';
 export { chunksFromIndex } from './retrieval/chunks.js';
 export type {
   CompositeGroundingSignals,
@@ -1067,11 +1072,13 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendDisputeLogResult,
+  AppendRetrospectiveOfferLogResult,
   AppendReviewLogOptions,
   AppendReviewLogResult,
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
+  RetrospectiveOfferLogRecordInput,
   ReviewLogRecordInput,
   SuccessionLogRecordInput,
   SuspendLogRecordInput,
@@ -1079,6 +1086,7 @@ export type {
 } from './review-log/write.js';
 export {
   appendDisputeRecord,
+  appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
@@ -1152,6 +1160,31 @@ export type {
   VaultInstrumentEnumeration,
   VaultInstrumentRecord,
 } from './session/types.js';
+// The `[D-101]` source-materiality classifier (knowledge model §3.2) — F1's
+// block that F3.8 (`../generate/voice-sources.js`) and F3.9
+// (`../generate/style-profile.js`) consume. See `./source/materiality.js`'s
+// own module doc for the cascade, its tier ordering, and what is
+// deliberately not wired yet (the arrival declaration, the repair badge).
+export type {
+  ClassifiedMateriality,
+  MaterialityAuthorship,
+  MaterialityCorrection,
+  MaterialityCues,
+  MaterialityCurationAuthority,
+  MaterialityFact,
+  MaterialityProvenance,
+  MaterialityProvenanceSource,
+} from './source/materiality.js';
+export {
+  carriesNotHersMarkers,
+  classifyMateriality,
+  expireCorrectionIfMaterial,
+  folderPriorFor,
+  hasHersLinkStructure,
+  resolveMateriality,
+  structuralNotHersFragment,
+  UNKNOWN_MATERIALITY,
+} from './source/materiality.js';
 export { DEFAULT_SOURCES_FOLDER, registerSources } from './source/register.js';
 export type {
   NonQuestionHeading,
