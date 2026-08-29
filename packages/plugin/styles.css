@@ -1143,6 +1143,34 @@ button.olea-review-mcq-option:hover {
   color: var(--text-muted, #888);
 }
 
+/* F7.2's term-dates quiet pointer (`[D-147]`, `ol-0r92.6`). Drawn beside a
+   rhythm quiet finding, never as its own section — same quiet posture the
+   contest gesture above takes: it is an optional door onto a settings
+   field, not a primary action, so it carries no brand or attention colour
+   of its own. */
+.olea-today-term-dates-pointer {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.olea-today-term-dates-pointer-text {
+  font-size: 0.85em;
+  color: var(--olea-host-muted);
+}
+
+.olea-today-term-dates-pointer-button {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 0.85em;
+  color: var(--text-muted, #888);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ============================================================
    ---- Gap and coverage views (F4.3, F4.5, F4.9, F4.10; ol-2tyj) ----
    ============================================================

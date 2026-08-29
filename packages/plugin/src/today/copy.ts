@@ -72,6 +72,7 @@ import {
   MASTERY_DISPLAY,
   MASTERY_ORDER,
 } from 'olea-core';
+import type { TermDatesAskState } from './term-window-store.js';
 
 /** The pane's title, as Obsidian shows it on the tab and in the sidebar. F6's own words: "Today". */
 export const TODAY_VIEW_TITLE = 'Today';
@@ -393,6 +394,40 @@ export function rhythmQuietLine(course: string, quietDays: number): RhythmQuietL
   return { course, text: rhythmQuietClause(quietDays) };
 }
 
+/**
+ * F7.2's term-dates quiet pointer (`[D-147]`, `ol-0r92.6`) — drawn beside a
+ * rhythm quiet finding, and only there: the clause fires it "when the
+ * rhythm reading would otherwise render with no yardstick", and the rhythm
+ * section currently renders nothing at all unless a course actually reached
+ * the quiet threshold (`renderRhythmBody`'s own doc). See
+ * `../settings/term-dates-field-copy.ts` for the settings side of the same
+ * ask, and that module's doc for why this wording is a Class B default
+ * rather than a ratified string (proposal §5, open question 5).
+ *
+ * States a fact about what the field is for, never a compliance framing —
+ * the same restraint `rhythmQuietClause` holds for the reading itself.
+ */
+export const TERM_DATES_POINTER_TEXT =
+  "When does this term run? Olea uses this to say whether material is arriving at the usual pace — not to track how you're doing.";
+
+/** Never "Remind me later" — see `term-dates-field-copy.ts`'s doc on the skip label for the same rule applied there. */
+export const TERM_DATES_POINTER_BUTTON_LABEL = 'Add term dates';
+
+/**
+ * `[D-147]`'s trigger, kept beside the strings rather than as an inline
+ * condition in `view.ts`'s DOM code — same reasoning `showsStartReviewAction`
+ * states above: it is what a test can hold onto without a DOM. Fires only
+ * when the rhythm reading has no resolved term window AND the ask remains
+ * genuinely unanswered — an `'answered'` or `'skipped'` state, or `null`
+ * (no ask support wired), both mean no pointer.
+ */
+export function showsTermDatesPointer(
+  hadTermWindow: boolean,
+  askState: TermDatesAskState | null,
+): boolean {
+  return !hadTermWindow && askState === 'unanswered';
+}
+
 // ---------------------------------------------------------------------------------------------
 // The contest gesture and its dispute sheet (`[D-046]` clause 4, `[D-095]`,
 // `ol-fgba` [DISP-1]; drawn in DSN-1 and approved by `[D-136]`).
@@ -513,6 +548,9 @@ export function allTodayStrings(): readonly string[] {
     // --- F6.9, the rhythm reading ---
     rhythmQuietClause(21),
     rhythmQuietClause(30),
+    // --- F7.2's term-dates quiet pointer (`[D-147]`) ---
+    TERM_DATES_POINTER_TEXT,
+    TERM_DATES_POINTER_BUTTON_LABEL,
     // --- the contest gesture and its sheet (`[D-046]` clause 4, `[D-095]`) ---
     CONTEST_GESTURE_LABEL,
     CONTEST_SHEET_LABEL,

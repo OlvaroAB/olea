@@ -37,9 +37,10 @@
 
 import type { App, Plugin } from 'obsidian';
 import { PluginSettingTab, Setting } from 'obsidian';
-import type { VaultSource, WorkerTaskTransport } from 'olea-core';
+import type { CalendarDay, VaultSource, WorkerTaskTransport } from 'olea-core';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { renderPrivacySection } from '../privacy/settings-section.js';
+import { ObsidianTermWindowStore } from '../today/term-window-store.js';
 import { renderUsageSection } from '../usage/settings-section.js';
 import type { ObsidianDataHost, PersistedWorkerConfig } from '../worker/config-store.js';
 import { ObsidianWorkerConfigStore } from '../worker/config-store.js';
@@ -72,6 +73,14 @@ import {
   SUPPORT_SECTION_INTRO,
 } from './support-section-copy.js';
 import {
+  TERM_DATES_FIELD_DESCRIPTION,
+  TERM_DATES_SECTION_HEADING,
+  TERM_DATES_SKIP_BUTTON_LABEL,
+  TERM_DATES_SKIP_DESCRIPTION,
+  TERM_END_FIELD_NAME,
+  TERM_START_FIELD_NAME,
+} from './term-dates-field-copy.js';
+import {
   TOKEN_FIELD_DESCRIPTION,
   TOKEN_FIELD_DISABLED,
   TOKEN_FIELD_NAME,
@@ -83,6 +92,8 @@ export class OleaSettingTab extends PluginSettingTab {
   private readonly studyPlanConfigStore: ObsidianStudyPlanSettingsStore;
   /** F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — see `explain-back-audit-gate.ts`'s module doc. */
   private readonly explainBackAuditGateStore: ObsidianExplainBackAuditGateStore;
+  /** F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — same store `today/data-source.ts`'s rhythm reading reads; this class is `save`/`skip`'s production caller. */
+  private readonly termWindowStore: ObsidianTermWindowStore;
   /** Kept for the F7.3 usage section (`ol-p3t09`), which reads its own `data.json` key through the same host. */
   private readonly dataHost: ObsidianDataHost;
 
@@ -103,6 +114,7 @@ export class OleaSettingTab extends PluginSettingTab {
     // section rather than inside the "AI" one.
     this.studyPlanConfigStore = new ObsidianStudyPlanSettingsStore(dataHost);
     this.explainBackAuditGateStore = new ObsidianExplainBackAuditGateStore(dataHost);
+    this.termWindowStore = new ObsidianTermWindowStore(dataHost);
     this.dataHost = dataHost;
   }
 
@@ -122,6 +134,12 @@ export class OleaSettingTab extends PluginSettingTab {
     // must stay synchronous (Obsidian calls it directly on tab open), and
     // every field renders independently of the other's load completing.
     void this.renderStudyPlanFields(containerEl);
+
+    // F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`): a calendar fact, not a
+    // study preference — its own heading, distinct from "Study plan" above,
+    // per the amended clause's own framing.
+    new Setting(containerEl).setName(TERM_DATES_SECTION_HEADING).setHeading();
+    void this.renderTermDatesFields(containerEl);
 
     new Setting(containerEl).setName('AI').setHeading();
     void this.renderWorkerFields(containerEl);
@@ -172,6 +190,66 @@ export class OleaSettingTab extends PluginSettingTab {
           void this.studyPlanConfigStore.save({ version: 1, assignmentsBasePath });
         });
       });
+  }
+
+  /**
+   * F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`): the settings side of the
+   * same ask `today/view.ts`'s quiet pointer opens. One editable field pair
+   * plus a skip affordance — not a first-run modal (proposal §2) — and
+   * every change writes straight through `ObsidianTermWindowStore`, the
+   * same read-and-persist-on-change pattern `renderStudyPlanFields` and
+   * `renderWorkerFields` already use.
+   *
+   * A half-filled pair (one bound entered, the other still blank) writes
+   * nothing: `resolveTermBoundary` already treats a half pair identically to
+   * "never asked" (`term-window-store.ts`'s own doc), so persisting one
+   * mid-edit would only ever be superseded by the completed pair or left as
+   * a state nothing downstream can read. Clearing both bounds back to
+   * blank calls `clear()`, not `skip()` — deleting what she entered is a
+   * correction to the same field, never a decline (Class B default; see
+   * `term-window-store.ts`'s `clear()` doc).
+   */
+  private async renderTermDatesFields(containerEl: HTMLElement): Promise<void> {
+    const persisted = await this.termWindowStore.load();
+    let start: CalendarDay | null = persisted?.start ?? null;
+    let end: CalendarDay | null = persisted?.end ?? null;
+
+    const sync = async (): Promise<void> => {
+      if (start !== null && end !== null) {
+        await this.termWindowStore.save({ start, end });
+      } else if (start === null && end === null) {
+        await this.termWindowStore.clear();
+      }
+      // Else: one bound filled, the other not — leave the store as it was
+      // until the pair completes; see this method's doc.
+    };
+
+    new Setting(containerEl)
+      .setName(TERM_START_FIELD_NAME)
+      .setDesc(TERM_DATES_FIELD_DESCRIPTION)
+      .addText((text) => {
+        text.inputEl.type = 'date';
+        if (start !== null) text.setValue(start);
+        text.onChange((value) => {
+          start = value === '' ? null : (value as CalendarDay);
+          void sync();
+        });
+      });
+
+    new Setting(containerEl).setName(TERM_END_FIELD_NAME).addText((text) => {
+      text.inputEl.type = 'date';
+      if (end !== null) text.setValue(end);
+      text.onChange((value) => {
+        end = value === '' ? null : (value as CalendarDay);
+        void sync();
+      });
+    });
+
+    new Setting(containerEl).setDesc(TERM_DATES_SKIP_DESCRIPTION).addButton((button) => {
+      button.setButtonText(TERM_DATES_SKIP_BUTTON_LABEL).onClick(() => {
+        void this.termWindowStore.skip();
+      });
+    });
   }
 
   /** F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — see this class's `display()` call site and `explain-back-audit-gate.ts`'s module doc. */

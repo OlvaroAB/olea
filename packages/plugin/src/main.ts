@@ -547,83 +547,102 @@ export default class OleaPlugin extends Plugin {
     // between two opens of the Today pane must not need a reload to take.
     const todayTrendsSettingsStore = new ObsidianStudyPlanSettingsStore(this);
 
-    this.registerView(
-      VIEW_TYPE_OLEA_TODAY,
-      (leaf) =>
-        new TodayView(leaf, {
-          load: async () => {
-            const { assignmentsBasePath } = await todayTrendsSettingsStore.load();
-            return loadTodayPanel({
-              vault,
-              deviceId,
-              // Real, as of the session pipeline: it walks the vault for
-              // instruments and replays the log for their state. It still
-              // returns `null` — which the panel renders as "cannot count yet"
-              // rather than as a zero — when the walk fails.
-              instruments: createVaultInstrumentSource({
-                vault,
-                scheduler,
-                deviceId,
-                now: () => new Date(),
-                // C7.9's containment co-presence filter (`ol-v7r5.7`): the
-                // Today count and the review queue must agree on which
-                // candidates a container/part pair drops, so this reads the
-                // same served fold `composeReviewSession` below passes.
-                relations: this.servedRelationEdges(),
-              }),
-              now: () => new Date(),
-              // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
-              // Today panel's insights. Absent path means "not configured",
-              // which `createVaultTrendsSource` already reads as "no weights"
-              // rather than a guessed folder.
-              trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
-              // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
-              // unconditionally in `onload`, same as `materiality` itself, so
-              // this is absent only before `onload` has run — never in a
-              // reachable production render.
-              ...(this.materialArrivals !== null && this.termWindowStore !== null
-                ? {
-                    rhythm: createRhythmSource({
-                      materialArrivals: this.materialArrivals,
-                      termWindow: this.termWindowStore,
-                    }),
-                  }
-                : {}),
-            });
-          },
-          // The panel's one primary action and the command palette entry reach
-          // the same tab, by the same call — F6.1's "Start review is the one
-          // way in" is only true if it is literally one way in.
-          startReview: () => {
-            void this.revealReviewView();
-          },
-          // `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]): every reading
-          // this panel asserts carries the one ratified contest gesture, and
-          // the dispute is recorded either way. Built from her own log, on
-          // device — the sheet issues no request.
-          contest: createTodayContestSupport({
+    this.registerView(VIEW_TYPE_OLEA_TODAY, (leaf) => {
+      // F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — read once per leaf
+      // creation (not at `registerView` registration time, which runs
+      // before `onload` has constructed `this.termWindowStore` — see that
+      // field's own doc), and narrowed into a local so the `termDatesAsk`
+      // closures below never need a non-null assertion on the mutable
+      // `this.termWindowStore` field. Same deferred-to-leaf-creation timing
+      // the `rhythm` field's own `this.termWindowStore !== null` guard
+      // below relies on.
+      const termWindowStoreForAsk = this.termWindowStore;
+      return new TodayView(leaf, {
+        load: async () => {
+          const { assignmentsBasePath } = await todayTrendsSettingsStore.load();
+          return loadTodayPanel({
             vault,
             deviceId,
-            conceptIdsByCourse: async () => {
-              const source = createVaultTrendsSource({ vault });
-              const records = await source.listConceptCourses();
-              const byCourse: Record<string, string[]> = {};
-              for (const record of records ?? []) {
-                for (const course of record.courses) {
-                  const bucket = byCourse[course] ?? [];
-                  bucket.push(record.conceptId);
-                  byCourse[course] = bucket;
+            // Real, as of the session pipeline: it walks the vault for
+            // instruments and replays the log for their state. It still
+            // returns `null` — which the panel renders as "cannot count yet"
+            // rather than as a zero — when the walk fails.
+            instruments: createVaultInstrumentSource({
+              vault,
+              scheduler,
+              deviceId,
+              now: () => new Date(),
+              // C7.9's containment co-presence filter (`ol-v7r5.7`): the
+              // Today count and the review queue must agree on which
+              // candidates a container/part pair drops, so this reads the
+              // same served fold `composeReviewSession` below passes.
+              relations: this.servedRelationEdges(),
+            }),
+            now: () => new Date(),
+            // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
+            // Today panel's insights. Absent path means "not configured",
+            // which `createVaultTrendsSource` already reads as "no weights"
+            // rather than a guessed folder.
+            trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
+            // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
+            // unconditionally in `onload`, same as `materiality` itself, so
+            // this is absent only before `onload` has run — never in a
+            // reachable production render.
+            ...(this.materialArrivals !== null && this.termWindowStore !== null
+              ? {
+                  rhythm: createRhythmSource({
+                    materialArrivals: this.materialArrivals,
+                    termWindow: this.termWindowStore,
+                  }),
                 }
+              : {}),
+          });
+        },
+        // The panel's one primary action and the command palette entry reach
+        // the same tab, by the same call — F6.1's "Start review is the one
+        // way in" is only true if it is literally one way in.
+        startReview: () => {
+          void this.revealReviewView();
+        },
+        // `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]): every reading
+        // this panel asserts carries the one ratified contest gesture, and
+        // the dispute is recorded either way. Built from her own log, on
+        // device — the sheet issues no request.
+        contest: createTodayContestSupport({
+          vault,
+          deviceId,
+          conceptIdsByCourse: async () => {
+            const source = createVaultTrendsSource({ vault });
+            const records = await source.listConceptCourses();
+            const byCourse: Record<string, string[]> = {};
+            for (const record of records ?? []) {
+              for (const course of record.courses) {
+                const bucket = byCourse[course] ?? [];
+                bucket.push(record.conceptId);
+                byCourse[course] = bucket;
               }
-              return byCourse;
-            },
-            today: () => localToday(new Date()),
-            now: () => isoWithLocalOffset(new Date()),
-            readHistory: () =>
-              readReviewHistory(vault, deviceId, { today: localToday(new Date()) }),
-          }),
+            }
+            return byCourse;
+          },
+          today: () => localToday(new Date()),
+          now: () => isoWithLocalOffset(new Date()),
+          readHistory: () => readReviewHistory(vault, deviceId, { today: localToday(new Date()) }),
         }),
-    );
+        // F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — same
+        // `this.termWindowStore !== null` guard `rhythm` above uses: the
+        // store is built unconditionally in `onload`, so absent here means
+        // only "before `onload` has run", never a reachable production
+        // render.
+        ...(termWindowStoreForAsk !== null
+          ? {
+              termDatesAsk: {
+                state: () => termWindowStoreForAsk.askState(),
+                openSettings: () => this.openSettingsTab(),
+              },
+            }
+          : {}),
+      });
+    });
 
     // `ol-2tyj`: the gap/coverage screen's production reader.
     // `createLocalGapProvider` recomputes on every `load()` — no cache, see
@@ -1806,6 +1825,31 @@ export default class OleaPlugin extends Plugin {
    * its queue in `onOpen`, so an existing tab is never re-composed underneath
    * her.
    */
+  /**
+   * Opens Olea's settings tab — the door F7.2's term-dates quiet pointer
+   * (`[D-147]`, `today/view.ts`'s `renderTermDatesPointer`) offers onto the
+   * ask. `app.setting` is Obsidian's own settings-modal controller; it has
+   * no public type (`obsidian.d.ts` declares no `setting` member on `App`),
+   * so every plugin that jumps a user to its own settings reaches for it the
+   * same undocumented way. Wrapped in `try`/`catch` because this button is
+   * not load-bearing for anything else on the panel — a future host that
+   * removes or renames this API should make the pointer a dead end, never a
+   * thrown error (degrade-never-block, F6.9).
+   */
+  private openSettingsTab(): void {
+    try {
+      const settingController = (
+        this.app as unknown as {
+          setting?: { open?: () => void; openTabById?: (id: string) => void };
+        }
+      ).setting;
+      settingController?.open?.();
+      settingController?.openTabById?.(this.manifest.id);
+    } catch {
+      // Best effort — see this method's doc.
+    }
+  }
+
   private async revealReviewView(): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_REVIEW);

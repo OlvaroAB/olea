@@ -26,7 +26,10 @@ import {
   rhythmQuietClause,
   rhythmQuietLine,
   showsStartReviewAction,
+  showsTermDatesPointer,
   spacingRateSentence,
+  TERM_DATES_POINTER_BUTTON_LABEL,
+  TERM_DATES_POINTER_TEXT,
 } from '../../src/today/copy.js';
 
 const strings = allTodayStrings();
@@ -372,6 +375,54 @@ describe('rhythmQuietClause / rhythmQuietLine — F6.9, the rhythm reading', () 
       expect(rhythmQuietClause(21).toLowerCase()).not.toContain(word);
       expect(corpus).not.toContain(word);
     }
+  });
+});
+
+describe('TERM_DATES_POINTER_TEXT / TERM_DATES_POINTER_BUTTON_LABEL — F7.2 ([D-147])', () => {
+  // Scenario: features/F7-plugin-surface.md, "F7.2 — term dates ask-once-
+  // or-dismissed ([D-147])".
+
+  it('states what the fact is for, never a compliance verdict', () => {
+    for (const word of ['falling behind', 'keep up', 'monitor', 'expected']) {
+      expect(TERM_DATES_POINTER_TEXT.toLowerCase()).not.toContain(word);
+    }
+    expect(TERM_DATES_POINTER_TEXT.toLowerCase()).toContain('not to track how you');
+  });
+
+  it('names the rhythm reading as the consumer — arrival pace, the same fact rhythmQuietClause states', () => {
+    expect(TERM_DATES_POINTER_TEXT.toLowerCase()).toMatch(/arriving/);
+  });
+
+  it('the button label is not phrased as a snooze — never "remind me later"', () => {
+    expect(TERM_DATES_POINTER_BUTTON_LABEL.toLowerCase()).not.toContain('remind');
+  });
+
+  it('is part of the corpus the panel-wide rules are checked against', () => {
+    expect(allTodayStrings()).toContain(TERM_DATES_POINTER_TEXT);
+    expect(allTodayStrings()).toContain(TERM_DATES_POINTER_BUTTON_LABEL);
+  });
+});
+
+describe('showsTermDatesPointer — the F7.2 quiet-pointer trigger ([D-147])', () => {
+  // Scenario: features/F6-today.md, "F6.9 / F7.2 — The Today panel's quiet
+  // pointer at the term-dates ask".
+
+  it('shows when there is no resolved term window and the ask is unanswered', () => {
+    expect(showsTermDatesPointer(false, 'unanswered')).toBe(true);
+  });
+
+  it('never shows once a term window is resolved, regardless of ask state', () => {
+    expect(showsTermDatesPointer(true, 'unanswered')).toBe(false);
+    expect(showsTermDatesPointer(true, null)).toBe(false);
+  });
+
+  it('never shows again once she has answered or explicitly skipped', () => {
+    expect(showsTermDatesPointer(false, 'answered')).toBe(false);
+    expect(showsTermDatesPointer(false, 'skipped')).toBe(false);
+  });
+
+  it('never shows when no ask support is wired (null — absent means inert)', () => {
+    expect(showsTermDatesPointer(false, null)).toBe(false);
   });
 });
 

@@ -58,12 +58,29 @@ import {
   rhythmQuietLine,
   START_REVIEW,
   showsStartReviewAction,
+  showsTermDatesPointer,
   spacingRateSentence,
+  TERM_DATES_POINTER_BUTTON_LABEL,
+  TERM_DATES_POINTER_TEXT,
   TODAY_HEADER_LABEL,
   TODAY_VIEW_TITLE,
 } from './copy.js';
+import type { TermDatesAskState } from './term-window-store.js';
 
 export const VIEW_TYPE_OLEA_TODAY = 'olea-today';
+
+/**
+ * F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — the settings side lives in
+ * `../settings/settings-tab.ts`; this is only the door the Today panel's
+ * quiet pointer opens onto it, plus the state read that decides whether to
+ * draw the pointer at all. `main.ts` supplies the real
+ * `ObsidianTermWindowStore.askState`/settings-opening implementation.
+ */
+export interface TermDatesAskSupport {
+  readonly state: () => Promise<TermDatesAskState>;
+  /** Opens Olea's settings tab, scrolled to nothing in particular — the proposal's "not a first-run modal" call means this is a plain settings door, not a focused field jump. */
+  readonly openSettings: () => void;
+}
 
 export interface TodayViewDeps {
   /** Loads the view model. Async because it reads the vault. */
@@ -80,6 +97,14 @@ export interface TodayViewDeps {
    * drawn and inert.
    */
   readonly contest?: TodayContestSupport;
+  /**
+   * F7.2's term-dates ask (`[D-147]`). Absent means the quiet pointer is
+   * never drawn — same absent-means-inert posture `contest` takes above,
+   * for a plugin instance whose term-window store is not yet constructed
+   * (before `onload` completes; never in a reachable production render —
+   * see `main.ts`'s wiring).
+   */
+  readonly termDatesAsk?: TermDatesAskSupport;
 }
 
 export class TodayView extends ItemView {
@@ -88,6 +113,8 @@ export class TodayView extends ItemView {
   private claims: readonly TodayClaim[] = [];
   /** The claim whose dispute sheet is open, and the sheet itself. */
   private openSheet: { readonly claimId: string; readonly sheet: DisputeSheet } | null = null;
+  /** F7.2's term-dates ask state (`[D-147]`), re-read every `refresh()` — `null` when `deps.termDatesAsk` is absent. */
+  private termDatesAskState: TermDatesAskState | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: TodayViewDeps) {
     super(leaf);
@@ -120,6 +147,7 @@ export class TodayView extends ItemView {
   async refresh(): Promise<void> {
     const vm = await this.deps.load();
     await this.deps.contest?.prime();
+    this.termDatesAskState = (await this.deps.termDatesAsk?.state()) ?? null;
     this.render(vm);
   }
 
@@ -407,6 +435,28 @@ export class TodayView extends ItemView {
     const insight = section.createDiv({ cls: 'olea-today-insight' });
     insight.createSpan({ cls: 'olea-today-mastery-code', text: line.course });
     insight.createSpan({ cls: 'olea-today-insight-text', text: line.text });
+
+    // F7.2's term-dates quiet pointer (`[D-147]`) — `showsTermDatesPointer`
+    // (`copy.ts`) is the tested decision; this is only the DOM call. See
+    // `TermDatesAskSupport`'s doc for why this is the one trigger point.
+    const hadTermWindow = rhythm.measured?.hadTermWindow ?? false;
+    if (showsTermDatesPointer(hadTermWindow, this.termDatesAskState)) {
+      this.renderTermDatesPointer(section);
+    }
+  }
+
+  /** F7.2's term-dates quiet pointer (`[D-147]`) — see `renderRhythmBody`'s call site for when this fires. */
+  private renderTermDatesPointer(parent: HTMLElement): void {
+    const pointer = parent.createDiv({ cls: 'olea-today-term-dates-pointer' });
+    pointer.createSpan({
+      cls: 'olea-today-term-dates-pointer-text',
+      text: TERM_DATES_POINTER_TEXT,
+    });
+    const button = pointer.createEl('button', {
+      cls: 'olea-today-term-dates-pointer-button',
+      text: TERM_DATES_POINTER_BUTTON_LABEL,
+    });
+    button.addEventListener('click', () => this.deps.termDatesAsk?.openSettings());
   }
 
   private renderDue(parent: HTMLElement, vm: TodayViewModel): void {
