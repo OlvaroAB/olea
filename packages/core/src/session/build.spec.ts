@@ -1,9 +1,12 @@
 // Scenarios: features/F2-review.md, "F2.14 — One entry point composes a session
 // from a vault" and "F2.14 — Containment co-presence is filtered at
-// composition (C7.9)" — @auto:core/session/build.spec
+// composition (C7.9)" — @auto:core/session/build.spec. F2.19's own reachability
+// coverage below is @auto:core/queue/block-order.spec's shape, reused at this
+// integration level per `ol-vr8z`.
 import type { ReviewLogEntry, SelectionContextV4 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
+import type { AssessmentRecord } from '../assessment/types.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { reviewLogPath } from '../review-log/path.js';
@@ -377,5 +380,148 @@ describe('C7.9 containment co-presence, wired through buildReviewSession (regist
     expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Gamma')))).toBe(
       true,
     );
+  });
+});
+
+/**
+ * F2.19 (`ol-vr8z`): `buildReviewSession` resolves `relatedConceptKeys` and
+ * `assessmentContext` internally from `relations`/`assessments` — see the
+ * field docs on `BuildReviewSessionInput`. Three same-course, never-related
+ * concepts, each with one instrument reviewed identically in the past so all
+ * three land in one exact overdue-days tie band at `BAND_NOW` — the only
+ * place F2.19's grouping can move anything (`[D-113]`; `queue/block-order.ts`'s
+ * own doc).
+ */
+function bandVault(): ReturnType<typeof memoryVault> {
+  return memoryVault({
+    'Courses/GEO/x.md': note('ConceptX', 'GEO101', ['## X?', '', 'X front::X back ^x1']),
+    'Courses/GEO/y.md': note('ConceptY', 'GEO101', ['## Y?', '', 'Y front::Y back ^y1']),
+    'Courses/GEO/z.md': note('ConceptZ', 'GEO101', ['## Z?', '', 'Z front::Z back ^z1']),
+  });
+}
+
+const BAND_REVIEWED_AT = '2026-08-01T09:00:00+00:00';
+const BAND_NOW = new Date('2026-09-20T12:00:00Z');
+
+function contrastEdge(a: string, b: string): ConceptRelation {
+  return {
+    type: 'contrasts-with',
+    from: a,
+    to: b,
+    provenance: 'model-proposed',
+    confidence: 0.9,
+    introducingPassages: {
+      from: { sourcePath: `${a}.md`, location: { page: 1, charRange: { start: 0, end: 1 } } },
+      to: { sourcePath: `${b}.md`, location: { page: 1, charRange: { start: 0, end: 1 } } },
+    },
+  };
+}
+
+async function bandedItemOrder(
+  extra: Partial<Parameters<typeof buildReviewSession>[0]> = {},
+): Promise<readonly string[]> {
+  const vault = bandVault();
+  const enumerated = await buildReviewSession({
+    vault,
+    scheduler: createFsrsScheduler(),
+    now: BAND_NOW,
+  });
+  const idOf = (conceptName: string): string => {
+    const record = enumerated.instruments.records.find((r) =>
+      r.conceptIds.includes(unboundKey(conceptName)),
+    );
+    if (record === undefined) throw new Error(`expected an instrument for ${conceptName}`);
+    return record.instrumentId;
+  };
+  // All three reviewed 'good' at the identical past instant, so FSRS — a
+  // pure function of (prior state, rating, elapsed time) — gives all three
+  // the identical resulting due date, hence the identical overdueDays at
+  // `BAND_NOW`: one tie band of three, not three bands of one.
+  const entries: readonly ReviewLogEntry[] = ['ConceptX', 'ConceptY', 'ConceptZ'].map(
+    (conceptName) =>
+      reviewOf(`band-${conceptName}`, BAND_REVIEWED_AT, idOf(conceptName), unboundKey(conceptName)),
+  );
+  const session = await buildReviewSession({
+    vault,
+    scheduler: createFsrsScheduler(),
+    now: BAND_NOW,
+    entries,
+    ...extra,
+  });
+  // Sanity: the property under test only holds if all three really did land
+  // in one tie band together — three items, one course.
+  expect(session.queue.items).toHaveLength(3);
+  return session.queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
+}
+
+describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved and threaded through', () => {
+  it('with neither raw input, the tie band keeps plain enumeration order (the pre-existing shape)', async () => {
+    const order = await bandedItemOrder();
+    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptY'), unboundKey('ConceptZ')]);
+  });
+
+  it('`relations` alone flips the tie-band order — the mutation this catches is exactly that flip', async () => {
+    const withRelation = await bandedItemOrder({
+      relations: [contrastEdge('ConceptX', 'ConceptZ')],
+    });
+    // X and Z now share a C7.10 edge; Y has none. Per `withinBlockRelatedness`
+    // this scores X and Z equally above Y, and a stable sort keeps X ahead of
+    // Z (X's band position came first) — X, Z, Y. Baseline (previous test)
+    // was X, Y, Z: Y and Z swap places, which is the observable flip.
+    expect(withRelation).toEqual([
+      unboundKey('ConceptX'),
+      unboundKey('ConceptZ'),
+      unboundKey('ConceptY'),
+    ]);
+  });
+
+  it('`assessments` alone is a no-op on this path today — a separate, already-flagged gap, not a bug here', async () => {
+    // `session/build.ts`'s `toQueueCandidate` never sets
+    // `QueueCandidate.targetAssessmentPath` (no vault-derived field feeds it
+    // on the plain path — see `ol-vr8z`'s hand-back), so
+    // `assessmentContext`'s scope-matching half has nothing to join against
+    // yet: `block-order.ts`'s `groupingScore` only reads `assessmentContext`
+    // through a candidate's own `targetAssessmentPath`, which stays `null`
+    // here. This test pins the CURRENT, honest behaviour — a resolved,
+    // correctly-shaped map that has no observable effect through this
+    // particular caller — rather than asserting a wiring outcome the
+    // upstream data does not yet support.
+    const assessments: readonly AssessmentRecord[] = [
+      {
+        path: 'Assessments/midterm.md',
+        course: 'GEO101',
+        type: 'exam',
+        weight: 0.3,
+        weightRaw: '30',
+        due: '2026-09-21',
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+    ];
+    const order = await bandedItemOrder({ assessments });
+    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptY'), unboundKey('ConceptZ')]);
+  });
+
+  it('supplying both `relations` and `assessments` together (the real call shape) is reachable and does not crash', async () => {
+    const assessments: readonly AssessmentRecord[] = [
+      {
+        path: 'Assessments/midterm.md',
+        course: 'GEO101',
+        type: 'exam',
+        weight: 0.3,
+        weightRaw: '30',
+        due: '2026-09-21',
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+    ];
+    const order = await bandedItemOrder({
+      relations: [contrastEdge('ConceptX', 'ConceptZ')],
+      assessments,
+    });
+    // Same flip `relations` alone produced — `assessments` rides along
+    // harmlessly (see the previous test for why it has no effect of its own
+    // on this path today).
+    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptZ'), unboundKey('ConceptY')]);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Queue composition v1 (F2.5, F2.14, F2.17, C5.5, P2-T07).
  *
- * Five steps, in this order, each of which exists for a stated reason:
+ * Six steps, in this order, each of which exists for a stated reason:
  *
  *   1. **Filter** (F2.5) — narrow to a course or a concept, if she asked.
  *   2. **Exclude suspended** (F2.6) — the queue's half of suspension.
@@ -9,22 +9,40 @@
  *   4. **Order** — plain FSRS due order, and nothing else.
  *   5. **Dedupe by concept** (F2.17) — at most one per concept, the rest
  *      deferred *and named*.
+ *   6. **Block and group** (F2.18/F2.19, `ol-ua0i`) — the already-decided
+ *      offer list is reordered into course blocks, refined by within-block
+ *      grouping. See "F2.18/F2.19" below.
  *
- * ## Plain FSRS order, on purpose
+ * ## Plain FSRS order decides WHAT is selected and deduped
  *
- * There is no priority heuristic here, and adding one would be a mistake with
- * a cost. C5.5 and the oracle (F2.8, F4.3) own prioritisation; the Phase A→B
- * checkpoint (spec §8) measures whether prioritisation changed what she
- * studied, and that measurement is only meaningful against a Phase A baseline
- * that genuinely had none. A "small sensible" v1 heuristic — most overdue
- * first, or hardest first, or interleave new items every fifth card — would
- * have to be unpicked before the comparison could be run, and until someone
- * noticed, it would silently be the thing the checkpoint was measuring.
+ * There is still no priority heuristic in steps 1–5, and adding one there
+ * would be a mistake with a cost: C5.5 and the oracle (F2.8, F4.3) own
+ * prioritisation, and nothing here reaches into it. Due date ascending, ties
+ * keep the caller's order, never-reviewed instruments last — that is the
+ * whole ordering these steps use to decide which instrument wins a dedupe
+ * tie, and `yieldRank`/`examProximity` still come out null, stating that no
+ * prioritisation ran rather than leaving the question open.
  *
- * So: due date ascending, ties keep the caller's order, never-reviewed
- * instruments last. That is the whole ordering, and the tests assert it as a
- * *negative* too — `yieldRank` and `examProximity` come out null, stating that
- * no prioritisation ran rather than leaving the question open.
+ * (This section used to ground the "no heuristic" rule in a Phase A→B
+ * checkpoint measuring whether prioritisation changed what she studied — spec
+ * §8's own Phase A/B distinction, which `[D-071]` has since withdrawn. The
+ * checkpoint is gone; the ordering discipline it argued for is kept on its
+ * own merits, for step 4/5's purposes only — see the next section for what
+ * changed downstream of them.)
+ *
+ * ## F2.18/F2.19 — course blocks and within-block grouping, applied after selection
+ *
+ * Step 6 (`ol-ua0i`) reorders the offer list steps 1–5 already decided into
+ * F2.18's course blocks, refined by F2.19's within-tie-band grouping —
+ * exactly the shape `study-session/compose.ts` already ships for the Today
+ * session (`blockByCoursePresentation`). `./block-order.ts` reuses that
+ * module's own scoring formulas rather than restating them; its own doc has
+ * the full account, including why `[D-113]`'s overdue-first primacy is
+ * unaffected (grouping only ever moves an item within an exact tie band,
+ * never across one, and never changes which instrument was selected or won a
+ * dedupe tie in steps 1–5 above). `relatedConceptKeys` and
+ * `assessmentContext` are both optional, caller-resolved, and a no-op when
+ * omitted — see that module's doc.
  *
  * ## The dedupe key is a set (`ol-t3sd`)
  *
@@ -61,6 +79,7 @@
 import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { isInstrumentSuspended } from '../review-log/suspension.js';
+import { applyCourseBlocking } from './block-order.js';
 import type {
   ComposedQueue,
   ComposeQueueInput,
@@ -222,6 +241,8 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     filter,
     formatPreference = [],
     dedupeByConcept = true,
+    relatedConceptKeys,
+    assessmentContext,
   } = input;
 
   // 1–3. Filter (F2.5), drop suspended (F2.6), keep only what is due.
@@ -314,5 +335,17 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     });
   }
 
-  return { items, deferred };
+  // 6. F2.18/F2.19 (`ol-ua0i`): reorder the already-decided offer list into
+  //    course blocks, refined by within-block grouping. Cannot add, drop or
+  //    re-dedupe anything — see `block-order.ts` and this file's module doc.
+  const candidatesById = new Map(candidates.map((c) => [c.instrumentId, c]));
+  const blocked = applyCourseBlocking({
+    items,
+    candidatesById,
+    now,
+    ...(relatedConceptKeys !== undefined ? { relatedConceptKeys } : {}),
+    ...(assessmentContext !== undefined ? { assessmentContext } : {}),
+  });
+
+  return { items: blocked, deferred };
 }

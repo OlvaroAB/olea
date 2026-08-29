@@ -104,6 +104,10 @@ class FakePlugin {
   register(cb: () => unknown): void {
     this.registeredCleanups.push(cb);
   }
+  // `Component.registerEvent` (real Obsidian): tracks an event ref for
+  // teardown — `main.ts` uses it for the process-now file-menu item
+  // (`ol-0r92.21`, F3.3/`[D-152]`).
+  registerEvent(_ref: unknown): void {}
   async loadData(): Promise<unknown> {
     return this.data;
   }
@@ -174,6 +178,11 @@ function fakeApp(): unknown {
       getLeaf: () => null,
       getRightLeaf: () => null,
       revealLeaf: async () => {},
+      // `ol-0r92.21` (F3.3/`[D-152]`): the process-now file-menu item
+      // subscribes via `registerEvent(workspace.on('file-menu', …))` at
+      // onload — never fired by this fake, but the method must exist.
+      on: () => ({}),
+      offref: () => {},
     },
     metadataCache: { getFileCache: () => null },
   };
@@ -217,7 +226,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all nine view types and all twelve commands when onload runs', async () => {
+  it('registers all nine view types and all thirteen commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -284,6 +293,9 @@ describe('the built bundle is what Obsidian can load', () => {
         // `olea-grove-open` immediately above.
         'olea-home-open',
         'olea-open',
+        // `ol-0r92.21` (F3.3/`[D-152]`): manual process-now on a single note —
+        // timing override on the existing ingestion path, palette + file-menu.
+        'olea-process-note-now',
         // `ol-4v2l` (F8.4, `[REG-1]`): opens the concept-and-instrument
         // registry's dedicated view. Folded into `commands/ids.ts`/
         // `register-commands.ts` by `ol-l5og.11` — `docs/dev/

@@ -435,8 +435,16 @@ export const WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS = 14;
  * assessment (`daysUntilDue < 0`) — F4.7's "exerts no weight" enforced as a
  * value rather than a branch a caller could forget. Never negative, never
  * above 1.
+ *
+ * Exported for `queue/block-order.ts` (`ol-ua0i`) — the plain review-queue
+ * path reuses this exact formula for its own F2.19 layer rather than
+ * restating the decay curve a second time. No behaviour change: still the
+ * same pure `dueDay`/`asOf` arithmetic.
  */
-function withinBlockAssessmentProximity(dueDay: CalendarDay | null, asOf: CalendarDay): number {
+export function withinBlockAssessmentProximity(
+  dueDay: CalendarDay | null,
+  asOf: CalendarDay,
+): number {
   if (dueDay === null) return 0;
   const daysUntilDue = daysBetweenCalendarDays(asOf, dueDay);
   if (daysUntilDue < 0) return 0;
@@ -451,8 +459,11 @@ function withinBlockAssessmentProximity(dueDay: CalendarDay | null, asOf: Calend
  * connected to more of its comparably-due neighbours scores higher and sorts
  * toward the rest of that cluster, without this module ever building a
  * clustering structure of its own.
+ *
+ * Exported for `queue/block-order.ts` (`ol-ua0i`) — see
+ * `withinBlockAssessmentProximity`'s doc above. No behaviour change.
  */
-function withinBlockRelatedness(
+export function withinBlockRelatedness(
   conceptKey: string,
   peers: readonly string[],
   related: ReadonlyMap<string, ReadonlySet<string>> | undefined,

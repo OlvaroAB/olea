@@ -1,4 +1,4 @@
-import { Notice, Plugin, type WorkspaceLeaf } from 'obsidian';
+import { Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
@@ -24,6 +24,7 @@ import {
   type QueueSnapshot,
   type RegistryOverrides,
   type RelationSet,
+  readAssessments,
   readList,
   refreshStudyPlan,
   type Scheduler,
@@ -32,6 +33,7 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
+import { OLEA_COMMAND_PROCESS_NOTE_NOW } from './commands/ids.js';
 import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
@@ -84,13 +86,20 @@ import {
   type MaterialityTrigger,
 } from './ingestion/materiality/wiring.js';
 import { WorkerMaterialityJudge } from './ingestion/materiality/workerJudge.js';
+import {
+  buildAuthoredNoteUnit,
+  createProcessNowAction,
+  isProcessNowSupported,
+  type ProcessNowAction,
+  processNowNotice,
+} from './ingestion/process-now.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
 import { createVaultMisconceptionStore } from './misconception/store.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
-import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
+import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
@@ -203,6 +212,14 @@ interface ReviewWiring {
 // because a `WorkspaceLeaf` has no runtime outside Obsidian.
 export default class OleaPlugin extends Plugin {
   private ingestion: IngestionWiring | null = null;
+  /**
+   * `[D-152]` (F3.3, `ol-0r92.21`): the manual process-now timing override —
+   * one instance for the plugin's whole session so its in-flight coalescing
+   * set actually coalesces across repeat invocations (`process-now.ts`'s own
+   * doc). Built once `this.ingestion` exists (it needs the real engine's
+   * `enqueue`/`tick`) and never rebuilt afterward.
+   */
+  private processNowAction: ProcessNowAction | null = null;
   private review: ReviewWiring | null = null;
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
@@ -808,6 +825,58 @@ export default class OleaPlugin extends Plugin {
       },
     });
 
+    // `ol-0r92.21` [D-152]: the manual process-now timing override, built the
+    // instant `this.ingestion` exists — it needs the real engine's own
+    // `enqueue`/`tick` (see `process-now.ts`'s module doc for why it cannot,
+    // and does not try to, jump the queue). `navigator.onLine` is the
+    // production `isOnline` source; `process-now.ts` defaults to `() => true`
+    // for tests that never inject one.
+    const ingestionForProcessNow = this.ingestion;
+    this.processNowAction = createProcessNowAction({
+      vault,
+      enqueuer: ingestionForProcessNow.engine,
+      tick: () => ingestionForProcessNow.engine.tick(),
+      onAuthoredNoteUnits: (units) => this.onUnitsLanded(units),
+      isOnline: () => navigator.onLine,
+    });
+
+    // `ol-0r92.21` [D-152]: the two doors onto `processNoteNow` — command
+    // palette and note context menu, F7.7's existing "two doors, one action"
+    // shape (`OLEA_COMMAND_OPEN`/`OLEA_COMMAND_TODAY_OPEN` above). Registered
+    // directly on `Plugin`, not through `registerOleaCommands`
+    // (`commands/register-commands.ts` is outside this bead's owned paths —
+    // `ids.ts`'s own doc on `OLEA_COMMAND_PROCESS_NOTE_NOW` states the same
+    // "id here, direct registration in main.ts, fold later" shape
+    // `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` already used).
+    // `checkCallback` hides the palette entry entirely with no active file,
+    // or a file `isProcessNowSupported` declines — the same "no affordance
+    // for something that would only error" posture `ol-p2t10`'s module doc
+    // states for "open Olea" before it had a destination.
+    this.addCommand({
+      id: OLEA_COMMAND_PROCESS_NOTE_NOW,
+      name: 'Olea: Process this note now',
+      checkCallback: (checking: boolean) => {
+        const file = this.app.workspace.getActiveFile();
+        if (file === null || !isProcessNowSupported(file.path)) return false;
+        if (checking) return true;
+        void this.processNoteNow(file.path);
+        return true;
+      },
+    });
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        if (!(file instanceof TFile) || !isProcessNowSupported(file.path)) return;
+        menu.addItem((item) => {
+          item
+            .setTitle('Olea: Process this note now')
+            .setIcon('refresh-cw')
+            .onClick(() => {
+              void this.processNoteNow(file.path);
+            });
+        });
+      }),
+    );
+
     // `ol-2zfj.38`: the vault-watch-to-`engine.enqueue` glue for the
     // multi-format ingestion path — see `ingestion/arrival-watch.ts`'s
     // module doc. Wired the instant `this.ingestion` exists, same ordering
@@ -1129,16 +1198,27 @@ export default class OleaPlugin extends Plugin {
   ): Promise<void> {
     if (!this.observedMaterialChange(result)) return;
 
-    const unit: ExtractedUnit = {
-      text: currentText,
-      provenance: {
-        sourcePath: path,
-        location: { page: 1, charRange: { start: 0, end: currentText.length } },
-        embeddedIn: { notePath: path, blockStart: 0, blockEnd: currentText.length },
-      },
-    };
+    // `ol-0r92.21` [D-152]: this exact unit shape is now shared with the
+    // manual process-now override (`ingestion/process-now.ts`'s
+    // `buildAuthoredNoteUnit`) so the debounce-driven path and the manual
+    // timing override stay one function rather than drifting copies.
+    await this.onUnitsLanded([buildAuthoredNoteUnit(path, currentText)]);
+  }
 
-    await this.onUnitsLanded([unit]);
+  /**
+   * `[D-152]` (F3.3, `ol-0r92.21`): the command-palette and note-context-menu
+   * handler for the manual process-now timing override — both doors call
+   * this one method (see the two registrations above). Delegates entirely to
+   * `this.processNowAction` (`process-now.ts`'s own doc covers what each
+   * outcome means and why); this method's only job is the Obsidian-specific
+   * bit that module deliberately has no import for — showing her a `Notice`
+   * — and the `this.processNowAction === null` guard for the (session-only,
+   * never seen in practice) window before `onload` reaches its construction.
+   */
+  private async processNoteNow(path: VaultPath): Promise<void> {
+    if (this.processNowAction === null) return;
+    const outcome = await this.processNowAction.processNow(path);
+    new Notice(processNowNotice(outcome));
   }
 
   /**
@@ -1593,6 +1673,14 @@ export default class OleaPlugin extends Plugin {
     // `evaluateConfusionRouting` needs no such gate (pure, local).
     const explainWhyPort = this.buildExplainWhyPort();
 
+    // F2.19 (`ol-vr8z`): assessment records for within-block scope grouping,
+    // sourced the same way `session-builder/provider.ts` does — the study-plan
+    // settings store's assignments base, gated on it being configured at all.
+    const assignmentsConfig = await new ObsidianStudyPlanSettingsStore(this).load();
+    const assessments = isStudyPlanConfigured(assignmentsConfig)
+      ? (await readAssessments(wiring.vault, assignmentsConfig.assignmentsBasePath)).records
+      : [];
+
     const outcome = await openReviewSession({
       vault: wiring.vault,
       scheduler: wiring.scheduler,
@@ -1614,6 +1702,9 @@ export default class OleaPlugin extends Plugin {
       // the live, served relation fold, read fresh at open time — `[]` before
       // the first corpus-relation batch has run.
       relations: this.servedRelationEdges(),
+      // F2.19 (`ol-vr8z`): resolved into `assessmentContext` inside
+      // `buildReviewSession`, alongside `relations` above.
+      assessments,
     });
     if (!outcome.ok) {
       console.error('Olea: could not compose a review session', outcome.error);

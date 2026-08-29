@@ -127,8 +127,11 @@ async function adapt(options: { readonly random?: RandomSource } = {}) {
 describe('each queue item becomes a renderable instrument of its own type', () => {
   it('renders all three types, in the order the queue offered them', async () => {
     const items = await adapt();
-    // Vault order: `Notes/cloze.md`, `Notes/mcq.md`, `Notes/qa.md`.
-    expect(items.map((i) => i.instrument.type)).toEqual(['cloze', 'mcq', 'qa']);
+    // All three are never-reviewed ('new'), so every course-block ties on
+    // urgency (`ol-ua0i`'s F2.18) and blocks sort alphabetically:
+    // MUS101 (mcq) leads TEST101 (cloze, qa, in vault-list order within the
+    // block: `Notes/cloze.md` then `Notes/qa.md`).
+    expect(items.map((i) => i.instrument.type)).toEqual(['mcq', 'cloze', 'qa']);
   });
 
   it('a Q&A card carries its question, its answer and the anchor to find it again', async () => {

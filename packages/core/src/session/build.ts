@@ -65,6 +65,9 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
+import type { AssessmentRecord } from '../assessment/types.js';
+import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { composeQueue } from '../queue/compose.js';
@@ -118,6 +121,18 @@ export interface BuildReviewSessionInput {
    * `RelationSet`'s served edges may pass them through unfiltered.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * F2.19 (`ol-vr8z`): assessment records this function resolves — together
+   * with `relations` above and its own `instruments.concepts` enumeration —
+   * into `composeQueue`'s `relatedConceptKeys`/`assessmentContext` maps via
+   * `resolveRelatedConceptKeys`/`resolveAssessmentGroupingContext`. This
+   * function does the resolution itself rather than taking the two maps
+   * pre-resolved, so a caller never has to enumerate concepts a second time
+   * just to join against them (`ol-ua0i`'s hand-back, option (b)). Omitted
+   * means no assessment-scope signal, a real no-op (`block-order.ts`'s
+   * doc), not a degraded mode — same posture `relations` already documents.
+   */
+  readonly assessments?: readonly AssessmentRecord[];
 }
 
 export interface ReviewSession {
@@ -192,6 +207,23 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   );
   const candidates = containment.candidates;
 
+  // F2.19 (`ol-vr8z`): resolve both signal maps here, against the same
+  // `instruments.concepts` enumeration this call already produced above —
+  // no second vault walk. Both resolvers accept an empty input array and
+  // return an empty map, which `block-order.ts` already proves reads
+  // identically to the map being omitted entirely, so passing them
+  // unconditionally (rather than spreading on definedness, as `filter`/
+  // `formatPreference`/`dedupeByConcept` do above) changes nothing when
+  // `input.relations`/`input.assessments` are both omitted.
+  const { relatedConceptKeys } = resolveRelatedConceptKeys(
+    input.relations ?? [],
+    instruments.concepts,
+  );
+  const { assessmentContext } = resolveAssessmentGroupingContext(
+    input.assessments ?? [],
+    instruments.concepts,
+  );
+
   const queue = composeQueue({
     candidates,
     now: input.now,
@@ -199,6 +231,8 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     ...(input.filter !== undefined ? { filter: input.filter } : {}),
     ...(input.formatPreference !== undefined ? { formatPreference: input.formatPreference } : {}),
     ...(input.dedupeByConcept !== undefined ? { dedupeByConcept: input.dedupeByConcept } : {}),
+    relatedConceptKeys,
+    assessmentContext,
   });
 
   const recordsById = new Map(instruments.records.map((record) => [record.instrumentId, record]));

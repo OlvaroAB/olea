@@ -461,7 +461,11 @@ describe('C7.9 containment relations reach both session-composition call sites (
   });
 
   it('composeReviewSession (the review command) threads it into openReviewSession', () => {
-    expect(main).toMatch(/relations:\s*this\.servedRelationEdges\(\),\s*\}\);/);
+    // F2.19 (`ol-vr8z`): `assessments` rides immediately after `relations` in
+    // the same `openReviewSession` call — both signal inputs, one call site.
+    expect(main).toMatch(
+      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,\s*\}\);/,
+    );
   });
 
   it("the Today panel's instrument source is given the same fold", () => {
@@ -549,14 +553,20 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
     );
   });
 
-  it('synthesises exactly one ExtractedUnit whose embeddedIn.notePath is the note itself — no new ingestion format', () => {
-    expect(main).toMatch(
+  it('synthesises exactly one unit whose embeddedIn.notePath is the note itself — no new ingestion format', () => {
+    // `ol-0r92.21` [D-152]: this shape moved into `ingestion/process-now.ts`'s
+    // `buildAuthoredNoteUnit`, shared with the manual process-now override
+    // (see that file's own test) — asserted against the source it now lives
+    // in, since `main.ts` calls it rather than building the literal inline.
+    expect(codeOf('ingestion/process-now.ts')).toMatch(
       /embeddedIn:\s*\{\s*notePath:\s*path,\s*blockStart:\s*0,\s*blockEnd:\s*currentText\.length\s*\},/,
     );
   });
 
   it('delegates to onUnitsLanded — the SAME F3.3 hook the ingestion path calls, not a second sweep entry point', () => {
-    expect(main).toMatch(/await this\.onUnitsLanded\(\[unit\]\);/);
+    expect(main).toMatch(
+      /await this\.onUnitsLanded\(\[buildAuthoredNoteUnit\(path, currentText\)\]\);/,
+    );
   });
 });
 
@@ -708,5 +718,54 @@ describe('Home and the grove open commands are folded into the shared command mo
   it('registerOleaCommands is given real openHome/openGrove handlers instead', () => {
     expect(main).toMatch(/openHome:\s*\(\)\s*=>\s*\{\s*void this\.revealHomeView\(\);\s*\},/);
     expect(main).toMatch(/openGrove:\s*\(\)\s*=>\s*\{\s*void this\.revealGroveView\(\);\s*\},/);
+  });
+});
+
+describe('the manual process-now timing override is registered and reachable ([D-152], ol-0r92.21)', () => {
+  // `docs/dev/surface-register.md`'s own convention for a bead outside
+  // `commands/`'s owned paths: the id lives in `ids.ts` (checked separately
+  // by `check-surface-register.mjs`'s own scan), wired directly on `Plugin`
+  // here rather than through `registerOleaCommands` — the same shape
+  // `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` used before their
+  // own Class A fold.
+
+  it('builds the process-now action once ingestion exists, wired to the real engine and onUnitsLanded', () => {
+    expect(main).toMatch(
+      /const ingestionForProcessNow = this\.ingestion;\s*this\.processNowAction = createProcessNowAction\(\{\s*vault,\s*enqueuer:\s*ingestionForProcessNow\.engine,\s*tick:\s*\(\)\s*=>\s*ingestionForProcessNow\.engine\.tick\(\),\s*onAuthoredNoteUnits:\s*\(units\)\s*=>\s*this\.onUnitsLanded\(units\),\s*isOnline:\s*\(\)\s*=>\s*navigator\.onLine,\s*\}\);/,
+    );
+  });
+
+  it('the command palette entry is registered directly, gated on an active, supported file', () => {
+    expect(main).toMatch(
+      /this\.addCommand\(\{\s*id:\s*OLEA_COMMAND_PROCESS_NOTE_NOW,\s*name:\s*'Olea: Process this note now',\s*checkCallback:\s*\(checking:\s*boolean\)\s*=>\s*\{\s*const file = this\.app\.workspace\.getActiveFile\(\);\s*if \(file === null \|\| !isProcessNowSupported\(file\.path\)\) return false;\s*if \(checking\) return true;\s*void this\.processNoteNow\(file\.path\);\s*return true;\s*\},\s*\}\);/,
+    );
+  });
+
+  it("the note context menu's item reaches the identical processNoteNow method", () => {
+    expect(main).toMatch(
+      /this\.app\.workspace\.on\('file-menu',\s*\(menu,\s*file\)\s*=>\s*\{\s*if \(!\(file instanceof TFile\) \|\| !isProcessNowSupported\(file\.path\)\) return;/,
+    );
+    expect(main).toMatch(
+      /\.setTitle\('Olea: Process this note now'\)\s*\.setIcon\('refresh-cw'\)\s*\.onClick\(\(\)\s*=>\s*\{\s*void this\.processNoteNow\(file\.path\);/,
+    );
+  });
+
+  it('processNoteNow delegates to the action and shows the resulting Notice', () => {
+    expect(main).toMatch(
+      /private async processNoteNow\(path: VaultPath\): Promise<void> \{\s*if \(this\.processNowAction === null\) return;\s*const outcome = await this\.processNowAction\.processNow\(path\);\s*new Notice\(processNowNotice\(outcome\)\);\s*\}/,
+    );
+  });
+
+  it('the authored-note debounce path and this override share one unit-building function, not two copies', () => {
+    expect(main).toMatch(
+      /await this\.onUnitsLanded\(\[buildAuthoredNoteUnit\(path, currentText\)\]\);/,
+    );
+  });
+
+  it('imports the real composer and TFile, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildAuthoredNoteUnit,\s*createProcessNowAction,\s*isProcessNowSupported,\s*type ProcessNowAction,\s*processNowNotice,?\s*\}\s*from\s*'\.\/ingestion\/process-now\.js'/,
+    );
+    expect(main).toMatch(/import \{ Notice, Plugin, TFile, type WorkspaceLeaf \} from 'obsidian';/);
   });
 });

@@ -57,6 +57,7 @@
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
+  AssessmentRecord,
   ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
@@ -151,6 +152,20 @@ export interface OpenReviewSessionInput {
    * documents rather than a degraded mode this module invents.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * F2.19 (`ol-vr8z`): assessment records, forwarded straight to
+   * `buildReviewSession`'s `assessments` input, which resolves them (against
+   * its own concept enumeration) into the `assessmentContext` map
+   * `session/build.ts`'s containment-adjacent F2.19 grouping reads — the same
+   * real no-op posture `relations` above documents when omitted. This module
+   * has no settings store of its own to source the assignments-base path
+   * `session-builder/provider.ts` reads assessments from (`ObsidianStudyPlanSettingsStore`
+   * via `ObsidianDataHost`) — deliberately, per this file's own "Obsidian-free
+   * on purpose" doc — so the caller (`main.ts`, which already holds that host)
+   * is the one that resolves the array and hands it over, same shape as
+   * `relations`.
+   */
+  readonly assessments?: readonly AssessmentRecord[];
 }
 
 export type OpenReviewSessionOutcome =
@@ -221,6 +236,7 @@ export async function openReviewSession(
       reviewLog: { additionalPaths },
       ...(input.filter !== undefined ? { filter: input.filter } : {}),
       ...(input.relations !== undefined ? { relations: input.relations } : {}),
+      ...(input.assessments !== undefined ? { assessments: input.assessments } : {}),
     });
 
     // C5.5: "the Worker supplies the policy … core executes it". A `null`

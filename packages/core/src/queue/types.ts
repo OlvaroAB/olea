@@ -13,11 +13,23 @@
  * `(candidates, now, suspended, filter)`; it reads no clock, opens no file and
  * holds no state between sessions. What she reviewed yesterday is in the
  * review log, and the scheduler state derived from it is in `QueueCandidate`.
+ *
+ * ## F2.18/F2.19 (`ol-ua0i`)
+ *
+ * WHAT is selected and deduped is still decided by plain FSRS due order alone
+ * — see `compose.ts`'s module doc. F2.18's course blocks and F2.19's
+ * within-block grouping are a presentation-order layer applied strictly
+ * *after* that, reusing `study-session/compose.ts`'s own scoring formulas
+ * (see `block-order.ts`). `QueueCandidate.targetAssessmentPath` and
+ * `ComposeQueueInput.relatedConceptKeys`/`assessmentContext` exist only to
+ * feed that layer.
  */
 
 import type { SelectionContextV4 } from 'olea-contracts';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type { SchedulerState } from '../scheduler/types.js';
+import type { CalendarDay } from '../today/calendar-day.js';
+import type { VaultPath } from '../vault/types.js';
 
 /**
  * One instrument the queue may offer, with everything composition needs to
@@ -82,6 +94,31 @@ export interface QueueCandidate {
    * prioritisation and belong to C5.5, not to v1.
    */
   readonly state: SchedulerState | null;
+  /**
+   * F2.19 (`ol-ua0i`): the concept's own target assessment, keyed the same
+   * way `gap/build.ts`'s `GapRow.targetAssessmentPath` is — the join key into
+   * `ComposeQueueInput.assessmentContext`. Optional and defaults to `null`
+   * ("no known target assessment"), which reads as a no-op at the grouping
+   * seam exactly like an absent map entry does — see `block-order.ts`.
+   */
+  readonly targetAssessmentPath?: VaultPath | null;
+}
+
+/**
+ * F2.19's per-assessment date and resolved scope, restated rather than
+ * imported from `study-session/compose.ts`'s `AssessmentGroupingContext` —
+ * the same "restate a structurally identical shape across a layer boundary"
+ * convention `assessment/scope-concept-keys.ts`'s own `AssessmentConceptContext`
+ * doc states for the identical situation one layer down. `ReadonlyMap`'s
+ * value position is covariant, so `resolveAssessmentGroupingContext`'s result
+ * is assignable straight into `ComposeQueueInput.assessmentContext` with no
+ * cast.
+ */
+export interface QueueAssessmentContext {
+  /** F4.7's dated arithmetic input. `null` reads as "no known deadline". */
+  readonly dueDay: CalendarDay | null;
+  /** F1.7's resolved scope, already turned into concept keys by the caller. */
+  readonly scopeConceptKeys: ReadonlySet<string>;
 }
 
 /**
@@ -227,6 +264,22 @@ export interface ComposeQueueInput {
    * named relaxation and nothing more.
    */
   readonly dedupeByConcept?: boolean;
+  /**
+   * F2.19 (`ol-ua0i`): C7.10 relation adjacency, keyed by `conceptKey`, each
+   * value the set of OTHER `conceptKey`s it connects to — the identical shape
+   * `study-session/compose.ts`'s `ComposeSessionRowsInput.relatedConceptKeys`
+   * takes, produced by the same `resolveRelatedConceptKeys` resolver.
+   * **Optional and safe to omit entirely**: see `block-order.ts`'s no-op
+   * proof.
+   */
+  readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * F2.19 (`ol-ua0i`): F1.7's per-assessment date and resolved scope, keyed
+   * by the exact `VaultPath` a candidate's own `targetAssessmentPath` names
+   * — see {@link QueueAssessmentContext}. **Optional and safe to omit
+   * entirely.**
+   */
+  readonly assessmentContext?: ReadonlyMap<VaultPath, QueueAssessmentContext>;
 }
 
 /**
