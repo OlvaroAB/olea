@@ -1130,6 +1130,31 @@ export type {
   Scheduler,
   SchedulerState,
 } from './scheduler/types.js';
+// F8.1's six-state grove coverage computation (`[D-054]`, `ol-o8eo`) — the
+// examiner-declared denominator (F1.5/F4.1), never Olea's own inference.
+// `./scope/coverage.ts` classifies one concept; `./scope/grove.ts` assembles
+// a whole course's reading (declared / inferred / no-registered-source) and
+// F8.3's count-and-source summary. See `./scope/grove.ts`'s module doc.
+export type {
+  ClassifyDeclaredConceptInput,
+  DeclaredConceptClassification,
+  GroveDeclaredState,
+} from './scope/coverage.js';
+export {
+  classifyDeclaredConcept,
+  GROUND_STALL_STREAK_THRESHOLD,
+  isVolunteer,
+} from './scope/coverage.js';
+export type {
+  BuildGroveModelInput,
+  BuildGroveModelResult,
+  GroveCell,
+  GroveCourseModel,
+  GroveCourseSummary,
+  GroveMaterialGapCell,
+  GroveVolunteerCell,
+} from './scope/grove.js';
+export { buildGroveModel } from './scope/grove.js';
 // The session pipeline (P2-T07's missing half): walk her vault for instruments,
 // bind each to its concept and courses, replay the review log into per-instrument
 // scheduling state, and hand the result to `composeQueue`. `buildReviewSession`

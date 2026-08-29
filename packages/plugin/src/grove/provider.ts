@@ -1,19 +1,87 @@
 /**
  * `createLocalGroveProvider` — the production `GroveDataDeps` (F8.1,
- * `[D-134]` Q1, `ol-0r92.17`). `./view.ts`'s module doc carries the full
- * argument for what this reads and why; the short version: this reuses
- * `buildRegistryModel` — the SAME projection `registry/provider.ts` reads
- * for F8.4's browse screen — grouped by course, rather than a second,
- * parallel computation of growth stage. Nothing here is a new fact about
- * her mastery; grouping by `RegistryConceptEntry.courses` and filtering out
- * withdrawn (`pruned`) concepts is the only work this module adds.
+ * `[D-134]` Q1, `ol-0r92.17`, real six-state computation `ol-o8eo`).
  *
- * **`openRetrospective` is deliberately absent from this factory's return
- * value.** It is a navigation callback (which Obsidian leaf to reveal),
- * not a data concern — `main.ts` supplies it directly at the view
- * construction site, the same split `today/view.ts`'s `startReview` and
- * `gap/view.ts`'s `buildSession` already draw between "what a provider
- * reads" and "what a host does with a click."
+ * ## What changed from the `ol-0r92.17` stand-in, and why
+ *
+ * The round-27 host had no core computation to read (`ol-o8eo`'s own
+ * description: "no `GroveState` type, no `ground`/`volunteer` value anywhere
+ * in the codebase"), so it rendered `buildRegistryModel`'s growth-stage
+ * projection with an honest disclaimer that it was Olea's own reading, never
+ * F8.1's examiner-declared scope. `olea-core#buildGroveModel` (`./scope/
+ * grove.ts`) is that computation now, and this module is the wiring: for
+ * each course, gather what `buildGroveModel` needs and read back a real
+ * three-way status (`'declared'` / `'inferred'` / `'no-registered-source'`)
+ * instead of always rendering the inferred reading.
+ *
+ * **This is the mechanism `ol-z0j9` (the naming-tension bead) asked for.**
+ * That bead flagged that F8.1's own vocabulary forbids the word `grove` for
+ * a scope Olea alone inferred, and the round-27 host was exactly that case,
+ * unconditionally. `GroveCourseModel`'s `'inferred'` status is what lets a
+ * course be told apart from a `'declared'` one — the view now withholds the
+ * `grove`-shaped rendering for an inferred course (`./view.ts`) rather than
+ * always drawing one. **Whether to rename the view or the command stays
+ * David's call** (`ol-z0j9` is still open for that question) — this bead
+ * does not touch `VIEW_TYPE_OLEA_GROVE`, the command id, or `GROVE_VIEW_TITLE`.
+ *
+ * ## The vocabulary tier-3 evidence matches against, and the material-gap caveat this inherits
+ *
+ * `extractTier3Evidence` can only cite a name that is IN its `vocabulary`
+ * option — the vocabulary is the candidate set, not a discovery mechanism —
+ * so this module widens it the same way `../concept/extract.ts`'s own tier-3
+ * pass does (`[...zettelByTitle.keys(), ...byName.keys()]`): every concept
+ * name this run already extracted, topic-derived or Zettelkasten-bound, not
+ * only Zettelkasten titles. This is what lets an objectives document that
+ * names a `topic:`-only concept actually produce a citation for it.
+ *
+ * **The trade this makes explicit rather than hides:** a genuinely-absent
+ * concept — the examiner's document names something she has NO note, no
+ * `topic:` reference and no Zettelkasten title for anywhere — can still never
+ * be discovered this way, because nothing puts its name in the vocabulary to
+ * match against. `../gap/build.ts`'s own module doc names the identical
+ * reachability gap for F4.10's material gap ("reachable through this shape
+ * but rare-to-absent in practice against the current pipeline") — this
+ * module inherits exactly that limitation, not a new one, and widening
+ * extraction's vocabulary is that bead's work, not this one's.
+ *
+ * ## The reads, and what has to wait on what
+ *
+ * `buildGroveModel` needs, per course: the vault's `ConceptRecord`s (from
+ * `enumerateVaultInstruments`, already walked for instruments too),
+ * registered sources and their tier-3 citations (`extractTier3Evidence` —
+ * F1.5/F4.1, the denominator's own source), and a growth-stage reading per
+ * concept. The last of those is read off `buildRegistryModel`'s own
+ * `RegistryConceptEntry.mastery` (C5.4's rollup, computed there already)
+ * rather than this module computing a second answer to "what stage is this
+ * concept at" — the same "compose once, read here" discipline `../gap/
+ * provider.ts` follows for `composeOracleRanking`. `buildRegistryModel` also
+ * remains this module's source for F8.5 withdrawal (`pruned`) — a concept
+ * pruned from the registry stays off the grove's default reading here too.
+ *
+ * Five reads — the review log, the instrument/concept walk, the standing
+ * offer log, the assessments Base and the registry overrides — depend on
+ * none of each other, so they run under one `Promise.all`, matching `../gap/
+ * provider.ts`'s own reasoning for paying independent vault reads
+ * concurrently rather than serially. `extractTier3Evidence` and
+ * `buildRegistryModel` run AFTER: both need `enumeration.concepts` (the
+ * former for its widened vocabulary — see below — the latter as an input),
+ * so neither can start until that walk resolves.
+ *
+ * ## The ground-streak gap, named rather than hidden (F4.5)
+ *
+ * `olea-core#classifyDeclaredConcept` (`./scope/coverage.ts`) needs a
+ * `priorGroundStreak` per concept to flag a PERSISTING `ground` reading as a
+ * stall rather than an ordinary in-flight one — see that module's doc for why
+ * the pure computation cannot hold this itself. **No durable per-install
+ * store for that streak exists yet** (there is no `data.json` slot for it,
+ * unlike `../registry/overrides-store.ts` or `../plan/settings-store.ts`), so
+ * this provider always calls `buildGroveModel` with an empty
+ * `priorGroundStreaks` map: every `ground` cell reads as a first-time
+ * evaluation this session, `stall` always `false`. The computation and its
+ * test coverage are real (`packages/core/src/scope/coverage.spec.ts`); only
+ * the cross-session persistence is missing. **Follow-up work, not silently
+ * absorbed**: a small local store the same shape as
+ * `ObsidianRegistryOverridesStore` would close this, keyed by concept id.
  *
  * **Whole-log mastery, not windowed** — same reasoning `registry/
  * provider.ts` states for its own read: growth stage is a current-state,
@@ -23,19 +91,23 @@
  * **The standing offer, computed once, filtered per course** — mirrors
  * `home/provider.ts`'s identical computation over the SAME assessments and
  * offer-event reads; the two are not shared into one module because they
- * differ in exactly one line (grouping by course vs. not), and sharing
- * would mean a new file outside either bead's more natural home. Dismissal
- * is delegated to `createLocalRetrospectiveProvider`'s own `markDismissed`
- * — this module does not re-implement the `data.json` append.
+ * differ in exactly one line (grouping by course vs. not), and sharing would
+ * mean a new file outside either bead's more natural home. Dismissal is
+ * delegated to `createLocalRetrospectiveProvider`'s own `markDismissed` —
+ * this module does not re-implement the `data.json` append.
  */
 
 import {
   type AssessmentRecord,
+  buildGroveModel,
+  buildMaterialPresence,
   buildRegistryModel,
+  type ConceptMaterialPresence,
   calendarDaysEndingOn,
   createFsrsScheduler,
   enumerateVaultInstruments,
-  type RegistryConceptEntry,
+  extractTier3Evidence,
+  type GroveCourseModel,
   readAssessments,
   readReviewLogHistory,
   reviewLogPath,
@@ -50,16 +122,13 @@ import { resolveOfferCards } from '../retrospective/offer-card.js';
 import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
-import type { GroveConceptRow, GroveCourseSection, GroveViewState } from './view.js';
+import type { GroveCourseSection, GroveViewState } from './view.js';
 
 /**
  * Same DECLARED shape `registry/provider.ts` and `retrospective/
  * provider.ts` each already carry — a plain-English default
  * (`buildRegistryModel` requires a holding cut to compute vitality), never
- * read by this module: F8.1 asks for growth stage/position, not vitality,
- * so `GroveConceptRow` never carries `.vitality`. Kept declared rather than
- * omitted so this call matches `BuildRegistryModelInput`'s real shape
- * without inventing a fourth site for the same unmeasured constant.
+ * read by this module: F8.1's grove reads growth stage, not vitality.
  */
 const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
@@ -79,8 +148,20 @@ export interface GroveDataDeps {
   readonly dismiss: (assessmentPath: VaultPath) => Promise<void>;
 }
 
-function toConceptRow(entry: RegistryConceptEntry): GroveConceptRow {
-  return { conceptId: entry.key, name: entry.displayName, mastery: entry.mastery.state };
+/**
+ * Tallies `VaultInstrumentRecord.notePath` — `buildMaterialPresence`'s second
+ * argument. A note the enumeration never mentions contributes zero, matching
+ * `../gap/provider.ts`'s identical helper (duplicated rather than shared: the
+ * two files are owned by different beads' `owns` sets, and this is six lines).
+ */
+function instrumentCountsByNotePath(
+  records: readonly { readonly notePath: VaultPath }[],
+): ReadonlyMap<VaultPath, number> {
+  const counts = new Map<VaultPath, number>();
+  for (const record of records) {
+    counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
+  }
+  return counts;
 }
 
 async function safeAssessmentRecords(
@@ -130,6 +211,10 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         );
         const { assignmentsBasePath } = await settingsStore.load();
 
+        // `enumerateVaultInstruments` already ran `extractConcepts` internally
+        // (`enumeration.concepts`) — this walk cannot start until that one
+        // finishes, so it is NOT part of the `Promise.all` below. Everything
+        // else is independent and paid concurrently.
         const [{ entries }, enumeration, offerEvents, assessmentRecords, overrides] =
           await Promise.all([
             readReviewLogHistory(deps.vault, { additionalPaths }),
@@ -139,7 +224,16 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             overridesStore.load(),
           ]);
 
-        const model = buildRegistryModel({
+        // Match against every concept she already has (topic-derived or
+        // Zettelkasten-bound), not only Zettelkasten titles — the same
+        // widening `../concept/extract.ts`'s own tier-3 vocabulary makes
+        // (`[...zettelByTitle.keys(), ...byName.keys()]`), so an examiner
+        // document naming a concept she only ever gave a `topic:` value is
+        // still matchable.
+        const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
+        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary });
+
+        const registryModel = buildRegistryModel({
           concepts: enumeration.concepts,
           instrumentRecords: enumeration.records,
           entries,
@@ -153,10 +247,27 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // F8.5: withdrawn concepts stay off the default grove reading, the
         // same default `RegistryView` draws — never deleted, just excluded
         // from this browse.
-        const visible = model.concepts.filter((entry) => !entry.pruned);
+        const prunedKeys = new Set(
+          registryModel.concepts.filter((entry) => entry.pruned).map((entry) => entry.key),
+        );
+        const visibleConcepts = enumeration.concepts.filter(
+          (concept) => !prunedKeys.has(concept.key),
+        );
+        const masteryByKey = new Map(
+          registryModel.concepts.map((entry) => [entry.key, entry.mastery] as const),
+        );
+        const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> =
+          buildMaterialPresence(
+            enumeration.concepts,
+            instrumentCountsByNotePath(enumeration.records),
+          );
 
         const courseNames = new Set<string>();
-        for (const entry of visible) for (const course of entry.courses) courseNames.add(course);
+        for (const concept of visibleConcepts)
+          for (const course of concept.courses) courseNames.add(course);
+        for (const source of tier3.sourcesReport.sources) {
+          if (source.course !== undefined) courseNames.add(source.course);
+        }
         for (const record of assessmentRecords) {
           if (record.course !== undefined) courseNames.add(record.course);
         }
@@ -166,14 +277,25 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // assessment record is handed in unfiltered.
         const allCards = resolveOfferCards(assessmentRecords, offerEvents, now);
 
-        const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => ({
-          course,
-          concepts: visible
-            .filter((entry) => entry.courses.includes(course))
-            .map(toConceptRow)
-            .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
-          offerCards: allCards.filter((card) => card.course === course),
-        }));
+        const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => {
+          const courseConcepts = visibleConcepts.filter((concept) =>
+            concept.courses.includes(course),
+          );
+          const { model }: { model: GroveCourseModel } = buildGroveModel({
+            course,
+            concepts: courseConcepts,
+            sources: tier3.sourcesReport.sources,
+            citations: tier3.citations,
+            materialPresence,
+            mastery: masteryByKey,
+            // No durable ground-streak store exists yet — see module doc.
+          });
+          return {
+            course,
+            model,
+            offerCards: allCards.filter((card) => card.course === course),
+          };
+        });
 
         return { kind: 'model', courses };
       } catch (error) {

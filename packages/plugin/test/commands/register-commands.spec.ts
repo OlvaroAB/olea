@@ -12,6 +12,8 @@ import {
   OLEA_COMMAND_CREATE_CARD,
   OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
+  OLEA_COMMAND_GROVE_OPEN,
+  OLEA_COMMAND_HOME_OPEN,
   OLEA_COMMAND_OPEN,
   OLEA_COMMAND_REGISTRY_OPEN,
   OLEA_COMMAND_RETROSPECTIVE_OPEN,
@@ -47,11 +49,13 @@ function fakeHandlers(): OleaCommandHandlers {
     openRetrospective: vi.fn(),
     copyDiagnostics: vi.fn(),
     openRegistry: vi.fn(),
+    openHome: vi.fn(),
+    openGrove: vi.fn(),
   };
 }
 
 describe('buildOleaCommands', () => {
-  it('registers exactly the ten command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
+  it('registers exactly the twelve command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry, home, grove) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry", ol-0r92.17 added "home"/"grove" (folded in by ol-2zfj.38); the withdrawn "draft cards" command (F4.5) is not among them', () => {
     const commands = buildOleaCommands(fakeHandlers());
     expect(commands.map((c) => c.id).sort()).toEqual(
       [
@@ -59,6 +63,8 @@ describe('buildOleaCommands', () => {
         OLEA_COMMAND_CREATE_CARD,
         OLEA_COMMAND_DIAGNOSTICS_COPY,
         OLEA_COMMAND_GAP_OPEN,
+        OLEA_COMMAND_GROVE_OPEN,
+        OLEA_COMMAND_HOME_OPEN,
         OLEA_COMMAND_OPEN,
         OLEA_COMMAND_REGISTRY_OPEN,
         OLEA_COMMAND_RETROSPECTIVE_OPEN,
@@ -89,6 +95,8 @@ describe('buildOleaCommands', () => {
     expect(byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_REGISTRY_OPEN]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_HOME_OPEN]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_GROVE_OPEN]?.hotkeys).toBeUndefined();
   });
 
   it('wires each command callback to its matching handler', () => {
@@ -106,6 +114,8 @@ describe('buildOleaCommands', () => {
     byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.callback();
     byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.callback();
     byId[OLEA_COMMAND_REGISTRY_OPEN]?.callback();
+    byId[OLEA_COMMAND_HOME_OPEN]?.callback();
+    byId[OLEA_COMMAND_GROVE_OPEN]?.callback();
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
     expect(handlers.createCard).toHaveBeenCalledTimes(1);
@@ -120,6 +130,8 @@ describe('buildOleaCommands', () => {
     expect(handlers.openRetrospective).toHaveBeenCalledTimes(1);
     expect(handlers.copyDiagnostics).toHaveBeenCalledTimes(1);
     expect(handlers.openRegistry).toHaveBeenCalledTimes(1);
+    expect(handlers.openHome).toHaveBeenCalledTimes(1);
+    expect(handlers.openGrove).toHaveBeenCalledTimes(1);
   });
 
   it('"explain something back" is not registered — David\'s ruling points existing commands at the Today panel, it does not manufacture a destination for contextual AI that is not built', () => {
@@ -135,10 +147,22 @@ describe('buildOleaCommands', () => {
     expect(commands.some((c) => c.id === OLEA_COMMAND_DIAGNOSTICS_COPY)).toBe(false);
   });
 
-  it('"Open concept and instrument registry" is left out of the palette entirely when no handler is supplied — main.ts still registers the id directly today (ol-l5og.11: the fold is not wired there yet)', () => {
+  it('"Open concept and instrument registry" is left out of the palette entirely when no handler is supplied', () => {
     const { openRegistry: _omitted, ...handlersWithoutRegistry } = fakeHandlers();
     const commands = buildOleaCommands(handlersWithoutRegistry);
     expect(commands.some((c) => c.id === OLEA_COMMAND_REGISTRY_OPEN)).toBe(false);
+  });
+
+  it('"Open Home" is left out of the palette entirely when no handler is supplied (ol-2zfj.38, same shape as openRegistry)', () => {
+    const { openHome: _omitted, ...handlersWithoutHome } = fakeHandlers();
+    const commands = buildOleaCommands(handlersWithoutHome);
+    expect(commands.some((c) => c.id === OLEA_COMMAND_HOME_OPEN)).toBe(false);
+  });
+
+  it('"Open course grove" is left out of the palette entirely when no handler is supplied (ol-2zfj.38, same shape as openRegistry)', () => {
+    const { openGrove: _omitted, ...handlersWithoutGrove } = fakeHandlers();
+    const commands = buildOleaCommands(handlersWithoutGrove);
+    expect(commands.some((c) => c.id === OLEA_COMMAND_GROVE_OPEN)).toBe(false);
   });
 });
 
@@ -147,13 +171,15 @@ describe('registerOleaCommands', () => {
     const registrar = new FakeCommandRegistrar();
     registerOleaCommands(registrar, fakeHandlers());
 
-    expect(registrar.registered).toHaveLength(10);
+    expect(registrar.registered).toHaveLength(12);
     expect(registrar.registered.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_BULK_REVIEW_OPEN,
         OLEA_COMMAND_CREATE_CARD,
         OLEA_COMMAND_DIAGNOSTICS_COPY,
         OLEA_COMMAND_GAP_OPEN,
+        OLEA_COMMAND_GROVE_OPEN,
+        OLEA_COMMAND_HOME_OPEN,
         OLEA_COMMAND_OPEN,
         OLEA_COMMAND_REGISTRY_OPEN,
         OLEA_COMMAND_RETROSPECTIVE_OPEN,

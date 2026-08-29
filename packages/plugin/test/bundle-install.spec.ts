@@ -276,19 +276,19 @@ describe('the built bundle is what Obsidian can load', () => {
         // no student-invoked draft verb, because Olea is already drafting.
         'olea-gap-open',
         // `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): opens the course grove.
-        // Registered directly via `this.addCommand`, same reasoning as
-        // `olea-registry-open` below.
+        // Folded into `commands/ids.ts`/`register-commands.ts` by
+        // `ol-2zfj.38`, same shape as `olea-registry-open` below — no
+        // longer a direct `this.addCommand` call.
         'olea-grove-open',
-        // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): opens Home. Registered
-        // directly via `this.addCommand`, same reasoning as
-        // `olea-registry-open` below.
+        // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): opens Home. Same fold as
+        // `olea-grove-open` immediately above.
         'olea-home-open',
         'olea-open',
         // `ol-4v2l` (F8.4, `[REG-1]`): opens the concept-and-instrument
-        // registry's dedicated view. Registered directly via
-        // `this.addCommand` rather than through `commands/ids.ts` —
-        // `docs/dev/surface-register.md` (olea-service) names the
-        // ownership-boundary reason and the follow-up.
+        // registry's dedicated view. Folded into `commands/ids.ts`/
+        // `register-commands.ts` by `ol-l5og.11` — `docs/dev/
+        // surface-register.md` (olea-service) names the ownership-boundary
+        // history.
         'olea-registry-open',
         // `ol-r68l` (F8.8, `[D-134]`): opens the retrospective's dedicated view.
         'olea-retrospective-open',

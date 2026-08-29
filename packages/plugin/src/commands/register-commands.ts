@@ -60,13 +60,20 @@
  *
  * **`OLEA_COMMAND_REGISTRY_OPEN` (`ol-l5og.11`) is the same "handler supplied
  * from outside this bead's owned files" shape `OLEA_COMMAND_DIAGNOSTICS_COPY`
- * states just above, one paragraph up.** `main.ts` still registers
- * `'olea-registry-open'` directly (`ol-4v2l`'s own choice, at the time the
- * only door reaching a real destination); this module now offers the same
- * id through the shared palette, conditional on `handlers.openRegistry` the
- * same way `copyDiagnostics` is conditional, so the two registrations never
- * both fire until `main.ts`'s own edit lands — see this bead's report for
- * that hand-back diff.
+ * states just above, one paragraph up.** `ol-4v2l` registered
+ * `'olea-registry-open'` directly on `Plugin` when it shipped (`registry/`,
+ * `main.ts` and `packages/core/src/registry/` were that bead's owned paths,
+ * not this module); this module offers the same id through the shared
+ * palette, conditional on `handlers.openRegistry` the same way
+ * `copyDiagnostics` is conditional. `main.ts`'s direct registration has
+ * since been removed — `openRegistry` is the only door onto this id now.
+ *
+ * **`OLEA_COMMAND_HOME_OPEN`/`OLEA_COMMAND_GROVE_OPEN` (`ol-0r92.17`,
+ * folded by `ol-2zfj.38`) are the same shape, completed the same way.**
+ * `ol-0r92.17`'s owned paths were `home/`, `grove/` and `main.ts`'s own
+ * view/command registration, not this module, so both were registered
+ * directly there first; `main.ts`'s two direct registrations are removed in
+ * the same commit that supplies `openHome`/`openGrove` here.
  */
 
 import {
@@ -74,6 +81,8 @@ import {
   OLEA_COMMAND_CREATE_CARD,
   OLEA_COMMAND_DIAGNOSTICS_COPY,
   OLEA_COMMAND_GAP_OPEN,
+  OLEA_COMMAND_GROVE_OPEN,
+  OLEA_COMMAND_HOME_OPEN,
   OLEA_COMMAND_OPEN,
   OLEA_COMMAND_REGISTRY_OPEN,
   OLEA_COMMAND_RETROSPECTIVE_OPEN,
@@ -124,6 +133,18 @@ export interface OleaCommandHandlers {
    * registration is what actually serves the command in the meantime.
    */
   readonly openRegistry?: () => void;
+  /**
+   * `ol-0r92.17` (F8.8, `[D-134]` Q1): opens `HomeView` directly. Optional on
+   * the same terms `openRegistry` states just above, and folded in by the
+   * same lane that fixed `openRegistry`'s own hand-back (`ol-2zfj.38`'s
+   * round-27 batch-3 tidy): `main.ts`'s two direct `this.addCommand({ id:
+   * 'olea-home-open', ... })`/`'olea-grove-open'` registrations are removed
+   * in the SAME commit that adds these handlers there, so the ids never
+   * register twice.
+   */
+  readonly openHome?: () => void;
+  /** `ol-0r92.17` (F8.1, `[D-134]` Q1): opens `GroveView` directly — same fold as `openHome` immediately above. */
+  readonly openGrove?: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -220,6 +241,25 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       id: OLEA_COMMAND_REGISTRY_OPEN,
       name: 'Olea: Open concept and instrument registry',
       callback: handlers.openRegistry,
+    });
+  }
+
+  // `ol-2zfj.38` (round-27 batch-3 tidy): folds `main.ts`'s two direct
+  // `this.addCommand` registrations for Home and the grove into this shared
+  // module, same conditional shape and same reason `openRegistry` above
+  // states — no behaviour change, same ids, same palette names.
+  if (handlers.openHome) {
+    specs.push({
+      id: OLEA_COMMAND_HOME_OPEN,
+      name: 'Olea: Open Home',
+      callback: handlers.openHome,
+    });
+  }
+  if (handlers.openGrove) {
+    specs.push({
+      id: OLEA_COMMAND_GROVE_OPEN,
+      name: 'Olea: Open course grove',
+      callback: handlers.openGrove,
     });
   }
 

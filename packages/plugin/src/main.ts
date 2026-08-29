@@ -13,6 +13,7 @@ import {
   createFsrsScheduler,
   type DeviceCapability,
   detectCourseProposals,
+  EMPTY_REGISTRY_OVERRIDES,
   type ExtractedUnit,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
@@ -21,6 +22,7 @@ import {
   parseDocument,
   parseFrontmatter,
   type QueueSnapshot,
+  type RegistryOverrides,
   type RelationSet,
   readList,
   refreshStudyPlan,
@@ -64,6 +66,7 @@ import { createLocalGroveProvider } from './grove/provider.js';
 import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
+import { buildIngestionArrivalWatch } from './ingestion/arrival-watch.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash-store.js';
 import {
@@ -92,6 +95,7 @@ import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
 import { createObsidianEditInstrumentPort } from './registry/obsidian-ports.js';
+import { ObsidianRegistryOverridesStore } from './registry/overrides-store.js';
 import { createLocalRegistryProvider } from './registry/provider.js';
 import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
 import { buildClassifyPassageHook } from './retrieval/classify-passage.js';
@@ -252,6 +256,21 @@ export default class OleaPlugin extends Plugin {
    * module doc for the named F7.2 gap that blocks one.
    */
   private termWindowStore: ObsidianTermWindowStore | null = null;
+
+  /**
+   * `ol-r5j4`: a cached `RegistryOverrides` snapshot, loaded once in `onload`
+   * and refreshed every time `registry/provider.ts`'s `rename`/
+   * `withdrawConcept`/`restoreConcept` write a new one
+   * (`onOverridesChanged` below). Exists solely so `draftQuizCardsDeps` and
+   * `composeExplainWhySourceChunks` — both synchronous assemblers of
+   * `RetrieveDeps` — can supply `registryOverrides` without awaiting
+   * `ObsidianRegistryOverridesStore.load()`'s own async read on every
+   * generative call. `EMPTY_REGISTRY_OVERRIDES` (no expansion) until the
+   * first load resolves or she has ever renamed/pruned a concept — the same
+   * "absent means no change in behaviour" default `RetrieveDeps
+   * .registryOverrides` itself documents.
+   */
+  private registryOverridesCache: RegistryOverrides = EMPTY_REGISTRY_OVERRIDES;
 
   /**
    * C7.8's course-detection surface (`[D-098]` point 1, F1.3, `ol-0r92.7`):
@@ -472,10 +491,10 @@ export default class OleaPlugin extends Plugin {
       },
       // `ol-r68l` (F8.8, `[D-134]`): the retrospective's own F7.7 command —
       // still the one door that opens the reading itself. `ol-0r92.17`
-      // added the standing OFFER's two hosts (`olea-home-open`/`olea-
-      // grove-open` above), which reveal this same view when their own
-      // "Open" button is clicked; this command remains the direct door for
-      // anyone who reaches for it by name.
+      // added the standing OFFER's two hosts (`openHome`/`openGrove`
+      // below), which reveal this same view when their own "Open" button is
+      // clicked; this command remains the direct door for anyone who
+      // reaches for it by name.
       openRetrospective: () => {
         void this.revealRetrospectiveView();
       },
@@ -492,29 +511,15 @@ export default class OleaPlugin extends Plugin {
       openRegistry: () => {
         void this.revealRegistryView();
       },
-    });
-
-    // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): Home's own open command,
-    // registered directly rather than through `commands/register-
-    // commands.ts`/`ids.ts` — this bead's owned paths are `home/`, `grove/`
-    // and this file (view + command registration only), the same
-    // restraint `ol-4v2l`'s `olea-registry-open` above states for its own
-    // scope.
-    this.addCommand({
-      id: 'olea-home-open',
-      name: 'Olea: Open Home',
-      callback: () => {
+      // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7) / `ol-2zfj.38`: Home's and
+      // the grove's own open commands, folded into the same shared command
+      // module `openRegistry` above already uses — the identical Class A
+      // tidy `docs/dev/surface-register.md` named as still owed for these
+      // two. No longer registered directly on `Plugin` here.
+      openHome: () => {
         void this.revealHomeView();
       },
-    });
-
-    // `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): the course grove's own open
-    // command — same direct-registration reasoning as `olea-home-open`
-    // above.
-    this.addCommand({
-      id: 'olea-grove-open',
-      name: 'Olea: Open course grove',
-      callback: () => {
+      openGrove: () => {
         void this.revealGroveView();
       },
     });
@@ -718,9 +723,10 @@ export default class OleaPlugin extends Plugin {
       });
     });
 
-    // `ol-0r92.17` (F8.1, `[D-134]` Q1): the course grove — see `grove/
-    // view.ts`'s module doc for what this bead can and cannot honestly
-    // build against F8.1's own six-state coverage layer. Each course
+    // `ol-0r92.17` (F8.1, `[D-134]` Q1): the course grove — `createLocalGroveProvider`
+    // now reads `olea-core`'s real F8.1 six-state computation (`ol-o8eo`) where a
+    // course has a registered source; see `grove/provider.ts`'s module doc for the
+    // three-way status and the remaining naming call (`ol-z0j9`). Each course
     // section carries its own filtered slice of the standing offer
     // (`retrospective/offer-card.ts`: "a future grove view would filter to
     // its own course").
@@ -759,6 +765,12 @@ export default class OleaPlugin extends Plugin {
             settingsHost: this,
             now: () => new Date(),
             editPort: createObsidianEditInstrumentPort(this.app),
+            // `ol-r5j4`: keeps `this.registryOverridesCache` current the
+            // instant she renames, withdraws or restores a concept from this
+            // view — see that field's own doc.
+            onOverridesChanged: (overrides) => {
+              this.registryOverridesCache = overrides;
+            },
           }),
         ),
     );
@@ -788,6 +800,20 @@ export default class OleaPlugin extends Plugin {
         draftDeps: () => this.draftQuizCardsDeps(),
       },
     });
+
+    // `ol-2zfj.38`: the vault-watch-to-`engine.enqueue` glue for the
+    // multi-format ingestion path — see `ingestion/arrival-watch.ts`'s
+    // module doc. Wired the instant `this.ingestion` exists, same ordering
+    // `buildKeywordIndexWiring`'s own `watch` wiring follows immediately
+    // below; `this.ingestion.engine` satisfies `JobEnqueuer` structurally,
+    // no separate handle needed.
+    this.register(
+      buildIngestionArrivalWatch({
+        vault,
+        enqueuer: this.ingestion.engine,
+        watch: (handler) => vault.watch(handler),
+      }),
+    );
 
     // ol-tuvx: `ObsidianKeywordIndexStore` was a finished adapter nothing
     // ever constructed. This is that construction — see
@@ -894,6 +920,20 @@ export default class OleaPlugin extends Plugin {
     // above — no Worker token needed for either.
     this.materialArrivals = new ObsidianMaterialArrivalStore(this);
     this.termWindowStore = new ObsidianTermWindowStore(this);
+
+    // `ol-r5j4`: prime the registry-overrides cache once at load — see this
+    // field's own doc for why `draftQuizCardsDeps`/`composeExplainWhySourceChunks`
+    // need a synchronous read rather than this store's own async `load()`.
+    // A read failure leaves the cache at `EMPTY_REGISTRY_OVERRIDES` (no
+    // expansion), never crashes `onload` — same posture every other
+    // best-effort load in this method already takes.
+    this.registryOverridesCache = await new ObsidianRegistryOverridesStore(this)
+      .load()
+      .catch((error: unknown) => {
+        console.error('Olea: could not load registry overrides', error);
+        return EMPTY_REGISTRY_OVERRIDES;
+      });
+
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'modify') return;
@@ -1355,6 +1395,12 @@ export default class OleaPlugin extends Plugin {
    * pasted yet (F7.8), or the keyword index has not built its first
    * snapshot. Mirrors `retrieval/wiring.ts`'s own `null`-on-unconfigured
    * posture rather than inventing a second one.
+   *
+   * `retrieve.registryOverrides` (`ol-r5j4`) reads `this.registryOverridesCache`
+   * — see that field's own doc for why a cache rather than this store's own
+   * async `load()`: this function is called synchronously from
+   * `buildIngestionRunner`'s `revision.draftDeps` and `onUnitsLanded`, and
+   * cannot itself become `async` without widening both of those seams.
    */
   private draftQuizCardsDeps(): DraftQuizCardsDeps | null {
     const embeddingCache = this.retrieval?.embeddingCache;
@@ -1376,6 +1422,7 @@ export default class OleaPlugin extends Plugin {
         keywordIndex: this.keywordIndex.engine.toPersisted(),
         embeddingCache,
         embeddingProvider,
+        registryOverrides: this.registryOverridesCache,
       },
       transport,
       // `ol-2zfj.36` ([D-101], F3.8/F3.9): the source-materiality hook —
@@ -1489,6 +1536,11 @@ export default class OleaPlugin extends Plugin {
    * yet (no Worker token pasted, or the index has not built its first
    * snapshot): this function's own contract is "refuse honestly downstream"
    * (see that function's doc), not "throw here."
+   *
+   * `retrieve.registryOverrides` (`ol-r5j4`) is the same
+   * `this.registryOverridesCache` read `draftQuizCardsDeps` above reads —
+   * one cache, both production callers of `retrieve()`, never two
+   * independent readings of the same override state.
    */
   private async composeExplainWhySourceChunks(
     instrument: ReviewInstrument,
@@ -1504,6 +1556,7 @@ export default class OleaPlugin extends Plugin {
           keywordIndex: this.keywordIndex.engine.toPersisted(),
           embeddingCache,
           embeddingProvider,
+          registryOverrides: this.registryOverridesCache,
         },
       },
       instrument,

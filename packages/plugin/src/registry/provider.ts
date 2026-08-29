@@ -26,6 +26,16 @@
  * `GapViewModel`: a persisted registry blob would be a new cache with
  * nothing in the contract naming it (C6, D-002/D-004/D-005/D-008). `load()`
  * recomputes from scratch every time the view opens or refreshes.
+ *
+ * **`deps.onOverridesChanged` (`ol-r5j4`) is the one exception to "no
+ * cache," and it is not this provider's own cache.** `retrieve()`'s two
+ * production callers need a `RegistryOverrides` snapshot assembled
+ * synchronously (`ol-l5og.11`'s alias expansion), while this store's own
+ * `load()` is async — so `main.ts` keeps a cached copy for THAT purpose,
+ * refreshed by this optional hook every time `rename`/`withdrawConcept`/
+ * `restoreConcept` below write a new blob. This provider's own `load()`
+ * above is untouched by it and still reads fresh every time, exactly as
+ * before.
  */
 
 import {
@@ -36,6 +46,7 @@ import {
   pruneConcept as pruneConceptOverride,
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
+  type RegistryOverrides,
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
   reviewLogPath,
@@ -78,6 +89,20 @@ export interface CreateLocalRegistryProviderDeps {
   /** Overridable for tests; defaults to the window every other provider probes by. */
   readonly probeDays?: number;
   readonly holdingCut?: number;
+  /**
+   * `ol-r5j4`: best-effort notification of a freshly-saved `RegistryOverrides`
+   * blob, fired after every `overridesStore.save()` below (rename, withdraw,
+   * restore). Exists so `main.ts` can keep a cached copy current for
+   * `retrieve()`'s two production callers (`draftQuizCardsDeps`,
+   * `composeExplainWhySourceChunks`) without either of them awaiting this
+   * store's own async `load()` — see those call sites' own doc for why a
+   * cache, not an async deps refactor, is the mechanism. Optional and
+   * fire-and-forget, same shape `onUnitsLanded`/`onVerdict` already use one
+   * directory over (`ingestion/wiring.ts`, `ingestion/materiality/wiring.ts`)
+   * for the identical reason: a downstream cache-refresh failure must never
+   * make a rename/prune/restore itself look like it failed.
+   */
+  readonly onOverridesChanged?: (overrides: RegistryOverrides) => void;
 }
 
 async function additionalReviewLogPaths(
@@ -136,16 +161,21 @@ export function createLocalRegistryProvider(
       const overrides = await overridesStore.load();
       const next = renameConceptOverride(overrides, entry.key, entry.originalName, newDisplayName);
       await overridesStore.save(next);
+      deps.onOverridesChanged?.(next);
     },
 
     async withdrawConcept(entry: RegistryConceptEntry): Promise<void> {
       const overrides = await overridesStore.load();
-      await overridesStore.save(pruneConceptOverride(overrides, entry.key));
+      const next = pruneConceptOverride(overrides, entry.key);
+      await overridesStore.save(next);
+      deps.onOverridesChanged?.(next);
     },
 
     async restoreConcept(entry: RegistryConceptEntry): Promise<void> {
       const overrides = await overridesStore.load();
-      await overridesStore.save(unpruneConceptOverride(overrides, entry.key));
+      const next = unpruneConceptOverride(overrides, entry.key);
+      await overridesStore.save(next);
+      deps.onOverridesChanged?.(next);
     },
 
     async withdrawInstrument(instrument: RegistryInstrumentSummary): Promise<void> {

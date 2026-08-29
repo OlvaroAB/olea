@@ -154,6 +154,52 @@ describe('createLocalRegistryProvider — withdraw/restore instrument (F8.5)', (
   });
 });
 
+describe('createLocalRegistryProvider — onOverridesChanged (ol-r5j4)', () => {
+  it('fires with the freshly-saved overrides on rename, withdraw and restore, and never on load', async () => {
+    const host = new FakeDataHost();
+    const seen: unknown[] = [];
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      onOverridesChanged: (overrides) => {
+        seen.push(overrides);
+      },
+    });
+
+    const before = await modelFrom(await provider.load());
+    const entry = before.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+    expect(seen).toHaveLength(0); // load() never fires it — only a write does
+
+    await provider.rename(entry, 'Renamed concept');
+    expect(seen).toHaveLength(1);
+
+    await provider.withdrawConcept(entry);
+    expect(seen).toHaveLength(2);
+
+    await provider.restoreConcept(entry);
+    expect(seen).toHaveLength(3);
+
+    // Each call reflects that specific write, not a stale earlier snapshot.
+    expect(seen[0]).toMatchObject({ renames: { [entry.key]: { displayName: 'Renamed concept' } } });
+    expect(seen[1]).toMatchObject({ prunedConceptKeys: [entry.key] });
+    expect(seen[2]).toMatchObject({ prunedConceptKeys: [] });
+  });
+
+  it('is optional — omitting it changes nothing about rename/withdraw/restore', async () => {
+    const host = new FakeDataHost();
+    const provider = makeProvider(fixtureVault(), host, new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const entry = before.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+
+    await expect(provider.rename(entry, 'Renamed concept')).resolves.toBeUndefined();
+  });
+});
+
 describe('createLocalRegistryProvider — edit (F8.4: delegated to Obsidian)', () => {
   it('hands the instrument to the injected edit port, and does nothing else', async () => {
     const editPort = new FakeEditPort();

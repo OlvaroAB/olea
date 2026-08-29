@@ -76,11 +76,31 @@ export const OLEA_COMMAND_RETROSPECTIVE_OPEN = 'olea-retrospective-open';
  * were `registry/`, `main.ts` and `packages/core/src/registry/`, not this
  * module) — `docs/dev/surface-register.md` named the fold into `ids.ts`/
  * `register-commands.ts` as the Class A follow-up this id and
- * `OLEA_COMMAND_REGISTRY_OPEN` complete (`ol-l5og.11`). `main.ts` still
- * needs to stop registering the id directly and start passing a handler
- * here instead — see this bead's report for the exact hand-back diff.
+ * `OLEA_COMMAND_REGISTRY_OPEN` complete (`ol-l5og.11`). **Done**: `main.ts`
+ * no longer registers this id directly — it passes `openRegistry` to
+ * `registerOleaCommands` instead, the same conditional-handler shape
+ * `OLEA_COMMAND_HOME_OPEN`/`OLEA_COMMAND_GROVE_OPEN` below now follow too.
  */
 export const OLEA_COMMAND_REGISTRY_OPEN = 'olea-registry-open';
+/**
+ * `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): Home's own open command — opens
+ * `HomeView` directly, independent of the standing retrospective offer card
+ * Home also hosts. Registered directly on `Plugin` at `main.ts` when
+ * `ol-0r92.17` shipped it (that bead's owned paths were `home/`, `grove/`
+ * and `main.ts`'s view/command registration only, not this module) —
+ * `docs/dev/surface-register.md` named the fold into `ids.ts`/
+ * `register-commands.ts` as the same Class A follow-up
+ * `OLEA_COMMAND_REGISTRY_OPEN` immediately above already completed for its
+ * own command. This id and `OLEA_COMMAND_GROVE_OPEN` below are that tidy,
+ * applied here (`ol-2zfj.38`'s round-27 batch-3 lane).
+ */
+export const OLEA_COMMAND_HOME_OPEN = 'olea-home-open';
+/**
+ * `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): the course grove's own open
+ * command — same direct-registration history, and the same fold, as
+ * `OLEA_COMMAND_HOME_OPEN` immediately above.
+ */
+export const OLEA_COMMAND_GROVE_OPEN = 'olea-grove-open';
 // `OLEA_COMMAND_DRAFT_CARDS` ('olea-draft-cards') was withdrawn (David, wave-2
 // round-2 correction). F4.5 ("Olea alpha functional scope") rules out a
 // student-invoked draft verb by name — "there is no 'Draft 6?' — because Olea

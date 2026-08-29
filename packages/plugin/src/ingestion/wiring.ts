@@ -37,6 +37,7 @@
 
 import {
   createExtractionJobRunner,
+  DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
   type DeviceCapability,
   deferredEnqueuer,
   type ExtractedUnit,
@@ -108,6 +109,15 @@ function withUnitsLandedHook(
  * instant this promise settles — the ordering `deferredEnqueuer`'s own
  * module doc requires (build the enqueuer, construct the runner, construct
  * the engine, bind) is exactly what this function does, in that order.
+ *
+ * **`ol-2zfj.38`: the engine is always constructed with `enqueueDebounce:
+ * DEFAULT_ENQUEUE_DEBOUNCE_POLICY`.** Unconditional and additive-only — every
+ * existing caller (this file's own tests included) never supplies
+ * `EnqueueInput.lastChangedAt`, so `enqueue`'s behaviour for them is
+ * byte-identical to before this policy was configured (`EngineDeps
+ * .enqueueDebounce`'s own doc: "both sides must opt in"). `main.ts`'s
+ * `ingestion/arrival-watch.ts` is the production caller that supplies
+ * `lastChangedAt` and so actually exercises the debounce.
  */
 export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<IngestionWiring> {
   const sink = new PendingIndexingSink();
@@ -128,6 +138,13 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     store: deps.queueStore,
     capability: deps.capability,
     runner: composedRunner,
+    // `ol-2zfj.38`: the ENQUEUE debounce is always in force from this
+    // construction onward — see `enqueue-debounce.ts`'s own doc for why it
+    // is declared, not derived, and `EngineDeps.enqueueDebounce`'s doc for
+    // why this alone is inert until a caller also supplies
+    // `EnqueueInput.lastChangedAt` (`ingestion/arrival-watch.ts` is the
+    // production caller that does).
+    enqueueDebounce: DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
   });
   enqueuer.bind(engine);
   return { engine, sink };

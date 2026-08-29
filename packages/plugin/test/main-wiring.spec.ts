@@ -631,3 +631,82 @@ describe('C7.8 course detection has a real trigger and a real host (ol-0r92.7)',
     expect(main).not.toMatch(/ObsidianCourseStore/);
   });
 });
+
+describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is real (ol-2zfj.38)', () => {
+  // `ol-84my`'s own close reason, verbatim: the ENQUEUE debounce and the
+  // queue engine both existed, and no production code ever called
+  // `IngestionQueueEngine.enqueue()` for a file newly arriving in the vault.
+  // Same defect shape as `ol-tuvx`/`ol-odb0.1` above: every unit test for
+  // `buildIngestionArrivalWatch` and the engine's own debounce passed while
+  // this gap existed, because each supplies its own fake of exactly the
+  // seam that was missing here — `main.ts` never calling it at all.
+
+  it('imports the tested composer, not an inline vault.watch handler', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildIngestionArrivalWatch\s*\}\s*from\s*'\.\/ingestion\/arrival-watch\.js'/,
+    );
+  });
+
+  it('builds the watch against the real engine buildIngestionRunner returned, registered for teardown', () => {
+    expect(main).toMatch(
+      /this\.register\(\s*buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer:\s*this\.ingestion\.engine,\s*watch:\s*\(handler\)\s*=>\s*vault\.watch\(handler\),\s*\}\),\s*\);/,
+    );
+  });
+
+  it('constructs the queue engine with the declared ENQUEUE debounce policy', () => {
+    expect(codeOf('ingestion/wiring.ts')).toMatch(
+      /enqueueDebounce:\s*DEFAULT_ENQUEUE_DEBOUNCE_POLICY,/,
+    );
+  });
+});
+
+describe("retrieve()'s two production callers supply registryOverrides, so alias expansion is actually exercised (ol-r5j4)", () => {
+  // `ol-l5og.11`'s own diagnosis: `retrieve()` expands keyword queries with
+  // rename aliases when `RetrieveDeps.registryOverrides` is supplied, but
+  // neither `draftQuizCardsDeps` nor `composeExplainWhySourceChunks` ever
+  // assembled one — the async overrides-store load did not fit either
+  // call site's synchronous deps assembly. These are the source-level
+  // checks that a cached snapshot now closes both gaps.
+
+  it('loads a cached RegistryOverrides snapshot once in onload, defaulting honestly on a read failure', () => {
+    expect(main).toMatch(
+      /this\.registryOverridesCache\s*=\s*await new ObsidianRegistryOverridesStore\(this\)\s*\.load\(\)\s*\.catch\(/,
+    );
+  });
+
+  it('the registry view refreshes the cache the instant she renames, withdraws or restores a concept', () => {
+    expect(main).toMatch(
+      /onOverridesChanged:\s*\(overrides\)\s*=>\s*\{\s*this\.registryOverridesCache = overrides;\s*\},/,
+    );
+  });
+
+  it('draftQuizCardsDeps supplies the cache to retrieve()', () => {
+    expect(main).toMatch(
+      /embeddingProvider,\s*registryOverrides:\s*this\.registryOverridesCache,\s*\},\s*transport,/,
+    );
+  });
+
+  it('composeExplainWhySourceChunks supplies the SAME cache to retrieve()', () => {
+    expect(main).toMatch(
+      /embeddingProvider,\s*registryOverrides:\s*this\.registryOverridesCache,\s*\},\s*\},\s*instrument,\s*\);/,
+    );
+  });
+});
+
+describe('Home and the grove open commands are folded into the shared command module, not direct addCommand calls (ol-2zfj.38)', () => {
+  // `docs/dev/surface-register.md` named this as the Class A tidy still owed
+  // once `OLEA_COMMAND_REGISTRY_OPEN` (`ol-l5og.11`) proved the pattern —
+  // same defect-shape posture this file already takes for every other
+  // wiring gap: a command working today is not the same claim as a command
+  // reached the way the rest of the palette is.
+
+  it('main.ts no longer calls this.addCommand for olea-home-open or olea-grove-open directly', () => {
+    expect(main).not.toMatch(/this\.addCommand\(\{\s*id:\s*'olea-home-open'/);
+    expect(main).not.toMatch(/this\.addCommand\(\{\s*id:\s*'olea-grove-open'/);
+  });
+
+  it('registerOleaCommands is given real openHome/openGrove handlers instead', () => {
+    expect(main).toMatch(/openHome:\s*\(\)\s*=>\s*\{\s*void this\.revealHomeView\(\);\s*\},/);
+    expect(main).toMatch(/openGrove:\s*\(\)\s*=>\s*\{\s*void this\.revealGroveView\(\);\s*\},/);
+  });
+});
