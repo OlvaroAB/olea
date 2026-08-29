@@ -77,6 +77,7 @@ import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
@@ -104,6 +105,14 @@ export interface ReviewSessionPorts {
    * documents, threaded straight through.
    */
   readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
+  /**
+   * `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]): the grade the session
+   * asserts about an answered MCQ carries the same contest gesture every other
+   * claim carries. Optional; absent means the gesture is not drawn at all —
+   * never drawn and inert. Threaded straight through, same posture as the two
+   * ports above.
+   */
+  readonly gradeContestPort?: GradeContestPort;
 }
 
 export interface OpenReviewSessionInput {
@@ -247,6 +256,7 @@ export async function openReviewSession(
       ...(input.ports.evaluateConfusionRouting
         ? { evaluateConfusionRouting: input.ports.evaluateConfusionRouting }
         : {}),
+      ...(input.ports.gradeContestPort ? { gradeContestPort: input.ports.gradeContestPort } : {}),
     });
 
     return {

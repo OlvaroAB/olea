@@ -79,6 +79,17 @@ export interface DraftRecord {
   readonly resolvedAt?: string;
   /** Present only once `accepted`/`edited`: the real vault instrument id `insertMcqBlock`/`stampMcqId` minted. */
   readonly instrumentId?: string;
+  /**
+   * `[D-133]` (`ol-2zfj.39`): the id of the instrument this draft, once
+   * accepted, supersedes — set only for a draft the `'instrument-revision'`
+   * job kind produced (`revision-job-runner.ts`), `undefined` for every
+   * ordinary F3.3 sweep draft. `accept.ts` forwards this verbatim to
+   * `materializeAcceptedDraft`'s `predecessorInstrumentId`, which is what
+   * actually stamps the successor's block field and appends the succession
+   * record — this field is only the vehicle that survives the draft cache's
+   * pending→accepted round-trip between drafting and her review decision.
+   */
+  readonly predecessorInstrumentId?: string;
 }
 
 /** Runtime shape guard for a `DraftRecord` read back from a vault file — never trust `JSON.parse`'s `any` past this. Mirrors the "fail closed, report rather than throw" posture `olea-core`'s review-log `parse.ts` uses for a corrupt line, at plugin scope. */
@@ -127,5 +138,8 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   }
   if (v.resolvedAt !== undefined && typeof v.resolvedAt !== 'string') return false;
   if (v.instrumentId !== undefined && typeof v.instrumentId !== 'string') return false;
+  if (v.predecessorInstrumentId !== undefined && typeof v.predecessorInstrumentId !== 'string') {
+    return false;
+  }
   return true;
 }

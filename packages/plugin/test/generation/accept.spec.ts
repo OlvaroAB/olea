@@ -16,10 +16,18 @@
  * for its generated provenance. That is the acceptance criterion "generated
  * items enter the queue like any instrument", proved against production
  * code on both sides of the seam rather than asserted about the write alone.
+ *
+ * The `[D-133]` describe block near the bottom (`ol-2zfj.39`) closes the
+ * LAST hop of the predecessor-threading chain: a `DraftRecord` carrying
+ * `predecessorInstrumentId` (as `revision-job-runner.ts` now produces) makes
+ * `accept()` forward it into `materializeAcceptedDraft`, which stamps the
+ * successor's `predecessor:` field and appends the succession record — end
+ * to end, from a cached draft through to both vault-visible facts.
  */
 import {
   buildReviewSession,
   createFsrsScheduler,
+  parseMcqBlocks,
   provisionalConceptKey,
   reviewLogPath,
 } from 'olea-core';
@@ -277,5 +285,56 @@ describe('an accepted MCQ persists as a scheduled instrument (F2.15/F3.4, ol-p3t
     expect(new Set([...offeredIds, ...deferredIds])).toEqual(
       new Set(['olea-mcq-existing', generatedId]),
     );
+  });
+});
+
+// `[D-133]` (`ol-2zfj.39`) — the final hop of the predecessor-threading
+// chain: `accept()` forwarding a cached draft's `predecessorInstrumentId`
+// into `materializeAcceptedDraft`. See this file's module doc.
+describe('createDraftAcceptPort — [D-133] predecessor threading', () => {
+  it('a draft carrying predecessorInstrumentId stamps the successor block and appends a succession record on accept', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseRecord({ predecessorInstrumentId: 'mcq-old-1' }));
+
+    const { instrumentId: successorId } = await port.accept('draft-1', 'accepted');
+
+    const { instruments, invalid } = parseMcqBlocks(vault.raw(NOTE_PATH) ?? '');
+    expect(invalid).toHaveLength(0);
+    expect(instruments[0]?.id).toBe(successorId);
+    expect(instruments[0]?.predecessor).toBe('mcq-old-1');
+
+    const path = reviewLogPath('2026-08-25', 'device-a');
+    const raw = vault.raw(path);
+    const lines = (raw ?? '')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const succession = lines.find((line) => line.kind === 'succession');
+    expect(succession).toMatchObject({
+      kind: 'succession',
+      predecessorInstrumentId: 'mcq-old-1',
+      successorInstrumentId: successorId,
+    });
+    // The verdict for the ACCEPT itself is still appended too — succession
+    // is additional bookkeeping, never a replacement for the ordinary
+    // verdict record every accept produces.
+    expect(lines.find((line) => line.kind === 'verdict')).toBeDefined();
+  });
+
+  it('a draft with no predecessorInstrumentId stamps nothing and appends no succession record (unchanged pre-[D-133] behaviour)', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseRecord());
+
+    await port.accept('draft-1', 'accepted');
+
+    const { instruments } = parseMcqBlocks(vault.raw(NOTE_PATH) ?? '');
+    expect(instruments[0]?.predecessor).toBeNull();
+
+    const path = reviewLogPath('2026-08-25', 'device-a');
+    const lines = (vault.raw(path) ?? '')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.find((line) => line.kind === 'succession')).toBeUndefined();
   });
 });

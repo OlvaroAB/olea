@@ -91,10 +91,34 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
         );
       }
 
-      const { instrumentId } = await materializeAcceptedDraft(deps.vault, {
-        sourcePath: record.sourcePath,
-        question: record.question,
-      });
+      const { instrumentId } = await materializeAcceptedDraft(
+        deps.vault,
+        {
+          sourcePath: record.sourcePath,
+          question: record.question,
+          // [D-133] (`ol-2zfj.39`): forwarded only when this draft was
+          // produced by the `'instrument-revision'` job kind
+          // (`revision-job-runner.ts`) — `undefined` for every ordinary
+          // sweep draft, matching `materializeAcceptedDraft`'s own
+          // "no succession bookkeeping unless a predecessor id is supplied"
+          // branch.
+          ...(record.predecessorInstrumentId !== undefined
+            ? { predecessorInstrumentId: record.predecessorInstrumentId }
+            : {}),
+        },
+        {
+          // Only actually required by `materializeAcceptedDraft` when a
+          // `predecessorInstrumentId` was supplied above (its own deviceId
+          // doc) — harmless to pass unconditionally otherwise, since it is
+          // simply unused on the ordinary path. `now` is this port's own
+          // already-resolved clock (`deps.now` defaulted above), never
+          // `deps.now` directly — `exactOptionalPropertyTypes` forbids
+          // setting a key to `undefined` when `deps.now` was omitted.
+          deviceId: deps.deviceId,
+          now,
+          ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+        },
+      );
 
       await deps.cache.put({
         ...record,

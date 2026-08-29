@@ -23,6 +23,8 @@ import type {
 } from 'olea-core';
 import { mapMcqRating } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
+import type { GradeContestPort } from './contest.js';
+import { CONTEST_GESTURE_LABEL, CONTEST_QUARANTINE_BADGE } from './copy.js';
 import {
   buildExplainWhyRequest,
   type ExplainWhyOutcome,
@@ -73,6 +75,22 @@ export type ReviewViewModel =
       readonly selectedIndex: number;
       readonly wasUnsure: boolean;
       readonly intervalLabel: string;
+      /**
+       * The contest gesture on the grade Olea has just asserted (`[D-046]`
+       * clause 4, `[D-095]`, `ol-fgba` [DISP-1]).
+       *
+       * An MCQ result IS an instrument grade — `[D-095]`'s third kind, "an
+       * explain-back verdict, an instrument grade" — so principle 12's fourth
+       * part binds on it exactly as it binds on a mastery reading. `null` when
+       * no `gradeContestPort` is wired: a session that cannot record a dispute
+       * does not offer the gesture, rather than offering one that would
+       * silently do nothing. That is the same "simply cannot offer it" posture
+       * `explainWhyPort` already takes, and it is the difference between an
+       * unavailable affordance and a dismiss button.
+       */
+      readonly contestGestureLabel: string | null;
+      /** Whether she has already contested this grade — it dims with a badge, never disappears. */
+      readonly contestBadge: string | null;
     }
   | { readonly phase: 'complete'; readonly summary: SessionCompleteSummary };
 
@@ -115,6 +133,15 @@ export interface ReviewSessionDeps {
    * offer it" posture `explainWhyPort` above already has.
    */
   readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
+  /**
+   * The grade case of the contest mechanism (`ol-fgba`, `[D-095]`). Optional
+   * and absent by default for the same reason `explainWhyPort` is: a session
+   * assembled without one cannot record a dispute, and an affordance that
+   * cannot record is the dismiss button `[D-046]` clause 4 exists to rule out.
+   * Absent reads as "cannot offer it", never as "offer it and drop the
+   * record".
+   */
+  readonly gradeContestPort?: GradeContestPort;
 }
 
 /**
@@ -146,6 +173,13 @@ export class ReviewSession {
   private wasUnsure = false;
   private presentedAtMs: number | null = null;
   private mcqIntervalLabel = '';
+  /**
+   * Instruments whose grade she has contested during this session, so the
+   * badge appears without a second read of the log. The durable answer is
+   * always `quarantinedGradeInstrumentIds` folded from the review log — this
+   * set is a render cache, never the truth.
+   */
+  private readonly contestedGrades = new Set<string>();
 
   private reviewedCount = 0;
   private readonly courseCodesSeen = new Set<string>();
@@ -222,6 +256,11 @@ export class ReviewSession {
           selectedIndex: this.mcqSelectedIndex ?? -1,
           wasUnsure: this.wasUnsure,
           intervalLabel: this.mcqIntervalLabel,
+          contestGestureLabel:
+            this.deps.gradeContestPort === undefined ? null : CONTEST_GESTURE_LABEL,
+          contestBadge: this.contestedGrades.has(item.instrument.instrumentId)
+            ? CONTEST_QUARANTINE_BADGE
+            : null,
         };
       }
     }
@@ -308,6 +347,48 @@ export class ReviewSession {
     this.mcqIntervalLabel = this.previewMcqInterval(
       this.mcqRating(instrument, this.mcqSelectedIndex),
     );
+  }
+
+  /**
+   * Contests the grade Olea has just asserted about this answer (`[D-046]`
+   * clause 4, mechanised by `[D-095]`; `ol-fgba` [DISP-1]).
+   *
+   * **One gesture, one event, and the effect is fixed by what she touched.**
+   * She is never asked to classify her own disagreement, so this method takes
+   * no reason and there is nowhere to put one: an MCQ result is an instrument
+   * grade, `[D-095]` routes a grade to `quarantined`, and that is the whole
+   * decision. The dispute is recorded either way — that recording is what
+   * makes this more than a dismiss button.
+   *
+   * **It does not move her on.** Contesting is not answering: the phase stays
+   * `mcq-answered`, so the claim, its evidence and her contest are all still
+   * on screen together, which is the acknowledgment `[D-095]` §2 requires.
+   *
+   * Returns silently when no port is wired — the same posture
+   * `requestExplainWhy` takes, and the reason `contestGestureLabel` is `null`
+   * in that case, so she is never offered a gesture that would drop her
+   * dispute.
+   */
+  async contestGrade(): Promise<void> {
+    if (this.phase !== 'mcq-answered') return;
+    const port = this.deps.gradeContestPort;
+    if (port === undefined) return;
+
+    const item = this.requireCurrent();
+    const instrument = this.requireMcq(item);
+    if (this.contestedGrades.has(instrument.instrumentId)) return;
+
+    await port.contestGrade({
+      instrumentId: instrument.instrumentId,
+      conceptIds: instrument.conceptIds,
+      // The evidence this grade rests on is the answer she gave to this
+      // instrument, in this session — an opaque fingerprint, never her text
+      // (D-005). A re-derivation on the same answer shares it; a later,
+      // different answer does not, which is evidence-relative aging applied
+      // to a grade exactly as `[D-095]` §3 applies it to a reading.
+      evidenceBasis: `mcq|${instrument.instrumentId}|${this.mcqSelectedIndex ?? -1}|${this.wasUnsure}`,
+    });
+    this.contestedGrades.add(instrument.instrumentId);
   }
 
   async mcqNext(): Promise<void> {

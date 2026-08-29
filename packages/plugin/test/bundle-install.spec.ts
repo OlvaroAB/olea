@@ -217,7 +217,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all seven view types and all ten commands when onload runs', async () => {
+  it('registers all nine view types and all twelve commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -235,6 +235,13 @@ describe('the built bundle is what Obsidian can load', () => {
         // same accept/edit/reject resolution `olea-review` offers.
         'olea-bulk-review',
         'olea-gap',
+        // `ol-0r92.17` (F8.1, `[D-134]` Q1): the course grove — a per-course
+        // concept listing, hosting that course's own slice of the standing
+        // retrospective offer.
+        'olea-grove',
+        // `ol-0r92.17` (F8.8, `[D-134]` Q1): Home — hosts every standing
+        // retrospective offer, unfiltered.
+        'olea-home',
         // `ol-4v2l` (F8.4/F8.5, `[REG-1]`, amended acceptance `[D-135]`): the
         // browsable concept-and-instrument registry — browse, per-concept
         // instrument mix and mastery, edit (delegated to Obsidian), rename
@@ -268,6 +275,14 @@ describe('the built bundle is what Obsidian can load', () => {
         // 'olea-draft-cards' was withdrawn (F4.5, wave-2 round-2 correction):
         // no student-invoked draft verb, because Olea is already drafting.
         'olea-gap-open',
+        // `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): opens the course grove.
+        // Registered directly via `this.addCommand`, same reasoning as
+        // `olea-registry-open` below.
+        'olea-grove-open',
+        // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): opens Home. Registered
+        // directly via `this.addCommand`, same reasoning as
+        // `olea-registry-open` below.
+        'olea-home-open',
         'olea-open',
         // `ol-4v2l` (F8.4, `[REG-1]`): opens the concept-and-instrument
         // registry's dedicated view. Registered directly via

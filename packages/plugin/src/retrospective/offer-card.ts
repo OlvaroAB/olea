@@ -3,7 +3,12 @@
  * Home and the grove... one standing card that stays visible until opened
  * or dismissed").
  *
- * **Not mounted anywhere as of this bead, and here is why, honestly.**
+ * **Mounted in both ruled hosts as of `ol-0r92.17` (round 27):** `../home/`
+ * and `../grove/` each render `resolveOfferCards`'s output (the grove
+ * filtered per course), so the paragraph below is the historical record of
+ * why this shipped unmounted, kept for the reasoning, not the current state.
+ *
+ * **Not mounted anywhere as of this bead (`ol-r68l`), and here is why, honestly.**
  * D-134 names two hosts — Home and the course grove (F8.1). Neither exists
  * as a plugin view today: `packages/plugin/src` has no `home/` directory at
  * all, and F8.1's grove is core-computation-only (`packages/core/src/

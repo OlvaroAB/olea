@@ -70,21 +70,29 @@
  * instrument's id and its predecessor field always land in the same byte
  * range write, never as two separate mutations of the note.
  *
- * **Reachability (`[D-072]`'s escape hatch, honestly not yet closed).** No
- * caller in this repo supplies `predecessorInstrumentId` today.
- * `accept.ts`'s `DraftAcceptPort.accept` — the only production caller of
- * this function — calls it with `{ sourcePath, question }` alone, and
- * `DraftQuestion`/`DraftRecord` (`./types.js`, outside this bead's `owns`)
- * carry no predecessor field for it to forward. The other end is equally
- * unwired: `concept/revision/enqueue.ts` shapes an `'instrument-revision'`
- * job payload naming the predecessor, but no `JobRunner` in this repo
- * recognises that `kind` yet, so nothing ever reaches the draft cache this
- * way either. This function is the materialization-side half of `[D-133]`'s
- * wiring trio and is unit-tested directly (`materialize-mcq.spec.ts`)
- * rather than through a caller that does not exist; threading a revision's
- * predecessor id through the ingestion queue, the draft cache
- * (`DraftRecord`), and `accept.ts` into this parameter is the remaining,
- * separate integration.
+ * **Reachability (`[D-072]`'s escape hatch, most of the way closed —
+ * `ol-2zfj.39`).** `accept.ts`'s `DraftAcceptPort.accept` now forwards
+ * `record.predecessorInstrumentId` here whenever it is set, and
+ * `revision-job-runner.ts`'s `runInstrumentRevisionJob` is what sets it: a
+ * drained `'instrument-revision'` job (`concept/revision/enqueue.ts`'s
+ * payload) resolves the predecessor's concept/course binding from a vault
+ * walk, drafts a successor, and caches a `DraftRecord` naming the
+ * predecessor. That closes the id's path from job payload through to this
+ * parameter. **What is still not closed:** `revision-job-runner.ts`'s
+ * `createRevisionAwareJobRunner` is not yet composed into the actual
+ * `JobRunner` `IngestionQueueEngine` drains in production
+ * (`packages/plugin/src/ingestion/wiring.ts`'s `buildIngestionRunner`,
+ * outside `ol-2zfj.39`'s `owns` — see that module's own doc for the exact
+ * two-line diff needed), and nothing yet calls
+ * `evaluateCitedPassageRevision`/`buildSuccessorRevisionEnqueueInput` to
+ * produce a real `'instrument-revision'` job in the first place
+ * (`concept/revision/material-change.ts`'s own doc: "a vault-reading
+ * caller, plugin-side, unbuilt"). This function is unit-tested directly
+ * (`materialize-mcq.spec.ts`) and, as of `ol-2zfj.39`, also exercised
+ * through its real caller (`accept.spec.ts`'s `[D-133] predecessor
+ * threading` suite) — both remaining gaps are one layer further upstream,
+ * at the job-composition and revision-detection boundary, not in this
+ * function's own call chain.
  */
 
 import {

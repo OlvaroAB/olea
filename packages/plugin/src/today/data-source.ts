@@ -52,6 +52,7 @@ import {
   type ConceptRelation,
   calendarDayFromLocalDate,
   calendarDaysEndingOn,
+  type DisputeLogRecord,
   type DueInstrument,
   type ExtractConceptsOptions,
   extractConcepts,
@@ -84,6 +85,15 @@ export const DEFAULT_STREAK_WINDOW_DAYS = 120;
 
 export interface ReviewHistory {
   readonly entries: readonly ReviewLogEntry[];
+  /**
+   * Every dispute in the same window (`[D-046]` clause 4 / `[D-095]`,
+   * `ol-fgba`). Carried beside `entries` rather than inside it for the reason
+   * `parseReviewLog`'s own `disputes` field gives: "every review event" and
+   * "every dispute about a claim" are different questions, and no consumer
+   * that switches over `ReviewLogEntry['kind']` should have to learn about a
+   * kind it has nothing to say about.
+   */
+  readonly disputes: readonly DisputeLogRecord[];
   /** Days covered, ending on the day asked for — what `computeStreak` needs. */
   readonly windowDays: number;
   /** Lines that did not parse. Diagnostics only; never rendered. */
@@ -138,6 +148,7 @@ export async function readReviewHistory(
   }
 
   const entries: ReviewLogEntry[] = [];
+  const disputes: DisputeLogRecord[] = [];
   let invalidLineCount = 0;
   // Sorted so the result is stable across hosts with different enumeration
   // orders; nothing downstream depends on order, but a stable answer is
@@ -146,10 +157,11 @@ export async function readReviewHistory(
     if (!(await vault.exists(path))) continue;
     const parsed = parseReviewLog(await vault.read(path));
     entries.push(...parsed.records);
+    disputes.push(...parsed.disputes);
     invalidLineCount += parsed.invalidLines.length;
   }
 
-  return { entries, windowDays, invalidLineCount };
+  return { entries, disputes, windowDays, invalidLineCount };
 }
 
 /**

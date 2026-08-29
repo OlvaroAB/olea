@@ -34,7 +34,7 @@ function line(rec: ReviewLogEntry): string {
 
 describe('parseReviewLog — well-formed content', () => {
   it('empty content yields no records and no invalid lines', () => {
-    expect(parseReviewLog('')).toEqual({ records: [], invalidLines: [] });
+    expect(parseReviewLog('')).toEqual({ records: [], invalidLines: [], disputes: [] });
   });
 
   it('parses N newline-terminated records in order', () => {

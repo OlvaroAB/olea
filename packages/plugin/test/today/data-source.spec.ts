@@ -150,7 +150,7 @@ describe('readReviewHistory — this device, by exact path', () => {
       today: '2026-08-10',
       windowDays: 7,
     });
-    expect(history).toEqual({ entries: [], windowDays: 7, invalidLineCount: 0 });
+    expect(history).toEqual({ entries: [], disputes: [], windowDays: 7, invalidLineCount: 0 });
   });
 
   it('reports the window it actually read, so the streak knows its own limit', async () => {

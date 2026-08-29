@@ -378,3 +378,39 @@ export function mcqFeedbackSentence(feedback: string, intervalLabel: string): st
   const schedule = `This one comes back ${interval}.`;
   return body === '' ? schedule : `${body} ${schedule}`;
 }
+
+// ---------------------------------------------------------------------------------------------
+// The contest gesture on a grade (`[D-046]` clause 4, `[D-095]`, `ol-fgba` [DISP-1]).
+//
+// The gesture's own label is NOT redefined here — it is `olea-core`'s
+// `CONTEST_GESTURE_LABEL`, the single string that appears on every
+// claim-bearing surface in the product. A second copy of it on this surface is
+// exactly how "the same gesture everywhere" quietly stops being true.
+//
+// Nothing in this block characterises her disagreement, defends the grading, or
+// carries a number standing in for confidence; `FORBIDDEN_CONTEST_STRINGS` in
+// `olea-core` is the mechanical half of that rule.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What a quarantined grade says while its re-derivation is outstanding. It
+ * dims with a reason — never disappears, and never reads as though the review
+ * did not happen.
+ */
+export const CONTEST_QUARANTINE_BADGE = 'Counting as thin evidence while this is re-checked.';
+
+/**
+ * The gesture's own label, re-exported from `olea-core` so this surface reads
+ * every string it renders from `copy.ts` like every other string here — while
+ * the string itself stays defined once, for the whole product.
+ */
+export { CONTEST_GESTURE_LABEL } from 'olea-core';
+
+/**
+ * The opening of the compensating line for a corrected grade. Names her
+ * contest as the catalyst, which is the proof the channel works.
+ */
+export const CONTEST_CORRECTED_PREFIX = 'Re-checked after you flagged this on';
+
+/** Shown once when the re-derivation upholds the original grading, then not again. */
+export const CONTEST_GRADE_UPHELD = 'Checked again — the original grading holds.';

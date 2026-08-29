@@ -994,6 +994,49 @@ export {
   readContentRecord,
   writeContentRecord,
 } from './review-log/content-store.js';
+// `[D-046]` clause 4's contest mechanism, mechanised by `[D-095]` (`ol-fgba`
+// [DISP-1]). The routing table, the three kind-specific effects, the dispute
+// record and its evidence-relative aging, and `[D-095]` §4's named contest-rate
+// health check. The dispute record's schema lives in core rather than contracts
+// pending the Class C move — see review-log/contest-record.ts's header.
+export type {
+  ClaimContestState,
+  ClaimRendering,
+  ClaimRouting,
+  ContestedClaim,
+  ContestInput,
+  ContestOutcome,
+  ContestRateReading,
+} from './review-log/contest.js';
+export {
+  CLAIM_ROUTING,
+  CONTEST_GESTURE_LABEL,
+  CONTEST_RATE_MIN_CLAIMS,
+  CONTEST_RATE_THRESHOLD,
+  contestClaim,
+  contestEffectFor,
+  contestOutcomeShapes,
+  contestRateHealthCheck,
+  contestStateForClaim,
+  FORBIDDEN_CONTEST_STRINGS,
+  isDisputeCurrent,
+  isRoutedRendering,
+  quarantinedGradeInstrumentIds,
+  resolveDispute,
+  reviewLogDisputes,
+  routeClaimRendering,
+  standingDissent,
+  UnroutedClaimError,
+  withdrawnStructuralClaims,
+} from './review-log/contest.js';
+export type {
+  ContestEffect,
+  ContestedClaimKind,
+  ContestedClaimRendering,
+  DisputeLogRecord,
+  DisputeLogRecordInput,
+} from './review-log/contest-record.js';
+export { safeParseDisputeLogRecord } from './review-log/contest-record.js';
 // [EVID-1] (`ol-0r92.1`) — the per-instrument explain-back history is a
 // projection over the review log, never a second write; entries carry
 // contentRef only and compose with content-store.ts to resolve evidence.
@@ -1023,6 +1066,7 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 // from the review log, never stored — see review-log/verdicts.ts.
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
+  AppendDisputeLogResult,
   AppendReviewLogOptions,
   AppendReviewLogResult,
   AppendSuccessionLogResult,
@@ -1034,6 +1078,7 @@ export type {
   VerdictLogRecordInput,
 } from './review-log/write.js';
 export {
+  appendDisputeRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
@@ -1263,6 +1308,20 @@ export {
   isCalendarDay,
   shiftCalendarDay,
 } from './today/calendar-day.js';
+// Every claim the Today panel asserts, enumerated so the contest gesture goes
+// on all of them rather than on the ones a renderer remembered (`ol-fgba`).
+export type {
+  EnumerateTodayClaimsInput,
+  EventsEvidenceRef,
+  HeldReadingBasis,
+  TodayClaim,
+} from './today/contest.js';
+export {
+  contestedClaimFor,
+  enumerateTodayClaims,
+  evidenceBasisOf,
+  heldReadingBasis,
+} from './today/contest.js';
 export type {
   CourseDueCount,
   DueInstrument,

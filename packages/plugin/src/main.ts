@@ -60,6 +60,10 @@ import {
   type GradingWiring,
   gradeExplainBackAttempt,
 } from './grading/wiring.js';
+import { createLocalGroveProvider } from './grove/provider.js';
+import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
+import { createLocalHomeProvider } from './home/provider.js';
+import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import {
   createInMemoryPreviousTextTracker,
@@ -93,6 +97,7 @@ import {
 import { ObsidianRetrospectiveOfferStore } from './retrospective/offer-store.js';
 import { createLocalRetrospectiveProvider } from './retrospective/provider.js';
 import { RetrospectiveView, VIEW_TYPE_OLEA_RETROSPECTIVE } from './retrospective/view.js';
+import { createVaultGradeContestPort } from './review/contest.js';
 import { retrieveExplainWhySourceChunks, WorkerExplainWhyGenerator } from './review/explainWhy.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
@@ -100,6 +105,7 @@ import {
   createVaultNoteExistsPort,
   createVaultReviewLogPort,
   createVaultSuspendPort,
+  isoWithLocalOffset,
   systemClock,
 } from './review/ports.js';
 import type { ReviewSession } from './review/session.js';
@@ -108,11 +114,14 @@ import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { createLocalSessionBuilderProvider } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
 import { OleaSettingTab } from './settings/settings-tab.js';
+import { createTodayContestSupport } from './today/contest.js';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
   createVaultTrendsSource,
   loadTodayPanel,
+  localToday,
+  readReviewHistory,
 } from './today/data-source.js';
 import { ObsidianMaterialArrivalStore } from './today/material-arrival-store.js';
 import { refreshOpenTodayViews } from './today/refresh.js';
@@ -370,6 +379,14 @@ export default class OleaPlugin extends Plugin {
         // `ol-mfn0`): resolves a cached, unreviewed draft the moment she
         // answers, edits, or rejects it.
         draftAcceptPort: this.generation.acceptPort,
+        // `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]): the grade the
+        // session asserts about an answered MCQ is a claim about her
+        // knowledge, so it carries the same gesture every other claim
+        // carries. Absent means the gesture is not drawn at all — never
+        // drawn and inert.
+        gradeContestPort: createVaultGradeContestPort(vault, deviceId, () =>
+          isoWithLocalOffset(new Date()),
+        ),
       },
     };
 
@@ -434,10 +451,12 @@ export default class OleaPlugin extends Plugin {
       openBulkReview: () => {
         void this.revealBulkReviewView();
       },
-      // `ol-r68l` (F8.8, `[D-134]`): the retrospective's one honestly-
-      // reachable door until a Home or grove view exists to host the
-      // standing offer card — see `retrospective/offer-card.ts`'s module
-      // doc.
+      // `ol-r68l` (F8.8, `[D-134]`): the retrospective's own F7.7 command —
+      // still the one door that opens the reading itself. `ol-0r92.17`
+      // added the standing OFFER's two hosts (`olea-home-open`/`olea-
+      // grove-open` above), which reveal this same view when their own
+      // "Open" button is clicked; this command remains the direct door for
+      // anyone who reaches for it by name.
       openRetrospective: () => {
         void this.revealRetrospectiveView();
       },
@@ -465,6 +484,31 @@ export default class OleaPlugin extends Plugin {
       name: 'Olea: Open concept and instrument registry',
       callback: () => {
         void this.revealRegistryView();
+      },
+    });
+
+    // `ol-0r92.17` (F8.8, `[D-134]` Q1, F7.7): Home's own open command,
+    // registered directly rather than through `commands/register-
+    // commands.ts`/`ids.ts` — this bead's owned paths are `home/`, `grove/`
+    // and this file (view + command registration only), the same
+    // restraint `ol-4v2l`'s `olea-registry-open` above states for its own
+    // scope.
+    this.addCommand({
+      id: 'olea-home-open',
+      name: 'Olea: Open Home',
+      callback: () => {
+        void this.revealHomeView();
+      },
+    });
+
+    // `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): the course grove's own open
+    // command — same direct-registration reasoning as `olea-home-open`
+    // above.
+    this.addCommand({
+      id: 'olea-grove-open',
+      name: 'Olea: Open course grove',
+      callback: () => {
+        void this.revealGroveView();
       },
     });
 
@@ -524,6 +568,31 @@ export default class OleaPlugin extends Plugin {
           startReview: () => {
             void this.revealReviewView();
           },
+          // `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]): every reading
+          // this panel asserts carries the one ratified contest gesture, and
+          // the dispute is recorded either way. Built from her own log, on
+          // device — the sheet issues no request.
+          contest: createTodayContestSupport({
+            vault,
+            deviceId,
+            conceptIdsByCourse: async () => {
+              const source = createVaultTrendsSource({ vault });
+              const records = await source.listConceptCourses();
+              const byCourse: Record<string, string[]> = {};
+              for (const record of records ?? []) {
+                for (const course of record.courses) {
+                  const bucket = byCourse[course] ?? [];
+                  bucket.push(record.conceptId);
+                  byCourse[course] = bucket;
+                }
+              }
+              return byCourse;
+            },
+            today: () => localToday(new Date()),
+            now: () => isoWithLocalOffset(new Date()),
+            readHistory: () =>
+              readReviewHistory(vault, deviceId, { today: localToday(new Date()) }),
+          }),
         }),
     );
 
@@ -621,6 +690,49 @@ export default class OleaPlugin extends Plugin {
       });
     });
 
+    // `ol-0r92.17` (F8.8, `[D-134]` Q1): Home hosts every standing
+    // retrospective offer, unfiltered — `retrospective/offer-card.ts`'s own
+    // doc names this exact shape. `openRetrospective` is supplied here
+    // (navigation), never by `createLocalHomeProvider` (data) — see
+    // `home/provider.ts`'s module doc for the split.
+    this.registerView(VIEW_TYPE_OLEA_HOME, (leaf) => {
+      const provider = createLocalHomeProvider({
+        vault,
+        deviceId,
+        settingsHost: this,
+        now: () => new Date(),
+      });
+      return new HomeView(leaf, {
+        load: () => provider.load(),
+        openRetrospective: () => {
+          void this.revealRetrospectiveView();
+        },
+        dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
+      });
+    });
+
+    // `ol-0r92.17` (F8.1, `[D-134]` Q1): the course grove — see `grove/
+    // view.ts`'s module doc for what this bead can and cannot honestly
+    // build against F8.1's own six-state coverage layer. Each course
+    // section carries its own filtered slice of the standing offer
+    // (`retrospective/offer-card.ts`: "a future grove view would filter to
+    // its own course").
+    this.registerView(VIEW_TYPE_OLEA_GROVE, (leaf) => {
+      const provider = createLocalGroveProvider({
+        vault,
+        deviceId,
+        settingsHost: this,
+        now: () => new Date(),
+      });
+      return new GroveView(leaf, {
+        load: () => provider.load(),
+        openRetrospective: () => {
+          void this.revealRetrospectiveView();
+        },
+        dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
+      });
+    });
+
     // `ol-4v2l` (F8.4/F8.5, `[REG-1]`, amended acceptance `[D-135]`): the
     // concept and instrument registry — the one browsable inventory over
     // her concept spine, since tiers 2/3 of it never touch the vault (see
@@ -660,6 +772,14 @@ export default class OleaPlugin extends Plugin {
       // own doc for why a generation failure can never fail the ingestion
       // job it rode in on).
       onUnitsLanded: (units) => this.onUnitsLanded(units),
+      // `ol-2zfj.39` (`[D-133]` end-to-end): a drained `'instrument-revision'`
+      // job drafts its successor into the same cache the F3.3 sweep fills,
+      // carrying the predecessor id that `accept.ts` stamps on materialize.
+      // `draftDeps` read fresh per job — F7.8 grey-out, never a failure.
+      revision: {
+        cache: generationWiring.cache,
+        draftDeps: () => this.draftQuizCardsDeps(),
+      },
     });
 
     // ol-tuvx: `ObsidianKeywordIndexStore` was a finished adapter nothing
@@ -1613,6 +1733,49 @@ export default class OleaPlugin extends Plugin {
     }
     await workspace.revealLeaf(leaf);
     await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_REGISTRY);
+  }
+
+  /**
+   * Opens Home (F8.8, `[D-134]` Q1, `ol-0r92.17`), or reveals the one
+   * already open, in the right sidebar — the same slot `TodayView` and
+   * `GapView` occupy, since this is a glance-and-return companion rather
+   * than a browse-and-edit tab (`RegistryView`'s own reasoning for its
+   * choice, the other way).
+   *
+   * Always refreshes on the way out (`ol-h3wy`'s pattern): a dismiss from
+   * the grove, or an assessment that just passed, must not need a manual
+   * reload to show here.
+   */
+  private async revealHomeView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_HOME);
+    const leaf = existing[0] ?? workspace.getRightLeaf(false);
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_HOME, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_HOME);
+  }
+
+  /**
+   * Opens the course grove (F8.1, `[D-134]` Q1, `ol-0r92.17`), or reveals
+   * the one already open, in a main-pane tab — the same slot `RegistryView`
+   * occupies, since this is a per-course browse rather than a sidebar
+   * glance.
+   *
+   * Always refreshes on the way out, same reasoning as `revealHomeView`.
+   */
+  private async revealGroveView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_GROVE);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_GROVE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_GROVE);
   }
 
   override onunload(): void {

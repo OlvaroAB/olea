@@ -29,7 +29,7 @@ describe('edge: empty history', () => {
     expect(syntheticLogFiles(stream)).toEqual([]);
     expect(stream.groundTruth.sessionDates).toEqual([]);
     // An empty file is still parseable, and reports nothing wrong with itself.
-    expect(parseReviewLog('')).toEqual({ records: [], invalidLines: [] });
+    expect(parseReviewLog('')).toEqual({ records: [], invalidLines: [], disputes: [] });
   });
 });
 

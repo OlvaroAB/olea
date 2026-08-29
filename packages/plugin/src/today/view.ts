@@ -37,8 +37,9 @@
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { CourseDueCount, CourseMastery, InsightsSummary, TodayViewModel } from 'olea-core';
-import { MASTERY_ORDER } from 'olea-core';
+import { CONTEST_GESTURE_LABEL, MASTERY_ORDER, type TodayClaim } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
+import type { DisputeSheet, TodayContestSupport } from './contest.js';
 import {
   conceptCountLabel,
   courseCountLabel,
@@ -69,10 +70,24 @@ export interface TodayViewDeps {
   readonly load: () => Promise<TodayViewModel>;
   /** What the one primary action does. Wired to the review command in `main.ts`. */
   readonly startReview: () => void;
+  /**
+   * The contest mechanism (`[D-046]` clause 4, `[D-095]`; `ol-fgba` [DISP-1]).
+   *
+   * Optional and absent by default, the same posture `explainWhyPort` takes in
+   * the review session: a panel assembled without it cannot record a dispute,
+   * and an affordance that cannot record is exactly the dismiss button clause
+   * 4 exists to rule out. Absent means the gesture is not drawn at all — never
+   * drawn and inert.
+   */
+  readonly contest?: TodayContestSupport;
 }
 
 export class TodayView extends ItemView {
   private readonly deps: TodayViewDeps;
+  /** The claims this render asserted, from `olea-core`'s enumeration. */
+  private claims: readonly TodayClaim[] = [];
+  /** The claim whose dispute sheet is open, and the sheet itself. */
+  private openSheet: { readonly claimId: string; readonly sheet: DisputeSheet } | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: TodayViewDeps) {
     super(leaf);
@@ -104,12 +119,18 @@ export class TodayView extends ItemView {
   /** Re-reads the log and redraws. Called on open and by `main.ts` after a session. */
   async refresh(): Promise<void> {
     const vm = await this.deps.load();
+    await this.deps.contest?.prime();
     this.render(vm);
   }
 
   private render(vm: TodayViewModel): void {
     const root = this.contentEl;
     root.empty();
+    // Every claim the panel asserts, enumerated once, in core — so the gesture
+    // goes on all of them rather than on the sections this renderer
+    // remembered. `claimsFor` is synchronous by design (`contest.ts`'s
+    // `prime`) so a claim and its gesture are built in the same pass.
+    this.claims = this.deps.contest?.claimsFor(vm) ?? [];
 
     const header = root.createDiv({ cls: 'olea-today-header' });
     header.createSpan({ cls: 'olea-today-header-label', text: TODAY_HEADER_LABEL });
@@ -142,6 +163,7 @@ export class TodayView extends ItemView {
     section.createDiv({ cls: 'olea-today-mastery-label', text: MASTERY_LABEL });
     for (const course of overview.courses) {
       this.renderMasteryCourse(section, course);
+      this.renderContestGesture(section, `mastery:${course.course}`);
     }
   }
 
@@ -191,6 +213,82 @@ export class TodayView extends ItemView {
   }
 
   /**
+   * The one gesture, identical in string and position, on every claim the
+   * panel asserts (`[D-046]` clause 4; DSN-1 frame 01).
+   *
+   * A claim DSN-1 left unrouted still renders its sheet — she can still see
+   * what the line rests on — and the sheet says plainly that this kind of line
+   * cannot be disputed yet, rather than offering a gesture that would do
+   * something nobody has ruled.
+   */
+  private renderContestGesture(parent: HTMLElement, claimId: string): void {
+    const support = this.deps.contest;
+    if (support === undefined) return;
+    const claim = this.claims.find((candidate) => candidate.id === claimId);
+    if (claim === undefined) return;
+
+    const row = parent.createDiv({ cls: 'olea-today-contest' });
+    const button = row.createEl('button', { cls: 'olea-today-contest-gesture' });
+    button.createSpan({ text: CONTEST_GESTURE_LABEL });
+    this.registerDomEvent(button, 'click', () => void this.openDisputeSheet(claim));
+
+    const open = this.openSheet;
+    if (open === null || open.claimId !== claimId) return;
+    this.renderDisputeSheet(row, open.sheet);
+  }
+
+  /** Opens the sheet from the artifact already on the device — no request is issued. */
+  private async openDisputeSheet(claim: TodayClaim): Promise<void> {
+    const support = this.deps.contest;
+    if (support === undefined) return;
+    this.openSheet = { claimId: claim.id, sheet: await support.sheetFor(claim) };
+    await this.refresh();
+  }
+
+  private renderDisputeSheet(parent: HTMLElement, sheet: DisputeSheet): void {
+    const panel = parent.createDiv({ cls: 'olea-today-contest-sheet' });
+    panel.createDiv({ cls: 'olea-today-contest-sheet-label', text: sheet.heading });
+    panel.createEl('p', { text: sheet.reasoning });
+
+    if (sheet.evidence.length > 0) {
+      const list = panel.createEl('ul', { cls: 'olea-today-contest-evidence' });
+      for (const line of sheet.evidence) {
+        list.createEl('li', { text: line.date });
+      }
+    }
+
+    panel.createDiv({ cls: 'olea-today-contest-offline', text: sheet.offlineNote });
+
+    if (sheet.dissentMark !== null) {
+      panel.createDiv({ cls: 'olea-today-contest-dissent', text: sheet.dissentMark });
+    }
+    if (sheet.acknowledgement !== null) {
+      panel.createDiv({ cls: 'olea-today-contest-ack', text: sheet.acknowledgement });
+    }
+    if (sheet.withheldReason !== null) {
+      panel.createDiv({ cls: 'olea-today-contest-withheld', text: sheet.withheldReason });
+      return;
+    }
+    if (sheet.gestureLabel === null) return;
+
+    const record = panel.createEl('button', { cls: 'olea-today-contest-record' });
+    record.createSpan({ text: sheet.gestureLabel });
+    this.registerDomEvent(record, 'click', () => void this.recordDispute());
+  }
+
+  /** Records the dispute. Either way — that recording is the whole clause. */
+  private async recordDispute(): Promise<void> {
+    const support = this.deps.contest;
+    const open = this.openSheet;
+    if (support === undefined || open === null) return;
+    const claim = this.claims.find((candidate) => candidate.id === open.claimId);
+    if (claim === undefined) return;
+    await support.contest(claim);
+    this.openSheet = null;
+    await this.refresh();
+  }
+
+  /**
    * F6.5 (`ol-p6t04`) — what the log shows, when it shows anything.
    *
    * Three renderings for three statuses, and the middle one is the reason the
@@ -205,6 +303,11 @@ export class TodayView extends ItemView {
    *   support.
    */
   private renderInsights(parent: HTMLElement, vm: TodayViewModel): void {
+    this.renderInsightsBody(parent, vm);
+    this.renderContestGesture(parent, 'insights');
+  }
+
+  private renderInsightsBody(parent: HTMLElement, vm: TodayViewModel): void {
     const insights = vm.insights;
     if (insights === null) return;
 
@@ -286,6 +389,11 @@ export class TodayView extends ItemView {
    * to a reading F6.9 states is about the vault and never about her.
    */
   private renderRhythm(parent: HTMLElement, vm: TodayViewModel): void {
+    this.renderRhythmBody(parent, vm);
+    this.renderContestGesture(parent, 'rhythm');
+  }
+
+  private renderRhythmBody(parent: HTMLElement, vm: TodayViewModel): void {
     const rhythm = vm.rhythm;
     if (rhythm === null || rhythm.status !== 'observed') return;
     const quietest = rhythm.measured?.quietestCourse ?? null;

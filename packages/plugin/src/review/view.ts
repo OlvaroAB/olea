@@ -427,7 +427,14 @@ export class ReviewView extends ItemView {
           vm.instrument,
           vm.instrument.options[vm.selectedIndex]?.label ?? '',
         );
-        this.renderMcqAnswered(vm.instrument, vm.selectedIndex, vm.wasUnsure, vm.intervalLabel);
+        this.renderMcqAnswered(
+          vm.instrument,
+          vm.selectedIndex,
+          vm.wasUnsure,
+          vm.intervalLabel,
+          vm.contestGestureLabel,
+          vm.contestBadge,
+        );
         break;
     }
 
@@ -581,6 +588,18 @@ export class ReviewView extends ItemView {
     const outcome = await session.requestExplainWhy(studentAnswer, chunks);
     this.explainWhyPanel =
       outcome === null ? null : { instrumentId: instrument.instrumentId, status: 'done', outcome };
+    this.render();
+  }
+
+  /**
+   * The grade contest (`ol-fgba`). Records the dispute, then re-renders so the
+   * quarantine badge replaces the gesture in place — one gesture, one event,
+   * and no advance past the claim she just disagreed with.
+   */
+  private async handleContestGrade(): Promise<void> {
+    const session = this.session;
+    if (session === null) return;
+    await session.contestGrade();
     this.render();
   }
 
@@ -808,6 +827,8 @@ export class ReviewView extends ItemView {
     selectedIndex: number,
     wasUnsure: boolean,
     intervalLabel: string,
+    contestGestureLabel: string | null,
+    contestBadge: string | null,
   ): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
@@ -835,6 +856,25 @@ export class ReviewView extends ItemView {
 
     const feedback = body.createDiv({ cls: 'olea-review-mcq-feedback' });
     feedback.createEl('p', { text: mcqFeedbackSentence(instrument.feedback, intervalLabel) });
+
+    // `[D-046]` clause 4 / `[D-095]` (`ol-fgba` [DISP-1]) — the grade Olea has
+    // just asserted about this answer is a claim about her knowledge, so it
+    // carries the same single gesture every other claim in the product
+    // carries, in the same words, right beside the claim itself. Contesting
+    // does not advance the session: the claim, its evidence and her contest
+    // stay on screen together, which is the acknowledgment `[D-095]` §2 asks
+    // for. The gesture is absent — never inert — when no port is wired to
+    // record the dispute (`ReviewViewModel`'s `contestGestureLabel` doc).
+    if (contestBadge !== null) {
+      feedback.createEl('p', { cls: 'olea-review-contest-badge', text: contestBadge });
+    } else if (contestGestureLabel !== null) {
+      const contest = feedback.createEl('button', {
+        cls: 'olea-review-ghost-action olea-review-contest',
+        attr: { [FOCUSABLE_ATTR]: 'true' },
+      });
+      contest.createSpan({ text: contestGestureLabel });
+      this.registerDomEvent(contest, 'click', () => void this.handleContestGrade());
+    }
 
     const footer = body.createDiv({ cls: 'olea-review-mcq-footer' });
     const guessToggle = footer.createEl('button', {

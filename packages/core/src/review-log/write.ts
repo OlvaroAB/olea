@@ -43,7 +43,14 @@ import {
   verdictLogRecord,
 } from 'olea-contracts';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import {
+  type DisputeLogRecord,
+  type DisputeLogRecordInput,
+  safeParseDisputeLogRecord,
+} from './contest-record.js';
 import { reviewLogPath } from './path.js';
+
+export type { DisputeLogRecordInput } from './contest-record.js';
 
 /**
  * Every `ReviewLogRecord` field the caller supplies; the writer stamps the
@@ -122,6 +129,13 @@ export interface AppendSuccessionLogResult {
   readonly path: VaultPath;
 }
 
+export interface AppendDisputeLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: DisputeLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
 function defaultGenerateEventId(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -160,7 +174,7 @@ function localDateOf(timestamp: string): string {
  */
 async function appendEntryLine(
   vault: VaultSource,
-  entry: ReviewLogEntry,
+  entry: ReviewLogEntry | DisputeLogRecord,
   deviceId: string,
 ): Promise<VaultPath> {
   const path = reviewLogPath(localDateOf(entry.timestamp), deviceId);
@@ -344,6 +358,54 @@ export async function appendSuccessionRecord(
   if (!parsed.success) {
     throw new Error(
       `appendSuccessionRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **dispute** event — the
+ * "recorded either way" half of `[D-046]` clause 4, shaped by `[D-095]`
+ * (`ol-fgba` [DISP-1]).
+ *
+ * The fifth sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`/`appendSuccessionRecord`, sharing the same append path
+ * and the same durability discipline. Used for BOTH the opening dispute and
+ * its later resolution: a resolution is a second record carrying `resolves`
+ * and `outcome`, never an edit to the first, which is what lets the
+ * compensating event name her contest as its catalyst by a durable event id.
+ *
+ * **The schema it validates against lives in `./contest-record.ts`, not in
+ * `olea-contracts`** — a new persisted event kind is Class C and this lane
+ * does not own `packages/contracts/`. See that file's header for the exact
+ * additive diff waiting to land and why the wire shape does not change when
+ * it does.
+ *
+ * **Recording is not optional garnish.** Every caller of `contestClaim`
+ * appends through here; an affordance that computed an effect and wrote
+ * nothing would be the dismiss button `[D-046]` clause 4 exists to rule out.
+ */
+export async function appendDisputeRecord(
+  vault: VaultSource,
+  input: DisputeLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendDisputeLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'dispute',
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = safeParseDisputeLogRecord(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendDisputeRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

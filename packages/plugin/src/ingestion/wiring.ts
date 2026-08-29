@@ -45,12 +45,28 @@ import {
   type QueueStore,
   type VaultSource,
 } from 'olea-core';
+import type { DraftCacheStore } from '../generation/cache-store.js';
+import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
+import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
 
 export interface IngestionWiringDeps {
   readonly vault: VaultSource;
   readonly queueStore: QueueStore;
   readonly capability: DeviceCapability;
+  /**
+   * `ol-2zfj.39` (`[D-133]` end-to-end): when present, the engine's runner
+   * is composed through `createRevisionAwareJobRunner`, so a drained
+   * `'instrument-revision'` job drafts a successor into `cache` instead of
+   * falling through to the extraction runner. `draftDeps` is read fresh per
+   * drained job (F7.8: `null` defers the job, never fails it) — see
+   * `generation/revision-job-runner.ts`'s module doc. Omitted means the
+   * pre-`ol-2zfj.39` behaviour, used by tests that never enqueue one.
+   */
+  readonly revision?: {
+    readonly cache: DraftCacheStore;
+    readonly draftDeps: () => DraftQuizCardsDeps | null;
+  };
   /**
    * Best-effort notification that a drained job accumulated `units` into the
    * sink (`ol-p3t07a`'s F3.3 trigger). Never awaited by anything that could
@@ -100,10 +116,18 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     : sink;
   const enqueuer = deferredEnqueuer();
   const runner = createExtractionJobRunner({ vault: deps.vault, enqueuer, sink: runnerSink });
+  const composedRunner = deps.revision
+    ? createRevisionAwareJobRunner({
+        vault: deps.vault,
+        cache: deps.revision.cache,
+        draftDeps: deps.revision.draftDeps,
+        fallback: runner,
+      })
+    : runner;
   const engine = await IngestionQueueEngine.create({
     store: deps.queueStore,
     capability: deps.capability,
-    runner,
+    runner: composedRunner,
   });
   enqueuer.bind(engine);
   return { engine, sink };

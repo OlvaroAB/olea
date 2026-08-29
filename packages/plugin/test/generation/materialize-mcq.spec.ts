@@ -10,9 +10,11 @@
  * the succession hookup: when a caller supplies `predecessorInstrumentId`,
  * the successor's `predecessor:` field is stamped and a `succession`
  * review-log record is appended, composing `stampPredecessorField` and
- * `buildSuccessionEvent` rather than reimplementing them. No production
- * caller supplies that parameter yet — see the source file's module doc —
- * so this suite is that capability's only caller today.
+ * `buildSuccessionEvent` rather than reimplementing them. `accept.ts` is now
+ * a real production caller of this parameter (`ol-2zfj.39` —
+ * `accept.spec.ts`'s own `[D-133] predecessor threading` suite exercises it
+ * end to end); this suite stays as the direct, unit-level proof of the
+ * stamping/append mechanics themselves.
  */
 import { parseMcqBlocks, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';

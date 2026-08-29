@@ -40,6 +40,7 @@ import {
   reviewLogEntryV3,
   reviewLogRecordV1,
 } from 'olea-contracts';
+import { type DisputeLogRecord, safeParseDisputeLogRecord } from './contest-record.js';
 import { upgradeV1, upgradeV2, upgradeV3 } from './upgrade.js';
 
 export interface InvalidReviewLogLine {
@@ -65,6 +66,21 @@ export interface ParseReviewLogResult {
    * it.
    */
   readonly invalidLines: readonly InvalidReviewLogLine[];
+  /**
+   * Dispute events (`[D-046]` clause 4 / `[D-095]`, `ol-fgba` [DISP-1]), in
+   * file order — the record that makes a contest more than a dismiss button.
+   *
+   * **A separate field rather than a member of `records`, deliberately.** The
+   * schema is not yet in `olea-contracts`' `reviewLogEntry` union (a new
+   * persisted kind is Class C; see `./contest-record.ts`'s header for the
+   * pending additive diff), and keeping disputes out of `records` means no
+   * consumer that switches exhaustively over `ReviewLogEntry['kind']` has to
+   * change to accommodate a kind it has nothing to say about. When the schema
+   * moves into contracts, this field can stay exactly as it is — the
+   * separation earns its keep either way, because "every review event" and
+   * "every dispute about a claim" are different questions.
+   */
+  readonly disputes: readonly DisputeLogRecord[];
 }
 
 /**
@@ -87,6 +103,7 @@ function declaredSchemaVersion(json: unknown): number | undefined {
 export function parseReviewLog(content: string): ParseReviewLogResult {
   const records: ReviewLogEntry[] = [];
   const invalidLines: InvalidReviewLogLine[] = [];
+  const disputes: DisputeLogRecord[] = [];
 
   const lines = content.split('\n');
   lines.forEach((rawLine, index) => {
@@ -149,6 +166,35 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
     }
 
     if (version === 5) {
+      // Dispute events (`[D-046]` clause 4 / `[D-095]`, `ol-fgba`) share this
+      // daily file with every other kind and are routed FIRST, on their own
+      // `kind` literal, because their schema is not yet a member of
+      // `reviewLogEntry`'s discriminated union — it lives in
+      // `./contest-record.ts` pending the Class C move into
+      // `packages/contracts/src/review-log.ts` (that file's header carries the
+      // exact additive diff). Routing them here rather than widening the union
+      // keeps every consumer that switches exhaustively over
+      // `ReviewLogEntry['kind']` untouched, and keeps a dispute line out of
+      // `invalidLines` — a persisted event this build wrote and then reported
+      // as corrupt would be the worst of both.
+      if (
+        typeof json === 'object' &&
+        json !== null &&
+        (json as Record<string, unknown>).kind === 'dispute'
+      ) {
+        const parsedDispute = safeParseDisputeLogRecord(json);
+        if (!parsedDispute.success) {
+          invalidLines.push({
+            lineNumber: index + 1,
+            raw: rawLine,
+            reason: parsedDispute.error.message,
+          });
+          return;
+        }
+        disputes.push(parsedDispute.data);
+        return;
+      }
+
       const parsed = reviewLogEntry.safeParse(json);
       if (!parsed.success) {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
@@ -168,5 +214,5 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
     });
   });
 
-  return { records, invalidLines };
+  return { records, invalidLines, disputes };
 }

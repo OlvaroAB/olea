@@ -18,7 +18,7 @@ export async function readReviewLogFile(
   path: VaultPath,
 ): Promise<ParseReviewLogResult> {
   if (!(await vault.exists(path))) {
-    return { records: [], invalidLines: [] };
+    return { records: [], invalidLines: [], disputes: [] };
   }
   const content = await vault.read(path);
   return parseReviewLog(content);

@@ -266,6 +266,21 @@ declares nothing at all. See the header.
   background: var(--olea-host-wash);
 }
 
+/* The contest gesture on a grade, and the badge it becomes once she has used
+   it (`[D-046]` clause 4, `[D-095]`; `ol-fgba`). The gesture inherits
+   `.olea-review-ghost-action` so it is the same weight as every other
+   secondary action on this screen — never a primary one, and never styled to
+   attract. The badge replaces it in place: a quarantined grade dims with a
+   reason, and does not disappear. */
+.olea-review-contest {
+  align-self: flex-start;
+}
+
+.olea-review-contest-badge {
+  color: var(--olea-host-muted);
+  font: 400 12px / 1.5 var(--olea-host-ui-font);
+}
+
 .olea-review-ghost-action--active {
   color: var(--olea-host-text);
   border-color: var(--olea-host-line-hover);
@@ -1065,6 +1080,55 @@ button.olea-review-mcq-option:hover {
   font-size: 11px;
   line-height: 1.4;
   color: var(--olea-host-muted);
+}
+
+/* The contest gesture and its dispute sheet on the Today panel
+   (`[D-046]` clause 4, `[D-095]`; `ol-fgba` [DISP-1], drawn in DSN-1).
+
+   The gesture is deliberately quiet and identical wherever it appears — one
+   string, one position, on every claim. It is not a primary action and must
+   never read as one: it is there for the moment she disagrees, not as
+   something the panel is asking her to do. No colour carries meaning here, so
+   nothing below needs a contrast branch; the sheet's own words are the whole
+   signal. */
+.olea-today-contest {
+  margin: 4px 0 12px;
+}
+
+.olea-today-contest-gesture,
+.olea-today-contest-record {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 0.85em;
+  color: var(--text-muted, #888);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.olea-today-contest-sheet {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--background-modifier-border, #ddd);
+}
+
+.olea-today-contest-sheet-label {
+  font-weight: 600;
+  font-size: 0.85em;
+}
+
+.olea-today-contest-evidence {
+  margin: 4px 0;
+  padding-left: 1.2em;
+  font-size: 0.85em;
+}
+
+.olea-today-contest-offline,
+.olea-today-contest-withheld,
+.olea-today-contest-dissent,
+.olea-today-contest-ack {
+  font-size: 0.85em;
+  color: var(--text-muted, #888);
 }
 
 /* ============================================================

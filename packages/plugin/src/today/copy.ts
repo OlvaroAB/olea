@@ -66,7 +66,12 @@
  */
 
 import type { MasteryState } from 'olea-contracts';
-import { type CourseEffort, MASTERY_DISPLAY, MASTERY_ORDER } from 'olea-core';
+import {
+  CONTEST_GESTURE_LABEL,
+  type CourseEffort,
+  MASTERY_DISPLAY,
+  MASTERY_ORDER,
+} from 'olea-core';
 
 /** The pane's title, as Obsidian shows it on the tab and in the sidebar. F6's own words: "Today". */
 export const TODAY_VIEW_TITLE = 'Today';
@@ -388,6 +393,82 @@ export function rhythmQuietLine(course: string, quietDays: number): RhythmQuietL
   return { course, text: rhythmQuietClause(quietDays) };
 }
 
+// ---------------------------------------------------------------------------------------------
+// The contest gesture and its dispute sheet (`[D-046]` clause 4, `[D-095]`,
+// `ol-fgba` [DISP-1]; drawn in DSN-1 and approved by `[D-136]`).
+//
+// **The gesture's own label is NOT defined here.** It is `olea-core`'s
+// `CONTEST_GESTURE_LABEL`, because it is the one string that appears on every
+// claim-bearing surface in the product and a per-surface copy of it is exactly
+// how "the same gesture everywhere" stops being true. Re-exported below so
+// `view.ts` and `allTodayStrings()` reach it the same way they reach every
+// other string on this panel.
+//
+// Every sentence in this block states a fact and points at the evidence behind
+// it. None defends Olea's reading, apologises for it, characterises her
+// disagreement, or carries a number standing in for confidence — frame 09's
+// forbidden list, asserted mechanically in the copy test against
+// `FORBIDDEN_CONTEST_STRINGS`.
+// ---------------------------------------------------------------------------------------------
+
+export { CONTEST_GESTURE_LABEL };
+
+/** The sheet's own heading. Names what it is showing, never what it thinks of her. */
+export const CONTEST_SHEET_LABEL = 'What this is based on';
+
+/**
+ * The withheld-gesture line for a claim DSN-1 left unrouted (open questions
+ * 6-10). She is told plainly that this kind of claim has no contest yet, rather
+ * than being offered a gesture that would do something nobody has ruled.
+ */
+export const CONTEST_NOT_YET_ROUTED = 'There is no way to dispute this kind of line yet.';
+
+/** Offline is a state the sheet renders in, never a reason it fails to open. */
+export const CONTEST_SHEET_OFFLINE_NOTE = 'This works without a connection.';
+
+/**
+ * The held-reading answer: the reading, the evidence, and the date. Newest
+ * review first, because "you explained it back three weeks ago" is the answer.
+ *
+ * No confidence number, no probability, no adjustment to agree. The reading
+ * holds and shows its work — `[D-046]` clause 4's hard half.
+ */
+export function contestHeldLine(reviewCount: number, latestDate: string | null): string {
+  if (reviewCount === 0 || latestDate === null) {
+    return 'This reading has no reviews behind it yet, in the window shown above.';
+  }
+  const reviews = reviewCount === 1 ? '1 review' : `${reviewCount} reviews`;
+  return `This reading stands on ${reviews}, the most recent on ${latestDate}.`;
+}
+
+/** The mark that rides beside a standing reading she disagreed with. */
+export const CONTEST_DISSENT_MARK = 'You disagree with this reading.';
+
+/**
+ * The acknowledgment, shown exactly once after a re-derivation upholds the
+ * claim, and then never again (`[D-095]` §2). Repeating it on every later visit
+ * would teach her the channel is an argument; never showing it would teach her
+ * it is a void.
+ */
+export const CONTEST_UPHELD_ACKNOWLEDGEMENT =
+  'Checked again — the reading is unchanged. Your note is kept beside it.';
+
+/**
+ * The compensating line for a corrected grade, naming her contest as its
+ * catalyst — written where she can see it, because that is the proof the
+ * channel works.
+ */
+export function contestCorrectedLine(date: string): string {
+  return `Re-checked after you flagged this on ${date}, and the earlier grading was changed.`;
+}
+
+/** What a quarantined grade says while its re-derivation is outstanding. */
+export const CONTEST_QUARANTINE_BADGE = 'Counting as thin evidence while this is re-checked.';
+
+/** A withdrawn structural claim. Never "deleted" — vocabulary registry §3. */
+export const CONTEST_RETURNED_TO_CANDIDATE =
+  'This match is back to a candidate and is not being used.';
+
 /**
  * Every string this panel can put on screen, for the copy test. Functions are
  * sampled across the values that change their wording; anything rendered by
@@ -432,5 +513,18 @@ export function allTodayStrings(): readonly string[] {
     // --- F6.9, the rhythm reading ---
     rhythmQuietClause(21),
     rhythmQuietClause(30),
+    // --- the contest gesture and its sheet (`[D-046]` clause 4, `[D-095]`) ---
+    CONTEST_GESTURE_LABEL,
+    CONTEST_SHEET_LABEL,
+    CONTEST_NOT_YET_ROUTED,
+    CONTEST_SHEET_OFFLINE_NOTE,
+    contestHeldLine(0, null),
+    contestHeldLine(1, '2026-08-18'),
+    contestHeldLine(4, '2026-08-18'),
+    CONTEST_DISSENT_MARK,
+    CONTEST_UPHELD_ACKNOWLEDGEMENT,
+    contestCorrectedLine('2026-08-21'),
+    CONTEST_QUARANTINE_BADGE,
+    CONTEST_RETURNED_TO_CANDIDATE,
   ];
 }

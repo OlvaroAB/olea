@@ -146,6 +146,6 @@ describe('two-device same-day review-log merge', () => {
 
   it('a file that was never written reads as zero records, not an error', async () => {
     const result = await readReviewLogFile(source, '.olea/reviews/2026-08-10.never-written.jsonl');
-    expect(result).toEqual({ records: [], invalidLines: [] });
+    expect(result).toEqual({ records: [], invalidLines: [], disputes: [] });
   });
 });
