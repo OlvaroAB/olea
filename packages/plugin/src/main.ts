@@ -653,6 +653,13 @@ export default class OleaPlugin extends Plugin {
             // own comment above `scheduler`'s construction: "one Scheduler...
             // is what makes that literally the same computation."
             scheduler,
+            // F2.19 (`ol-v7r5.11`): the same served relation fold
+            // `composeReviewSession` and the Today panel's instrument source
+            // already read (`this.servedRelationEdges()`'s own doc) — a thunk
+            // so a later ingestion tick's fresh batch reaches a session built
+            // after this leaf was first opened, not just the one at hand when
+            // it was.
+            relations: () => this.servedRelationEdges(),
           }),
         ),
     );

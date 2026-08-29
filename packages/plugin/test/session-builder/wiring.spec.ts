@@ -98,7 +98,20 @@ describe('the session builder reads what only a real vault has', () => {
 
   it('SESS-2: replays scheduling state through the same Scheduler the Today panel uses, and reads its own scheduler dep rather than building a second instance', () => {
     expect(provider).toMatch(/replaySchedulerStates\(entries,\s*deps\.scheduler\)/);
-    expect(main).toMatch(/scheduler,\s*\}\),/);
+    expect(main).toMatch(
+      /scheduler,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*\}\),/,
+    );
+  });
+
+  it('F2.19 (ol-v7r5.11): resolves relatedConceptKeys/assessmentContext from real fixtures and threads them into the composed session, and main.ts wires the same served relation fold the Today panel and composeReviewSession already read', () => {
+    expect(provider).toMatch(
+      /resolveRelatedConceptKeys\(\s*deps\.relations\?\.\(\)\s*\?\?\s*\[\],\s*enumeration\.concepts,?\s*\)/,
+    );
+    expect(provider).toMatch(
+      /resolveAssessmentGroupingContext\(\s*edges\.assessmentsRead\.records,\s*enumeration\.concepts,?\s*\)/,
+    );
+    expect(provider).toMatch(/relatedConceptKeys,\s*assessmentContext,/);
+    expect(main).toMatch(/relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\)/);
   });
 
   it('is the first production reader of the review log’s durationMs (INV-4)', () => {

@@ -12,6 +12,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
+import type { AssessmentRecord } from '../assessment/types.js';
+import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
+import type { ConceptRelation, RelationProvenanceKind, RelationType } from '../concept/relation.js';
+import type { ConceptRecord } from '../concept/types.js';
+import type { Provenance } from '../extract/types.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import type { OracleMasteryState } from '../oracle/types.js';
@@ -936,5 +942,245 @@ describe('F2.19 — no phase/stage/term-position field in the schema this module
 
     expect(suspectKeys(signals)).toEqual([]);
     expect(suspectKeys(result)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2.19 production resolvers, end to end (`ol-v7r5.11`). `ol-v7r5.10`'s
+// handback named two reachability gaps: nothing resolved
+// `concept/relation.ts`'s name-keyed edges into `relatedConceptKeys`, and
+// nothing resolved `assessment/scope.ts`'s free text into
+// `assessmentContext`. `related-concept-keys.ts` and
+// `assessment/scope-concept-keys.ts` are those resolvers (see their own
+// specs for unit coverage, including the honest miss counts). This block
+// proves the resolvers THEMSELVES — never a hand-built map — drive a real
+// composed session's within-block order: `ConceptRecord`/`ConceptRelation`/
+// `AssessmentRecord` fixtures in, `buildComposedStudySession`'s row order
+// out. Concept keys are deliberately distinct from concept names throughout
+// (`key-*` vs a display name), so a resolver that quietly no-op'd by
+// treating a name as its own key would fail every assertion below rather
+// than passing by coincidence.
+//
+// INV-3: every concept/course/assessment name below is coined for the test.
+// ---------------------------------------------------------------------------
+
+describe('F2.19 production resolvers: relatedConceptKeys/assessmentContext resolved from real fixtures, not hand-built maps', () => {
+  function keyedRow(spec: RowSpec & { readonly conceptKey: string }, rank: number): GapRow {
+    return { ...row(spec, rank), conceptKey: spec.conceptKey };
+  }
+
+  function concept(
+    name: string,
+    key: string,
+    courses: readonly string[] = ['CRS101'],
+  ): ConceptRecord {
+    return { key, name, tier: 1, courses, sourcePaths: [] };
+  }
+
+  function passage(sourcePath: string): Provenance {
+    return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
+  }
+
+  function relationEdge(
+    type: RelationType,
+    from: string,
+    to: string,
+    options: { confidence?: number; provenance?: RelationProvenanceKind } = {},
+  ): ConceptRelation {
+    return {
+      type,
+      from,
+      to,
+      provenance: options.provenance ?? 'model-proposed',
+      confidence: options.confidence ?? 0.5,
+      introducingPassages: { from: passage(`${from}.md`), to: passage(`${to}.md`) },
+    };
+  }
+
+  function assessmentRecord(
+    overrides: Partial<AssessmentRecord> & { readonly path: VaultPath },
+  ): AssessmentRecord {
+    return {
+      course: 'CRS101',
+      type: 'Test',
+      weight: 40,
+      weightRaw: '40',
+      due: '2026-09-01',
+      status: 'todo',
+      ...overrides,
+    };
+  }
+
+  it('relatedness resolved from real ConceptRecord/ConceptRelation fixtures shifts within-block order toward a connected peer', () => {
+    // Three comparably-due concepts, same course. A relation edge (by NAME,
+    // as `concept/relation.ts` emits) connects Alpha and Charlie only. If the
+    // resolver truly joins names to keys, Charlie sorts adjacent to Alpha
+    // ahead of the unconnected Bravo; alphabetical fallback would put Bravo
+    // second, so this cannot pass by coincidence.
+    const concepts = [
+      concept('Alpha', 'key-alpha'),
+      concept('Bravo', 'key-bravo'),
+      concept('Charlie', 'key-charlie'),
+    ];
+    const relations = [relationEdge('related' as RelationType, 'Alpha', 'Charlie')];
+    const { relatedConceptKeys, unresolvedEndpointCount } = resolveRelatedConceptKeys(
+      relations,
+      concepts,
+    );
+    expect(unresolvedEndpointCount).toBe(0);
+
+    const theRows = [
+      keyedRow({ conceptName: 'Alpha', conceptKey: 'key-alpha', gapScore: 5 }, 1),
+      keyedRow({ conceptName: 'Bravo', conceptKey: 'key-bravo', gapScore: 5 }, 2),
+      keyedRow({ conceptName: 'Charlie', conceptKey: 'key-charlie', gapScore: 5 }, 3),
+    ];
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['key-alpha']),
+      qa('b1', ['key-bravo']),
+      qa('c1', ['key-charlie']),
+    ]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const withoutRelations = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+    });
+    expect(withoutRelations.orderedRows.map((r) => r.conceptName)).toEqual([
+      'Alpha',
+      'Bravo',
+      'Charlie',
+    ]);
+
+    const withResolvedRelations = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      relatedConceptKeys,
+    });
+
+    expect(withResolvedRelations.orderedRows.map((r) => r.conceptName)).toEqual([
+      'Alpha',
+      'Charlie',
+      'Bravo',
+    ]);
+  });
+
+  it("assessment scope resolved from real AssessmentRecord fixtures shifts placement toward the approaching assessment's own scope", () => {
+    // Two comparably-due concepts, same course. An assessment's stated scope
+    // (free text, comma-split per the resolver's convention) names Delta but
+    // not Charlie, and a third scope segment matches nothing (counted, not
+    // silently absorbed). The assessment is one day out — proximity close to
+    // 1 — so placement should favour Delta.
+    const quiz = '05 Assessments/Quiz.md' as VaultPath;
+    const concepts = [concept('Charlie', 'key-charlie'), concept('Delta', 'key-delta')];
+    const assessments = [
+      assessmentRecord({
+        path: quiz,
+        due: '2026-09-15',
+        scope: 'Delta, Some Untracked Topic',
+      }),
+    ];
+    const { assessmentContext, unresolvedScopeSegmentCount } = resolveAssessmentGroupingContext(
+      assessments,
+      concepts,
+    );
+    expect(unresolvedScopeSegmentCount).toBe(1);
+    expect(assessmentContext.get(quiz)?.scopeConceptKeys).toEqual(new Set(['key-delta']));
+
+    const theRows = [
+      keyedRow(
+        {
+          conceptName: 'Charlie',
+          conceptKey: 'key-charlie',
+          gapScore: 5,
+          targetAssessmentPath: quiz,
+        },
+        1,
+      ),
+      keyedRow(
+        { conceptName: 'Delta', conceptKey: 'key-delta', gapScore: 5, targetAssessmentPath: quiz },
+        2,
+      ),
+    ];
+    const instruments = buildConceptInstrumentIndex([
+      qa('c1', ['key-charlie']),
+      qa('d1', ['key-delta']),
+    ]);
+    const sameOverdue = replay({
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      d1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const withoutContext = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+    });
+    // Alphabetical/conceptKey tiebreak with no signal: Charlie first.
+    expect(withoutContext.orderedRows.map((r) => r.conceptName)).toEqual(['Charlie', 'Delta']);
+
+    const withResolvedContext = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      assessmentContext,
+    });
+
+    expect(withResolvedContext.orderedRows.map((r) => r.conceptName)).toEqual(['Delta', 'Charlie']);
+  });
+
+  it("feeding both resolved maps through buildComposedStudySession (the whole production layer) still shifts the built session's item order", () => {
+    const concepts = [concept('Alpha', 'key-alpha'), concept('Charlie', 'key-charlie')];
+    const relations = [relationEdge('is-a', 'Alpha', 'Charlie')];
+    const { relatedConceptKeys } = resolveRelatedConceptKeys(relations, concepts);
+
+    const theRows = [
+      keyedRow({ conceptName: 'Alpha', conceptKey: 'key-alpha', gapScore: 5 }, 1),
+      keyedRow({ conceptName: 'Bravo', conceptKey: 'key-bravo', gapScore: 5 }, 2),
+      keyedRow({ conceptName: 'Charlie', conceptKey: 'key-charlie', gapScore: 5 }, 3),
+    ];
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['key-alpha']),
+      qa('b1', ['key-bravo']),
+      qa('c1', ['key-charlie']),
+    ]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const composed = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      relatedConceptKeys,
+    });
+
+    expect(composed.model.items.map((item) => item.conceptName)).toEqual([
+      'Alpha',
+      'Charlie',
+      'Bravo',
+    ]);
   });
 });

@@ -325,3 +325,116 @@ describe('createLocalSessionBuilderProvider — row 3.9’s chooser reaches the 
     expect(item.supportLevel).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
   });
 });
+
+// F2.19 (`ol-v7r5.11`): `resolveAssessmentGroupingContext` is now wired
+// unconditionally into `provider.ts`'s `load()` — this suite proves it reaches
+// a REAL composed session over a REAL vault (frontmatter, not a hand-built
+// map), the same standard RANK-3's suite above holds for retrievability. Two
+// concepts, both never reviewed (so both are `unmet`, tied at `overdueDays: 0`
+// — `memoryVault` has no `firstSeen`, so ARRIVE-2's map is empty and both fall
+// back to the same conservative 0), both cited by the same past paper for the
+// same course's only assessment (so both target it, F4.2/F4.7). The ONLY
+// difference between the two fixtures below is a `scope:` frontmatter line on
+// the assessment note itself — never a hand-built `assessmentContext` map.
+const TWO_CONCEPT_PAST_PAPER = [
+  '---',
+  'role: past-paper',
+  'course: TESTC101',
+  '---',
+  '',
+  '# TESTC101 Past Paper — 2023',
+  '',
+  '## Question 1 (10 marks)',
+  '',
+  'Explain the core mechanism behind Widget theory and why it matters.',
+  '',
+  '## Question 2 (10 marks)',
+  '',
+  'Explain the core mechanism behind Gadget theory and why it matters.',
+  '',
+].join('\n');
+
+function twoConceptBaseFiles(quizContent: string): Readonly<Record<string, string>> {
+  return {
+    '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+    '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
+    'Notes/one.md': [
+      '---',
+      'topic: [Widget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/two.md': [
+      '---',
+      'topic: [Gadget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front2::Back2',
+      '',
+    ].join('\n'),
+    '03 Research/TESTC101 Past Paper 2023.md': TWO_CONCEPT_PAST_PAPER,
+    [BASE_PATH]: BASE_FILE,
+    '02 Assignments/Quiz 1.md': quizContent,
+  };
+}
+
+const QUIZ_NO_SCOPE =
+  '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n';
+const QUIZ_SCOPED_TO_WIDGET =
+  '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\nscope: Widget theory\n---\n\n# Quiz 1\n';
+
+function conceptNamesOf(model: StudySessionModel): readonly string[] {
+  return model.items.map((item) => item.conceptName);
+}
+
+describe('createLocalSessionBuilderProvider — F2.19 assessment-scope resolver reaches a real composed session, from real frontmatter (ol-v7r5.11)', () => {
+  it("baseline: with no stated scope on the assessment note, two never-reviewed, comparably-due concepts targeting the same assessment settle by overdue-first's own tiebreak", async () => {
+    const provider = createLocalSessionBuilderProvider({
+      vault: memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE)),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const names = conceptNamesOf(state.model);
+    expect(names).toContain('Widget theory');
+    expect(names).toContain('Gadget theory');
+  });
+
+  it('a real "scope:" frontmatter property on the assessment note — read through assessment/read.ts, resolved to a conceptKey by resolveAssessmentGroupingContext, never a hand-built map — moves the concept it names ahead of its (otherwise comparably-due) peer', async () => {
+    const baseline = await createLocalSessionBuilderProvider({
+      vault: memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE)),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    }).load({ budgetMinutes: 60 });
+    const scoped = await createLocalSessionBuilderProvider({
+      vault: memoryVault(twoConceptBaseFiles(QUIZ_SCOPED_TO_WIDGET)),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    }).load({ budgetMinutes: 60 });
+    if (baseline.kind !== 'model') throw new Error('expected a model (baseline)');
+    if (scoped.kind !== 'model') throw new Error('expected a model (scoped)');
+
+    // The ONLY input difference between the two runs is the `scope:` line on
+    // the assessment note. If the resolver were not wired (or silently a
+    // no-op, `study-session/compose.ts`'s own proven equivalence), the two
+    // orders would be byte-identical. Widget theory — the concept the scope
+    // names — must be ahead of Gadget theory once it is, regardless of which
+    // way the tie originally fell.
+    const baselineNames = conceptNamesOf(baseline.model);
+    const scopedNames = conceptNamesOf(scoped.model);
+    expect(scopedNames).not.toEqual(baselineNames);
+    expect(scopedNames.indexOf('Widget theory')).toBeLessThan(scopedNames.indexOf('Gadget theory'));
+  });
+});

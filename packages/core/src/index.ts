@@ -9,6 +9,16 @@ export {
   extractInFolderFilters,
 } from './assessment/base-file.js';
 export { readAssessments } from './assessment/read.js';
+// F2.19's assessment-scope resolver (`ol-v7r5.11`): F1.7's free-text scope
+// and F4.7's due day, resolved to the `conceptKey`-keyed context
+// `study-session/compose.ts`'s within-block grouping seam reads. See
+// `./assessment/scope-concept-keys.js`'s module doc for the exact/
+// normalized-exact-only matching convention (`ol-2zfj.27`).
+export type {
+  AssessmentConceptContext,
+  AssessmentGroupingContextResolution,
+} from './assessment/scope-concept-keys.js';
+export { resolveAssessmentGroupingContext } from './assessment/scope-concept-keys.js';
 export type {
   AssessmentField,
   AssessmentReadReport,
@@ -178,6 +188,13 @@ export type {
   RelationDropReason,
 } from './concept/reconcile.js';
 export { reconcileRelations, totalDropped } from './concept/reconcile.js';
+// F2.19's relatedness resolver (`ol-v7r5.11`): joins `ConceptRelation.from`/
+// `.to` NAMES to the `conceptKey`-keyed adjacency map the within-block
+// grouping seam reads. See `./concept/related-concept-keys.js`'s module doc
+// for the reused name→key derivation (`ol-63e1`) and the reversible
+// "every relation type counts, adjacency is symmetric" default.
+export type { RelatedConceptKeysResolution } from './concept/related-concept-keys.js';
+export { resolveRelatedConceptKeys } from './concept/related-concept-keys.js';
 // The six ruled concept-to-concept relation types (`[REL-1]`, C7.10,
 // `[D-070]`) — vocabulary, directedness, and which types v0.9 actually
 // emits. See `./concept/relation.js`'s module doc for the per-type argument.

@@ -25,6 +25,30 @@
  *    ever read it (`study-session/duration.ts`'s module doc) — this is its
  *    first production reader.
  *
+ * ## F2.19's two resolvers (`ol-v7r5.11`), closing `ol-v7r5.10`'s two named gaps
+ *
+ * `study-session/compose.ts`'s within-block grouping seam reads two
+ * caller-resolved, optional maps; this is where both are built, from data
+ * this `load()` already has in hand:
+ *
+ *  - **`relatedConceptKeys`** — `concept/related-concept-keys.ts`'s
+ *    `resolveRelatedConceptKeys`, joining `deps.relations`' name-keyed
+ *    `ConceptRelation`s (the same served fold `main.ts`'s
+ *    `servedRelationEdges()` already hands to `composeReviewSession` and the
+ *    Today panel's instrument source, `[D-070]`'s abstention gate applied)
+ *    against `enumeration.concepts` — the same `ConceptRecord[]` this call
+ *    already extracts for `composeOracleRanking`'s own name→key join
+ *    (`ol-63e1`), so this pays no second extraction pass.
+ *  - **`assessmentContext`** — `assessment/scope-concept-keys.ts`'s
+ *    `resolveAssessmentGroupingContext`, over the identical
+ *    `edges.assessmentsRead.records` already read above for F4.7's countdown
+ *    and the same `enumeration.concepts`.
+ *
+ * Both resolvers are pure and their misses are honest-but-silent by design
+ * (see each module's own doc) — nothing here surfaces the miss counts, since
+ * no clause names a surface for them; a future caller wanting them reads the
+ * resolvers' own return values directly.
+ *
  * ## The history window, and why the durations use a longer one
  *
  * `gap/provider.ts` probes `SCHEDULING_HISTORY_PROBE_DAYS` of review-log files
@@ -49,6 +73,7 @@
 import type {
   CalendarDay,
   ConceptMaterialPresence,
+  ConceptRelation,
   Scheduler,
   VaultPath,
   VaultSource,
@@ -65,6 +90,8 @@ import {
   estimateInstrumentDurations,
   readReviewLogHistory,
   replaySchedulerStates,
+  resolveAssessmentGroupingContext,
+  resolveRelatedConceptKeys,
   reviewLogPath,
 } from 'olea-core';
 import {
@@ -97,6 +124,20 @@ export interface CreateLocalSessionBuilderProviderDeps {
    */
   readonly scheduler: Scheduler;
   readonly probeDays?: number;
+  /**
+   * F2.19 (`ol-v7r5.11`): the served C7.10 relation fold — same shape and
+   * same `[D-093]` abstention gate as `main.ts`'s `servedRelationEdges()`,
+   * which already hands this to `composeReviewSession` and the Today panel's
+   * instrument source. **A thunk, not a value** — same reason `now` is one:
+   * `createLocalSessionBuilderProvider` is called once per leaf, but `load()`
+   * recomputes on every call (this file's own module doc), so a captured
+   * array would go stale the moment an ingestion tick folds in a new relation
+   * batch after the leaf opened. Optional and safe to omit:
+   * `resolveRelatedConceptKeys` reads an absent/empty list as "no relations
+   * known" and produces an empty adjacency map, which `study-session/
+   * compose.ts` already proves is a no-op.
+   */
+  readonly relations?: () => readonly ConceptRelation[];
 }
 
 /** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
@@ -218,9 +259,26 @@ export function createLocalSessionBuilderProvider(
         const gapRows = allGapRows(gap);
         const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
 
+        // F2.19 (`ol-v7r5.11`): both resolvers are pure and synchronous, over
+        // data this call already holds — `enumeration.concepts` is the same
+        // extraction `composeOracleRanking` used for its own name→key join
+        // above, and `edges.assessmentsRead.records` is the same read the
+        // `assessments` field below passes through for F4.7's countdown. See
+        // this file's own module doc, "F2.19's two resolvers".
+        const { relatedConceptKeys } = resolveRelatedConceptKeys(
+          deps.relations?.() ?? [],
+          enumeration.concepts,
+        );
+        const { assessmentContext } = resolveAssessmentGroupingContext(
+          edges.assessmentsRead.records,
+          enumeration.concepts,
+        );
+
         const composed = buildComposedStudySession({
           rows: gapRows,
           arrivalDays,
+          relatedConceptKeys,
+          assessmentContext,
           instruments: buildConceptInstrumentIndex(enumeration.records),
           replay,
           budgetMinutes: request.budgetMinutes,
