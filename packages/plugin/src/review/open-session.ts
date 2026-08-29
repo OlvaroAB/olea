@@ -81,7 +81,7 @@ import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
 import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
-import { adaptExecutedReviewQueue } from './queue-adapter.js';
+import { adaptExecutedReviewQueue, buildSupportLevelHistoryLookup } from './queue-adapter.js';
 import { ReviewSession } from './session.js';
 
 /** The five side-effecting seams plus the clock, exactly as `ReviewSessionDeps` names them. */
@@ -230,6 +230,7 @@ export async function openReviewSession(
     const scheduled = adaptExecutedReviewQueue({
       items: executed.items,
       recordsById: composed.recordsById,
+      supportHistory: buildSupportLevelHistoryLookup(composed.entries),
       ...(input.random !== undefined ? { random: input.random } : {}),
     });
 
