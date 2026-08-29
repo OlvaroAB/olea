@@ -1144,6 +1144,20 @@ export {
   routingReason,
   UNCLASSIFIED_MIX,
 } from './routing/instrument-mix.js';
+// RHY-3's schedule-extraction build chain, step 1 (`ol-4chx` -> `ol-r6s0` ->
+// `ol-hna1` -> `ol-at1a`): evidence-based calendar-note discovery and the
+// narrow event-line grammar scan. No production caller yet — `ol-at1a` wires
+// the eventual freshness signal into a displayed surface; see
+// `./schedule/discover.ts`'s module doc for the exact scope boundary and the
+// four Class C stops this build must not cross.
+export {
+  discoverScheduleEvents,
+  type ScheduleDiscoveryReport,
+  type ScheduleEventRecord,
+  type ScheduleNoteScan,
+  type ScheduleTimeRange,
+  scanNoteForScheduleEvents,
+} from './schedule/discover.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
   // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported
