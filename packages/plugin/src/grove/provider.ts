@@ -67,21 +67,27 @@
  * former for its widened vocabulary — see below — the latter as an input),
  * so neither can start until that walk resolves.
  *
- * ## The ground-streak gap, named rather than hidden (F4.5)
+ * ## The ground-streak, now persisted (F4.5, `ol-0r92.20`)
  *
  * `olea-core#classifyDeclaredConcept` (`./scope/coverage.ts`) needs a
  * `priorGroundStreak` per concept to flag a PERSISTING `ground` reading as a
  * stall rather than an ordinary in-flight one — see that module's doc for why
- * the pure computation cannot hold this itself. **No durable per-install
- * store for that streak exists yet** (there is no `data.json` slot for it,
- * unlike `../registry/overrides-store.ts` or `../plan/settings-store.ts`), so
- * this provider always calls `buildGroveModel` with an empty
- * `priorGroundStreaks` map: every `ground` cell reads as a first-time
- * evaluation this session, `stall` always `false`. The computation and its
- * test coverage are real (`packages/core/src/scope/coverage.spec.ts`); only
- * the cross-session persistence is missing. **Follow-up work, not silently
- * absorbed**: a small local store the same shape as
- * `ObsidianRegistryOverridesStore` would close this, keyed by concept id.
+ * the pure computation cannot hold this itself. `./ground-streak-store.ts`
+ * (`ObsidianGroveGroundStreakStore`) is the durable per-install store this
+ * closes: the same `data.json` shape `ObsidianRegistryOverridesStore` and
+ * `ObsidianStudyPlanSettingsStore` already use, keyed by concept id. `load()`
+ * below reads it once, alongside the other independent vault reads, and
+ * hands the same map into every course's `buildGroveModel` call (a
+ * concept's classification depends only on its own material/instrument/
+ * mastery state, never on which course is being built, so one global map
+ * serves every course). Only `'declared'`-status courses contribute back —
+ * `buildGroveModel`'s `'inferred'`/`'no-registered-source'` branches echo the
+ * whole input map unfiltered (see that module's doc), which would
+ * reintroduce stale entries for unrelated concepts if merged in — so this
+ * module merges `nextGroundStreaks` only from courses that actually computed
+ * real cells, then saves the merged result once, replacing the whole stored
+ * map (a concept no longer reading `ground` in ANY declared course is
+ * correctly absent, its streak reset — see the store's own module doc).
  *
  * **Whole-log mastery, not windowed** — same reasoning `registry/
  * provider.ts` states for its own read: growth stage is a current-state,
@@ -122,6 +128,7 @@ import { resolveOfferCards } from '../retrospective/offer-card.js';
 import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import { ObsidianGroveGroundStreakStore } from './ground-streak-store.js';
 import type { GroveCourseSection, GroveViewState } from './view.js';
 
 /**
@@ -191,6 +198,8 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
   // concept withdrawn there (F8.5) stays withdrawn here too, rather than
   // this read-only browse reintroducing it through a second, unaware path.
   const overridesStore = new ObsidianRegistryOverridesStore(deps.settingsHost);
+  // F4.5/`ol-0r92.20`: the durable ground-streak store — see module doc.
+  const groundStreakStore = new ObsidianGroveGroundStreakStore(deps.settingsHost);
   const retrospective = createLocalRetrospectiveProvider({
     vault: deps.vault,
     deviceId: deps.deviceId,
@@ -215,14 +224,21 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // (`enumeration.concepts`) — this walk cannot start until that one
         // finishes, so it is NOT part of the `Promise.all` below. Everything
         // else is independent and paid concurrently.
-        const [{ entries }, enumeration, offerEvents, assessmentRecords, overrides] =
-          await Promise.all([
-            readReviewLogHistory(deps.vault, { additionalPaths }),
-            enumerateVaultInstruments(deps.vault),
-            offerStore.load(),
-            safeAssessmentRecords(deps.vault, assignmentsBasePath),
-            overridesStore.load(),
-          ]);
+        const [
+          { entries },
+          enumeration,
+          offerEvents,
+          assessmentRecords,
+          overrides,
+          priorGroundStreaks,
+        ] = await Promise.all([
+          readReviewLogHistory(deps.vault, { additionalPaths }),
+          enumerateVaultInstruments(deps.vault),
+          offerStore.load(),
+          safeAssessmentRecords(deps.vault, assignmentsBasePath),
+          overridesStore.load(),
+          groundStreakStore.load(),
+        ]);
 
         // Match against every concept she already has (topic-derived or
         // Zettelkasten-bound), not only Zettelkasten titles — the same
@@ -277,25 +293,37 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // assessment record is handed in unfiltered.
         const allCards = resolveOfferCards(assessmentRecords, offerEvents, now);
 
+        // Only `'declared'` courses contribute a real ground-streak reading
+        // back — see module doc for why the other two statuses' echoed
+        // `nextGroundStreaks` must NOT be merged in here.
+        const nextGroundStreaks = new Map<string, number>();
         const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => {
           const courseConcepts = visibleConcepts.filter((concept) =>
             concept.courses.includes(course),
           );
-          const { model }: { model: GroveCourseModel } = buildGroveModel({
+          const built = buildGroveModel({
             course,
             concepts: courseConcepts,
             sources: tier3.sourcesReport.sources,
             citations: tier3.citations,
             materialPresence,
             mastery: masteryByKey,
-            // No durable ground-streak store exists yet — see module doc.
+            priorGroundStreaks,
           });
+          const model: GroveCourseModel = built.model;
+          if (model.status === 'declared') {
+            for (const [conceptKey, streak] of built.nextGroundStreaks) {
+              nextGroundStreaks.set(conceptKey, streak);
+            }
+          }
           return {
             course,
             model,
             offerCards: allCards.filter((card) => card.course === course),
           };
         });
+
+        await groundStreakStore.save(nextGroundStreaks);
 
         return { kind: 'model', courses };
       } catch (error) {

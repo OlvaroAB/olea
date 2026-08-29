@@ -16,7 +16,13 @@ import type { VaultSource } from 'olea-core';
 // tooling, this file is production code that gets bundled into the plugin, and
 // this was the only one of the plugin's 43 core imports reaching past the
 // barrel. A deep import here would also let the module be bundled twice.
-import { appendReviewLogRecord, appendSuspendRecord, masteryAtTimeForConceptIds } from 'olea-core';
+import {
+  appendReviewLogRecord,
+  appendSuspendRecord,
+  masteryAtTimeForConceptIds,
+  type SupportLevelPresentation,
+  supportLevelReviewFields,
+} from 'olea-core';
 import {
   localToday,
   readReviewHistory,
@@ -30,6 +36,25 @@ export interface RecordReviewInput {
   readonly wasUnsure: boolean;
   readonly durationMs: number | null;
   readonly selectionContext: SelectionContextV4;
+  /**
+   * Row 3.9's chooser decision for this review ([SUPP-2], `ol-95vv.4`) — the
+   * support level actually shown, carried from composition
+   * (`StudySessionItem.supportLevel` / a future wired
+   * `ComposedExplainBackItem.supportLevel`) through to this write. `undefined`
+   * for a review whose item carried no decision — an `'mcq'` item (out of
+   * `[D-094]`'s ladder scope by rule) or a caller not yet wired to the
+   * chooser — and the record is written with no `supportLevelShown` field at
+   * all, exactly today's behaviour, never a fabricated value.
+   *
+   * Only `.level` is ever persisted, never `.provenance`: the frozen v5
+   * schema has no provenance field
+   * (`packages/core/src/support-level/record.ts`'s own doc), and
+   * `supportLevelReviewFields` accepts nothing but a bare level, so there is
+   * no parameter here a caller could route her self-rating through even by
+   * mistake — principle 16's "record what was shown, never what she said" is
+   * structural, not a discipline this port has to remember.
+   */
+  readonly supportLevel?: SupportLevelPresentation;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -67,6 +92,13 @@ export function isoWithLocalOffset(date: Date): string {
  * `timestamp` is read from the clock at write time rather than passed in,
  * because the log records *when the event happened*, and the only honest
  * answer to that is "now" at the moment of appending.
+ *
+ * **`supportLevelShown` (row 3.9, `[SUPP-2]`/`ol-95vv.4`) is merged here,
+ * not stamped.** Unlike `masteryAtTime` below, this port never computes it —
+ * `input.supportLevel` is the caller's own chooser decision for the item
+ * being reviewed, and `supportLevelReviewFields` is the one function
+ * trusted to turn it into the record's field (see `RecordReviewInput.
+ * supportLevel`'s doc for why only `.level` ever survives into the log).
  *
  * **`masteryAtTime` (C5.4, `ol-rpr4`) is stamped here, and the ordering below
  * is the whole correctness argument, not a comment describing it.**
@@ -115,6 +147,13 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
           durationMs: input.durationMs,
           selectionContext: input.selectionContext,
           masteryAtTime,
+          // Row 3.9's write seam ([SUPP-2]): merge `supportLevelShown` only
+          // when this review's item carried a chooser decision — see
+          // `RecordReviewInput.supportLevel`'s doc for why `undefined`
+          // produces no field at all rather than a fabricated one.
+          ...(input.supportLevel !== undefined
+            ? supportLevelReviewFields(input.supportLevel.level)
+            : {}),
         },
         { deviceId },
       );

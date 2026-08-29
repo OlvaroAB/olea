@@ -107,6 +107,8 @@ import type { AssessmentFormat } from '../gap/readiness.js';
 import { assessmentFormatOf } from '../gap/readiness.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
+import type { SelfAssessmentFeeling } from '../support-level/self-assessment.js';
+import type { SessionSupportOutcome, SupportLadderTier } from '../support-level/types.js';
 import type { CalendarDay } from '../today/calendar-day.js';
 import { isCalendarDay } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
@@ -118,6 +120,7 @@ import {
   totalExplainBackSeconds,
 } from './explain-back.js';
 import type { ConceptInstrumentIndex } from './instrument-index.js';
+import { chooseSupportLevel, type SupportLevelPresentation } from './support-level-chooser.js';
 
 /**
  * Whether a chosen instrument matches the format of the assessment she meets
@@ -129,6 +132,41 @@ import type { ConceptInstrumentIndex } from './instrument-index.js';
  * to say, and only the first of them is a claim.
  */
 export type SessionFormatMatch = 'preferred-format' | 'other-format' | 'no-preference';
+
+/**
+ * Row 3.9's chooser input, threaded through composition ([SUPP-2],
+ * `ol-95vv.4`). One cell per concept × ladder tier: every past session's
+ * outcome for it, **strictly before** the review this fill is about to
+ * compose — never including it. See `./support-level-chooser.js`'s module
+ * doc for why: the fill is choosing what to show at a review that has not
+ * happened yet, so a lookup that (accidentally or not) folded in that same
+ * review's own outcome would answer a different, retroactively-wrong
+ * question, and neither this module nor the chooser has a clock or a session
+ * id to catch the mistake — the discipline is on whatever builds this
+ * lookup, stated here rather than left implicit.
+ *
+ * A cell with no signal (a concept never reviewed at this tier, or a caller
+ * with no history to offer) returns an empty array — the chooser's own cold
+ * start (`[D-094]`'s `'prompted'`) already covers it; this is not a case
+ * this module special-cases.
+ */
+export interface SupportLevelHistoryLookup {
+  outcomesFor(conceptKey: string, tier: SupportLadderTier): readonly SessionSupportOutcome[];
+}
+
+/**
+ * `SchedulableInstrumentType` -> the ladder tier row 3.9 scores it at, or
+ * `null` when the instrument is out of the ladder's scope entirely.
+ *
+ * `'mcq'` is the only exclusion: `[D-094]`'s own scope clause gives
+ * recognition-tier instruments no ladder at all ("its options are its
+ * scaffolding"), and `support-level-signal.ts`'s `deriveFailureShape` throws
+ * on one for the same reason. `'qa'`/`'cloze'` are both `'recall'` — row
+ * 3.9's ladder does not distinguish card format within the recall tier.
+ */
+function supportLadderTierFor(instrumentType: SchedulableInstrumentType): SupportLadderTier | null {
+  return instrumentType === 'mcq' ? null : 'recall';
+}
 
 /** Why a considered concept contributed nothing to the session. */
 export type StudySessionOmissionReason =
@@ -158,6 +196,17 @@ export interface StudySessionItem {
   /** Whether {@link estimatedSeconds} came from her own review history or from Olea's assumption — see `./duration.ts`. */
   readonly durationSource: DurationEstimateSource;
   readonly formatMatch: SessionFormatMatch;
+  /**
+   * Row 3.9's chooser decision for this item ([SUPP-2], `ol-95vv.4`) — the
+   * support level she will be shown, plus why. `undefined` when no decision
+   * was made: an `'mcq'` item (out of `[D-094]`'s ladder scope by rule,
+   * {@link supportLadderTierFor}) or a caller that supplied no
+   * {@link BuildStudySessionInput.supportHistory} at all. Never a fabricated
+   * `'independent'`/`'not-offered'` value standing in for "we did not ask" —
+   * an absent field says exactly that, the same "state the absence" rule
+   * `nextAssessment`/`durationSource` already follow on this shape.
+   */
+  readonly supportLevel?: SupportLevelPresentation;
 }
 
 /** One considered concept the session does not contain, and why. */
@@ -303,6 +352,24 @@ export interface BuildStudySessionInput {
    * explain-back" section and `./explain-back.js`.
    */
   readonly acceptedExplainBacks?: readonly AcceptedExplainBack[];
+  /**
+   * Row 3.9's chooser input ([SUPP-2], `ol-95vv.4`) — see
+   * {@link SupportLevelHistoryLookup}. Omitted entirely means no support
+   * level is computed for any item: every {@link StudySessionItem} carries
+   * `supportLevel: undefined`, exactly today's (pre-`ol-95vv.4`) behaviour,
+   * so every existing caller and fixture needs no change.
+   */
+  readonly supportHistory?: SupportLevelHistoryLookup;
+  /**
+   * The session's one pre-session self-assessment (row 3.9's transient,
+   * per-session input, F2.20). `ol-7883` left "per item or per session"
+   * undecided for the LEVEL; the self-assessment INPUT itself is
+   * unambiguously singular ("her pre-session self-assessment"), so the same
+   * feeling is applied to every item this fill scores. Ignored entirely when
+   * {@link supportHistory} is not supplied — there is nothing for it to
+   * adjust.
+   */
+  readonly supportSelfAssessment?: SelfAssessmentFeeling;
 }
 
 const SECONDS_PER_MINUTE = 60;
@@ -590,6 +657,17 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
         queue.at += 1;
         chosenInstrumentIds.add(record.instrumentId);
         candidatePlannedSeconds += seconds;
+        // Row 3.9's chooser ([SUPP-2]): computed only when a caller supplied
+        // history to compute it from, and only for a tier the ladder scores
+        // at all — see `supportLadderTierFor` and `SupportLevelHistoryLookup`.
+        const supportTier = supportLadderTierFor(record.instrumentType);
+        const supportLevel: SupportLevelPresentation | undefined =
+          supportTier === null || input.supportHistory === undefined
+            ? undefined
+            : chooseSupportLevel(
+                input.supportHistory.outcomesFor(queue.row.conceptKey, supportTier),
+                input.supportSelfAssessment ?? null,
+              );
         items.push({
           position: items.length + 1,
           instrumentId: record.instrumentId,
@@ -604,6 +682,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
           estimatedSeconds: seconds,
           durationSource: durations.sourceFor(record.instrumentType),
           formatMatch: formatMatchOf(record.instrumentType, formatPreference),
+          ...(supportLevel !== undefined ? { supportLevel } : {}),
         });
         queue.chose = true;
         taken = true;

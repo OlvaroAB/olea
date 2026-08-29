@@ -41,6 +41,48 @@ function hostWithBasePath(basePath: string): FakeDataHost {
   return host;
 }
 
+/**
+ * A course with a registered objectives document naming "Concept A", material
+ * present for it, and NO instrument built — the `ground` cell F4.5's stall
+ * flag needs (F8.2's "material present, nothing generated yet" narrowing;
+ * `../../src/scope/coverage.ts` — no `::` card syntax anywhere below, so
+ * `instrumentCount` stays 0).
+ */
+function fixtureVaultGroundOnly() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '03 Research/Objectives.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept A in depth.',
+      '',
+    ].join('\n'),
+    'Notes/one.md': [
+      '---',
+      'topic: [Concept A]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Some prose about Concept A, with no instrument built for it yet.',
+      '',
+    ].join('\n'),
+  });
+}
+
 /** A course with a registered objectives document naming "Concept A" — the `'declared'` case. */
 function fixtureVaultWithRegisteredSource() {
   return memoryVault({
@@ -186,6 +228,117 @@ describe('createLocalGroveProvider — load', () => {
     });
     const state = await provider.load();
     expect(state.kind).toBe('unavailable');
+  });
+
+  it("persists a concept's ground-streak across two separate provider instances sharing the same data.json, so the stall flag can fire (F4.5, ol-0r92.20)", async () => {
+    const host = hostWithBasePath(BASE_PATH);
+    const vault = fixtureVaultGroundOnly();
+
+    // First "session": a fresh provider, nothing persisted yet.
+    const provider1 = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const first = await sectionsFrom(await provider1.load());
+    const firstModel = modelOf(first.find((c) => c.course === 'TESTC101'));
+    if (firstModel.status !== 'declared')
+      throw new Error(`expected declared, got ${firstModel.status}`);
+    expect(firstModel.cells).toEqual([
+      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: false },
+    ]);
+
+    // Second "session": a BRAND NEW provider instance (as if the plugin were
+    // closed and reopened) reading the SAME host/data.json — never the same
+    // provider object, so nothing but the persisted store could carry the
+    // streak forward.
+    const provider2 = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const second = await sectionsFrom(await provider2.load());
+    const secondModel = modelOf(second.find((c) => c.course === 'TESTC101'));
+    if (secondModel.status !== 'declared')
+      throw new Error(`expected declared, got ${secondModel.status}`);
+    expect(secondModel.cells).toEqual([
+      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: true },
+    ]);
+  });
+
+  it('a concept that stops reading ground has its streak reset, not left stale, in the persisted store', async () => {
+    const host = hostWithBasePath(BASE_PATH);
+
+    const provider1 = createLocalGroveProvider({
+      vault: fixtureVaultGroundOnly(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    await provider1.load();
+    await provider1.load(); // streak now 2, stall true, per the test above
+
+    // A later session where the concept now has material AND an instrument —
+    // no longer `ground` at all.
+    const vaultNowSeeded = memoryVault({
+      [BASE_PATH]: [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+      '03 Research/Objectives.md': [
+        '---',
+        'role: objectives',
+        'course: TESTC101',
+        '---',
+        '',
+        'The course covers Concept A in depth.',
+        '',
+      ].join('\n'),
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+    });
+    const provider2 = createLocalGroveProvider({
+      vault: vaultNowSeeded,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    await provider2.load();
+
+    // A hypothetical regression back to no material this session should read
+    // as a first-sight `ground` again, not a continued stall — proving the
+    // store actually dropped the resolved concept rather than leaving it at
+    // its old streak.
+    const provider3 = createLocalGroveProvider({
+      vault: fixtureVaultGroundOnly(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const third = await sectionsFrom(await provider3.load());
+    const thirdModel = modelOf(third.find((c) => c.course === 'TESTC101'));
+    if (thirdModel.status !== 'declared')
+      throw new Error(`expected declared, got ${thirdModel.status}`);
+    expect(thirdModel.cells).toEqual([
+      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: false },
+    ]);
   });
 });
 

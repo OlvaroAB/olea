@@ -560,6 +560,27 @@ describe('buildComposedStudySession', () => {
     expect(composed.model).toEqual(expectedModel);
   });
 
+  it('passes supportHistory/supportSelfAssessment straight through to buildStudySession (row 3.9, `[SUPP-2]`) — this layer adds no seam of its own', () => {
+    const theRows = rows([{ conceptName: 'A', gapScore: 9, masteryState: 'sprout' }]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A'])]);
+    const composed = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      supportHistory: { outcomesFor: () => [{ failureShape: 'wrong-concept', hintUptake: false }] },
+      supportSelfAssessment: null,
+    });
+
+    expect(composed.model.items).toHaveLength(1);
+    expect(composed.model.items[0]?.supportLevel).toEqual({
+      level: 'guided',
+      provenance: 'evidence-thin',
+    });
+  });
+
   it('refuses an unusable budget before any composition work runs', () => {
     for (const budgetMinutes of [0, -5, Number.NaN]) {
       expect(() =>

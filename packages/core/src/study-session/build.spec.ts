@@ -16,8 +16,9 @@ import type { ConceptSize } from '../concept/size.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import type { McqInstrumentRecord, QaInstrumentRecord } from '../session/types.js';
+import type { SessionSupportOutcome, SupportLadderTier } from '../support-level/types.js';
 import type { VaultPath } from '../vault/types.js';
-import { buildStudySession } from './build.js';
+import { buildStudySession, type SupportLevelHistoryLookup } from './build.js';
 import {
   type DurationEstimateSource,
   type DurationModel,
@@ -1069,6 +1070,97 @@ describe('accepted explain-back is priced, never selected (F2.14a, `[D-126]`)', 
       asOf: AS_OF,
     });
     expect(session.durationBasis).toBe('measured');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Row 3.9's chooser, wired into composition ([SUPP-2], `ol-95vv.4`)
+// ---------------------------------------------------------------------------
+
+/** A fixed answer for every cell — the fill's own plumbing is what's under test, not the chooser's fold (`support-level-chooser.spec.ts` owns that). */
+function fixedHistory(outcomes: readonly SessionSupportOutcome[]): SupportLevelHistoryLookup & {
+  readonly asked: Array<{ conceptKey: string; tier: SupportLadderTier }>;
+} {
+  const asked: Array<{ conceptKey: string; tier: SupportLadderTier }> = [];
+  return {
+    asked,
+    outcomesFor(conceptKey, tier) {
+      asked.push({ conceptKey, tier });
+      return outcomes;
+    },
+  };
+}
+
+describe('the support-level chooser, wired into the fill (row 3.9, [SUPP-2])', () => {
+  it('every StudySessionItem carries no supportLevel at all when no supportHistory is supplied — unchanged, pre-`ol-95vv.4` behaviour', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(Object.hasOwn(session.items[0] ?? {}, 'supportLevel')).toBe(false);
+  });
+
+  it('a recall-tier item (qa/cloze) is scored at the recall tier, keyed by the row’s own conceptKey, strictly from the history it was handed', () => {
+    const history = fixedHistory([{ failureShape: 'wrong-concept', hintUptake: false }]);
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      supportHistory: history,
+    });
+
+    expect(session.items).toHaveLength(1);
+    // One wrong-concept failure from cold start escalates straight to 'guided'
+    // (`support-level-chooser.spec.ts`'s own fixture for the same input).
+    expect(session.items[0]?.supportLevel).toEqual({
+      level: 'guided',
+      provenance: 'evidence-thin',
+    });
+    expect(history.asked).toEqual([{ conceptKey: 'A', tier: 'recall' }]);
+  });
+
+  it('an mcq item is never scored — recognition has no ladder ([D-094]), so no lookup is even made for it', () => {
+    const history = fixedHistory([{ failureShape: 'wrong-concept', hintUptake: false }]);
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([mcq('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      supportHistory: history,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(Object.hasOwn(session.items[0] ?? {}, 'supportLevel')).toBe(false);
+    expect(history.asked).toEqual([]);
+  });
+
+  it('the session’s one self-assessment is applied to every eligible item’s offer, never the folded evidence', () => {
+    const history = fixedHistory([]); // cold start: evidence-derived level is 'prompted'
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      supportHistory: history,
+      supportSelfAssessment: 'unsure',
+    });
+
+    expect(session.items.map((i) => i.supportLevel)).toEqual([
+      { level: 'guided', provenance: 'self-requested' },
+      { level: 'guided', provenance: 'self-requested' },
+    ]);
   });
 });
 

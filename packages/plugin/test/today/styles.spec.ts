@@ -116,6 +116,18 @@ function classesEmittedByView(): readonly string[] {
   return [...found].sort();
 }
 
+/**
+ * Obsidian's own top-level body classes, not something `view.ts` ever emits via
+ * `cls:`/`addClass(...)` (those calls only ever name Olea's own elements) — a
+ * selector scoping to one of these describes which host theme branch a rule
+ * applies in, not a class this pane's markup carries. `ol-g5tr`'s
+ * `.theme-light .olea-today-root` override is the first (and, by this pane's
+ * own "sidebar pane, not a second review view" rule below, the only sanctioned)
+ * reason one appears in this section, so it is excluded here rather than
+ * counted as an unreachable rule.
+ */
+const HOST_THEME_CLASSES = new Set(['theme-light', 'theme-dark']);
+
 /** Every class selector the Today section of the stylesheet defines a rule for. */
 function classesStyled(): ReadonlySet<string> {
   const found = new Set<string>();
@@ -124,7 +136,7 @@ function classesStyled(): ReadonlySet<string> {
   // A class name starts with a letter — `.5px` and `.15em` are decimals.
   for (const match of rules.matchAll(/\.([a-z][a-z0-9-]*)/gi)) {
     const cls = match[1];
-    if (cls !== undefined) found.add(cls);
+    if (cls !== undefined && !HOST_THEME_CLASSES.has(cls)) found.add(cls);
   }
   return found;
 }
@@ -160,9 +172,18 @@ describe('the Today section of styles.css is a sidebar pane, not a second review
     expect(css).not.toContain('--olea-dark-');
   });
 
-  it('owns exactly the two colours DP-1 puts on this surface', () => {
+  it("owns exactly the two colours DP-1 puts on this surface, plus ol-g5tr's light-branch brand override", () => {
+    // `ol-g5tr`: #8a9a63 measured 2.84–3.05:1 against this pane's light-ground
+    // fixtures (this pane forces no theme branch of its own, unlike
+    // `.olea-review-root` — see the header above), so `.theme-light
+    // .olea-today-root` darkens `--olea-host-brand` to #677647 for ≥4.6:1. A
+    // second `brand` declaration is therefore expected, not a drift.
     const owned = [...css.matchAll(/--olea-host-(attention|brand):\s*(#[0-9a-f]{6})/gi)];
-    expect(owned.map((m) => `${m[1]}:${m[2]}`)).toEqual(['attention:#e0a94e', 'brand:#8a9a63']);
+    expect(owned.map((m) => `${m[1]}:${m[2]}`)).toEqual([
+      'attention:#e0a94e',
+      'brand:#8a9a63',
+      'brand:#677647',
+    ]);
   });
 
   it('reads the host for every ground, text, border and font role, via the shared block it carries with the other three roots', () => {

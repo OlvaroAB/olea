@@ -8,10 +8,16 @@
  * `App` again, this file stops compiling.
  */
 
+import type { SelectionContextV4 } from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
 import { calendarDayFromLocalDate, parseReviewLog, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { createVaultNoteExistsPort, createVaultSuspendPort } from '../../src/review/ports.js';
+import {
+  createVaultNoteExistsPort,
+  createVaultReviewLogPort,
+  createVaultSuspendPort,
+} from '../../src/review/ports.js';
+import type { ReviewInstrument } from '../../src/review/types.js';
 import { memoryVault } from './memory-vault.js';
 
 /** Only `exists` is reachable from this port; the rest throw so a widened implementation is caught rather than silently tolerated. */
@@ -148,5 +154,75 @@ describe('createVaultSuspendPort', () => {
     );
     expect(suspensions.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
     expect(new Set(suspensions.map((r) => r.eventId)).size).toBe(2);
+  });
+});
+
+describe('createVaultReviewLogPort — the supportLevel write seam (ol-95vv.4)', () => {
+  const DEVICE = 'ports-spec-reviewlog-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-support-1',
+    conceptIds: ['concept-a'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'qa',
+    question: 'What is it?',
+    answer: 'It is this.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['qa'],
+    planVersion: null,
+  };
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  it("merges supportLevelShown from the caller's chooser decision — only `.level`, never `.provenance` (row 3.9, [SUPP-2])", async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+      supportLevel: { level: 'guided', provenance: 'self-requested' },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(record.supportLevelShown).toBe('guided');
+  });
+
+  it('writes no supportLevelShown field at all when the caller passes no chooser decision, never a fabricated one', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(Object.hasOwn(record, 'supportLevelShown')).toBe(false);
   });
 });

@@ -14,10 +14,13 @@
 import type { WorkerTaskRequest } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  type AcceptExplainBackGradingWithObservationContext,
+  acceptExplainBackGradingWithObservation,
   buildGradingWiring,
   evaluateConfusionRouting,
   gradeExplainBackAttempt,
 } from '../../src/grading/wiring.js';
+import { SLOT_E_MODEL_ID } from '../../src/retrieval/wiring.js';
 import { EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY } from '../../src/settings/explain-back-audit-gate.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
@@ -244,5 +247,273 @@ describe('evaluateConfusionRouting — the plugin-side composition delegates to 
   it('does not offer below the threshold or on a non-Again rating', () => {
     expect(evaluateConfusionRouting({ rating: 'again', lapses: 3 }).shouldOffer).toBe(false);
     expect(evaluateConfusionRouting({ rating: 'good', lapses: 99 }).shouldOffer).toBe(false);
+  });
+});
+
+// ---- ol-4053: buildGradingWiring also composes the misconception embedder --
+
+/** A `WorkerTaskTransport` fake that answers BOTH `explain-back.judge.v1` and `retrieval.embed.v1` — the same transport `buildGradingWiring` now hands to both `createWorkerJudgeCaller` and `buildMisconceptionEmbedderWiring` (`ol-4053`). */
+function fakeMultiTaskTransport(vectorByText: ReadonlyMap<string, readonly number[]> = new Map()) {
+  const calls: WorkerTaskRequest[] = [];
+  return {
+    calls,
+    send: async (request: WorkerTaskRequest) => {
+      calls.push(request);
+      if (request.taskId === 'retrieval.embed.v1') {
+        const chunks = (request.payload as { chunks: { contentHash: string; text: string }[] })
+          .chunks;
+        return {
+          ok: true,
+          stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: SLOT_E_MODEL_ID },
+          result: {
+            embeddings: chunks.map((chunk) => ({
+              contentHash: chunk.contentHash,
+              vector: vectorByText.get(chunk.text) ?? [1, 0, 0],
+            })),
+          },
+        };
+      }
+      return {
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: '1.2.0', modelId: 'test-model' },
+        result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+      };
+    },
+  };
+}
+
+describe('buildGradingWiring — ol-4053: the misconception embedder/cache pair', () => {
+  it('returns a null embedder and cache when no Worker config has ever been saved', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeMultiTaskTransport(),
+    });
+    expect(wiring.misconceptionEmbedder).toBeNull();
+    expect(wiring.misconceptionEmbeddingCache).toBeNull();
+  });
+
+  it('builds a real embedder and cache once the Worker is configured, over the same SLOT_E_MODEL_ID retrieval pins', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeMultiTaskTransport(new Map([['a misconception statement', [1, 0, 0]]]));
+
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    expect(wiring.misconceptionEmbedder).not.toBeNull();
+    expect(wiring.misconceptionEmbeddingCache).not.toBeNull();
+    const vectors = await wiring.misconceptionEmbedder?.embed(['a misconception statement']);
+    expect(vectors).toEqual([[1, 0, 0]]);
+    expect(transport.calls.some((call) => call.taskId === 'retrieval.embed.v1')).toBe(true);
+  });
+});
+
+// ---- ol-4053: acceptExplainBackGradingWithObservation -----------------
+
+describe('acceptExplainBackGradingWithObservation', () => {
+  function fixedContext(
+    overrides: Partial<AcceptExplainBackGradingWithObservationContext> = {},
+  ): AcceptExplainBackGradingWithObservationContext {
+    return {
+      originInstrumentId: 'explain-back:concept-heap:1',
+      originReviewEventId: 'review-event-1',
+      timestamp: '2026-08-29T09:00:00-04:00',
+      resolveCitation: (blockId) =>
+        blockId === 'block-1' ? { path: 'Courses/CS/notes.md', blockIndex: 2 } : null,
+      resolveConceptId: (concept) => (concept === 'heap-property' ? 'concept-heap' : null),
+      candidateRecordsForConcept: () => [],
+      ...overrides,
+    };
+  }
+
+  it('accepts a pending grading with no misconceptionCandidates and returns empty observations', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeMultiTaskTransport();
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    const pending = await gradeExplainBackAttempt(wiring, baseInput);
+    if (!pending) throw new Error('expected a pending grading');
+
+    const { accepted, observations } = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pending,
+      fixedContext(),
+    );
+
+    expect(accepted.status).toBe('accepted');
+    expect(observations).toEqual([]);
+  });
+
+  it('turns an accepted misconceptionCandidate into an observation event, no-embedder fallback when Worker is unconfigured', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeMultiTaskTransport(),
+    });
+    // No Worker configured -> judgeCaller is null, so build the pending
+    // grading directly against olea-core's pipeline instead of through
+    // gradeExplainBackAttempt (which would itself return null here).
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        ngramSize: 3,
+        matchedNgramCount: 0,
+        totalNgramCount: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        answerTokenCount: 0,
+        sourceTokenCount: 0,
+      },
+      grading: {
+        verdict: 'partial' as const,
+        feedback: 'Close, but check the heap property.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [
+          {
+            concept: 'heap-property',
+            statement: 'Thinks a heap is always fully sorted.',
+            correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+            correctionSourceBlockIds: ['block-1'],
+          },
+        ],
+        citationsAvailable: true,
+        droppedCitationCount: 0,
+        droppedMisconceptionCount: 0,
+      },
+    };
+
+    const { accepted, observations } = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pending,
+      fixedContext(),
+    );
+
+    expect(accepted.misconceptionCandidates).toHaveLength(1);
+    expect(observations).toHaveLength(1);
+    const outcome = observations[0];
+    if (!outcome || outcome.skipped) throw new Error('expected a resolved outcome');
+    expect(outcome.result.matchedExisting).toBe(false); // no embedder -> always fresh
+    expect(outcome.result.event.conceptId).toBe('concept-heap');
+    expect(outcome.result.event.citation).toEqual({ path: 'Courses/CS/notes.md', blockIndex: 2 });
+  });
+
+  it('skips a candidate that cannot be resolved to a concept id, rather than inventing one', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeMultiTaskTransport(),
+    });
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        ngramSize: 3,
+        matchedNgramCount: 0,
+        totalNgramCount: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        answerTokenCount: 0,
+        sourceTokenCount: 0,
+      },
+      grading: {
+        verdict: 'partial' as const,
+        feedback: 'Close, but check the heap property.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [
+          {
+            concept: 'unknown-concept',
+            statement: 'A different claim.',
+            correction: 'Correction text.',
+            correctionSourceBlockIds: ['block-1'],
+          },
+        ],
+        citationsAvailable: true,
+        droppedCitationCount: 0,
+        droppedMisconceptionCount: 0,
+      },
+    };
+
+    const { observations } = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pending,
+      fixedContext(),
+    );
+
+    expect(observations).toEqual([
+      {
+        candidate: pending.grading.misconceptionCandidates[0],
+        skipped: true,
+        reason: 'unresolved-concept',
+      },
+    ]);
+  });
+
+  it('an observation-step failure never fails the grade acceptance it rode on', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeMultiTaskTransport(),
+    });
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        ngramSize: 3,
+        matchedNgramCount: 0,
+        totalNgramCount: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        answerTokenCount: 0,
+        sourceTokenCount: 0,
+      },
+      grading: {
+        verdict: 'partial' as const,
+        feedback: 'Close, but check the heap property.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [
+          {
+            concept: 'heap-property',
+            statement: 'Thinks a heap is always fully sorted.',
+            correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+            correctionSourceBlockIds: ['block-1'],
+          },
+        ],
+        citationsAvailable: true,
+        droppedCitationCount: 0,
+        droppedMisconceptionCount: 0,
+      },
+    };
+
+    const originalConsoleError = console.error;
+    const errorLines: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errorLines.push(args);
+    };
+    try {
+      const { accepted, observations } = await acceptExplainBackGradingWithObservation(
+        wiring,
+        pending,
+        fixedContext({
+          candidateRecordsForConcept: () => {
+            throw new Error('boom');
+          },
+        }),
+      );
+      expect(accepted.status).toBe('accepted');
+      expect(observations).toEqual([]);
+      expect(errorLines).toHaveLength(1);
+      const [message, detail] = errorLines[0] ?? [];
+      expect(message).toBe('Olea: misconception observation failed (grade acceptance unaffected)');
+      // D-005: a count only, never the candidate's statement or correction text.
+      expect(JSON.stringify(detail)).not.toContain('heap is always fully sorted');
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });

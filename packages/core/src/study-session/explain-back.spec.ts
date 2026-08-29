@@ -62,6 +62,20 @@ describe('priceAcceptedExplainBacks (F2.14a, `[D-126]`)', () => {
     expect(priceAcceptedExplainBacks([], durations(90, 'assumed'))).toEqual([]);
   });
 
+  it('carries a caller-supplied supportLevel decision through unchanged (row 3.9, `[SUPP-2]`) — this module never computes one', () => {
+    const withDecision: AcceptedExplainBack = {
+      ...event('eb1', 'Alpha'),
+      supportLevel: { level: 'guided', provenance: 'self-requested' },
+    };
+    const [item] = priceAcceptedExplainBacks([withDecision], durations(90, 'assumed'));
+    expect(item?.supportLevel).toEqual({ level: 'guided', provenance: 'self-requested' });
+  });
+
+  it('an event with no supportLevel prices to an item with none either — never a fabricated default', () => {
+    const [item] = priceAcceptedExplainBacks([event('eb1')], durations(90, 'assumed'));
+    expect(Object.hasOwn(item ?? {}, 'supportLevel')).toBe(false);
+  });
+
   it('never reads a candidate-type seconds/source — it asks the model for explain-back specifically', () => {
     const model: DurationModel = {
       estimates: [],

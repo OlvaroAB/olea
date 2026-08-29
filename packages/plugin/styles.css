@@ -795,6 +795,18 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-text);
 }
 
+/* ol-g5tr: `--olea-host-brand`'s #8a9a63 measured 2.84–3.05:1 against this
+   pane's light-ground fixtures — below the ≥4.5:1 floor. Unlike
+   `.olea-review-root`, this pane forces no theme branch of its own
+   (`view.ts` never sets `theme-dark` here — see the header above), so a
+   host in `.theme-light` genuinely renders the light branch. Darkened
+   (hue/sat unchanged) to #677647, the same value
+   `docs/design/shared/theme-host.css` already ratifies for this failure,
+   for ≥4.6:1. */
+.theme-light .olea-today-root {
+  --olea-host-brand: #677647;
+}
+
 /* ol-p6t03 (Q6.1/Q6.5): the pane's one native control (`.olea-today-primary-action`)
    gets no ring of its own from Obsidian — the host's own chrome routinely resets a
    plain button's default browser outline, the same gap `.olea-review-root
@@ -1197,6 +1209,14 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-text);
 }
 
+/* ol-g5tr: same failure and same fix as `.theme-light .olea-today-root`
+   above — #8a9a63 measured 2.84–3.05:1 against this pane's light-ground
+   fixtures, and this pane forces no theme branch either, so darkened
+   (hue/sat unchanged) to #677647 for ≥4.6:1. */
+.theme-light .olea-gap-root {
+  --olea-host-brand: #677647;
+}
+
 .olea-gap-unavailable {
   padding: 12px 0;
 }
@@ -1476,6 +1496,14 @@ button.olea-review-mcq-option:hover {
   padding: 14px 16px 20px;
   font-family: var(--olea-host-ui-font);
   color: var(--olea-host-text);
+}
+
+/* ol-g5tr: same failure and same fix as `.theme-light .olea-today-root`
+   above — #8a9a63 measured 2.84–3.05:1 against this pane's light-ground
+   fixtures, and this pane forces no theme branch either, so darkened
+   (hue/sat unchanged) to #677647 for ≥4.6:1. */
+.theme-light .olea-session-root {
+  --olea-host-brand: #677647;
 }
 
 .olea-session-budgets {

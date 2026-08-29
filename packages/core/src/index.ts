@@ -672,6 +672,16 @@ export { isRecallTier, readVitality } from './mastery/vitality.js';
 // P4-T04): a local projection folded from its own append-only event log,
 // never a second source of truth — see misconception/types.ts's module doc.
 //
+// `ol-4053`: the accepted-grading -> observation-event composition — see
+// `accepted-grading-observation.ts`'s own module doc.
+export type {
+  AcceptedGradingMisconceptionCandidate,
+  AcceptedGradingObservationContext,
+  AcceptedGradingObservationDeps,
+  AcceptedGradingObservationOutcome,
+  SkippedAcceptedGradingCandidateReason,
+} from './misconception/accepted-grading-observation.js';
+export { buildObservationEventsFromAcceptedGrading } from './misconception/accepted-grading-observation.js';
 // F2.12 confusion routing (`ol-p4t05`) lives alongside the store rather than
 // its own top-level module: it reads the same "route a repeated failure into
 // an explanation" territory this store already occupies, and its prompt-line

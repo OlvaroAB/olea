@@ -43,6 +43,7 @@
 
 import type { VaultPath } from '../vault/types.js';
 import type { DurationEstimateSource, DurationModel } from './duration.js';
+import type { SupportLevelPresentation } from './support-level-chooser.js';
 
 /**
  * One explain-back she accepted and produced during a session — a fact the
@@ -58,6 +59,26 @@ export interface AcceptedExplainBack {
   readonly notePath: VaultPath;
   /** The note's filename without its extension. Never read from real-vault content (INV-3). */
   readonly noteTitle: string;
+  /**
+   * Row 3.9's chooser decision this explain-back was actually shown at
+   * ([SUPP-2], `ol-95vv.4`) — a given fact, like every other field here: this
+   * module never computes it, the same way it never computes `conceptName`
+   * or `notePath`.
+   *
+   * `AcceptedExplainBack` carries no `conceptKey` (only `conceptName`, a
+   * display string — `../study-session/build.ts`'s own `ol-63e1` comment is
+   * explicit that the two are NOT interchangeable identifiers), so
+   * `priceAcceptedExplainBacks` below has nothing safe to fold a
+   * `SupportLevelHistoryLookup` over even if one were threaded in here — the
+   * production caller that recognises an accepted explain-back and durably
+   * attributes it to "this session" does not exist yet (this module's own
+   * "Reachability" doc section), so there is no real identifier space to
+   * name today. A future caller that DOES compute the decision (via
+   * `chooseSupportLevel` at the `'explanation'` tier, the same as
+   * `build.ts`'s fill) attaches it here directly, the same way it already
+   * supplies every other given fact on this type. `undefined` until then.
+   */
+  readonly supportLevel?: SupportLevelPresentation;
 }
 
 /**
@@ -67,6 +88,10 @@ export interface AcceptedExplainBack {
  * `StudySessionItem` by its type alone, never by an absent field.
  */
 export interface ComposedExplainBackItem extends AcceptedExplainBack {
+  // `supportLevel` (row 3.9, [SUPP-2]) is inherited from `AcceptedExplainBack`
+  // above, not redeclared here — `priceAcceptedExplainBacks` spreads `...event`
+  // before adding the fields below, so whatever the caller attached rides
+  // straight through unchanged.
   readonly instrumentType: 'explain-back';
   /** `durations.secondsFor('explain-back')` at the time the session was built — see `./duration.js`'s `EXPLAIN_BACK_ASSUMED_SECONDS`. */
   readonly estimatedSeconds: number;

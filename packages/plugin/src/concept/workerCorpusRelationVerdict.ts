@@ -159,16 +159,15 @@ function readResponseBody(body: unknown): Record<string, unknown> {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerCorpusRelationVerdictError(
       `WorkerCorpusRelationVerdict: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerCorpusRelationVerdictError(
       'WorkerCorpusRelationVerdict: the Worker response carried no `ok` discriminant.',
     );
@@ -178,12 +177,12 @@ function readResponseBody(body: unknown): Record<string, unknown> {
 }
 
 function readResult(response: Record<string, unknown>): Record<string, unknown> {
-  const result = response['result'];
+  const result = response.result;
   return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {};
 }
 
 function readVerdicts(response: Record<string, unknown>): readonly CorpusVerdict[] {
-  const rawVerdicts = readResult(response)['verdicts'];
+  const rawVerdicts = readResult(response).verdicts;
   if (rawVerdicts === undefined) return [];
   if (!Array.isArray(rawVerdicts)) {
     throw new WorkerCorpusRelationVerdictError(
@@ -196,8 +195,8 @@ function readVerdicts(response: Record<string, unknown>): readonly CorpusVerdict
 function toCorpusVerdict(raw: unknown, index: number): CorpusVerdict {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
 
-  const a = entry['a'];
-  const b = entry['b'];
+  const a = entry.a;
+  const b = entry.b;
   if (typeof a !== 'string' || a.length === 0) {
     throw new WorkerCorpusRelationVerdictError(
       `WorkerCorpusRelationVerdict: verdict ${index} carried no endpoint "a" name.`,
@@ -209,7 +208,7 @@ function toCorpusVerdict(raw: unknown, index: number): CorpusVerdict {
     );
   }
 
-  const type = entry['type'];
+  const type = entry.type;
   if (typeof type !== 'string' || !CORPUS_ELIGIBLE_WIRE_TYPES.has(type)) {
     // Belt and braces, same posture as `workerConceptReader.ts`'s relation
     // type check: `conceptsRelationsVerdict`'s zod schema (olea-service)
@@ -220,7 +219,7 @@ function toCorpusVerdict(raw: unknown, index: number): CorpusVerdict {
     );
   }
 
-  const directionRaw = entry['direction'];
+  const directionRaw = entry.direction;
   let direction: 'a-to-b' | 'b-to-a' | undefined;
   if (directionRaw !== undefined) {
     if (directionRaw !== 'a-to-b' && directionRaw !== 'b-to-a') {
@@ -231,7 +230,7 @@ function toCorpusVerdict(raw: unknown, index: number): CorpusVerdict {
     direction = directionRaw;
   }
 
-  const confidence = entry['confidence'];
+  const confidence = entry.confidence;
   if (typeof confidence !== 'number' || Number.isNaN(confidence)) {
     throw new WorkerCorpusRelationVerdictError(
       `WorkerCorpusRelationVerdict: verdict ${index} carried no numeric confidence.`,

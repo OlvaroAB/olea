@@ -93,9 +93,51 @@
  * criterion), and inherits, rather than closes, the pre-existing reachability
  * gap on the function it greys — closing that is `ol-tka5`/`ol-548w`'s job,
  * not this bead's.
+ *
+ * ===========================================================================
+ * `ol-4053` UPDATE: THE ACCEPT STEP NOW COMPOSES THE MISCONCEPTION EMBEDDER
+ * ===========================================================================
+ * `ol-tka5` (the verdict-seam Class C question) and `ol-548w` (the INV-6
+ * accept-step recording question) are now BOTH CLOSED — `[D-117]`'s review-log
+ * v5 landed the schema. **That does not mean an explain-back destination
+ * exists in the review UI yet — it still does not**, and building one is a
+ * Class C user-visible-surface change with no citing clause, out of this
+ * bead's `owns` (`packages/plugin/src/grading/`,
+ * `packages/core/src/misconception/`) regardless. What `ol-4053` actually
+ * closes is narrower and one level down: `ol-nagi` built
+ * `WorkerMisconceptionEmbedder`/`buildObservationEventWithEmbedding` with no
+ * caller "by construction" — the honest caller is the accepted-grading path,
+ * which needed `ol-tka5` to exist at all. `GradingWiring` below now also
+ * composes a `MisconceptionEmbedder`/`MisconceptionEmbeddingCacheEngine` pair
+ * (`buildMisconceptionEmbedderWiring`, `../misconception-embedder.js` — same
+ * F7.8 grey-out terms, same `SLOT_E_MODEL_ID` pin, same Worker config), and
+ * `acceptExplainBackGradingWithObservation` below is the real, callable
+ * accept-and-observe path: `acceptExplainBackGrading` (INV-6) followed by
+ * `buildObservationEventsFromAcceptedGrading`
+ * (`../../core/src/misconception/accepted-grading-observation.js`) against
+ * that composed embedder/cache, with the observation half wrapped in the same
+ * best-effort boundary `../ingestion/wiring.ts`'s `withUnitsLandedHook`
+ * establishes: an embedding failure never fails the grade acceptance it rode
+ * on.
+ *
+ * **Still no production caller of `acceptExplainBackGradingWithObservation`
+ * itself**, for the same reason `gradeExplainBackAttempt` above has none: there
+ * is nowhere in the product yet that produces a `PendingExplainBackGrading` to
+ * accept in the first place. Per `[D-072]` clause 5's escape hatch, the next
+ * caller is named rather than guessed at or built past this bead's `owns`: the
+ * explain-back UI destination (e.g. `ol-qbbb` [F5a], or an equivalent
+ * contract-cited surface) plus whatever reads the misconception store
+ * (`packages/plugin/src/misconception/store.ts`) to supply
+ * `AcceptExplainBackGradingWithObservationContext`'s `resolveCitation` /
+ * `resolveConceptId` / `candidateRecordsForConcept` for real — none of which
+ * this bead's `owns` reaches.
  */
 
 import {
+  type AcceptedExplainBackGrading,
+  type AcceptedGradingObservationOutcome,
+  acceptExplainBackGrading,
+  buildObservationEventsFromAcceptedGrading,
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
   createWorkerJudgeCaller,
@@ -103,9 +145,14 @@ import {
   type GradeExplainBackInput,
   gradeExplainBack,
   type JudgeCaller,
+  type MisconceptionEmbedder,
+  type MisconceptionEmbeddingCacheEngine,
+  type MisconceptionRecord,
+  type MisconceptionSourceCitation,
   type PendingExplainBackGrading,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { buildMisconceptionEmbedderWiring } from '../misconception-embedder.js';
 import {
   isExplainBackKilled,
   ObsidianExplainBackAuditGateStore,
@@ -139,6 +186,14 @@ export interface GradingWiring {
    * and this file's `ol-g3a0.1` module-doc update.
    */
   readonly killedBySustainedAuditFailure: boolean;
+  /**
+   * `null` under the same F7.8 grey-out condition as `judgeCaller` (no Worker
+   * configured yet) — see the `ol-4053` module-doc update above.
+   * `misconceptionEmbedder`/`misconceptionEmbeddingCache` are always
+   * both-or-neither, mirroring `MisconceptionEmbedderWiring`'s own pair.
+   */
+  readonly misconceptionEmbedder: MisconceptionEmbedder | null;
+  readonly misconceptionEmbeddingCache: MisconceptionEmbeddingCacheEngine | null;
 }
 
 export async function buildGradingWiring(deps: GradingWiringDeps): Promise<GradingWiring> {
@@ -146,13 +201,31 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
   const config = await configStore.load();
   const auditGateStore = new ObsidianExplainBackAuditGateStore(deps.dataHost);
   const killedBySustainedAuditFailure = isExplainBackKilled(await auditGateStore.load());
+  // `ol-4053`: the same Worker config this wiring already loads also gates
+  // the misconception embedder — `buildMisconceptionEmbedderWiring` re-checks
+  // it independently (mirroring how `this.retrieval`/`this.grading` each
+  // build their own transport in `main.ts` rather than sharing one), so this
+  // never depends on `judgeCaller`'s own null-check below.
+  const misconception = await buildMisconceptionEmbedderWiring({
+    dataHost: deps.dataHost,
+    createTransport: deps.createTransport,
+  });
 
-  if (!isWorkerConfigured(config)) return { judgeCaller: null, killedBySustainedAuditFailure };
+  if (!isWorkerConfigured(config)) {
+    return {
+      judgeCaller: null,
+      killedBySustainedAuditFailure,
+      misconceptionEmbedder: misconception.embedder,
+      misconceptionEmbeddingCache: misconception.cache,
+    };
+  }
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
   return {
     judgeCaller: createWorkerJudgeCaller({ transport }),
     killedBySustainedAuditFailure,
+    misconceptionEmbedder: misconception.embedder,
+    misconceptionEmbeddingCache: misconception.cache,
   };
 }
 
@@ -184,6 +257,81 @@ export async function gradeExplainBackAttempt(
 ): Promise<PendingExplainBackGrading | null> {
   if (wiring.judgeCaller === null || wiring.killedBySustainedAuditFailure) return null;
   return gradeExplainBack(input, wiring.judgeCaller);
+}
+
+/**
+ * Everything a caller must supply beyond `wiring` to turn an accepted
+ * grading's `misconceptionCandidates` into observation events — see
+ * `olea-core`'s `AcceptedGradingObservationContext`
+ * (`packages/core/src/misconception/accepted-grading-observation.ts`) for the
+ * full contract these fields satisfy. Named separately here rather than
+ * re-exported so this module stays the one place that documents what a real
+ * caller (still unbuilt — see the `ol-4053` module-doc update) needs to
+ * resolve: which `sourceBlocks` id maps to which `{path, blockIndex}`, which
+ * label maps to which concept id, and which existing records are eligible to
+ * reabsorb a new occurrence on that concept.
+ */
+export interface AcceptExplainBackGradingWithObservationContext {
+  readonly originInstrumentId: string;
+  readonly originReviewEventId: string | null;
+  readonly timestamp: string;
+  readonly resolveCitation: (blockId: string) => MisconceptionSourceCitation | null;
+  readonly resolveConceptId: (concept: string) => string | null;
+  readonly candidateRecordsForConcept: (conceptId: string) => readonly MisconceptionRecord[];
+}
+
+export interface AcceptExplainBackGradingWithObservationResult {
+  readonly accepted: AcceptedExplainBackGrading;
+  /** Empty when there were no misconceptionCandidates to observe, or when the observation step failed — see this function's doc. */
+  readonly observations: readonly AcceptedGradingObservationOutcome[];
+}
+
+/**
+ * `ol-4053`: the accepted-grading path `buildObservationEventWithEmbedding`
+ * was built for, one composition root up from
+ * `buildObservationEventsFromAcceptedGrading` (`olea-core`). Runs INV-6's
+ * accept step first — `acceptExplainBackGrading` throwing means `pending`
+ * carried an ungrounded citation, a caller bug per that function's own doc,
+ * so this does NOT catch that — then maps every surviving
+ * `misconceptionCandidates` entry into an observation event against
+ * `wiring`'s composed embedder/cache.
+ *
+ * **Failure isolation, mirroring `../ingestion/wiring.ts`'s
+ * `withUnitsLandedHook`:** the observation step is wrapped in its own
+ * try/catch. An embedding or observation failure never fails the grade
+ * acceptance it rode on — the caller still gets back a valid `accepted`
+ * grading, with `observations: []` and a content-free `console.error` line
+ * (D-005: a count only, never the candidate's statement or correction).
+ */
+export async function acceptExplainBackGradingWithObservation(
+  wiring: GradingWiring,
+  pending: PendingExplainBackGrading,
+  context: AcceptExplainBackGradingWithObservationContext,
+): Promise<AcceptExplainBackGradingWithObservationResult> {
+  const accepted = acceptExplainBackGrading(pending);
+  if (accepted.misconceptionCandidates.length === 0) {
+    return { accepted, observations: [] };
+  }
+
+  try {
+    const observations = await buildObservationEventsFromAcceptedGrading(
+      accepted.misconceptionCandidates,
+      context,
+      {
+        embedder: wiring.misconceptionEmbedder,
+        ...(wiring.misconceptionEmbeddingCache
+          ? { cache: wiring.misconceptionEmbeddingCache }
+          : {}),
+      },
+    );
+    return { accepted, observations };
+  } catch (error) {
+    console.error('Olea: misconception observation failed (grade acceptance unaffected)', {
+      misconceptionCandidateCount: accepted.misconceptionCandidates.length,
+      error,
+    });
+    return { accepted, observations: [] };
+  }
 }
 
 /**
