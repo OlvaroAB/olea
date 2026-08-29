@@ -1158,6 +1158,19 @@ export {
   type ScheduleTimeRange,
   scanNoteForScheduleEvents,
 } from './schedule/discover.js';
+// RHY-3's schedule-extraction build chain, step 2 (`ol-4chx` -> `ol-r6s0` ->
+// `ol-hna1` -> `ol-at1a`): case-insensitive course association plus explicit
+// ambiguity handling for step 1's parsed events. No production caller yet —
+// see `./schedule/associate.ts`'s module doc for the exact scope boundary.
+export {
+  associateScheduleEvents,
+  type AssociatedScheduleEvent,
+  type CourseLabelMatch,
+  matchCourseLabel,
+  type ScheduleAssociationMiss,
+  type ScheduleAssociationReport,
+  type UnmatchedScheduleEvent,
+} from './schedule/associate.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
 export type {
   // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported

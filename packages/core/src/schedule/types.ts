@@ -67,3 +67,51 @@ export interface ScheduleDiscoveryReport {
   /** Sum of `unparseableLineCount` across every note scanned, not only candidates — an internal diagnostic only, same posture as above. */
   readonly totalUnparseableLines: number;
 }
+
+/**
+ * Why a candidate label was not associated with a known course (`ol-r6s0`,
+ * RHY-3 §9's course-association rule). Both collapse to the same "unusable
+ * for schedule inference" treatment downstream — RHY-3 §8 Class C stop 2
+ * forbids any surface reporting either to her — but the distinction is kept
+ * as an internal diagnostic rather than discarded, the same posture
+ * `unparseableLineCount` already takes.
+ *
+ * - `no-match`: the label matched zero known course codes. Expected and
+ *   ordinary — a personal or non-course calendar entry is a legitimate
+ *   reason for this, never an error.
+ * - `ambiguous`: the label matched more than one known course code
+ *   case-insensitively. Not observed in the reference vault (RHY-3 §9), but
+ *   named rather than assumed impossible — a longer roster can collide.
+ */
+export type ScheduleAssociationMiss = 'no-match' | 'ambiguous';
+
+/** One event whose label matched exactly one known course. */
+export interface AssociatedScheduleEvent {
+  readonly event: ScheduleEventRecord;
+  /**
+   * The known course code as the roster spelled it — never the calendar
+   * label's own casing. RHY-3 §9: this vault's calendar casing and folder
+   * casing disagree on every single line, so the roster's spelling is the
+   * one later stages (`courseFromPath`'s own codes) already expect.
+   */
+  readonly courseCode: string;
+}
+
+/** One event whose label could not be associated with exactly one known course. */
+export interface UnmatchedScheduleEvent {
+  readonly event: ScheduleEventRecord;
+  readonly reason: ScheduleAssociationMiss;
+}
+
+/**
+ * The result of associating a set of parsed events against a known
+ * course-code roster (`ol-r6s0`). Per RHY-3 §9's last paragraph, ambiguity
+ * and gaps degrade **per event**, never per note or across the whole
+ * report — one unmatched event never removes another event's match, so
+ * both buckets are always populated independently rather than one
+ * short-circuiting the other.
+ */
+export interface ScheduleAssociationReport {
+  readonly matched: readonly AssociatedScheduleEvent[];
+  readonly unmatched: readonly UnmatchedScheduleEvent[];
+}

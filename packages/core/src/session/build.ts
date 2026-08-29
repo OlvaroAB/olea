@@ -65,6 +65,7 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import type { AssessmentConceptContext } from '../assessment/scope-concept-keys.js';
 import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
@@ -131,6 +132,13 @@ export interface BuildReviewSessionInput {
    * just to join against them (`ol-ua0i`'s hand-back, option (b)). Omitted
    * means no assessment-scope signal, a real no-op (`block-order.ts`'s
    * doc), not a degraded mode — same posture `relations` already documents.
+   *
+   * Also the source, via `targetAssessmentPathIndex`, for each candidate's
+   * own `QueueCandidate.targetAssessmentPath` (`ol-f3qu`) — without this,
+   * `assessmentContext` was resolved but nothing joined against it, so
+   * `block-order.ts`'s scope-matching half of F2.19 silently scored `0` on
+   * this path regardless of what was passed here. See `toQueueCandidate`'s
+   * doc.
    */
   readonly assessments?: readonly AssessmentRecord[];
 }
@@ -165,18 +173,88 @@ export interface ReviewSession {
   readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
 }
 
-/** The queue's half of a record. The renderer's half stays on the record and never reaches composition. */
+/**
+ * The queue's half of a record. The renderer's half stays on the record and
+ * never reaches composition.
+ *
+ * `targetAssessmentPathByConceptKey` (`ol-f3qu`) is the reverse index
+ * {@link targetAssessmentPathIndex} builds from `resolveAssessmentGroupingContext`'s
+ * output — omitted entirely, this reads as "no known target assessment" for
+ * every candidate, exactly the prior behaviour. Looked up by
+ * `record.conceptIds[0]`, the same "first concept, her authored order"
+ * M:N-to-one convention `queue/block-order.ts`'s own `placementOf` already
+ * uses for the identical join (`placed.conceptKey`), so the key produced here
+ * is the key that consumer will actually look up.
+ */
 export function toQueueCandidate(
   record: VaultInstrumentRecord,
   replay: ReplayResult,
+  targetAssessmentPathByConceptKey?: ReadonlyMap<string, VaultPath>,
 ): QueueCandidate {
+  const conceptKey = record.conceptIds[0];
   return {
     instrumentId: record.instrumentId,
     instrumentType: record.instrumentType,
     conceptIds: record.conceptIds,
     courses: record.courses,
     state: replay.states.get(record.instrumentId)?.state ?? null,
+    targetAssessmentPath:
+      (conceptKey !== undefined ? targetAssessmentPathByConceptKey?.get(conceptKey) : undefined) ??
+      null,
   };
+}
+
+/**
+ * F2.19 (`ol-f3qu`): the reverse of `assessmentContext`'s scope membership —
+ * for each concept key an assessment's resolved scope names, which single
+ * assessment {@link toQueueCandidate} should record as that concept's
+ * `targetAssessmentPath`. Built entirely from `resolveAssessmentGroupingContext`'s
+ * already-resolved output (no new vault read, and deliberately not the
+ * oracle's edge-weighted equivalent — `gap/build.ts`'s `contributions[0]` —
+ * which comes from `evidence-edge/build.ts`'s tier-3 past-paper walk;
+ * `oracle/compose.ts`'s own doc is explicit that walk is not for every
+ * render, which the plain queue path does).
+ *
+ * A concept named in more than one assessment's scope (rare, but possible —
+ * a topic on both a midterm and a final) resolves by soonest known `dueDay`
+ * first, ties by `VaultPath` ascending — the same tie-break convention
+ * `oracle/rank.ts` already uses for `contributions`, applied here because
+ * `withinBlockAssessmentProximity` is driven purely by `dueDay` (nearer
+ * scores higher, `null` scores `0`), so the soonest assessment is the one
+ * whose selection actually changes anything; when nothing has a known due
+ * day the tie-break is for determinism only. Zero free parameters, no
+ * corpus fitting — a deterministic index over data already in hand.
+ */
+function targetAssessmentPathIndex(
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentConceptContext>,
+): ReadonlyMap<string, VaultPath> {
+  const bestByConceptKey = new Map<string, { path: VaultPath; dueDay: string | null }>();
+  for (const [path, context] of assessmentContext) {
+    for (const conceptKey of context.scopeConceptKeys) {
+      const current = bestByConceptKey.get(conceptKey);
+      if (current === undefined || isSoonerTarget({ path, dueDay: context.dueDay }, current)) {
+        bestByConceptKey.set(conceptKey, { path, dueDay: context.dueDay });
+      }
+    }
+  }
+  const index = new Map<string, VaultPath>();
+  for (const [conceptKey, best] of bestByConceptKey) index.set(conceptKey, best.path);
+  return index;
+}
+
+/** `true` when `candidate` should win {@link targetAssessmentPathIndex}'s tie over `current` — see that function's doc. */
+function isSoonerTarget(
+  candidate: { readonly path: VaultPath; readonly dueDay: string | null },
+  current: { readonly path: VaultPath; readonly dueDay: string | null },
+): boolean {
+  if (candidate.dueDay !== current.dueDay) {
+    if (candidate.dueDay === null) return false;
+    if (current.dueDay === null) return true;
+    // `CalendarDay` is `YYYY-MM-DD`, lexical order is chronological order —
+    // see `today/calendar-day.ts`'s own doc for why that format was chosen.
+    return candidate.dueDay < current.dueDay;
+  }
+  return candidate.path < current.path;
 }
 
 /**
@@ -197,24 +275,18 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   const replay = replaySchedulerStates(entries, input.scheduler);
   const suspended = suspendedInstrumentIds(entries);
 
-  const enumeratedCandidates = instruments.records.map((record) =>
-    toQueueCandidate(record, replay),
-  );
-  const containment = filterContainmentCoPresence(
-    enumeratedCandidates,
-    input.relations ?? [],
-    instruments.concepts,
-  );
-  const candidates = containment.candidates;
-
-  // F2.19 (`ol-vr8z`): resolve both signal maps here, against the same
-  // `instruments.concepts` enumeration this call already produced above —
-  // no second vault walk. Both resolvers accept an empty input array and
+  // F2.19 (`ol-vr8z`/`ol-f3qu`): resolve both signal maps here, against the
+  // same `instruments.concepts` enumeration this call already produced above
+  // — no second vault walk. Both resolvers accept an empty input array and
   // return an empty map, which `block-order.ts` already proves reads
   // identically to the map being omitted entirely, so passing them
   // unconditionally (rather than spreading on definedness, as `filter`/
   // `formatPreference`/`dedupeByConcept` do above) changes nothing when
-  // `input.relations`/`input.assessments` are both omitted.
+  // `input.relations`/`input.assessments` are both omitted. Resolved BEFORE
+  // `toQueueCandidate` runs (moved up from after, `ol-f3qu`) because
+  // `assessmentContext` is also `targetAssessmentPathIndex`'s input, and a
+  // candidate needs its `targetAssessmentPath` set at construction — neither
+  // resolver reads `candidates`, so the reorder changes nothing else.
   const { relatedConceptKeys } = resolveRelatedConceptKeys(
     input.relations ?? [],
     instruments.concepts,
@@ -223,6 +295,17 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     input.assessments ?? [],
     instruments.concepts,
   );
+  const targetAssessmentPathByConceptKey = targetAssessmentPathIndex(assessmentContext);
+
+  const enumeratedCandidates = instruments.records.map((record) =>
+    toQueueCandidate(record, replay, targetAssessmentPathByConceptKey),
+  );
+  const containment = filterContainmentCoPresence(
+    enumeratedCandidates,
+    input.relations ?? [],
+    instruments.concepts,
+  );
+  const candidates = containment.candidates;
 
   const queue = composeQueue({
     candidates,

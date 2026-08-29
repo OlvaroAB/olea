@@ -475,17 +475,18 @@ describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved an
     ]);
   });
 
-  it('`assessments` alone is a no-op on this path today — a separate, already-flagged gap, not a bug here', async () => {
-    // `session/build.ts`'s `toQueueCandidate` never sets
-    // `QueueCandidate.targetAssessmentPath` (no vault-derived field feeds it
-    // on the plain path — see `ol-vr8z`'s hand-back), so
-    // `assessmentContext`'s scope-matching half has nothing to join against
-    // yet: `block-order.ts`'s `groupingScore` only reads `assessmentContext`
-    // through a candidate's own `targetAssessmentPath`, which stays `null`
-    // here. This test pins the CURRENT, honest behaviour — a resolved,
-    // correctly-shaped map that has no observable effect through this
-    // particular caller — rather than asserting a wiring outcome the
-    // upstream data does not yet support.
+  it('`assessments` alone shifts the tie band toward the assessment-scoped concept (`ol-f3qu`)', async () => {
+    // Until `ol-f3qu`, `session/build.ts`'s `toQueueCandidate` never set
+    // `QueueCandidate.targetAssessmentPath`, so `assessmentContext`'s
+    // scope-matching half had nothing to join against — this test used to pin
+    // that honest gap (a resolved, correctly-shaped map with no observable
+    // effect through this caller). `ol-f3qu` closes it: `targetAssessmentPathIndex`
+    // now maps ConceptZ's key to this assessment's path (it names 'ConceptZ'
+    // in its scope), so `block-order.ts`'s `groupingScore` finds the context
+    // and, with the due date one day after `BAND_NOW`, the proximity term
+    // dominates (`~0.93`) and outweighs the zero relatedness every item has
+    // here (no `relations` supplied). ConceptZ moves to the front; X and Y,
+    // both scoring `0`, keep their original relative order behind it.
     const assessments: readonly AssessmentRecord[] = [
       {
         path: 'Assessments/midterm.md',
@@ -499,10 +500,10 @@ describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved an
       },
     ];
     const order = await bandedItemOrder({ assessments });
-    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptY'), unboundKey('ConceptZ')]);
+    expect(order).toEqual([unboundKey('ConceptZ'), unboundKey('ConceptX'), unboundKey('ConceptY')]);
   });
 
-  it('supplying both `relations` and `assessments` together (the real call shape) is reachable and does not crash', async () => {
+  it('supplying both `relations` and `assessments` together (the real call shape) blends both signals, assessment proximity winning', async () => {
     const assessments: readonly AssessmentRecord[] = [
       {
         path: 'Assessments/midterm.md',
@@ -519,9 +520,132 @@ describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved an
       relations: [contrastEdge('ConceptX', 'ConceptZ')],
       assessments,
     });
-    // Same flip `relations` alone produced — `assessments` rides along
-    // harmlessly (see the previous test for why it has no effect of its own
-    // on this path today).
-    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptZ'), unboundKey('ConceptY')]);
+    // Before `ol-f3qu`: X and Z share a C7.10 edge (relatedness 0.5 each), Y
+    // has none, so `relations` alone flips the baseline to X, Z, Y (see the
+    // test above it). With `targetAssessmentPathIndex` now wiring ConceptZ to
+    // this assessment, Z's score blends in the ~0.93 proximity term
+    // (`(1 - 0.93) * 0.5 relatedness + 0.93 * 1 scopeMembership ≈ 0.95`),
+    // which now outranks X's relatedness-only 0.5 — Z leads instead of X.
+    expect(order).toEqual([unboundKey('ConceptZ'), unboundKey('ConceptX'), unboundKey('ConceptY')]);
+  });
+});
+
+describe('F2.19 (`ol-f3qu`) — `toQueueCandidate` populates `targetAssessmentPath`', () => {
+  function candidateFor(
+    candidates: readonly {
+      readonly conceptIds: readonly string[];
+      readonly targetAssessmentPath?: string | null;
+    }[],
+    conceptName: string,
+  ): { readonly targetAssessmentPath?: string | null } {
+    const candidate = candidates.find((c) => c.conceptIds.includes(unboundKey(conceptName)));
+    if (candidate === undefined) throw new Error(`expected a candidate for ${conceptName}`);
+    return candidate;
+  }
+
+  it('stays `null` when no `assessments` are supplied — the prior, still-correct default', async () => {
+    const session = await buildReviewSession({
+      vault: bandVault(),
+      scheduler: createFsrsScheduler(),
+      now: BAND_NOW,
+    });
+    expect(candidateFor(session.candidates, 'ConceptX').targetAssessmentPath).toBeNull();
+  });
+
+  it("sets a candidate's `targetAssessmentPath` to the assessment naming its first concept in scope", async () => {
+    const assessments: readonly AssessmentRecord[] = [
+      {
+        path: 'Assessments/midterm.md',
+        course: 'GEO101',
+        type: 'exam',
+        weight: 0.3,
+        weightRaw: '30',
+        due: '2026-09-21',
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+    ];
+    const session = await buildReviewSession({
+      vault: bandVault(),
+      scheduler: createFsrsScheduler(),
+      now: BAND_NOW,
+      assessments,
+    });
+    expect(candidateFor(session.candidates, 'ConceptZ').targetAssessmentPath).toBe(
+      'Assessments/midterm.md',
+    );
+    // Untouched: ConceptX is named in no assessment's scope.
+    expect(candidateFor(session.candidates, 'ConceptX').targetAssessmentPath).toBeNull();
+  });
+
+  it('a concept named in two assessments resolves to the one with the soonest known due day', async () => {
+    const assessments: readonly AssessmentRecord[] = [
+      {
+        path: 'Assessments/far.md',
+        course: 'GEO101',
+        type: 'exam',
+        weight: 0.3,
+        weightRaw: '30',
+        due: '2026-12-01',
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+      {
+        path: 'Assessments/near.md',
+        course: 'GEO101',
+        type: 'quiz',
+        weight: 0.1,
+        weightRaw: '10',
+        due: '2026-09-21',
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+    ];
+    const session = await buildReviewSession({
+      vault: bandVault(),
+      scheduler: createFsrsScheduler(),
+      now: BAND_NOW,
+      assessments,
+    });
+    // `targetAssessmentPathIndex`'s tie-break: soonest known `dueDay` wins,
+    // regardless of the two assessments' vault-path ordering ('far' sorts
+    // before 'near' alphabetically, so this also proves it isn't a path sort).
+    expect(candidateFor(session.candidates, 'ConceptZ').targetAssessmentPath).toBe(
+      'Assessments/near.md',
+    );
+  });
+
+  it('a concept named in two assessments with no known due day breaks the tie by `VaultPath` ascending, deterministically', async () => {
+    const assessments: readonly AssessmentRecord[] = [
+      {
+        path: 'Assessments/zzz-no-due.md',
+        course: 'GEO101',
+        type: 'exam',
+        weight: 0.3,
+        weightRaw: '30',
+        due: undefined,
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+      {
+        path: 'Assessments/aaa-no-due.md',
+        course: 'GEO101',
+        type: 'quiz',
+        weight: 0.1,
+        weightRaw: '10',
+        due: undefined,
+        status: 'upcoming',
+        scope: 'ConceptZ',
+      },
+    ];
+    const session = await buildReviewSession({
+      vault: bandVault(),
+      scheduler: createFsrsScheduler(),
+      now: BAND_NOW,
+      assessments,
+    });
+    expect(candidateFor(session.candidates, 'ConceptZ').targetAssessmentPath).toBe(
+      'Assessments/aaa-no-due.md',
+    );
   });
 });
