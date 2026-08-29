@@ -9,14 +9,20 @@
  * name so the folder stays flat: `<date>.<deviceId>.jsonl`.
  *
  * **`.olea/reviews/` is a dot-prefixed path.** `FolderSource.list()`
- * deliberately skips dotfiles/dot-directories (`.obsidian`, `.trash`, ...) —
- * see its own doc — which means a future "enumerate every device's log for a
- * day" reader cannot discover files here via `VaultSource.list()` against
- * `FolderSource`. That does not affect this module or the writer (`read`,
- * `write`, and `exists` all address a file directly by path, with no
- * dependence on `list()`), but it is a real gap for whoever builds
- * multi-device *discovery* later — flagged in the P2-T03 report rather than
- * silently worked around here, since it is a `VaultSource`/`FolderSource`
+ * deliberately skips dotfiles/dot-directories (`.obsidian`, `.trash`, ...)
+ * while *walking* — see its own doc — but that exclusion is applied to
+ * entries it passes on the way down, not to a caller-named `under` root:
+ * `list({ under: REVIEW_LOG_FOLDER })` starts its walk directly inside
+ * `.olea/reviews/` and reads it fine (`FolderSource.listUnder()`, `ol-df19`,
+ * is the same walk under a name that makes the dot-directory intent explicit
+ * at the call site; both work). **`ObsidianSource` is the real gap**: it
+ * lists over `vault.getFiles()`, which Obsidian itself never populates with
+ * dot-prefixed paths, so no method built on it can see this folder at all —
+ * a host limitation, not a choice any file in this repo makes. That does not
+ * affect this module or the writer (`read`, `write`, and `exists` all address
+ * a file directly by path, with no dependence on `list()`), but it is a real
+ * gap for a multi-device *discovery* reader on a real Obsidian install —
+ * tracked on `ol-yk1c` (C5.2a), since it is a `VaultSource`/`ObsidianSource`
  * contract question, not a review-log one.
  */
 

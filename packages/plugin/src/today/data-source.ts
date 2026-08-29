@@ -6,20 +6,49 @@
  * only file in this folder that a real Obsidian host is required to execute.
  * Same split as `review/ports.ts` vs `review/obsidian-ports.ts`.
  *
- * ## The streak half is real today
+ * ## The review-history read is real today
  *
- * The review log is readable now (`ol-p2t03`, closed), so the streak is wired
- * to her actual history rather than stubbed. Two details it has to get right:
+ * The review log is readable now (`ol-p2t03`, closed), so `readReviewHistory`
+ * is wired to her actual history rather than stubbed. `[D-061]` removed the
+ * *rendered streak strip* (`ol-ej59.7`), but this read did not go with it:
+ * `olea-core`'s `buildTodayPanel` still folds `entries` into a computed
+ * `StreakSummary` nothing draws, and into the mastery and insight trends
+ * (`resolveTrendsFields` below) that are still on screen — so the discovery
+ * gap this module has always carried is a live data-layer concern, not a
+ * stale one (`ol-yk1c`, C5.2a). Three details it has to get right:
  *
  * - **Discovery.** C5.2 puts one file per day per device in `.olea/reviews/`,
- *   and `review-log/path.ts` warns that the folder is dot-prefixed, so
- *   `FolderSource.list()` skips it entirely and Obsidian's `vault.getFiles()`
- *   does not return it either. So this module does both: it asks `list()` (in
- *   case the host does surface the folder, which is the only way another
- *   device's file can be found at all) **and** probes this device's own file
- *   for each day of the window by exact path, which needs no listing. The
- *   union is de-duplicated by path. A phone's reviews therefore count wherever
- *   the host can see the file, and this device's always count.
+ *   a dot-prefixed folder. `FolderSource.listUnder()` (`ol-df19`, DF-19) can
+ *   enumerate a dot-prefixed subtree it is named directly, and — verified
+ *   against `folder-source.ts`'s own `walk` — `FolderSource.list({ under })`
+ *   already does too, because `under` becomes the walk's *root* rather than an
+ *   entry it recurses past; a plain-folder host is therefore never blind here.
+ *   The real gap is `ObsidianSource`: it lists over `vault.getFiles()`, which
+ *   Obsidian itself never populates with dot-prefixed paths, so no method
+ *   built on it can see this folder (`packages/plugin/src/vault/
+ *   obsidian-source.ts`, out of this module's ownership — see that file's own
+ *   `ol-yk1c` note). So this module does both: it asks `list()` (the only way
+ *   another device's file can be found at all, on a host that can see the
+ *   folder) **and** probes this device's own file for each day of the window
+ *   by exact path, which needs no listing. The union is de-duplicated by
+ *   path. A phone's reviews therefore count wherever the host can see the
+ *   file, and this device's always count.
+ * - **Honesty about the gap.** A host that cannot list the folder is
+ *   indistinguishable, from `list()`'s return value alone, from a vault where
+ *   no *other* device has ever written here — both come back empty. Silently
+ *   trusting that emptiness would make a real device's history vanish, and
+ *   the error runs in the direction that shortens whatever reads `entries`,
+ *   which is the worst direction (F6.1's non-punitive intent, `ol-yk1c`).
+ *   `discoveryDegraded` (on `ReviewHistory`) makes the gap visible instead of
+ *   silent: it is `true` exactly when the raw listing came back with nothing
+ *   at all — empty result or a throw, treated alike — **and** this device's
+ *   own probe proves there is real history in the window to potentially miss.
+ *   When this device also has no history yet, there is nothing to qualify, so
+ *   the flag stays `false` — it cannot prove a negative, and does not try to.
+ *   No UI reads this field yet: wiring it into a rendered qualifier is gated
+ *   on a contract clause for the copy it would need (no user-visible
+ *   affordance without one), so it is exposed here for a future consumer to
+ *   pick up rather than acted on in this module.
  * - **Tolerance.** A crash-truncated final line costs that line and nothing
  *   else — `parseReviewLog` already guarantees that per line, and this module
  *   never throws it away wholesale. `invalidLineCount` is surfaced for
@@ -104,6 +133,19 @@ export interface ReviewHistory {
   readonly windowDays: number;
   /** Lines that did not parse. Diagnostics only; never rendered. */
   readonly invalidLineCount: number;
+  /**
+   * `true` when the host's folder listing found nothing at all — empty result
+   * or a throw — while this device's own exact-path probe proves there is
+   * real history in the window (C5.2a, `ol-yk1c`). That combination is the
+   * one case this module cannot tell apart from "no other device has ever
+   * written here": the listing is either blind (a real host limitation, see
+   * this file's module doc) or genuinely finding nothing, and only the first
+   * can be silently hiding another device's entries. `false` covers both "the
+   * listing demonstrably works" (it returned something) and "there is no
+   * history on this device either, so there is nothing to qualify" — it never
+   * asserts completeness, only the absence of this one detectable gap.
+   */
+  readonly discoveryDegraded: boolean;
 }
 
 export interface ReadReviewHistoryOptions {
@@ -149,25 +191,35 @@ export async function readReviewHistory(
   }
 
   // This device, by exact path — works on every host, listing or not.
+  const ownPaths = new Set<VaultPath>();
   for (const day of days) {
-    paths.add(reviewLogPath(day, deviceId));
+    const ownPath = reviewLogPath(day, deviceId);
+    paths.add(ownPath);
+    ownPaths.add(ownPath);
   }
 
   const entries: ReviewLogEntry[] = [];
   const disputes: DisputeLogRecord[] = [];
   let invalidLineCount = 0;
+  let ownDeviceHasHistory = false;
   // Sorted so the result is stable across hosts with different enumeration
   // orders; nothing downstream depends on order, but a stable answer is
   // cheaper to debug than a nearly-stable one.
   for (const path of [...paths].sort()) {
     if (!(await vault.exists(path))) continue;
+    if (ownPaths.has(path)) ownDeviceHasHistory = true;
     const parsed = parseReviewLog(await vault.read(path));
     entries.push(...parsed.records);
     disputes.push(...parsed.disputes);
     invalidLineCount += parsed.invalidLines.length;
   }
 
-  return { entries, disputes, windowDays, invalidLineCount };
+  // See `ReviewHistory.discoveryDegraded`'s doc: the raw listing (unfiltered
+  // by window — a file outside it still proves the host can see the folder)
+  // came back with nothing, yet this device's own probe found real history.
+  const discoveryDegraded = listed.length === 0 && ownDeviceHasHistory;
+
+  return { entries, disputes, windowDays, invalidLineCount, discoveryDegraded };
 }
 
 /**

@@ -5,15 +5,25 @@
  * the same property `review/ports.spec.ts` asserts for its port: if this ever
  * reaches for an `App`, this file stops compiling.
  *
- * The two cases worth stating up front, because both are real host behaviour
- * rather than hypotheticals:
+ * The host behaviours worth stating up front, because they are real host
+ * behaviour rather than hypotheticals (C5.2a, `ol-yk1c`):
  *
- *  - **A host whose `list()` cannot see `.olea/reviews/`.** `FolderSource`
- *    skips dot-prefixed trees outright and Obsidian's `vault.getFiles()` does
- *    not return them either (`review-log/path.ts`'s own warning). The per-day
- *    probe is what makes this device's history readable regardless.
- *  - **A host whose `list()` can.** Then another device's file is discoverable,
- *    and her phone's reviews count towards the streak.
+ *  - **A host whose `list()` cannot see `.olea/reviews/` at all** — the real
+ *    `ObsidianSource` case, since Obsidian's `vault.getFiles()` never returns
+ *    dot-prefixed trees. The per-day probe is what makes this device's
+ *    history readable regardless.
+ *  - **A host whose `list()` throws on the dot-prefixed path** — also a
+ *    legitimate host, not an error condition; the probe survives it the same
+ *    way.
+ *  - **A host whose `list()` can see the folder** — `FolderSource` included,
+ *    once it is asked with `under` pointed directly at the dot-prefixed root.
+ *    Then another device's file is discoverable, and her phone's reviews
+ *    count.
+ *
+ * A host that cannot list, and a host that lists honestly but finds nothing,
+ * return the identical empty array — so `discoveryDegraded` is the fourth
+ * thing tested below: it distinguishes "there is real history here that the
+ * listing failed to surface" from "there is nothing to surface".
  */
 
 import type { ConceptRelation, VaultSource } from 'olea-core';
@@ -142,6 +152,9 @@ describe('readReviewHistory — this device, by exact path', () => {
       windowDays: 7,
     });
     expect(history.entries).toHaveLength(1);
+    // The probe found real history the listing could not — this is exactly
+    // the case `discoveryDegraded` exists to surface (C5.2a, `ol-yk1c`).
+    expect(history.discoveryDegraded).toBe(true);
   });
 
   it('a vault with no log at all is no history, not an error', async () => {
@@ -150,7 +163,13 @@ describe('readReviewHistory — this device, by exact path', () => {
       today: '2026-08-10',
       windowDays: 7,
     });
-    expect(history).toEqual({ entries: [], disputes: [], windowDays: 7, invalidLineCount: 0 });
+    expect(history).toEqual({
+      entries: [],
+      disputes: [],
+      windowDays: 7,
+      invalidLineCount: 0,
+      discoveryDegraded: false,
+    });
   });
 
   it('reports the window it actually read, so the streak knows its own limit', async () => {
@@ -174,6 +193,9 @@ describe('readReviewHistory — other devices, where the host surfaces them', ()
       windowDays: 7,
     });
     expect(history.entries.map((e) => e.eventId).sort()).toEqual(['a', 'phone']);
+    // The listing demonstrably works here — it found the other device's file
+    // — so there is no gap to flag, whatever this device's own history is.
+    expect(history.discoveryDegraded).toBe(false);
   });
 
   it('ignores files in the folder that are not review logs', async () => {
@@ -214,6 +236,56 @@ describe('readReviewHistory — other devices, where the host surfaces them', ()
       windowDays: 7,
     });
     expect(history.entries).toHaveLength(1);
+    // A host that refuses to list at all is the same "cannot prove it works"
+    // signal as one that lists and finds nothing — both leave real history
+    // (found here by the probe) unconfirmed by the listing.
+    expect(history.discoveryDegraded).toBe(true);
+  });
+});
+
+describe('readReviewHistory — discoveryDegraded (C5.2a, ol-yk1c)', () => {
+  it('a host that lists honestly and finds nothing is not degraded', async () => {
+    // listSeesDotFolder: true means list() returns real results (empty here,
+    // since `files` is empty) — this is the "genuinely nothing here" case,
+    // never distinguishable from a hiding host by the listing alone, but here
+    // there is also no history on this device, so there is nothing to miss.
+    const { vault } = fakeVault({}, { listSeesDotFolder: true });
+    const history = await readReviewHistory(vault, DEVICE, {
+      today: '2026-08-10',
+      windowDays: 7,
+    });
+    expect(history.discoveryDegraded).toBe(false);
+  });
+
+  it('a hiding host with no history anywhere yet is not degraded either', async () => {
+    // A brand-new device, nothing to qualify: the flag never asserts
+    // completeness, only the presence of a detectable gap, and there isn't
+    // one to detect when this device itself has never written a log.
+    const { vault } = fakeVault({}, { listSeesDotFolder: false });
+    const history = await readReviewHistory(vault, DEVICE, {
+      today: '2026-08-10',
+      windowDays: 7,
+    });
+    expect(history.discoveryDegraded).toBe(false);
+  });
+
+  it('a file outside the window still proves the listing works', async () => {
+    // The raw listing is checked unfiltered by window: seeing anything in the
+    // folder — even a day the streak window does not cover — is proof the
+    // host can enumerate it, so a within-window gap on THIS device could not
+    // be another device's file the listing failed to surface.
+    const { vault } = fakeVault(
+      {
+        [logPath('2026-01-01', OTHER_DEVICE)]: `${reviewLine('2026-01-01', 'old')}\n`,
+        [logPath('2026-08-10', DEVICE)]: `${reviewLine('2026-08-10', 'a')}\n`,
+      },
+      { listSeesDotFolder: true },
+    );
+    const history = await readReviewHistory(vault, DEVICE, {
+      today: '2026-08-10',
+      windowDays: 3,
+    });
+    expect(history.discoveryDegraded).toBe(false);
   });
 });
 
