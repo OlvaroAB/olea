@@ -79,6 +79,7 @@ import {
   ORACLE_STATES,
   RETRIEVE_STATES,
   REVIEW_STATES,
+  RHYTHM_STATES,
   SESSION_STATES,
   TALL_STATE_VIEWPORTS,
   TIMELINE_STATES,
@@ -181,6 +182,20 @@ for (const stateId of TRENDS_STATES) {
       await applyTallViewportIfAny(page, stateId);
       await gotoState(page, 'trends', stateId, setId);
       await expect(hostFrameElement(page)).toHaveScreenshot(`trends-${stateId}--${setId}.png`);
+    });
+  }
+}
+
+// RHY-3's multicourse composition (`ol-i0zw`) — 2 states across the same 6
+// variable sets, 12 more screenshots. No product view exists for this
+// composition yet (`rhythm-scenarios.ts`'s module doc), so this is the FIRST
+// visual coverage of RHY-3-multicourse-composition.md's §4 collapse rule.
+for (const stateId of RHYTHM_STATES) {
+  for (const setId of VARIABLE_SETS) {
+    test(`rhythm/${stateId} @ ${setId}`, async ({ page }) => {
+      await applyTallViewportIfAny(page, stateId);
+      await gotoState(page, 'rhythm', stateId, setId);
+      await expect(hostFrameElement(page)).toHaveScreenshot(`rhythm-${stateId}--${setId}.png`);
     });
   }
 }

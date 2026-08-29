@@ -54,7 +54,58 @@
 //   node scripts/check-inv3.mjs                    # unset -> warns, exits 0
 //   node scripts/check-inv3.mjs --require-markers  # unset -> errors, exits 1
 //   node scripts/check-inv3.mjs <dir>              # scan only <dir> (testing)
+//   node scripts/check-inv3.mjs --canary           # self-test the MATCHING MECHANISM only;
+//                                                   # needs no secret and touches no repo content.
+//   INV3_MARKERS_REQUIRED=1 node scripts/check-inv3.mjs
+//                                                   # opt-in: unset/empty INV3_MARKERS becomes a
+//                                                   # hard error instead of a warning. See below.
 //
+// ================================================================================================
+// THE CANARY (R18/N-013, ol-wm2v) — WHY THIS GUARD NEEDED A DIFFERENT SHAPE OF FIX
+// ================================================================================================
+// The textbook N-013 case, and the reason ol-wm2v names this file first: `INV3_MARKERS` has been
+// unset since the project started (`ol-inv3markers`), so this tripwire has never actually run —
+// and the ordinary invocation above still reports exit 0 every time, unchanged by anything below.
+// That is deliberate, not an oversight, for a reason specific to THIS guard and not shared by the
+// vault-snapshot guards in the sibling private repo:
+//
+//   * Every one of those guards has a SUBJECT it can go find on disk right now — her vault
+//     snapshot — so a canary for them can assert "I found the expected world" unconditionally.
+//   * This guard's subject is a SECRET DAVID HAS NOT POPULATED YET. There is no directory to
+//     point a canary at that would turn "the secret is missing" into anything other than exactly
+//     what it is: the secret is missing. Flipping the ORDINARY run to exit 1 on that state would
+//     turn the public repo's CI red today, unconditionally, for a reason no contributor caused
+//     and cannot fix from a PR — the worst possible way to spend a hard-error gate's credibility.
+//
+// So this guard gets TWO additions instead of one flip, each answering a different half of R18:
+//
+//   1. `--canary` (R18.3 — "green must mean I looked and found the expected world"). It proves
+//      the SCANNING MECHANISM — `collectFiles`, `markerPattern`, the advisory carve-out — still
+//      works, using a marker and content it invents and plants in its own throwaway directory.
+//      That is a real, always-checkable subject: unlike the real marker list, "can this pipeline
+//      detect a string I just planted" needs no secret and reveals a regression (a broken regex,
+//      a walker that stops recursing, an extension skipped that should not be) that an unset
+//      secret would otherwise hide behind forever. It is wired into the private repo's
+//      `check-privacy-guards.mjs` self-test as a dedicated probe (see that file's `--probe-inv3`
+//      block) rather than through the shared MISSING/EMPTY/DECOY/FIXTURE vault fixtures — this
+//      guard's subject is not vault-shaped, so those four decoys do not express a meaningful bad
+//      oracle for it. Flagged as a scope choice on ol-wm2v; the alternative (forcing this guard
+//      through the vault fixture loop) produces a canary that cannot distinguish "correct world"
+//      from "the guard's own tmp fixture" and therefore proves nothing either.
+//
+//   2. `INV3_MARKERS_REQUIRED=1` (R18.1 — "a guard that cannot find its subject is a hard
+//      error"), applied where it is actually safe to apply it: as a REVERSIBLE, OPT-IN escalation
+//      David's own CI config can set once the secret exists, not as today's default. Unset (the
+//      state every environment is in right now) leaves the existing warn-and-continue behaviour
+//      completely unchanged — this line does not, on its own, turn anything red. The day
+//      `INV3_MARKERS` is populated, setting this alongside it in `ci.yml` converts "the secret
+//      went missing again" from a silent warning back into the hard error R18.1 asks for. This is
+//      a DIFFERENT axis from `--require-markers` above and does not weaken it: `--require-markers`
+//      has no env-var form on purpose, because a call site that pushes content OUTWARDS must not
+//      be silently downgradable by an inherited variable. `INV3_MARKERS_REQUIRED` runs the other
+//      direction — it only ever turns a permissive default MORE strict — so the inheritance risk
+//      that argument warns about does not apply to it.
+// ================================================================================================
 // ================================================================================================
 // MATCHING (ol-thuc) — mirrors the private repo's scripts/check-bead-text.mjs, with one
 // deliberate, explained deviation
@@ -106,7 +157,16 @@
 //     only file + line. A guard that prints the secret it exists to protect defeats itself.
 // ================================================================================================
 
-import { appendFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMON_ENGLISH_WORDS } from './lib/common-english-words.mjs';
@@ -246,7 +306,10 @@ function scan(root, markers) {
 
 const argv = process.argv.slice(2);
 const requireMarkers = argv.includes('--require-markers');
-const unknownFlags = argv.filter((a) => a.startsWith('--') && a !== '--require-markers');
+const canaryOnly = argv.includes('--canary');
+const unknownFlags = argv.filter(
+  (a) => a.startsWith('--') && a !== '--require-markers' && a !== '--canary',
+);
 if (unknownFlags.length > 0) {
   // Refuse rather than ignore. A typo'd `--require-marker` that silently
   // parsed as "no flag" would turn a fail-closed call site into a fail-open
@@ -254,6 +317,54 @@ if (unknownFlags.length > 0) {
   console.error(`check-inv3: unknown flag(s): ${unknownFlags.join(', ')}`);
   process.exit(2);
 }
+
+// --canary (R18.3, ol-wm2v) — self-test the MATCHING MECHANISM, never the real markers or the
+// real repo content. See the header block above for why this guard's canary cannot be "did I
+// find her vault" the way the private repo's guards can: there is no vault here, and the real
+// subject (INV3_MARKERS) is a secret this script must never manufacture a substitute for. What
+// IS always checkable is whether collectFiles/markerPattern/isOrdinaryEnglish still detect a
+// marker planted on purpose — entirely invented, in a throwaway directory, never touching
+// anything tracked in this repo.
+if (canaryOnly) {
+  const SENTINEL = 'inv3-canary-sentinel-zqplxk'; // invented for this check; not real content
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'olea-inv3-canary-'));
+  try {
+    writeFileSync(
+      join(tmpRoot, 'hit.md'),
+      `this line carries the planted ${SENTINEL} marker on purpose\n`,
+    );
+    writeFileSync(join(tmpRoot, 'miss.md'), 'ordinary unrelated content, no marker here\n');
+
+    const hits = scan(tmpRoot, [SENTINEL]);
+    const hitFiles = new Set(hits.map((h) => h.file));
+
+    const foundInHit = hitFiles.has(relative(repoRoot, join(tmpRoot, 'hit.md')));
+    const notFoundInMiss = !hitFiles.has(relative(repoRoot, join(tmpRoot, 'miss.md')));
+    const noneAdvisory = hits.every((h) => !h.advisory); // an invented slug is never ordinary English
+
+    if (foundInHit && notFoundInMiss && noneAdvisory) {
+      console.log(
+        'check-inv3: CANARY OK — planted a synthetic marker, matched the file that carries it, ' +
+          'and did not match the file that does not.',
+      );
+      process.exit(0);
+    }
+    console.error('check-inv3: CANARY FAILED — the matching mechanism did not behave as built.');
+    console.error(
+      `  found in planted file: ${foundInHit} | absent from control file: ${notFoundInMiss} | ` +
+        `flagged non-advisory: ${noneAdvisory}`,
+    );
+    console.error(
+      '  This means collectFiles/markerPattern/isOrdinaryEnglish regressed. A real ' +
+        'INV3_MARKERS scan would report green while catching nothing (N-013) — fix the ' +
+        'mechanism before trusting any scan from this script.',
+    );
+    process.exit(1);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 const argRoot = argv.find((a) => !a.startsWith('--'));
 const scanRoot = argRoot ? resolve(repoRoot, argRoot) : repoRoot;
 
@@ -271,6 +382,21 @@ if (markers.length === 0) {
         'Set INV3_MARKERS (see ol-inv3markers) or, if you have read every file being sent\n' +
         'and are accepting the risk deliberately, do not route it through this script —\n' +
         'record the decision instead. Do not remove --require-markers to get past this.',
+    );
+    process.exit(1);
+  }
+  if (process.env.INV3_MARKERS_REQUIRED) {
+    // R18.1, applied where it is safe to (see header): an OPT-IN escalation, off by default, so
+    // this line changes nothing for any environment that does not explicitly set it — including
+    // every CI run today. David's own workflow config sets this alongside INV3_MARKERS once the
+    // secret exists, so the tripwire going missing again is a hard error rather than a warning.
+    console.error(
+      'INV-3 FAIL-CLOSED: INV3_MARKERS is unset or empty, and INV3_MARKERS_REQUIRED is set.\n\n' +
+        'This environment has asserted the real-content marker list should exist by now.\n' +
+        'Its absence is being treated as a hard error (R18.1) rather than the ordinary\n' +
+        'warn-and-continue below. Populate INV3_MARKERS, or unset INV3_MARKERS_REQUIRED if\n' +
+        'this environment genuinely has not reached the point where the secret is expected\n' +
+        'yet — do not unset it to silence a real gap.',
     );
     process.exit(1);
   }

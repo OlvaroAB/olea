@@ -26,7 +26,7 @@ const readFixture = (name: string): string => readFileSync(join(FIXTURES, name),
 
 /** A minimal valid block, built rather than pasted so the floor is visible in the test. */
 function block(lines: readonly string[]): string {
-  return ['```' + MCQ_FENCE_INFO, ...lines, '```', ''].join('\n');
+  return [`\`\`\`${MCQ_FENCE_INFO}`, ...lines, '```', ''].join('\n');
 }
 
 const POOL = ['distractor A', 'distractor B', 'distractor C', 'distractor D'];
@@ -91,7 +91,7 @@ describe('parseMcqBlocks — a hand-typed block', () => {
   it('tolerates irregular spacing, field order and label case', () => {
     const { instruments, invalid } = parseMcqBlocks(
       [
-        '```' + MCQ_FENCE_INFO,
+        `\`\`\`${MCQ_FENCE_INFO}`,
         'DISTRACTOR:   distractor A',
         'Stem :  which one is it?',
         '',
@@ -177,7 +177,7 @@ describe('serializeMcq — the canonical form', () => {
       }),
     ).toBe(
       [
-        '```' + MCQ_FENCE_INFO,
+        `\`\`\`${MCQ_FENCE_INFO}`,
         'stem: which one is it?',
         'answer: the right one',
         ...POOL.map((d) => `distractor: ${d}`),
@@ -201,7 +201,7 @@ describe('serializeMcq — the canonical form', () => {
       }),
     ).toBe(
       [
-        '```' + MCQ_FENCE_INFO,
+        `\`\`\`${MCQ_FENCE_INFO}`,
         'stem: which one is it?',
         'answer: the right one',
         ...POOL.map((d) => `distractor: ${d}`),
@@ -237,7 +237,7 @@ describe('serializeMcq — the canonical form', () => {
   });
 
   it('keeps a CRLF block CRLF, and a tilde fence a tilde fence', () => {
-    const source = ['~~~~' + MCQ_FENCE_INFO, ...validLines, '~~~~', ''].join('\r\n');
+    const source = [`~~~~${MCQ_FENCE_INFO}`, ...validLines, '~~~~', ''].join('\r\n');
     const { instruments } = parseMcqBlocks(source);
     const instrument = instruments[0];
     if (!instrument) throw new Error('no instrument');

@@ -84,7 +84,13 @@ import {
 } from './copy.js';
 import type { ExplainWhyOutcome } from './explainWhy.js';
 import type { RatingPreview } from './interval.js';
-import { hintsFor, type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
+import {
+  hasGlobalBindings,
+  hintsFor,
+  type ReviewAction,
+  type ReviewScreen,
+  resolveReviewKey,
+} from './keymap.js';
 import type {
   PendingConfusionRoutingOffer,
   ReviewSession,
@@ -512,6 +518,18 @@ export class ReviewView extends ItemView {
       );
       return;
     }
+
+    // ol-63xn (Q6.5): `note-missing` is the one screen `hasGlobalBindings`
+    // excludes from the global E/S bindings — there is nothing to edit or
+    // suspend once the source note is gone, and the screen already offers
+    // skip/remove instead. The keycap side of that already went through
+    // `actionKeycap` (it queries the resolver and draws nothing there), but a
+    // bare `if (screen.kind !== 'note-missing')` here would be a second,
+    // hand-typed copy of exactly the list `hasGlobalBindings` keeps — the
+    // duplication this bead exists to remove. Gating the buttons on the same
+    // predicate keymap.ts uses means the pointer path can never say yes where
+    // the keyboard path says no.
+    if (!hasGlobalBindings(screen)) return;
 
     this.actionButton(
       header,

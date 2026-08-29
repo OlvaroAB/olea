@@ -113,22 +113,21 @@ function readGrading(body: unknown): ExplainBackGradingWireResponse {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerJudgeError(
       `WorkerJudgeCaller: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerJudgeError(
       'WorkerJudgeCaller: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   if (typeof result !== 'object' || result === null) {
     throw new WorkerJudgeError(
       'WorkerJudgeCaller: the Worker response carried no `result` object.',
@@ -136,13 +135,13 @@ function readGrading(body: unknown): ExplainBackGradingWireResponse {
   }
   const r = result as Record<string, unknown>;
 
-  const verdict = r['verdict'];
+  const verdict = r.verdict;
   if (typeof verdict !== 'string' || !VERDICTS.has(verdict)) {
     throw new WorkerJudgeError(
       `WorkerJudgeCaller: the Worker returned an unrecognised verdict (${JSON.stringify(verdict)}).`,
     );
   }
-  const feedback = r['feedback'];
+  const feedback = r.feedback;
   if (typeof feedback !== 'string' || feedback.length === 0) {
     throw new WorkerJudgeError('WorkerJudgeCaller: the Worker response carried no feedback text.');
   }
@@ -150,9 +149,9 @@ function readGrading(body: unknown): ExplainBackGradingWireResponse {
   return {
     verdict: verdict as ExplainBackGradingWireResponse['verdict'],
     feedback,
-    missedPoints: readStringArray(r['missedPoints'], 'missedPoints'),
-    citedIssues: readCitedIssues(r['citedIssues']),
-    misconceptionCandidates: readMisconceptionCandidates(r['misconceptionCandidates']),
+    missedPoints: readStringArray(r.missedPoints, 'missedPoints'),
+    citedIssues: readCitedIssues(r.citedIssues),
+    misconceptionCandidates: readMisconceptionCandidates(r.misconceptionCandidates),
   };
 }
 
@@ -181,20 +180,20 @@ function readCitedIssues(value: unknown): readonly CitedIssue[] {
       throw new WorkerJudgeError(`WorkerJudgeCaller: citedIssues[${index}] was not an object.`);
     }
     const entry = raw as Record<string, unknown>;
-    const kind = entry['kind'];
+    const kind = entry.kind;
     if (typeof kind !== 'string' || !CITED_ISSUE_KINDS.has(kind)) {
       throw new WorkerJudgeError(
         `WorkerJudgeCaller: citedIssues[${index}] carried an unrecognised kind.`,
       );
     }
-    const description = entry['description'];
+    const description = entry.description;
     if (typeof description !== 'string' || description.length === 0) {
       throw new WorkerJudgeError(
         `WorkerJudgeCaller: citedIssues[${index}] carried no description.`,
       );
     }
     const sourceBlockIds = readStringArray(
-      entry['sourceBlockIds'],
+      entry.sourceBlockIds,
       `citedIssues[${index}].sourceBlockIds`,
     );
     return { kind: kind as CitedIssueKind, description, sourceBlockIds };
@@ -215,9 +214,9 @@ function readMisconceptionCandidates(value: unknown): readonly MisconceptionCand
       );
     }
     const entry = raw as Record<string, unknown>;
-    const concept = entry['concept'];
-    const statement = entry['statement'];
-    const correction = entry['correction'];
+    const concept = entry.concept;
+    const statement = entry.statement;
+    const correction = entry.correction;
     if (typeof concept !== 'string' || concept.length === 0) {
       throw new WorkerJudgeError(
         `WorkerJudgeCaller: misconceptionCandidates[${index}] carried no concept.`,
@@ -234,10 +233,10 @@ function readMisconceptionCandidates(value: unknown): readonly MisconceptionCand
       );
     }
     const correctionSourceBlockIds = readStringArray(
-      entry['correctionSourceBlockIds'],
+      entry.correctionSourceBlockIds,
       `misconceptionCandidates[${index}].correctionSourceBlockIds`,
     );
-    const confusedWith = entry['confusedWith'];
+    const confusedWith = entry.confusedWith;
     return {
       concept,
       statement,

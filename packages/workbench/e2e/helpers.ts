@@ -98,6 +98,9 @@ export const TRENDS_STATES = [
   'trends-too-early',
 ] as const;
 
+// RHY-3's multicourse composition (`ol-i0zw`) — see `rhythm-scenarios.ts` for the source of truth.
+export const RHYTHM_STATES = ['rhythm-two-flagged', 'rhythm-one-flagged'] as const;
+
 export const VARIABLE_SETS = [
   'obsidian-dark',
   'obsidian-light',
@@ -116,6 +119,7 @@ export type TimelineStateId = (typeof TIMELINE_STATES)[number];
 export type ExplainStateId = (typeof EXPLAIN_STATES)[number];
 export type SessionStateId = (typeof SESSION_STATES)[number];
 export type TrendsStateId = (typeof TRENDS_STATES)[number];
+export type RhythmStateId = (typeof RHYTHM_STATES)[number];
 export type VariableSetId = (typeof VARIABLE_SETS)[number];
 export type Surface =
   | 'review'
@@ -126,7 +130,8 @@ export type Surface =
   | 'timeline'
   | 'explain'
   | 'session'
-  | 'trends';
+  | 'trends'
+  | 'rhythm';
 
 /**
  * WBF-4 (`ol-opjq`) — per-STATE viewport overrides for the golden suite.
@@ -241,6 +246,7 @@ export interface DiscoveredMatrix {
   readonly explainStates: readonly string[];
   readonly sessionStates: readonly string[];
   readonly trendsStates: readonly string[];
+  readonly rhythmStates: readonly string[];
   readonly variableSets: readonly string[];
 }
 
@@ -273,6 +279,9 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
   const trendsStates = await page
     .locator('[data-wb-trends-state-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-trends-state-link') ?? ''));
+  const rhythmStates = await page
+    .locator('[data-wb-rhythm-state-link]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-rhythm-state-link') ?? ''));
   const variableSets = await page
     .locator('[data-wb-set-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-set-link') ?? ''));
@@ -286,6 +295,7 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     explainStates,
     sessionStates,
     trendsStates,
+    rhythmStates,
     variableSets,
   };
 }

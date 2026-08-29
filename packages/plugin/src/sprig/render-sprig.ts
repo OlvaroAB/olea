@@ -17,14 +17,19 @@
  * **Split in two on purpose.** `sprigPlan` is pure data — no DOM, no Obsidian — and is what this
  * module's test file actually exercises: which parts a stage draws, read from `SPRIG_GEOMETRY`
  * plus the label from `MASTERY_DISPLAY` (`olea-core`), never retyped here. `renderSprig` turns a
- * plan into real SVG nodes via `document.createElementNS` — Obsidian's `createEl` family does not
- * cover the SVG namespace, and its `createSvg` prototype extension only exists at runtime inside a
- * real host (same reason `today/view.ts` and `gap/view.ts` carry no test file of their own: DOM
- * building that needs a real host is exercised by running the plugin, not by Vitest). This repo's
- * Vitest config has no DOM environment configured — no `jsdom`/`happy-dom` dependency anywhere in
- * the workspace — and adding one mid-task would touch `pnpm-lock.yaml`, a file every lane in this
- * run reads. `renderSprig` itself is therefore left at the same untested boundary the view files
- * already accept; `sprigPlan` carries the logic actually worth asserting on.
+ * plan into real SVG nodes via `container.ownerDocument.createElementNS` — Obsidian's `createEl`
+ * family does not cover the SVG namespace, and its `createSvg` prototype extension only exists at
+ * runtime inside a real host (same reason `today/view.ts` and `gap/view.ts` carry no test file of
+ * their own: DOM building that needs a real host is exercised by running the plugin, not by
+ * Vitest). Every node is created via the caller's mount-point `container`, never the ambient
+ * global `document` — a popped-out Obsidian tab or an iframe-isolated host has its own `Document`,
+ * exactly the shape `ol-rq23` fixed in `ReviewView` (`ol-dth1`). This repo's Vitest config has no
+ * DOM environment configured — no `jsdom`/`happy-dom` dependency anywhere in the workspace — and
+ * adding one mid-task would touch `pnpm-lock.yaml`, a file every lane in this run reads.
+ * `renderSprig` itself is therefore left at the same untested boundary the view files already
+ * accept; `sprigPlan` carries the logic actually worth asserting on, and this file's own document-
+ * ownership property is asserted at the source-text level (`test/sprig/render-sprig.spec.ts`),
+ * same convention as `ol-rq23`'s `view-focus-document.spec.ts`.
  *
  * **The growth transition and the vitality wilt are NOT implemented here — a deliberate
  * deferral, not an oversight.** See `ol-t1hc`'s closing report for the growth-transition
@@ -133,6 +138,14 @@ export interface RenderSprigOptions {
   readonly state: MasteryState;
   /** CSS pixels; the sprig is square. Defaults to 15 — inline-with-text size. */
   readonly size?: number;
+  /**
+   * The element the returned SVG is about to be appended under. Every node this function
+   * creates comes from `container.ownerDocument`, never the ambient global `document` — the
+   * same fix shape as `ol-rq23`'s `ReviewView` (`root.ownerDocument.activeElement`): a
+   * popped-out Obsidian tab or an iframe-isolated host has its own `Document`, and building
+   * nodes in the wrong one leaves them unable to actually appear where the caller mounts them.
+   */
+  readonly container: Element;
 }
 
 /**
@@ -145,8 +158,9 @@ export interface RenderSprigOptions {
 export function renderSprig(options: RenderSprigOptions): SVGSVGElement {
   const plan = sprigPlan(options.state);
   const size = options.size ?? 15;
+  const doc = options.container.ownerDocument;
 
-  const svg = document.createElementNS(SVG_NS, 'svg');
+  const svg = doc.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', SPRIG_VIEW_BOX);
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
@@ -155,7 +169,7 @@ export function renderSprig(options: RenderSprigOptions): SVGSVGElement {
   svg.classList.add('olea-sprig');
 
   if (plan.seed) {
-    const seed = document.createElementNS(SVG_NS, 'ellipse');
+    const seed = doc.createElementNS(SVG_NS, 'ellipse');
     seed.setAttribute('cx', '12');
     seed.setAttribute('cy', '16.4');
     seed.setAttribute('rx', '2.7');
@@ -164,14 +178,14 @@ export function renderSprig(options: RenderSprigOptions): SVGSVGElement {
     seed.classList.add('olea-sprig-seed');
     svg.appendChild(seed);
   } else if (plan.stemTop !== null) {
-    const stem = document.createElementNS(SVG_NS, 'path');
+    const stem = doc.createElementNS(SVG_NS, 'path');
     stem.setAttribute('d', `M12 21 C 12 17, 12 ${plan.stemTop + 3}, 12 ${plan.stemTop}`);
     stem.classList.add('olea-sprig-stem');
     svg.appendChild(stem);
   }
 
   for (const leaf of plan.leaves) {
-    const ellipse = document.createElementNS(SVG_NS, 'ellipse');
+    const ellipse = doc.createElementNS(SVG_NS, 'ellipse');
     ellipse.setAttribute('cx', String(leaf.cx));
     ellipse.setAttribute('cy', String(leaf.cy));
     ellipse.setAttribute('rx', '3.4');
@@ -182,7 +196,7 @@ export function renderSprig(options: RenderSprigOptions): SVGSVGElement {
   }
 
   if (plan.fruit !== null) {
-    const fruit = document.createElementNS(SVG_NS, 'circle');
+    const fruit = doc.createElementNS(SVG_NS, 'circle');
     fruit.setAttribute('cx', String(plan.fruit.cx));
     fruit.setAttribute('cy', String(plan.fruit.cy));
     fruit.setAttribute('r', '2.7');

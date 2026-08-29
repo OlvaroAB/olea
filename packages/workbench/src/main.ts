@@ -37,7 +37,7 @@
  * screenshot harness, no `@auto-web` tags.
  */
 
-import { createFsrsScheduler, type TodayViewModel } from 'olea-core';
+import { CONTEST_GESTURE_LABEL, createFsrsScheduler, type TodayViewModel } from 'olea-core';
 import {
   buildExplainScenario,
   EXPLAIN_STATES,
@@ -52,7 +52,7 @@ import {
 } from './generate-scenarios.js';
 import { createHostFrame, type HostFrame } from './host-frame.js';
 import { installObsidianDomHelpers } from './obsidian-shim/dom.js';
-import type { WorkspaceLeaf } from './obsidian-shim/index.js';
+import { Notice, type WorkspaceLeaf } from './obsidian-shim/index.js';
 import { buildFixtureOracle, type FixtureOracleResult } from './oracle/fixture-oracle.js';
 import { fixtureOracleFocus, fixtureOracleFocusNote } from './oracle/fixture-oracle-focus.js';
 import { acceptCandidates } from './oracle/generate.js';
@@ -89,6 +89,13 @@ import {
   RETRIEVE_STATES,
   type RetrieveScenario,
 } from './retrieve-scenarios.js';
+import {
+  buildRhythmScenario,
+  findRhythmState,
+  RHYTHM_STATES,
+  type RhythmComposedPanel,
+  type RhythmScenario,
+} from './rhythm-scenarios.js';
 import { buildScenario, findState, REVIEW_STATES, type Scenario } from './scenarios.js';
 import { SessionBuilderView } from './session-bridge.js';
 import {
@@ -141,6 +148,7 @@ type RouteSurface =
   | 'explain'
   | 'session'
   | 'trends'
+  | 'rhythm'
   | 'walk';
 
 const DEFAULT_STATE = 'qa-front';
@@ -152,6 +160,7 @@ const DEFAULT_TIMELINE_STATE = 'timeline-steady';
 const DEFAULT_EXPLAIN_STATE = 'explanation-grounded';
 const DEFAULT_SESSION_STATE = 'session-exam-eve-90';
 const DEFAULT_TRENDS_STATE = 'trends-cramming';
+const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -196,6 +205,23 @@ const TRENDS_ILLUSTRATIVE_LABEL =
   'one in five histories where the pattern was deliberately removed. Nothing here measures how ' +
   'well Olea reads real behaviour.';
 
+/**
+ * The rhythm surface's own notice, in place of `mountGenerate`'s "no product
+ * view to mount yet" pattern (`RETRIEVE`/`GENERATE`'s own wording for
+ * P3-T07b) — see `rhythm-scenarios.ts`'s module doc for the full argument.
+ * States what this draws (the real discover -> associate -> freshness chain,
+ * composed per the design doc's own rule) and what it is NOT (a product
+ * surface): `[D-072]`'s reachability clause is not discharged by this pane.
+ */
+const RHYTHM_NO_PRODUCT_VIEW_NOTICE =
+  "RHY-3's multicourse composition (ol-i0zw) has no product surface yet. The real Today panel's " +
+  "rhythm section (ol-at1a, in progress) still surfaces at most ONE course's reading — this " +
+  "pane draws the design's composed-panel rule (RHY-3-multicourse-composition.md §4) directly " +
+  "against olea-core's own, unmodified discover -> associate -> freshness chain, over the fixture " +
+  'vault plus one synthetic calendar note this workbench adds. Reachability: NONE — this is a ' +
+  'workbench-only rendering, not a product view; see the inspector and this bead for what is ' +
+  'still undone.';
+
 /** Where `build.mjs` copies `packages/plugin/styles.css`, unmodified. */
 const PLUGIN_STYLES_HREF = './plugin-styles.css';
 
@@ -226,6 +252,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_SESSION_STATE;
     case 'trends':
       return DEFAULT_TRENDS_STATE;
+    case 'rhythm':
+      return DEFAULT_RHYTHM_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -254,6 +282,8 @@ function findStateFor(
       return findSessionState(stateId);
     case 'trends':
       return findTrendsState(stateId);
+    case 'rhythm':
+      return findRhythmState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -291,9 +321,11 @@ function readRoute(): Route {
                   ? 'session'
                   : segments[0] === 'trends'
                     ? 'trends'
-                    : segments[0] === 'walk'
-                      ? 'walk'
-                      : 'review';
+                    : segments[0] === 'rhythm'
+                      ? 'rhythm'
+                      : segments[0] === 'walk'
+                        ? 'walk'
+                        : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -352,6 +384,7 @@ async function main(): Promise<void> {
   const explainStateList = requireEl('[data-wb-explain-states]');
   const sessionStateList = requireEl('[data-wb-session-states]');
   const trendsStateList = requireEl('[data-wb-trends-states]');
+  const rhythmStateList = requireEl('[data-wb-rhythm-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -490,6 +523,18 @@ async function main(): Promise<void> {
       writeRoute({ ...readRoute(), surface: 'trends', stateId: state.id });
     });
     trendsStateList.appendChild(button);
+  }
+
+  for (const state of RHYTHM_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbRhythmStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'rhythm', stateId: state.id });
+    });
+    rhythmStateList.appendChild(button);
   }
 
   // The walkthrough's own step list (rule: "collapses the six state lists to
@@ -763,6 +808,14 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'trends' && button.dataset.wbTrendsStateLink === state.id,
+      );
+    }
+    for (const button of rhythmStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-rhythm-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'rhythm' && button.dataset.wbRhythmStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1049,6 +1102,25 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
+    /**
+     * RHY-3's multicourse composition (`ol-i0zw`), against the REAL fixture
+     * vault plus one synthetic calendar note — never `composed`/
+     * `loaded.history`, same reasoning as `mountSession`. No product view to
+     * mount (`rhythm-scenarios.ts`'s module doc), so this draws real DOM
+     * straight into `host`, the same posture `mountGenerate`'s accept-gate
+     * panel already takes for a chain with no product renderer yet.
+     */
+    async function mountRhythm(stateId: string): Promise<void> {
+      host.createDiv({ cls: 'wb-illustrative-label', text: RHYTHM_NO_PRODUCT_VIEW_NOTICE });
+
+      const scenario = await buildRhythmScenario(stateId, vault);
+      if (run !== generation) return;
+
+      renderRhythmPanel(host, scenario.panel);
+      renderRhythmInspector(inspector, { setNote: activeSet.note, scenario });
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
     // Walkthrough-only mounters. Neither draws a new PRODUCT screen (rule 1 —
     // see `walkthrough.ts`'s module doc for the argument in full): `mountNote`
     // shows her fixture note's own markdown, the same thing Obsidian's stock
@@ -1223,6 +1295,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'trends') {
       await mountTrends(route.stateId);
+      return;
+    }
+    if (route.surface === 'rhythm') {
+      await mountRhythm(route.stateId);
       return;
     }
     if (route.surface === 'today') {
@@ -2043,6 +2119,143 @@ function renderTrendsInspector(inspector: HTMLElement, input: TrendsInspectorInp
             ? ''
             : ` — widestGap ${viewModel.insights.effort.measured.widestGap.toFixed(2)} on ` +
               `${viewModel.insights.effort.measured.widestGapCourse}`),
+  });
+}
+
+/**
+ * A per-course row inside the rhythm panel — marker, course code, a status
+ * line, and (§4.3) a per-row action and contest gesture, since a dispute or
+ * an "open the folder" action is about ONE course's claim, never the panel
+ * as a whole. Both are inert here (Notices), the same posture `scenarios.ts`'s
+ * `editPort` and `mountGenerate`'s pre-accept controls already take for an
+ * affordance this workbench has no real backing for — see the module doc.
+ */
+function renderRhythmRow(parent: HTMLElement, row: RhythmComposedPanel['rows'][number]): void {
+  const el = parent.createDiv({ cls: 'wb-rhythm-row' });
+  el.createSpan({ cls: 'wb-rhythm-row-marker' });
+  el.createSpan({ cls: 'wb-rhythm-row-course', text: row.courseCode });
+
+  const statusText =
+    row.reading.status === 'not-arrived-with-yardstick'
+      ? "hasn't arrived since it was expected."
+      : row.lastArrivalDay === null
+        ? 'no arrival has been observed for this course yet.'
+        : `last arrived ${row.lastArrivalDay}. Nothing to say whether that is late or exactly right.`;
+  el.createSpan({ cls: 'wb-rhythm-row-status', text: statusText });
+  el.createSpan({ cls: 'wb-rhythm-row-badge', text: 'not yet' });
+
+  const actions = el.createDiv({ cls: 'wb-rhythm-row-actions' });
+  const openButton = actions.createEl('button', { text: `Open ${row.courseCode} folder` });
+  openButton.type = 'button';
+  openButton.addEventListener('click', () => {
+    new Notice(
+      `Workbench: the product would open 01 Courses/${row.courseCode} in the file explorer. ` +
+        'There is no file explorer here.',
+    );
+  });
+  const contestButton = actions.createEl('button', { text: CONTEST_GESTURE_LABEL });
+  contestButton.type = 'button';
+  contestButton.addEventListener('click', () => {
+    new Notice(
+      'Workbench: this composition has no product renderer yet, so no real dispute sheet is ' +
+        'wired to this gesture — see the inspector note.',
+    );
+  });
+}
+
+/**
+ * RHY-3-multicourse-composition.md §4, drawn directly — see `rhythm-
+ * scenarios.ts`'s module doc for why this is workbench-only DOM rather than
+ * a product view. `nothing-to-report` (§4.5) renders NOTHING, on purpose:
+ * the family stays silent rather than asserting a positive "all clear".
+ */
+function renderRhythmPanel(host: HTMLElement, panel: RhythmComposedPanel): void {
+  if (panel.kind === 'nothing-to-report') return;
+
+  const root = host.createDiv({ cls: 'wb-rhythm-panel' });
+  root.setAttr('data-wb-rhythm-panel-kind', panel.kind);
+  if (panel.factLine !== null) {
+    root.createDiv({ cls: 'wb-rhythm-fact', text: panel.factLine });
+  }
+  if (panel.consequenceLine !== null) {
+    root.createDiv({ cls: 'wb-rhythm-consequence', text: panel.consequenceLine });
+  }
+  if (panel.mitigationLine !== null) {
+    root.createDiv({ cls: 'wb-rhythm-mitigation', text: panel.mitigationLine });
+  }
+
+  const rows = root.createDiv({ cls: 'wb-rhythm-rows' });
+  for (const row of panel.rows) {
+    renderRhythmRow(rows, row);
+  }
+
+  if (panel.footerLine !== null) {
+    root.createDiv({ cls: 'wb-rhythm-footer', text: panel.footerLine });
+  }
+}
+
+const RHYTHM_PROVISIONAL_NOTE =
+  'workbench-only: this composition rule (RHY-3-multicourse-composition.md §4) has no product ' +
+  'renderer yet. The per-course freshness readings below ARE real — computed by ' +
+  "olea-core's own discoverScheduleEvents -> associateScheduleEvents -> computeScheduleFreshness " +
+  'over the fixture vault plus one synthetic calendar note this workbench adds. What is NOT real: ' +
+  "the panel copy is this workbench drawing the design doc's own §4.3/§6 lines against real " +
+  'course codes, and the "Open folder"/contest controls are inert Notices, not wired affordances.';
+
+interface RhythmInspectorInput {
+  readonly setNote: string;
+  readonly scenario: RhythmScenario;
+}
+
+function renderRhythmInspector(inspector: HTMLElement, input: RhythmInspectorInput): void {
+  const { scenario } = input;
+  inspector.empty();
+  inspector.createDiv({ cls: 'wb-inspector-note', text: scenario.state.note });
+  inspector.createDiv({ cls: 'wb-inspector-note wb-inspector-note--dim', text: input.setNote });
+  inspector.createDiv({
+    cls: 'wb-inspector-note wb-inspector-note--dim',
+    text: RHYTHM_PROVISIONAL_NOTE,
+  });
+
+  const discoveryRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  discoveryRow.createSpan({ cls: 'wb-inspector-label', text: 'discovery' });
+  discoveryRow.createSpan({
+    cls: 'wb-inspector-value',
+    text:
+      `${String(scenario.discovery.notesScanned.length)} note(s) scanned, ` +
+      `${String(scenario.discovery.events.length)} event(s) matched across ` +
+      `${String(scenario.discovery.candidateNotes.length)} candidate note(s), ` +
+      `${String(scenario.discovery.totalUnparseableLines)} unparseable line(s)`,
+  });
+
+  const associationRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  associationRow.createSpan({ cls: 'wb-inspector-label', text: 'association' });
+  associationRow.createSpan({
+    cls: 'wb-inspector-value',
+    text:
+      `${String(scenario.association.matched.length)} matched, ` +
+      `${String(scenario.association.unmatched.length)} unmatched`,
+  });
+
+  for (const reading of scenario.readings) {
+    const row = inspector.createDiv({ cls: 'wb-inspector-row' });
+    row.createSpan({ cls: 'wb-inspector-label', text: `freshness — ${reading.courseCode}` });
+    row.createSpan({
+      cls: 'wb-inspector-value',
+      text:
+        `${reading.status}` +
+        (reading.expectedSessionDate === undefined
+          ? ''
+          : ` — expected ${reading.expectedSessionDate} (${reading.basis ?? 'unknown'})`) +
+        ` — ${reading.reason}`,
+    });
+  }
+
+  const panelRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  panelRow.createSpan({ cls: 'wb-inspector-label', text: 'panel' });
+  panelRow.createSpan({
+    cls: 'wb-inspector-value',
+    text: `${scenario.panel.kind} — ${String(scenario.panel.rows.length)} row(s)`,
   });
 }
 

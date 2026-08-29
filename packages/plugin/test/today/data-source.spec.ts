@@ -692,6 +692,104 @@ describe('loadTodayPanel', () => {
       expect(vm.rhythm).toBeNull();
     });
   });
+
+  describe('RHY-3 calendar-schedule freshness (`ol-4chx` -> `ol-r6s0` -> `ol-hna1` -> `ol-at1a`)', () => {
+    // INV-3: every course code, path and line of text below is coined for
+    // this test. None of it comes from any real vault.
+
+    it('is null when no rhythm source was wired — the same third state the flat reading uses', async () => {
+      const { vault } = fakeVault({});
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+      });
+      expect(vm.scheduleFreshness).toBeNull();
+    });
+
+    it('is null when the wired rhythm source cannot enumerate arrivals, not a thrown error', async () => {
+      const { vault } = fakeVault({});
+      const rhythm: TodayRhythmSource = {
+        async listCourseMaterialArrivals() {
+          return null;
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        rhythm,
+      });
+      expect(vm.scheduleFreshness).toBeNull();
+    });
+
+    it('is an empty list, not null, when a rhythm source is wired but no calendar note is discoverable', async () => {
+      const { vault } = fakeVault({}, { listSeesDotFolder: true });
+      const rhythm: TodayRhythmSource = {
+        async listCourseMaterialArrivals() {
+          return [];
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        rhythm,
+      });
+      expect(vm.scheduleFreshness).toEqual([]);
+    });
+
+    it('reports a with-yardstick reading for a course whose calendar sessions are unmatched by any arrival', async () => {
+      // `now` (2026-08-10) is `today` — two FIXTURE101 sessions land before it,
+      // both after the last observed arrival, past the one-day grace margin.
+      const { vault } = fakeVault(
+        {
+          '01 Courses/FIXTURE101/Lecture notes.md': 'Just a note — never scanned for events.',
+          'UNIVERSITY/Calendar/calendar-events.md': [
+            '- [ ] FIXTURE101 Mon 09:00-10:00 📅 2026-08-03',
+            '- [ ] FIXTURE101 Wed 09:00-10:00 📅 2026-08-05',
+          ].join('\n'),
+        },
+        { listSeesDotFolder: true },
+      );
+      const rhythm: TodayRhythmSource = {
+        async listCourseMaterialArrivals() {
+          return [{ course: 'FIXTURE101', lastMaterialArrivalDay: '2026-08-01' }];
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        rhythm,
+      });
+      expect(vm.scheduleFreshness).toEqual([
+        expect.objectContaining({
+          courseCode: 'FIXTURE101',
+          status: 'not-arrived-with-yardstick',
+          expectedSessionDate: '2026-08-05',
+          basis: 'observed',
+        }),
+      ]);
+    });
+  });
 });
 
 class FakeDataHost {

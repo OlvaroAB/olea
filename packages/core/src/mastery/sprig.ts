@@ -42,11 +42,7 @@
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
 import { MASTERY_ORDER } from './display.js';
-import {
-  computeAllConceptMastery,
-  conceptIdsInLog,
-  type MasteryRollupOptions,
-} from './rollup.js';
+import { computeAllConceptMastery, conceptIdsInLog, type MasteryRollupOptions } from './rollup.js';
 
 /**
  * How many concepts (of the given set, or every concept the log names) sit

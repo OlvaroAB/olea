@@ -140,6 +140,26 @@ body .view-content { display: flex; flex: 1; flex-direction: column; min-width: 
 .wb-note-list { line-height: 1.6; margin: 0 0 12px; padding-left: 22px; }
 .wb-note-checkbox { margin-right: 6px; }
 .wb-note-link { background: rgba(127, 127, 127, 0.16); border-radius: 3px; padding: 0 3px; }
+
+/* RHY-3's multicourse composition (ol-i0zw), drawn directly into the host
+   pane — no product view exists yet, same "no product renderer" posture as
+   \`.wb-detached\` above (see \`rhythm-scenarios.ts\`'s module doc). One fixed-
+   footprint panel regardless of row count (§4.3's own footprint-invariance
+   rule), never a card per course. */
+.wb-rhythm-panel { margin: 12px; max-width: 72ch; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.wb-rhythm-fact { color: var(--text-normal, #dadada); font-size: 14px; font-weight: 600; line-height: 1.5; margin: 0 0 6px; }
+.wb-rhythm-consequence, .wb-rhythm-mitigation { color: var(--text-muted, #9e9e9e); font-size: 13px; line-height: 1.5; margin: 0 0 6px; }
+.wb-rhythm-rows { border-top: 1px solid rgba(127, 127, 127, 0.25); margin: 10px 0; }
+/* flex-wrap rather than a fixed two-line DOM split: the marker/course/
+   status/badge line and the actions line share one flex container so a
+   narrower panel wraps the SAME markup instead of needing a second layout. */
+.wb-rhythm-row { align-items: center; border-bottom: 1px solid rgba(127, 127, 127, 0.16); display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 10px 0; }
+.wb-rhythm-row-marker { background: var(--text-muted, #9e9e9e); border-radius: 50%; flex: none; height: 6px; width: 6px; }
+.wb-rhythm-row-course { color: var(--text-normal, #dadada); flex: none; font-weight: 600; }
+.wb-rhythm-row-status { color: var(--text-muted, #9e9e9e); flex: 1 1 240px; font-size: 13px; min-width: 240px; }
+.wb-rhythm-row-badge { background: rgba(127, 127, 127, 0.16); border-radius: 3px; color: var(--text-muted, #9e9e9e); flex: none; font-size: 11px; padding: 2px 6px; text-transform: uppercase; }
+.wb-rhythm-row-actions { display: flex; flex: 0 0 100%; gap: 6px; padding-left: 14px; }
+.wb-rhythm-footer { color: var(--text-muted, #9e9e9e); font-size: 12px; line-height: 1.5; margin-top: 4px; }
 `;
 
 function absolute(url: string): string {

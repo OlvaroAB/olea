@@ -9,7 +9,12 @@
  */
 import { PRESENTED_OPTIONS } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { hintsFor, type ReviewScreen, resolveReviewKey } from '../../src/review/keymap.js';
+import {
+  hasGlobalBindings,
+  hintsFor,
+  type ReviewScreen,
+  resolveReviewKey,
+} from '../../src/review/keymap.js';
 
 const SCREENS: readonly ReviewScreen[] = [
   { kind: 'card-front' },
@@ -262,6 +267,31 @@ describe('resolveReviewKey — empty', () => {
     for (const key of ['e', 's', ' ', '1', 'a']) {
       expect(resolveReviewKey({ key }, screen)).toBeNull();
     }
+  });
+});
+
+describe('hasGlobalBindings — exported so view.ts can gate pointer affordances on it (ol-63xn)', () => {
+  // `note-missing` here is the point of the export: `view.ts`'s header used
+  // to render "Edit note"/"Suspend" as clickable buttons on this screen even
+  // though `resolveReviewKey` already refused E/S on it (see the "edit/suspend
+  // do not apply" case above) — the pointer path and the keyboard path
+  // disagreed about what the screen offers. Exporting this predicate lets the
+  // header ask the same question the resolver asks, instead of hand-typing a
+  // second `screen.kind !== 'note-missing'` list that could drift from this
+  // one.
+  it('is false exactly for the three screens with no current item', () => {
+    expect(hasGlobalBindings({ kind: 'session-complete' })).toBe(false);
+    expect(hasGlobalBindings({ kind: 'empty' })).toBe(false);
+    expect(hasGlobalBindings({ kind: 'note-missing' })).toBe(false);
+  });
+
+  it('is true for every screen carrying a current item', () => {
+    expect(hasGlobalBindings({ kind: 'card-front' })).toBe(true);
+    expect(hasGlobalBindings({ kind: 'card-reveal' })).toBe(true);
+    expect(hasGlobalBindings({ kind: 'mcq-unanswered', optionCount: PRESENTED_OPTIONS })).toBe(
+      true,
+    );
+    expect(hasGlobalBindings({ kind: 'mcq-answered' })).toBe(true);
   });
 });
 

@@ -182,25 +182,24 @@ function readEmbeddings(body: unknown, expectedModel: string): readonly Embeddin
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerEmbeddingError(
       `WorkerEmbeddingProvider: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerEmbeddingError(
       'WorkerEmbeddingProvider: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const stamp = response['stamp'];
+  const stamp = response.stamp;
   const stampedModel =
     typeof stamp === 'object' && stamp !== null
-      ? (stamp as Record<string, unknown>)['modelId']
+      ? (stamp as Record<string, unknown>).modelId
       : undefined;
   if (typeof stampedModel !== 'string' || stampedModel.length === 0) {
     throw new WorkerEmbeddingError(
@@ -215,10 +214,10 @@ function readEmbeddings(body: unknown, expectedModel: string): readonly Embeddin
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   const rawEntries =
     typeof result === 'object' && result !== null
-      ? (result as Record<string, unknown>)['embeddings']
+      ? (result as Record<string, unknown>).embeddings
       : undefined;
   if (!Array.isArray(rawEntries)) {
     throw new WorkerEmbeddingError(
@@ -228,8 +227,8 @@ function readEmbeddings(body: unknown, expectedModel: string): readonly Embeddin
 
   return rawEntries.map((raw, index) => {
     const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
-    const contentHash = entry['contentHash'];
-    const vector = entry['vector'];
+    const contentHash = entry.contentHash;
+    const vector = entry.vector;
     if (typeof contentHash !== 'string' || contentHash.length === 0) {
       throw new WorkerEmbeddingError(
         `WorkerEmbeddingProvider: embedding ${index} carried no contentHash.`,

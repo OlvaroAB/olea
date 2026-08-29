@@ -30,6 +30,7 @@ import {
   ORACLE_STATES,
   RETRIEVE_STATES,
   REVIEW_STATES,
+  RHYTHM_STATES,
   SESSION_STATES,
   type Surface,
   TALL_STATE_VIEWPORTS,
@@ -78,6 +79,7 @@ const SURFACE_STATES: ReadonlyArray<readonly [Surface, readonly string[]]> = [
   ['explain', EXPLAIN_STATES],
   ['session', SESSION_STATES],
   ['trends', TRENDS_STATES],
+  ['rhythm', RHYTHM_STATES],
 ];
 
 for (const [surface, stateIds] of SURFACE_STATES) {

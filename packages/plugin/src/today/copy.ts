@@ -67,8 +67,11 @@
 
 import type { MasteryState } from 'olea-contracts';
 import {
+  type CalendarDay,
   CONTEST_GESTURE_LABEL,
   type CourseEffort,
+  type CourseFreshnessBasis,
+  type CourseFreshnessReading,
   MASTERY_DISPLAY,
   MASTERY_ORDER,
 } from 'olea-core';
@@ -395,6 +398,88 @@ export function rhythmQuietLine(course: string, quietDays: number): RhythmQuietL
 }
 
 /**
+ * RHY-3's calendar-schedule freshness signal (`ol-4chx` -> `ol-r6s0` ->
+ * `ol-hna1` -> `ol-at1a`) — the "with yardstick" branch of the already-drawn
+ * rhythm empty state (`RhythmScoped(dates=true)`,
+ * `docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/
+ * Pass5Empties.jsx` in `olea-service`), now fed a real per-course session date
+ * instead of sample content. This is a *stronger* claim than
+ * `rhythmQuietClause`'s flat quiet-days count — a specific calendar-derived
+ * date rather than a threshold crossing — and `basis` is what keeps that
+ * strength honest:
+ *
+ * - `'observed'` — the calendar note itself records the session. Stated
+ *   plainly, the strongest claim this signal can make (RHY-3 §4).
+ * - `'extrapolated'` — projected from a recurring weekly slot past the synced
+ *   window. Hedged ("based on its usual pattern", "expected around") rather
+ *   than asserted as read — RHY-3 §4's binding rule that an extrapolated date
+ *   must never be stated with an observed date's confidence.
+ *
+ * Same restraint `rhythmQuietClause` already holds: no streak, no effort
+ * score, no hours total, nothing phrased as "behind" — a session and whether
+ * material from it has landed, and nothing else. The fact is about the vault
+ * (`[D-047]`), never about her.
+ */
+export function rhythmYardstickClause(
+  expectedSessionDate: CalendarDay,
+  basis: CourseFreshnessBasis,
+): string {
+  return basis === 'observed'
+    ? `a session on ${expectedSessionDate} hasn't shown up in your vault yet.`
+    : `based on its usual pattern, a session was expected around ${expectedSessionDate}, and nothing from it has shown up in your vault yet.`;
+}
+
+/** `rhythmYardstickClause`'s return shape, bundled with the course it is true of — same reasoning `rhythmQuietLine` states. */
+export interface RhythmYardstickLine {
+  readonly course: string;
+  readonly text: string;
+}
+
+/**
+ * The one way this module offers to reach `rhythmYardstickClause` — reaching
+ * it always carries which course it measures, same guarantee `rhythmQuietLine`
+ * gives. The course itself is never in `.text` (INV-3, `ol-p2t08`).
+ */
+export function rhythmYardstickLine(
+  course: string,
+  expectedSessionDate: CalendarDay,
+  basis: CourseFreshnessBasis,
+): RhythmYardstickLine {
+  return { course, text: rhythmYardstickClause(expectedSessionDate, basis) };
+}
+
+/**
+ * Which course's calendar-schedule reading the already-drawn rhythm empty
+ * state shows, when more than one course reaches `not-arrived-with-yardstick`
+ * at once. Composing every flagged course into one panel is
+ * `RHY-3-multicourse-composition.md`'s job (`ol-movk` / `ol-i0zw`), explicitly
+ * out of this bead's scope (`ol-at1a`) — so exactly one reading is picked, the
+ * same way the flat quiet-days reading already narrows to exactly one
+ * (`RhythmInsight.measured.quietestCourse`, `olea-core`'s `today/rhythm.ts`).
+ *
+ * **Stable, arbitrary tie-break: course code, alphabetical.** The composition
+ * doc's own §4.4 names this exact fallback for courses with no assessment
+ * date on record; used here as the *only* rule (not merely the fallback)
+ * because ranking by "how overdue" would be the cross-course score comparison
+ * Cluster C rules out (`ol-ej59.4` ruling 1) the moment it influenced what she
+ * sees — and a composed, assessment-proximity ordering across every flagged
+ * course is exactly the multicourse work this bead does not do.
+ *
+ * Returns `null` when `readings` is `null` (the signal could not be computed)
+ * or when no course currently carries a with-yardstick reading — both cases
+ * leave the existing no-yardstick fallback (`rhythmQuietLine`) to render, same
+ * as before this signal existed.
+ */
+export function pickRhythmYardstickReading(
+  readings: readonly CourseFreshnessReading[] | null,
+): CourseFreshnessReading | null {
+  if (readings === null) return null;
+  const withYardstick = readings.filter((r) => r.status === 'not-arrived-with-yardstick');
+  if (withYardstick.length === 0) return null;
+  return [...withYardstick].sort((a, b) => a.courseCode.localeCompare(b.courseCode))[0] ?? null;
+}
+
+/**
  * F7.2's term-dates quiet pointer (`[D-147]`, `ol-0r92.6`) — drawn beside a
  * rhythm quiet finding, and only there: the clause fires it "when the
  * rhythm reading would otherwise render with no yardstick", and the rhythm
@@ -548,6 +633,9 @@ export function allTodayStrings(): readonly string[] {
     // --- F6.9, the rhythm reading ---
     rhythmQuietClause(21),
     rhythmQuietClause(30),
+    // --- RHY-3's calendar-schedule freshness (`ol-at1a`) ---
+    rhythmYardstickClause('2026-08-11', 'observed'),
+    rhythmYardstickClause('2026-08-18', 'extrapolated'),
     // --- F7.2's term-dates quiet pointer (`[D-147]`) ---
     TERM_DATES_POINTER_TEXT,
     TERM_DATES_POINTER_BUTTON_LABEL,

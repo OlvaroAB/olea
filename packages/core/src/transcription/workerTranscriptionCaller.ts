@@ -102,22 +102,21 @@ function readTranscription(body: unknown): TranscribeAudioWireResponse {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerTranscriptionError(
       `WorkerTranscriptionCaller: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerTranscriptionError(
       'WorkerTranscriptionCaller: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   if (typeof result !== 'object' || result === null) {
     throw new WorkerTranscriptionError(
       'WorkerTranscriptionCaller: the Worker response carried no `result` object.',
@@ -125,13 +124,13 @@ function readTranscription(body: unknown): TranscribeAudioWireResponse {
   }
   const r = result as Record<string, unknown>;
 
-  const transcript = r['transcript'];
+  const transcript = r.transcript;
   if (typeof transcript !== 'string') {
     throw new WorkerTranscriptionError(
       'WorkerTranscriptionCaller: the Worker response carried no transcript field.',
     );
   }
-  const durationSeconds = r['durationSeconds'];
+  const durationSeconds = r.durationSeconds;
   if (
     typeof durationSeconds !== 'number' ||
     !Number.isFinite(durationSeconds) ||

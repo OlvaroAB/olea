@@ -161,7 +161,9 @@ export class GapView extends ItemView {
       // alone.
       masteryEl.setText(row.masteryState);
     } else {
-      masteryEl.appendChild(renderSprig({ state: row.masteryState, size: 12 }));
+      masteryEl.appendChild(
+        renderSprig({ state: row.masteryState, size: 12, container: masteryEl }),
+      );
       masteryEl.createSpan({ text: row.masteryState });
     }
     el.createDiv({ cls: 'olea-gap-line', text: gapRowLine(row) });

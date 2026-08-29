@@ -8,6 +8,7 @@
  * mock and not the record; a rejection recorded as a failing test is not.
  */
 
+import type { CourseFreshnessReading } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   allTodayStrings,
@@ -23,8 +24,11 @@ import {
   masteryCountLabel,
   NOTHING_DUE,
   newCountSentence,
+  pickRhythmYardstickReading,
   rhythmQuietClause,
   rhythmQuietLine,
+  rhythmYardstickClause,
+  rhythmYardstickLine,
   showsStartReviewAction,
   showsTermDatesPointer,
   spacingRateSentence,
@@ -375,6 +379,120 @@ describe('rhythmQuietClause / rhythmQuietLine — F6.9, the rhythm reading', () 
       expect(rhythmQuietClause(21).toLowerCase()).not.toContain(word);
       expect(corpus).not.toContain(word);
     }
+  });
+});
+
+/** A minimal `CourseFreshnessReading`, only the fields these tests vary. */
+function freshnessReading(
+  courseCode: string,
+  overrides: Partial<CourseFreshnessReading> = {},
+): CourseFreshnessReading {
+  return {
+    courseCode,
+    status: 'not-arrived-with-yardstick',
+    expectedSessionDate: '2026-08-11',
+    basis: 'observed',
+    reason: 'test fixture',
+    ...overrides,
+  };
+}
+
+describe('rhythmYardstickClause / rhythmYardstickLine — RHY-3 (`ol-at1a`)', () => {
+  // Scenario: features/F6-today.md's F6.9 scenarios extend to the
+  // calendar-schedule signal the same way rhythmQuietClause's do — this is
+  // the "with yardstick" branch RHY-3-schedule-extraction.md §4/§5 licenses.
+
+  it('states an observed session date plainly, with confidence', () => {
+    const clause = rhythmYardstickClause('2026-08-11', 'observed');
+    expect(clause).toContain('2026-08-11');
+    expect(clause).not.toMatch(/expected|usual pattern|based on/);
+  });
+
+  it('hedges an extrapolated session date rather than stating it as read (RHY-3 §4)', () => {
+    const clause = rhythmYardstickClause('2026-08-18', 'extrapolated');
+    expect(clause).toContain('2026-08-18');
+    // The binding rule this bead must honour: never the same confidence as
+    // an observed date.
+    expect(clause).toMatch(/usual pattern/);
+    expect(clause).toMatch(/expected/);
+  });
+
+  it('names no streak, effort score, hours total or compliance language', () => {
+    for (const basis of ['observed', 'extrapolated'] as const) {
+      const clause = rhythmYardstickClause('2026-08-11', basis).toLowerCase();
+      for (const word of ['streak', 'effort', 'hours', 'complete', 'behind', 'ahead', 'should']) {
+        expect(clause, `"${word}" is exactly what F6.9's forbidden list rules out`).not.toContain(
+          word,
+        );
+      }
+    }
+  });
+
+  it('never names a future day, weekday or relative time (same rule as the panel-wide corpus check)', () => {
+    for (const basis of ['observed', 'extrapolated'] as const) {
+      const clause = rhythmYardstickClause('2026-08-11', basis).toLowerCase();
+      for (const word of ['tomorrow', 'scheduled', 'until', 'comes up', 'come up']) {
+        expect(clause).not.toContain(word);
+      }
+    }
+  });
+
+  it('rhythmYardstickLine bundles the course with the same text rhythmYardstickClause produces', () => {
+    const line = rhythmYardstickLine('FIXTURE101', '2026-08-11', 'observed');
+    expect(line.course).toBe('FIXTURE101');
+    expect(line.text).toBe(rhythmYardstickClause('2026-08-11', 'observed'));
+  });
+
+  it('the bundled text still names no course — only the .course field does (INV-3, ol-p2t08)', () => {
+    const line = rhythmYardstickLine('FIXTURE101', '2026-08-11', 'observed');
+    expect(line.text).not.toContain('FIXTURE101');
+    expect(line.text).not.toMatch(/[A-Z]/);
+  });
+
+  it('is part of the corpus the panel-wide rules are checked against', () => {
+    expect(allTodayStrings()).toContain(rhythmYardstickClause('2026-08-11', 'observed'));
+    expect(allTodayStrings()).toContain(rhythmYardstickClause('2026-08-18', 'extrapolated'));
+  });
+});
+
+describe('pickRhythmYardstickReading — selects at most one course (`ol-at1a`)', () => {
+  it('returns null when the signal could not be computed at all', () => {
+    expect(pickRhythmYardstickReading(null)).toBeNull();
+  });
+
+  it('returns null when no course currently has a with-yardstick reading', () => {
+    const readings = [
+      freshnessReading('ARRIVED1', {
+        status: 'arrived',
+        expectedSessionDate: undefined,
+        basis: undefined,
+      }),
+      freshnessReading('NOYARD02', {
+        status: 'not-arrived-no-yardstick',
+        expectedSessionDate: undefined,
+        basis: undefined,
+      }),
+    ];
+    expect(pickRhythmYardstickReading(readings)).toBeNull();
+  });
+
+  it('returns the one with-yardstick reading when exactly one course has one', () => {
+    const readings = [
+      freshnessReading('ARRIVED1', {
+        status: 'arrived',
+        expectedSessionDate: undefined,
+        basis: undefined,
+      }),
+      freshnessReading('QUIETONE'),
+    ];
+    expect(pickRhythmYardstickReading(readings)?.courseCode).toBe('QUIETONE');
+  });
+
+  it('never composes more than one course — picks by a stable, arbitrary tie-break (course code) rather than any "how overdue" ranking', () => {
+    const readings = [freshnessReading('ZCOURSE9'), freshnessReading('ACOURSE1')];
+    // Alphabetical, not insertion order — the selection is deterministic
+    // regardless of how the caller happened to list courses.
+    expect(pickRhythmYardstickReading(readings)?.courseCode).toBe('ACOURSE1');
   });
 });
 

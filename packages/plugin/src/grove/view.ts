@@ -178,7 +178,7 @@ export class GroveView extends ItemView {
       for (const cell of model.cells) {
         const el = list.createDiv({ cls: 'olea-grove-concept' });
         if (cell.state !== 'ground') {
-          el.appendChild(renderSprig({ state: cell.state, size: 12 }));
+          el.appendChild(renderSprig({ state: cell.state, size: 12, container: el }));
         } else {
           el.createSpan({ cls: 'olea-grove-ground-mark', text: groveStateLabel('ground') });
         }

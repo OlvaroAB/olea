@@ -54,8 +54,10 @@ import {
   masteryCountLabel,
   NOTHING_DUE,
   newCountSentence,
+  pickRhythmYardstickReading,
   RHYTHM_LABEL,
   rhythmQuietLine,
+  rhythmYardstickLine,
   START_REVIEW,
   showsStartReviewAction,
   showsTermDatesPointer,
@@ -65,6 +67,7 @@ import {
   TODAY_HEADER_LABEL,
   TODAY_VIEW_TITLE,
 } from './copy.js';
+import type { TodayViewModelWithSchedule } from './data-source.js';
 import type { TermDatesAskState } from './term-window-store.js';
 
 export const VIEW_TYPE_OLEA_TODAY = 'olea-today';
@@ -84,7 +87,7 @@ export interface TermDatesAskSupport {
 
 export interface TodayViewDeps {
   /** Loads the view model. Async because it reads the vault. */
-  readonly load: () => Promise<TodayViewModel>;
+  readonly load: () => Promise<TodayViewModelWithSchedule>;
   /** What the one primary action does. Wired to the review command in `main.ts`. */
   readonly startReview: () => void;
   /**
@@ -151,7 +154,7 @@ export class TodayView extends ItemView {
     this.render(vm);
   }
 
-  private render(vm: TodayViewModel): void {
+  private render(vm: TodayViewModelWithSchedule): void {
     const root = this.contentEl;
     root.empty();
     // Every claim the panel asserts, enumerated once, in core — so the gesture
@@ -235,7 +238,7 @@ export class TodayView extends ItemView {
       // evidence for a growth transition to react to at this surface. `renderRow`
       // in `gap/view.ts` is where a sprig stands for one concept's own state.
       const countEl = counts.createSpan({ cls: 'olea-today-mastery-count' });
-      countEl.appendChild(renderSprig({ state, size: 12 }));
+      countEl.appendChild(renderSprig({ state, size: 12, container: countEl }));
       countEl.createSpan({ text: masteryCountLabel(state, count) });
     }
   }
@@ -409,19 +412,49 @@ export class TodayView extends ItemView {
    * carries no `insightsScopeSentence` footer and would misstate its own
    * scope if folded under a label that promises one.
    *
-   * Renders only on `'observed'` — a course actually reached the quiet
-   * threshold. `'not-observed'` (measured, and nothing is quiet) and
-   * `'not-enough-history'` (no arrival store wired, or nothing observed yet)
-   * both render nothing: the same "nothing here fires in the negative
-   * direction" restraint `insightLines`' effort half already holds, applied
-   * to a reading F6.9 states is about the vault and never about her.
+   * **Two sources feed the one section, never both at once (`ol-at1a`).**
+   * RHY-3's calendar-schedule freshness signal (`vm.scheduleFreshness`) is
+   * checked first — `pickRhythmYardstickReading` picks at most one course's
+   * "with yardstick" reading, a stronger, dated claim than the flat
+   * quiet-days fallback below. Only when no course currently has one does
+   * this fall back to the pre-existing reading (`vm.rhythm`, F6.9's flat
+   * `QUIET_DAYS_THRESHOLD`), unchanged from before this signal existed —
+   * still renders only on `'observed'`. `'not-observed'` (measured, and
+   * nothing is quiet) and `'not-enough-history'` (no arrival store wired, or
+   * nothing observed yet) both render nothing: the same "nothing here fires
+   * in the negative direction" restraint `insightLines`' effort half already
+   * holds, applied to a reading F6.9 states is about the vault and never
+   * about her.
    */
-  private renderRhythm(parent: HTMLElement, vm: TodayViewModel): void {
+  private renderRhythm(parent: HTMLElement, vm: TodayViewModelWithSchedule): void {
     this.renderRhythmBody(parent, vm);
     this.renderContestGesture(parent, 'rhythm');
   }
 
-  private renderRhythmBody(parent: HTMLElement, vm: TodayViewModel): void {
+  private renderRhythmBody(parent: HTMLElement, vm: TodayViewModelWithSchedule): void {
+    const yardstick = pickRhythmYardstickReading(vm.scheduleFreshness);
+    if (
+      yardstick !== null &&
+      yardstick.expectedSessionDate !== undefined &&
+      yardstick.basis !== undefined
+    ) {
+      const line = rhythmYardstickLine(
+        yardstick.courseCode,
+        yardstick.expectedSessionDate,
+        yardstick.basis,
+      );
+      const section = parent.createDiv({ cls: 'olea-today-insights' });
+      section.createDiv({ cls: 'olea-today-insights-label', text: RHYTHM_LABEL });
+      const insight = section.createDiv({ cls: 'olea-today-insight' });
+      insight.createSpan({ cls: 'olea-today-mastery-code', text: line.course });
+      insight.createSpan({ cls: 'olea-today-insight-text', text: line.text });
+      // No term-dates pointer here: RHY-3 §3 — a calendar-derived expectation
+      // needs no term start/end at all, so there is nothing this reading is
+      // "missing" that asking for term dates would supply. The pointer stays
+      // scoped to the no-yardstick fallback below, its original trigger.
+      return;
+    }
+
     const rhythm = vm.rhythm;
     if (rhythm === null || rhythm.status !== 'observed') return;
     const quietest = rhythm.measured?.quietestCourse ?? null;

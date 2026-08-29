@@ -280,7 +280,17 @@ export function buildTrendsScenario(stateId: string): TrendsScenario {
   if (state === undefined)
     throw new Error(`workbench: unknown trends state ${JSON.stringify(stateId)}`);
 
-  const viewModel = buildTrendsViewModel(state.id);
+  // `ol-at1a` widened `TodayViewDeps.load` to `TodayViewModelWithSchedule`
+  // (RHY-3's calendar-schedule freshness signal). This surface replays a
+  // persona stream through `buildTodayPanel` and never wires that source —
+  // `null` is its own documented "no rhythm source wired" case. Widened
+  // ONCE, here, rather than inside `deps.load`'s closure: `viewModel` below
+  // is the exact object both `load()` resolves to and this scenario returns
+  // as `viewModel`, and `renderTrendsInspector`'s own doc promises the
+  // inspector "re-states the same `viewModel` the pane rendered from, never
+  // a second computation" — a fresh object per `load()` call would break
+  // that identity.
+  const viewModel = { ...buildTrendsViewModel(state.id), scheduleFreshness: null };
 
   return {
     deps: {

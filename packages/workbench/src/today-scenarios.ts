@@ -219,15 +219,22 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       return {
         deps: {
           load: () =>
-            Promise.resolve(
-              buildTodayPanel({
+            Promise.resolve({
+              ...buildTodayPanel({
                 entries: [],
                 instruments: [],
                 today,
                 dueThrough,
                 windowDays: DEFAULT_STREAK_WINDOW_DAYS,
               }),
-            ),
+              // `ol-at1a` widened `TodayViewDeps.load` to
+              // `TodayViewModelWithSchedule` (RHY-3's calendar-schedule
+              // freshness signal). This state hand-builds a `TodayViewModel`
+              // straight from `buildTodayPanel` and never wires that source —
+              // `null` is its own documented "no rhythm source wired" case,
+              // not a fabricated empty reading.
+              scheduleFreshness: null,
+            }),
           startReview,
         },
         logged,
@@ -238,15 +245,17 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       return {
         deps: {
           load: () =>
-            Promise.resolve(
-              buildTodayPanel({
+            Promise.resolve({
+              ...buildTodayPanel({
                 entries: [],
                 instruments: null,
                 today,
                 dueThrough,
                 windowDays: DEFAULT_STREAK_WINDOW_DAYS,
               }),
-            ),
+              // See `today-nothing-due`'s comment above.
+              scheduleFreshness: null,
+            }),
           startReview,
         },
         logged,

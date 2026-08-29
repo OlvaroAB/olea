@@ -16,6 +16,7 @@ import {
   ORACLE_STATES,
   RETRIEVE_STATES,
   REVIEW_STATES,
+  RHYTHM_STATES,
   SESSION_STATES,
   TIMELINE_STATES,
   TODAY_STATES,
@@ -23,7 +24,7 @@ import {
   VARIABLE_SETS,
 } from './helpers.js';
 
-test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/variable-set lists match the live app', async ({
+test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/variable-set lists match the live app', async ({
   page,
 }) => {
   await page.goto('/');
@@ -66,6 +67,10 @@ test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/sessi
     new Set(live.trendsStates),
     'trends states — see trends-scenarios.ts TRENDS_STATES',
   ).toEqual(new Set(TRENDS_STATES));
+  expect(
+    new Set(live.rhythmStates),
+    'rhythm states — see rhythm-scenarios.ts RHYTHM_STATES',
+  ).toEqual(new Set(RHYTHM_STATES));
   expect(new Set(live.variableSets), 'variable sets — see themes/index.ts VARIABLE_SETS').toEqual(
     new Set(VARIABLE_SETS),
   );

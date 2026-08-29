@@ -45,15 +45,21 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
+  associateScheduleEvents,
   buildReviewSession,
   buildTodayPanel,
   type CalendarDay,
   type ConceptCourses,
   type ConceptRelation,
+  type CourseFreshnessReading,
   calendarDayFromLocalDate,
   calendarDaysEndingOn,
+  computeScheduleFreshness,
+  courseFromPath,
+  DEFAULT_COURSES_FOLDER,
   type DisputeLogRecord,
   type DueInstrument,
+  discoverScheduleEvents,
   type ExtractConceptsOptions,
   extractConcepts,
   parseReviewLog,
@@ -474,10 +480,39 @@ export interface TodayPanelDeps {
 }
 
 /**
+ * `TodayViewModel` widened with RHY-3's calendar-schedule freshness signal
+ * (`ol-4chx` -> `ol-r6s0` -> `ol-hna1` -> `ol-at1a`) — see
+ * `resolveScheduleFreshness` below for how it is computed and `view.ts`'s
+ * `renderRhythmBody` for how it feeds the already-drawn rhythm empty state.
+ *
+ * **Kept as a plugin-local widening, not a new `TodayPanelInput`/
+ * `TodayViewModel` field.** Those two types belong to `olea-core`'s
+ * `today/panel.ts`, outside this bead's `owns` scope
+ * (`packages/plugin/src/today/`, `packages/core/src/schedule/`) — adding the
+ * field there instead is the more natural long-term home (the same place
+ * `rhythm` itself lives) and is named as the exact diff in this bead's
+ * hand-back, not attempted here.
+ */
+export type TodayViewModelWithSchedule = TodayViewModel & {
+  /**
+   * One reading per course the calendar-events note's matched events cover.
+   * `null` when the signal could not be computed at all (no rhythm source
+   * wired yet — pre-`onload`, never a reachable production render — or its
+   * arrival store could not be read; `resolveRhythmFields`'s own absent
+   * case). `[]` is a real, common answer: a vault with a calendar note but
+   * nothing overdue for any course it names, or no calendar note discovered
+   * anywhere (RHY-3 §6 row 1) — both degrade to "no yardstick" for every
+   * course, which is exactly what an empty array, read by
+   * `pickRhythmYardstickReading`, already produces.
+   */
+  readonly scheduleFreshness: readonly CourseFreshnessReading[] | null;
+};
+
+/**
  * Loads both halves and folds them through core's one entry point. This is the
  * whole of what `view.ts` calls; everything it then does is DOM.
  */
-export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewModel> {
+export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewModelWithSchedule> {
   const now = deps.now();
   const today = localToday(now);
   // Resolved here rather than forwarded as `undefined`: under
@@ -506,7 +541,21 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   const trendsFields = await resolveTrendsFields(deps.trends);
   const rhythmFields = await resolveRhythmFields(deps.rhythm);
 
-  return buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields });
+  const vm = await buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields });
+
+  // RHY-3's calendar-schedule freshness — computed alongside `buildTodayPanel`
+  // rather than through it (see `TodayViewModelWithSchedule`'s doc). Reuses
+  // the same "last arrival per course" fact `rhythmFields` already read,
+  // rather than reading the arrival store a second time.
+  const courseMaterialArrivals =
+    'courseMaterialArrivals' in rhythmFields ? rhythmFields.courseMaterialArrivals : null;
+  const scheduleFreshness = await resolveScheduleFreshness(
+    deps.vault,
+    courseMaterialArrivals,
+    today,
+  );
+
+  return { ...vm, scheduleFreshness };
 }
 
 /** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */
@@ -529,4 +578,50 @@ async function resolveRhythmFields(
   if (courseMaterialArrivals === null) return {};
   const termWindow = await rhythm.resolveTermWindow();
   return { courseMaterialArrivals, termWindow };
+}
+
+/**
+ * RHY-3's calendar-schedule freshness signal (`ol-4chx` -> `ol-r6s0` ->
+ * `ol-hna1` -> `ol-at1a`), computed fresh on every panel load — RHY-3 §8
+ * Class C stop 1 forbids any persisted cache of the parsed schedule, and this
+ * function does none: `discoverScheduleEvents` re-scans the vault every call.
+ *
+ * `courseMaterialArrivals` is the "last arrival per course" fact
+ * `resolveRhythmFields` already read from the arrival store — passed in
+ * rather than re-read, and its absence (`null`) is treated the same way that
+ * function treats it: no rhythm source wired yet, or its store unreadable, is
+ * "cannot say" for this signal too, never a computed answer.
+ *
+ * The known-course roster comes from `discoverScheduleEvents`'s own
+ * `notesScanned` (every markdown note in the vault) run through
+ * `courseFromPath` (F1.3) — the same roster-derivation pattern
+ * `generation/pipeline.ts`'s `runGenerationSweep` already uses, reusing the
+ * one vault-wide listing `discoverScheduleEvents` already did rather than
+ * asking the host to list twice.
+ */
+async function resolveScheduleFreshness(
+  vault: VaultSource,
+  courseMaterialArrivals: readonly RhythmCourseInput[] | null,
+  today: CalendarDay,
+): Promise<readonly CourseFreshnessReading[] | null> {
+  if (courseMaterialArrivals === null) return null;
+  try {
+    const discovery = await discoverScheduleEvents(vault);
+    const knownCourseCodes = new Set<string>();
+    for (const path of discovery.notesScanned) {
+      const course = courseFromPath(path, DEFAULT_COURSES_FOLDER);
+      if (course !== undefined) knownCourseCodes.add(course);
+    }
+
+    const association = associateScheduleEvents(discovery.events, knownCourseCodes);
+    const lastArrivalByCourse = new Map(
+      courseMaterialArrivals.map((c) => [c.course, c.lastMaterialArrivalDay] as const),
+    );
+    return computeScheduleFreshness(association.matched, lastArrivalByCourse, today);
+  } catch {
+    // A vault read failure here is the same "cannot say" every other source
+    // in this file returns `null` for — never surfaced to her as an error
+    // (RHY-3 §8 Class C stop 2 forbids a "couldn't read your calendar" line).
+    return null;
+  }
 }

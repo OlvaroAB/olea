@@ -1144,6 +1144,19 @@ export {
   routingReason,
   UNCLASSIFIED_MIX,
 } from './routing/instrument-mix.js';
+// RHY-3's schedule-extraction build chain, step 2 (`ol-4chx` -> `ol-r6s0` ->
+// `ol-hna1` -> `ol-at1a`): case-insensitive course association plus explicit
+// ambiguity handling for step 1's parsed events. No production caller yet —
+// see `./schedule/associate.ts`'s module doc for the exact scope boundary.
+export {
+  type AssociatedScheduleEvent,
+  associateScheduleEvents,
+  type CourseLabelMatch,
+  matchCourseLabel,
+  type ScheduleAssociationMiss,
+  type ScheduleAssociationReport,
+  type UnmatchedScheduleEvent,
+} from './schedule/associate.js';
 // RHY-3's schedule-extraction build chain, step 1 (`ol-4chx` -> `ol-r6s0` ->
 // `ol-hna1` -> `ol-at1a`): evidence-based calendar-note discovery and the
 // narrow event-line grammar scan. No production caller yet — `ol-at1a` wires
@@ -1158,19 +1171,6 @@ export {
   type ScheduleTimeRange,
   scanNoteForScheduleEvents,
 } from './schedule/discover.js';
-// RHY-3's schedule-extraction build chain, step 2 (`ol-4chx` -> `ol-r6s0` ->
-// `ol-hna1` -> `ol-at1a`): case-insensitive course association plus explicit
-// ambiguity handling for step 1's parsed events. No production caller yet —
-// see `./schedule/associate.ts`'s module doc for the exact scope boundary.
-export {
-  associateScheduleEvents,
-  type AssociatedScheduleEvent,
-  type CourseLabelMatch,
-  matchCourseLabel,
-  type ScheduleAssociationMiss,
-  type ScheduleAssociationReport,
-  type UnmatchedScheduleEvent,
-} from './schedule/associate.js';
 // RHY-3's schedule-extraction build chain, step 3 (`ol-4chx` -> `ol-r6s0` ->
 // `ol-hna1` -> `ol-at1a`): weekday recurrence detection over step 2's matched
 // events, forward extrapolation past a stale synced window, and the
@@ -1181,11 +1181,11 @@ export {
 // build must not cross.
 export {
   ARRIVAL_GRACE_DAYS,
-  computeCourseFreshness,
-  computeScheduleFreshness,
   type CourseFreshnessBasis,
   type CourseFreshnessReading,
   type CourseFreshnessStatus,
+  computeCourseFreshness,
+  computeScheduleFreshness,
   EXTRAPOLATION_BOUND_WEEKS,
   MIN_HISTORICAL_SESSIONS_TO_TRUST,
 } from './schedule/freshness.js';

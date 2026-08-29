@@ -95,8 +95,20 @@ function normaliseSpace(key: string): boolean {
   return key === ' ' || key === 'Spacebar';
 }
 
-/** Screens with an on-screen item to act on — where the "every item" global bindings (E, S, Esc, arrows) apply. `session-complete`, `empty` and `note-missing` each have no editable/suspendable item, so they opt out. */
-function hasGlobalBindings(screen: ReviewScreen): boolean {
+/**
+ * Screens with an on-screen item to act on — where the "every item" global
+ * bindings (E, S, Esc, arrows) apply. `session-complete`, `empty` and
+ * `note-missing` each have no editable/suspendable item, so they opt out.
+ *
+ * Exported so `view.ts`'s header can gate the "Edit note"/"Suspend" **pointer**
+ * affordances on the same predicate that already decides whether E/S do
+ * anything (ol-63xn) — a second hand-typed screen-kind list in the DOM layer
+ * is exactly the drift this bead was filed over: the keycaps stopped
+ * advertising a dead shortcut on `note-missing` once they were derived from
+ * this function, but the buttons themselves kept rendering because nothing
+ * asked it the same question.
+ */
+export function hasGlobalBindings(screen: ReviewScreen): boolean {
   return (
     screen.kind !== 'session-complete' && screen.kind !== 'empty' && screen.kind !== 'note-missing'
   );

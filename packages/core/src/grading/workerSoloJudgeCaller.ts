@@ -99,22 +99,21 @@ function readSoloGrading(body: unknown): ExplainBackSoloWireResponse {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerSoloJudgeError(
       `WorkerSoloJudgeCaller: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerSoloJudgeError(
       'WorkerSoloJudgeCaller: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   if (typeof result !== 'object' || result === null) {
     throw new WorkerSoloJudgeError(
       'WorkerSoloJudgeCaller: the Worker response carried no `result` object.',
@@ -122,21 +121,21 @@ function readSoloGrading(body: unknown): ExplainBackSoloWireResponse {
   }
   const r = result as Record<string, unknown>;
 
-  const soloLevel = r['soloLevel'];
+  const soloLevel = r.soloLevel;
   if (typeof soloLevel !== 'string' || !SOLO_LEVELS.has(soloLevel)) {
     throw new WorkerSoloJudgeError(
       `WorkerSoloJudgeCaller: the Worker returned an unrecognised soloLevel (${JSON.stringify(soloLevel)}).`,
     );
   }
-  const rationale = r['rationale'];
+  const rationale = r.rationale;
   if (typeof rationale !== 'string' || rationale.length === 0) {
     throw new WorkerSoloJudgeError(
       'WorkerSoloJudgeCaller: the Worker response carried no rationale text.',
     );
   }
 
-  const citedBlockIds = readStringArray(r['citedBlockIds'], 'citedBlockIds');
-  const neighbourUseDemonstrated = r['neighbourUseDemonstrated'];
+  const citedBlockIds = readStringArray(r.citedBlockIds, 'citedBlockIds');
+  const neighbourUseDemonstrated = r.neighbourUseDemonstrated;
   if (neighbourUseDemonstrated !== undefined && typeof neighbourUseDemonstrated !== 'boolean') {
     throw new WorkerSoloJudgeError(
       "WorkerSoloJudgeCaller: 'neighbourUseDemonstrated' was present but not a boolean.",
