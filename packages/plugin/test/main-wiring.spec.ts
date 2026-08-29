@@ -721,13 +721,15 @@ describe('Home and the grove open commands are folded into the shared command mo
   });
 });
 
-describe('the manual process-now timing override is registered and reachable ([D-152], ol-0r92.21)', () => {
-  // `docs/dev/surface-register.md`'s own convention for a bead outside
-  // `commands/`'s owned paths: the id lives in `ids.ts` (checked separately
-  // by `check-surface-register.mjs`'s own scan), wired directly on `Plugin`
-  // here rather than through `registerOleaCommands` — the same shape
-  // `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` used before their
-  // own Class A fold.
+describe('the manual process-now timing override is registered and reachable ([D-152], ol-0r92.21; palette door folded by ol-s46v)', () => {
+  // The command-palette door used to be a direct `this.addCommand` call,
+  // outside `commands/`'s owned paths at the time `ol-0r92.21` shipped it —
+  // the same shape `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` used
+  // before their own Class A fold (`docs/dev/surface-register.md`). `ol-s46v`
+  // is that fold, completed here: the id and name now live in
+  // `register-commands.ts` (asserted directly in that module's own spec),
+  // and this file's job is proving `main.ts` no longer registers it directly
+  // and instead supplies the real `checkCallback`, unchanged, as a handler.
 
   it('builds the process-now action once ingestion exists, wired to the real engine and onUnitsLanded', () => {
     expect(main).toMatch(
@@ -735,9 +737,14 @@ describe('the manual process-now timing override is registered and reachable ([D
     );
   });
 
-  it('the command palette entry is registered directly, gated on an active, supported file', () => {
+  it('main.ts no longer calls this.addCommand for olea-process-note-now directly', () => {
+    expect(main).not.toMatch(/this\.addCommand\(\{\s*id:\s*OLEA_COMMAND_PROCESS_NOTE_NOW/);
+    expect(main).not.toMatch(/this\.addCommand\(\{\s*id:\s*'olea-process-note-now'/);
+  });
+
+  it('registerOleaCommands is given the real checkCallback instead, identical to the direct registration it replaced — gated on an active, supported file', () => {
     expect(main).toMatch(
-      /this\.addCommand\(\{\s*id:\s*OLEA_COMMAND_PROCESS_NOTE_NOW,\s*name:\s*'Olea: Process this note now',\s*checkCallback:\s*\(checking:\s*boolean\)\s*=>\s*\{\s*const file = this\.app\.workspace\.getActiveFile\(\);\s*if \(file === null \|\| !isProcessNowSupported\(file\.path\)\) return false;\s*if \(checking\) return true;\s*void this\.processNoteNow\(file\.path\);\s*return true;\s*\},\s*\}\);/,
+      /processNoteNowCheckCallback:\s*\(checking:\s*boolean\)\s*=>\s*\{\s*const file = this\.app\.workspace\.getActiveFile\(\);\s*if \(file === null \|\| !isProcessNowSupported\(file\.path\)\) return false;\s*if \(checking\) return true;\s*void this\.processNoteNow\(file\.path\);\s*return true;\s*\},/,
     );
   });
 

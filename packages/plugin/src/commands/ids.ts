@@ -112,11 +112,11 @@ export const OLEA_COMMAND_GROVE_OPEN = 'olea-grove-open';
  * `[D-152]` (F3.3, `ol-0r92.21`): the manual process-now TIMING OVERRIDE on a
  * single note — never a generation verb (unlike the withdrawn
  * `OLEA_COMMAND_DRAFT_CARDS` above, it asks Olea to run the SAME automatic
- * ingestion sooner, never to draft something new on request). Registered
- * directly on `Plugin` in `main.ts` (this bead's owned paths were
- * `ingestion/` and `main.ts`, not this module) — the same "id declared here,
- * wired directly in `main.ts`, fold into the shared palette module later"
- * shape `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` used above.
+ * ingestion sooner, never to draft something new on request). **Fold done**
+ * (`ol-s46v`): registered via the shared palette module's optional
+ * `processNoteNowCheckCallback` handler — `checkCallback`, not `callback`,
+ * because hiding the palette entry when no supported file is active is
+ * load-bearing behaviour.
  * Also reachable from a note's context menu (`main.ts`'s `file-menu`
  * handler), invoking the identical `processNoteNow` method.
  */

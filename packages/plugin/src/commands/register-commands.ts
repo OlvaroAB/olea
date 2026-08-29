@@ -84,6 +84,7 @@ import {
   OLEA_COMMAND_GROVE_OPEN,
   OLEA_COMMAND_HOME_OPEN,
   OLEA_COMMAND_OPEN,
+  OLEA_COMMAND_PROCESS_NOTE_NOW,
   OLEA_COMMAND_REGISTRY_OPEN,
   OLEA_COMMAND_RETROSPECTIVE_OPEN,
   OLEA_COMMAND_REVIEW_START,
@@ -145,6 +146,24 @@ export interface OleaCommandHandlers {
   readonly openHome?: () => void;
   /** `ol-0r92.17` (F8.1, `[D-134]` Q1): opens `GroveView` directly — same fold as `openHome` immediately above. */
   readonly openGrove?: () => void;
+  /**
+   * `ol-s46v` (`[D-152]`, F3.3): the manual process-now timing override's
+   * palette door, folded here from `main.ts`'s own direct
+   * `this.addCommand({ id: OLEA_COMMAND_PROCESS_NOTE_NOW, ... })`
+   * (`ol-0r92.21`) — same optional-handler shape `openRegistry`/`openHome`/
+   * `openGrove` above use, so `buildOleaCommands` below leaves the command
+   * out of the palette entirely rather than registering a broken one when
+   * no handler is supplied.
+   *
+   * **This is the full `checkCallback`, not a plain callback** — `main.ts`
+   * is where `this.app.workspace.getActiveFile()` and
+   * `isProcessNowSupported` are reachable, so it builds the whole function
+   * (identical to the one the direct registration used to inline) and hands
+   * it through, rather than this module reaching for either dependency
+   * itself. See `types.ts`'s `OleaCommandSpec.checkCallback` doc for what
+   * `checking` means and why returning `false` hides the palette entry.
+   */
+  readonly processNoteNowCheckCallback?: (checking: boolean) => boolean;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -260,6 +279,20 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       id: OLEA_COMMAND_GROVE_OPEN,
       name: 'Olea: Open course grove',
       callback: handlers.openGrove,
+    });
+  }
+
+  // `ol-s46v`: folds `main.ts`'s direct process-now `addCommand` call into
+  // this shared module, same conditional shape and same reason `openHome`/
+  // `openGrove` above state — no behaviour change, same id, same palette
+  // name, same `checkCallback` semantics (hidden with no active/supported
+  // file). `checkCallback` rather than `callback` is the one difference from
+  // every entry above it.
+  if (handlers.processNoteNowCheckCallback) {
+    specs.push({
+      id: OLEA_COMMAND_PROCESS_NOTE_NOW,
+      name: 'Olea: Process this note now',
+      checkCallback: handlers.processNoteNowCheckCallback,
     });
   }
 

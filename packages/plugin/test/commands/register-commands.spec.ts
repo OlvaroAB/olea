@@ -15,6 +15,7 @@ import {
   OLEA_COMMAND_GROVE_OPEN,
   OLEA_COMMAND_HOME_OPEN,
   OLEA_COMMAND_OPEN,
+  OLEA_COMMAND_PROCESS_NOTE_NOW,
   OLEA_COMMAND_REGISTRY_OPEN,
   OLEA_COMMAND_RETROSPECTIVE_OPEN,
   OLEA_COMMAND_REVIEW_START,
@@ -51,11 +52,12 @@ function fakeHandlers(): OleaCommandHandlers {
     openRegistry: vi.fn(),
     openHome: vi.fn(),
     openGrove: vi.fn(),
+    processNoteNowCheckCallback: vi.fn((_checking: boolean) => true),
   };
 }
 
 describe('buildOleaCommands', () => {
-  it('registers exactly the twelve command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry, home, grove) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry", ol-0r92.17 added "home"/"grove" (folded in by ol-2zfj.38); the withdrawn "draft cards" command (F4.5) is not among them', () => {
+  it('registers exactly the thirteen command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry, home, grove, process-note-now) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry", ol-0r92.17 added "home"/"grove" (folded in by ol-2zfj.38), ol-s46v folded in "process-note-now"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
     const commands = buildOleaCommands(fakeHandlers());
     expect(commands.map((c) => c.id).sort()).toEqual(
       [
@@ -66,6 +68,7 @@ describe('buildOleaCommands', () => {
         OLEA_COMMAND_GROVE_OPEN,
         OLEA_COMMAND_HOME_OPEN,
         OLEA_COMMAND_OPEN,
+        OLEA_COMMAND_PROCESS_NOTE_NOW,
         OLEA_COMMAND_REGISTRY_OPEN,
         OLEA_COMMAND_RETROSPECTIVE_OPEN,
         OLEA_COMMAND_REVIEW_START,
@@ -97,6 +100,7 @@ describe('buildOleaCommands', () => {
     expect(byId[OLEA_COMMAND_REGISTRY_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_HOME_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_GROVE_OPEN]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_PROCESS_NOTE_NOW]?.hotkeys).toBeUndefined();
   });
 
   it('wires each command callback to its matching handler', () => {
@@ -104,18 +108,18 @@ describe('buildOleaCommands', () => {
     const commands = buildOleaCommands(handlers);
     const byId = Object.fromEntries(commands.map((c) => [c.id, c]));
 
-    byId[OLEA_COMMAND_REVIEW_START]?.callback();
-    byId[OLEA_COMMAND_CREATE_CARD]?.callback();
-    byId[OLEA_COMMAND_TODAY_OPEN]?.callback();
-    byId[OLEA_COMMAND_OPEN]?.callback();
-    byId[OLEA_COMMAND_GAP_OPEN]?.callback();
-    byId[OLEA_COMMAND_SESSION_BUILD]?.callback();
-    byId[OLEA_COMMAND_BULK_REVIEW_OPEN]?.callback();
-    byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.callback();
-    byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.callback();
-    byId[OLEA_COMMAND_REGISTRY_OPEN]?.callback();
-    byId[OLEA_COMMAND_HOME_OPEN]?.callback();
-    byId[OLEA_COMMAND_GROVE_OPEN]?.callback();
+    byId[OLEA_COMMAND_REVIEW_START]?.callback?.();
+    byId[OLEA_COMMAND_CREATE_CARD]?.callback?.();
+    byId[OLEA_COMMAND_TODAY_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_GAP_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_SESSION_BUILD]?.callback?.();
+    byId[OLEA_COMMAND_BULK_REVIEW_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_RETROSPECTIVE_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_DIAGNOSTICS_COPY]?.callback?.();
+    byId[OLEA_COMMAND_REGISTRY_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_HOME_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_GROVE_OPEN]?.callback?.();
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
     expect(handlers.createCard).toHaveBeenCalledTimes(1);
@@ -164,6 +168,28 @@ describe('buildOleaCommands', () => {
     const commands = buildOleaCommands(handlersWithoutGrove);
     expect(commands.some((c) => c.id === OLEA_COMMAND_GROVE_OPEN)).toBe(false);
   });
+
+  it('"Process this note now" is left out of the palette entirely when no handler is supplied (ol-s46v, same shape as openRegistry)', () => {
+    const { processNoteNowCheckCallback: _omitted, ...handlersWithoutProcessNow } = fakeHandlers();
+    const commands = buildOleaCommands(handlersWithoutProcessNow);
+    expect(commands.some((c) => c.id === OLEA_COMMAND_PROCESS_NOTE_NOW)).toBe(false);
+  });
+
+  it('"Process this note now" is registered with checkCallback, not callback — the one command whose palette visibility itself depends on the active file (ol-s46v)', () => {
+    const handlers = fakeHandlers();
+    const commands = buildOleaCommands(handlers);
+    const processNowSpec = commands.find((c) => c.id === OLEA_COMMAND_PROCESS_NOTE_NOW);
+
+    expect(processNowSpec?.callback).toBeUndefined();
+    expect(processNowSpec?.checkCallback).toBe(handlers.processNoteNowCheckCallback);
+
+    // The pass-through is the real function, not a wrapper that drops its
+    // argument or return value — both matter to Obsidian's real contract
+    // (hide the entry when `checking` finds nothing to do).
+    processNowSpec?.checkCallback?.(true);
+    expect(handlers.processNoteNowCheckCallback).toHaveBeenCalledWith(true);
+    expect(processNowSpec?.checkCallback?.(false)).toBe(true);
+  });
 });
 
 describe('registerOleaCommands', () => {
@@ -171,7 +197,7 @@ describe('registerOleaCommands', () => {
     const registrar = new FakeCommandRegistrar();
     registerOleaCommands(registrar, fakeHandlers());
 
-    expect(registrar.registered).toHaveLength(12);
+    expect(registrar.registered).toHaveLength(13);
     expect(registrar.registered.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_BULK_REVIEW_OPEN,
@@ -181,6 +207,7 @@ describe('registerOleaCommands', () => {
         OLEA_COMMAND_GROVE_OPEN,
         OLEA_COMMAND_HOME_OPEN,
         OLEA_COMMAND_OPEN,
+        OLEA_COMMAND_PROCESS_NOTE_NOW,
         OLEA_COMMAND_REGISTRY_OPEN,
         OLEA_COMMAND_RETROSPECTIVE_OPEN,
         OLEA_COMMAND_REVIEW_START,

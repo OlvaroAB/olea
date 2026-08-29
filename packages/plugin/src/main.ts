@@ -33,7 +33,6 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
-import { OLEA_COMMAND_PROCESS_NOTE_NOW } from './commands/ids.js';
 import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
@@ -539,6 +538,26 @@ export default class OleaPlugin extends Plugin {
       openGrove: () => {
         void this.revealGroveView();
       },
+      // `ol-s46v` (`[D-152]`, F3.3): the process-now command palette entry,
+      // folded from `main.ts`'s own direct `this.addCommand` call
+      // (`ol-0r92.21`) into the shared module — same conditional-handler
+      // shape `openRegistry`/`openHome`/`openGrove` above use, extended with
+      // `checkCallback` (`commands/types.ts`) since this is the first Olea
+      // command whose PALETTE VISIBILITY itself has to react to which file is
+      // active, not just what runs when it's invoked. Identical logic to the
+      // direct registration it replaces: hidden from the palette with no
+      // active file, or a file `isProcessNowSupported` declines. The note
+      // context-menu door onto the same action stays a direct
+      // `this.registerEvent` call below — `register-commands.ts` has no
+      // precedent for an event registration, and this bead does not invent
+      // one.
+      processNoteNowCheckCallback: (checking: boolean) => {
+        const file = this.app.workspace.getActiveFile();
+        if (file === null || !isProcessNowSupported(file.path)) return false;
+        if (checking) return true;
+        void this.processNoteNow(file.path);
+        return true;
+      },
     });
 
     // Same store, same "read fresh on every call, never cached" discipline
@@ -859,29 +878,13 @@ export default class OleaPlugin extends Plugin {
       isOnline: () => navigator.onLine,
     });
 
-    // `ol-0r92.21` [D-152]: the two doors onto `processNoteNow` — command
-    // palette and note context menu, F7.7's existing "two doors, one action"
-    // shape (`OLEA_COMMAND_OPEN`/`OLEA_COMMAND_TODAY_OPEN` above). Registered
-    // directly on `Plugin`, not through `registerOleaCommands`
-    // (`commands/register-commands.ts` is outside this bead's owned paths —
-    // `ids.ts`'s own doc on `OLEA_COMMAND_PROCESS_NOTE_NOW` states the same
-    // "id here, direct registration in main.ts, fold later" shape
-    // `OLEA_COMMAND_REGISTRY_OPEN`/`OLEA_COMMAND_HOME_OPEN` already used).
-    // `checkCallback` hides the palette entry entirely with no active file,
-    // or a file `isProcessNowSupported` declines — the same "no affordance
-    // for something that would only error" posture `ol-p2t10`'s module doc
-    // states for "open Olea" before it had a destination.
-    this.addCommand({
-      id: OLEA_COMMAND_PROCESS_NOTE_NOW,
-      name: 'Olea: Process this note now',
-      checkCallback: (checking: boolean) => {
-        const file = this.app.workspace.getActiveFile();
-        if (file === null || !isProcessNowSupported(file.path)) return false;
-        if (checking) return true;
-        void this.processNoteNow(file.path);
-        return true;
-      },
-    });
+    // `ol-0r92.21` [D-152] / `ol-s46v`: the note context menu's own door onto
+    // `processNoteNow` — F7.7's existing "two doors, one action" shape
+    // (`OLEA_COMMAND_OPEN`/`OLEA_COMMAND_TODAY_OPEN` above), the other door
+    // now being the palette entry folded into the `registerOleaCommands` call
+    // above via `processNoteNowCheckCallback`. This one stays a direct
+    // `this.registerEvent` call: `register-commands.ts` has no precedent for
+    // an event registration, and this bead does not invent one.
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file) => {
         if (!(file instanceof TFile) || !isProcessNowSupported(file.path)) return;
