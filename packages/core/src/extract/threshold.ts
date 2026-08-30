@@ -28,21 +28,21 @@
  * count, but a near-*zero* one, because there are no text-showing operators
  * in the content stream at all.
  *
- * **`DEFAULT_TEXT_LAYER_CHAR_THRESHOLD = 10` is this task's own engineering
- * judgement, not a contract number or a measured one** — same footing as
- * `ingestion/budget.ts`'s pacing constants, and flagged the same way. Ten
- * characters per page is comfortably below any plausible genuine slide or
- * document page (even a bare section-divider slide with just a number on
- * it clears this), while still catching the near-zero yield a true
- * image-only or scanned page produces. **This number must not ship
- * unexamined**: E4/P3-T06 measures real character yield against the private
- * corpus and is expected to replace it. Getting it wrong in
- * either direction is expensive in a specific, asymmetric way: too high
- * routes legitimate thin-but-real pages to Slot V for no quality gain — the
- * misrouting failure mode cost model §5.1 quantifies; too low fails to catch
- * genuinely scanned pages, silently handing near-empty or garbage text to Slot G
- * instead of routing to vision, which is worse than a cost mistake — it's
- * a quality failure that looks like success.
+ * **`DEFAULT_TEXT_LAYER_CHAR_THRESHOLD = 10` is an adopted value, not this
+ * file's own invention.** It was set from a measurement; the measurement
+ * itself is private and does not ship — only the number below is public.
+ * Treat it as *derived*, not *declared*: it moves only via a decision bead,
+ * never by local judgement about what "feels" thin enough. As a sanity
+ * check on the shipped number, not an argument for it: ten characters per
+ * page is comfortably below any plausible genuine slide or document page
+ * (even a bare section-divider slide with just a number on it clears this),
+ * while still catching the near-zero yield a true image-only or scanned
+ * page produces. Getting it wrong in either direction is expensive in a
+ * specific, asymmetric way: too high routes legitimate thin-but-real pages
+ * to Slot V for no quality gain; too low fails to catch genuinely scanned
+ * pages, silently handing near-empty or garbage text to Slot G instead of
+ * routing to vision, which is worse than a cost mistake — it's a quality
+ * failure that looks like success.
  */
 
 import type { RouteDecision } from './types.js';
