@@ -273,6 +273,30 @@ describe('F2.12 confusion routing has a real production entry point (ol-p4t05)',
   });
 });
 
+describe('F5.1 first-suggestion picker has a real production entry point (ol-0r92.22)', () => {
+  // Same defect shape `gradeExplainBackAttempt` (ol-drfy) and
+  // `evaluateConfusionRouting` (ol-p4t05) already document above: a pure
+  // function built and tested in olea-core with no non-test caller anywhere
+  // is exactly the six-times-found defect the reachability clause (plan
+  // §2.7 clause 5) exists to stop. This is the source-level proof that
+  // `main.ts` exposes `pickFirstExplainBackInvitation` as a real,
+  // reachable-if-not-yet-invoked-by-anything-else method — see
+  // `first-invitation-picker.ts`'s module doc for why no automatic depth
+  // signal exists yet to feed it, and this method's own doc comment for why
+  // nothing calls it.
+
+  it('imports the picker directly from olea-core, generic candidate type included', () => {
+    expect(main).toMatch(/type FirstInvitationCandidate,/);
+    expect(main).toMatch(/pickNextExplainBackInvitation,/);
+  });
+
+  it('exposes a production entry point delegating to the pure picker', () => {
+    expect(main).toMatch(
+      /pickFirstExplainBackInvitation<T extends FirstInvitationCandidate>\(\s*candidates:\s*readonly T\[\],\s*alreadyInvitedIds:\s*ReadonlySet<string> \| readonly string\[\] = \[\],\s*\):\s*T \| null \{\s*return pickNextExplainBackInvitation\(candidates, alreadyInvitedIds\);/,
+    );
+  });
+});
+
 describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle)', () => {
   // Same defect shape as `JudgeCaller` above, one bead earlier in the same
   // ownership chain: `readConcepts` and `ConceptReaderPort` (`ol-2zfj.1`)

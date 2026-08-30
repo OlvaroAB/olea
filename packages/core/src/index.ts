@@ -811,6 +811,15 @@ export {
 } from './misconception/types.js';
 export type { AppendMisconceptionEventResult } from './misconception/write.js';
 export { appendMisconceptionEvent } from './misconception/write.js';
+// F5.1's first-suggestion picker (`ol-0r92.22`): the generic, declared
+// tier-ordering rule that consumes `olea-service/eval/explainback/SEEDING.md`'s
+// schema (real, per-student seeding data stays private) — see
+// onboarding/first-invitation-picker.ts's module doc for the full argument.
+export type {
+  FirstInvitationCandidate,
+  InvitationTier,
+} from './onboarding/first-invitation-picker.js';
+export { pickNextExplainBackInvitation, TIER_ORDER } from './onboarding/first-invitation-picker.js';
 // P5-T07's switch-on: the composition that actually produces a
 // `RankOracleResult` from a vault and a review log — `rankOracle` had no
 // non-test caller anywhere until this joined `buildConceptAssessmentEdges`

@@ -15,12 +15,14 @@ import {
   detectCourseProposals,
   EMPTY_REGISTRY_OVERRIDES,
   type ExtractedUnit,
+  type FirstInvitationCandidate,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
   notePathCourses,
   type PendingExplainBackGrading,
   parseDocument,
   parseFrontmatter,
+  pickNextExplainBackInvitation,
   type QueueSnapshot,
   type RegistryOverrides,
   type RelationSet,
@@ -1776,6 +1778,34 @@ export default class OleaPlugin extends Plugin {
    */
   evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
     return evaluateConfusionRouting(input);
+  }
+
+  /**
+   * `ol-0r92.22`'s production entry point for F5.1's first-suggestion picker:
+   * given a tier-labelled candidate list (the shape
+   * `olea-service/eval/explainback/SEEDING.md`'s schema documents,
+   * generalised — real per-student seeding data stays in the private repo)
+   * and the ids already invited, returns the earliest-tier candidate not yet
+   * offered. Pure and synchronous, exactly like `evaluateConfusionRouting`
+   * above — no Worker/F7.8 gating applies here either.
+   *
+   * **No caller of this method exists in this package yet, deliberately —
+   * the same gap `gradeExplainBackAttempt`/`readConceptsFromVault` document
+   * above.** There is no command, view or onboarding surface today that
+   * decides WHEN to offer the first explain-back invitation or supplies a
+   * real tiered candidate list; building either is a separate bead's job
+   * (a new user-visible surface needs its own citing clause, per this
+   * repo's own standing rule), not implied by wiring this picker. Nor does
+   * anything in this package compute `InvitationTier` automatically from an
+   * arbitrary vault — `SEEDING.md`'s depth-to-tier labelling was a human
+   * judgement applied once to one real extraction run, not a pipeline
+   * output; a real per-vault tier signal is future work.
+   */
+  pickFirstExplainBackInvitation<T extends FirstInvitationCandidate>(
+    candidates: readonly T[],
+    alreadyInvitedIds: ReadonlySet<string> | readonly string[] = [],
+  ): T | null {
+    return pickNextExplainBackInvitation(candidates, alreadyInvitedIds);
   }
 
   /**
