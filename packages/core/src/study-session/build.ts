@@ -112,6 +112,12 @@ import type { SessionSupportOutcome, SupportLadderTier } from '../support-level/
 import type { CalendarDay } from '../today/calendar-day.js';
 import { isCalendarDay } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
+// Type-only, and the one place this module reaches "up" to `./compose.js`
+// (which itself imports value bindings from here) — erased at compile time,
+// so it introduces no runtime cycle. `ObligationClass` (F6.7, `ol-y237`) is
+// `compose.ts`'s own classification, threaded through so a `StudySessionItem`
+// can carry it without this module re-deriving or duplicating it.
+import type { ObligationClass } from './compose.js';
 import type { DurationEstimateSource, DurationModel, DurationModelBasis } from './duration.js';
 import {
   type AcceptedExplainBack,
@@ -207,6 +213,27 @@ export interface StudySessionItem {
    * `nextAssessment`/`durationSource` already follow on this shape.
    */
   readonly supportLevel?: SupportLevelPresentation;
+  /**
+   * SESS-2's obligation classification for this item's own concept (F6.7,
+   * `ol-y237`) — which of `'unmet'`/`'recall-due'`/`'baseline-due'`/
+   * `'elective'` put it in front of her today, computed once by
+   * `./compose.ts`'s `composeSessionRows` and threaded straight through
+   * rather than re-derived here (this module "does not rank anything", see
+   * the module doc — classifying is ranking's sibling judgement, not this
+   * module's to make a second time). Paired with this item's own `notePath`/
+   * `noteTitle`, a caller can write F6.7's by-source sentence ("new material
+   * from Tuesday's lecture") without touching `ObligationClass` counts or
+   * duplicating `classifyObligation`'s logic.
+   *
+   * `undefined` when no classification was supplied for this row's
+   * `conceptKey` — no {@link BuildStudySessionInput.obligationClasses} map at
+   * all (every caller before `ol-y237`, and every caller other than
+   * `buildComposedStudySession`), or a map that has no entry for this
+   * concept. Never a fabricated class standing in for "we did not classify
+   * this" — the same "state the absence" rule `supportLevel` above already
+   * follows on this shape.
+   */
+  readonly obligationClass?: ObligationClass;
 }
 
 /** One considered concept the session does not contain, and why. */
@@ -370,6 +397,18 @@ export interface BuildStudySessionInput {
    * adjust.
    */
   readonly supportSelfAssessment?: SelfAssessmentFeeling;
+  /**
+   * SESS-2 (`./compose.ts`, F6.7, `ol-y237`): each concept's own
+   * {@link ObligationClass}, keyed by `conceptKey` — `buildComposedStudySession`
+   * always supplies its own `composeSessionRows` output here (overriding
+   * anything a caller passed, since it is derived rather than a caller
+   * input; see `BuildComposedStudySessionInput`'s `Omit`). **Omitted entirely
+   * means no item carries `obligationClass` at all** — exactly today's
+   * (pre-`ol-y237`) behaviour for every plain `buildStudySession` caller,
+   * none of which classifies obligations. A `conceptKey` absent from the map
+   * behaves the same as an absent map for that one item.
+   */
+  readonly obligationClasses?: ReadonlyMap<string, ObligationClass>;
 }
 
 const SECONDS_PER_MINUTE = 60;
@@ -668,6 +707,9 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
                 input.supportHistory.outcomesFor(queue.row.conceptKey, supportTier),
                 input.supportSelfAssessment ?? null,
               );
+        // SESS-2 (F6.7, `ol-y237`): threaded through verbatim, never
+        // re-derived — see `StudySessionItem.obligationClass`'s doc.
+        const obligationClass = input.obligationClasses?.get(queue.row.conceptKey);
         items.push({
           position: items.length + 1,
           instrumentId: record.instrumentId,
@@ -683,6 +725,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
           durationSource: durations.sourceFor(record.instrumentType),
           formatMatch: formatMatchOf(record.instrumentType, formatPreference),
           ...(supportLevel !== undefined ? { supportLevel } : {}),
+          ...(obligationClass !== undefined ? { obligationClass } : {}),
         });
         queue.chose = true;
         taken = true;

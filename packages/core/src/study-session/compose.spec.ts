@@ -715,21 +715,25 @@ describe('buildComposedStudySession', () => {
       asOf: AS_OF,
     });
 
-    const expectedOrder = composeSessionRows({
+    const expectedComposition = composeSessionRows({
       rows: theRows,
       instruments,
       replay: theReplay,
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 1200,
-    }).orderedRows;
+    });
     const expectedModel = buildStudySession({
-      rows: expectedOrder,
+      rows: expectedComposition.orderedRows,
       instruments,
       budgetMinutes: 20,
       durations: flatDurations(60),
       asOf: AS_OF,
       order: 'given',
+      // `buildComposedStudySession` always threads its own composition's
+      // obligation classes through (`ol-y237`, F6.7) — reproduced here so
+      // this equivalence check compares like with like.
+      obligationClasses: expectedComposition.obligationClasses,
     });
 
     expect(composed.model).toEqual(expectedModel);
@@ -885,14 +889,80 @@ describe('buildComposedStudySession', () => {
       asOf: AS_OF,
     });
 
-    // The whole result is exactly these four structural fields — obligation
-    // classes, an order, shares, counts — never a fifth, prose-shaped one. A
-    // future edit adding a rendered "composition sentence" field here would
-    // fail this test, which is the point: that sentence belongs to
+    // The whole result is exactly these five structural fields — a per-item
+    // obligation-class map, an order (inside `model`), shares, forced
+    // courses, and an overflow count — never a prose-shaped one. A future
+    // edit adding a rendered "composition sentence" field here would fail
+    // this test, which is the point: that sentence belongs to
     // `session-builder/copy.ts`, over this structure, not to this module.
+    // `obligationClasses` (`ol-y237`, F6.7) belongs on this list precisely
+    // because it is NOT prose either — see the assertion below and the
+    // module doc's "Per-item obligation class" section for why a class-per-
+    // concept map is a structural field, not a rendered sentence.
     expect(Object.keys(composed).sort()).toEqual(
-      ['courseShares', 'forcedCourses', 'model', 'overflow'].sort(),
+      ['courseShares', 'forcedCourses', 'model', 'obligationClasses', 'overflow'].sort(),
     );
+  });
+
+  it('F6.7 (`ol-y237`): the per-item obligation class survives to both the composed result and each StudySessionItem, keyed the same way', () => {
+    const theRows = rows([
+      { conceptName: 'NeverSeen', gapScore: 9 }, // no replay entry -> 'unmet'
+      { conceptName: 'Elective', gapScore: 5, masteryState: 'tree' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('n1', ['NeverSeen']),
+      qa('e1', ['Elective']),
+    ]);
+    // Reviewed today, at a mastery stage whose ladder rung has not elapsed —
+    // 'elective', not 'baseline-due'.
+    const theReplay = replay({ e1: { lastReviewedDay: AS_OF, dueDay: '2099-01-01' } });
+    const composed = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(composed.obligationClasses.get('NeverSeen')).toBe('unmet');
+    expect(composed.obligationClasses.get('Elective')).toBe('elective');
+
+    // Same classes, reachable per-item without a caller rejoining by
+    // conceptKey itself.
+    const byConceptName = new Map(composed.model.items.map((i) => [i.conceptName, i]));
+    expect(byConceptName.get('NeverSeen')?.obligationClass).toBe('unmet');
+    expect(byConceptName.get('Elective')?.obligationClass).toBe('elective');
+
+    // Never a count, a total, or a list of names alongside the class — the
+    // map's only value per key is the bare `ObligationClass` string.
+    for (const value of composed.obligationClasses.values()) {
+      expect(typeof value).toBe('string');
+    }
+  });
+
+  it('obligationClasses is keyed over the CHOSEN set only — a classified-but-overflowed concept has no entry', () => {
+    const theRows = rows([
+      { conceptName: 'Fits', gapScore: 9, masteryState: 'sprout' },
+      { conceptName: 'TooMuch', gapScore: 8, masteryState: 'sprout' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('f1', ['Fits']), qa('t1', ['TooMuch'])]);
+    const theReplay = replay({
+      f1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      t1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 60, // room for exactly one — see the overflow test above
+    });
+
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['TooMuch']);
+    expect(result.obligationClasses.has('TooMuch')).toBe(true);
+    expect(result.obligationClasses.has('Fits')).toBe(false);
   });
 });
 

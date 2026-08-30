@@ -1165,6 +1165,65 @@ describe('the support-level chooser, wired into the fill (row 3.9, [SUPP-2])', (
 });
 
 // ---------------------------------------------------------------------------
+// SESS-2's obligation class, threaded through verbatim (F6.7, `ol-y237`)
+// ---------------------------------------------------------------------------
+
+describe('obligationClasses threaded onto each StudySessionItem (F6.7, `ol-y237`)', () => {
+  it('every StudySessionItem carries no obligationClass at all when no obligationClasses map is supplied — unchanged, pre-`ol-y237` behaviour', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(Object.hasOwn(session.items[0] ?? {}, 'obligationClass')).toBe(false);
+  });
+
+  it("attaches the supplied map's class for the item's own conceptKey, verbatim — never re-derived", () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      obligationClasses: new Map([
+        ['A', 'unmet'],
+        ['B', 'recall-due'],
+      ]),
+    });
+
+    expect(session.items.map((i) => [i.conceptName, i.obligationClass])).toEqual([
+      ['A', 'unmet'],
+      ['B', 'recall-due'],
+    ]);
+  });
+
+  it('a conceptKey absent from the map behaves the same as an absent map, for that one item only', () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      obligationClasses: new Map([['A', 'baseline-due']]),
+    });
+
+    const byName = new Map(session.items.map((i) => [i.conceptName, i]));
+    expect(byName.get('A')?.obligationClass).toBe('baseline-due');
+    expect(Object.hasOwn(byName.get('B') ?? {}, 'obligationClass')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The gap view's `build-session` affordance
 // ---------------------------------------------------------------------------
 

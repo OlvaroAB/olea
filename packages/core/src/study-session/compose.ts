@@ -157,6 +157,28 @@
  * material; whether any of this ever reaches a screen is a contract question
  * this module does not answer.
  *
+ * ## Per-item obligation class IS meant to reach a screen (F6.7, `ol-y237`)
+ *
+ * {@link ComposeSessionRowsResult.obligationClasses} is the opposite shape
+ * from `overflow` on purpose. F6.7 asks the suggested session to name new
+ * (unmet) material **by its source** ("includes new material from Tuesday's
+ * lecture"), never by a count — and this module already computes exactly the
+ * classification a caller needs to write that sentence, then used to discard
+ * it the instant `orderedRows` dropped down to `GapRow[]`. The map is keyed
+ * by `conceptKey`, over exactly the rows `orderedRows` names (the chosen set,
+ * never the classified-but-not-chosen remainder `overflow` counts), and its
+ * value is one `ObligationClass` — nothing shaped like a total, a
+ * per-class count, or a list of names. A caller pairs
+ * `obligationClasses.get(row.conceptKey) === 'unmet'` with that SAME
+ * concept's own instrument `notePath`/`noteTitle` (already on
+ * `StudySessionItem`, carried through unrelated to this map) to name the
+ * source — the class plus the existing source field is everything F6.7's
+ * sentence needs, and there is no field here a renderer could sum to recover
+ * the count the contract forbids. `buildComposedStudySession` folds the same
+ * map onto {@link StudySessionModel.items} as each item's own
+ * `obligationClass` so a caller working at the instrument level never has to
+ * rejoin by `conceptKey` itself.
+ *
  * ## The arrival-day signal (`ARRIVE-1`, `ol-4pue`) and its own honest gap
  *
  * The model's `classify()` computes an `unmet` concept's `overdueDays` from
@@ -717,6 +739,16 @@ export interface ComposeSessionRowsResult {
   readonly overflow: readonly ObligationOverflowEntry[];
   readonly courseShares: ReadonlyMap<string, number>;
   readonly forcedCourses: readonly string[];
+  /**
+   * Each chosen concept's own {@link ObligationClass}, keyed by `conceptKey`
+   * — a student-visible signal, unlike {@link overflow}. See the module
+   * doc's "Per-item obligation class" section for why this shape (one class
+   * per concept, no count, no total) is exactly what F6.7 needs and nothing
+   * it forbids. Covers precisely the concepts named in {@link orderedRows};
+   * a `conceptKey` classified-but-not-chosen lives only in `overflow`'s
+   * aggregate, never here.
+   */
+  readonly obligationClasses: ReadonlyMap<string, ObligationClass>;
 }
 
 /**
@@ -796,19 +828,28 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     spent += c.cost;
   }
 
-  const orderedRows = blockByCoursePresentation(
+  const orderedBlocks = blockByCoursePresentation(
     chosen,
     relatedConceptKeys,
     assessmentContext,
     asOf,
-  ).map((c) => c.row);
+  );
+  const orderedRows = orderedBlocks.map((c) => c.row);
   const overflow = buildOverflow(classified, chosenKeys);
+  // Keyed over the CHOSEN set only (`orderedBlocks`, same rows as
+  // `orderedRows`) — see `ComposeSessionRowsResult.obligationClasses`'s doc.
+  const obligationClasses = new Map<string, ObligationClass>(
+    orderedBlocks.map((c) => [c.row.conceptKey, c.klass]),
+  );
 
-  return { orderedRows, overflow, courseShares: shares, forcedCourses: forced };
+  return { orderedRows, overflow, courseShares: shares, forcedCourses: forced, obligationClasses };
 }
 
 export interface BuildComposedStudySessionInput
-  extends Omit<BuildStudySessionInput, 'order' | 'rows'> {
+  // `obligationClasses` is omitted for the same reason `order`/`rows` are:
+  // it is derived from `composeSessionRows` below, never a caller input —
+  // see `buildComposedStudySession`'s own override of it.
+  extends Omit<BuildStudySessionInput, 'order' | 'rows' | 'obligationClasses'> {
   readonly rows: readonly GapRow[];
   /** `replaySchedulerStates(entries, scheduler)` — see `ComposeSessionRowsInput.replay`. */
   readonly replay: ReplayResult;
@@ -821,11 +862,24 @@ export interface BuildComposedStudySessionInput
 }
 
 export interface ComposedStudySession {
+  /**
+   * Carries the same per-concept classification as {@link obligationClasses}
+   * below, already folded onto each item as its own `obligationClass` — see
+   * `StudySessionItem.obligationClass`'s doc.
+   */
   readonly model: StudySessionModel;
   /** NOT a student-visible surface — see the module doc's F6.7 section. */
   readonly overflow: readonly ObligationOverflowEntry[];
   readonly courseShares: ReadonlyMap<string, number>;
   readonly forcedCourses: readonly string[];
+  /**
+   * IS a student-visible signal, unlike {@link overflow} — see
+   * `ComposeSessionRowsResult.obligationClasses`'s doc and the module doc's
+   * "Per-item obligation class" section. Surfaced here too (not only on
+   * `model.items`) for a caller that wants the composition-level map without
+   * walking every item.
+   */
+  readonly obligationClasses: ReadonlyMap<string, ObligationClass>;
 }
 
 /**
@@ -873,6 +927,9 @@ export function buildComposedStudySession(
     ...input,
     rows: composed.orderedRows,
     order: 'given',
+    // Derived from the composition just run, not a caller input — see
+    // `BuildComposedStudySessionInput`'s Omit and its comment above.
+    obligationClasses: composed.obligationClasses,
   });
 
   return {
@@ -880,5 +937,6 @@ export function buildComposedStudySession(
     overflow: composed.overflow,
     courseShares: composed.courseShares,
     forcedCourses: composed.forcedCourses,
+    obligationClasses: composed.obligationClasses,
   };
 }
