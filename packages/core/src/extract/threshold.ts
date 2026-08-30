@@ -1,19 +1,18 @@
 /**
- * Text-layer-first routing policy (cost model §5.1, §6.4, C3, P3-T04).
+ * Text-layer-first routing policy (C3, P3-T04).
  *
- * The cost model is blunt about what this file is. It asks C3 to make vision
- * escalation a *routing decision* — attempt text extraction, measure
- * character yield per page, and escalate to Slot V only below a threshold —
- * and it identifies the assumed vision-routing rate that this threshold
- * determines as both the single largest lever on its own spend projection and
- * the number in it that it trusts least. That combination — biggest lever,
+ * C3 asks for vision escalation to be a *routing decision* — attempt text
+ * extraction, measure character yield per page, and escalate to Slot V only
+ * below a threshold — rather than a blanket per-format assumption. The
+ * escalation rate this threshold produces is the single largest lever on
+ * this pipeline's inference cost, and it is also the number this project
+ * trusts least: it depends on how much real-world course material turns out
+ * to be genuinely image-only versus merely terse, and that composition
+ * hasn't been measured at scale yet. That combination — biggest lever,
  * shakiest input — is why this constant exists in its own tiny module rather
  * than buried as a magic number in `pdf.ts`: it needs one clearly-labelled
- * place to be found, argued with, and eventually replaced by real measurement
- * (E4/P3-T06 — cost model §6, question 4). The routing requirement, the
- * assumed rate and the spend figures behind that judgement all live in
- * `olea-service/docs/Olea_ai_workload_and_cost_model.md` §5.1 and §6.4, which
- * is private-classified and so is cited by path rather than quoted.
+ * place to be found, argued with, and eventually replaced by real
+ * measurement (E4/P3-T06).
  *
  * **What the threshold is actually distinguishing.** Not "substantial
  * content" vs "sparse content" — a legitimate title slide might carry as
