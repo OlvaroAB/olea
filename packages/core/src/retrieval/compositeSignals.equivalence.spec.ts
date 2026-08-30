@@ -61,7 +61,17 @@ import { hybridRetrieve } from './hybrid.js';
 import type { RetrievalChunk, VectorLike } from './types.js';
 
 const PRIVATE_REPO = new URL('../../../../../olea-service/', import.meta.url);
-const VAULT_ROOT = new URL('docs/Obsidian-vault-copy/', PRIVATE_REPO);
+// The corpus embedding cache and reference report below were both cached
+// (2026-08-14/15) against the T0 snapshot. `docs/Obsidian-vault-copy/` used
+// to BE that flat snapshot; a later reorg (`ol-3ux7.5.10`) pure-renamed T0
+// to `UNIVERSITY_20260810/` and added a second, larger T1 snapshot
+// (`UNIVERSITY_20260828/`) alongside it (`docs/README.md`). Pointing this
+// test at the bare directory after that reorg silently swaps in a bigger,
+// different corpus — `buildLexicon`'s idf weighting is corpus-wide, so
+// `lexBest` drifts even though `top1`/`marginP99` (keyed off the unchanged
+// embedding cache's content hashes) do not. Pin to T0 explicitly so this
+// test keeps replaying the exact corpus the cached numbers came from.
+const VAULT_ROOT = new URL('docs/Obsidian-vault-copy/UNIVERSITY_20260810/', PRIVATE_REPO);
 const CORPUS_EMBEDDING_CACHE = new URL(
   '.olea-harness/retrieval/2026-08-14T23-41-02-925Z__slot-e-corpus/embedding-cache.json',
   PRIVATE_REPO,
