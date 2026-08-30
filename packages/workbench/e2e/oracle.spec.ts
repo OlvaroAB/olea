@@ -54,6 +54,41 @@ test('gap-material (F4.10): kelvane renders as a material-gap row and NEVER offe
   await expect(row.first().locator('.olea-gap-action-find-source')).toBeVisible();
 });
 
+test("FLOW: gap-mastery — clicking build-session navigates to the session surface, seeded with that row's concept (round 35, ol-z6x2)", async ({
+  page,
+}) => {
+  await gotoState(page, 'oracle', 'gap-mastery', 'obsidian-dark');
+  const row = frame(page).locator('.olea-gap-row-mastery-gap').first();
+  await expect(row).toBeVisible();
+  const conceptName = ((await row.locator('.olea-gap-concept').textContent()) ?? '').trim();
+  expect(conceptName.length).toBeGreaterThan(0);
+  const buildSessionAction = row.locator('.olea-gap-action-build-session');
+  await expect(buildSessionAction).toBeVisible();
+
+  await buildSessionAction.click();
+
+  // A real hash navigation, not a no-op: the workbench harness wires
+  // `deps.buildSession` (main.ts's `mountOracle`) to `writeRoute`, landing on
+  // the session surface's default state with `focus=<conceptName>`.
+  await expect(page.locator('html')).toHaveAttribute('data-wb-route-surface', 'session', {
+    timeout: 10_000,
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-wb-ready', 'true', { timeout: 10_000 });
+  expect(page.url()).toContain(`/session/session-exam-eve-90`);
+  expect(decodeURIComponent(page.url())).toContain(`focus=${conceptName}`);
+
+  // `SessionBuilderView.setFocusConcept` really ran: `study-session/build.ts`'s
+  // own doc says a concept absent from the ranking is not an error, and this
+  // oracle state's synthetic corpus (`oracle-scenarios.ts`) and the session
+  // surface's real fixture-vault corpus (`session-scenarios.ts`) are two
+  // different worlds by design, so the honest, real outcome here is
+  // `focusLine`'s "could not find" sentence — proof the request actually
+  // reached `buildStudySession`, not a false positive match.
+  await expect(frame(page).locator('.olea-session-copy')).toContainText(
+    `Olea could not find ${conceptName} in the current ranking`,
+  );
+});
+
 test('coverage-unreadable-source (ol-cvsc): an unreadable source renders, never a clean zero', async ({
   page,
 }) => {

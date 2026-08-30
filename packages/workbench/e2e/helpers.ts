@@ -86,6 +86,7 @@ export const SESSION_STATES = [
   'session-measured-45',
   'session-no-cards-yet',
   'session-nothing-to-build',
+  'session-vault-unreadable',
 ] as const;
 
 // F6.2, F6.5, `ol-lohq`/`ol-p6t04` — see `trends-scenarios.ts` for the source of truth.

@@ -19,7 +19,22 @@ import {
   buildSessionScenario,
   findSessionState,
   SESSION_STATES,
+  type SessionScenario,
 } from '../src/session-scenarios.js';
+
+/**
+ * Every test in this file except the `session-vault-unreadable` describe block
+ * below builds a state that always composes a world, so its `model` is never
+ * actually `null` — this just gives TypeScript the same fact the test author
+ * already knows, rather than repeating `if (scenario.model === null) return;`
+ * at every call site.
+ */
+function sessionModel(scenario: SessionScenario): StudySessionModel {
+  if (scenario.model === null) {
+    throw new Error('test setup: expected a composed model, got the unavailable state');
+  }
+  return scenario.model;
+}
 
 const vault = new FolderSource(
   fileURLToPath(new URL('../../core/fixtures/vault', import.meta.url)),
@@ -49,11 +64,21 @@ describe('SESSION_STATES', () => {
     for (const state of SESSION_STATES) {
       const scenario = await buildSessionScenario(state.id, vault);
       expect(scenario.state).toBe(state);
-      expect(scenario.model.budgetMinutes).toBe(state.budgetMinutes);
-      expect(scenario.model.asOf).toBe(state.asOf);
+      if (state.simulateVaultFailure === true) {
+        // No world composed at all — see the dedicated describe block below.
+        expect(scenario.model).toBeNull();
+        expect(scenario.instrumentCount).toBe(0);
+        expect(scenario.conceptCount).toBe(0);
+        continue;
+      }
+      const { model } = scenario;
+      expect(model).not.toBeNull();
+      if (model === null) continue;
+      expect(model.budgetMinutes).toBe(state.budgetMinutes);
+      expect(model.asOf).toBe(state.asOf);
       // Not a ceiling check — `[D-091]` (`ol-zji3` [BUD-1]) — see
       // `expectBudgetOvershootBound`'s doc comment for the derivation.
-      expectBudgetOvershootBound(scenario.model);
+      expectBudgetOvershootBound(model);
       // A real walk, not a stub: the fixture vault has instruments and concepts.
       expect(scenario.instrumentCount).toBeGreaterThan(0);
       expect(scenario.conceptCount).toBeGreaterThan(0);
@@ -90,7 +115,8 @@ describe('the states show what they advertise', () => {
     const scenario = await buildSessionScenario('session-exam-eve-90', vault);
 
     expect(scenario.gapRowCount).toBeGreaterThan(0);
-    const next = scenario.model.nextAssessment;
+    const model = sessionModel(scenario);
+    const next = model.nextAssessment;
     expect(next).not.toBeNull();
     if (next === null) return;
     expect(next.daysUntil).toBe(1);
@@ -98,51 +124,49 @@ describe('the states show what they advertise', () => {
     // The ranking's own strongest contributor is a far-off, heavily-weighted
     // exam — which is exactly why the countdown must read the calendar.
     const rowTargets = new Set(
-      scenario.model.leftOut
-        .map((o) => o.conceptName)
-        .concat(scenario.model.items.map((i) => i.conceptName)),
+      model.leftOut.map((o) => o.conceptName).concat(model.items.map((i) => i.conceptName)),
     );
     expect(rowTargets.size).toBeGreaterThan(0);
   });
 
   it('the exam-eve state prefers the quiz’s format and says so per item (F4.8)', async () => {
     const scenario = await buildSessionScenario('session-exam-eve-90', vault);
-    expect(scenario.model.formatPreference).toBe('mcq');
-    expect(scenario.model.items.some((i) => i.formatMatch === 'preferred-format')).toBe(true);
+    const model = sessionModel(scenario);
+    expect(model.formatPreference).toBe('mcq');
+    expect(model.items.some((i) => i.formatMatch === 'preferred-format')).toBe(true);
     // MCQ first: the preferred-format item outranks the same concept's other
     // cards rather than merely being present.
-    const firstForItsConcept = scenario.model.items.find(
-      (i) => i.formatMatch === 'preferred-format',
-    );
+    const firstForItsConcept = model.items.find((i) => i.formatMatch === 'preferred-format');
     expect(firstForItsConcept).toBeDefined();
   });
 
   it('a mid-semester day with no imminent quiz expresses no format preference', async () => {
     const scenario = await buildSessionScenario('session-short-20', vault);
-    expect(scenario.model.formatPreference).toBe('unknown');
-    expect(scenario.model.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
+    const model = sessionModel(scenario);
+    expect(model.formatPreference).toBe('unknown');
+    expect(model.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
   });
 
   it('the tight state is where the budget actually bites, and it names what it dropped', async () => {
-    const tight = await buildSessionScenario('session-tight-5', vault);
-    const roomy = await buildSessionScenario('session-short-20', vault);
+    const tight = sessionModel(await buildSessionScenario('session-tight-5', vault));
+    const roomy = sessionModel(await buildSessionScenario('session-short-20', vault));
 
-    expect(tight.model.items.length).toBeGreaterThan(0);
-    expect(tight.model.items.length).toBeLessThan(roomy.model.items.length);
+    expect(tight.items.length).toBeGreaterThan(0);
+    expect(tight.items.length).toBeLessThan(roomy.items.length);
     // Leaving out is information, not truncation.
-    expect(tight.model.leftOutInstrumentCount).toBeGreaterThan(0);
+    expect(tight.leftOutInstrumentCount).toBeGreaterThan(0);
   });
 
   it('the measured state actually reads its durations from the (borrowed) history', async () => {
-    const measured = await buildSessionScenario('session-measured-45', vault);
-    const assumed = await buildSessionScenario('session-short-20', vault);
+    const measured = sessionModel(await buildSessionScenario('session-measured-45', vault));
+    const assumed = sessionModel(await buildSessionScenario('session-short-20', vault));
 
-    expect(measured.model.durationBasis).not.toBe('assumed');
-    expect(measured.model.items.some((i) => i.durationSource === 'measured')).toBe(true);
+    expect(measured.durationBasis).not.toBe('assumed');
+    expect(measured.items.some((i) => i.durationSource === 'measured')).toBe(true);
     // The fixture vault has no review log of its own, so every unborrowed state
     // is honestly cold-start.
-    expect(assumed.model.durationBasis).toBe('assumed');
-    expect(assumed.model.items.every((i) => i.durationSource === 'assumed')).toBe(true);
+    expect(assumed.durationBasis).toBe('assumed');
+    expect(assumed.items.every((i) => i.durationSource === 'assumed')).toBe(true);
   });
 });
 
@@ -154,24 +178,26 @@ describe('the three emptinesses are three different states', () => {
     // gives a ranked concept a card, THIS is the assertion that goes red, and
     // that is the point of the state.
     expect(scenario.gapRowCount).toBeGreaterThan(0);
-    expect(scenario.model.items).toEqual([]);
-    expect(scenario.model.leftOut.length).toBe(scenario.gapRowCount);
-    expect(scenario.model.leftOut.every((o) => o.reason === 'no-instruments')).toBe(true);
+    const model = sessionModel(scenario);
+    expect(model.items).toEqual([]);
+    expect(model.leftOut.length).toBe(scenario.gapRowCount);
+    expect(model.leftOut.every((o) => o.reason === 'no-instruments')).toBe(true);
     // "You have notes on this, no cards yet" — F4.5's coverage gap, which is a
     // different sentence from "we don't have it" (F4.10).
-    expect(scenario.model.leftOut.every((o) => o.gapClass === 'coverage-gap')).toBe(true);
+    expect(model.leftOut.every((o) => o.gapClass === 'coverage-gap')).toBe(true);
   });
 
   it('"nothing ranked" has no rows and therefore no left-out list at all', async () => {
     const scenario = await buildSessionScenario('session-nothing-to-build', vault);
 
     expect(scenario.gapRowCount).toBe(0);
-    expect(scenario.model.consideredRowCount).toBe(0);
-    expect(scenario.model.items).toEqual([]);
+    const model = sessionModel(scenario);
+    expect(model.consideredRowCount).toBe(0);
+    expect(model.items).toEqual([]);
     // The distinguishing field: with rows to consider, an empty session would
     // have carried left-out entries instead.
-    expect(scenario.model.leftOut).toEqual([]);
-    expect(scenario.model.nextAssessment).toBeNull();
+    expect(model.leftOut).toEqual([]);
+    expect(model.nextAssessment).toBeNull();
   });
 
   it('a target far below every instrument’s length still rounds up to admit one, and is not either of the above (`[D-091]`)', async () => {
@@ -216,12 +242,13 @@ describe('the budget seam is live, not pre-baked models', () => {
 
   it('deps.load honours a focus concept, so the gap view’s build-session affordance is demonstrable here', async () => {
     const scenario = await buildSessionScenario('session-tight-5', vault);
+    const model = sessionModel(scenario);
     // The lowest-ranked concept the fill reached — the one a focus request has
     // to be able to lift, since it is nowhere near the front on its own score.
-    const last = scenario.model.items[scenario.model.items.length - 1];
+    const last = model.items[model.items.length - 1];
     expect(last).toBeDefined();
     if (last === undefined) return;
-    expect(scenario.model.items[0]?.conceptName).not.toBe(last.conceptName);
+    expect(model.items[0]?.conceptName).not.toBe(last.conceptName);
 
     const focused = await scenario.deps.load({
       budgetMinutes: 5,
@@ -237,5 +264,27 @@ describe('the budget seam is live, not pre-baked models', () => {
       const scenario = await buildSessionScenario(state.id, vault);
       expect(scenario.deps.defaultBudgetMinutes).toBe(state.budgetMinutes);
     }
+  });
+});
+
+describe('session-vault-unreadable reaches SessionBuilderView\'s kind: "unavailable" branch for real', () => {
+  it('the scenario itself composes no world — model, gapRowCount, instrumentCount and conceptCount all read empty', async () => {
+    const scenario = await buildSessionScenario('session-vault-unreadable', vault);
+    expect(scenario.model).toBeNull();
+    expect(scenario.gapRowCount).toBe(0);
+    expect(scenario.instrumentCount).toBe(0);
+    expect(scenario.conceptCount).toBe(0);
+    expect(scenario.borrowedInstrumentCount).toBe(0);
+  });
+
+  it('deps.load genuinely throws internally and catches it, resolving unavailable regardless of the request', async () => {
+    const scenario = await buildSessionScenario('session-vault-unreadable', vault);
+    const plain = await scenario.deps.load({ budgetMinutes: 20 });
+    expect(plain.kind).toBe('unavailable');
+    // The vault's `list()` throws before any request-specific composition can
+    // even start, so a focus concept changes nothing about the outcome —
+    // same as production's real failure mode.
+    const focused = await scenario.deps.load({ budgetMinutes: 90, focusConceptName: 'anything' });
+    expect(focused.kind).toBe('unavailable');
   });
 });

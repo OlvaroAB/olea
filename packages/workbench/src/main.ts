@@ -232,6 +232,14 @@ interface Route {
   readonly personaId: WorkbenchPersonaId;
   /** The timeline surface's day scrubber (`ol-opmb.5` [TB-4]) — a `0`-based index, ignored by every other surface. Always present in the URL so a timeline link is reloadable on its own. */
   readonly day: number;
+  /**
+   * The gap view's `build-session` affordance (`ol-p5t06b`, F4.6): the
+   * concept name to seed the session builder with. `''` means none, the same
+   * "always present, ignored elsewhere" convention {@link day} uses — read
+   * only by `mountSession`. Always present in the URL for the same reason:
+   * a build-session link is reloadable on its own.
+   */
+  readonly focus: string;
 }
 
 function defaultStateFor(surface: RouteSurface): string {
@@ -338,11 +346,13 @@ function readRoute(): Route {
     setId: findVariableSet(setId) === undefined ? DEFAULT_VARIABLE_SET : setId,
     personaId: persona === undefined ? DEFAULT_PERSONA : persona.id,
     day: Number.isFinite(requestedDay) && params.has('day') ? requestedDay : DEFAULT_TIMELINE_DAY,
+    focus: params.get('focus') ?? '',
   };
 }
 
 function writeRoute(route: Route): void {
-  const next = `#/${route.surface}/${route.stateId}?set=${route.setId}&persona=${route.personaId}&day=${String(route.day)}`;
+  const focusParam = route.focus.length > 0 ? `&focus=${encodeURIComponent(route.focus)}` : '';
+  const next = `#/${route.surface}/${route.stateId}?set=${route.setId}&persona=${route.personaId}&day=${String(route.day)}${focusParam}`;
   if (window.location.hash !== next) window.location.hash = next;
 }
 
@@ -508,7 +518,12 @@ async function main(): Promise<void> {
     button.dataset.wbSessionStateLink = state.id;
     button.textContent = state.label;
     button.addEventListener('click', () => {
-      writeRoute({ ...readRoute(), surface: 'session', stateId: state.id });
+      // A deliberate "load this state fresh" click, not a continuation of
+      // whatever focus concept a prior build-session navigation set —
+      // `SessionBuilderView.setFocusConcept`'s own doc says the choice to
+      // focus is deliberate, so clearing it here is the same discipline
+      // applied to how a focus is entered as to how it is left.
+      writeRoute({ ...readRoute(), surface: 'session', stateId: state.id, focus: '' });
     });
     sessionStateList.appendChild(button);
   }
@@ -858,7 +873,30 @@ async function main(): Promise<void> {
       // back to review/today) but nothing below depends on it.
       const scenario = await buildOracleScenario(stateId);
       if (run !== generation) return;
-      const view = new GapView(makeLeaf(), scenario.deps);
+      const view = new GapView(makeLeaf(), {
+        ...scenario.deps,
+        // `ol-p5t06b` (F4.6), workbench harness wiring only — the plugin's
+        // own `GapView` already has this affordance and a real production
+        // caller (`gap/view.ts`'s own doc); this mount had never set it,
+        // leaving `.olea-gap-action-build-session` unclickable in every
+        // oracle-surface state. Navigating to the session surface (rather
+        // than seeding a leaf already on screen, `SessionBuilderView`'s own
+        // `setFocusConcept` doc) is the honest workbench equivalent: there is
+        // no already-open session tab here, only a route to land one on.
+        // `row.conceptName` and the session surface's own fixture-vault
+        // world are two different corpora by design (this surface's own
+        // module doc), so the honest outcome on a synthetic-world concept is
+        // `focusLine`'s "could not find" sentence, not a false match — see
+        // the e2e test asserting exactly that.
+        buildSession: (row) => {
+          writeRoute({
+            ...readRoute(),
+            surface: 'session',
+            stateId: DEFAULT_SESSION_STATE,
+            focus: row.conceptName,
+          });
+        },
+      });
       host.appendChild(view.containerEl);
       mounted = { view };
 
@@ -1057,7 +1095,7 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
-    async function mountSession(stateId: string): Promise<void> {
+    async function mountSession(stateId: string, focusConceptName = ''): Promise<void> {
       // The real fixture vault, exactly as `mountFixtureOracle` reads it —
       // never `composed`/`loaded.history`, which belong to the synthetic
       // persona machinery this surface deliberately does not use (see
@@ -1078,6 +1116,20 @@ async function main(): Promise<void> {
       void view.onOpen();
       await settle();
       if (run !== generation) return;
+
+      // `route.focus` (`ol-p5t06b`): the gap view's build-session affordance
+      // navigated here with a concept name. `setFocusConcept` is the real
+      // `SessionBuilderView` method the plugin's own `main.ts` would call to
+      // seed a leaf it is about to reveal — this harness has no leaf to seed
+      // in advance, so it calls the same method immediately after opening
+      // the fresh one instead. A concept absent from this state's ranking is
+      // not an error (`focusLine`'s own doc): the session still builds, and
+      // says so on screen.
+      if (focusConceptName.length > 0) {
+        await view.setFocusConcept(focusConceptName);
+        await settle();
+        if (run !== generation) return;
+      }
 
       renderSessionInspector(inspector, { setNote: activeSet.note, scenario });
       document.documentElement.setAttribute('data-wb-ready', 'true');
@@ -1290,7 +1342,7 @@ async function main(): Promise<void> {
       return;
     }
     if (route.surface === 'session') {
-      await mountSession(route.stateId);
+      await mountSession(route.stateId, route.focus);
       return;
     }
     if (route.surface === 'trends') {
@@ -2011,6 +2063,19 @@ function renderSessionInspector(inspector: HTMLElement, input: SessionInspectorI
   inspector.empty();
   inspector.createDiv({ cls: 'wb-inspector-note', text: scenario.note });
   inspector.createDiv({ cls: 'wb-inspector-note wb-inspector-note--dim', text: input.setNote });
+
+  if (model === null) {
+    // `state.simulateVaultFailure` (session-scenarios.ts): no world was
+    // composed, so there is nothing to read independently of the view — the
+    // honest counterpart of the `.olea-session-unavailable` box it rendered.
+    const row = inspector.createDiv({ cls: 'wb-inspector-row' });
+    row.createSpan({ cls: 'wb-inspector-label', text: 'session' });
+    row.createSpan({
+      cls: 'wb-inspector-value',
+      text: "unavailable — deps.load resolves { kind: 'unavailable' } with no world composed.",
+    });
+    return;
+  }
 
   const budgetRow = inspector.createDiv({ cls: 'wb-inspector-row' });
   budgetRow.createSpan({ cls: 'wb-inspector-label', text: 'budget' });

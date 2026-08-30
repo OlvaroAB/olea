@@ -114,9 +114,9 @@ test('session-no-cards-yet: ranked concepts exist, but none is practisable — a
   // session-nothing-to-build's zero ranked rows below.
   expect(Number(consideredMatch?.[1])).toBeGreaterThan(0);
   await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
-  // No product view branch renders `.olea-session-unavailable` from any
-  // current workbench state — this is a real empty MODEL, not the
-  // `kind: 'unavailable'` branch (see the handback note).
+  // This state is a real empty MODEL — a session with zero items — never the
+  // `kind: 'unavailable'` branch. `session-vault-unreadable` below is what
+  // reaches that branch (round 35 tranche, `ol-z6x2`).
   await expect(frame(page).locator('.olea-session-unavailable')).toHaveCount(0);
 });
 
@@ -130,6 +130,35 @@ test('session-nothing-to-build: no past paper registered, rankOracle abstains �
   expect(consideredMatch).not.toBeNull();
   expect(Number(consideredMatch?.[1])).toBe(0);
   await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
+});
+
+test("session-vault-unreadable: SessionBuilderView's kind: 'unavailable' branch, reached through a real vault-list failure (round 35, ol-z6x2)", async ({
+  page,
+}) => {
+  await gotoState(page, 'session', 'session-vault-unreadable', 'obsidian-dark');
+  // The budget controls still render (SessionBuilderView.render calls
+  // renderBudgetControls before checking state.kind) but no items and no
+  // copy lines — sessionScreenCopy never runs on this branch.
+  await expect(frame(page).locator('.olea-session-budget')).not.toHaveCount(0);
+  await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
+  await expect(frame(page).locator('.olea-session-line')).toHaveCount(0);
+  const unavailable = frame(page).locator('.olea-session-unavailable');
+  await expect(unavailable).toBeVisible();
+  await expect(unavailable.locator('.olea-session-unavailable-title')).toHaveText(
+    'Olea could not read your sources just now.',
+  );
+  await expect(unavailable.locator('.olea-session-unavailable-body')).toContainText(
+    'no session to build here',
+  );
+  // The inspector's own honest counterpart: no world was composed, so it has
+  // nothing independent to read — never a silent zero standing in for a
+  // model (session-scenarios.ts's own doc on `SessionScenario.model`).
+  const sessionRow = await inspectorRowValue(page, 'session');
+  expect(sessionRow).toContain('unavailable');
+  expect(sessionRow).toContain('no world composed');
+  // No illustrative label either — this state's instruments/history are both
+  // the 'real'/'none' defaults, not borrowed.
+  await expect(frame(page).locator('.wb-illustrative-label')).toHaveCount(0);
 });
 
 test('FLOW: clicking a budget button re-runs buildStudySession for real, over the cached fixture-vault world', async ({

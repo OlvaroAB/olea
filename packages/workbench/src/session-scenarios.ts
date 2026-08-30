@@ -62,7 +62,10 @@ import type {
   CalendarDay,
   ConceptRecord,
   GapRow,
+  ListOptions,
   StudySessionModel,
+  Unsubscribe,
+  VaultEvent,
   VaultInstrumentRecord,
   VaultPath,
   VaultSource,
@@ -121,6 +124,16 @@ export interface SessionWorkbenchState {
   readonly history: 'none' | 'borrowed';
   /** Overrides the sources folder — the degenerate state's mechanism. */
   readonly sourcesFolder?: VaultPath;
+  /**
+   * When `true`, this state composes over a vault whose `list()` always
+   * throws — the genuine "could not walk the vault" failure
+   * `SessionBuilderView`'s `kind: 'unavailable'` branch exists for
+   * (`SESSION_UNAVAILABLE_TITLE`'s own module doc: "a vault it could not
+   * walk, an extraction pass that threw"). `deps.load` catches it, exactly
+   * mirroring `createLocalSessionBuilderProvider`'s own top-level
+   * try/catch — see `'session-vault-unreadable'`'s own note.
+   */
+  readonly simulateVaultFailure?: boolean;
 }
 
 export const SESSION_STATES: readonly SessionWorkbenchState[] = [
@@ -207,6 +220,26 @@ export const SESSION_STATES: readonly SessionWorkbenchState[] = [
       'zero evidence and rankOracle abstains, so there are no gap rows at all. The screen must ' +
       'say "nothing is ranked yet" and NOT "nothing fits in twenty minutes" — two emptinesses, ' +
       'two sentences, told apart by consideredRowCount.',
+  },
+  {
+    id: 'session-vault-unreadable',
+    label: 'Vault could not be walked',
+    group: 'session',
+    asOf: '2026-09-14',
+    budgetMinutes: 20,
+    instruments: 'real',
+    history: 'none',
+    simulateVaultFailure: true,
+    note:
+      "SessionBuilderView's kind: 'unavailable' branch — zero e2e reachability before this " +
+      "state, since every other state resolves `kind: 'model'` (`session-scenarios.ts`'s own " +
+      "prior finding). `SESSION_UNAVAILABLE_TITLE`'s own module doc names what this covers: " +
+      '"a vault it could not walk, an extraction pass that threw" — so this state\'s vault ' +
+      'throws from `list()`, and `deps.load` catches it with the SAME try/catch shape ' +
+      "`session-builder/provider.ts`'s `createLocalSessionBuilderProvider` ships (`console.error` " +
+      "then `{ kind: 'unavailable' }`), reached through the real pipeline rather than a " +
+      "hand-built state — the same discipline `NO_PAST_PAPERS_FOLDER`'s abstention state above " +
+      'uses for its own emptiness.',
   },
 ];
 
@@ -446,16 +479,72 @@ function worldFor(state: SessionWorkbenchState, vault: VaultSource): Promise<Ses
   return built;
 }
 
+// ---------------------------------------------------------------------------
+// `'session-vault-unreadable'`'s own mechanism
+// ---------------------------------------------------------------------------
+
+/**
+ * A read-only overlay whose `list()` always throws — the honest way to reach
+ * `SessionBuilderView`'s `kind: 'unavailable'` branch, matching what
+ * `SESSION_UNAVAILABLE_TITLE`'s own module doc says the branch is for ("a
+ * vault it could not walk"). Every real read/enumeration in `composeWorld`
+ * (`enumerateVaultInstruments`, `extractConcepts`, `composeOracleRanking`)
+ * calls `list()` before it calls `read()`, so this throws before a single
+ * byte of `base` is ever read — the failure is in walking the vault, not in
+ * what it contains.
+ */
+class UnwalkableVaultOverlay implements VaultSource {
+  constructor(private readonly base: VaultSource) {}
+
+  list(_options?: ListOptions): Promise<readonly VaultPath[]> {
+    throw new Error('workbench: simulated vault-list failure (session-vault-unreadable)');
+  }
+
+  read(path: VaultPath): Promise<string> {
+    return this.base.read(path);
+  }
+
+  readBinary(path: VaultPath): Promise<Uint8Array> {
+    return this.base.readBinary(path);
+  }
+
+  exists(path: VaultPath): Promise<boolean> {
+    return this.base.exists(path);
+  }
+
+  write(): Promise<void> {
+    throw new Error('UnwalkableVaultOverlay: read-only, never written to');
+  }
+
+  delete(): Promise<void> {
+    throw new Error('UnwalkableVaultOverlay: read-only, never written to');
+  }
+
+  watch(handler: (event: VaultEvent) => void): Unsubscribe {
+    return this.base.watch(handler);
+  }
+}
+
+function vaultThatCannotBeWalked(base: VaultSource): VaultSource {
+  return new UnwalkableVaultOverlay(base);
+}
+
 export interface SessionScenario {
   /** Mount the real `SessionBuilderView` against this. */
   readonly deps: SessionBuilderViewDeps;
   readonly note: string;
   readonly state: SessionWorkbenchState;
-  /** The session at the state's own budget — inspector data, so a viewer never has to take the view's rendering on faith. */
-  readonly model: StudySessionModel;
-  /** How many gap rows the fill had to choose from. `0` is `'session-nothing-to-build'`'s whole point. */
+  /**
+   * The session at the state's own budget — inspector data, so a viewer never
+   * has to take the view's rendering on faith. `null` on
+   * `state.simulateVaultFailure` states: the vault walk throws before any
+   * world exists, so there is no independent reading to show — the honest
+   * inspector counterpart of the view's own unavailable box.
+   */
+  readonly model: StudySessionModel | null;
+  /** How many gap rows the fill had to choose from. `0` is `'session-nothing-to-build'`'s whole point, and every `simulateVaultFailure` state's too (no world composed). */
   readonly gapRowCount: number;
-  /** Instruments the vault really holds. Unchanged by borrowing — borrowing re-binds records, it never mints them. */
+  /** Instruments the vault really holds. Unchanged by borrowing — borrowing re-binds records, it never mints them. `0` on `simulateVaultFailure` states (the walk never completes). */
   readonly instrumentCount: number;
   readonly conceptCount: number;
   /** How many instruments were re-bound onto ranked concepts. `0` on the two unborrowed states, and worth showing beside the numbers. */
@@ -477,6 +566,35 @@ export async function buildSessionScenario(
   const state = findSessionState(stateId);
   if (state === undefined) {
     throw new Error(`workbench: unknown session state ${JSON.stringify(stateId)}`);
+  }
+
+  if (state.simulateVaultFailure === true) {
+    // Mirrors `createLocalSessionBuilderProvider`'s own top-level try/catch
+    // (see the state's note): a genuine throw from the vault walk, caught the
+    // same way production catches one. No caching through `worldFor` — this
+    // state exists to fail on every call, not to memoize a rejection.
+    const brokenVault = vaultThatCannotBeWalked(vault);
+    const load = async (): Promise<SessionBuilderState> => {
+      try {
+        await composeWorld(state, brokenVault);
+        // Unreachable: `vaultThatCannotBeWalked` always throws from `list()`,
+        // which every path below this point depends on.
+        throw new Error('workbench: expected the simulated vault failure to throw');
+      } catch (error) {
+        console.error('workbench: could not build a study session', error);
+        return { kind: 'unavailable' };
+      }
+    };
+    return {
+      deps: { load, defaultBudgetMinutes: state.budgetMinutes },
+      note: state.note,
+      state,
+      model: null,
+      gapRowCount: 0,
+      instrumentCount: 0,
+      conceptCount: 0,
+      borrowedInstrumentCount: 0,
+    };
   }
 
   const world = await worldFor(state, vault);
