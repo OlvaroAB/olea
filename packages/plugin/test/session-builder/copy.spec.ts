@@ -29,6 +29,7 @@ import {
   instrumentTypeLabel,
   leftOutLines,
   minutesLabel,
+  newMaterialLines,
   SESSION_ATTRIBUTION,
   SESSION_BUDGET_OPTIONS,
   sessionFraming,
@@ -142,12 +143,22 @@ function everyProducibleString(): readonly string[] {
       leftOutInstrumentCount: 3,
     }),
     model({ leftOut: [omission({ reason: 'did-not-fit' }), omission({ reason: 'did-not-fit' })] }),
+    // F6.7 — a session with new (unmet) material from two sources, alongside
+    // an item that is due but not new.
+    model({
+      items: [
+        item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' }),
+        item({ position: 2, obligationClass: 'unmet', noteTitle: 'Seminar handout' }),
+        item({ position: 3, obligationClass: 'recall-due', noteTitle: 'Old flashcard set' }),
+      ],
+    }),
   ];
 
   for (const m of models) {
     strings.push(...sessionScreenCopy(m));
     strings.push(...leftOutLines(m));
     strings.push(...emptySessionLines(m));
+    strings.push(...newMaterialLines(m));
     const countdownText = countdownLine(m);
     if (countdownText !== null) strings.push(countdownText);
     const format = formatPreferenceLine(m);
@@ -429,5 +440,53 @@ describe('the screen copy is the only place sentences come from', () => {
     // No items means no minutes were estimated, so there is nothing to
     // attribute — a provenance line for numbers that were never shown.
     expect(empty).not.toContain(durationBasisLine(model()));
+  });
+});
+
+// --------------------------------------------------------------------------
+// F6.7 — new (unmet) material named by source, never by count ([D-060],
+// ol-0r92.9). `SessionBuilderView.render` (`../../src/session-builder/
+// view.ts`) draws `sessionScreenCopy`'s result on every path, so this is the
+// production caller: `newMaterialLines` reaches the screen through
+// `sessionScreenCopy` with no separate wiring in `view.ts`.
+// --------------------------------------------------------------------------
+
+describe('F6.7 reaches the screen through sessionScreenCopy — no separate view.ts wiring needed', () => {
+  it('names each distinct new-material source once, and never the item due beside it', () => {
+    const m = model({
+      items: [
+        item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' }),
+        item({ position: 2, obligationClass: 'unmet', noteTitle: 'Seminar handout' }),
+        item({ position: 3, obligationClass: 'recall-due', noteTitle: 'Old flashcard set' }),
+      ],
+    });
+    expect(newMaterialLines(m)).toEqual([
+      'Includes new material from Lecture notes.',
+      'Includes new material from Seminar handout.',
+    ]);
+    expect(newMaterialLines(m).join(' ')).not.toContain('Old flashcard set');
+  });
+
+  it('sessionScreenCopy carries the by-source lines — this is what view.ts actually renders', () => {
+    const m = model({ items: [item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' })] });
+    expect(sessionScreenCopy(m)).toContain('Includes new material from Lecture notes.');
+  });
+
+  it('is silent — no lines at all — when nothing in the session is unmet', () => {
+    expect(newMaterialLines(model())).toEqual([]);
+    expect(sessionScreenCopy(model()).some((l) => l.includes('new material'))).toBe(false);
+  });
+
+  it('never carries a digit — a source is named, never a count of sources or items', () => {
+    const m = model({
+      items: [
+        item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' }),
+        item({ position: 2, obligationClass: 'unmet', noteTitle: 'Seminar handout' }),
+        item({ position: 3, obligationClass: 'unmet', noteTitle: 'Reading list' }),
+      ],
+    });
+    for (const line of newMaterialLines(m)) {
+      expect(line).not.toMatch(/\d/);
+    }
   });
 });

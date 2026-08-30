@@ -8,7 +8,7 @@
  * mock and not the record; a rejection recorded as a failing test is not.
  */
 
-import type { CourseFreshnessReading } from 'olea-core';
+import type { CourseFreshnessReading, StudySessionItem } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   allTodayStrings,
@@ -24,6 +24,8 @@ import {
   masteryCountLabel,
   NOTHING_DUE,
   newCountSentence,
+  newMaterialSourceLine,
+  newMaterialSourceLines,
   pickRhythmYardstickReading,
   rhythmQuietClause,
   rhythmQuietLine,
@@ -672,5 +674,103 @@ describe('showsStartReviewAction — the front door does not disappear at zero (
     // "zero due" — this bead does not decide whether offering a session
     // against an unreadable vault is honest, so that state is left alone.
     expect(showsStartReviewAction(null)).toBe(false);
+  });
+});
+
+describe('F6.7 — unmet material is named by source, never counted ([D-060], ol-0r92.9)', () => {
+  // Scenarios: features/F6-today.md, "F6.7 — Unmet material is named by
+  // source, never counted", all four tagged @auto:plugin/today/copy.spec.
+
+  function unmetItem(noteTitle: string): Pick<StudySessionItem, 'obligationClass' | 'noteTitle'> {
+    return { obligationClass: 'unmet', noteTitle };
+  }
+  function dueItem(noteTitle: string): Pick<StudySessionItem, 'obligationClass' | 'noteTitle'> {
+    return { obligationClass: 'recall-due', noteTitle };
+  }
+
+  it('new material worth mentioning is named by where it came from, never a figure standing in for it', () => {
+    // Scenario: "new material worth mentioning is named by where it came from".
+    const line = newMaterialSourceLine('a seminar handout');
+    expect(line).toContain('a seminar handout');
+    expect(line).not.toMatch(/\d/);
+  });
+
+  it('one line per distinct source in a multi-new-item session — never a count of them, and due items never leak in', () => {
+    // Scenario: "no standalone number, badge or counter of unmet generated
+    // material appears anywhere" — exercised over a session with several new
+    // items, one source repeated, and one due (not new) item.
+    const items = [
+      unmetItem('Lecture notes'),
+      unmetItem('Lecture notes'), // same source, second item — collapses to one line
+      unmetItem('Seminar handout'),
+      unmetItem('Reading list'),
+      dueItem('Old flashcard set'), // due, not new — must not produce a line here
+    ];
+    const lines = newMaterialSourceLines(items);
+    expect(lines).toEqual([
+      'Includes new material from Lecture notes.',
+      'Includes new material from Seminar handout.',
+      'Includes new material from Reading list.',
+    ]);
+    // Three distinct sources, from five items — the line count is never
+    // rendered as a number anywhere, and no line names any quantity.
+    for (const line of lines) {
+      expect(line).not.toMatch(/\d/);
+    }
+  });
+
+  it('is silent — not a rendered "0 new sources" line — when nothing is unmet', () => {
+    expect(newMaterialSourceLines([dueItem('Old flashcard set')])).toEqual([]);
+    expect(newMaterialSourceLines([])).toEqual([]);
+  });
+
+  it('an item with no classification at all never produces a line', () => {
+    // Every `buildStudySession` caller before `ol-y237`, and every caller
+    // other than `buildComposedStudySession`, supplies no classification map
+    // at all — `obligationClass: undefined` must read as "not new", never as
+    // a fabricated class standing in for "we did not classify this".
+    expect(newMaterialSourceLines([{ noteTitle: 'Unclassified note' }])).toEqual([]);
+  });
+
+  it('due work may still be counted, and is never the headline (F6.1) — a due count and a source line never share a sentence', () => {
+    // Scenario: "due work may still be counted, and is never the headline".
+    const dueLine = dueTodaySentence(12);
+    const sourceLine = newMaterialSourceLine('a lecture recording');
+    expect(dueLine).toMatch(/\d/);
+    expect(sourceLine).not.toMatch(/\d/);
+    expect(sourceLine).not.toBe(dueLine);
+  });
+
+  it('the line is met-versus-unmet, not number-versus-no-number — every unmet-material string is uncounted and every due-count string may be counted', () => {
+    // Scenario: "the line is met-versus-unmet, not number-versus-no-number".
+    const unmetStrings = newMaterialSourceLines([unmetItem('A'), unmetItem('B')]);
+    const dueStrings = [dueTodaySentence(1), dueTodaySentence(23), newCountSentence(12) ?? ''];
+    for (const s of unmetStrings) {
+      expect(s, `"${s}" is unmet material and must be uncounted`).not.toMatch(/\d/);
+    }
+    for (const s of dueStrings) {
+      expect(s, `"${s}" is due work and is permitted to be counted`).toMatch(/\d/);
+    }
+  });
+
+  it('no standalone number, badge or counter of unmet generated material appears anywhere on the panel', () => {
+    // Scenario: "no standalone number, badge or counter of unmet generated
+    // material appears anywhere" — checked against the whole panel corpus
+    // this file already samples, not just this function's own output.
+    const newMaterialLines = allTodayStrings().filter((s) =>
+      s.toLowerCase().includes('new material'),
+    );
+    expect(newMaterialLines.length).toBeGreaterThan(0);
+    for (const line of newMaterialLines) {
+      expect(line, `"${line}" mentions new material and must carry no digit`).not.toMatch(/\d/);
+    }
+  });
+
+  it('is part of the corpus the panel-wide rules are checked against', () => {
+    expect(allTodayStrings()).toContain(newMaterialSourceLine('the lecture notes'));
+  });
+
+  it('names no course directly — the source string is the caller’s own note title, never invented or coded here (INV-3, ol-p2t08)', () => {
+    expect(newMaterialSourceLine('a note')).not.toMatch(/[A-Z]{4,}\d{3}/);
   });
 });

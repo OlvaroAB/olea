@@ -74,6 +74,7 @@ import {
   type CourseFreshnessReading,
   MASTERY_DISPLAY,
   MASTERY_ORDER,
+  type StudySessionItem,
 } from 'olea-core';
 import type { TermDatesAskState } from './term-window-store.js';
 
@@ -589,6 +590,58 @@ export const CONTEST_QUARANTINE_BADGE = 'Counting as thin evidence while this is
 export const CONTEST_RETURNED_TO_CANDIDATE =
   'This match is back to a candidate and is not being used.';
 
+// ---------------------------------------------------------------------------------------------
+// F6.7 — new (unmet) material is named by its source, never by a count
+// (`[D-060]`; `ol-0r92.9`, data half `ol-y237`).
+//
+// `ol-y237` (`olea-core`'s `study-session/compose.ts` / `build.ts`) hands a
+// caller each session item's own `ObligationClass` and that same item's own
+// `notePath`/`noteTitle` — the two facts F6.7's sentence needs, and a shape
+// with no total, no per-class count and no list length anywhere in it, so
+// nothing here could be summed back into the count the clause forbids. This
+// module is the one place that turns the pair into the sentence; the
+// suggested session's screen (`session-builder/copy.ts`'s `sessionScreenCopy`,
+// rendered on every path by `session-builder/view.ts`) is the reachable
+// caller — the same reason `effortInsightLine`/`rhythmQuietLine` above live
+// here and are called from a DOM file that never assembles a sentence of its
+// own.
+//
+// **One line per distinct source, never a count of them.** Two items drawn
+// from the same note collapse to one line; a second mention of the same
+// source would read as emphasis, and two different notes worth mentioning
+// are two facts, not a number to be summed. `recall-due`/`baseline-due`/
+// `elective` items, and any item with no classification at all
+// (`obligationClass === undefined` — a caller that supplied no
+// classification map), are due work or ordinary review, never material she
+// has not yet met, and never produce a line here (F6.1: due counts are
+// permitted elsewhere and are never the headline on this surface either).
+// ---------------------------------------------------------------------------------------------
+
+/** F6.7's own worked example, generalised: names the source and stops. */
+export function newMaterialSourceLine(source: string): string {
+  return `Includes new material from ${source}.`;
+}
+
+/**
+ * Every distinct source worth mentioning for material she has not yet met,
+ * across the items a session offers. `[]` when nothing in `items` is
+ * classified `'unmet'` — silence, not a rendered "0 new sources" line, the
+ * same "absent rather than zero" rule `newCountSentence` already holds.
+ */
+export function newMaterialSourceLines(
+  items: readonly Pick<StudySessionItem, 'obligationClass' | 'noteTitle'>[],
+): readonly string[] {
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (item.obligationClass !== 'unmet') continue;
+    if (seen.has(item.noteTitle)) continue;
+    seen.add(item.noteTitle);
+    sources.push(item.noteTitle);
+  }
+  return sources.map(newMaterialSourceLine);
+}
+
 /**
  * Every string this panel can put on screen, for the copy test. Functions are
  * sampled across the values that change their wording; anything rendered by
@@ -652,5 +705,7 @@ export function allTodayStrings(): readonly string[] {
     contestCorrectedLine('2026-08-21'),
     CONTEST_QUARANTINE_BADGE,
     CONTEST_RETURNED_TO_CANDIDATE,
+    // --- F6.7 — new material named by source, never by count ([D-060]) ---
+    newMaterialSourceLine('the lecture notes'),
   ];
 }

@@ -1,6 +1,9 @@
 /**
  * Every string the session builder shows her (F4.6, F4.7, F4.8, F4.9;
- * `ol-p5t06b` [P5-T06b]).
+ * `ol-p5t06b` [P5-T06b]). Also F6.7's by-source signal on this screen
+ * (`ol-0r92.9`) — F6.4 names this the reachable surface for it: "where the
+ * session includes material Olea has built since she last studied, it says
+ * where it came from ... and never how much of it there is."
  *
  * **Why a copy module and not strings in the view.** The same reason
  * `gap/copy.ts` exists (`ol-09kf`): product copy assembled in a DOM builder is
@@ -51,6 +54,7 @@ import type {
   StudySessionOmission,
 } from 'olea-core';
 import { FULL_SYLLABUS_ADVICE } from '../gap/copy.js';
+import { newMaterialSourceLines } from '../today/copy.js';
 
 // ---------------------------------------------------------------------------
 // Titles, budgets and the unavailable state
@@ -243,6 +247,24 @@ export function focusLine(model: StudySessionModel): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// F6.7 — new (unmet) material named by source, never by count (`[D-060]`;
+// `ol-0r92.9`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every source worth mentioning for material this session includes that she
+ * has not yet met — F6.4's own clause on this exact screen: "where the
+ * session includes material Olea has built since she last studied, it says
+ * where it came from ... and never how much of it there is."
+ * `newMaterialSourceLines` (`../today/copy.js`) is the shared primitive; this
+ * is only the `StudySessionModel` -> `StudySessionItem[]` plumbing so the
+ * caller never has to know the field is `model.items`.
+ */
+export function newMaterialLines(model: StudySessionModel): readonly string[] {
+  return newMaterialSourceLines(model.items);
+}
+
+// ---------------------------------------------------------------------------
 // What was left out — information, not a verdict
 // ---------------------------------------------------------------------------
 
@@ -364,6 +386,8 @@ export function sessionScreenCopy(model: StudySessionModel): readonly string[] {
   const lines: string[] = [];
   if (model.items.length > 0) lines.push(sessionSummaryLine(model));
   lines.push(...emptySessionLines(model));
+  // F6.7 — named right beside what was built, never as a count of it.
+  lines.push(...newMaterialLines(model));
 
   const focus = focusLine(model);
   if (focus !== null) lines.push(focus);
