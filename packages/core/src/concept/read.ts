@@ -53,7 +53,9 @@
  * how that arrives, and it arrives as a *stated reason*, never as silence.
  */
 
+import { buildOutline } from '../block/outline.js';
 import { parseDocument } from '../block/parse.js';
+import type { OutlineNode, ParsedDocument } from '../block/types.js';
 import { discoverEmbeddedSources } from '../extract/embeds.js';
 import { extractFromVault, formatFromExtension } from '../extract/registry.js';
 import type { EmbeddedInNote, Provenance, SourceFormat } from '../extract/types.js';
@@ -551,6 +553,39 @@ async function gatherDerivedPassages(
 }
 
 /**
+ * Nearest-enclosing-heading text for every block in `doc`, keyed by index
+ * into `doc.blocks` — the section-grain citation label C3.2 wants and DF-22
+ * flagged as missing for markdown (`ol-2zfj.26`). `../block/outline.ts`
+ * already groups a heading with the blocks that belong to it; this walks
+ * that tree once per note and flattens it to "which heading's content is
+ * this block part of", the same reading `../extract/docx.ts` gives
+ * `SourceLocation.section` for Word headings.
+ *
+ * **A heading's own block is tagged with its PARENT's heading text, not its
+ * own** — `docx.ts`'s convention for the identical case ("the heading's own
+ * unit carries its parent section, not itself"), kept identical here so a
+ * citation never reads a heading as if it were content one level inside
+ * itself. A block above the first heading, or in a note with no headings at
+ * all, is simply absent from the map — `undefined` at the call site, the
+ * same honest-absence rule `SourceLocation.section`'s own doc comment states
+ * rather than a fabricated top-level label.
+ */
+function sectionsByBlockIndex(doc: ParsedDocument): ReadonlyMap<number, string> {
+  const index = new Map<number, string>();
+
+  function visit(nodes: readonly OutlineNode[], enclosing: string | undefined): void {
+    for (const node of nodes) {
+      if (enclosing !== undefined) index.set(node.index, enclosing);
+      for (const contentIndex of node.contentIndices) index.set(contentIndex, node.heading.text);
+      visit(node.children, node.heading.text);
+    }
+  }
+  visit(buildOutline(doc), undefined);
+
+  return index;
+}
+
+/**
  * Passages from her material, markdown blocks and extracted non-markdown
  * units alike, each carrying the anchor that produced it so a citation can
  * quote the exact span.
@@ -594,21 +629,27 @@ export async function gatherPassages(
       first?.kind === 'frontmatter' ? readList(parseFrontmatter(first.inner), 'course').items : [];
     const courses = notePathCourses(path, explicitCourses, coursesFolder);
     const course = courses.length === 1 ? courses[0] : undefined;
+    const sections = sectionsByBlockIndex(doc);
 
-    for (const block of doc.blocks) {
-      if (block.kind === 'frontmatter' || block.kind === 'blank') continue;
-      if (block.raw.trim() === '') continue;
+    doc.blocks.forEach((block, index) => {
+      if (block.kind === 'frontmatter' || block.kind === 'blank') return;
+      if (block.raw.trim() === '') return;
+      const section = sections.get(index);
       passages.push({
         text: block.raw,
         anchor: {
           sourcePath: path,
           // Markdown has no pages; page 1 is the whole-document convention
           // `../extract/types.js` already documents for single-page formats.
-          location: { page: 1, charRange: { start: block.start, end: block.end } },
+          location: {
+            page: 1,
+            charRange: { start: block.start, end: block.end },
+            ...(section !== undefined ? { section } : {}),
+          },
         },
         course,
       });
-    }
+    });
   }
 
   const derived = await gatherDerivedPassages(vault, paths, coursesFolder, options.under);

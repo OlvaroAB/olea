@@ -586,6 +586,71 @@ describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', (
   });
 });
 
+describe('gatherPassages — section-grain citations for markdown (C3.2, DF-22, ol-2zfj.26)', () => {
+  it('a passage under a heading carries that heading text as its section', async () => {
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Note.md': '# Background\n\nOrmathel is the settling of the layer.\n',
+    });
+
+    const passages = await gatherPassages(vault);
+    const body = passages.find((p) => p.text.includes('Ormathel'));
+
+    expect(body?.anchor.location.section).toBe('Background');
+  });
+
+  it('a passage between the top of the note and the first heading carries no section', async () => {
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Note.md': 'Unheaded opening line.\n\n# Background\n\nBody.\n',
+    });
+
+    const passages = await gatherPassages(vault);
+    const opening = passages.find((p) => p.text.includes('Unheaded'));
+
+    expect(opening?.anchor.location.section).toBeUndefined();
+  });
+
+  it('a note with no headings at all carries no section on any passage', async () => {
+    const passages = await gatherPassages(BARE_VAULT);
+    // BARE_VAULT's own notes DO carry a single top-level heading each; use a
+    // heading-free note here instead, same honest-absence rule the docx/pptx
+    // extractors already document for section.
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Flat.md': 'Just a paragraph, no heading anywhere.\n',
+    });
+    const flatPassages = await gatherPassages(vault);
+
+    expect(passages.length).toBeGreaterThan(0); // sanity: BARE_VAULT still yields passages
+    expect(flatPassages.every((p) => p.anchor.location.section === undefined)).toBe(true);
+  });
+
+  it("a heading's own passage carries its PARENT section, not itself — same rule docx.ts uses", async () => {
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Note.md': '# Background\n\nIntro text.\n\n## Methods\n\nMethods text.\n',
+    });
+
+    const passages = await gatherPassages(vault);
+    const methodsHeading = passages.find((p) => p.text.trim() === '## Methods');
+    const methodsBody = passages.find((p) => p.text.includes('Methods text'));
+    const backgroundHeading = passages.find((p) => p.text.trim() === '# Background');
+
+    expect(methodsHeading?.anchor.location.section).toBe('Background');
+    expect(methodsBody?.anchor.location.section).toBe('Methods');
+    expect(backgroundHeading?.anchor.location.section).toBeUndefined();
+  });
+
+  it('a section deep in the tree resolves to its own nearest heading, not the root', async () => {
+    const vault = new MemoryVault({
+      '01 Courses/ABCD101/Note.md':
+        '# Unit One\n\n## Background\n\n### Prior work\n\nCited findings.\n',
+    });
+
+    const passages = await gatherPassages(vault);
+    const nested = passages.find((p) => p.text.includes('Cited findings'));
+
+    expect(nested?.anchor.location.section).toBe('Prior work');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // [REL-1] / [EXT-6] — relations recovered as part of extraction itself,
 // reconciled against the concepts the same read returned.
