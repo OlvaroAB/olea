@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these sixteen ids, spelled exactly this way', () => {
+  it('is exactly these seventeen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -26,6 +26,7 @@ describe('the closed task-id catalogue', () => {
       'grounding.judge.v1',
       'materiality.judge.v1',
       'oracle.rank.v1',
+      'plan.governor.v1',
       'quiz.generate.v1',
       'retrieval.embed.v1',
       'retrieval.rerank.v1',
@@ -88,7 +89,12 @@ describe('the closed task-id catalogue', () => {
     // not yet served: `whisper-large-v3-turbo` has no measured output ceiling
     // (`ol-91sr`'s "measure before pinning" rule), so the length below counts
     // it as spellable, not as live.
-    expect(ALL_TASK_IDS).toHaveLength(16);
+    //
+    // `plan.governor.v1` (`[D-157]`, `ol-itkl`) also carries no W-number: it
+    // serves the shadow-observer experiment's pre-registered measurement, not
+    // a production workload — see its doc comment in `tasks.ts`. Counted as
+    // spellable, not as a workload shape.
+    expect(ALL_TASK_IDS).toHaveLength(17);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

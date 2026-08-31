@@ -223,6 +223,28 @@ export const TASK_IDS = {
    * `retrieval.embed.v1` were once reserved ahead of their own completion.
    */
   VISION_EXTRACT: 'vision.extract.v1',
+  /**
+   * Slot O — the whole-term governor OBSERVER for the `[D-157]` shadow
+   * experiment (`ol-3ux7.5.13`, task built by `ol-itkl`). Carries no
+   * W-number: it serves a pre-registered measurement
+   * (`olea-service/findings/governor-shadow-preregistration.md`), not a
+   * production workload — nothing it returns reaches any surface, plan, or
+   * student-visible artifact, by the experiment's own construction.
+   *
+   * **Reserved and routed for the harness only.** Its sole caller is
+   * `olea-service/scripts/harness/playback-governor-observer.mjs`; whether a
+   * governor STAGE ever joins the periodic plan computation is decided on the
+   * shadow evidence via a later decision bead (`[D-157]`'s adopt/decline),
+   * and adoption would design its production task shape against the real
+   * consumer at that point rather than inheriting this observer's. Payload/
+   * response fixed by `olea-service/src/tasks/planGovernor.ts`: named-input
+   * re-weight proposals with one-plain-sentence reasons; `grounding`/
+   * `groundResponse` deliberately `null` — the observer's expressibility
+   * constraint (measurement 3) is enforced harness-side by the frozen
+   * pre-registration's own `applyProposals`, and a Worker-side filter would
+   * change what that frozen measurement records.
+   */
+  PLAN_GOVERNOR: 'plan.governor.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */
