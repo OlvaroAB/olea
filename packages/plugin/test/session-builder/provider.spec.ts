@@ -32,7 +32,10 @@ import { enumerateVaultInstruments, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
-import { createLocalSessionBuilderProvider } from '../../src/session-builder/provider.js';
+import {
+  createLocalSessionBuilderProvider,
+  reentryCandidateBudgetMinutes,
+} from '../../src/session-builder/provider.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -436,5 +439,79 @@ describe('createLocalSessionBuilderProvider — F2.19 assessment-scope resolver 
     const scopedNames = conceptNamesOf(scoped.model);
     expect(scopedNames).not.toEqual(baselineNames);
     expect(scopedNames.indexOf('Widget theory')).toBeLessThan(scopedNames.indexOf('Gadget theory'));
+  });
+});
+
+// F6.6 (`ol-v7r5.18`, discovered from `ol-blwb` / `[BKLG-1]`): `provider.ts`'s
+// `load()` now composes through `composeReentrySession` rather than calling
+// `buildComposedStudySession` directly — this suite is the production-caller
+// proof that a genuine absence (a review logged long before `now`) actually
+// reaches the branch, and that a recent one does not.
+describe('createLocalSessionBuilderProvider — F6.6 re-entry composition wiring (ol-v7r5.18)', () => {
+  it('a review logged three weeks before "now" produces a reentry state, never a plain model', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { timestamp: '2026-07-20T09:00:00-04:00' }),
+    ]);
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW, // 2026-08-10 — 21 days after the review above
+      scheduler: stubScheduler({ [instrumentId]: 1 }),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('reentry');
+    if (state.kind !== 'reentry') throw new Error('expected a reentry state');
+
+    // F6.6's own structural guarantee: a re-entry view cannot carry the two
+    // counts the clause forbids, regardless of what the underlying model held.
+    expect('leftOutInstrumentCount' in state.view).toBe(false);
+    expect('consideredRowCount' in state.view).toBe(false);
+
+    // The candidate budget this file offers is half the ordinary request
+    // (reentryCandidateBudgetMinutes), well above the size floor at 60
+    // minutes — so the composed session's own budget should reflect that
+    // shrink rather than the ordinary 60.
+    expect(state.view.budgetMinutes).toBe(reentryCandidateBudgetMinutes(60));
+    expect(state.view.budgetMinutes).toBeLessThan(60);
+    expect(findWidgetItem(state.view).conceptName).toBe('Widget theory');
+  });
+
+  it('a review logged two days before "now" stays an ordinary model — an ordinary gap is not an absence', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { timestamp: '2026-08-08T09:00:00-04:00' }),
+    ]);
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({ [instrumentId]: 1 }),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('model');
+    if (state.kind !== 'model') throw new Error('expected an ordinary model');
+    expect(state.model.budgetMinutes).toBe(60);
+  });
+
+  it('no review history at all stays an ordinary model — never reviewed is not "returning after an absence"', async () => {
+    const vault = vaultWithReviewLog([]);
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('model');
   });
 });

@@ -1310,6 +1310,9 @@ export type {
   SourceRegistrationReport,
   SourceRole,
 } from './source/types.js';
+// The absence signal register row 3.8 names (F6.6; `ol-v7r5.18`): "days since
+// her last review", derived from the review log's own timestamps.
+export { daysSinceLastReview } from './study-session/absence.js';
 // The session builder (F4.6, F4.7, F4.8; P5-T06b). Pure selection over the gap
 // view's own order — it ranks nothing, recomputes no exam proximity, and widens
 // no format map; study-session/build.ts's module doc states each of those three

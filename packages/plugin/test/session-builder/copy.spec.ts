@@ -9,6 +9,7 @@
  */
 
 import type {
+  ReentryStudySessionView,
   SessionAssessmentCountdown,
   StudySessionItem,
   StudySessionModel,
@@ -30,6 +31,9 @@ import {
   leftOutLines,
   minutesLabel,
   newMaterialLines,
+  REENTRY_STILL_AVAILABLE_LINE,
+  reentryEmptyLines,
+  reentryScreenCopy,
   SESSION_ATTRIBUTION,
   SESSION_BUDGET_OPTIONS,
   sessionFraming,
@@ -105,6 +109,15 @@ function model(overrides: Partial<StudySessionModel> = {}): StudySessionModel {
 }
 
 /**
+ * A `ReentryStudySessionView` fixture — `model()` minus the two fields F6.6
+ * forbids, exactly the shape `composeReentrySession` hands a renderer.
+ */
+function reentryView(overrides: Partial<StudySessionModel> = {}): ReentryStudySessionView {
+  const { leftOutInstrumentCount: _l, consideredRowCount: _c, ...view } = model(overrides);
+  return view;
+}
+
+/**
  * Every sentence this module can produce, over models chosen to reach every
  * branch. The audits below run over THIS, not over the fixed inventory —
  * `ol-f49h`'s point, held here: an inventory is not an audit.
@@ -168,6 +181,24 @@ function everyProducibleString(): readonly string[] {
     strings.push(durationBasisLine(m));
     if (m.items.length > 0) strings.push(sessionSummaryLine(m));
     for (const i of m.items) strings.push(sessionItemLine(i));
+  }
+
+  // F6.6 — the re-entry screen's own composition, over the same kind of
+  // variety (empty, with items, with new material, with a countdown).
+  const reentryViews: ReentryStudySessionView[] = [
+    reentryView(),
+    reentryView({ items: [], plannedSeconds: 0, nextAssessment: null }),
+    reentryView({
+      items: [
+        item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' }),
+        item({ position: 2, obligationClass: 'recall-due', noteTitle: 'Old flashcard set' }),
+      ],
+    }),
+    reentryView({ focusConcept: 'Alpha' }),
+  ];
+  for (const v of reentryViews) {
+    strings.push(...reentryScreenCopy(v));
+    strings.push(...reentryEmptyLines(v));
   }
 
   return [...new Set(strings)];
@@ -488,5 +519,140 @@ describe('F6.7 reaches the screen through sessionScreenCopy — no separate view
     for (const line of newMaterialLines(m)) {
       expect(line).not.toMatch(/\d/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F6.6 — re-entry composition after an absence (`ol-v7r5.18`, discovered from
+// `ol-blwb` / `[BKLG-1]`). Scenarios: `features/F6-today.md`, "F6.6 — Coming
+// back after time away gets a small session, not a backlog" — the two named
+// here are the ones this bead adds coverage for: "no count of what
+// accumulated appears anywhere on this screen, in any position" and "what
+// accumulated remains available and is never described as lost or expired".
+// `SessionBuilderView.render` (`../../src/session-builder/view.ts`) draws
+// `reentryScreenCopy`'s result on every `'reentry'`-state path, so this is
+// the production caller: no separate `view.ts` wiring is needed for either
+// scenario, the same shape F6.7's own suite above already establishes.
+// ---------------------------------------------------------------------------
+
+describe('F6.6 — no count of what accumulated appears anywhere on this screen, in any position', () => {
+  it('a re-entry view built from a substantial left-out backlog produces none of the counted left-out lines an ordinary session would render for the SAME leftOut data', () => {
+    // The adversarial construction the scenario names: "a re-entry session
+    // shown after a two-week absence with a substantial backlog behind it."
+    // `leftOut` here is deliberately large and would, on the ordinary
+    // surface, produce four separate counted lines (`leftOutLines`'s own
+    // test above proves exactly that for this same omission set).
+    const backlog = [
+      omission({ reason: 'did-not-fit' }),
+      omission({ reason: 'did-not-fit' }),
+      omission({ reason: 'did-not-fit' }),
+      omission({ reason: 'no-instruments', gapClass: 'coverage-gap' }),
+      omission({ reason: 'no-instruments', gapClass: 'material-gap' }),
+      omission({ reason: 'already-in-session' }),
+    ];
+    // Sanity check on the adversarial fixture itself: the ordinary path DOES
+    // count this backlog, so the re-entry assertions below are a real
+    // contrast, not a vacuous one.
+    const ordinaryLines = leftOutLines(model({ leftOut: backlog }));
+    expect(ordinaryLines.length).toBeGreaterThan(0);
+
+    // `nextAssessment: null` isolates the property under test: the countdown
+    // (F4.7) legitimately carries a digit of its own (days until an
+    // assessment), which is a different, permitted kind of number from a
+    // count of what accumulated — excluding it here keeps the "no digit
+    // outside the session's own summary" check below from a false positive
+    // on an unrelated line.
+    const view = reentryView({ leftOut: backlog, nextAssessment: null });
+    const screen = reentryScreenCopy(view);
+
+    // None of the ordinary surface's counted lines for this exact backlog
+    // leak into the re-entry screen.
+    for (const line of ordinaryLines) {
+      expect(
+        screen,
+        `"${line}" is a counted left-out line and must not appear on a re-entry screen`,
+      ).not.toContain(line);
+    }
+    // And no line on the re-entry screen carries a digit that isn't the
+    // session's OWN item count/time (sessionSummaryLine) — every other line
+    // states a fact with no count of what was left behind.
+    const withoutSummary = screen.filter((l) => l !== sessionSummaryLine(view));
+    for (const line of withoutSummary) {
+      expect(
+        line,
+        `"${line}" carries a digit — is it secretly a count of what accumulated?`,
+      ).not.toMatch(/\d/);
+    }
+  });
+
+  it('the two forbidden fields are structurally absent from the view reentryScreenCopy renders', () => {
+    const view = reentryView({ leftOut: [omission()] });
+    expect('leftOutInstrumentCount' in view).toBe(false);
+    expect('consideredRowCount' in view).toBe(false);
+  });
+
+  it('reentryScreenCopy never calls leftOutLines — the empty-backlog case is not what makes this true', () => {
+    // Regression guard for the specific defect: a re-entry screen that only
+    // happens to look clean because its fixture has nothing left out. The
+    // fixture above already has a non-empty `leftOut`; this asserts the same
+    // property holds even when there is exactly one very countable omission.
+    const view = reentryView({
+      leftOut: [omission({ reason: 'did-not-fit' }), omission({ reason: 'did-not-fit' })],
+    });
+    expect(reentryScreenCopy(view).join(' ')).not.toContain('did not fit');
+  });
+});
+
+describe('F6.6 — what accumulated remains available and is never described as lost or expired', () => {
+  it('REENTRY_STILL_AVAILABLE_LINE states the fact plainly, with no word for loss', () => {
+    for (const word of ['lost', 'expired', 'discarded', 'gone', 'deleted', 'backlog']) {
+      expect(REENTRY_STILL_AVAILABLE_LINE.toLowerCase()).not.toContain(word);
+    }
+    expect(REENTRY_STILL_AVAILABLE_LINE.toLowerCase()).toContain('still');
+  });
+
+  it('the line is present on every re-entry screen, with or without items', () => {
+    expect(reentryScreenCopy(reentryView())).toContain(REENTRY_STILL_AVAILABLE_LINE);
+    expect(reentryScreenCopy(reentryView({ items: [], plannedSeconds: 0 }))).toContain(
+      REENTRY_STILL_AVAILABLE_LINE,
+    );
+  });
+
+  it('is part of the corpus the module-wide inventory carries, for the F4.9/principle-12 audits above to reach it', () => {
+    expect(allSessionBuilderStrings()).toContain(REENTRY_STILL_AVAILABLE_LINE);
+  });
+});
+
+describe('F6.6 — the re-entry empty state names no count either', () => {
+  it('is silent when the view has items', () => {
+    expect(reentryEmptyLines(reentryView())).toEqual([]);
+  });
+
+  it('states what could be read, not a claim about what she has left to study, when there is nothing to build from', () => {
+    const lines = reentryEmptyLines(reentryView({ items: [], plannedSeconds: 0 }));
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.join(' ')).toContain('not about what you have left to study');
+    for (const line of lines) expect(line).not.toMatch(/\d/);
+  });
+});
+
+describe('F6.6 — reentryScreenCopy still carries the rest of the surface’s honesty', () => {
+  it('always carries the F4.9 framing, same as the ordinary screen', () => {
+    expect(reentryScreenCopy(reentryView())).toContain(SESSION_ATTRIBUTION);
+    expect(reentryScreenCopy(reentryView())).toContain(FULL_SYLLABUS_ADVICE);
+  });
+
+  it('carries F6.7’s by-source material lines when the session includes unmet material', () => {
+    const view = reentryView({
+      items: [item({ obligationClass: 'unmet', noteTitle: 'Lecture notes' })],
+    });
+    expect(reentryScreenCopy(view)).toContain('Includes new material from Lecture notes.');
+  });
+
+  it('carries the duration basis line only when there are items to time', () => {
+    expect(reentryScreenCopy(reentryView())).toContain(durationBasisLine(reentryView()));
+    expect(reentryScreenCopy(reentryView({ items: [], plannedSeconds: 0 }))).not.toContain(
+      durationBasisLine(reentryView()),
+    );
   });
 });

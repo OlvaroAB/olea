@@ -3,7 +3,11 @@
  * `ol-p5t06b` [P5-T06b]). Also F6.7's by-source signal on this screen
  * (`ol-0r92.9`) — F6.4 names this the reachable surface for it: "where the
  * session includes material Olea has built since she last studied, it says
- * where it came from ... and never how much of it there is."
+ * where it came from ... and never how much of it there is." And F6.6's
+ * re-entry-after-absence surface (`ol-v7r5.18`, discovered from `ol-blwb` /
+ * `[BKLG-1]`) — see `reentryScreenCopy` below, which is what
+ * `SessionBuilderView` renders when `provider.ts` reports a re-entry
+ * (`SessionBuilderState`'s `'reentry'` branch, `../session-builder/view.js`).
  *
  * **Why a copy module and not strings in the view.** The same reason
  * `gap/copy.ts` exists (`ol-09kf`): product copy assembled in a DOM builder is
@@ -48,6 +52,7 @@
 
 import type {
   DurationModelBasis,
+  ReentryStudySessionView,
   SessionAssessmentCountdown,
   StudySessionItem,
   StudySessionModel,
@@ -136,7 +141,7 @@ export function assessmentName(countdown: SessionAssessmentCountdown): string {
  * date rather than as an urgent "today". A false deadline is the most
  * expensive small lie this surface could tell.
  */
-export function countdownLine(model: StudySessionModel): string | null {
+export function countdownLine(model: Pick<StudySessionModel, 'nextAssessment'>): string | null {
   const next = model.nextAssessment;
   if (next === null) return null;
   const name = assessmentName(next);
@@ -161,7 +166,9 @@ export function countdownLine(model: StudySessionModel): string | null {
  * nothing about format at all. A sentence offered for a preference that did not
  * fire would be a reason for something that did not happen.
  */
-export function formatPreferenceLine(model: StudySessionModel): string | null {
+export function formatPreferenceLine(
+  model: Pick<StudySessionModel, 'formatPreference' | 'items'>,
+): string | null {
   if (model.formatPreference !== 'mcq') return null;
   if (!model.items.some((item) => item.formatMatch === 'preferred-format')) return null;
   return 'Multiple-choice questions come first here, because your next assessment is a quiz.';
@@ -187,7 +194,7 @@ const DURATION_BASIS_LINES: Readonly<Record<DurationModelBasis, string>> = {
  * doc says so outright), and presenting those as "about eighteen minutes"
  * without qualification is a measurement claim Olea has not earned.
  */
-export function durationBasisLine(model: StudySessionModel): string {
+export function durationBasisLine(model: Pick<StudySessionModel, 'durationBasis'>): string {
   return DURATION_BASIS_LINES[model.durationBasis];
 }
 
@@ -223,7 +230,9 @@ export function sessionItemLine(item: StudySessionItem): string {
  * the session and it does not say the session is enough — the first is noise
  * and the second is a claim F4.9's full-syllabus clause forbids.
  */
-export function sessionSummaryLine(model: StudySessionModel): string {
+export function sessionSummaryLine(
+  model: Pick<StudySessionModel, 'items' | 'plannedSeconds' | 'budgetMinutes'>,
+): string {
   const n = model.items.length;
   const cards = n === 1 ? '1 card' : `${n} cards`;
   return `${cards}, about ${minutesLabel(model.plannedSeconds)} of the ${model.budgetMinutes} you asked for.`;
@@ -235,7 +244,9 @@ export function sessionSummaryLine(model: StudySessionModel): string {
  * a distinct sentence when the concept could not be found — a request silently
  * dropped is worse than one that says it was not honoured.
  */
-export function focusLine(model: StudySessionModel): string | null {
+export function focusLine(
+  model: Pick<StudySessionModel, 'focusConcept' | 'items' | 'leftOut'>,
+): string | null {
   const focus = model.focusConcept;
   if (focus === null) return null;
   const honoured =
@@ -260,7 +271,7 @@ export function focusLine(model: StudySessionModel): string | null {
  * is only the `StudySessionModel` -> `StudySessionItem[]` plumbing so the
  * caller never has to know the field is `model.items`.
  */
-export function newMaterialLines(model: StudySessionModel): readonly string[] {
+export function newMaterialLines(model: Pick<StudySessionModel, 'items'>): readonly string[] {
   return newMaterialSourceLines(model.items);
 }
 
@@ -407,6 +418,86 @@ export function sessionScreenCopy(model: StudySessionModel): readonly string[] {
 }
 
 // ---------------------------------------------------------------------------
+// F6.6 — re-entry composition after an absence (`ol-v7r5.18`, discovered from
+// `ol-blwb` / `[BKLG-1]`). `composeReentrySession`'s own `view` field
+// (`ReentryStudySessionView`, `olea-core`) already omits
+// `leftOutInstrumentCount`/`consideredRowCount` structurally, so this screen
+// cannot render them by accident — but F6.6's ban is wider than those two
+// fields: `leftOutLines` above is built from `model.leftOut` directly (never
+// the two omitted counts) and would still render a count of what did not fit,
+// which on a re-entry screen specifically IS the accumulated-backlog count
+// the clause forbids "in any position." So `reentryScreenCopy` below is a
+// SEPARATE composition, not `sessionScreenCopy` run over a narrower type —
+// it deliberately never calls `leftOutLines` or `emptySessionLines` (the
+// second also because it needs `consideredRowCount`, which the type does not
+// have). Everything else `sessionScreenCopy` says is still true and still
+// said: F4.9's framing, F6.7's by-source material lines, the countdown, the
+// format preference and the duration basis all carry over unchanged, via the
+// same functions — each narrowed above to a `Pick<StudySessionModel, ...>`
+// of only the fields it actually reads, which is what lets
+// `ReentryStudySessionView` (missing two fields) satisfy them without a
+// second copy of each function's logic.
+// ---------------------------------------------------------------------------
+
+/**
+ * F6.6's second named scenario: "what accumulated remains available and is
+ * never described as lost or expired." States the fact plainly and stops —
+ * no "backlog", no "catch up", no word for loss at all, because the whole
+ * point is that nothing was lost. Always shown on a re-entry screen, never
+ * conditionally, because it is true of every re-entry session by
+ * construction (F6.6: the ordinary selection rule run at fewer slots is what
+ * makes "everything else is still scheduled" a fact rather than a promise).
+ */
+export const REENTRY_STILL_AVAILABLE_LINE =
+  'Everything else is still here, still scheduled, exactly as it was before.';
+
+/**
+ * The re-entry screen's empty state — `ReentryStudySessionView` has no
+ * `consideredRowCount` to distinguish "nothing ranked" from "nothing fit the
+ * budget" the way `emptySessionLines` does for an ordinary session, but
+ * `REENTRY_SIZE_FLOOR_MINUTES`'s own doc means that distinction cannot arise
+ * here in practice — the floor exists precisely so a re-entry budget can
+ * always seat at least a handful of instruments when anything is ranked, so
+ * an empty re-entry session can only mean the ranking itself had nothing.
+ */
+export function reentryEmptyLines(view: Pick<ReentryStudySessionView, 'items'>): readonly string[] {
+  if (view.items.length > 0) return [];
+  return [
+    'Olea has nothing ready to build a session from right now.',
+    'That is a statement about what it could read just now, not about what you have left to study.',
+  ];
+}
+
+/**
+ * The whole re-entry screen's non-item copy, in render order — F6.6's
+ * counterpart to `sessionScreenCopy`. See the section doc above for why this
+ * is a separate composition rather than a call into `sessionScreenCopy`.
+ */
+export function reentryScreenCopy(view: ReentryStudySessionView): readonly string[] {
+  const lines: string[] = [];
+  if (view.items.length > 0) lines.push(sessionSummaryLine(view));
+  lines.push(...reentryEmptyLines(view));
+  lines.push(REENTRY_STILL_AVAILABLE_LINE);
+  // F6.7 — named right beside what was built, never as a count of it.
+  lines.push(...newMaterialLines(view));
+
+  const focus = focusLine(view);
+  if (focus !== null) lines.push(focus);
+
+  lines.push(...sessionFraming());
+
+  const countdown = countdownLine(view);
+  if (countdown !== null) lines.push(countdown);
+
+  const format = formatPreferenceLine(view);
+  if (format !== null) lines.push(format);
+
+  if (view.items.length > 0) lines.push(durationBasisLine(view));
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
 // The enumeration David reviews, and the F4.9 audit runs over
 // ---------------------------------------------------------------------------
 
@@ -428,5 +519,8 @@ export function allSessionBuilderStrings(): readonly string[] {
     ...Object.values(DURATION_BASIS_LINES),
     ...Object.values(INSTRUMENT_TYPE_LABELS),
     ...SESSION_BUDGET_OPTIONS.map(budgetOptionLabel),
+    // --- F6.6 — re-entry composition after an absence (`ol-v7r5.18`) ---
+    REENTRY_STILL_AVAILABLE_LINE,
+    ...reentryEmptyLines({ items: [] }),
   ];
 }

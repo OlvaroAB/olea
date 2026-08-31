@@ -68,6 +68,41 @@
  * blob with nothing in the contract naming it — a Class C stop (C6; D-002,
  * D-004, D-005 and D-008 already decide every case where the convenience
  * tempts).
+ *
+ * ## F6.6 — re-entry composition after an absence (`ol-v7r5.18`, discovered
+ * from `ol-blwb` / `[BKLG-1]`)
+ *
+ * `composeReentrySession` (`olea-core`'s `study-session/reentry.ts`) is now
+ * this file's ONE call for building a session — never `buildComposedStudySession`
+ * directly — because `reentry.ts`'s own reachability note names this exact
+ * call site as the missing wiring: "the one place an ordinary session is
+ * composed today ... has no notion of 'days since her last review' to decide
+ * whether to call this module instead." `composeReentrySession` itself
+ * decides whether this is a re-entry (`isReentryDue`, `REENTRY_ABSENCE_
+ * THRESHOLD_DAYS`) and, when it is not, runs `ordinaryBudgetMinutes`
+ * unmodified — so this is not a branch this file has to take, only a call it
+ * has to make.
+ *
+ * Two things this file supplies that `reentry.ts` deliberately does not:
+ *
+ *  - **`daysSinceLastReview`** (`./absence.js` in `olea-core`) — the same
+ *    `entries` this call already reads in full for the mastery join and the
+ *    SESS-2 replay above, never a second, narrower read. `entries` is the
+ *    WHOLE log (`readReviewLogHistory`'s own doc: "reads every log file it can
+ *    see"), not the `probeDays` window, so a real multi-week absence is never
+ *    misread as "never reviewed" the way a windowed read would.
+ *  - **The candidate re-entry budget** — `reentryCandidateBudgetMinutes`
+ *    below. SESS-1's modelling found the whole 0.25x-1.0x range of an ordinary
+ *    budget statistically indistinguishable (`reentry.ts`'s own doc: "the
+ *    widest plateau in the whole document"), so this is a declared, plain-
+ *    English choice, never a fitted one — see that function's own doc.
+ *
+ * The result carries `isReentry` and a `view` that structurally omits the two
+ * counts F6.6 forbids (`ReentryStudySessionView`) — `load()` returns
+ * `{ kind: 'reentry', view }` rather than `{ kind: 'model', model }` exactly
+ * when `isReentry` is true, so `SessionBuilderView` (`./view.js`) can never
+ * render an ordinary session's `leftOutInstrumentCount`/`consideredRowCount`
+ * on a re-entry screen by forgetting to check a flag.
  */
 
 import type {
@@ -80,12 +115,13 @@ import type {
 } from 'olea-core';
 import {
   allGapRows,
-  buildComposedStudySession,
   buildConceptInstrumentIndex,
   buildGapView,
   buildMaterialPresence,
   calendarDaysEndingOn,
   composeOracleRanking,
+  composeReentrySession,
+  daysSinceLastReview,
   enumerateVaultInstruments,
   estimateInstrumentDurations,
   readReviewLogHistory,
@@ -107,6 +143,36 @@ import {
 import { buildSupportLevelHistoryLookup } from '../review/queue-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { SessionBuilderRequest, SessionBuilderState, SessionBuilderViewDeps } from './view.js';
+
+/**
+ * DECLARED (never fitted). What fraction of the ordinary requested budget
+ * this file offers `composeReentrySession` as the re-entry candidate, before
+ * that module's own `REENTRY_SIZE_FLOOR_MINUTES` floor applies.
+ *
+ * SESS-1's modelling (`findings/SESS-1-session-composition-model.md` §3.3,
+ * olea-service; cited in full by `olea-core`'s `reentry.ts`) swept this ratio
+ * from 0.25x to 1.0x and found "the widest plateau in the whole document" —
+ * baseline share and recall probability barely move anywhere in that range,
+ * so the number is "a product judgement about how a return should feel, not
+ * a load-bearing constant" (`reentry.ts`'s own words). One half is the
+ * plain-English reading of F6.6's "deliberately small" — noticeably shorter
+ * than what she asked for, without being a token session — and it sits
+ * comfortably inside the plateau SESS-1 measured, so there is nothing here to
+ * fit against data: any value in that range reads the same to the model.
+ */
+export const REENTRY_CANDIDATE_BUDGET_RATIO = 0.5;
+
+/**
+ * The candidate re-entry budget this file offers `composeReentrySession` —
+ * see {@link REENTRY_CANDIDATE_BUDGET_RATIO}'s own doc for where the ratio
+ * comes from. `composeReentrySession` only uses this when its own
+ * `isReentryDue` check fires; otherwise `ordinaryBudgetMinutes` is used
+ * unmodified, so a wrong candidate here can only ever affect a genuine
+ * re-entry, never an ordinary session.
+ */
+export function reentryCandidateBudgetMinutes(ordinaryBudgetMinutes: number): number {
+  return ordinaryBudgetMinutes * REENTRY_CANDIDATE_BUDGET_RATIO;
+}
 
 export interface CreateLocalSessionBuilderProviderDeps {
   readonly vault: VaultSource;
@@ -274,14 +340,19 @@ export function createLocalSessionBuilderProvider(
           enumeration.concepts,
         );
 
-        const composed = buildComposedStudySession({
+        // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
+        // module doc, `readReviewLogHistory`), so a real multi-week absence
+        // is measured correctly regardless of `probeDays`.
+        const composed = composeReentrySession({
           rows: gapRows,
           arrivalDays,
           relatedConceptKeys,
           assessmentContext,
           instruments: buildConceptInstrumentIndex(enumeration.records),
           replay,
-          budgetMinutes: request.budgetMinutes,
+          daysSinceLastReview: daysSinceLastReview(entries, now),
+          candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
+          ordinaryBudgetMinutes: request.budgetMinutes,
           // The first production read of the review log's `durationMs` (INV-4:
           // the discipline went in ahead of the feature, and this is the
           // feature).
@@ -303,7 +374,14 @@ export function createLocalSessionBuilderProvider(
             : {}),
         });
 
-        return { kind: 'model', model: composed.model };
+        // F6.6: a re-entry composition returns the narrower, count-free
+        // `view` (`ReentryStudySessionView`) rather than the ordinary
+        // `model` — see this file's own module doc and `SessionBuilderState`'s
+        // doc (`./view.js`) for why that is a type, not a flag a renderer has
+        // to remember to check.
+        return composed.isReentry
+          ? { kind: 'reentry', view: composed.view }
+          : { kind: 'model', model: composed.full.model };
       } catch (error) {
         console.error('Olea: could not build a study session', error);
         return { kind: 'unavailable' };

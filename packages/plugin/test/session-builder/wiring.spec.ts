@@ -93,7 +93,15 @@ describe('the session builder reads what only a real vault has', () => {
   it('composes the real oracle chain rather than re-implementing a ranking', () => {
     expect(provider).toMatch(/composeOracleRanking\(\{/);
     expect(provider).toMatch(/buildGapView\(\{/);
-    expect(provider).toMatch(/buildComposedStudySession\(\{/);
+  });
+
+  // F6.6 (`ol-v7r5.18`): `buildComposedStudySession` is no longer called
+  // directly here — `composeReentrySession` is, so an absence-aware branch
+  // exists at all. See that module's own reachability note, which named this
+  // exact call site as the missing wiring.
+  it('composes through composeReentrySession, not buildComposedStudySession directly (ol-v7r5.18)', () => {
+    expect(provider).toMatch(/composeReentrySession\(\{/);
+    expect(provider).not.toMatch(/buildComposedStudySession\(\{/);
   });
 
   it('SESS-2: replays scheduling state through the same Scheduler the Today panel uses, and reads its own scheduler dep rather than building a second instance', () => {

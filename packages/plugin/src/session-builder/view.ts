@@ -1,6 +1,7 @@
 /**
  * `SessionBuilderView` — the time-bounded session screen (F4.6, F4.7, F4.8,
- * F4.9; `ol-p5t06b` [P5-T06b]).
+ * F4.9; `ol-p5t06b` [P5-T06b]), and F6.6's re-entry-after-absence surface
+ * (`ol-v7r5.18`, discovered from `ol-blwb` / `[BKLG-1]`).
  *
  * **Thin by design, and here that is a safety property.** Everything this
  * screen *decides* is in `olea-core`'s `study-session/` — which instruments are
@@ -16,17 +17,22 @@
  * where its reachability is.
  *
  * **The one rule this file must not break.** It renders `sessionScreenCopy`'s
- * result on every path — session or no session, focused or not. That function
- * is what emits the F4.9 framing and the left-out lines, and it has no branch
- * that produces a bare list of cards. A card list written here directly, or a
- * summary line assembled in this file, would be a claim nothing can assert on.
+ * result for an ordinary session and `reentryScreenCopy`'s result for a
+ * re-entry one (`SessionBuilderState`'s `'reentry'` branch) — session or no
+ * session, focused or not, re-entry or not. Those two functions are what emit
+ * the F4.9 framing, the left-out lines (ordinary only — see `reentryScreenCopy`'s
+ * own doc for why a re-entry render must never reach `leftOutLines`) and F6.6's
+ * always-available line, and neither has a branch that produces a bare list of
+ * cards. A card list written here directly, or a summary line assembled in this
+ * file, would be a claim nothing can assert on.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type { StudySessionItem, StudySessionModel } from 'olea-core';
+import type { ReentryStudySessionView, StudySessionItem, StudySessionModel } from 'olea-core';
 import {
   budgetOptionLabel,
   DEFAULT_SESSION_BUDGET_MINUTES,
+  reentryScreenCopy,
   SESSION_BUDGET_OPTIONS,
   SESSION_UNAVAILABLE_BODY,
   SESSION_UNAVAILABLE_TITLE,
@@ -37,9 +43,19 @@ import {
 
 export const VIEW_TYPE_OLEA_SESSION = 'olea-session-builder';
 
-/** What the view was handed. Two states, for the reason `GapViewState`'s own doc gives: "we could not read your vault" and "there is nothing to build" are different sentences. */
+/**
+ * What the view was handed. Three states, for the reason `GapViewState`'s own
+ * doc gives: "we could not read your vault" and "there is nothing to build"
+ * are different sentences — and F6.6 (`ol-v7r5.18`) adds a third that is
+ * neither: `'reentry'` carries `ReentryStudySessionView`, not
+ * `StudySessionModel`, so a re-entry render is structurally unable to reach
+ * `leftOutInstrumentCount`/`consideredRowCount` (`olea-core`'s
+ * `ReentryStudySessionView` doc) — the same reason `composeReentrySession`
+ * gives that type its own shape rather than a flag on the ordinary one.
+ */
 export type SessionBuilderState =
   | { readonly kind: 'model'; readonly model: StudySessionModel }
+  | { readonly kind: 'reentry'; readonly view: ReentryStudySessionView }
   | { readonly kind: 'unavailable' };
 
 /** What the view asks for when it (re)builds. */
@@ -125,16 +141,21 @@ export class SessionBuilderView extends ItemView {
       return;
     }
 
-    // Every sentence on this screen comes from `copy.ts`, including the F4.9
-    // framing and the left-out lines. This loop must never gain a sibling that
-    // writes a sentence of its own.
+    // Every sentence on this screen comes from `copy.ts` — `sessionScreenCopy`
+    // for an ordinary session, `reentryScreenCopy` for F6.6's re-entry one
+    // (never the same function: see that function's own doc for why
+    // `leftOutLines` must never run over a re-entry view). Neither branch of
+    // this loop may gain a sibling that writes a sentence of its own.
+    const lines =
+      state.kind === 'reentry' ? reentryScreenCopy(state.view) : sessionScreenCopy(state.model);
     const copy = root.createDiv({ cls: 'olea-session-copy' });
-    for (const line of sessionScreenCopy(state.model)) {
+    for (const line of lines) {
       copy.createDiv({ cls: 'olea-session-line', text: line });
     }
 
+    const items = state.kind === 'reentry' ? state.view.items : state.model.items;
     const list = root.createDiv({ cls: 'olea-session-items' });
-    for (const item of state.model.items) this.renderItem(list, item);
+    for (const item of items) this.renderItem(list, item);
   }
 
   private renderBudgetControls(parent: HTMLElement): void {
