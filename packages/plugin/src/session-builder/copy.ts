@@ -370,8 +370,8 @@ export function emptySessionLines(model: StudySessionModel): readonly string[] {
     ];
   }
   return [
-    `Nothing Olea has cards for fits in ${model.budgetMinutes} minutes.`,
-    'A longer session, or cards for the concepts below, would give it something to work with.',
+    `Nothing that Olea has instruments for fits in ${model.budgetMinutes} minutes.`,
+    'A longer session, or instruments for the concepts below, would give it something to work with.',
   ];
 }
 
