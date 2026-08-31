@@ -7,8 +7,9 @@
  */
 
 import type { CalendarDay } from 'olea-core';
-import { misconceptionLogPath, reviewLogPath } from 'olea-core';
+import { isValidDeviceId, misconceptionLogPath, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { DEVICE_ID_STORAGE_KEY } from '../../src/device/device-id.js';
 import { runFullDelete } from '../../src/privacy/full-delete.js';
 import type { DeleteHttpRequestFn } from '../../src/privacy/types.js';
 import { FakeDataHost, MemoryVaultSource } from './fakes.js';
@@ -110,5 +111,63 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     });
 
     expect(vault.raw('01 Courses/SYN101/Lecture 1.md')).toBe('What is X?::X is Y.\n');
+  });
+
+  it('mints and persists a fresh device id (ol-1ttf, ruled by ol-ppxj.16) — full delete does not preserve identity', async () => {
+    const dataHost = new FakeDataHost();
+    dataHost.blob = { [DEVICE_ID_STORAGE_KEY]: DEVICE_ID };
+    const vault = new MemoryVaultSource();
+    const httpRequest: DeleteHttpRequestFn = async () => ({ status: 200 });
+
+    const result = await runFullDelete({
+      dataHost,
+      vault,
+      deviceId: DEVICE_ID,
+      today: TODAY,
+      workerConfig: { baseUrl: '', token: '' },
+      httpRequest,
+    });
+
+    expect(isValidDeviceId(result.newDeviceId)).toBe(true);
+    expect(result.newDeviceId).not.toBe(DEVICE_ID);
+    expect((dataHost.blob as Record<string, unknown>)[DEVICE_ID_STORAGE_KEY]).toBe(
+      result.newDeviceId,
+    );
+  });
+
+  it('resets the device id AFTER discovering this installs own logs by the OLD id — the reset never blinds the vault-artifact purge to its own files', async () => {
+    // A host that refuses to list a dot-prefixed folder (log-discovery.ts's
+    // documented, common case — most real Obsidian hosts): this device's own
+    // log is then found ONLY by exact-path probing against `deviceId`. If
+    // `resetDeviceId` ran before this probe, the probe would look for a file
+    // named by the NEW id — which was never written — and this device's own
+    // log would wrongly survive the delete.
+    class NoListingVaultSource extends MemoryVaultSource {
+      override async list(): Promise<readonly never[]> {
+        throw new Error('this host refuses to list a dot-prefixed folder');
+      }
+    }
+    const dataHost = new FakeDataHost();
+    dataHost.blob = { [DEVICE_ID_STORAGE_KEY]: DEVICE_ID };
+    const vault = new NoListingVaultSource({
+      [reviewLogPath(TODAY, DEVICE_ID)]: '{"kind":"review"}\n',
+    });
+    const httpRequest: DeleteHttpRequestFn = async () => ({ status: 200 });
+
+    const result = await runFullDelete({
+      dataHost,
+      vault,
+      deviceId: DEVICE_ID,
+      today: TODAY,
+      workerConfig: { baseUrl: '', token: '' },
+      httpRequest,
+    });
+
+    expect(result.vaultArtifacts.deletedReviewLogPaths).toContain(reviewLogPath(TODAY, DEVICE_ID));
+    expect(vault.exists(reviewLogPath(TODAY, DEVICE_ID))).resolves.toBe(false);
+    expect(result.newDeviceId).not.toBe(DEVICE_ID);
+    // C5.2: the reset itself never touches the vault — any log file it does
+    // NOT find (a different device's, or one outside the probe window) is
+    // simply left exactly as it was; the new id just never names it.
   });
 });

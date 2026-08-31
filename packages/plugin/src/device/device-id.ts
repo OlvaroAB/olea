@@ -45,6 +45,20 @@
  * start because a cache file is malformed would make a review session
  * impossible, and a split log is recoverable (both files are still valid,
  * append-only, and merge) whereas a session she could not run is not.
+ *
+ * ## Full delete mints a fresh id (`ol-1ttf`, ruled by `ol-ppxj.16`)
+ *
+ * `resetDeviceId` below is the other, deliberate way this id changes: a full
+ * delete ("delete everything Olea knows") mints a fresh device identity, on
+ * the plain reading that a full delete of everything Olea knows about this
+ * install includes its own identity. `purgeCache` (the cache-only purge)
+ * keeps preserving the id unchanged — the distinction the module doc above
+ * already draws for `ensureDeviceId`'s repair path applies here too: this is
+ * a disclosed, deliberate severing of continuity, not a repair. Old
+ * per-device review/misconception log files already in the vault are left
+ * exactly as they are (C5.2) — this function never touches the vault, it
+ * only replaces the stored id, so nothing about the old files changes; the
+ * new id simply never appears in a filename that links back to them.
  */
 
 import { isValidDeviceId } from 'olea-core';
@@ -103,4 +117,28 @@ export async function ensureDeviceId(
   blob[DEVICE_ID_STORAGE_KEY] = minted;
   await host.saveData(blob);
   return minted;
+}
+
+/**
+ * Mints a fresh device id and persists it **unconditionally**, discarding
+ * whatever was stored — the full-delete half of the lifecycle (`ol-1ttf`).
+ * Unlike `ensureDeviceId`, this never returns an existing id: full delete's
+ * whole point here is to sever continuity on purpose. Read-modify-write
+ * against the shared `data.json` blob, same as `ensureDeviceId`, so a
+ * concurrent feature's own top-level key is untouched.
+ */
+export async function resetDeviceId(
+  host: ObsidianDataHost,
+  random: RandomSource = defaultRandom,
+): Promise<string> {
+  const existing = await host.loadData();
+  const blob: Record<string, unknown> =
+    typeof existing === 'object' && existing !== null
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const fresh = generateDeviceId(random);
+  blob[DEVICE_ID_STORAGE_KEY] = fresh;
+  await host.saveData(blob);
+  return fresh;
 }

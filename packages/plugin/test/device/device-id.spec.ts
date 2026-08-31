@@ -4,6 +4,7 @@ import {
   DEVICE_ID_STORAGE_KEY,
   ensureDeviceId,
   generateDeviceId,
+  resetDeviceId,
 } from '../../src/device/device-id.js';
 import type { ObsidianDataHost } from '../../src/keyword-index/store.js';
 
@@ -115,5 +116,42 @@ describe('ensureDeviceId', () => {
     // than by grepping for particular words.
     const id = generateDeviceId();
     expect(id).toMatch(/^olea-[0-9a-z]{12}$/);
+  });
+});
+
+describe('resetDeviceId (ol-1ttf, ruled by ol-ppxj.16)', () => {
+  it('mints and persists a fresh id even when a valid one is already stored', async () => {
+    const host = fakeHost({ [DEVICE_ID_STORAGE_KEY]: 'olea-aaaaaaaaaaaa' });
+    const fresh = await resetDeviceId(host);
+    expect(isValidDeviceId(fresh)).toBe(true);
+    expect(fresh).not.toBe('olea-aaaaaaaaaaaa');
+    expect((host.blob as Record<string, unknown>)[DEVICE_ID_STORAGE_KEY]).toBe(fresh);
+    expect(host.writes).toBe(1);
+  });
+
+  it('mints a different id on every call — a full delete never reuses the id it just replaced', async () => {
+    const host = fakeHost({ [DEVICE_ID_STORAGE_KEY]: 'olea-bbbbbbbbbbbb' });
+    const first = await resetDeviceId(host);
+    const second = await resetDeviceId(host);
+    expect(first).not.toBe('olea-bbbbbbbbbbbb');
+    expect(second).not.toBe(first);
+  });
+
+  it('never clobbers another feature sharing data.json', async () => {
+    const host = fakeHost({
+      [DEVICE_ID_STORAGE_KEY]: 'olea-cccccccccccc',
+      keywordIndex: { version: 1, documents: [] },
+    });
+    await resetDeviceId(host);
+    const blob = host.blob as Record<string, unknown>;
+    expect(blob.keywordIndex).toEqual({ version: 1, documents: [] });
+  });
+
+  it('mints an id even from an empty or corrupted data.json', async () => {
+    for (const junk of [null, 'corrupted', 7, []]) {
+      const host = fakeHost(junk);
+      const id = await resetDeviceId(host);
+      expect(isValidDeviceId(id)).toBe(true);
+    }
   });
 });
