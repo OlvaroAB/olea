@@ -7,11 +7,16 @@
  *   node build.mjs serve       watch + local server
  *   node build.mjs verify      read-only: is dist/ a complete production artifact?
  *
- * `WB_DIST` overrides the output directory (default `./dist`). It exists so a
- * test can build a throwaway artifact without overwriting the real one — see
- * `test/build-stamp.spec.ts`, and note that the alternative would have been a
- * test that clobbers the deployable directory to prove the deployable directory
- * is protected.
+ * `WB_DIST` overrides the *deployable* output directory (default `./dist`). It
+ * exists so a test can build a throwaway artifact without overwriting the real
+ * one — see `test/build-stamp.spec.ts`, and note that the alternative would
+ * have been a test that clobbers the deployable directory to prove the
+ * deployable directory is protected.
+ *
+ * `serve` never writes to the deployable directory at all: it builds into
+ * `<WB_DIST or dist>-dev`, a sibling directory, and serves from there — see
+ * `ol-m34c` below. `dist/` keeps whatever `build`/`production` last put there
+ * for as long as `dev` runs.
  *
  * Two esbuild settings carry the design:
  *
@@ -31,15 +36,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, extname, join, posix, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const dist =
-  process.env.WB_DIST === undefined || process.env.WB_DIST === ''
-    ? join(here, 'dist')
-    : resolve(process.env.WB_DIST);
 const mode = process.argv[2] ?? 'development';
 // An UNRECOGNISED mode used to fall through to `development` — so a typo in the
 // read-only mode (`verfiy`) would silently wipe and rebuild the artifact instead
@@ -56,6 +57,37 @@ if (!MODES.has(mode)) {
 const production = mode === 'production';
 const serve = mode === 'serve';
 const verify = mode === 'verify';
+
+/** The deployable artifact: `WB_DIST`, or `./dist` by default. Always what `verify` reads. */
+const deployableDist =
+  process.env.WB_DIST === undefined || process.env.WB_DIST === ''
+    ? join(here, 'dist')
+    : resolve(process.env.WB_DIST);
+
+/**
+ * ol-m34c, prevention half. (The build-stamp machinery further down is the
+ * detection half, kept as belt-and-braces — see its own comment.)
+ *
+ * ol-ie7t stopped a FAILED serve from wiping `dist/` before it knew it could
+ * not bind its port. That left the case that actually did the damage: a
+ * SUCCESSFUL, long-lived serve rebuilds on every source edit, in place, in the
+ * same directory the deployable artifact lives in — so a forgotten watcher can
+ * silently overwrite a production `app.js` with a dev bundle, which is exactly
+ * what happened on 2026-08-15 (`ol-m34c`'s notes).
+ *
+ * Ordering cannot fix that: the overwrite is a successful build doing what it
+ * was asked. The fix is that `serve` never gets a path to the deployable
+ * directory in the first place — every write it makes (`rm`, `copyStatic`,
+ * `esbuild`, the stamp) targets a sibling directory instead, and the HTTP
+ * server reads from that same sibling. `dist` below is therefore "wherever
+ * THIS invocation is allowed to write" — `deployableDist` itself for
+ * production/development/verify, and `<deployableDist>-dev` for serve. This
+ * composes with `WB_DIST`: a test pointing it at a scratch directory gets an
+ * equally-scratch serve directory beside it, never the real one.
+ */
+const dist = serve
+  ? join(dirname(deployableDist), `${basename(deployableDist)}-dev`)
+  : deployableDist;
 
 const PLUGIN_STYLES = resolve(here, '..', 'plugin', 'styles.css');
 const THINGS_THEME = resolve(here, 'vendor', 'things', 'theme.css');
@@ -105,25 +137,28 @@ const nodeBuiltinGuard = {
 };
 
 /**
- * ol-m34c: **`dist/` records which build wrote it, so a MIXED one is detectable.**
+ * ol-m34c, detection half — kept as belt-and-braces now that serve can no
+ * longer reach the deployable directory at all (see the `dist` computation
+ * near the top of the file for the prevention half). **`dist/` records which
+ * build wrote it, so a MIXED one is detectable.**
  *
- * ol-ie7t made a *failed* serve non-destructive. This is the other half, and it
- * is the half that was observed doing damage: a **successful** serve wipes
- * `dist/` and rebuilds it as a dev build, in the same directory the deployable
- * artifact lives in. On 2026-08-15 a forgotten watcher wrote a 3,352,881-byte
- * dev bundle over a 447 KB production `app.js` seven minutes after the
- * production build finished, leaving `index.html`, `_headers` and
+ * This is what caught the original incident: on 2026-08-15 a forgotten
+ * `serve` watcher, back when it still owned the real `dist/`, wrote a
+ * 3,352,881-byte dev bundle over a 447 KB production `app.js` seven minutes
+ * after the production build finished, leaving `index.html`, `_headers` and
  * `plugin-styles.css` from one build beside an `app.js` from another — and
  * **nothing in the directory said so**. Anything deploying `dist/` in that
  * window would have shipped a dev build with no signal at all.
  *
- * Ordering alone cannot fix that: the watcher's write is a *successful* build
- * doing exactly what it was asked to. What was missing was not a guard but a
- * RECORD. So every completed build now writes `build-stamp.json` naming the
- * mode it ran in and the size and SHA-256 of every other file it left behind,
- * and the watcher rewrites that stamp on every rebuild — so the stamp cannot go
- * stale while the thing it describes changes underneath it, which is the exact
- * shape of the failure it exists to catch.
+ * `serve` cannot cause that specific failure any more, but the stamp stays
+ * useful: a one-shot `node build.mjs` (no args) still legitimately leaves a
+ * dev build sitting in the deployable directory until the next `production`
+ * build, and the stamp is what lets `verify` catch that (exit 2) plus any
+ * other tampering or partial write (exit 1). So every completed build still
+ * writes `build-stamp.json` naming the mode it ran in and the size and
+ * SHA-256 of every other file it left behind, and a watcher rewrites that
+ * stamp on every rebuild — so the stamp cannot go stale while the thing it
+ * describes changes underneath it.
  *
  * `node build.mjs verify` then answers "is this a complete production artifact?"
  * in one command, with three distinct exit codes (0 / 1 mixed-or-tampered /
@@ -525,9 +560,14 @@ const port = Number(process.env.WB_PORT ?? 4321);
  * says which port and what to do. `dist/` is only ever touched once this process
  * knows it can finish.
  *
- * It is the whole fix for the CLASH. It is not the whole fix for the directory:
- * a serve that *does* get its port still replaces the artifact with a dev build,
- * which is `ol-m34c` and is why the build stamp above exists.
+ * It was the whole fix for the CLASH, and not yet the whole fix for the
+ * directory: a serve that *did* get its port still replaced the deployable
+ * artifact with a dev build on every rebuild — that was `ol-m34c`. It is now
+ * closed too, by a different mechanism: `dist` (see near the top of the file)
+ * resolves to a sibling directory for `serve`, so the `rm`/`copyStatic`/
+ * `esbuild` calls below never touch the deployable directory at all when this
+ * process is a dev server. Nothing below this comment needed to change to get
+ * that — the redirection happens once, at the point `dist` is defined.
  */
 if (verify) {
   await verifyDist();
@@ -540,7 +580,8 @@ if (serve) {
   } catch (error) {
     console.error(
       `workbench: could not bind port ${port} (${error.code ?? error.message}). ` +
-        'dist/ has NOT been touched. Free that port, or set WB_PORT to another one.',
+        `dist/ has NOT been touched — neither the deployable ${deployableDist} nor the ` +
+        `serve directory ${dist}. Free that port, or set WB_PORT to another one.`,
     );
     process.exit(1);
   }
@@ -563,6 +604,8 @@ console.log(`workbench: http://localhost:${port}/#/review/qa-front?set=obsidian-
 // nobody remembered starting. `build-stamp.json` says `mode: "serve"` for as long
 // as this process owns the directory.
 console.log(
-  `workbench: this dev server now OWNS ${dist} and will overwrite it on every source ` +
-    'edit. `node build.mjs verify` exits 2 while that is true.',
+  `workbench: this dev server now OWNS ${dist} (ol-m34c: a sibling of the deployable ` +
+    `${deployableDist}, never that directory itself) and will overwrite it on every ` +
+    `source edit. ${deployableDist} is untouched for as long as this process runs — ` +
+    '`node build.mjs verify` keeps describing the last real production build.',
 );

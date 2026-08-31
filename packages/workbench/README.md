@@ -31,9 +31,10 @@ pnpm --filter olea-workbench build    # static output in dist/
 pnpm --filter olea-workbench verify   # read-only: is dist/ a complete production artifact?
 ```
 
-**`dev` OWNS `dist/`** while it runs, and says so on startup. It rebuilds the artifact in
-place on every source edit — see [the build stamp](#the-build-stamp-ol-m34c) before doing
-anything with `dist/` that assumes it came from `build`.
+**`dev` never touches `dist/`.** It builds and serves from `dist-dev/`, a sibling directory it
+owns and rebuilds on every source edit — see [the build stamp](#the-build-stamp-ol-m34c) for
+why that directory still carries its own stamp, and `ol-m34c` for why `dev` no longer writes
+to the deployable directory at all.
 
 `dist/` is a plain static directory. One URL per surface × state × variable set × persona:
 
@@ -515,10 +516,17 @@ in the directory recorded that its files came from two builds, so nothing could 
 noticed — and `dist/` is what the pre-deploy privacy gate is run against. It was caught by a
 human comparing a reported file size against the file on disk.
 
-`ol-ie7t` fixed the case where a serve *fails*: it binds its port before touching `dist/`, so
-a clash is a clean non-destructive exit. Ordering cannot help with the case above, because
-that overwrite is a *successful* build doing what it was asked. What was missing was not a
-guard but a **record**.
+`ol-ie7t` fixed the case where a serve *fails*: it binds its port before touching anything, so
+a clash is a clean non-destructive exit. Ordering could not help with the case above, because
+that overwrite was a *successful* build doing what it was asked — so `ol-m34c` closed it a
+different way: `serve` now builds and serves from `dist-dev/`, a sibling of the deployable
+`dist/`, and never writes to `dist/` at all. A live watcher simply has no path to the
+deployable artifact any more, successful or not.
+
+The stamp below predates that fix and remains useful independently of it: a one-shot
+`node build.mjs` (no args) still legitimately leaves a dev build sitting in the deployable
+`dist/` until the next `production` build, and the stamp is what lets `verify` catch that,
+plus any other tampering or partial write.
 
 So every completed build writes `dist/build-stamp.json`: the mode it ran in, when, how many
 watcher rebuilds have happened since, and the size and SHA-256 of every other file in the
@@ -540,12 +548,10 @@ and the surest way to keep a credential-shaped string out of it is to have no ch
 one. `test/build-stamp.spec.ts` asserts that, alongside the three exit codes and a
 reconstruction of the mixed directory using a real dev bundle.
 
-**Still open:** a successful `dev` continues to replace the artifact in place. Building into
-a temp directory and swapping on success is the fix `ol-m34c` names, and it interacts with
-the watcher lifecycle. The stamp makes the result **detectable**, not impossible.
-
-`WB_DIST` overrides the output directory, which is how the tests build throwaway artifacts
-instead of clobbering the deployable one.
+`WB_DIST` overrides the deployable output directory, which is how the tests build throwaway
+artifacts instead of clobbering the deployable one. `serve` derives its own `dist-dev`-shaped
+directory from whatever `WB_DIST` resolves to, so a test pointing `WB_DIST` at a scratch
+directory gets an equally-scratch serve directory beside it.
 
 ## Deploying
 

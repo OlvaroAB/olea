@@ -16,6 +16,11 @@ packages/workbench/test-results
 # for a private review link — a derived artifact, not the deployable dist/
 packages/workbench/dist-single
 
+# workbench: dev-serve output (ol-m34c) — a sibling of the deployable dist/
+# that `node build.mjs serve` builds and serves from, so a live watcher never
+# has a path to the deployable artifact
+packages/workbench/dist-dev
+
 # obsidian plugin dev artifact
 data.json
 
