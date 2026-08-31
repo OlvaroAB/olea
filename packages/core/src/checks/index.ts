@@ -1,4 +1,12 @@
 export {
+  checkRebuildWasteRate,
+  MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK,
+  type RebuildOutcomeCase,
+  type RebuildWasteMeasured,
+  type RebuildWasteVerdict,
+  WASTED_REBUILD_RATE_CEILING,
+} from '../queue/rebuild-controller.js';
+export {
   checkEarlierCourseRecognitionNeutralisedTwin,
   type RecognitionNeutralisedTwinMeasured,
   type RecognitionTwinCase,
