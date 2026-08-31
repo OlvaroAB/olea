@@ -43,6 +43,7 @@
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { ReentryStudySessionView, StudySessionItem, StudySessionModel } from 'olea-core';
+import { EXPLAIN_BACK_SESSION_ENTRY_LABEL } from '../explain-back/copy.js';
 import {
   budgetOptionLabel,
   DEFAULT_SESSION_BUDGET_MINUTES,
@@ -97,6 +98,17 @@ export interface SessionBuilderViewDeps {
    * this wiring (a test double, say) still satisfies the interface.
    */
   readonly endSitting?: () => void;
+  /**
+   * F4.6 session assembly / F6.4 Today's suggestion — two of `[D-163]`'s four
+   * ruled entry points onto `ExplainBackModal` (`ol-12gs`), both converging
+   * on THIS screen: `today/copy.ts`'s own module doc names this view as
+   * F6.4's reachable caller ("the suggested session's screen... is the
+   * reachable caller"), and F4.6 is this screen's own clause. Optional on the
+   * same "main.ts supplies a handler" terms every other cross-package
+   * callback in this plugin uses — this module never imports
+   * `explain-back/modal.ts` or any grading/retrieval wiring itself.
+   */
+  readonly openExplainBack?: () => void;
 }
 
 export class SessionBuilderView extends ItemView {
@@ -162,6 +174,7 @@ export class SessionBuilderView extends ItemView {
     root.empty();
 
     this.renderBudgetControls(root);
+    this.renderExplainBackEntry(root);
 
     if (state.kind === 'unavailable') {
       const box = root.createDiv({ cls: 'olea-session-unavailable' });
@@ -205,6 +218,24 @@ export class SessionBuilderView extends ItemView {
         void this.refresh();
       });
     }
+  }
+
+  /**
+   * F4.6 / F6.4, `[D-163]` (`ol-12gs`): the session-builder/Today-suggestion
+   * door onto `ExplainBackModal` — see `SessionBuilderViewDeps.openExplainBack`'s
+   * own doc for why both clauses converge on this one screen. Rendered
+   * standing, independent of `state`, the same way F2.20's "available help"
+   * posture keeps F2.7's own on-demand channel reachable regardless of
+   * queue state — never gated on whether a session was actually built.
+   */
+  private renderExplainBackEntry(parent: HTMLElement): void {
+    const openExplainBack = this.deps.openExplainBack;
+    if (!openExplainBack) return;
+    const button = parent.createEl('button', {
+      cls: 'olea-session-explain-back',
+      text: EXPLAIN_BACK_SESSION_ENTRY_LABEL,
+    });
+    button.addEventListener('click', () => openExplainBack());
   }
 
   private renderItem(parent: HTMLElement, item: StudySessionItem): void {

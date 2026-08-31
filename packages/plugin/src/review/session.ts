@@ -457,36 +457,24 @@ export class ReviewSession {
   }
 
   /**
-   * F2.12's "one available action" (`ol-h2bx`): routes the just-offered
-   * instrument through the SAME on-demand channel F2.7 already built
-   * (`explainWhyPort`/`requestExplainWhy` above) — never a new explain-back
-   * destination. Building one is a Class C move this bead does not make
-   * (`grading/wiring.ts`'s module doc: `ol-tka5`/`ol-548w` are both still
-   * open Class C questions), so "explain it back" here means the same
-   * grounded, on-demand explanation F2.7 shows for the failed item, not a
-   * Feynman-mode input she writes into.
+   * F2.12's "one available action" (`[D-163]`/`ol-12gs`, superseding
+   * `ol-h2bx`'s `acceptConfusionRoutingOffer`): resolves the just-offered
+   * instrument and clears the pending offer — nothing more. The actual
+   * "explain it back" exchange is `ExplainBackModal`'s job now (F5.1's
+   * dedicated destination), opened by `review/view.ts`'s
+   * `handleAcceptConfusionOffer` with the instrument this method returns;
+   * this method performs no port call and retrieves no grounding context,
+   * unlike the method it replaces, because there is no longer an inline
+   * result for THIS class to produce.
    *
-   * `sourceChunks` is the caller's already-retrieved grounding context for
-   * the OFFERED instrument — same contract `requestExplainWhy` already has,
-   * and deliberately not retrieved by this method either (see that
-   * method's doc).
-   *
-   * Clears the pending offer unconditionally once there was one to clear —
-   * "one available action," taken, whatever the port then does with it.
-   * Returns `null` without touching anything when there is nothing pending;
-   * also returns `null` (offer still cleared) when no `explainWhyPort` is
-   * wired (F7.8) — nothing to route into is not a reason to leave a
-   * resolved offer looking unresolved.
+   * Returns `null` without touching anything when there is nothing pending
+   * — "one available action," taken once, is a no-op the second time.
    */
-  async acceptConfusionRoutingOffer(
-    sourceChunks: readonly string[],
-  ): Promise<ExplainWhyOutcome | null> {
+  resolveConfusionRoutingOffer(): PendingConfusionRoutingOffer | null {
     const offer = this.pendingConfusionOffer;
     if (offer === null) return null;
     this.pendingConfusionOffer = null;
-    if (this.deps.explainWhyPort === undefined) return null;
-    const request = buildExplainWhyRequest(offer.instrument, '', sourceChunks);
-    return this.deps.explainWhyPort.explainWhy(request);
+    return offer;
   }
 
   async skipMissingNote(): Promise<void> {

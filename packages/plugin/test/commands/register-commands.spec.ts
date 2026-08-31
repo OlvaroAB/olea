@@ -11,6 +11,7 @@ import {
   OLEA_COMMAND_BULK_REVIEW_OPEN,
   OLEA_COMMAND_CREATE_CARD,
   OLEA_COMMAND_DIAGNOSTICS_COPY,
+  OLEA_COMMAND_EXPLAIN_BACK,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_GROVE_OPEN,
   OLEA_COMMAND_HOME_OPEN,
@@ -53,17 +54,19 @@ function fakeHandlers(): OleaCommandHandlers {
     openHome: vi.fn(),
     openGrove: vi.fn(),
     processNoteNowCheckCallback: vi.fn((_checking: boolean) => true),
+    openExplainBack: vi.fn(),
   };
 }
 
 describe('buildOleaCommands', () => {
-  it('registers exactly the thirteen command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry, home, grove, process-note-now) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry", ol-0r92.17 added "home"/"grove" (folded in by ol-2zfj.38), ol-s46v folded in "process-note-now"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
+  it('registers exactly the fourteen command ids (review, create, today, open, gap, session, bulk-review, retrospective, diagnostics, registry, home, grove, process-note-now, explain-back) — ol-2tyj added "gap", ol-p5t06b added "session", ol-jie3 added "bulk-review", ol-r68l added "retrospective", ol-p6t02 added "diagnostics", ol-l5og.11 added "registry", ol-0r92.17 added "home"/"grove" (folded in by ol-2zfj.38), ol-s46v folded in "process-note-now", ol-12gs (`[D-163]`) added "explain-back"; the withdrawn "draft cards" command (F4.5) is not among them', () => {
     const commands = buildOleaCommands(fakeHandlers());
     expect(commands.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_BULK_REVIEW_OPEN,
         OLEA_COMMAND_CREATE_CARD,
         OLEA_COMMAND_DIAGNOSTICS_COPY,
+        OLEA_COMMAND_EXPLAIN_BACK,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_GROVE_OPEN,
         OLEA_COMMAND_HOME_OPEN,
@@ -101,6 +104,7 @@ describe('buildOleaCommands', () => {
     expect(byId[OLEA_COMMAND_HOME_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_GROVE_OPEN]?.hotkeys).toBeUndefined();
     expect(byId[OLEA_COMMAND_PROCESS_NOTE_NOW]?.hotkeys).toBeUndefined();
+    expect(byId[OLEA_COMMAND_EXPLAIN_BACK]?.hotkeys).toBeUndefined();
   });
 
   it('wires each command callback to its matching handler', () => {
@@ -120,6 +124,7 @@ describe('buildOleaCommands', () => {
     byId[OLEA_COMMAND_REGISTRY_OPEN]?.callback?.();
     byId[OLEA_COMMAND_HOME_OPEN]?.callback?.();
     byId[OLEA_COMMAND_GROVE_OPEN]?.callback?.();
+    byId[OLEA_COMMAND_EXPLAIN_BACK]?.callback?.();
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
     expect(handlers.createCard).toHaveBeenCalledTimes(1);
@@ -136,13 +141,14 @@ describe('buildOleaCommands', () => {
     expect(handlers.openRegistry).toHaveBeenCalledTimes(1);
     expect(handlers.openHome).toHaveBeenCalledTimes(1);
     expect(handlers.openGrove).toHaveBeenCalledTimes(1);
+    expect(handlers.openExplainBack).toHaveBeenCalledTimes(1);
   });
 
-  it('"explain something back" is not registered — David\'s ruling points existing commands at the Today panel, it does not manufacture a destination for contextual AI that is not built', () => {
+  it('"Explain something back" is registered once `[D-163]`\'s destination has a handler (ol-12gs) — historically absent while contextual AI had nowhere honest to go', () => {
     const commands = buildOleaCommands(fakeHandlers());
-    for (const command of commands) {
-      expect(command.name.toLowerCase()).not.toContain('explain');
-    }
+    expect(commands.some((c) => c.id === OLEA_COMMAND_EXPLAIN_BACK)).toBe(true);
+    const explainBack = commands.find((c) => c.id === OLEA_COMMAND_EXPLAIN_BACK);
+    expect(explainBack?.name.toLowerCase()).toContain('explain');
   });
 
   it('"Copy diagnostics" is left out of the palette entirely when no handler is supplied — same choice this file already made for "open Olea"/"explain something back" while they had no destination (ol-p6t02: main.ts has not been wired yet)', () => {
@@ -175,6 +181,12 @@ describe('buildOleaCommands', () => {
     expect(commands.some((c) => c.id === OLEA_COMMAND_PROCESS_NOTE_NOW)).toBe(false);
   });
 
+  it('"Explain something back" is left out of the palette entirely when no handler is supplied (ol-12gs, same shape as openRegistry)', () => {
+    const { openExplainBack: _omitted, ...handlersWithoutExplainBack } = fakeHandlers();
+    const commands = buildOleaCommands(handlersWithoutExplainBack);
+    expect(commands.some((c) => c.id === OLEA_COMMAND_EXPLAIN_BACK)).toBe(false);
+  });
+
   it('"Process this note now" is registered with checkCallback, not callback — the one command whose palette visibility itself depends on the active file (ol-s46v)', () => {
     const handlers = fakeHandlers();
     const commands = buildOleaCommands(handlers);
@@ -197,12 +209,13 @@ describe('registerOleaCommands', () => {
     const registrar = new FakeCommandRegistrar();
     registerOleaCommands(registrar, fakeHandlers());
 
-    expect(registrar.registered).toHaveLength(13);
+    expect(registrar.registered).toHaveLength(14);
     expect(registrar.registered.map((c) => c.id).sort()).toEqual(
       [
         OLEA_COMMAND_BULK_REVIEW_OPEN,
         OLEA_COMMAND_CREATE_CARD,
         OLEA_COMMAND_DIAGNOSTICS_COPY,
+        OLEA_COMMAND_EXPLAIN_BACK,
         OLEA_COMMAND_GAP_OPEN,
         OLEA_COMMAND_GROVE_OPEN,
         OLEA_COMMAND_HOME_OPEN,

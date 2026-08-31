@@ -105,13 +105,17 @@ describe('every port the session needs is the real one', () => {
     // further call site does not split this install's history across two
     // filenames (C5.2). `onload` awaits it once, the ingestion-tick handler
     // (`ol-2zfj.19`) awaits it again to thread the same id into
-    // `createVaultMisconceptionStore`, and the citation-revision batch pass
+    // `createVaultMisconceptionStore`, the citation-revision batch pass
     // (`ol-2zfj.35` [CORP-3b]) awaits it a third time to thread the same id
-    // into `createVaultSuspendPort` — there is no `this.deviceId` cache to
-    // reuse instead in any of the three. The count below tracks known call
-    // sites rather than asserting "exactly once", so a future accidental
-    // duplicate still has to be a deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(3);
+    // into `createVaultSuspendPort`, and `ol-12gs`'s
+    // `buildExplainBackObservationContextFor` awaits it a fourth time to
+    // thread the same id into its OWN `createVaultMisconceptionStore` read
+    // (the accept-and-observe step's misconception-record lookup) — there is
+    // no `this.deviceId` cache to reuse instead in any of the four. The count
+    // below tracks known call sites rather than asserting "exactly once", so
+    // a future accidental duplicate still has to be a deliberate edit to this
+    // test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(4);
   });
 });
 
@@ -267,8 +271,12 @@ describe('F2.12 confusion routing has a real production entry point (ol-p4t05)',
   });
 
   it('imports the composed decision function from grading/wiring, not a bare re-export of olea-core', () => {
+    // `ol-12gs` (`[D-163]`) added `acceptExplainBackGradingWithObservation`
+    // and its two context/result types to this same import block — the
+    // grading/wiring module is still the one composition root, not a second
+    // one this bead invented alongside it.
     expect(main).toMatch(
-      /import\s*\{\s*buildGradingWiring,\s*evaluateConfusionRouting,\s*type GradingWiring,\s*gradeExplainBackAttempt,\s*\}\s*from\s*'\.\/grading\/wiring\.js'/,
+      /import\s*\{\s*type AcceptExplainBackGradingWithObservationContext,\s*type AcceptExplainBackGradingWithObservationResult,\s*acceptExplainBackGradingWithObservation,\s*buildGradingWiring,\s*evaluateConfusionRouting,\s*type GradingWiring,\s*gradeExplainBackAttempt,\s*\}\s*from\s*'\.\/grading\/wiring\.js'/,
     );
   });
 });

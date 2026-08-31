@@ -71,7 +71,6 @@ import { ReviewActivityNotifier } from './activity.js';
 import {
   actionKeycap,
   EXPLAIN_WHY_REFUSAL,
-  EXPLAIN_WHY_UNAVAILABLE,
   mcqFeedbackSentence,
   mcqOptionKeycap,
   questionText,
@@ -109,19 +108,23 @@ type ExplainWhyPanelState =
   | { readonly instrumentId: string; readonly status: 'done'; readonly outcome: ExplainWhyOutcome };
 
 /**
- * F2.12's offer banner state (`ol-h2bx`). `presentedWithInstrumentId` is the
- * instrument that was current the moment the offer first appeared — the
- * banner clears itself once she moves past THAT item (see
- * `syncConfusionRoutingOffer`'s doc), which is what keeps it from lingering
- * indefinitely without an explicit "decline" control (F2.12's own "one
- * available action" framing).
+ * F2.12's offer banner state (`ol-h2bx`, destination changed by `[D-163]`/
+ * `ol-12gs`). `presentedWithInstrumentId` is the instrument that was current
+ * the moment the offer first appeared — the banner clears itself once she
+ * moves past THAT item (see `syncConfusionRoutingOffer`'s doc), which is
+ * what keeps it from lingering indefinitely without an explicit "decline"
+ * control (F2.12's own "one available action" framing).
+ *
+ * **No `status`/`outcome` fields any more.** Accepting used to call an
+ * `ExplainWhyPort` inline and render its async result in this banner; now
+ * accepting opens `ExplainBackModal` (a separate `Modal`, not a panel this
+ * view renders), so there is nothing left for this banner to show once the
+ * one action is taken — see `handleAcceptConfusionOffer`'s own doc.
  */
 interface ConfusionBannerState {
   readonly instrument: ReviewInstrument;
   readonly promptText: string;
   readonly presentedWithInstrumentId: string | null;
-  readonly status: 'idle' | 'loading' | 'unavailable' | 'done';
-  readonly outcome?: ExplainWhyOutcome;
 }
 
 /**
@@ -161,6 +164,7 @@ export class ReviewView extends ItemView {
   private readonly openSession: ReviewSessionProvider;
   private readonly activity: ReviewActivityNotifier;
   private readonly retrieveSourceChunks: RetrieveExplainWhySourceChunks | undefined;
+  private readonly openExplainBack: ((instrument: ReviewInstrument) => void) | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -192,11 +196,14 @@ export class ReviewView extends ItemView {
     openSession: ReviewSessionProvider,
     onReviewActivity?: () => void,
     retrieveSourceChunks?: RetrieveExplainWhySourceChunks,
+    /** F2.12, `[D-163]` (`ol-12gs`): opens `ExplainBackModal` for the offered instrument — see `handleAcceptConfusionOffer`'s own doc. */
+    openExplainBack?: (instrument: ReviewInstrument) => void,
   ) {
     super(leaf);
     this.openSession = openSession;
     this.activity = new ReviewActivityNotifier(onReviewActivity);
     this.retrieveSourceChunks = retrieveSourceChunks;
+    this.openExplainBack = openExplainBack;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -674,7 +681,6 @@ export class ReviewView extends ItemView {
         instrument: offer.instrument,
         promptText: offer.promptText,
         presentedWithInstrumentId: currentInstrumentId,
-        status: 'idle',
       };
       return;
     }
@@ -693,53 +699,34 @@ export class ReviewView extends ItemView {
     const banner = this.contentEl.createDiv({ cls: 'olea-review-confusion-banner' });
     banner.createEl('p', { cls: 'olea-review-confusion-prompt', text: state.promptText });
 
-    if (state.status === 'idle') {
-      const btn = banner.createEl('button', {
-        cls: 'olea-review-primary-action',
-        attr: { [FOCUSABLE_ATTR]: 'true' },
-      });
-      btn.createSpan({ text: 'Explain it back' });
-      this.registerDomEvent(btn, 'click', () => void this.handleAcceptConfusionOffer());
-      return;
-    }
-    if (state.status === 'loading') {
-      banner.createEl('p', { cls: 'olea-review-confusion-message', text: 'Asking Olea…' });
-      return;
-    }
-    if (state.status === 'unavailable') {
-      banner.createEl('p', { cls: 'olea-review-confusion-message', text: EXPLAIN_WHY_UNAVAILABLE });
-      return;
-    }
-    if (state.outcome !== undefined) {
-      banner.createEl('p', {
-        cls: 'olea-review-confusion-message',
-        text: state.outcome.refused ? EXPLAIN_WHY_REFUSAL : state.outcome.text,
-      });
-    }
+    const btn = banner.createEl('button', {
+      cls: 'olea-review-primary-action',
+      attr: { [FOCUSABLE_ATTR]: 'true' },
+    });
+    btn.createSpan({ text: 'Explain it back' });
+    this.registerDomEvent(btn, 'click', () => this.handleAcceptConfusionOffer());
   }
 
-  /** The banner's one action — see `syncConfusionRoutingOffer`'s doc for why there is no second, "decline" one. */
-  private async handleAcceptConfusionOffer(): Promise<void> {
+  /**
+   * The banner's one action — see `syncConfusionRoutingOffer`'s doc for why
+   * there is no second, "decline" one. `[D-163]`/`ol-12gs`: this used to call
+   * `ReviewSession.acceptConfusionRoutingOffer` and render its async
+   * `ExplainWhyOutcome` inline in this banner; it now opens `ExplainBackModal`
+   * (F5.1's dedicated destination) for the offered instrument and clears the
+   * banner immediately — there is nothing left for THIS view to show once the
+   * one action is taken, because the exchange now happens in a separate
+   * `Modal` this view neither renders nor tears down anything to make room
+   * for (hand-off, never a second inline copy — `[D-163]`'s own wording).
+   * `session.resolveConfusionRoutingOffer` only clears session-side state; it
+   * performs no port call, unlike the method it replaces.
+   */
+  private handleAcceptConfusionOffer(): void {
     const session = this.session;
     const pending = this.confusionBanner;
     if (session === null || pending === null) return;
-    this.confusionBanner = { ...pending, status: 'loading' };
-    this.render();
-
-    const chunks = this.retrieveSourceChunks
-      ? await this.retrieveSourceChunks(pending.instrument)
-      : [];
-    const outcome = await session.acceptConfusionRoutingOffer(chunks);
-
-    // A NEW offer may have superseded this one while the request was in
-    // flight — never clobber it with a stale result.
-    const latest = this.confusionBanner;
-    if (latest === null || latest.instrument.instrumentId !== pending.instrument.instrumentId)
-      return;
-    this.confusionBanner =
-      outcome === null
-        ? { ...pending, status: 'unavailable' }
-        : { ...pending, status: 'done', outcome };
+    session.resolveConfusionRoutingOffer();
+    this.confusionBanner = null;
+    this.openExplainBack?.(pending.instrument);
     this.render();
   }
 

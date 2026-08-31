@@ -226,7 +226,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all nine view types and all thirteen commands when onload runs', async () => {
+  it('registers all nine view types and all fourteen commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -283,6 +283,11 @@ describe('the built bundle is what Obsidian can load', () => {
         'olea-diagnostics-copy',
         // 'olea-draft-cards' was withdrawn (F4.5, wave-2 round-2 correction):
         // no student-invoked draft verb, because Olea is already drafting.
+        // `[D-163]` (`ol-12gs`): the on-demand door onto `ExplainBackModal`,
+        // free-form. The SAME view also opens from F2.12's confusion banner,
+        // the session builder and Today — this is only its fourth,
+        // command-palette entry point.
+        'olea-explain-back',
         'olea-gap-open',
         // `ol-0r92.17` (F8.1, `[D-134]` Q1, F7.7): opens the course grove.
         // Folded into `commands/ids.ts`/`register-commands.ts` by
@@ -311,8 +316,14 @@ describe('the built bundle is what Obsidian can load', () => {
         'olea-session-build',
         'olea-today-open',
       ]);
-      // No command promises contextual AI before it exists (D-033).
-      expect(plugin.commands.map((command) => command.name).join(' ')).not.toMatch(/explain/i);
+      // `[D-163]` (`ol-12gs`) gave contextual AI its destination — exactly
+      // one command now promises it, named for what she does with it.
+      const explainCommands = plugin.commands.filter((command) =>
+        /explain/i.test(command.name),
+      );
+      expect(explainCommands.map((command) => command.name)).toEqual([
+        'Olea: Explain something back',
+      ]);
       expect(plugin.settingTabs).toHaveLength(1);
       // The ingestion tick (D-002) is registered through `registerInterval`, so
       // Obsidian clears it on unload rather than it outliving the plugin.

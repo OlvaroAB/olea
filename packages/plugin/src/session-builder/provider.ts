@@ -255,6 +255,12 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * compose.ts` already proves is a no-op.
    */
   readonly relations?: () => readonly ConceptRelation[];
+  /**
+   * F4.6 / F6.4, `[D-163]` (`ol-12gs`): passed straight through to the
+   * returned `SessionBuilderViewDeps.openExplainBack` — this function never
+   * calls it, only forwards it, the same pass-through `SessionBuilderViewDeps.endSitting`'s own construction below already is for a caller-supplied lifecycle hook.
+   */
+  readonly openExplainBack?: () => void;
 }
 
 /** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
@@ -504,5 +510,8 @@ export function createLocalSessionBuilderProvider(
     endSitting(): void {
       sitting = exitSitting();
     },
+    // F4.6 / F6.4, `[D-163]`: forwarded, never called, from `deps.openExplainBack`
+    // — see this file's own `CreateLocalSessionBuilderProviderDeps.openExplainBack` doc.
+    ...(deps.openExplainBack ? { openExplainBack: deps.openExplainBack } : {}),
   };
 }

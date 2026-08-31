@@ -561,21 +561,13 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
     expect(session.getConfusionRoutingOffer()).toBeNull();
   });
 
-  it("accepting the offer requests the SAME on-demand explanation F2.7's requestExplainWhy uses, and clears the offer", async () => {
+  it("resolving the offer returns the offered instrument and clears the offer — `[D-163]`/ol-12gs: this used to call F2.7's requestExplainWhy inline; the exchange itself is ExplainBackModal's job now, opened by the view with the instrument this method returns", async () => {
     const instrument = qaFixture();
     const item = queueItem(instrument);
-    const calls: unknown[] = [];
-    const explainWhyPort = {
-      explainWhy: async (request: unknown) => {
-        calls.push(request);
-        return { refused: false as const, text: 'Because...', citedChunkIndex: 1 };
-      },
-    };
     const session = new ReviewSession(
       baseDeps({
         queue: [item],
         scheduler: fakeScheduler(4),
-        explainWhyPort,
         evaluateConfusionRouting: (input) => ({
           shouldOffer: true,
           lapses: input.lapses,
@@ -588,22 +580,22 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
     await session.rate('again');
     expect(session.getConfusionRoutingOffer()).not.toBeNull();
 
-    const outcome = await session.acceptConfusionRoutingOffer(['a source passage']);
+    const resolved = session.resolveConfusionRoutingOffer();
 
-    expect(outcome).toEqual({ refused: false, text: 'Because...', citedChunkIndex: 1 });
-    expect(calls).toEqual([
-      {
-        courseCode: instrument.courseCode,
-        question: instrument.question,
-        studentAnswer: '',
-        correctAnswer: instrument.answer,
-        sourceChunks: ['a source passage'],
-      },
-    ]);
+    expect(resolved?.instrument.instrumentId).toBe(instrument.instrumentId);
     expect(session.getConfusionRoutingOffer()).toBeNull();
   });
 
-  it('accepting with no explainWhyPort wired returns null and still clears the offer (F7.8)', async () => {
+  it('resolving with nothing pending returns null, never throws', async () => {
+    const session = new ReviewSession(baseDeps({ queue: [queueItem(qaFixture())] }));
+    await session.start();
+
+    const resolved = session.resolveConfusionRoutingOffer();
+
+    expect(resolved).toBeNull();
+  });
+
+  it('resolving twice in a row returns null the second time — "one available action," taken once', async () => {
     const session = new ReviewSession(
       baseDeps({
         queue: [queueItem(qaFixture())],
@@ -619,18 +611,7 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
     session.reveal();
     await session.rate('again');
 
-    const outcome = await session.acceptConfusionRoutingOffer([]);
-
-    expect(outcome).toBeNull();
-    expect(session.getConfusionRoutingOffer()).toBeNull();
-  });
-
-  it('accepting with nothing pending is a no-op, never throws', async () => {
-    const session = new ReviewSession(baseDeps({ queue: [queueItem(qaFixture())] }));
-    await session.start();
-
-    const outcome = await session.acceptConfusionRoutingOffer([]);
-
-    expect(outcome).toBeNull();
+    expect(session.resolveConfusionRoutingOffer()).not.toBeNull();
+    expect(session.resolveConfusionRoutingOffer()).toBeNull();
   });
 });

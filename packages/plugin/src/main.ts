@@ -54,12 +54,21 @@ import {
 } from './concept/wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
+import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
+import { buildExplainBackObservationContext } from './explain-back/observation.js';
+import {
+  type ExplainBackSourceBlock,
+  retrieveExplainBackSourceBlocks,
+} from './explain-back/request.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
 import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
+  type AcceptExplainBackGradingWithObservationContext,
+  type AcceptExplainBackGradingWithObservationResult,
+  acceptExplainBackGradingWithObservation,
   buildGradingWiring,
   evaluateConfusionRouting,
   type GradingWiring,
@@ -478,6 +487,10 @@ export default class OleaPlugin extends Plugin {
           // `ol-sn1q`: F2.7's grounding half, composed against whatever the
           // real keyword index and embedding cache currently hold.
           (instrument) => this.composeExplainWhySourceChunks(instrument),
+          // F2.12, `[D-163]` (`ol-12gs`): the confusion banner's "Explain it
+          // back" accept action opens `ExplainBackModal` for the offered
+          // instrument — see `openExplainBackModal`'s own doc.
+          (instrument) => this.openExplainBackModal({ kind: 'instrument', instrument }),
         ),
     );
 
@@ -560,6 +573,13 @@ export default class OleaPlugin extends Plugin {
         if (checking) return true;
         void this.processNoteNow(file.path);
         return true;
+      },
+      // F5.1, `[D-163]` (`ol-12gs`): the on-demand door onto `ExplainBackModal`,
+      // free-form — she names the topic herself. The SAME modal is also
+      // opened from the confusion banner, the session builder and Today, via
+      // `this.openExplainBackModal` directly (see that method's own doc).
+      openExplainBack: () => {
+        this.openExplainBackModal({ kind: 'freeform' });
       },
     });
 
@@ -711,6 +731,14 @@ export default class OleaPlugin extends Plugin {
             deviceId,
             settingsHost: this,
             now: () => new Date(),
+            // F4.6 / F6.4, `[D-163]` (`ol-12gs`): this screen's own door onto
+            // `ExplainBackModal` — nothing to refresh on close, since the
+            // screen underneath is never torn down (hand-off, not a rebuild)
+            // and this bead deliberately does not wire F4.6's session-time
+            // accounting fold (`explain-back/modal.ts`'s module doc).
+            openExplainBack: () => {
+              this.openExplainBackModal({ kind: 'freeform' });
+            },
             // Same instance the Today panel's replay uses — see this file's
             // own comment above `scheduler`'s construction: "one Scheduler...
             // is what makes that literally the same computation."
@@ -1750,16 +1778,121 @@ export default class OleaPlugin extends Plugin {
    * propagated through `gradeExplainBackAttempt` (`grading/wiring.ts`)
    * rather than re-checked here.
    *
-   * No caller of this method exists in this package yet, deliberately — see
-   * `grading/wiring.ts`'s module doc for why. It exists so `ol-p4t05`
-   * (confusion routing) has something real to call into instead of a
-   * declared-but-unimplemented port.
+   * **`ol-12gs` (`[D-163]`) closed the reachability gap this doc used to
+   * name.** `openExplainBackModal` below is the real caller: every one of
+   * `ExplainBackModal`'s four entry points reaches this method through the
+   * `deps.grade` it is constructed with.
    */
   async gradeExplainBackAttempt(
     input: GradeExplainBackInput,
   ): Promise<PendingExplainBackGrading | null> {
     if (this.grading === null) return null;
     return gradeExplainBackAttempt(this.grading, input);
+  }
+
+  /**
+   * `ol-4053`'s production entry point for the accept-and-observe step:
+   * reaches `acceptExplainBackGradingWithObservation` through the same
+   * `GradingWiring` `gradeExplainBackAttempt` above uses. `null` under the
+   * identical F7.8 condition (no Worker configured, or the kill-switch has
+   * tripped) — see that function's own doc for why the two failure reasons
+   * are not distinguished in the return type.
+   *
+   * **`ol-12gs` (`[D-163]`) gives this its first production caller**, the
+   * same way it did for `gradeExplainBackAttempt` above: `openExplainBackModal`
+   * below builds the `AcceptExplainBackGradingWithObservationContext`
+   * (`buildExplainBackObservationContextFor`) and calls this method when she
+   * accepts a grading.
+   */
+  async acceptExplainBackGradingWithObservation(
+    pending: PendingExplainBackGrading,
+    context: AcceptExplainBackGradingWithObservationContext,
+  ): Promise<AcceptExplainBackGradingWithObservationResult | null> {
+    if (this.grading === null) return null;
+    return acceptExplainBackGradingWithObservation(this.grading, pending, context);
+  }
+
+  /**
+   * F5.2's grounding half for the "Explain it back" view (`ol-12gs`):
+   * `explain-back/request.ts`'s `retrieveExplainBackSourceBlocks` over
+   * whatever the keyword index and embedding cache currently hold — the
+   * same two instances `composeExplainWhySourceChunks` above assembles for
+   * F2.7's grounding half. `[]` when either half isn't ready yet, same
+   * "refuse honestly downstream, not here" contract.
+   */
+  private async composeExplainBackSourceBlocks(
+    query: string,
+  ): Promise<readonly ExplainBackSourceBlock[]> {
+    const embeddingCache = this.retrieval?.embeddingCache;
+    const embeddingProvider = this.retrieval?.embeddingProvider;
+    if (embeddingCache === null || embeddingCache === undefined) return [];
+    if (embeddingProvider === null || embeddingProvider === undefined) return [];
+    if (this.keywordIndex === null) return [];
+    return retrieveExplainBackSourceBlocks(
+      {
+        retrieve: {
+          keywordIndex: this.keywordIndex.engine.toPersisted(),
+          embeddingCache,
+          embeddingProvider,
+          registryOverrides: this.registryOverridesCache,
+        },
+      },
+      query,
+    );
+  }
+
+  /**
+   * Builds the `AcceptExplainBackGradingWithObservationContext` the accept
+   * step needs — a fresh misconception-store read every call, same
+   * "load fresh, never cache" discipline `ingestSessionJustClosed`'s own
+   * `misconceptionStore` read above already follows, since a projection this
+   * cheap gains nothing from staleness risk.
+   */
+  private async buildExplainBackObservationContextFor(params: {
+    readonly subjectConceptId: string | null;
+    readonly originInstrumentId: string;
+    readonly sourceBlocks: readonly ExplainBackSourceBlock[];
+  }): Promise<AcceptExplainBackGradingWithObservationContext> {
+    const vault = new ObsidianSource(this.app);
+    const deviceId = await ensureDeviceId(this);
+    const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
+    const records = (await store.load()) ?? [];
+    return buildExplainBackObservationContext({
+      subjectConceptId: params.subjectConceptId,
+      originInstrumentId: params.originInstrumentId,
+      // Recording the graded verdict into a review-log event is `ol-95vv`'s
+      // mastery-fold job, not this view's (see `explain-back/modal.ts`'s
+      // module doc) — so there is never a review-log event id to attach here.
+      originReviewEventId: null,
+      sourceBlocks: params.sourceBlocks,
+      records,
+      now: () => new Date(),
+    });
+  }
+
+  /**
+   * The ONE construction point for `ExplainBackModal` (`[D-163]`, `ol-12gs`)
+   * — every one of the four ruled entry points (the command below, F2.12's
+   * confusion banner in `review/view.ts`, and the session-builder/Today
+   * affordance in `session-builder/view.ts`) calls this same method rather
+   * than constructing the modal itself, which is what makes "one dedicated
+   * view, single rendering implementation" true of the wiring and not just
+   * of the class.
+   */
+  private openExplainBackModal(seed: ExplainBackSeed, onClosed?: () => void): void {
+    new ExplainBackModal(
+      this.app,
+      {
+        grade: (input) => this.gradeExplainBackAttempt(input),
+        acceptWithObservation: (pending, context) =>
+          this.acceptExplainBackGradingWithObservation(pending, context),
+        retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
+        buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
+        generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
+        ...(onClosed ? { onClosed } : {}),
+      },
+      seed,
+    ).open();
   }
 
   /**
@@ -1770,16 +1903,17 @@ export default class OleaPlugin extends Plugin {
    * module doc for why this needs no Worker/F7.8 gating, unlike
    * `gradeExplainBackAttempt` above.
    *
-   * **`ol-h2bx` closed the reachability gap this doc used to name.**
+   * **`ol-h2bx` closed the reachability gap this doc used to name; `ol-12gs`
+   * (`[D-163]`) changed WHERE the accepted offer goes.**
    * `composeReviewSession` above passes `(input) =>
    * this.evaluateConfusionRouting(input)` into `openReviewSession`'s
    * `ports.evaluateConfusionRouting`, which `ReviewSession.logAndAdvance`
    * (`review/session.ts`) calls after every graded Q&A/cloze/MCQ rating. The
-   * accepted offer routes through the SAME on-demand channel F2.7 already
-   * built (`explainWhyPort`/`requestExplainWhy`) rather than into
-   * `gradeExplainBackAttempt` above — that method's own "no caller yet" gap
-   * is still real and is not this bead's to close (`ol-tka5`/`ol-548w` are
-   * still open Class C questions; see `grading/wiring.ts`'s module doc).
+   * accepted offer used to route through F2.7's on-demand channel
+   * (`explainWhyPort`/`requestExplainWhy`) — a placeholder destination while
+   * F5's own view did not exist. `ReviewView`'s confusion banner now opens
+   * `openExplainBackModal` above directly instead; see that view's own
+   * `handleAcceptConfusionOffer` doc.
    */
   evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
     return evaluateConfusionRouting(input);

@@ -18,16 +18,28 @@
  * that need a front door — the oracle, explain-back — inherit a settled
  * answer instead of re-litigating it.
  *
- * **"Explain something back" still has no destination and still cannot be
- * given one honestly.** It is contextual AI (F2.7/F2.12/F5), and nothing
- * behind it is built — not even the Today panel is *its* destination, since
- * a command literally named "explain something back" that opens the Today
- * panel and explains nothing back is a more misleading palette entry than
- * an absent one, not a less. The ruling names the Today panel as the
- * settled front door so that *when* explain-back's own destination exists
- * (Phase 3+), it inherits that answer about where a session starts — it
- * does not manufacture the destination early. It waits for the bead that
- * builds it.
+ * **"Explain something back" now has a real destination (`[D-163]`,
+ * `ol-12gs`).** The paragraph below described why it could not be given one
+ * honestly before `[D-163]` named the surface — kept for the history, since
+ * the same reasoning (never register a command whose click does nothing) is
+ * exactly what made the wait correct rather than an oversight. The command
+ * now opens `packages/plugin/src/explain-back/modal.ts`'s `ExplainBackModal`
+ * in its free-form mode: she names the topic herself, since the command
+ * palette carries no failing-instrument context the way F2.12's confusion
+ * routing does. It is optional on the same `main.ts`-supplies-a-handler
+ * terms `copyDiagnostics`/`openRegistry` below already use, since wiring the
+ * modal's dependencies (grading, retrieval, the misconception store) lives
+ * in `main.ts`, outside this module's owned paths.
+ *
+ * Historical: "Explain something back" had no destination and could not be
+ * given one honestly. It was contextual AI (F2.7/F2.12/F5), and nothing
+ * behind it was built — not even the Today panel was *its* destination,
+ * since a command literally named "explain something back" that opens the
+ * Today panel and explains nothing back is a more misleading palette entry
+ * than an absent one, not a less. The ruling named the Today panel as the
+ * settled front door so that *when* explain-back's own destination existed,
+ * it would inherit that answer about where a session starts, rather than
+ * manufacturing the destination early. `ol-12gs` is the bead that built it.
  *
  * The command ids in `ids.ts` are deliberately stable, so registering
  * "explain something back" later is an addition here and nothing else.
@@ -80,6 +92,7 @@ import {
   OLEA_COMMAND_BULK_REVIEW_OPEN,
   OLEA_COMMAND_CREATE_CARD,
   OLEA_COMMAND_DIAGNOSTICS_COPY,
+  OLEA_COMMAND_EXPLAIN_BACK,
   OLEA_COMMAND_GAP_OPEN,
   OLEA_COMMAND_GROVE_OPEN,
   OLEA_COMMAND_HOME_OPEN,
@@ -164,6 +177,13 @@ export interface OleaCommandHandlers {
    * `checking` means and why returning `false` hides the palette entry.
    */
   readonly processNoteNowCheckCallback?: (checking: boolean) => boolean;
+  /**
+   * F5.1, `[D-163]` (`ol-12gs`): opens the "Explain it back" view in its
+   * free-form mode. Optional on the same `main.ts`-supplies-a-handler terms
+   * `openRegistry`/`openHome`/`openGrove` above state — this module never
+   * imports `explain-back/modal.ts` or any grading/retrieval wiring itself.
+   */
+  readonly openExplainBack?: () => void;
 }
 
 /** Pure — builds the command specs without touching any registrar, so ids/names/hotkeys are assertable in isolation. */
@@ -293,6 +313,19 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
       id: OLEA_COMMAND_PROCESS_NOTE_NOW,
       name: 'Olea: Process this note now',
       checkCallback: handlers.processNoteNowCheckCallback,
+    });
+  }
+
+  // `ol-12gs` (F5.1, `[D-163]`): only registered once `main.ts` supplies a
+  // real handler — same conditional shape and same reason `openHome`/
+  // `openGrove` above state. Named for what she does, matching the
+  // convention "Build a study session"/"Open assessment retrospective"
+  // already set.
+  if (handlers.openExplainBack) {
+    specs.push({
+      id: OLEA_COMMAND_EXPLAIN_BACK,
+      name: 'Olea: Explain something back',
+      callback: handlers.openExplainBack,
     });
   }
 

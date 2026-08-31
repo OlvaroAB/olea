@@ -121,3 +121,15 @@ export const OLEA_COMMAND_GROVE_OPEN = 'olea-grove-open';
  * handler), invoking the identical `processNoteNow` method.
  */
 export const OLEA_COMMAND_PROCESS_NOTE_NOW = 'olea-process-note-now';
+/**
+ * F5.1, `[D-163]` (`ol-12gs`): opens the "Explain it back" view on demand,
+ * free-form — she names the topic herself rather than a failing instrument
+ * supplying one. The SAME view (`packages/plugin/src/explain-back/modal.ts`)
+ * is also opened from F2.12's confusion-routing banner, from the session
+ * builder (F4.6) and from Today's suggestion (F6.4); this command is only
+ * the fourth, on-demand door onto it — `[D-163]`'s ruling is one dedicated
+ * view, never a fork per entry point. `register-commands.ts`'s module doc
+ * used to record this destination as unbuilt ("waits for the bead that
+ * builds it") — `ol-12gs` is that bead.
+ */
+export const OLEA_COMMAND_EXPLAIN_BACK = 'olea-explain-back';
