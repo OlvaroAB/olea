@@ -16,6 +16,20 @@
  * where the honesty properties are asserted, and `test/main-wiring.spec.ts` is
  * where its reachability is.
  *
+ * **RBLD-2 (`ol-e228`), component register row 3.6.** This view holds no
+ * `SittingState` itself, even though it is the surface that decides *when* a
+ * sitting begins and ends. The freeze the rebuild controller (`olea-core`'s
+ * `queue/rebuild-controller.ts`) provides is only worth holding somewhere that
+ * can also cheaply tell whether a between-sittings trigger fired, and this
+ * file has no vault or review-log access to do that (the thin-view rule
+ * above) — `./provider.js` does, so `deps.load` is where the `SittingState`
+ * actually lives, closed over once per leaf. What this view DOES own, per the
+ * bead: the two lifecycle edges deciding when a sitting starts and ends —
+ * every `load` call from `refresh`/`setFocusConcept`/a budget click IS "she
+ * asked for a session" (`load`'s own controller always honours an explicit
+ * ask), and `onClose` below is "she finished or abandoned" via
+ * `deps.endSitting`.
+ *
  * **The one rule this file must not break.** It renders `sessionScreenCopy`'s
  * result for an ordinary session and `reentryScreenCopy`'s result for a
  * re-entry one (`SessionBuilderState`'s `'reentry'` branch) — session or no
@@ -71,6 +85,18 @@ export interface SessionBuilderViewDeps {
   /** Overrides `SESSION_BUDGET_OPTIONS` — the budgets are a Class B default, reversible from the outside. */
   readonly budgetOptions?: readonly number[];
   readonly defaultBudgetMinutes?: number;
+  /**
+   * RBLD-2 (`ol-e228`), component register row 3.6: tells `load`'s own
+   * rebuild controller that she finished or navigated away, so the freeze it
+   * holds across `load` calls (`./provider.js`'s `SittingState`) releases —
+   * the next `load` is free to recompute rather than reuse. `onClose` is this
+   * surface's operational reading of "she finished" (`rebuild-controller.ts`'s
+   * own doc offers "opening the view vs. closing it" as the two candidates;
+   * there is no explicit finish/abandon affordance on this screen to read
+   * instead — F4.6/F4.7/F4.8 name none). Optional so a `deps` that predates
+   * this wiring (a test double, say) still satisfies the interface.
+   */
+  readonly endSitting?: () => void;
 }
 
 export class SessionBuilderView extends ItemView {
@@ -104,6 +130,9 @@ export class SessionBuilderView extends ItemView {
 
   override async onClose(): Promise<void> {
     this.contentEl.empty();
+    // RBLD-2 (`ol-e228`): closing the tab is this surface's "she finished or
+    // abandoned" — see `SessionBuilderViewDeps.endSitting`'s own doc.
+    this.deps.endSitting?.();
   }
 
   /**

@@ -447,6 +447,128 @@ describe('createLocalSessionBuilderProvider — F2.19 assessment-scope resolver 
 // `buildComposedStudySession` directly — this suite is the production-caller
 // proof that a genuine absence (a review logged long before `now`) actually
 // reaches the branch, and that a recent one does not.
+// RBLD-2 (`ol-e228`), component register row 3.6: `load()`'s rebuild
+// controller. `retrievability` is queried once per in-play concept on every
+// REAL composition, so counting its calls is a cheap, direct proxy for
+// "did the whole oracle chain actually run again" — the same observable
+// `provider.ts`'s own module doc names as the double-`load()` this wiring
+// now avoids (`onOpen`'s `refresh()` immediately followed by
+// `revealSessionBuilderView`'s `setFocusConcept` call on a brand-new leaf).
+describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-e228)', () => {
+  function countingScheduler(byInstrument: Readonly<Record<string, number>>): {
+    scheduler: Scheduler;
+    calls: () => number;
+  } {
+    const base = stubScheduler(byInstrument);
+    let calls = 0;
+    return {
+      scheduler: {
+        schedule: base.schedule,
+        retrievability(input) {
+          calls += 1;
+          return base.retrievability(input);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  it('a second load() call with the same request, while the sitting is still open, reuses the frozen composition instead of recomputing', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler,
+    });
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls();
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // Same request, no `endSitting()` in between — exactly the shape of the
+    // real double-call this bead's own module doc names.
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls()).toBe(callsAfterFirst); // no second composition ran
+    expect(second).toBe(first); // the identical frozen object, not a coincidentally-equal rebuild
+  });
+
+  it('a budget change — an explicit new ask — always rebuilds, even mid-sitting: the frozen-sitting contract does not apply to a request she changed herself', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler,
+    });
+
+    const first = await provider.load({ budgetMinutes: 20 });
+    const callsAfterFirst = calls();
+    const second = await provider.load({ budgetMinutes: 45 });
+
+    expect(calls()).toBeGreaterThan(callsAfterFirst);
+    expect(second).not.toBe(first);
+  });
+
+  it('endSitting() releases the freeze: the next load() with the same request rebuilds rather than reusing what was frozen', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler,
+    });
+    if (provider.endSitting === undefined) throw new Error('expected endSitting to be wired');
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls();
+    provider.endSitting();
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls()).toBeGreaterThan(callsAfterFirst);
+    expect(second).not.toBe(first);
+  });
+
+  it('the hold cap: past an hour into the same sitting, an otherwise-identical request rebuilds rather than holding indefinitely — [D-162] is proposed, not ruled, so this is treated as ending the sitting, the lower-risk option, until it is', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+    let now = NOW;
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => now,
+      scheduler,
+    });
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls();
+
+    // 61 minutes later, same request — still well within a plausible single
+    // open tab, but past `DEFAULT_SESSION_HOLD_CAP_MINUTES`.
+    now = new Date(NOW.getTime() + 61 * 60_000);
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls()).toBeGreaterThan(callsAfterFirst);
+    expect(second).not.toBe(first);
+  });
+});
+
 describe('createLocalSessionBuilderProvider — F6.6 re-entry composition wiring (ol-v7r5.18)', () => {
   it('a review logged three weeks before "now" produces a reentry state, never a plain model', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
