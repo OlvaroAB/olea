@@ -43,16 +43,16 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
-import type {
-  AcceptExplainBackGradingWithObservationContext,
-  AcceptExplainBackGradingWithObservationResult,
-} from '../grading/wiring.js';
 import {
   discardExplainBackGrading,
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
   type PendingExplainBackGrading,
 } from 'olea-core';
+import type {
+  AcceptExplainBackGradingWithObservationContext,
+  AcceptExplainBackGradingWithObservationResult,
+} from '../grading/wiring.js';
 import {
   EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
   EXPLAIN_WHY_UNAVAILABLE,
@@ -216,8 +216,7 @@ export class ExplainBackModal extends Modal {
       // insufficient-notes; anything else reads as the transient
       // check-failed refusal — the same two-reason posture C4.7/`[D-089]`
       // rules for the folded path (see this file's module doc).
-      const isUnusableInput =
-        error instanceof Error && error.name === 'UnusableGradingInputError';
+      const isUnusableInput = error instanceof Error && error.name === 'UnusableGradingInputError';
       this.state = {
         phase: 'refused',
         prompt,
@@ -243,7 +242,11 @@ export class ExplainBackModal extends Modal {
     this.render();
   }
 
-  private discardGrading(prompt: ResolvedPrompt, answer: string, pending: PendingExplainBackGrading): void {
+  private discardGrading(
+    prompt: ResolvedPrompt,
+    answer: string,
+    pending: PendingExplainBackGrading,
+  ): void {
     discardExplainBackGrading(pending);
     this.state = { phase: 'answering', prompt, answer };
     this.render();
@@ -376,7 +379,8 @@ export class ExplainBackModal extends Modal {
   }
 
   private renderAcceptedPhase(root: HTMLElement, message: string | null): void {
-    if (message !== null) root.createEl('p', { cls: 'olea-explain-back-encouragement', text: message });
+    if (message !== null)
+      root.createEl('p', { cls: 'olea-explain-back-encouragement', text: message });
     const button = root.createEl('button', { text: 'Done' });
     button.addEventListener('click', () => this.close());
   }

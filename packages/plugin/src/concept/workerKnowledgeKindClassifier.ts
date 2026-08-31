@@ -120,10 +120,9 @@ function readClassification(body: unknown): ClassifyKnowledgeKindResponse {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     // Mirrors `WorkerConceptReader`'s reasoning: `quota-exceeded` is the one
     // Worker error code with an unambiguous mapping onto
     // `KnowledgeKindClassifierUnavailableReason`. Everything else is a real
@@ -141,17 +140,17 @@ function readClassification(body: unknown): ClassifyKnowledgeKindResponse {
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerKnowledgeKindClassifierError(
       'WorkerKnowledgeKindClassifier: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   const entry =
     typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : undefined;
-  const rawKind = entry?.['kind'];
-  const rawConfidence = entry?.['confidence'];
+  const rawKind = entry?.kind;
+  const rawConfidence = entry?.confidence;
 
   if (typeof rawKind !== 'string' || (rawKind !== 'unclassified' && !isKnowledgeKind(rawKind))) {
     throw new WorkerKnowledgeKindClassifierError(

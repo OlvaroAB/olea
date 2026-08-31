@@ -318,9 +318,7 @@ describe('the built bundle is what Obsidian can load', () => {
       ]);
       // `[D-163]` (`ol-12gs`) gave contextual AI its destination — exactly
       // one command now promises it, named for what she does with it.
-      const explainCommands = plugin.commands.filter((command) =>
-        /explain/i.test(command.name),
-      );
+      const explainCommands = plugin.commands.filter((command) => /explain/i.test(command.name));
       expect(explainCommands.map((command) => command.name)).toEqual([
         'Olea: Explain something back',
       ]);

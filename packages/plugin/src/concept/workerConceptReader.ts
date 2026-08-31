@@ -133,10 +133,9 @@ function readResponseBody(body: unknown): Record<string, unknown> {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     // `[D-068]`'s accepted cost names budget-exhaustion as its own reason,
     // distinct from a generic failure — the one Worker error code with an
     // unambiguous mapping onto `ConceptReaderUnavailableReason`. Everything
@@ -156,7 +155,7 @@ function readResponseBody(body: unknown): Record<string, unknown> {
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerConceptReaderError(
       'WorkerConceptReader: the Worker response carried no `ok` discriminant.',
     );
@@ -166,7 +165,7 @@ function readResponseBody(body: unknown): Record<string, unknown> {
 }
 
 function readResult(response: Record<string, unknown>): Record<string, unknown> {
-  const result = response['result'];
+  const result = response.result;
   return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {};
 }
 
@@ -174,7 +173,7 @@ function readProposals(
   response: Record<string, unknown>,
   passages: readonly ConceptPassage[],
 ): readonly ProposedConcept[] {
-  const rawConcepts = readResult(response)['concepts'];
+  const rawConcepts = readResult(response).concepts;
   if (!Array.isArray(rawConcepts)) {
     throw new WorkerConceptReaderError(
       'WorkerConceptReader: the Worker response carried no `result.concepts` array.',
@@ -190,12 +189,12 @@ function toProposedConcept(
   index: number,
 ): ProposedConcept {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
-  const name = entry['name'];
+  const name = entry.name;
   if (typeof name !== 'string' || name.length === 0) {
     throw new WorkerConceptReaderError(`WorkerConceptReader: concept ${index} carried no name.`);
   }
 
-  const anchorIndex = entry['anchorIndex'];
+  const anchorIndex = entry.anchorIndex;
   if (typeof anchorIndex !== 'number' || !Number.isInteger(anchorIndex)) {
     throw new WorkerConceptReaderError(
       `WorkerConceptReader: concept ${index} ("${name}") carried no numeric anchorIndex.`,
@@ -212,7 +211,7 @@ function toProposedConcept(
     );
   }
 
-  const aliasesRaw = entry['aliases'];
+  const aliasesRaw = entry.aliases;
   const aliases: string[] = Array.isArray(aliasesRaw)
     ? aliasesRaw.filter((alias): alias is string => typeof alias === 'string')
     : [];
@@ -220,7 +219,7 @@ function toProposedConcept(
   // `alsoInIndexes` is corroborating detail, not the concept's identity —
   // unlike `anchorIndex`, an entry the Worker's grounding missed is filtered
   // out here rather than failing the whole concept.
-  const alsoInRaw = entry['alsoInIndexes'];
+  const alsoInRaw = entry.alsoInIndexes;
   const alsoIn: Provenance[] = Array.isArray(alsoInRaw)
     ? alsoInRaw
         .filter((value): value is number => typeof value === 'number' && Number.isInteger(value))
@@ -254,7 +253,7 @@ function readRelationProposals(
   response: Record<string, unknown>,
   concepts: readonly ProposedConcept[],
 ): readonly ProposedRelation[] {
-  const rawRelations = readResult(response)['relations'];
+  const rawRelations = readResult(response).relations;
   if (rawRelations === undefined) return [];
   if (!Array.isArray(rawRelations)) {
     throw new WorkerConceptReaderError(
@@ -274,7 +273,7 @@ function toProposedRelation(
 ): ProposedRelation {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
 
-  const type = entry['type'];
+  const type = entry.type;
   if (typeof type !== 'string' || !PER_DOCUMENT_RELATION_TYPES.has(type)) {
     // Belt and braces, same posture as `toProposedConcept`'s anchorIndex
     // check: `conceptsExtractRelationProposal`'s zod schema already restricts
@@ -286,8 +285,8 @@ function toProposedRelation(
     );
   }
 
-  const fromIndex = entry['fromIndex'];
-  const toIndex = entry['toIndex'];
+  const fromIndex = entry.fromIndex;
+  const toIndex = entry.toIndex;
   if (typeof fromIndex !== 'number' || !Number.isInteger(fromIndex)) {
     throw new WorkerConceptReaderError(
       `WorkerConceptReader: relation ${index} carried no numeric fromIndex.`,
@@ -312,7 +311,7 @@ function toProposedRelation(
     );
   }
 
-  const confidence = entry['confidence'];
+  const confidence = entry.confidence;
   if (typeof confidence !== 'number' || Number.isNaN(confidence)) {
     throw new WorkerConceptReaderError(
       `WorkerConceptReader: relation ${index} (${type}) carried no numeric confidence.`,

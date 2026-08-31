@@ -45,7 +45,11 @@ function indexWithBlocks(path: string, blocks: readonly string[]): PersistedKeyw
         path,
         courses: [],
         contentHash: 'unused',
-        blocks: blocks.map((text, blockIndex) => ({ blockIndex, kind: 'paragraph' as const, text })),
+        blocks: blocks.map((text, blockIndex) => ({
+          blockIndex,
+          kind: 'paragraph' as const,
+          text,
+        })),
       },
     ],
   };
@@ -136,7 +140,11 @@ describe('buildExplainBackPromptContextFromInstrument', () => {
 
 describe('buildExplainBackPromptContextFromTopic', () => {
   it('wraps the topic into a question, honestly with no separate synthesized reference answer', () => {
-    const entry = { block: { blockId: 'b1', text: 'a passage about photosynthesis' }, path: 'p.md', blockIndex: 0 };
+    const entry = {
+      block: { blockId: 'b1', text: 'a passage about photosynthesis' },
+      path: 'p.md',
+      blockIndex: 0,
+    };
     const context = buildExplainBackPromptContextFromTopic('photosynthesis', [entry]);
     expect(context.question).toBe('In your own words: explain photosynthesis.');
     expect(context.referenceAnswer).toBe('a passage about photosynthesis');

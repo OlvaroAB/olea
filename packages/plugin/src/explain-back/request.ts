@@ -35,8 +35,8 @@
 import {
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
-  retrieve,
   type RetrieveDeps,
+  retrieve,
   type SourceBlockRef,
 } from 'olea-core';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from '../review/types.js';

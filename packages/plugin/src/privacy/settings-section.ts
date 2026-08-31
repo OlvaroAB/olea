@@ -53,6 +53,7 @@ import {
 import { buildPrivacyExportBundle } from './export-bundle.js';
 import { runFullDelete } from './full-delete.js';
 import { obsidianDeleteHttpRequest } from './obsidian-adapters.js';
+import { reloadPluginAfterFullDelete } from './reload-plugin.js';
 import type { ObsidianDataHost } from './types.js';
 
 export const PRIVACY_EXPORT_FOLDER = 'Olea exports';
@@ -131,6 +132,14 @@ export function renderPrivacySection(
               httpRequest: obsidianDeleteHttpRequest,
             });
             new Notice(DELETE_DONE_MESSAGE);
+            // `ol-ppxj.26`: `runFullDelete` just minted a fresh device id, but
+            // every port built once at `onload` (`main.ts`) already captured
+            // the OLD one by closure. Reloading the plugin here — rather than
+            // leaving that for her next Obsidian restart — is what makes the
+            // reset actually take effect for the rest of this session; see
+            // `reload-plugin.ts`'s module doc for why this is the smaller,
+            // more honest fix than re-threading `deviceId` everywhere.
+            await reloadPluginAfterFullDelete(deps.app);
           } finally {
             confirmState = 'idle';
             button.setButtonText(deleteButtonLabel(confirmState));
