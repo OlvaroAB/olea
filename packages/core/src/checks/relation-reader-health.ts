@@ -21,12 +21,15 @@
  *
  * **This module is pure and does no I/O**, per `./types.ts`'s own rule: it
  * takes already-computed observations — did an edge of this type get
- * produced, and did the reader's output change — and returns a verdict.
- * Producing the observations (running the real per-document stage against a
- * fixture vault and fixture port; running the real corpus batch against
- * fixture concepts and a fixture verdict port; checking whether anything
- * production-reachable reads the result) is the harness script's job:
- * `olea-service`'s `scripts/harness/relation-reader-check.mjs`.
+ * produced, did the reader's output change, and (for a directed type) did
+ * the edge land on the canonical endpoint (`ol-2zfj.17`, `ol-3ux7.20`) — and
+ * returns a verdict. Producing the observations (running the real
+ * per-document stage against a fixture vault and fixture port; running the
+ * real corpus batch against fixture concepts and a fixture verdict port;
+ * checking whether anything production-reachable reads the result; checking
+ * a golden fixture's known endpoints against the produced edge) is the
+ * harness script's job: `olea-service`'s
+ * `scripts/harness/relation-reader-check.mjs`.
  *
  * ## The audited answer this check currently reports (2026-08-26)
  *
@@ -73,6 +76,28 @@ export interface RelationReaderObservation {
   readonly readerName: string;
   readonly edgesProduced: number;
   readonly readerFired: boolean;
+  /**
+   * Whether this edge's endpoints landed per the canonical directed reading
+   * `ol-2zfj.17` pinned on `ProposedRelation`/`ConceptRelation` (`from` =
+   * subtype/part/prerequisite, `to` = supertype/whole/dependent) — measured
+   * harness-side against a golden fixture with known endpoints, never
+   * inferred here (`ol-3ux7.20`). Filed because counts alone cannot see
+   * this: `edgesProduced` and `readerFired` are unchanged by a producer that
+   * silently swapped `from`/`to` — the edge still gets produced, and a
+   * reader keyed only on presence still "fires" on it, so an inverted
+   * direction is invisible to both existing fields.
+   *
+   * `undefined` when direction does not apply — a symmetric type
+   * (`contrasts-with`, `related`) has no `from`/`to` to get wrong — or when
+   * a run genuinely did not measure it. An `undefined` observation never
+   * fails the check on this dimension alone, the same "reported, not asked
+   * to prove a negative" posture `untested` already uses for edge counts.
+   * `false` means the golden fixture's known endpoints came back on the
+   * wrong side, and that always fails the check regardless of
+   * `readerFired` — a reader firing on an inverted edge is not healthy, it
+   * is the silent failure this field exists to surface.
+   */
+  readonly directionCorrect?: boolean;
 }
 
 export interface RelationReaderHealthMeasured {
@@ -83,15 +108,29 @@ export interface RelationReaderHealthMeasured {
   readonly silent: readonly string[];
   /** Types with `edgesProduced === 0` — nothing was produced to test a reader against, reported rather than silently dropped. */
   readonly untested: readonly string[];
+  /**
+   * Types where `directionCorrect === false` — a directed type's edges
+   * landed on the wrong endpoint, the exact inversion `ol-2zfj.17` pinned
+   * canonical semantics to catch (`ol-3ux7.20`). Distinct from `silent`: a
+   * type can be here while still `firing` by count, because direction and
+   * presence are different dimensions and a reader can fire on an inverted
+   * edge just as readily as on a correct one.
+   */
+  readonly directionWrong: readonly string[];
 }
 
 /**
  * One observation per relation type in, a verdict out. Fails on ANY type
- * that produced at least one edge but whose named reader did not fire, or
- * if zero observations were supplied (N-013: a check that ran nothing
- * cannot pass). A type with zero edges produced never fails the check on
- * its own — there is nothing yet to ask a reader to read — but is reported
- * in `untested` rather than silently folded into `firing`.
+ * that produced at least one edge but whose named reader did not fire, on
+ * ANY directed type whose golden-fixture direction check came back false
+ * (`ol-3ux7.20` — this is checked independently of `readerFired`, because an
+ * inverted edge can still make a reader "fire"), or if zero observations
+ * were supplied (N-013: a check that ran nothing cannot pass). A type with
+ * zero edges produced never fails the check on its own — there is nothing
+ * yet to ask a reader to read — but is reported in `untested` rather than
+ * silently folded into `firing`. Likewise a type reporting `directionCorrect
+ * === undefined` (symmetric type, or a run that did not measure it) never
+ * fails on this dimension alone.
  */
 export function checkRelationReaderFires(
   observations: readonly RelationReaderObservation[],
@@ -99,8 +138,12 @@ export function checkRelationReaderFires(
   const firing: string[] = [];
   const silent: string[] = [];
   const untested: string[] = [];
+  const directionWrong: string[] = [];
 
   for (const observation of observations) {
+    if (observation.directionCorrect === false) {
+      directionWrong.push(observation.type);
+    }
     if (observation.edgesProduced === 0) {
       untested.push(observation.type);
     } else if (observation.readerFired) {
@@ -115,25 +158,38 @@ export function checkRelationReaderFires(
     firing,
     silent,
     untested,
+    directionWrong,
   };
 
   if (observations.length === 0) {
     return { ok: false, measured, detail: 'zero observations supplied — nothing was checked' };
+  }
+
+  const failures: string[] = [];
+  if (directionWrong.length > 0) {
+    const named = observations
+      .filter((o) => directionWrong.includes(o.type))
+      .map((o) => `${o.type} (reader: ${o.readerName})`)
+      .join(', ');
+    failures.push(
+      `${directionWrong.length} of ${observations.length} type(s) landed on the wrong endpoint — direction inverted against the canonical from/to reading (ol-2zfj.17): ${named}`,
+    );
   }
   if (silent.length > 0) {
     const named = observations
       .filter((o) => silent.includes(o.type))
       .map((o) => `${o.type} (reader: ${o.readerName})`)
       .join(', ');
-    return {
-      ok: false,
-      measured,
-      detail: `${silent.length} of ${observations.length} type(s) produced edges no wired reader consumed: ${named}`,
-    };
+    failures.push(
+      `${silent.length} of ${observations.length} type(s) produced edges no wired reader consumed: ${named}`,
+    );
+  }
+  if (failures.length > 0) {
+    return { ok: false, measured, detail: failures.join('; ') };
   }
   return {
     ok: true,
     measured,
-    detail: `every type that produced an edge (${firing.length}) had a real downstream reader fire (${untested.length} type(s) produced nothing to test)`,
+    detail: `every type that produced an edge (${firing.length}) had a real downstream reader fire, on the correct endpoint (${untested.length} type(s) produced nothing to test)`,
   };
 }
