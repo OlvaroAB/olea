@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these seventeen ids, spelled exactly this way', () => {
+  it('is exactly these eighteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -20,6 +20,7 @@ describe('the closed task-id catalogue', () => {
       'concepts.classify.v1',
       'concepts.extract.v1',
       'concepts.relations.v1',
+      'explain-back.author.v1',
       'explain-back.judge.v1',
       'explain-back.solo.v1',
       'explain-why.generate.v1',
@@ -94,7 +95,11 @@ describe('the closed task-id catalogue', () => {
     // serves the shadow-observer experiment's pre-registered measurement, not
     // a production workload — see its doc comment in `tasks.ts`. Counted as
     // spellable, not as a workload shape.
-    expect(ALL_TASK_IDS).toHaveLength(17);
+    //
+    // `explain-back.author.v1` (`[D-165]`, `ol-c0rz`) likewise: it authors
+    // synthetic answers for the tier-3 harness's supplementary source on a
+    // different model family from the judge — harness-only, no W-number.
+    expect(ALL_TASK_IDS).toHaveLength(18);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

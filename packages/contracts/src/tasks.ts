@@ -245,6 +245,26 @@ export const TASK_IDS = {
    * change what that frozen measurement records.
    */
   PLAN_GOVERNOR: 'plan.governor.v1',
+  /**
+   * Slot O — authors a synthetic explain-back ANSWER at a declared quality
+   * tier from fixture material, for the tier-3 grading-in-the-loop harness's
+   * `[D-165]`-amended supplementary source (`ol-c0rz`; protocol at
+   * `olea-service/eval/tier3-grading-in-the-loop-protocol.md`). Carries no
+   * W-number: harness-only, like `plan.governor.v1` — its sole caller is
+   * `olea-service/scripts/harness/playback-grading.mjs`'s `--model-authored`
+   * path, and nothing it returns reaches any surface or student.
+   *
+   * **The different-family fence is the point of its routing:** it runs on
+   * Slot O's pin so the authoring model is a different family from the Slot
+   * J judge that will grade its output — same separation the E2b
+   * cross-grader uses, ruled by `[D-165]`. Every number derived from its
+   * output is labeled non-calibration/provisional; it never feeds grading
+   * calibration or any threshold (N-015; the calibration eval takes no
+   * synthetic stand-ins). Payload/response fixed by
+   * `olea-service/src/tasks/explainBackAuthor.ts`; INV-5 grounding contract
+   * required (it generates), `groundResponse` `null`.
+   */
+  EXPLAIN_BACK_AUTHOR: 'explain-back.author.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */
