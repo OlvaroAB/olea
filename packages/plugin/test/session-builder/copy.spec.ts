@@ -292,8 +292,8 @@ describe('principle 12 — information and consequence, never verdict', () => {
     );
     expect(lines).toEqual([
       '2 more ranked concepts did not fit in 20 minutes.',
-      '1 has notes but no cards yet, so there was nothing to practise.',
-      '1 is already covered by a card in this session.',
+      '1 has notes but no instruments yet, so there was nothing to practise.',
+      '1 is already covered by an instrument in this session.',
     ]);
   });
 
@@ -432,11 +432,11 @@ describe('the two empty sessions are two different sentences', () => {
 describe('the summary and the item lines', () => {
   it('reports the count and the time against the budget she asked for', () => {
     expect(sessionSummaryLine(model({ items: [item()] }))).toBe(
-      '1 card, about 1 min of the 20 you asked for.',
+      '1 instrument, about 1 min of the 20 you asked for.',
     );
     expect(
       sessionSummaryLine(model({ items: [item(), item({ position: 2, estimatedSeconds: 45 })] })),
-    ).toBe('2 cards, about 2 min of the 20 you asked for.');
+    ).toBe('2 instruments, about 2 min of the 20 you asked for.');
   });
 
   it('names the shape of each item in words she would use, not the internal type', () => {

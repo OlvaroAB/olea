@@ -234,8 +234,8 @@ export function sessionSummaryLine(
   model: Pick<StudySessionModel, 'items' | 'plannedSeconds' | 'budgetMinutes'>,
 ): string {
   const n = model.items.length;
-  const cards = n === 1 ? '1 card' : `${n} cards`;
-  return `${cards}, about ${minutesLabel(model.plannedSeconds)} of the ${model.budgetMinutes} you asked for.`;
+  const instruments = n === 1 ? '1 instrument' : `${n} instruments`;
+  return `${instruments}, about ${minutesLabel(model.plannedSeconds)} of the ${model.budgetMinutes} you asked for.`;
 }
 
 /**
@@ -293,8 +293,8 @@ function countOf(
  * This is `ol-cvsc`'s rule applied one screen over: a shortened list she cannot
  * see the edge of is a claim about her material that nothing established. The
  * three reasons stay three sentences because their consequences differ — a
- * longer session fixes the first, drafting cards fixes the second, and the
- * third is already handled.
+ * longer session fixes the first, drafting instruments fixes the second, and
+ * the third is already handled.
  */
 export function leftOutLines(model: StudySessionModel): readonly string[] {
   if (model.leftOut.length === 0) return [];
@@ -309,15 +309,15 @@ export function leftOutLines(model: StudySessionModel): readonly string[] {
     );
   }
 
-  const noCards = countOf(
+  const noInstruments = countOf(
     model.leftOut,
     (o) => o.reason === 'no-instruments' && o.gapClass === 'coverage-gap',
   );
-  if (noCards > 0) {
+  if (noInstruments > 0) {
     lines.push(
-      noCards === 1
-        ? '1 has notes but no cards yet, so there was nothing to practise.'
-        : `${noCards} have notes but no cards yet, so there was nothing to practise.`,
+      noInstruments === 1
+        ? '1 has notes but no instruments yet, so there was nothing to practise.'
+        : `${noInstruments} have notes but no instruments yet, so there was nothing to practise.`,
     );
   }
 
@@ -333,15 +333,15 @@ export function leftOutLines(model: StudySessionModel): readonly string[] {
     );
   }
 
-  const otherNoCards = countOf(
+  const otherNoInstruments = countOf(
     model.leftOut,
     (o) => o.reason === 'no-instruments' && o.gapClass === 'mastery-gap',
   );
-  if (otherNoCards > 0) {
+  if (otherNoInstruments > 0) {
     lines.push(
-      otherNoCards === 1
-        ? '1 has cards Olea could not reach on this pass.'
-        : `${otherNoCards} have cards Olea could not reach on this pass.`,
+      otherNoInstruments === 1
+        ? '1 has instruments Olea could not reach on this pass.'
+        : `${otherNoInstruments} have instruments Olea could not reach on this pass.`,
     );
   }
 
@@ -349,8 +349,8 @@ export function leftOutLines(model: StudySessionModel): readonly string[] {
   if (already > 0) {
     lines.push(
       already === 1
-        ? '1 is already covered by a card in this session.'
-        : `${already} are already covered by cards in this session.`,
+        ? '1 is already covered by an instrument in this session.'
+        : `${already} are already covered by instruments in this session.`,
     );
   }
 
