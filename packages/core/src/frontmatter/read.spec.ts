@@ -24,6 +24,35 @@ describe('readScalar — meaning path, lossy by design', () => {
     const fm = parseFrontmatter('key: value\n');
     expect(readScalar(fm, 'nonexistent')).toEqual({ scalar: '', items: [], wikilinks: [] });
   });
+
+  // ol-j9c8: a single-valued field authored as a one-item YAML block list
+  // (the value's own line ends after the colon, and the value lives on a
+  // "- " continuation line below it) used to come back with the dash still
+  // attached, corrupting assessment course attribution — see
+  // ../assessment/read.ts's readField, which resolves `course` through this
+  // function.
+  it('strips the marker from a one-item block-list value, unlike a raw dash-prefixed scalar', () => {
+    const fm = parseFrontmatter('course:\n  - GEOL204\n');
+    const result = readScalar(fm, 'course');
+    expect(result.scalar).toBe('GEOL204');
+    expect(result.items).toEqual(['GEOL204']);
+  });
+
+  it('unquotes a one-item block-list value the same way a plain quoted scalar is unquoted', () => {
+    const fm = parseFrontmatter('course:\n  - "GEOL204"\n');
+    expect(readScalar(fm, 'course').scalar).toBe('GEOL204');
+  });
+
+  it('does not collapse a genuinely multi-item block list into one scalar (behavior unchanged)', () => {
+    // readScalar was never meant to resolve this ambiguity — readList is —
+    // so it falls through to the pre-fix trim-and-unquote path, which
+    // reproduces the raw multi-line text verbatim, dashes and all. This
+    // test documents that shape so a future change to it is deliberate.
+    const fm = parseFrontmatter('course:\n  - GEOL204\n  - GEOL205\n');
+    const result = readScalar(fm, 'course');
+    expect(result.scalar).toBe('- GEOL204\n  - GEOL205');
+    expect(result.items).toEqual(['- GEOL204\n  - GEOL205']);
+  });
 });
 
 describe('readList — meaning path, best-effort over shapes her vault uses', () => {

@@ -86,21 +86,55 @@ function findValueRaw(fm: Frontmatter, key: string): string | undefined {
   return entry?.kind === 'entry' ? entry.valueRaw : undefined;
 }
 
+/** A block-list line: optional indent, `-`, then the item text. */
+const BLOCK_ITEM_RE = /^[ \t]*-[ \t]+(.*)$/;
+
+/**
+ * Every block-list item (`- item` continuation line) in a raw value, each
+ * with its own dash marker stripped and one layer of quoting removed —
+ * the same per-item interpretation `readList` applies. Empty when the value
+ * has no block-list shape at all (a bare scalar, a flow list, ...).
+ */
+function blockListItems(valueRaw: string): string[] {
+  return valueRaw
+    .split('\n')
+    .map((line) => BLOCK_ITEM_RE.exec(line.replace(/\r$/, '')))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => unquote((m[1] ?? '').trim()));
+}
+
 /**
  * Interprets a value as a single scalar: trims surrounding whitespace and
  * one layer of quoting. `items` is `[scalar]` when non-empty, else `[]`.
  * `wikilinks` is scanned independently of the scalar/quote interpretation.
+ *
+ * **A one-item block list reads as its single scalar value** (`ol-j9c8`): a
+ * single-valued field authored as
+ * ```
+ * course:
+ *   - GEOL204
+ * ```
+ * reads as `GEOL204`, not `- GEOL204` — the leading dash is `readList`'s
+ * marker for a genuinely multi-valued field, not part of a single-valued
+ * field's content, so it is stripped here the same way a plain scalar's
+ * quoting is. A block list with more than one item is a shape this reader
+ * was never meant to collapse into one value (that ambiguity is `readList`'s
+ * to resolve, not this function's), so it falls through unchanged to the
+ * plain trim-and-unquote path below, same as before this fix.
  */
 export function readScalar(fm: Frontmatter, key: string): InterpretedValue {
   const valueRaw = findValueRaw(fm, key);
   if (valueRaw === undefined) return EMPTY;
 
+  const items = blockListItems(valueRaw);
+  if (items.length === 1) {
+    const scalar = items[0] ?? '';
+    return { scalar, items: scalar === '' ? [] : [scalar], wikilinks: extractWikilinks(valueRaw) };
+  }
+
   const scalar = unquote(valueRaw.trim());
   return { scalar, items: scalar === '' ? [] : [scalar], wikilinks: extractWikilinks(valueRaw) };
 }
-
-/** A block-list line: optional indent, `-`, then the item text. */
-const BLOCK_ITEM_RE = /^[ \t]*-[ \t]+(.*)$/;
 
 /**
  * Interprets a value as a list, trying the shapes her vault actually uses,
@@ -118,11 +152,7 @@ export function readList(fm: Frontmatter, key: string): InterpretedValue {
   const trimmed = valueRaw.trim();
   if (trimmed === '') return { scalar: '', items: [], wikilinks };
 
-  const blockItems = valueRaw
-    .split('\n')
-    .map((line) => BLOCK_ITEM_RE.exec(line.replace(/\r$/, '')))
-    .filter((m): m is RegExpExecArray => m !== null)
-    .map((m) => unquote((m[1] ?? '').trim()));
+  const blockItems = blockListItems(valueRaw);
   if (blockItems.length > 0) {
     return { scalar: trimmed, items: blockItems, wikilinks };
   }

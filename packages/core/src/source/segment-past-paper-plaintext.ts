@@ -98,6 +98,29 @@
  * `../extract/pdf.ts` already builds from page *content* alone — it has no
  * `/Info` dictionary field anywhere in its shape, so there is nothing for
  * this module to accidentally propagate into a log or a report reason.
+ *
+ * **Anchor-recognition coverage (`ol-m0kx`, diagnosed by `ol-j4p4`).** The
+ * finding's own §3 catalogues six distinct top-level question-numbering
+ * conventions actually observed in the censused corpus. Five of them share
+ * one shape this module already matches — a number (via `QUESTION_KEYWORD_RE`,
+ * `NUMBER_DELIM_RE` or `NUMBER_BARE_RE`) immediately followed by visible
+ * prose on the same paragraph, however that number is dressed (`"3."`,
+ * `"Question 3."`, a bare gutter integer, a bare gutter integer immediately
+ * preceding a restated `"Q3."` label). The sixth — a capital letter with no
+ * number at all (`"A. Using examples, outline…"`, findings §3, §5.11) — was
+ * genuinely invisible to every prior anchor and is what `LETTER_DELIM_RE`
+ * adds. It is deliberately **capital-letter-only**: every lettered *sub-part*
+ * and MCQ-option form the censused corpus uses (`a.`, `a)`, `(a)`, `i.`,
+ * `(i)`) is lowercase (findings §4.1), so requiring a capital letter is a
+ * positive test that never overlaps the widespread lowercase conventions —
+ * it does not "extend" `PART_MARKER_RE`'s territory, it recognises a
+ * genuinely disjoint shape. The one convention this module still does not
+ * attempt to disambiguate is the restated `"Question N."` in an F3 answer
+ * booklet (findings §5.1, §5.2): that already matches the existing number
+ * anchor, and matching it is exactly what makes the duplicate-label guard
+ * below fire and degrade the document, which is the correct, conservative
+ * outcome for a shape this module cannot safely resolve — not a gap to
+ * close by guessing which occurrence is the real one.
  */
 
 import type { ExtractionResult } from '../extract/types.js';
@@ -123,12 +146,34 @@ const FURNITURE_MIN_PAGE_FRACTION = 0.5;
  */
 const MAX_TOP_LEVEL_QUESTION_NUMBER = 200;
 
-/** `"Question 3"` — the one anchor form the censused corpus never actually used, kept for forward tolerance. */
+/** `"Question 3"` — the one anchor form the censused corpus never actually used, kept for forward tolerance. Also what a restated `"Question 2."` in an F3 answer booklet matches — see the module doc's coverage note for why that is the correct outcome, not a gap. */
 const QUESTION_KEYWORD_RE = /^Question\s+(\d{1,4})\b/i;
-/** `"3."` / `"3)"` followed by visible prose on the same paragraph — never a bare trailing delimiter. */
+/** `"3."` / `"3)"` followed by visible prose on the same paragraph — never a bare trailing delimiter. Also the form the F3 booklet's `"3. This question refers to…"` restatement matches (findings §3). */
 const NUMBER_DELIM_RE = /^(\d{1,4})[.)]\s*(?=\S)/;
-/** A bare digit run immediately followed by a letter — `"3 Briefly outline…"` — never followed by another digit (an axis-tick run) or punctuation (a footer fraction, a session code). */
+/** A bare digit run immediately followed by a letter — `"3 Briefly outline…"` — never followed by another digit (an axis-tick run) or punctuation (a footer fraction, a session code). This is also what the "gutter integer plus restated `Q3.` label" convention matches through (findings §3): the leading digit is read as the anchor and the following `"Q3."` token is absorbed as this question's own prose. */
 const NUMBER_BARE_RE = /^(\d{1,4})\s+(?=[A-Za-z])/;
+
+/**
+ * A single **capital** letter followed by `.`/`)` and visible prose on the
+ * same paragraph — `"A. Using examples, outline…"` (findings §3,
+ * "capital-letter top-level items, no number at all"; observed as PSYCH305's
+ * unnumbered Section 2 essay alternatives, findings §5.11). Capital-only is
+ * the load-bearing choice, not an arbitrary restriction: every lettered
+ * sub-part and MCQ-option form the censused corpus actually uses — `a.`,
+ * `a)`, `(a)`, `i.`, `(i)` — is lowercase (findings §4.1), so this never
+ * overlaps them; it is a positive test for a genuinely disjoint shape, not a
+ * loosening of the existing one.
+ */
+const LETTER_DELIM_RE = /^([A-Z])[.)]\s*(?=\S)/;
+/**
+ * Declared, not fitted: the censused corpus's own lettered-alternative
+ * documents never go past `D` (4 options). `F` leaves headroom for a paper
+ * with a couple more alternatives without accepting an entire capitalised
+ * outline (`A.` … `Z.`) as one implausibly-long run of top-level questions —
+ * the same reasoning `MAX_TOP_LEVEL_QUESTION_NUMBER` applies to the numeric
+ * form.
+ */
+const MAX_TOP_LEVEL_LETTER = 'F';
 
 /** A single letter in parentheses — `"(a)"`, never `"(Intercept)"` (findings §5.6) or a roman-numeral run (`"(ii)"`, two characters). */
 const PART_MARKER_RE = /^\(([a-zA-Z])\)/;
@@ -289,17 +334,33 @@ function splitParagraphs(lines: readonly Line[]): Paragraph[] {
   return paragraphs;
 }
 
-/** Matches a top-level question anchor against a paragraph's first line, honouring `MAX_TOP_LEVEL_QUESTION_NUMBER`. `undefined` when nothing matches or the matched number is implausible. */
-function matchTopLevelAnchor(firstLine: string): number | undefined {
-  const match =
+/**
+ * Matches a top-level question anchor against a paragraph's first line and
+ * returns its label, honouring `MAX_TOP_LEVEL_QUESTION_NUMBER` for a numeric
+ * anchor and `MAX_TOP_LEVEL_LETTER` for a lettered one. `undefined` when
+ * nothing matches or the matched anchor is implausible. The numeric and
+ * lettered regex families never both match the same line — every numeric
+ * form requires the paragraph's first character to be a digit and
+ * `LETTER_DELIM_RE` requires it to be a bare capital letter — so there is no
+ * ordering question between them.
+ */
+function matchTopLevelAnchor(firstLine: string): string | undefined {
+  const numberMatch =
     QUESTION_KEYWORD_RE.exec(firstLine) ??
     NUMBER_DELIM_RE.exec(firstLine) ??
     NUMBER_BARE_RE.exec(firstLine);
-  const captured = match?.[1];
-  if (captured === undefined) return undefined;
-  const value = Number(captured);
-  if (!Number.isFinite(value) || value > MAX_TOP_LEVEL_QUESTION_NUMBER) return undefined;
-  return value;
+  const numberCaptured = numberMatch?.[1];
+  if (numberCaptured !== undefined) {
+    const value = Number(numberCaptured);
+    if (!Number.isFinite(value) || value > MAX_TOP_LEVEL_QUESTION_NUMBER) return undefined;
+    return String(value);
+  }
+
+  const letterCaptured = LETTER_DELIM_RE.exec(firstLine)?.[1];
+  if (letterCaptured !== undefined && letterCaptured <= MAX_TOP_LEVEL_LETTER) {
+    return letterCaptured;
+  }
+  return undefined;
 }
 
 export type PlainTextSegmentationStatus = 'segmented' | 'unsegmented';
@@ -336,13 +397,15 @@ function unsegmented(sourcePath: VaultPath, reason: string): PlainTextPastPaperS
  * past paper — see the module doc for what is shared (the output shape) and
  * what is not (the reasoning that makes producing it safe).
  *
- * Reachability: nothing in `packages/core` calls this yet. Wiring a
- * `role: 'past-paper'` PDF `Source` through `../extract/` and into this
- * function is `../concept/evidence.js`'s `collectDerivedSources` (the
- * `limitations: role === 'past-paper' ? ['questions-not-segmented'] : []`
- * line) and `packages/plugin/src/concept/corpusRelationSignals.js`'s
- * `format === null` filter — both outside this bead's declared file
- * ownership, and both named as `ol-3ux7.10`'s job.
+ * Reachability: wired, not merely planned — `../tier3-evidence/build.ts`'s
+ * `role === 'past-paper' ? segmentPlainTextPastPaper(result) : undefined`
+ * line calls this for every registered past-paper source and is what
+ * produces every `kind: 'past-paper'` citation the real corpus yields
+ * (confirmed by `ol-j4p4`'s diagnosis; a stale "nothing calls this yet" note
+ * lived here until `ol-m0kx`). `../evidence-edge/build.ts` also imports this
+ * module directly for its own re-segmentation path. This coverage fix
+ * (`ol-m0kx`) does not change the caller — it only widens which of the
+ * caller's inputs come back `'segmented'` instead of `'unsegmented'`.
  */
 export function segmentPlainTextPastPaper(
   extraction: ExtractionResult,
@@ -392,9 +455,9 @@ export function segmentPlainTextPastPaper(
     let handled = false;
 
     if (!isFurniture) {
-      const topNumber = matchTopLevelAnchor(paragraph.firstLine);
-      if (topNumber !== undefined) {
-        const label = String(topNumber);
+      const topLabel = matchTopLevelAnchor(paragraph.firstLine);
+      if (topLabel !== undefined) {
+        const label = topLabel;
         if (seenTopLabels.has(label)) {
           // A restarting section (findings §3) and a concatenated
           // question/answer booklet (findings §5.1) both produce exactly
