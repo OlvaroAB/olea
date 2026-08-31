@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { chunksFromIndex } from '../retrieval/chunks.js';
+import { FolderSource } from '../vault/folder-source.js';
 import type { ListOptions, Unsubscribe, VaultPath, VaultSource } from '../vault/types.js';
 import { buildFullIndex } from './build.js';
 import type { YieldScheduler } from './scheduling.js';
@@ -184,5 +189,137 @@ describe('buildFullIndex — cancellation actually stops work (C2.6, Q6.2)', () 
 
     expect(result.status).toBe('complete');
     expect(vault.reads.length).toBe(4);
+  });
+});
+
+/**
+ * A minimal, valid, single-page PDF with one `Tj` — the same hand-built style
+ * `fixtures/vault/README.md` describes, `../extract/pdf.spec.ts` uses, and
+ * `../tier3-evidence/build.spec.ts` duplicates for the identical reason: it
+ * exercises the real parser rather than a mock of it.
+ */
+function buildPdfBytes(pageText: string): Uint8Array {
+  const escapeLiteral = (text: string): string =>
+    text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const raw = `BT /F1 12 Tf 20 150 Td (${escapeLiteral(pageText)}) Tj ET`;
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n',
+    `5 0 obj\n<< /Length ${raw.length} >>\nstream\n${raw}\nendstream\nendobj\n`,
+  ];
+  const trailer = 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n0\n%%EOF';
+  const text = `%PDF-1.4\n${objects.join('')}${trailer}`;
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+  return bytes;
+}
+
+describe('buildFullIndex — registeredFiles (ol-n06g: registered material is citable but was not embeddable)', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-build-registered-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function writeText(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  async function writePdf(relPath: string, pageText: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, buildPdfBytes(pageText));
+  }
+
+  it('without registeredFiles, a binary source is invisible to the index (the gap ol-n06g reports)', async () => {
+    await writeText('note.md', '---\n---\n\n# A note\n');
+    await writePdf('Lectures/deck.pdf', 'Some lecture content about basalt weathering.');
+    const vault = new FolderSource(root);
+
+    const result = await buildFullIndex({ vault, scheduler: { yield: async () => {} } });
+
+    expect(result.status).toBe('complete');
+    if (result.status !== 'complete') throw new Error('unreachable');
+    expect(result.index.documents.map((d) => d.path)).toEqual(['note.md']);
+  });
+
+  it('a registered PDF is chunked and embeddable — the fix (registeredFiles threaded to extractFromVault, mirroring the concept/citation pipeline)', async () => {
+    await writeText('note.md', '---\n---\n\n# A note\n');
+    await writePdf('Lectures/deck.pdf', 'Some lecture content about basalt weathering.');
+    const vault = new FolderSource(root);
+
+    const result = await buildFullIndex({
+      vault,
+      scheduler: { yield: async () => {} },
+      registeredFiles: [{ path: 'Lectures/deck.pdf', role: 'course-material', course: 'GEOL204' }],
+    });
+
+    expect(result.status).toBe('complete');
+    if (result.status !== 'complete') throw new Error('unreachable');
+
+    // Documents stay in ascending-path order even though the registered
+    // document was appended after the markdown scan (types.ts's invariant).
+    expect(result.index.documents.map((d) => d.path)).toEqual(['Lectures/deck.pdf', 'note.md']);
+    const pdfDoc = result.index.documents.find((d) => d.path === 'Lectures/deck.pdf');
+    expect(pdfDoc?.courses).toEqual(['GEOL204']);
+    expect(pdfDoc?.blocks.length).toBeGreaterThan(0);
+    expect(pdfDoc?.blocks[0]?.text).toContain('basalt weathering');
+
+    // The actual gap this bead closes: chunksFromIndex (what embed-corpus.mjs
+    // sends to the embedding provider) now carries the registered material.
+    const chunks = await chunksFromIndex(result.index);
+    const pdfChunks = chunks.filter((c) => c.path === 'Lectures/deck.pdf');
+    expect(pdfChunks.length).toBeGreaterThan(0);
+    expect(pdfChunks[0]?.text).toContain('basalt weathering');
+  });
+
+  it('a registered file that does not exist is skipped honestly, never thrown', async () => {
+    await writeText('note.md', '---\n---\n\n# A note\n');
+    const vault = new FolderSource(root);
+
+    const result = await buildFullIndex({
+      vault,
+      scheduler: { yield: async () => {} },
+      registeredFiles: [{ path: 'Lectures/missing.pdf' }],
+    });
+
+    expect(result.status).toBe('complete');
+    if (result.status !== 'complete') throw new Error('unreachable');
+    expect(result.index.documents.map((d) => d.path)).toEqual(['note.md']);
+  });
+
+  it('a registered markdown file needs no special handling — already covered by the ordinary scan, not duplicated', async () => {
+    await writeText('03 Research/paper.md', '---\nrole: past-paper\n---\n\nQuestion 1.\n');
+    const vault = new FolderSource(root);
+
+    const result = await buildFullIndex({
+      vault,
+      scheduler: { yield: async () => {} },
+      registeredFiles: [{ path: '03 Research/paper.md', role: 'past-paper' }],
+    });
+
+    expect(result.status).toBe('complete');
+    if (result.status !== 'complete') throw new Error('unreachable');
+    expect(result.index.documents.map((d) => d.path)).toEqual(['03 Research/paper.md']);
+  });
+
+  it('omitting registeredFiles entirely reproduces exactly the pre-existing behaviour (backward compatible)', async () => {
+    const vault = vaultWithDocs(3);
+    const withOption = await buildFullIndex({
+      vault,
+      scheduler: { yield: async () => {} },
+      registeredFiles: [],
+    });
+    const withoutOption = await buildFullIndex({ vault, scheduler: { yield: async () => {} } });
+
+    expect(withOption).toEqual(withoutOption);
   });
 });
