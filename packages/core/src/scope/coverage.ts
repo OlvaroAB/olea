@@ -50,9 +50,37 @@
  * `GROUND_STALL_STREAK_THRESHOLD` is a plain-English default (declared, not
  * derived — this project has no real semester of ground-persistence data to
  * fit against yet), reversible via an ordinary Class B tuning pass.
+ *
+ * ## The C7.9 part-of fold (`ol-5phn`, discovered from `ol-i8at`)
+ *
+ * "A broad area and its own parts are never counted as separate peers
+ * against the denominator" (C7.9) needs a fold over `part-of` edges before
+ * `./grove.ts` assembles its denominator, or a container concept and one of
+ * its declared parts both land their own entry. `containerNamesToFold`
+ * below is that fold, over concept NAMES (this module's own grain — see
+ * `isVolunteer` below) rather than keys, because `./grove.ts` builds its
+ * `declaredNames` set from `ConceptCitation.conceptName` before it ever
+ * resolves a name to a `ConceptRecord`.
+ *
+ * **Same rule as the sibling consumer, not a new one.**
+ * `../session/containment.ts`'s `filterContainmentCoPresence` (C7.9,
+ * `ol-v7r5.5`) already made this call for session composition: `part-of` is
+ * directed, `from` is the finer/part side, `to` is the coarser/container
+ * side, and the container yields when both sides are present — the part is
+ * the finer, recoverable reading and the container is not (the identical
+ * asymmetry C7.9 states for concept size itself, two sentences before the
+ * denominator sentence this fold implements). This function applies the
+ * same direction and the same yielding side; it does not re-derive either.
+ *
+ * **Zero free parameters**, matching `containment.ts`'s own discipline: a
+ * name's membership in the drop set is decided by set membership over
+ * `edges`, nothing else. An edge naming a concept outside `declaredNames` is
+ * dropped, not guessed at — the same posture `containment.ts` takes toward
+ * an edge endpoint its own concept set does not resolve.
  */
 
 import type { MasteryState } from 'olea-contracts';
+import type { ConceptRelation } from '../concept/relation.js';
 
 /**
  * The five states a concept WITH declared scope can read, before the
@@ -141,4 +169,30 @@ export function classifyDeclaredConcept(
  */
 export function isVolunteer(conceptName: string, declaredNames: ReadonlySet<string>): boolean {
   return !declaredNames.has(conceptName);
+}
+
+/**
+ * The C7.9 part-of fold for `./grove.ts`'s denominator (see module doc): the
+ * declared-scope concept NAMES to drop before assembling `cells` and
+ * `materialGaps` — every `part-of` edge whose part side (`from`) and
+ * container side (`to`) are BOTH present in `declaredNames`. Edge types
+ * other than `part-of` are ignored rather than rejected, so a caller may
+ * hand over a whole edge set without pre-filtering by type — this fold is
+ * C7.9's alone and `part-of`'s alone, matching `../session/containment.ts`'s
+ * identical posture toward its own `edges` input.
+ *
+ * Pure and total: no clock, no I/O. A no-op whenever `edges` is empty —
+ * which is every caller that has not yet threaded a relation set through
+ * (`./grove.ts`'s `relations` field is optional for exactly this reason).
+ */
+export function containerNamesToFold(
+  edges: readonly ConceptRelation[],
+  declaredNames: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const drop = new Set<string>();
+  for (const edge of edges) {
+    if (edge.type !== 'part-of') continue;
+    if (declaredNames.has(edge.from) && declaredNames.has(edge.to)) drop.add(edge.to);
+  }
+  return drop;
 }

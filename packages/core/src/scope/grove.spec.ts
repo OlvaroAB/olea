@@ -8,6 +8,8 @@
  * Every concept name, course code and path below is invented, per INV-3.
  */
 import { describe, expect, it } from 'vitest';
+import type { ConceptRelation } from '../concept/relation.js';
+import type { Provenance } from '../extract/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
 import type { ConceptMasteryEvidence, ConceptMasteryResult } from '../mastery/rollup.js';
 import type { Source } from '../source/types.js';
@@ -59,6 +61,23 @@ function objectivesSource(path: VaultPath): Source {
 
 function pastPaperSource(path: VaultPath): Source {
   return { path, role: 'past-paper', course: COURSE, kind: 'registered-file', format: null };
+}
+
+function passage(sourcePath: string): Provenance {
+  return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
+}
+
+// A part-of B: `from` is the finer/part side, `to` is the coarser/container
+// side (`../session/containment.spec.ts`'s own convention).
+function partOf(from: string, to: string): ConceptRelation {
+  return {
+    type: 'part-of',
+    from,
+    to,
+    provenance: 'model-proposed',
+    confidence: 0.9,
+    introducingPassages: { from: passage(`${from}.md`), to: passage(`${to}.md`) },
+  };
 }
 
 function citation(
@@ -262,5 +281,82 @@ describe('buildGroveModel — ground-streak plumbing (F4.5)', () => {
     });
     if (second.model.status !== 'declared') throw new Error('expected declared');
     expect(second.model.cells[0]).toMatchObject({ state: 'ground', stall: true });
+  });
+});
+
+describe('buildGroveModel — C7.9 part-of fold (`ol-5phn`), relations input', () => {
+  it('a broad area and its own declared part are never counted as separate peers against the denominator', () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const part = concept('key-part', 'Invented Part');
+    const broadArea = concept('key-broad', 'Invented Broad Area');
+    const { model } = buildGroveModel({
+      course: COURSE,
+      concepts: [part, broadArea],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [
+        citation('Invented Part', 'objectives', objectivesPath),
+        citation('Invented Broad Area', 'objectives', objectivesPath),
+      ],
+      materialPresence: new Map([
+        ['key-part', presence(part.sourcePaths, 1)],
+        ['key-broad', presence(broadArea.sourcePaths, 1)],
+      ]),
+      mastery: new Map([
+        ['key-part', mastery('key-part', 'seed')],
+        ['key-broad', mastery('key-broad', 'seed')],
+      ]),
+      relations: [partOf('Invented Part', 'Invented Broad Area')],
+    });
+
+    if (model.status !== 'declared') throw new Error('expected declared');
+    // The container yields — its own denominator entry drops, the part's stays.
+    expect(model.cells.map((c) => c.conceptName)).toEqual(['Invented Part']);
+    expect(model.summary.denominatorCount).toBe(1);
+  });
+
+  it("absent `relations` runs no fold — today's behaviour, unchanged, for every caller that predates this field", () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const part = concept('key-part', 'Invented Part');
+    const broadArea = concept('key-broad', 'Invented Broad Area');
+    const { model } = buildGroveModel({
+      course: COURSE,
+      concepts: [part, broadArea],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [
+        citation('Invented Part', 'objectives', objectivesPath),
+        citation('Invented Broad Area', 'objectives', objectivesPath),
+      ],
+      materialPresence: new Map([
+        ['key-part', presence(part.sourcePaths, 1)],
+        ['key-broad', presence(broadArea.sourcePaths, 1)],
+      ]),
+      mastery: new Map([
+        ['key-part', mastery('key-part', 'seed')],
+        ['key-broad', mastery('key-broad', 'seed')],
+      ]),
+      // No `relations` field at all.
+    });
+
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.summary.denominatorCount).toBe(2);
+  });
+
+  it('a container declared with no part present is not folded — the fold needs both sides', () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const broadArea = concept('key-broad', 'Invented Broad Area');
+    const { model } = buildGroveModel({
+      course: COURSE,
+      concepts: [broadArea],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [citation('Invented Broad Area', 'objectives', objectivesPath)],
+      materialPresence: new Map([['key-broad', presence(broadArea.sourcePaths, 1)]]),
+      mastery: new Map([['key-broad', mastery('key-broad', 'seed')]]),
+      // The part named on this edge is never declared in this course's citations.
+      relations: [partOf('Invented Part', 'Invented Broad Area')],
+    });
+
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.cells.map((c) => c.conceptName)).toEqual(['Invented Broad Area']);
+    expect(model.summary.denominatorCount).toBe(1);
   });
 });

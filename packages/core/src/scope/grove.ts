@@ -56,6 +56,19 @@
  * fields: if a `ratio`/`percent`/`percentage`/`completion`/`quotient` key is
  * ever added to either shape, `pnpm -r typecheck` fails on it.
  *
+ * ## The C7.9 part-of fold (`ol-5phn`, discovered from `ol-i8at`)
+ *
+ * A broad concept and one of its own declared parts must never land two
+ * independent entries against the denominator (C7.9's own words, quoted in
+ * full at `./coverage.js`). `BuildGroveModelInput.relations` is optional —
+ * absent means no fold runs, so every caller that predates this field stays
+ * valid unchanged. When supplied, `./coverage.js#containerNamesToFold`
+ * decides which declared names are container sides of a present part-of
+ * pair, and this module simply skips them before building `cells` and
+ * `materialGaps` — the same direction and yielding-side convention
+ * `../session/containment.ts`'s `filterContainmentCoPresence` already ruled
+ * for session composition, not a second rule for the same asymmetry.
+ *
  * ## INV-1 / §7.1
  *
  * Pure. No `obsidian`, no vault I/O, no clock — every input is already
@@ -63,13 +76,19 @@
  * between "the walk" and "the pure compose").
  */
 
+import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { Source, SourceRole } from '../source/types.js';
 import type { ConceptCitation, ConceptCitationKind } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
-import { classifyDeclaredConcept, type GroveDeclaredState, isVolunteer } from './coverage.js';
+import {
+  classifyDeclaredConcept,
+  containerNamesToFold,
+  type GroveDeclaredState,
+  isVolunteer,
+} from './coverage.js';
 
 export type { GroveDeclaredState } from './coverage.js';
 
@@ -171,6 +190,18 @@ export interface BuildGroveModelInput {
   readonly mastery: ReadonlyMap<string, ConceptMasteryResult>;
   /** Per concept KEY, the ground-streak each concept carried into THIS evaluation — absent means "never read ground before". See `./coverage.js`'s module doc for why this module holds none of this itself. */
   readonly priorGroundStreaks?: ReadonlyMap<string, number>;
+  /**
+   * `RelationSet`'s served edges for `course`, whole (`is-a`, `part-of`, …) —
+   * optional, and this is the C7.9 fold's on/off switch (`ol-5phn`,
+   * discovered from `ol-i8at`). **Absent means no fold runs**: every
+   * declared name counts its own denominator entry, today's behaviour,
+   * unchanged — every caller that predates this field stays valid with no
+   * edit. When supplied, `./coverage.js#containerNamesToFold` reads only the
+   * `part-of` edges (this rule's alone); other types are ignored rather than
+   * rejected, matching `../session/containment.ts`'s identical posture
+   * toward the same kind of input.
+   */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 export interface BuildGroveModelResult {
@@ -217,11 +248,19 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
 
   const conceptsByName = new Map(input.concepts.map((concept) => [concept.name, concept]));
 
+  // C7.9's part-of fold: a container name whose own part is also declared
+  // drops here, before either bucket is built, so `denominatorCount` below
+  // (`cells.length + materialGaps.length`) never lands two entries for what
+  // the material names as one broad area and one of its own parts. A no-op
+  // when `input.relations` is absent — see the field's own doc.
+  const foldedContainerNames = containerNamesToFold(input.relations ?? [], declaredNames);
+
   const cells: GroveCell[] = [];
   const materialGaps: GroveMaterialGapCell[] = [];
   const nextGroundStreaks = new Map<string, number>();
 
   for (const conceptName of declaredNames) {
+    if (foldedContainerNames.has(conceptName)) continue;
     const concept = conceptsByName.get(conceptName);
     if (concept === undefined) {
       // The examiner's document names this concept and her material does
