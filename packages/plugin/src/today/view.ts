@@ -36,7 +36,13 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type { CourseDueCount, CourseMastery, InsightsSummary, TodayViewModel } from 'olea-core';
+import type {
+  CourseDueCount,
+  CourseMastery,
+  CourseScopeReading,
+  InsightsSummary,
+  TodayViewModel,
+} from 'olea-core';
 import { CONTEST_GESTURE_LABEL, MASTERY_ORDER, type TodayClaim } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
 import type { DisputeSheet, TodayContestSupport } from './contest.js';
@@ -58,7 +64,10 @@ import {
   RHYTHM_LABEL,
   rhythmQuietLine,
   rhythmYardstickLine,
+  SCOPE_LABEL,
+  SCOPE_NOT_YET_DECLARED,
   START_REVIEW,
+  scopeSummaryLine,
   showsStartReviewAction,
   showsTermDatesPointer,
   spacingRateSentence,
@@ -168,6 +177,7 @@ export class TodayView extends ItemView {
     const body = root.createDiv({ cls: 'olea-today-body' });
     this.renderDue(body, vm);
     this.renderMastery(body, vm);
+    this.renderScope(body, vm);
     this.renderInsights(body, vm);
     this.renderRhythm(body, vm);
   }
@@ -240,6 +250,55 @@ export class TodayView extends ItemView {
       countEl.appendChild(renderSprig({ state, size: 12, container: countEl }));
       countEl.createSpan({ text: masteryCountLabel(state, count) });
     }
+  }
+
+  /**
+   * F6.2's cross-course scope reading (`[D-076]` round 2, `ol-a83u` [SCP-1],
+   * `ol-4qvc`) — one line per running course, the count and the source it
+   * came from, never a sum or a rank (F8.3, C5.7). A separate section from
+   * `renderMastery`: the two are different computations over different
+   * models (`buildMasteryOverview`'s five-state distribution vs
+   * `buildCrossCourseScopeOverview`'s examiner-declared count), grouped only
+   * by both being F6.2's cross-course default reading — so they render as
+   * two sections, not one merged row.
+   *
+   * Reuses the mastery section's own classes (`olea-today-mastery*`) rather
+   * than inventing new ones: `packages/plugin/styles.css` is outside this
+   * bead's `owns`, and every rule this section needs — an eyebrow label, a
+   * course code beside a line of text — already exists there for the
+   * identical layout.
+   *
+   * `scope === null` renders nothing, same posture `renderMastery` takes for
+   * `mastery === null`: a panel never wired for a scope reading has not been
+   * asked the question and has not declined to answer it.
+   */
+  private renderScope(parent: HTMLElement, vm: TodayViewModel): void {
+    const overview = vm.scope;
+    if (overview === null || overview.courses.length === 0) return;
+
+    const section = parent.createDiv({ cls: 'olea-today-mastery' });
+    section.createDiv({ cls: 'olea-today-mastery-label', text: SCOPE_LABEL });
+    for (const course of overview.courses) {
+      this.renderScopeCourse(section, course);
+    }
+  }
+
+  private renderScopeCourse(parent: HTMLElement, course: CourseScopeReading): void {
+    const row = parent.createDiv({ cls: 'olea-today-mastery-course' });
+    const head = row.createDiv({ cls: 'olea-today-mastery-head' });
+    // From her vault, never from `copy.ts` — same rule as the mastery rows.
+    head.createSpan({ cls: 'olea-today-mastery-code', text: course.course });
+    head.createSpan({
+      cls: 'olea-today-mastery-total',
+      text:
+        course.status === 'declared'
+          ? scopeSummaryLine(
+              course.builtCount,
+              course.denominatorCount,
+              course.denominatorSourcePaths.length,
+            )
+          : SCOPE_NOT_YET_DECLARED,
+    });
   }
 
   /**

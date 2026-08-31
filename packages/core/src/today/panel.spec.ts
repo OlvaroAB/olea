@@ -1,5 +1,7 @@
 import type { ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import type { GroveCourseModel } from '../scope/grove.js';
+import type { VaultPath } from '../vault/types.js';
 import type { DueInstrument } from './due.js';
 import { buildTodayPanel, type TodayPanelInput } from './panel.js';
 
@@ -53,11 +55,12 @@ const instruments: readonly DueInstrument[] = [
 describe('buildTodayPanel', () => {
   it('is the halves it has and nothing else', () => {
     // Was `['due', 'streak']` until F6.2/F6.5 (`ol-lohq`, `ol-p6t04`) added the
-    // trends half, `rhythm` joined it at F6.9 (`ol-v7r5.6`), and
-    // `courseFreshness` joined it at `ol-ksw7` (migrated in from a
-    // plugin-local widening). Kept as an exact field-set assertion rather
-    // than relaxed to `toContain`: the point of it is that a field cannot
-    // appear here without somebody deciding it should.
+    // trends half, `rhythm` joined it at F6.9 (`ol-v7r5.6`), `courseFreshness`
+    // joined it at `ol-ksw7` (migrated in from a plugin-local widening), and
+    // `scope` joined it at `ol-4qvc` (F6.2's cross-course scope reading).
+    // Kept as an exact field-set assertion rather than relaxed to
+    // `toContain`: the point of it is that a field cannot appear here without
+    // somebody deciding it should.
     const vm = buildTodayPanel(input());
     expect(Object.keys(vm).sort()).toEqual([
       'courseFreshness',
@@ -65,6 +68,7 @@ describe('buildTodayPanel', () => {
       'insights',
       'mastery',
       'rhythm',
+      'scope',
       'streak',
       'windowDays',
     ]);
@@ -213,6 +217,122 @@ describe('buildTodayPanel — RHY-3 calendar-schedule freshness pass-through (`o
     ];
     const vm = buildTodayPanel(input({ courseFreshness: readings }));
     expect(vm.courseFreshness).toBe(readings);
+  });
+});
+
+/**
+ * F6.2's cross-course scope reading (`ol-a83u` [SCP-1], `ol-4qvc`). These
+ * three tests re-assert the guarantees `../gap/scope-overview.spec.ts`
+ * already proves against `buildCrossCourseScopeOverview` directly — done
+ * again here, at the wiring layer, so `features/F6-today.md`'s F6.2
+ * cross-course scenarios ("courses beside one another", "each course's own
+ * denominator source", "no denominator yet") can retag to this suite
+ * instead of `core/today/mastery-overview.spec`, where the aggregator never
+ * lived (`ol-4qvc`'s own close notes). INV-3: every course code and path
+ * below is invented.
+ */
+function declaredModel(
+  course: string,
+  denominatorCount: number,
+  builtCount: number,
+  denominatorSourcePaths: readonly VaultPath[],
+): GroveCourseModel {
+  return {
+    status: 'declared',
+    course,
+    cells: [],
+    materialGaps: [],
+    volunteers: [],
+    summary: { builtCount, denominatorCount, denominatorSourcePaths },
+  };
+}
+
+function noRegisteredSourceModel(course: string): GroveCourseModel {
+  return { status: 'no-registered-source', course };
+}
+
+describe('buildTodayPanel — F6.2 cross-course scope reading (ol-4qvc)', () => {
+  it('is null when the field was never supplied — the same third state courseFreshness takes', () => {
+    const vm = buildTodayPanel(input());
+    expect(vm.scope).toBeNull();
+  });
+
+  it('is null when the field was explicitly supplied as null — "the scope source could not compute"', () => {
+    const vm = buildTodayPanel(input({ courseScopeModels: null }));
+    expect(vm.scope).toBeNull();
+  });
+
+  it('an EMPTY list is a real answer, distinct from null', () => {
+    const vm = buildTodayPanel(input({ courseScopeModels: [] }));
+    expect(vm.scope).toEqual({ courses: [], asOf: TODAY });
+  });
+
+  it('echoes this panel\'s own "today" as the reading\'s asOf, never a per-source registration date', () => {
+    const vm = buildTodayPanel(
+      input({ courseScopeModels: [declaredModel('AAA111', 5, 1, ['Sources/a.pdf' as VaultPath])] }),
+    );
+    expect(vm.scope?.asOf).toBe(TODAY);
+  });
+
+  it('places two declared courses beside one another, never scored against one another (C5.7)', () => {
+    const vm = buildTodayPanel(
+      input({
+        courseScopeModels: [
+          declaredModel('AAA111', 10, 2, ['Sources/aaa-objectives.pdf' as VaultPath]),
+          declaredModel('ZZZ999', 10, 9, ['Sources/zzz-objectives.pdf' as VaultPath]),
+        ],
+      }),
+    );
+    for (const course of vm.scope?.courses ?? []) {
+      expect(Object.keys(course).sort()).toEqual([
+        'builtCount',
+        'course',
+        'denominatorCount',
+        'denominatorSourcePaths',
+        'status',
+      ]);
+    }
+    // Course-code order, not "how well each course is going" order.
+    expect(vm.scope?.courses.map((c) => c.course)).toEqual(['AAA111', 'ZZZ999']);
+  });
+
+  it("each course's count names its own denominator source, never a shared or borrowed one", () => {
+    const vm = buildTodayPanel(
+      input({
+        courseScopeModels: [
+          declaredModel('AAA111', 12, 3, ['Sources/aaa-objectives.pdf' as VaultPath]),
+          declaredModel('BBB222', 8, 8, [
+            'Sources/bbb-past-paper-1.pdf' as VaultPath,
+            'Sources/bbb-past-paper-2.pdf' as VaultPath,
+          ]),
+        ],
+      }),
+    );
+    const aaa = vm.scope?.courses.find((c) => c.course === 'AAA111');
+    const bbb = vm.scope?.courses.find((c) => c.course === 'BBB222');
+    if (aaa?.status !== 'declared' || bbb?.status !== 'declared') {
+      throw new Error('expected both courses declared');
+    }
+    expect(aaa.denominatorSourcePaths).toEqual(['Sources/aaa-objectives.pdf']);
+    expect(bbb.denominatorSourcePaths).toEqual([
+      'Sources/bbb-past-paper-1.pdf',
+      'Sources/bbb-past-paper-2.pdf',
+    ]);
+  });
+
+  it('a course with no registered source states it has no denominator yet, never a borrowed one', () => {
+    const vm = buildTodayPanel(
+      input({
+        courseScopeModels: [
+          declaredModel('AAA111', 10, 2, ['Sources/aaa-objectives.pdf' as VaultPath]),
+          noRegisteredSourceModel('BBB222'),
+        ],
+      }),
+    );
+    expect(vm.scope?.courses.find((c) => c.course === 'BBB222')).toEqual({
+      course: 'BBB222',
+      status: 'no-denominator-yet',
+    });
   });
 });
 

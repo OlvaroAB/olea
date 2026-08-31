@@ -374,6 +374,14 @@ export {
   DEFAULT_MCQ_RECOGNITION_WEIGHT,
   readinessFactorsFor,
 } from './gap/readiness.js';
+// F6.2's cross-course scope reading (`[D-076]` round 2, "Can she see where she
+// stands against everything, not one course at a time?"; `ol-a83u` [SCP-1]).
+// Places every running course's own `../scope/grove.js#GroveCourseModel` side
+// by side — never sums or ranks (F8.3, C5.7) — and was previously reachable
+// only from inside `packages/core` because `ol-a83u`'s `owns` stopped at
+// `gap/`; `ol-4qvc` widens the barrel so `packages/plugin` can wire it in.
+export type { CourseScopeReading, CrossCourseScopeOverview } from './gap/scope-overview.js';
+export { buildCrossCourseScopeOverview } from './gap/scope-overview.js';
 export type { CardAuthorship, ClassifiedCard, StyleProfile } from './generate/style-profile.js';
 export {
   computeStyleProfile,
@@ -656,6 +664,14 @@ export { EMPTY_KEYWORD_INDEX } from './keyword-index/types.js';
 // from here; there is deliberately no second copy of these five words.
 export type { MasteryDisplay } from './mastery/display.js';
 export { MASTERY_DISPLAY, MASTERY_ORDER, masteryTitle } from './mastery/display.js';
+// `ConceptMasteryResult`/`computeAllConceptMastery` (`ol-4qvc`): the same
+// per-concept mastery fold `today/mastery-overview.js#buildMasteryOverview`
+// already builds on via `../mastery/sprig.js`, exported here so a caller
+// outside core can build the `mastery` map `../scope/grove.js#buildGroveModel`
+// needs without re-deriving mastery a second way — `packages/plugin`'s
+// F6.2 cross-course scope source (`today/data-source.ts`) is the first
+// consumer.
+export type { ConceptMasteryResult } from './mastery/rollup.js';
 // The value a review-log writer stamps onto a new v4 record (`ol-7328`'s
 // per-concept ruling, `ol-g6zg`'s v4 shape, wired by `ol-rpr4`). Exported here
 // rather than left to a deep source import: the plugin's review port is
@@ -663,7 +679,7 @@ export { MASTERY_DISPLAY, MASTERY_ORDER, masteryTitle } from './mastery/display.
 // imports reaching past this barrel. The workbench does reach into
 // `core/src/mastery/rollup.js` directly, but that is dev tooling and not a
 // precedent for the shipped plugin.
-export { masteryAtTimeForConceptIds } from './mastery/rollup.js';
+export { computeAllConceptMastery, masteryAtTimeForConceptIds } from './mastery/rollup.js';
 // The sprig data (F2.3, F2.11, P4-T06) and the distribution F6.2's overview is
 // rendered from. Reachable only inside core until now; the Today panel is its
 // first consumer outside it (`ol-lohq`).
@@ -869,6 +885,34 @@ export type {
 // and the suspended set excluded (F2.6). The one module that joins instruments
 // to concepts — see queue/types.ts for why that join lives only here.
 export { composeQueue } from './queue/compose.js';
+export type {
+  DecideRebuildInput,
+  RebuildDecision,
+  RebuildOutcomeCase,
+  RebuildTriggerInput,
+  RebuildTriggerReason,
+  RebuildTriggerResult,
+  RebuildWasteMeasured,
+  RebuildWasteVerdict,
+  SittingState,
+} from './queue/rebuild-controller.js';
+// RBLD-1 (`ol-o7hr`), component register row 3.6, `[D-076]` round 4 "When
+// does the queue rebuild?" — the rebuild trigger set and freeze contract that
+// had no owner anywhere in the codebase. See queue/rebuild-controller.ts's
+// module doc for what is already ruled and what remains open.
+export {
+  assessmentDatePassedSince,
+  checkRebuildWasteRate,
+  DEFAULT_SESSION_HOLD_CAP_MINUTES,
+  DEFAULT_SESSION_HOLD_CAP_MS,
+  decideRebuild,
+  enterSitting,
+  evaluateRebuildTrigger,
+  exitSitting,
+  IDLE_SITTING,
+  MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK,
+  WASTED_REBUILD_RATE_CEILING,
+} from './queue/rebuild-controller.js';
 export type {
   ComposedQueue,
   ComposeQueueInput,

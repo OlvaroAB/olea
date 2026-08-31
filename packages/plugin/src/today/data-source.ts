@@ -75,6 +75,8 @@
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
   associateScheduleEvents,
+  buildGroveModel,
+  buildMaterialPresence,
   buildReviewSession,
   buildTodayPanel,
   type CalendarDay,
@@ -83,6 +85,7 @@ import {
   type CourseFreshnessReading,
   calendarDayFromLocalDate,
   calendarDaysEndingOn,
+  computeAllConceptMastery,
   computeScheduleFreshness,
   courseFromPath,
   DEFAULT_COURSES_FOLDER,
@@ -90,11 +93,15 @@ import {
   type DueInstrument,
   discoverScheduleEvents,
   type ExtractConceptsOptions,
+  enumerateVaultInstruments,
   extractConcepts,
+  extractTier3Evidence,
+  type GroveCourseModel,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
   type RhythmCourseInput,
   readAssessments,
+  readReviewLogHistory,
   resolveTermBoundary,
   reviewLogPath,
   type Scheduler,
@@ -518,6 +525,142 @@ export function createRhythmSource(deps: RhythmSourceDeps): TodayRhythmSource {
   };
 }
 
+/**
+ * Where the panel gets F6.2's cross-course scope reading's one real input:
+ * a `GroveCourseModel` per running course (`ol-a83u` [SCP-1], `ol-4qvc`).
+ * Implemented for real by `createVaultScopeSource` below, over the same
+ * `olea-core#buildGroveModel` the grove screen (`../grove/provider.ts`)
+ * computes per course — this is a second, independent caller of that pure
+ * function, not a second computation of what it decides.
+ */
+export interface TodayScopeSource {
+  /**
+   * `null` means "could not enumerate", the same third state
+   * `TodayInstrumentSource.listDueCandidates` draws — not an empty list,
+   * which is a real answer (no running course has a grove model yet).
+   */
+  listCourseGroveModels(): Promise<readonly GroveCourseModel[] | null>;
+}
+
+export interface VaultScopeSourceDeps {
+  readonly vault: VaultSource;
+  /** Names this device's own review-log files for the whole-log probe below. */
+  readonly deviceId: string;
+  /** Injected so the source is deterministic under test; production passes `() => new Date()`. */
+  readonly now: () => Date;
+  readonly probeDays?: number;
+}
+
+/**
+ * Tallies `VaultInstrumentRecord.notePath` — `buildMaterialPresence`'s second
+ * argument. Duplicated from `../grove/provider.ts`'s identical helper rather
+ * than shared: the two files are owned by different beads' `owns` sets, and
+ * this is six lines (that module's own doc states the same reasoning for its
+ * own copy, which is itself a third copy alongside `../gap/provider.ts`'s and
+ * `../session-builder/provider.ts`'s).
+ */
+function instrumentCountsByNotePath(
+  records: readonly { readonly notePath: VaultPath }[],
+): ReadonlyMap<VaultPath, number> {
+  const counts = new Map<VaultPath, number>();
+  for (const record of records) {
+    counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * The real scope source: one `buildGroveModel` call per running course, the
+ * same per-course computation the grove screen runs — this module computes
+ * no scope of its own, matching `olea-core`'s own `gap/scope-overview.ts`
+ * module doc ("this module computes no scope of its own").
+ *
+ * **Lighter than the grove screen's own read, on purpose.** Two things
+ * `../grove/provider.ts` does that this source does not:
+ *
+ *  - **No ground-streak persistence.** `classifyDeclaredConcept`'s
+ *    `priorGroundStreak` only ever changes the `stall` FLAG on a `ground`
+ *    cell (`../scope/coverage.ts`'s own module doc: "no production caller
+ *    yet has a durable store for it") — it never changes which of the six
+ *    states a concept classifies as. `buildCrossCourseScopeOverview` never
+ *    reads `cells`/`stall` at all, only `summary`'s two counts and its
+ *    source paths, so omitting persistence here costs this reading nothing.
+ *  - **No F8.5 withdrawn-concept filter.** The grove screen excludes
+ *    `pruned` concepts via `buildRegistryModel`; this source does not, the
+ *    same simplification `../today/mastery-overview.ts`'s own per-course
+ *    mastery reading already makes (it is built from `extractConcepts`
+ *    directly, with no pruning either) — this reading is at that same
+ *    grain, not the grove screen's.
+ *
+ * **Whole-log mastery, not windowed** — same reasoning `../grove/
+ * provider.ts` states for its own read: growth stage is a current-state
+ * reading, and a windowed read would understate an old concept's stage. The
+ * `additionalPaths` probe is the same `SCHEDULING_HISTORY_PROBE_DAYS`-bounded
+ * fallback `createVaultInstrumentSource` and `../grove/provider.ts` both use
+ * for a host that cannot list `.olea/reviews/`.
+ */
+export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSource {
+  return {
+    async listCourseGroveModels() {
+      try {
+        const today = localToday(deps.now());
+        const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+        const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
+          reviewLogPath(day, deps.deviceId),
+        );
+
+        const [{ entries }, enumeration] = await Promise.all([
+          readReviewLogHistory(deps.vault, { additionalPaths }),
+          enumerateVaultInstruments(deps.vault),
+        ]);
+
+        const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
+        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary });
+
+        const materialPresence = buildMaterialPresence(
+          enumeration.concepts,
+          instrumentCountsByNotePath(enumeration.records),
+        );
+        const mastery = computeAllConceptMastery(
+          entries,
+          enumeration.concepts.map((concept) => concept.key),
+        );
+
+        // Every course a concept or a registered source names — a course
+        // with a registered objectives document but no concepts extracted
+        // yet still belongs on this reading (F8.1's own "declared, zero
+        // built" state), the same roster `../grove/provider.ts` derives.
+        const courseNames = new Set<string>();
+        for (const concept of enumeration.concepts) {
+          for (const course of concept.courses) courseNames.add(course);
+        }
+        for (const source of tier3.sourcesReport.sources) {
+          if (source.course !== undefined) courseNames.add(source.course);
+        }
+
+        return [...courseNames].sort().map((course) => {
+          const courseConcepts = enumeration.concepts.filter((concept) =>
+            concept.courses.includes(course),
+          );
+          return buildGroveModel({
+            course,
+            concepts: courseConcepts,
+            sources: tier3.sourcesReport.sources,
+            citations: tier3.citations,
+            materialPresence,
+            mastery,
+          }).model;
+        });
+      } catch {
+        // "We could not read your vault" is not "no course has a denominator
+        // yet" — the panel renders `null` as the former, same posture every
+        // other source in this file takes.
+        return null;
+      }
+    },
+  };
+}
+
 export interface TodayPanelDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
@@ -529,6 +672,8 @@ export interface TodayPanelDeps {
   readonly trends?: TodayTrendsSource;
   /** Absent means no rhythm reading — see `TodayRhythmSource`. */
   readonly rhythm?: TodayRhythmSource;
+  /** Absent means no F6.2 cross-course scope reading — see `TodayScopeSource`. */
+  readonly scope?: TodayScopeSource;
 }
 
 /**
@@ -575,6 +720,7 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   // was never asked", never as "asked, and it read nothing".
   const trendsFields = await resolveTrendsFields(deps.trends);
   const rhythmFields = await resolveRhythmFields(deps.rhythm);
+  const scopeFields = await resolveScopeFields(deps.scope);
 
   // RHY-3's calendar-schedule freshness — reuses the same "last arrival per
   // course" fact `rhythmFields` already read, rather than reading the
@@ -585,7 +731,13 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
     'courseMaterialArrivals' in rhythmFields ? rhythmFields.courseMaterialArrivals : null;
   const courseFreshness = await resolveScheduleFreshness(deps.vault, courseMaterialArrivals, today);
 
-  return buildTodayPanel({ ...base, ...trendsFields, ...rhythmFields, courseFreshness });
+  return buildTodayPanel({
+    ...base,
+    ...trendsFields,
+    ...rhythmFields,
+    courseFreshness,
+    ...scopeFields,
+  });
 }
 
 /** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */
@@ -608,6 +760,24 @@ async function resolveRhythmFields(
   if (courseMaterialArrivals === null) return {};
   const termWindow = await rhythm.resolveTermWindow();
   return { courseMaterialArrivals, termWindow };
+}
+
+/**
+ * F6.2's half of `TodayPanelInput` (`ol-4qvc`) — `{}` when `scope` was never
+ * wired at all (the key stays absent, which `buildTodayPanel` reads as "this
+ * panel was never asked"). Once `scope` IS wired, the key is always present —
+ * `null` when the read failed, a real list otherwise — the same "always a
+ * key, possibly null" posture `courseFreshness` takes above, never
+ * `resolveTrendsFields`/`resolveRhythmFields`'s "omit the key on failure"
+ * posture: a scope source that is wired and fails is a different fact from
+ * one that was never wired, and `TodayPanelInput.courseScopeModels`'s three
+ * states exist to keep them distinguishable.
+ */
+async function resolveScopeFields(
+  scope: TodayScopeSource | undefined,
+): Promise<Pick<TodayPanelInput, 'courseScopeModels'> | Record<string, never>> {
+  if (scope === undefined) return {};
+  return { courseScopeModels: await scope.listCourseGroveModels() };
 }
 
 /**

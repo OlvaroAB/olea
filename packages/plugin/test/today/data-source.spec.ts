@@ -32,6 +32,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
+  createVaultScopeSource,
   DEFAULT_STREAK_WINDOW_DAYS,
   endOfLocalDay,
   loadTodayPanel,
@@ -46,6 +47,7 @@ import {
   ObsidianMaterialArrivalStore,
 } from '../../src/today/material-arrival-store.js';
 import { ObsidianTermWindowStore } from '../../src/today/term-window-store.js';
+import { memoryVault, unreadableVault } from '../review/memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
 const OTHER_DEVICE = 'olea-herphone01';
@@ -765,6 +767,77 @@ describe('loadTodayPanel', () => {
     });
   });
 
+  describe('F6.2 cross-course scope reading (ol-4qvc)', () => {
+    it('leaves the scope half null when no scope source was wired — a third state, not a computed answer', async () => {
+      const { vault } = fakeVault({});
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+      });
+      expect(vm.scope).toBeNull();
+    });
+
+    it('threads a wired scope source through to a real cross-course reading', async () => {
+      const { vault } = fakeVault({});
+      const scope = {
+        async listCourseGroveModels() {
+          return [
+            {
+              status: 'declared' as const,
+              course: 'GEO101',
+              cells: [],
+              materialGaps: [],
+              volunteers: [],
+              summary: {
+                builtCount: 3,
+                denominatorCount: 5,
+                denominatorSourcePaths: ['Sources/geo-objectives.pdf'],
+              },
+            },
+          ];
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        scope,
+      });
+      expect(vm.scope?.courses).toEqual([
+        {
+          course: 'GEO101',
+          status: 'declared',
+          builtCount: 3,
+          denominatorCount: 5,
+          denominatorSourcePaths: ['Sources/geo-objectives.pdf'],
+        },
+      ]);
+    });
+
+    it('a scope source that cannot enumerate degrades to "could not compute", not a thrown error', async () => {
+      const { vault } = fakeVault({});
+      const scope = {
+        async listCourseGroveModels() {
+          return null;
+        },
+      };
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        scope,
+      });
+      expect(vm.scope).toBeNull();
+    });
+  });
+
   describe('RHY-3 calendar-schedule freshness (`ol-4chx` -> `ol-r6s0` -> `ol-hna1` -> `ol-at1a`)', () => {
     // INV-3: every course code, path and line of text below is coined for
     // this test. None of it comes from any real vault.
@@ -918,5 +991,102 @@ describe('createRhythmSource — the real source, over the two persisted stores'
       termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
     });
     expect(await source.resolveTermWindow()).toBeNull();
+  });
+});
+
+/**
+ * `createVaultScopeSource` — F6.2's cross-course scope reading's real input
+ * (`ol-a83u` [SCP-1], `ol-4qvc`): one `buildGroveModel` call per running
+ * course. This suite tests the WIRING this bead adds (assembling
+ * `buildGroveModel`'s inputs from a vault walk) — not `buildGroveModel`'s own
+ * acceptance criteria, which is `packages/core/src/scope/grove.spec.ts`'s
+ * job, nor `buildCrossCourseScopeOverview`'s, which is `packages/core/src/
+ * gap/scope-overview.spec.ts`'s (re-asserted at the `buildTodayPanel` layer
+ * in `packages/core/src/today/panel.spec.ts`).
+ *
+ * Fixture shape matches `../grove/provider.spec.ts`'s own
+ * `fixtureVaultWithRegisteredSource` — same registered-objectives-plus-two-
+ * courses fixture, proven there to produce a real `'declared'`/`'inferred'`
+ * split; INV-3: every course code and concept name below is invented.
+ */
+describe('createVaultScopeSource — the real F6.2 scope source (ol-4qvc)', () => {
+  const NOW = new Date('2026-09-01T09:00:00Z');
+
+  function fixtureVault() {
+    return memoryVault({
+      '03 Research/Objectives.md': [
+        '---',
+        'role: objectives',
+        'course: TESTC101',
+        '---',
+        '',
+        'The course covers Concept A in depth.',
+        '',
+      ].join('\n'),
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      'Notes/two.md': [
+        '---',
+        'topic: [Concept B]',
+        'course: TESTC202',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+    });
+  }
+
+  it('one buildGroveModel call per running course: a declared course reads a real built/denominator count and its source, an inferred course reads no denominator (F8.1)', async () => {
+    const source = createVaultScopeSource({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      now: () => NOW,
+    });
+    const models = await source.listCourseGroveModels();
+    expect(models).not.toBeNull();
+    const byCourse = new Map((models ?? []).map((model) => [model.course, model]));
+    expect([...byCourse.keys()].sort()).toEqual(['TESTC101', 'TESTC202']);
+
+    const c101 = byCourse.get('TESTC101');
+    if (c101 === undefined || c101.status !== 'declared') {
+      throw new Error(`expected TESTC101 declared, got ${c101?.status}`);
+    }
+    expect(c101.summary.denominatorSourcePaths).toEqual(['03 Research/Objectives.md']);
+    expect(c101.summary.denominatorCount).toBe(1);
+    // "Front::Back" gives Concept A a real instrument, so it reads `seed`
+    // (never having been reviewed) rather than `ground` — built, in F8.3's
+    // count-and-source sense.
+    expect(c101.summary.builtCount).toBe(1);
+
+    // TESTC202 has a concept of her own ("Concept B") but no registered
+    // objectives/past-paper source at all — F8.1 scenario 3's inference case,
+    // which `buildCrossCourseScopeOverview` reads as "no denominator yet".
+    expect(byCourse.get('TESTC202')?.status).toBe('inferred');
+  });
+
+  it('an empty vault reads no running courses at all — a real, honest empty list, not a failure', async () => {
+    const source = createVaultScopeSource({
+      vault: memoryVault({}),
+      deviceId: DEVICE,
+      now: () => NOW,
+    });
+    expect(await source.listCourseGroveModels()).toEqual([]);
+  });
+
+  it('returns null, never throws, when the vault cannot be read', async () => {
+    const source = createVaultScopeSource({
+      vault: unreadableVault() as ReturnType<typeof fixtureVault>,
+      deviceId: DEVICE,
+      now: () => NOW,
+    });
+    expect(await source.listCourseGroveModels()).toBeNull();
   });
 });

@@ -139,6 +139,7 @@ import { createTodayContestSupport } from './today/contest.js';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
+  createVaultScopeSource,
   createVaultTrendsSource,
   loadTodayPanel,
   localToday,
@@ -605,6 +606,10 @@ export default class OleaPlugin extends Plugin {
             // which `createVaultTrendsSource` already reads as "no weights"
             // rather than a guessed folder.
             trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
+            // F6.2's cross-course scope reading (`ol-4qvc`): one grove model
+            // per running course, placed side by side — counts never summed
+            // or ranked (F8.3/C5.7).
+            scope: createVaultScopeSource({ vault, deviceId, now: () => new Date() }),
             // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
             // unconditionally in `onload`, same as `materiality` itself, so
             // this is absent only before `onload` has run — never in a

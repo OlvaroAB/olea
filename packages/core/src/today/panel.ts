@@ -32,10 +32,15 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import {
+  buildCrossCourseScopeOverview,
+  type CrossCourseScopeOverview,
+} from '../gap/scope-overview.js';
 import type { WeightedAssessment } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
 import type { CourseFreshnessReading } from '../schedule/freshness.js';
+import type { GroveCourseModel } from '../scope/grove.js';
 import type { CalendarDay } from './calendar-day.js';
 import { type DueInstrument, type DueSummary, summariseDue } from './due.js';
 import { buildMasteryOverview, type MasteryOverview } from './mastery-overview.js';
@@ -134,6 +139,28 @@ export interface TodayPanelInput {
    * already does with an empty array.
    */
   readonly courseFreshness?: readonly CourseFreshnessReading[] | null;
+  /**
+   * F6.2's cross-course scope reading (`[D-076]` round 2, `ol-a83u` [SCP-1],
+   * `ol-4qvc`) — one `../scope/grove.js#GroveCourseModel` per running course,
+   * the same per-course computation the grove screen runs (one
+   * `buildGroveModel` call per course). **Arrives pre-computed, the same
+   * posture `courseFreshness` documents above**: assembling one needs a
+   * vault-wide read (registered sources, tier-3 citations, material
+   * presence, mastery) this pure function does not perform, so the caller
+   * (`packages/plugin/src/today/data-source.ts`'s scope source) computes the
+   * list and hands it over already built; `buildTodayPanel` only assembles
+   * the cross-course reading over it (`../gap/scope-overview.js#
+   * buildCrossCourseScopeOverview`), the same "grouping, not a second
+   * computation" discipline that module's own doc states.
+   *
+   * **Three states, matching `courseFreshness` exactly**: `undefined` means
+   * this panel was never wired for a scope reading at all (no section
+   * rendered — not a false "no denominator yet" for every course she has);
+   * `null` means a scope source was wired but the read failed (same "cannot
+   * say" as `courseFreshness: null`); a real array — `[]` included — is an
+   * honest answer and produces a reading with exactly that many course rows.
+   */
+  readonly courseScopeModels?: readonly GroveCourseModel[] | null;
 }
 
 export interface TodayViewModel {
@@ -167,6 +194,16 @@ export interface TodayViewModel {
    * full state table; this function performs no further computation on it.
    */
   readonly courseFreshness: readonly CourseFreshnessReading[] | null;
+  /**
+   * F6.2's cross-course scope reading, assembled from
+   * `TodayPanelInput.courseScopeModels` via `../gap/scope-overview.js#
+   * buildCrossCourseScopeOverview`, `asOf` this panel's own `today` — never a
+   * sum, never a rank across courses (F8.3, C5.7). `null` on the same two
+   * conditions `courseFreshness` documents above: never wired, or wired and
+   * unreadable. See `TodayPanelInput.courseScopeModels`'s doc for the full
+   * state table.
+   */
+  readonly scope: CrossCourseScopeOverview | null;
   /**
    * How many days of review history the numbers above were computed over —
    * echoed back from `windowDays` so the panel can state its own scope rather
@@ -236,7 +273,29 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
   // null output" resolution every optional field on this function performs.
   const courseFreshness = input.courseFreshness ?? null;
 
-  return { due, streak, mastery, insights, rhythm, courseFreshness, windowDays: input.windowDays };
+  // F6.2's cross-course scope reading (`ol-4qvc`). `courseScopeModels`
+  // arrives pre-computed (see that field's doc) — `undefined`/`null` both
+  // collapse to no reading, matching `courseFreshness` above; a real list
+  // (`[]` included) is assembled into the honest cross-course shape, `asOf`
+  // this panel's own `today` (the reading's own timestamp — see `../gap/
+  // scope-overview.js`'s module doc for why that is never a per-source
+  // registration date).
+  const courseScopeModels = input.courseScopeModels;
+  const scope =
+    courseScopeModels === undefined || courseScopeModels === null
+      ? null
+      : buildCrossCourseScopeOverview(courseScopeModels, input.today);
+
+  return {
+    due,
+    streak,
+    mastery,
+    insights,
+    rhythm,
+    courseFreshness,
+    scope,
+    windowDays: input.windowDays,
+  };
 }
 
 /** Shared because it is immutable and read-only — no caller can add to it. */

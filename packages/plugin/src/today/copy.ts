@@ -227,6 +227,43 @@ export function conceptCountLabel(count: number): string {
 }
 
 /**
+ * F6.2's cross-course scope reading eyebrow (`[D-076]` round 2, `ol-a83u`
+ * [SCP-1], `ol-4qvc`) — a separate section from `MASTERY_LABEL` above: the
+ * scope reading states how much of each course's own, examiner-declared
+ * material is built, never a percentage (F8.3) and never a comparison
+ * across courses (C5.7). "Declares" rather than "covers"/"coverage":
+ * the count is the examiner's own declared scope reported back to her,
+ * never Olea's judgement of how much ground is covered.
+ */
+export const SCOPE_LABEL = 'What each course declares';
+
+/**
+ * A course with no registered objectives document or past paper yet
+ * (F8.1 scenario 2's own wording, at this panel's compact grain — the full
+ * explanation and the "register one" pointer belong to the grove screen,
+ * `../grove/copy.ts#GROVE_NO_SOURCE_BODY`, not to this summary line).
+ */
+export const SCOPE_NOT_YET_DECLARED = 'No objectives document or past paper registered yet.';
+
+/**
+ * A course whose scope IS declared: the built count and the denominator's
+ * own source count, side by side, **never their quotient** (F8.3). Same
+ * shape as `../grove/copy.ts#groveSummaryLine` because it is the same fact
+ * about the same course — duplicated wording rather than a shared import
+ * because the two copy modules are owned by different beads' `owns` sets
+ * (the same reasoning `data-source.ts`'s own `instrumentCountsByNotePath`
+ * states one layer down).
+ */
+export function scopeSummaryLine(
+  builtCount: number,
+  denominatorCount: number,
+  sourceCount: number,
+): string {
+  const sourceNoun = sourceCount === 1 ? 'source' : 'sources';
+  return `${builtCount} of ${denominatorCount} built, from ${sourceCount} registered ${sourceNoun}.`;
+}
+
+/**
  * The insights section's eyebrow (F6.5).
  *
  * "What the log shows" rather than "Insights" or "Your patterns": the subject
@@ -676,6 +713,11 @@ export function allTodayStrings(): readonly string[] {
     conceptCountLabel(0),
     conceptCountLabel(1),
     conceptCountLabel(8),
+    // --- F6.2's cross-course scope reading (`[D-076]` round 2, `ol-4qvc`) ---
+    SCOPE_LABEL,
+    SCOPE_NOT_YET_DECLARED,
+    scopeSummaryLine(2, 10, 1),
+    scopeSummaryLine(9, 10, 2),
     spacingRateSentence(41.8, 2.9, 7),
     spacingRateSentence(3, 3, 7),
     // `null` at zero is not a string; the non-null form is the only wording
