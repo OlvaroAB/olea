@@ -360,7 +360,20 @@ export function buildGapView(input: BuildGapViewInput): GapViewModel {
   };
 }
 
-/** Every row across every ranked course, in course order — the coverage screen's own list, filtered by the caller to the class it shows. */
+/**
+ * Every row across every ranked course, in course order — the coverage
+ * screen's own list, filtered by the caller to the class it shows.
+ *
+ * **Not a cross-course score order.** Rows are concatenated course by
+ * course, each already sorted by that course's own `gapScore`; nothing here
+ * compares `gapScore` between courses (the study-plan contract's `weight`
+ * doc forbids it). A caller building a multi-course study session from this
+ * list must allocate across courses first — `study-session/compose.ts`'s
+ * `composeSessionRows`/`buildComposedStudySession` — rather than handing
+ * this straight to `study-session/build.ts`'s `buildStudySession` under its
+ * default order, which now refuses rows spanning more than one course
+ * (XCRS-1, `ol-dq1c`).
+ */
 export function allGapRows(model: GapViewModel): readonly GapRow[] {
   return model.courses.flatMap((course) => (course.status === 'ranked' ? course.rows : []));
 }

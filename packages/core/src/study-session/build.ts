@@ -35,8 +35,12 @@
  *
  * ## The fill, stated plainly so the result is auditable
  *
- * Rows are taken in gapScore order (highest first) — or, when a caller
- * passes `order: 'given'` (`./compose.ts`'s `buildComposedStudySession`,
+ * Rows are taken in gapScore order (highest first) — valid only within one
+ * course; `rows` spanning several courses under this default order is
+ * rejected outright (XCRS-1, `ol-dq1c`; {@link assertSingleCourseUnderDefaultOrder}),
+ * because `gapScore` is never comparable across a course boundary
+ * (`packages/contracts/src/study-plan.ts`) — or, when a caller passes
+ * `order: 'given'` (`./compose.ts`'s `buildComposedStudySession`,
  * SESS-2/`ol-4a78`), in the order it was handed, already encoding obligation
  * class, cross-course allocation and F2.18's course blocking. The fill runs
  * in **passes**:
@@ -330,10 +334,23 @@ export interface StudySessionModel {
 
 export interface BuildStudySessionInput {
   /**
-   * The gap rows to draw from — `allGapRows(model)` for the whole view, or one
-   * course's `rows`. Sorted here rather than assumed sorted: `buildGapView`
-   * orders within a course, and a caller flattening several courses has an
-   * order this module must not inherit by accident.
+   * The gap rows to draw from.
+   *
+   * **Under the default order (`'gapScore'`), `rows` must come from ONE
+   * course.** `packages/contracts/src/study-plan.ts`'s `weight` doc is
+   * explicit that a per-course score is "never compared across courses", and
+   * `rankOracle`/`buildGapView` both honour that by ranking each course
+   * separately (`GapViewModel.courses`) — `allGapRows(model)` exists for
+   * *display* (the coverage screen's flat list) and concatenates course by
+   * course, it does **not** produce a cross-course score order. Handing that
+   * straight to this function with the default order used to silently re-sort
+   * it by `gapScore` across the course boundary — the exact defect XCRS-1
+   * (`ol-dq1c`) names. {@link buildStudySession} now throws instead (see
+   * {@link assertSingleCourseUnderDefaultOrder}) rather than doing that
+   * comparison. A caller with rows from several courses needs
+   * `composeSessionRows`/`buildComposedStudySession` (`./compose.ts`,
+   * SESS-2), which allocates across courses first and calls this function
+   * with `order: 'given'`.
    */
   readonly rows: readonly GapRow[];
   readonly instruments: ConceptInstrumentIndex;
@@ -450,12 +467,31 @@ function daysUntilDue(asOf: CalendarDay, due: string | undefined): number | null
 }
 
 /**
+ * `rows` under the default (`'gapScore'`) order, by distinct `course` —
+ * XCRS-1 (`ol-dq1c`)'s check. **Never called for `order: 'given'`**: a
+ * caller using `'given'` (`composeSessionRows`/`buildComposedStudySession`)
+ * has already allocated across courses without comparing `gapScore` or
+ * `overdueDays` across the boundary, which is exactly what this guard exists
+ * to force for everyone else.
+ */
+function assertSingleCourseUnderDefaultOrder(rows: readonly GapRow[]): void {
+  const courses = new Set(rows.map((row) => row.course));
+  if (courses.size <= 1) return;
+  throw new Error(
+    `buildStudySession: rows span ${courses.size} courses (${[...courses].sort().join(', ')}) under the default 'gapScore' order. ` +
+      "gapScore is never compared across courses (packages/contracts/src/study-plan.ts's `weight` doc; XCRS-1 / ol-dq1c) — " +
+      'sort within one course before calling this, or use composeSessionRows/buildComposedStudySession (./compose.ts) ' +
+      "to allocate across courses first and pass its result here with order: 'given'.",
+  );
+}
+
+/**
  * Rows in the order the fill will walk them: gapScore descending, then the
- * gap view's own tiebreak (rank, then concept name) so a flattened multi-course
- * list is as deterministic as a single course's was — or, when `order` is
- * `'given'`, the caller's own order untouched (see {@link BuildStudySessionInput.order}).
- * `focusConceptName`, when it names a row, is lifted to the front afterwards
- * either way.
+ * gap view's own tiebreak (rank, then concept name) — valid only within one
+ * course, which {@link assertSingleCourseUnderDefaultOrder} enforces before
+ * this ever runs — or, when `order` is `'given'`, the caller's own order
+ * untouched (see {@link BuildStudySessionInput.order}). `focusConceptName`,
+ * when it names a row, is lifted to the front afterwards either way.
  */
 function fillOrder(
   rows: readonly GapRow[],
@@ -605,14 +641,17 @@ function formatMatchOf(
  * Build a time-bounded study session from the gap view.
  *
  * Pure: same inputs, same session, always. Throws on a budget that is not a
- * positive finite number of minutes and on an `asOf` that is not a calendar
- * day — both are caller errors that would otherwise produce a confidently
+ * positive finite number of minutes, on an `asOf` that is not a calendar
+ * day, and — under the default order — on `rows` spanning more than one
+ * course (XCRS-1, `ol-dq1c`; see {@link assertSingleCourseUnderDefaultOrder})
+ * — all three are caller errors that would otherwise produce a confidently
  * wrong session, which is the failure mode this whole surface is built to
  * avoid. Everything else that can go missing (no rows, no instruments, no
  * assessments, no history) is an ordinary state with an honest answer.
  */
 export function buildStudySession(input: BuildStudySessionInput): StudySessionModel {
   const { rows, instruments, budgetMinutes, durations, asOf } = input;
+  const order = input.order ?? 'gapScore';
 
   if (!Number.isFinite(budgetMinutes) || budgetMinutes <= 0) {
     throw new Error(
@@ -624,8 +663,11 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
       `buildStudySession: asOf must be a YYYY-MM-DD day, got ${JSON.stringify(asOf)}`,
     );
   }
+  if (order === 'gapScore') {
+    assertSingleCourseUnderDefaultOrder(rows);
+  }
 
-  const ordered = fillOrder(rows, input.focusConceptName, input.order ?? 'gapScore');
+  const ordered = fillOrder(rows, input.focusConceptName, order);
   const nextAssessment = nextAssessmentOf(ordered, input.assessments, asOf);
   const formatPreference: AssessmentFormat = nextAssessment?.format ?? 'unknown';
   const budgetSeconds = budgetMinutes * SECONDS_PER_MINUTE;

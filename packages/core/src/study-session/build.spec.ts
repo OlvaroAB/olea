@@ -330,12 +330,38 @@ describe('the budget is a promise', () => {
     expect(session.items.map((i) => i.gapScore)).toEqual([9, 5]);
   });
 
-  it('re-sorts a caller-flattened multi-course list rather than inheriting the flatten order', () => {
-    // `allGapRows` concatenates course by course, so a course-2 row with a
-    // higher gapScore arrives AFTER a weaker course-1 row.
+  it('refuses a caller-flattened multi-course list under the default order rather than comparing gapScore across courses (XCRS-1)', () => {
+    // `allGapRows` concatenates course by course; feeding that list straight
+    // to `buildStudySession` under the default order used to silently
+    // re-sort it by `gapScore` across the course boundary — exactly the
+    // comparison `packages/contracts/src/study-plan.ts`'s `weight` doc
+    // forbids ("never compared across courses"), and the defect ol-dq1c
+    // names. It must fail loudly instead of picking a course by score.
     const rows = [
       row({ conceptName: 'Weak', gapScore: 2, course: 'CRS101', rank: 1 }),
       row({ conceptName: 'Strong', gapScore: 9, course: 'CRS202', rank: 1 }),
+    ];
+    const index = buildConceptInstrumentIndex([qa('w1', ['Weak']), qa('s1', ['Strong'])]);
+
+    expect(() =>
+      buildStudySession({
+        rows,
+        instruments: index,
+        budgetMinutes: 1,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+      }),
+    ).toThrow(/rows span 2 courses/i);
+  });
+
+  it('allows a multi-course list when the caller supplies its own cross-course-safe order', () => {
+    // `order: 'given'` is `composeSessionRows`/`buildComposedStudySession`'s
+    // seam (`./compose.ts`, SESS-2): the caller has already allocated across
+    // courses without comparing `gapScore`, so this function must not
+    // re-derive or reject that order — it only rejects the default.
+    const rows = [
+      row({ conceptName: 'Strong', gapScore: 9, course: 'CRS202', rank: 1 }),
+      row({ conceptName: 'Weak', gapScore: 2, course: 'CRS101', rank: 1 }),
     ];
     const index = buildConceptInstrumentIndex([qa('w1', ['Weak']), qa('s1', ['Strong'])]);
 
@@ -345,8 +371,11 @@ describe('the budget is a promise', () => {
       budgetMinutes: 1,
       durations: flatDurations(60),
       asOf: AS_OF,
+      order: 'given',
     });
 
+    // The caller's own order is honoured verbatim — 'Strong' first because
+    // it was handed first, not because its gapScore is higher.
     expect(session.items.map((i) => i.conceptName)).toEqual(['Strong']);
   });
 
