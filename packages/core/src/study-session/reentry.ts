@@ -60,16 +60,16 @@
  * ## Reachability (`[D-072]`, clause 5 of the plan's §2.7 Definition of
  * Done)
  *
- * **No production caller exists yet.** The one place an ordinary session is
- * composed today is `packages/plugin/src/session-builder/provider.ts:215`,
- * which calls `buildComposedStudySession` directly with
- * `request.budgetMinutes` and has no notion of "days since her last
- * review" to decide whether to call this module instead. Wiring that in —
- * computing the absence fact from the review log's own timestamps, and
- * choosing the candidate re-entry budget on the caller's own judgement, per
- * the plateau above — is future work for whichever bead builds the F6.6
- * surface; this module is the engine seam for it, deliberately with no
- * student-visible affordance of its own.
+ * **Corrected — a production caller now exists.**
+ * `packages/plugin/src/session-builder/provider.ts`'s `load()` is now the
+ * ONE call that builds an ordinary session (`ol-v7r5.18`, discovered from
+ * `ol-blwb` / `[BKLG-1]`): it calls `composeReentrySession` unconditionally,
+ * with `daysSinceLastReview` computed from the review log's own timestamps
+ * (`./absence.js`) and a declared candidate re-entry budget
+ * (`session-builder/provider.ts`'s own `REENTRY_CANDIDATE_BUDGET_RATIO`),
+ * rather than calling `buildComposedStudySession` directly as this note
+ * previously said. This module remains the engine seam; the wiring it once
+ * named as future work is done.
  */
 
 import type { StudySessionModel } from './build.js';
