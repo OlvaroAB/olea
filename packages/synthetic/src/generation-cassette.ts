@@ -28,25 +28,43 @@
  * spans multiple task ids (`cards.generate.v1`, `quiz.generate.v1`, ...),
  * each independently routed to its own slot, model and prompt version
  * (`olea-service/src/tasks/registry.ts`) — so the same payload hash could
- * legitimately exist under two different task ids, and the same
- * `(taskId, payloadHash)` pair could legitimately have been recorded against
- * an OLDER prompt version or model than the one currently pinned, if the
- * prompt changed after the recording. `findGenerationEntry` below refuses
- * that reuse outright rather than serving stale output — "a cassette that
- * silently replays a superseded prompt version is a harness reporting on
- * code that no longer exists" (the parent bead's own phrase, copied here on
- * purpose because it is the same failure mode `readCassette`'s model check
- * in `embedding-cassette.ts` already guards, one axis wider).
+ * legitimately exist under two different task ids, under two different
+ * prompt versions (the prompt changed after an earlier recording), AND under
+ * two different models for the model-comparison keystone this cassette
+ * exists to support: recording candidate model B's response to a payload
+ * already recorded under candidate model A is the ORDINARY case, not an
+ * error — it is exactly what "compare two models without re-running either"
+ * means. `findGenerationEntry` below matches on the full 4-tuple directly,
+ * so model A's and model B's recordings of the identical payload coexist in
+ * `entries` side by side and each replays independently, keyed to the caller
+ * asking for it by name.
  *
- * ## Never falls back to "close enough"
+ * ## Never falls back to "close enough" — but a different pin is a MISS, not a THROW
  *
  * Same rule as `embedding-cassette.ts`'s `readCassette`: a schema, version,
  * or dataset-version mismatch throws `GenerationCassetteMismatchError`
- * rather than silently starting over or serving a partial result. A lookup
- * that finds an entry for the right `(taskId, payloadHash)` but the WRONG
- * `promptVersion`/`modelId` throws the same error rather than treating it as
- * an ordinary cache miss — silently re-recording under those circumstances
- * would hide the fact that a stale entry existed at all.
+ * rather than silently starting over or serving a partial result — that
+ * discipline is unchanged, and still lives on `readGenerationCassette`
+ * below.
+ *
+ * `findGenerationEntry`, one level down, is different on purpose: asking for
+ * `(taskId, promptVersion, modelId, payloadHash)` and finding nothing for
+ * that EXACT tuple is an ordinary miss (`undefined`), even when an entry
+ * exists for the same `(taskId, payloadHash)` under some OTHER prompt
+ * version or model. Earlier revisions of this module narrowed the lookup to
+ * `(taskId, payloadHash)` first and then asserted the remaining two fields
+ * against whatever single candidate that narrowing happened to find — which
+ * meant recording model B for a payload already recorded under model A threw
+ * before model B's call was ever attempted, the exact case this module exists
+ * to make cheap. The narrow-then-assert shape never distinguished "no
+ * recording exists" from "a DIFFERENT recording exists" — both looked like a
+ * throw. Those are now two different, separately-reachable outcomes:
+ * `findGenerationEntry`'s `undefined` return says only "not under the
+ * requested pin"; `diagnoseGenerationCassetteMiss` below, called
+ * independently and only for diagnostic reporting, says whether some OTHER
+ * pin recorded the same payload. A caller that wants the old "this looks like
+ * a superseded recording" hint composes the two rather than getting it as a
+ * side effect of an assertion baked into the lookup.
  *
  * `datasetVersion` covers what content-hash keying alone cannot: a
  * regeneration of the workbench's generation-scenario payloads that changes
@@ -161,8 +179,13 @@ export function readGenerationCassette(
  * truth for what was actually used when it was recorded, and is surfaced to
  * the caller rather than silently dropped. `undefined` means a genuine miss.
  *
- * This is the browser-safe half of `findGenerationEntry` below, which adds
- * the Node-side mismatch check on top of it.
+ * This is the browser-safe half of `findGenerationEntry` below, which narrows
+ * further to the full 4-tuple rather than trusting whichever entry this
+ * 2-field lookup happens to find first. If more than one model's recording
+ * exists for the same `(taskId, payloadHash)` — the coexistence this module
+ * exists to support — this function returns array order's first match, not a
+ * chosen one; callers with a pin to ask for should use `findGenerationEntry`
+ * instead.
  */
 export function findGenerationEntryByRequest(
   cassette: GenerationCassette,
@@ -174,15 +197,24 @@ export function findGenerationEntryByRequest(
 }
 
 /**
- * Looks up the entry for `(taskId, payloadHash)`. `undefined` means a
- * genuine miss — nothing was ever recorded for this exact request. If an
- * entry exists for that pair but its `promptVersion`/`modelId` differ from
- * what the caller currently expects (the task's prompt or slot pin moved
- * since this was recorded), this THROWS rather than returning either the
- * stale entry or `undefined` — see the module doc's "never falls back to
- * close enough". Node-only in practice: only a caller with access to the
- * task registry (`olea-service`'s `cassette.mjs`) has an "expected" value to
- * pass; see `findGenerationEntryByRequest` for the browser-safe lookup.
+ * Looks up the entry for the full `(taskId, promptVersion, modelId,
+ * payloadHash)` tuple. `undefined` means no recording exists under exactly
+ * this pin — whether that is because NOTHING was ever recorded for this
+ * payload, or because it was recorded only under a DIFFERENT prompt version
+ * or model, is not distinguished here; both are an ordinary miss, and the
+ * model-comparison keystone this module exists for depends on that being
+ * true (model A's and model B's recordings of the same payload coexist in
+ * `cassette.entries`, and a lookup pinned to model B must not be disturbed
+ * by model A's entry sitting right next to it). Call
+ * `diagnoseGenerationCassetteMiss` separately if a caller wants to know
+ * whether some other pin recorded this exact payload — that is diagnostic
+ * information for a miss report, never a reason to throw or to silently
+ * serve the other pin's entry.
+ *
+ * Node-only in practice: only a caller with access to the task registry
+ * (`olea-service`'s `cassette.mjs`) has a `promptVersion`/`modelId` pin to
+ * ask for; see `findGenerationEntryByRequest` for the browser-safe lookup
+ * that has no such pin to compare against.
  */
 export function findGenerationEntry(
   cassette: GenerationCassette,
@@ -193,18 +225,75 @@ export function findGenerationEntry(
     readonly payloadHash: string;
   },
 ): GenerationCassetteEntry | undefined {
-  const candidate = findGenerationEntryByRequest(cassette, key);
-  if (candidate === undefined) return undefined;
-  if (candidate.promptVersion !== key.promptVersion || candidate.modelId !== key.modelId) {
-    throw new GenerationCassetteMismatchError(
-      `generation-cassette: holds a recording for ${JSON.stringify(key.taskId)} (payload ${key.payloadHash}) ` +
-        `at promptVersion ${JSON.stringify(candidate.promptVersion)} / model ${JSON.stringify(candidate.modelId)}, ` +
-        `but the caller now expects promptVersion ${JSON.stringify(key.promptVersion)} / model ${JSON.stringify(key.modelId)}. ` +
-        'The task changed prompt or model pin since this was recorded — replaying it would be a harness ' +
-        'reporting on code that no longer exists. Re-run the precompute pass rather than reusing this entry.',
+  return cassette.entries.find(
+    (entry) =>
+      entry.taskId === key.taskId &&
+      entry.promptVersion === key.promptVersion &&
+      entry.modelId === key.modelId &&
+      entry.payloadHash === key.payloadHash,
+  );
+}
+
+/** One OTHER pin (not necessarily the one requested) that recorded the same `(taskId, payloadHash)`. */
+export interface GenerationCassetteOtherPin {
+  readonly promptVersion: string;
+  readonly modelId: string;
+}
+
+/**
+ * Diagnostic-only report for a `findGenerationEntry` miss — never a
+ * substitute for it, and never thrown. `otherPins` lists every
+ * `promptVersion`/`modelId` pin, other than the one queried, that DOES carry
+ * a recording for the same `(taskId, payloadHash)` — ascending, so a report
+ * is deterministic. `[]` means a genuine miss: nothing was ever recorded for
+ * this payload under any pin, not just the one asked for.
+ */
+export interface GenerationCassetteMissDiagnostic {
+  readonly otherPinExists: boolean;
+  readonly otherPins: readonly GenerationCassetteOtherPin[];
+}
+
+/**
+ * Explains a `findGenerationEntry` miss, without throwing and without being
+ * consulted by `findGenerationEntry` itself. This is the explicit,
+ * separately-callable form of the "stale pin" diagnostic that an earlier
+ * revision of this module produced as a side effect of the lookup itself
+ * (by throwing) — a cassette miss report that says "a recording exists for
+ * this payload under a different model/promptVersion" is information a
+ * caller may want to log or surface, not a reason to refuse the request.
+ * `olea-service`'s `cassette.mjs` calls this only after `findGenerationEntry`
+ * has already returned `undefined`, to enrich its own "no recording" refusal
+ * message — never to decide whether to refuse.
+ */
+export function diagnoseGenerationCassetteMiss(
+  cassette: GenerationCassette,
+  key: {
+    readonly taskId: string;
+    readonly promptVersion: string;
+    readonly modelId: string;
+    readonly payloadHash: string;
+  },
+): GenerationCassetteMissDiagnostic {
+  const otherPins = cassette.entries
+    .filter(
+      (entry) =>
+        entry.taskId === key.taskId &&
+        entry.payloadHash === key.payloadHash &&
+        (entry.promptVersion !== key.promptVersion || entry.modelId !== key.modelId),
+    )
+    .map((entry) => ({ promptVersion: entry.promptVersion, modelId: entry.modelId }))
+    .sort((a, b) =>
+      a.promptVersion !== b.promptVersion
+        ? a.promptVersion < b.promptVersion
+          ? -1
+          : 1
+        : a.modelId < b.modelId
+          ? -1
+          : a.modelId > b.modelId
+            ? 1
+            : 0,
     );
-  }
-  return candidate;
+  return { otherPinExists: otherPins.length > 0, otherPins };
 }
 
 /** Serialisable form, entries sorted ascending by `(taskId, payloadHash)` — deterministic on disk. */

@@ -54,10 +54,13 @@ export { generateStream, MASTERY_STABILITY_BANDS, SPEC_DEFAULTS, streamSpec } fr
 export type {
   GenerationCassette,
   GenerationCassetteEntry,
+  GenerationCassetteMissDiagnostic,
+  GenerationCassetteOtherPin,
   GenerationTaskResponse,
 } from './generation-cassette.js';
 export {
   canonicalJson,
+  diagnoseGenerationCassetteMiss,
   emptyGenerationCassette,
   findGenerationEntry,
   findGenerationEntryByRequest,
