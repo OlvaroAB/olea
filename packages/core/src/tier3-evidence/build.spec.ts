@@ -52,7 +52,7 @@ describe('extractTier3Evidence — default vocabulary (every Zettelkasten title)
     expect(paraconformity?.questions).toHaveLength(1);
 
     // No MUSTH104 zettel, and no other GEOL204 zettel (Cementation,
-    // Ripple lamination), is named verbatim in either past paper.
+    // Climbing lamination), is named verbatim in either past paper.
     expect(result.pastPaperClusters.map((c) => c.conceptName).sort()).toEqual([
       'Bioturbation',
       'Hummocky stratification',

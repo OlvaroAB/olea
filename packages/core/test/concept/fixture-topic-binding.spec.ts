@@ -44,8 +44,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const vaultRoot = join(__dirname, '..', '..', 'fixtures', 'vault');
 
 /** The note whose `topic:` is a flow list mixing a wikilink and a plain string. */
-const FLOW_LIST_NOTE =
-  '01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md';
+const FLOW_LIST_NOTE = '01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md';
 /** The note whose `topic:` is a block list of wikilink items, one quoted and one bare. */
 const BLOCK_LIST_NOTE = '01 Courses/MUSTH104/Sonatina in D/Exposition Summary.md';
 

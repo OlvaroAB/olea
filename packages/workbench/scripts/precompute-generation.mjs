@@ -174,7 +174,7 @@ const QUIZ_SCENARIOS = [
  * `question` sent to `explain-why.generate.v1` below, matching production wiring
  * (`retrieveExplainWhySourceChunks` in `packages/plugin/src/review/explainWhy.ts` uses the review
  * item's own question text as the retrieval query, never a second string) — echoes the fixture
- * vault's own lecture-note title (`01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast
+ * vault's own lecture-note title (`01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and
  * Imbrication.md`), never invented.
  */
 const EXPLAIN_WHY_QUESTION = 'What causes clast imbrication in a rolling bedload?';

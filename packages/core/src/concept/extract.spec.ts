@@ -25,18 +25,18 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     expect(names).toEqual([
       'Appoggiatura',
       'Bioturbation',
-      'Cadential preparation',
+      'Cadential anacrusis',
       'Cementation',
       'Chromatic harmony',
       'Clastic deposition',
+      'Climbing lamination',
       'Contrapuntal doubling',
       'Diagenetic burial',
-      'Harmonic progression',
+      'Harmonic sequence',
       'Hummocky stratification',
       'Imbrication',
       'Paraconformity',
       'Plagal cadence',
-      'Ripple lamination',
       'Sediment provenance',
       'Stratigraphic succession',
       'Suspension',
@@ -48,11 +48,11 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     const diagenetic = concepts.find((c) => c.name === 'Diagenetic burial');
     expect(diagenetic).toBeDefined();
     expect(diagenetic?.courses).toEqual(['GEOL204']);
-    // Named on: Grain Provenance and Clast Imbrication, Cementation and Burial
+    // Named on: Clast Provenance and Imbrication, Cementation and Burial
     // Diagenesis, whirlwind-recap-callouts, lab-protocol-notes.
     expect(diagenetic?.sourcePaths).toHaveLength(4);
     expect(diagenetic?.sourcePaths).toContain(
-      '01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md',
+      '01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md',
     );
     expect(diagenetic?.sourcePaths).toContain('01 Courses/GEOL204/WEEK 3/lab-protocol-notes.md');
   });
@@ -64,7 +64,7 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     expect(symbolic?.courses).toEqual(['MUSTH104']);
     expect(symbolic?.sourcePaths).toEqual(
       [
-        '01 Courses/MUSTH104/Chorale No. 12/Phrase One - Close Listening.md',
+        '01 Courses/MUSTH104/Chorale No. 12/Phrase One - Aural Study.md',
         '01 Courses/MUSTH104/Minuet and Trio/Cadences and Suspensions.md',
       ].sort(),
     );
@@ -73,12 +73,12 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
   it('none of the fixture vault `topic` strings collide with a Zettelkasten title — topics and zettels are deliberately different grains, so every `topic`-only name stays tier 2, unbound', async () => {
     const concepts = await extractConcepts(source);
     const topicOnlyNames = [
-      'Cadential preparation',
+      'Cadential anacrusis',
       'Chromatic harmony',
       'Clastic deposition',
       'Contrapuntal doubling',
       'Diagenetic burial',
-      'Harmonic progression',
+      'Harmonic sequence',
       'Sediment provenance',
       'Stratigraphic succession',
     ];
@@ -99,7 +99,7 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
       'Imbrication',
       'Paraconformity',
       'Plagal cadence',
-      'Ripple lamination',
+      'Climbing lamination',
       'Suspension',
     ];
     for (const title of referencedTitles) {

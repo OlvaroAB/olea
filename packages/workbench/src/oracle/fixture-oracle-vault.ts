@@ -29,7 +29,7 @@
  *    (`enumerateVaultInstruments` only binds an instrument to a concept via a
  *    `topic:`-tagged note — `session-scenarios.ts`'s own module doc names
  *    this exact mechanism as the root cause it works around for the session
- *    surface). Tagging "Grain Provenance and Clast Imbrication.md" — the
+ *    surface). Tagging "Clast Provenance and Imbrication.md" — the
  *    lecture that already narrates the imbrication-forming sequence in
  *    depth — with an ADDITIONAL `[[Imbrication]]` topic makes "Imbrication"
  *    tier 1 (bound the same way, same `provisionalConceptKey`, so the
@@ -101,9 +101,9 @@
 import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } from 'olea-core';
 import { requireReplace } from '../vault/require-replace.js';
 
-/** `Lecture - Grain Provenance and Clast Imbrication.md`'s real, committed frontmatter topic line — matched literally so this file fails loudly (not silently) if that note's topics ever change upstream. */
+/** `Lecture - Clast Provenance and Imbrication.md`'s real, committed frontmatter topic line — matched literally so this file fails loudly (not silently) if that note's topics ever change upstream. */
 const IMBRICATION_LECTURE_PATH =
-  '01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md' as VaultPath;
+  '01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md' as VaultPath;
 const IMBRICATION_LECTURE_ORIGINAL_TOPIC_LINE =
   'topic: [[[Sediment provenance]], Diagenetic burial]';
 const IMBRICATION_LECTURE_EXTENDED_TOPIC_LINE =

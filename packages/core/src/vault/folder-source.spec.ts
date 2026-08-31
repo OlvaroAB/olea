@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from './folder-source.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
-const CRLF_FIXTURE = '01 Courses/MUSTH104/Chorale No. 12/Listening notes.md';
+const CRLF_FIXTURE = '01 Courses/MUSTH104/Chorale No. 12/Aural notes.md';
 const PDF_FIXTURE = '01 Courses/GEOL204/WEEK 2/Geol204-Week2-Slides.pdf';
 
 describe('FolderSource against the synthetic fixture vault', () => {

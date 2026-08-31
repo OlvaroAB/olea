@@ -15,7 +15,7 @@ Mineral matter precipitated from pore fluid into the space between skeleton grai
 ## Why does porosity matter more than the cement itself?
 The rock does not stiffen smoothly as cement arrives — it stiffens once the cement bridges enough grain contacts to lock the grain skeleton, a threshold called the critical grain-contact fraction. Strength comes from bridging, not from bulk fill alone.
 
-## What determines how fast a sandstone lithifies at depth?
+## What determines how fast a sandstone lithifies during burial?
 - Grainsize — coarser grain skeletons lose porosity more slowly
 - Composition — feldspar-rich grain skeletons dissolve and reprecipitate faster
 - Depth and heat — the deeper the burial, the faster the overgrowths

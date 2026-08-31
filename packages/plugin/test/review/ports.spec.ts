@@ -56,8 +56,8 @@ describe('createVaultNoteExistsPort', () => {
   it('asks the vault for exactly the path it was given, unmodified', async () => {
     const { vault, asked } = fakeVault([]);
     const port = createVaultNoteExistsPort(vault);
-    await port.exists('01 Courses/MUSTH104/Chorale No. 12/Listening notes.md');
-    expect(asked).toEqual(['01 Courses/MUSTH104/Chorale No. 12/Listening notes.md']);
+    await port.exists('01 Courses/MUSTH104/Chorale No. 12/Aural notes.md');
+    expect(asked).toEqual(['01 Courses/MUSTH104/Chorale No. 12/Aural notes.md']);
   });
 
   it('uses only VaultSource.exists — never another vault method', async () => {

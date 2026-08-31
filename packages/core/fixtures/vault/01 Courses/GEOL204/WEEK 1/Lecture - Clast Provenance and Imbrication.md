@@ -5,12 +5,12 @@ week: 1
 type: lecture
 ---
 
-# Grain Provenance and Clast Imbrication
+# Clast Provenance and Imbrication
 
 ## What sets a conglomerate's provenance signal?
 The proportion of unstable minerals surviving in the bed. Feldspar breaks down quickly, so a feldspar-rich conglomerate records a short, fast delivery from the upland source; a quartzose one records a long or repeated one. Compare against [[Hummocky stratification]].
 
-## Describe the stages of clast alignment in a rolling bedload
+## Describe the stages of clast fabric in a rolling bedload
 1. A rolling clast strikes an already-resting clast and stalls against it
 2. The stalled clast tips until its long axis leans downstream ([[Imbrication]])
 3. Following clasts stack against the same face, each leaning the same way

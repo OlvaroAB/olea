@@ -4,7 +4,7 @@ course: GEOL204
 year: 2024
 ---
 
-# GEOL204 Past Paper — 2024 Final Examination
+# GEOL204 Past Paper — 2024
 
 Instructions: Answer ALL questions in Section A. Answer TWO of the THREE questions in
 Section B. Total time: 3 hours.

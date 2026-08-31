@@ -1,12 +1,12 @@
 ---
-topic: [Harmonic progression, Chromatic harmony]
+topic: [Harmonic sequence, Chromatic harmony]
 course: MUSTH104
 work: Chorale No. 12
 subtitle: ""
 related: []
 ---
 
-# Chorale No. 12 — Phrase One, Close Listening
+# Chorale No. 12 — Phrase One, Aural Study
 
 ## Who is carrying the harmonic argument in this phrase?
 No single part — the chorale withholds a melodic lead entirely, and Phrase One trains the ear to read the harmony through what the inner parts avoid doing rather than what the top part states.

@@ -49,7 +49,7 @@ import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } fro
 import { requireReplace } from './require-replace.js';
 
 const GRAIN_PROVENANCE_PATH =
-  '01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md' as VaultPath;
+  '01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md' as VaultPath;
 const INTRO_TO_CLASTIC_PATH =
   '01 Courses/GEOL204/WEEK 1/Lecture - Introduction to Clastic Sediment.md' as VaultPath;
 const DEPOSITION_PATH =

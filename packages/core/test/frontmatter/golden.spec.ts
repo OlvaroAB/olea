@@ -184,8 +184,8 @@ describe('frontmatter round-trip — named nasty cases (fixtures/vault/README.md
     expect(serializeFrontmatter(fm)).toBe(inner);
   });
 
-  it('empty-string value and empty list, both preserved exactly (Phrase One - Close Listening)', () => {
-    const inner = readInner('01 Courses/MUSTH104/Chorale No. 12/Phrase One - Close Listening.md');
+  it('empty-string value and empty list, both preserved exactly (Phrase One - Aural Study)', () => {
+    const inner = readInner('01 Courses/MUSTH104/Chorale No. 12/Phrase One - Aural Study.md');
     const fm = parseFrontmatter(inner);
     const byKey = new Map(
       fm.nodes.filter((n) => n.kind === 'entry').map((n) => [n.kind === 'entry' ? n.key : '', n]),
@@ -196,7 +196,7 @@ describe('frontmatter round-trip — named nasty cases (fixtures/vault/README.md
   });
 
   it('the CRLF case — line endings inside frontmatter survive (Reyes, real fixture)', () => {
-    // The vault's designated CRLF-only fixture (Listening notes.md, above) has
+    // The vault's designated CRLF-only fixture (Aural notes.md, above) has
     // no frontmatter block at all, so this reads the dedicated CRLF ×
     // frontmatter fixture instead — the file this suite's dynamic walk
     // (top of this describe block) also exercises, asserted here by name so

@@ -92,15 +92,15 @@ naming what it is a fixture for and exactly where it lives.
   `01 Courses/MUSTH104/Minuet and Trio/`.
 - Question-headed hierarchical outline notes (flashcard-front headings, F2/F3 premise) —
   most lecture notes under `01 Courses/**`, e.g.
-  `01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md`
-  ("Describe the stages of clast alignment in a rolling bedload") and
+  `01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md`
+  ("Describe the stages of clast fabric in a rolling bedload") and
   `01 Courses/MUSTH104/Sonatina in D/Exposition Summary.md`
   ("How does the unaccompanied first subject carry meaning before the harmony moves?").
 - Curated `topic` frontmatter property, consistent vocabulary within each course so course↔
   concept M:N is testable (F1.4 / P1-T05) — GEOL204 notes share `Sediment provenance`,
   `Clastic deposition`, `Diagenetic burial`, `Stratigraphic succession` across
   `01 Courses/GEOL204/WEEK 1/*.md`, `WEEK 2/*.md`, `WEEK 3/Lecture - Cementation...md`; MUSTH104
-  notes share `Harmonic progression`, `Chromatic harmony`, `Cadential preparation`,
+  notes share `Harmonic sequence`, `Chromatic harmony`, `Cadential anacrusis`,
   `Contrapuntal doubling` across `01 Courses/MUSTH104/**/*.md`.
 - Embedded-PDF note (F1.6) — `01 Courses/GEOL204/WEEK 2/Lecture - Deposition & Bedform
   Stratification.md` embeds `Geol204-Week2-Slides.pdf` via Obsidian's embed syntax (two
@@ -129,11 +129,11 @@ naming what it is a fixture for and exactly where it lives.
   round-trip suite that loops over a vault with none in it passes vacuously. Placed only in
   notes that already carry a `topic` property, so every instrument binds to a concept:
   - Q&A, **all four** default-syntax styles — single-line `::` and single-line-reversed `:::`
-    in `01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md`,
+    in `01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md`,
     multi-line `?` in `WEEK 1/Lecture - Introduction to Clastic Sediment.md` and in
     `01 Courses/MUSTH104/Sonatina in D/Exposition Summary.md`, multi-line-reversed `??` in
     `WEEK 3/Lecture - Cementation and Burial Diagenesis.md`, plus single-line `::` in
-    `01 Courses/MUSTH104/Chorale No. 12/Phrase One - Close Listening.md` and
+    `01 Courses/MUSTH104/Chorale No. 12/Phrase One - Aural Study.md` and
     `Minuet and Trio/Cadences and Suspensions.md`.
   - Cloze, **both** delimiters — two `==…==` deletions on one line in
     `WEEK 1/Lecture - Introduction to Clastic Sediment.md` (so the multi-deletion path, where
@@ -209,14 +209,14 @@ naming what it is a fixture for and exactly where it lives.
   exercised only by temp vaults built inside `src/concept/extract.spec.ts` and never by the
   committed corpus. Two shapes now exist:
   - a **flow list mixing a wikilink with a plain string** —
-    `01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md`, field
+    `01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md`, field
     `topic: [[[Sediment provenance]], Diagenetic burial]`. Note this is the same byte shape as
     Vance's `related` nasty case (PyYAML silently reads each `[[X]]` as a nested one-element
     list), now on the property whose *meaning* the concept layer depends on rather than on a
     property nothing reads.
   - a **block list whose items are wikilinks, one quoted and one bare** —
     `01 Courses/MUSTH104/Sonatina in D/Exposition Summary.md`, field
-    `topic:` / `  - "[[Cadential preparation]]"` / `  - [[Contrapuntal doubling]]`.
+    `topic:` / `  - "[[Cadential anacrusis]]"` / `  - [[Contrapuntal doubling]]`.
 
   **Both dereference to names that other notes write as bare strings**, which is the actual
   invariant: `Sediment provenance` is a wikilink here and a plain string in
@@ -247,7 +247,7 @@ naming what it is a fixture for and exactly where it lives.
   wikilink lists. No two Research notes share one quoting convention.
 - **A note with no frontmatter at all** —
   `01 Courses/GEOL204/WEEK 3/scratch-thoughts.md`.
-- **CRLF line endings** — `01 Courses/MUSTH104/Chorale No. 12/Listening notes.md` (whole file
+- **CRLF line endings** — `01 Courses/MUSTH104/Chorale No. 12/Aural notes.md` (whole file
   converted to `\r\n`; verified with `file(1)`: "with CRLF line terminators").
 - **CRLF line endings intersecting a frontmatter block, with wikilinks inside that
   frontmatter** (C1.3 × the CRLF case — the intersection P1-T02's acceptance criteria names but
@@ -273,7 +273,7 @@ naming what it is a fixture for and exactly where it lives.
   a parser must not extend "frontmatter" to the last `---` in the document, and must not treat
   fenced `---` lines as Markdown thematic breaks either.
 - **Frontmatter value that is an empty string, and one that is an empty list** —
-  `01 Courses/MUSTH104/Chorale No. 12/Phrase One - Close Listening.md` — `subtitle: ""` and
+  `01 Courses/MUSTH104/Chorale No. 12/Phrase One - Aural Study.md` — `subtitle: ""` and
   `related: []`.
 - **A PDF 1.5+ file whose entire page tree is inside a compressed object stream** (ol-voen /
   [P3-T04b]) — `01 Courses/GEOL204/WEEK 3/xref-stream-only.pdf`, 3 pages, 1,056 bytes.
@@ -303,7 +303,7 @@ naming what it is a fixture for and exactly where it lives.
   expensive one. Verified independently with `pdftotext`: 3 pages, all three texts exact.
   Unchanged by the course rebuild, for the same reason as the fixture above.
 - **Tabs used for indentation in a list** —
-  `01 Courses/GEOL204/WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md` — the sub-list
+  `01 Courses/GEOL204/WEEK 1/Lecture - Clast Provenance and Imbrication.md` — the sub-list
   under "What keeps an imbricated fabric from being re-set by the next flood?" is indented with
   a literal tab character (verified with `grep -P '^\t'`: 3 lines).
 
@@ -372,7 +372,7 @@ naming what it is a fixture for and exactly where it lives.
   deliberate mismatch is what pins R1/R2's no-fuzzy-matching requirement, and
   `concept/evidence.spec.ts` asserts exactly two objectives citations because of it. If you "tidy" bullet 3 into the noun form, you delete the test.
 - **Two GEOL204 zettels are deliberately absent from both papers and the objectives**
-  (`Cementation`, `Ripple lamination`), as is every MUSTH104 zettel, so the tier-3 mint has a
+  (`Cementation`, `Climbing lamination`), as is every MUSTH104 zettel, so the tier-3 mint has a
   real negative case. `05 Zettelkasten/Suspension.md` is the one to watch: an earlier draft of
   the 2024 paper's Question 1 used a sedimentology idiom built on that zettel's name, and
   extraction read it as a concept mention — minting a tier-3 record across the course boundary
@@ -423,7 +423,7 @@ dates spread 2026-08-14 through 2026-11-27.
 
 - All content is invented: course codes GEOL204/MUSTH104, all lecture/assignment/research
   titles, all six GEOL204 zettels (Imbrication, Bioturbation, Paraconformity, Cementation,
-  Ripple lamination, Hummocky stratification) and six MUSTH104 zettels (Suspension,
+  Climbing lamination, Hummocky stratification) and six MUSTH104 zettels (Suspension,
   Appoggiatura, Deceptive cadence, Plagal cadence, Consecutive fifths, Tierce picarde), all
   author names (Norling, Petrov, Adeyemi, Vance, Halloran, Reyes), all studied-work titles
   (Chorale No. 12, Sonatina in D, Minuet and Trio). Her real course codes, lecture titles,

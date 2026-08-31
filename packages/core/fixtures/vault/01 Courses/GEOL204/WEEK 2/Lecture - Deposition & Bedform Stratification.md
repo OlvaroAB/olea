@@ -10,19 +10,19 @@ type: lecture
 ![[Geol204-Week2-Slides.pdf]]
 
 ## What happens when a turbidite reaches the shelf edge?
-The dense mixture decelerates, its coarsest fraction drops first, and the rest settles in calibre order — leaving the fining pattern that makes [[Ripple lamination]] readable at the top of the deposit.
+The dense mixture decelerates, its coarsest fraction drops first, and the rest settles in calibre order — leaving the fining pattern that makes [[Climbing lamination]] readable at the top of the deposit.
 
-## Describe the sequence of a single turbidite deposit
+## Describe the sequence of a single turbidite accumulation
 1. Erosive scour at the leading edge
-2. An amalgamated coarse division with [[Ripple lamination]] absent
+2. An amalgamated coarse division with [[Climbing lamination]] absent
 3. Planar laminae as the flow thins
 4. Climbing ripples in the upper division
 5. A silt cap settling out of suspension last
 
-## How does a bedform record more than one storm at a time?
-Storm and fair-weather deposits stack in the same place, so an outcrop face carries both the erosive amalgamation of the big events and the quiet intervals between them. Whether the pattern survives depends on how deeply the next event scours — see [[Bioturbation]].
+## How does a bedform record more than one gale at a time?
+Gale and fair-weather deposits stack in the same place, so an outcrop face carries both the erosive amalgamation of the big events and the quiet intervals between them. Whether the pattern survives depends on how deeply the next event scours — see [[Bioturbation]].
 
-## What happens to a deposit once the storm that made it has passed?
+## What happens to an accumulation once the gale that made it has passed?
 Reworking, burrowing, or burial beneath the next deposit — any of the three end the record so the bedform can be overprinted before the following event arrives.
 
 ```olea-mcq
@@ -32,7 +32,7 @@ distractor: Erosive scour at the leading edge
 distractor: An amalgamated coarse division
 distractor: Planar laminae
 distractor: Climbing ripples
-distractor: Ripple lamination
+distractor: Climbing lamination
 feedback: The coarsest fraction drops first; the silt cap settles out of suspension last.
 id: mcq-turbidite-sequence-1
 ```

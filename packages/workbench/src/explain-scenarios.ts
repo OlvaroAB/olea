@@ -20,7 +20,7 @@
  * query "should" do. `explanation-grounded`'s query
  * ("What causes clast imbrication in a rolling bedload?") deliberately
  * echoes the fixture vault's own lecture-note title (`01 Courses/GEOL204/
- * WEEK 1/Lecture - Grain Provenance and Clast Imbrication.md`) because F2.7
+ * WEEK 1/Lecture - Clast Provenance and Imbrication.md`) because F2.7
  * is about a MISSED answer on material she has — a query with no relationship
  * to anything in the vault would not demonstrate that. `explanation-refused`'s
  * query is deliberately invented nonsense (no natural-language relationship

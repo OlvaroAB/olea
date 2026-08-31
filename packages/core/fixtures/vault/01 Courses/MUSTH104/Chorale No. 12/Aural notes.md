@@ -1,4 +1,4 @@
-# Listening notes — Chorale No. 12, Phrase One
+# Aural notes — Chorale No. 12, Phrase One
 
 Quick notes before the seminar:
 
