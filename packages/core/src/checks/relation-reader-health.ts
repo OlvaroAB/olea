@@ -97,7 +97,7 @@ export interface RelationReaderObservation {
    * `readerFired` — a reader firing on an inverted edge is not healthy, it
    * is the silent failure this field exists to surface.
    */
-  readonly directionCorrect?: boolean;
+  readonly directionCorrect?: boolean | undefined;
 }
 
 export interface RelationReaderHealthMeasured {
