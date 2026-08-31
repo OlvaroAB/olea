@@ -687,6 +687,88 @@ describe('composeSessionRows', () => {
       withoutSignals.orderedRows.map((r) => r.conceptName),
     );
   });
+
+  // [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): course/topic
+  // becomes a first-class input to this same composition, not a separate
+  // due-queue-only mechanism.
+  describe('[STEER-1] courses/conceptIds — the "course or topic" steering input', () => {
+    it('courses restricts composition to the named course(s), same as if the other course never existed', () => {
+      const theRows = rows([
+        { conceptName: 'Big1', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'Small1', course: 'SMALL', gapScore: 9, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('b1', ['Big1']), qa('s1', ['Small1'])]);
+      const sameOverdue = replay({
+        b1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+        s1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+      });
+
+      const filtered = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        courses: ['SMALL'],
+      });
+
+      expect(filtered.orderedRows.map((r) => r.conceptName)).toEqual(['Small1']);
+      expect([...filtered.courseShares.keys()]).toEqual(['SMALL']);
+      expect(filtered.overflow.every((entry) => entry.count === 0)).toBe(true);
+    });
+
+    it('conceptIds restricts to the named concept(s) (F2.5\'s "topic"), independent of course', () => {
+      const theRows = rows([
+        { conceptName: 'Alpha', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'Bravo', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('b1', ['Bravo'])]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+      });
+
+      const filtered = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        conceptIds: ['Bravo'],
+      });
+
+      expect(filtered.orderedRows.map((r) => r.conceptName)).toEqual(['Bravo']);
+    });
+
+    it('courses and conceptIds combine by AND, mirroring queue/types.ts QueueFilter', () => {
+      const theRows = rows([
+        { conceptName: 'Alpha', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'Bravo', course: 'SMALL', gapScore: 9, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('b1', ['Bravo'])]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+      });
+
+      // Names a concept from the OTHER course than the course filter allows —
+      // AND semantics mean neither row passes.
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        courses: ['BIG'],
+        conceptIds: ['Bravo'],
+      });
+
+      expect(result.orderedRows).toEqual([]);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1045,47 @@ describe('buildComposedStudySession', () => {
     expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['TooMuch']);
     expect(result.obligationClasses.has('TooMuch')).toBe(true);
     expect(result.obligationClasses.has('Fits')).toBe(false);
+  });
+
+  // [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): time,
+  // course-or-topic and stated interest, all three supplied TOGETHER on this
+  // one path and all three honoured — the acceptance criterion itself, not
+  // just the course-filter mechanism composeSessionRows exercises above.
+  it('[STEER-1]: budgetMinutes, courses and focusConceptName are honoured together, on one call', () => {
+    const theRows = rows([
+      { conceptName: 'InCourseA', course: 'A', gapScore: 1, masteryState: 'sprout' },
+      { conceptName: 'FocusInCourseA', course: 'A', gapScore: 1, masteryState: 'sprout' },
+      { conceptName: 'InCourseB', course: 'B', gapScore: 9, masteryState: 'sprout' },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['InCourseA']),
+      qa('a2', ['FocusInCourseA']),
+      qa('b1', ['InCourseB']),
+    ]);
+    const sameOverdue = replay({
+      a1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+      a2: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-09-08', dueDay: '2099-01-01' },
+    });
+
+    const composed = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: sameOverdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetMinutes: 20, // time
+      courses: ['A'], // course/topic — B's much higher gapScore must not win a slot
+      focusConceptName: 'FocusInCourseA', // stated interest — front-lifted within the filtered set
+    });
+
+    expect(composed.model.items.map((item) => item.conceptName)).toEqual([
+      'FocusInCourseA',
+      'InCourseA',
+    ]);
+    expect(composed.model.budgetMinutes).toBe(20);
+    expect(composed.model.focusConcept).toBe('FocusInCourseA');
+    expect([...composed.courseShares.keys()]).toEqual(['A']);
   });
 });
 

@@ -731,6 +731,26 @@ export interface ComposeSessionRowsInput {
    * module doc's "F2.19" section.
    */
   readonly assessmentContext?: ReadonlyMap<VaultPath, AssessmentGroupingContext>;
+  /**
+   * [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): the
+   * "course or topic" steering input, one of the three the ruling makes
+   * first-class on this one path (alongside {@link ComposeSessionRowsInput.budgetSeconds}
+   * and `buildStudySession`'s `focusConceptName`). Matches {@link GapRow.course}
+   * verbatim — R1/R2, never case-folded. `undefined` means no restriction;
+   * combined with {@link conceptIds} by AND, mirroring `../queue/types.ts`'s
+   * `QueueFilter`. Applied before `groupByCourse` and everything downstream
+   * of it, so cross-course allocation runs only over the courses she actually
+   * asked about — XCRS-1 (`ol-dq1c`) never compares a `gapScore` across a
+   * boundary this filter already removed, it just sees fewer courses.
+   */
+  readonly courses?: readonly string[];
+  /**
+   * [STEER-1]'s "topic" half of the same input: restrict to one or more
+   * concepts by {@link GapRow.conceptKey} — the opaque join key, never
+   * `conceptName` (R2). `undefined` means no restriction; combined with
+   * {@link courses} by AND.
+   */
+  readonly conceptIds?: readonly string[];
 }
 
 export interface ComposeSessionRowsResult {
@@ -763,7 +783,7 @@ export interface ComposeSessionRowsResult {
  */
 export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessionRowsResult {
   const {
-    rows,
+    rows: allRows,
     instruments,
     replay,
     durations,
@@ -772,7 +792,21 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     arrivalDays,
     relatedConceptKeys,
     assessmentContext,
+    courses: courseFilter,
+    conceptIds: conceptIdFilter,
   } = input;
+
+  // [STEER-1]: the course-or-topic input, applied before any allocation
+  // work so shares/forced-courses/obligation classes are all computed over
+  // exactly the scope she asked about — see the field docs above.
+  const rows =
+    courseFilter === undefined && conceptIdFilter === undefined
+      ? allRows
+      : allRows.filter(
+          (row) =>
+            (courseFilter === undefined || courseFilter.includes(row.course)) &&
+            (conceptIdFilter === undefined || conceptIdFilter.includes(row.conceptKey)),
+        );
 
   const classified: ClassifiedRow[] = rows.map((row) => {
     const { lastRetrievalDay, recallDueDay } = obligationSignalsFor(
@@ -859,7 +893,34 @@ export interface BuildComposedStudySessionInput
   readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
   /** F2.19 — see `ComposeSessionRowsInput.assessmentContext`, passed straight through. */
   readonly assessmentContext?: ReadonlyMap<VaultPath, AssessmentGroupingContext>;
+  /** [STEER-1] — see `ComposeSessionRowsInput.courses`, passed straight through. */
+  readonly courses?: readonly string[];
+  /** [STEER-1] — see `ComposeSessionRowsInput.conceptIds`, passed straight through. */
+  readonly conceptIds?: readonly string[];
 }
+
+/**
+ * [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): the single
+ * request shape carrying all three steering inputs the ruling makes
+ * first-class on ONE path — the time she has, a course or topic, and a
+ * stated interest (today's only proxy: front-lifting one named concept,
+ * `focusConceptName`). A caller builds ONE object of this shape and hands it
+ * to {@link buildComposedStudySession} unmodified.
+ *
+ * It is ALSO, unmodified, a valid `filter` for `composeQueue`
+ * (`../queue/compose.js`): `QueueFilter`'s `courses`/`conceptIds` are a
+ * structural subset of this type, and `../queue/types.ts` documents that
+ * compatibility explicitly rather than leaving it to be discovered. This is
+ * deliberately plain data with no row-shape coupling (unlike `ClassifiedRow`
+ * or `QueueItem` — see `../queue/block-order.ts`'s module doc for why THOSE
+ * restate rather than share a type across this exact boundary); a type with
+ * no row-shape to restate has nothing that convention protects, so it is
+ * shared once instead.
+ */
+export type SessionSteeringRequest = Pick<
+  BuildComposedStudySessionInput,
+  'budgetMinutes' | 'courses' | 'conceptIds' | 'focusConceptName'
+>;
 
 export interface ComposedStudySession {
   /**
@@ -921,6 +982,8 @@ export function buildComposedStudySession(
     ...(input.assessmentContext !== undefined
       ? { assessmentContext: input.assessmentContext }
       : {}),
+    ...(input.courses !== undefined ? { courses: input.courses } : {}),
+    ...(input.conceptIds !== undefined ? { conceptIds: input.conceptIds } : {}),
   });
 
   const model = buildStudySession({

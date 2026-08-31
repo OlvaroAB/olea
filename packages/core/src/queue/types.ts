@@ -136,6 +136,21 @@ export interface QueueAssessmentContext {
  * tier-2 concepts come from (knowledge model §3), so filtering to one topic
  * and filtering to one concept are the same operation, and the field is named
  * for the spine rather than for the property that feeds it.
+ *
+ * [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): this shape is
+ * a deliberate structural SUBSET of `study-session/compose.ts`'s
+ * `SessionSteeringRequest` — same two field names, same AND semantics, same
+ * "undefined means no restriction" default. That type is the single request
+ * object the ruling asks for (time + course-or-topic + stated interest, all
+ * honoured together); a caller may pass one of those objects straight
+ * through as this `filter`, unmodified, so the course-or-topic half of a
+ * steering request is honoured identically here and at
+ * `buildComposedStudySession`. This module does not import that type (no
+ * runtime need to, and no row-shape to restate — contrast `block-order.ts`'s
+ * module doc, which explains why `ClassifiedRow`/`QueueItem` do NOT share
+ * across this boundary); the compatibility is structural and stated here so
+ * it is a documented property of this shape, not an accident a reader has to
+ * rediscover.
  */
 export interface QueueFilter {
   /** Offer only instruments whose concept belongs to one of these courses. */

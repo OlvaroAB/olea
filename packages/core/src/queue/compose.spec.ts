@@ -259,6 +259,32 @@ describe('F2.5 — filter by course or topic (shed floor)', () => {
     });
     expect(idsOf(result)).toEqual([]);
   });
+
+  // [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): a caller
+  // builds ONE `SessionSteeringRequest` (`../study-session/compose.js`) for
+  // "twenty minutes on this course" and hands it, unmodified, to both this
+  // queue's `filter` and `buildComposedStudySession` — `QueueFilter` is a
+  // documented structural subset of that type (see `types.ts`'s `QueueFilter`
+  // doc), so no translation happens here or anywhere. This proves it at the
+  // type level (the extra `budgetMinutes`/`focusConceptName` fields compile
+  // fine where only `courses`/`conceptIds` are read) and at the value level
+  // (the same object narrows the offer identically to a hand-built filter).
+  it('a SessionSteeringRequest (the study-session steering shape) narrows identically to a hand-built QueueFilter', () => {
+    // Structural, not a runtime import — this is exactly the shape
+    // `Pick<BuildComposedStudySessionInput, 'budgetMinutes' | 'courses' |
+    // 'conceptIds' | 'focusConceptName'>` produces.
+    const steeringRequest = {
+      budgetMinutes: 20,
+      courses: ['COURSE-A'],
+      focusConceptName: 'Some concept name, irrelevant to the queue',
+    };
+    expectTypeOf(steeringRequest).toMatchTypeOf<ComposeQueueInput['filter']>();
+
+    const result = compose({ candidates: spread, filter: steeringRequest });
+    expect(idsOf(result)).toEqual(
+      idsOf(compose({ candidates: spread, filter: { courses: ['COURSE-A'] } })),
+    );
+  });
 });
 
 describe('F2.6 — the queue does its half of suspension', () => {
