@@ -9,7 +9,7 @@
  * `buildGroveModel`'s own acceptance criteria, which is `packages/core/
  * src/scope/grove.spec.ts` and `coverage.spec.ts`'s job.
  */
-import type { GroveCourseModel } from 'olea-core';
+import type { ConceptRelation, GroveCourseModel, Provenance } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
 import type { GroveCourseSection, GroveViewState } from '../../src/grove/view.js';
@@ -128,6 +128,78 @@ function fixtureVaultWithRegisteredSource() {
       '',
     ].join('\n'),
   });
+}
+
+/**
+ * A course with TWO declared names — a container ("Concept Wide") and one of
+ * its own parts ("Concept Narrow") — both cited by the same registered
+ * objectives document and both backed by real material, so absent a served
+ * `part-of` edge they land as two independent denominator peers (`ol-kghd`,
+ * C7.9).
+ */
+function fixtureVaultWithContainerAndPart() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '03 Research/Objectives.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept Wide and Concept Narrow in depth.',
+      '',
+    ].join('\n'),
+    'Notes/wide.md': [
+      '---',
+      'topic: [Concept Wide]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/narrow.md': [
+      '---',
+      'topic: [Concept Narrow]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+  });
+}
+
+function relationPassage(sourcePath: string): Provenance {
+  return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
+}
+
+// `from` is the finer/part side, `to` is the coarser/container side — the
+// same convention `packages/core/src/scope/grove.spec.ts`'s own `partOf`
+// helper documents.
+function partOf(from: string, to: string): ConceptRelation {
+  return {
+    type: 'part-of',
+    from,
+    to,
+    provenance: 'model-proposed',
+    confidence: 0.9,
+    introducingPassages: {
+      from: relationPassage(`${from}.md`),
+      to: relationPassage(`${to}.md`),
+    },
+  };
 }
 
 function modelOf(section: GroveCourseSection | undefined): GroveCourseModel {
@@ -339,6 +411,40 @@ describe('createLocalGroveProvider — load', () => {
     expect(thirdModel.cells).toEqual([
       { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: false },
     ]);
+  });
+});
+
+describe('createLocalGroveProvider — relations (ol-kghd, C7.9 part-of fold)', () => {
+  it('counts a container and its declared part as two denominator peers when no relations thunk is supplied (unchanged default)', async () => {
+    const provider = createLocalGroveProvider({
+      vault: fixtureVaultWithContainerAndPart(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const courses = await sectionsFrom(await provider.load());
+    const model = modelOf(courses.find((c) => c.course === 'TESTC101'));
+    if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+    expect(model.cells.map((cell) => cell.conceptName).sort()).toEqual([
+      'Concept Narrow',
+      'Concept Wide',
+    ]);
+    expect(model.summary.denominatorCount).toBe(2);
+  });
+
+  it('folds the container out of the denominator once a served part-of edge reaches buildGroveModel through the relations thunk', async () => {
+    const provider = createLocalGroveProvider({
+      vault: fixtureVaultWithContainerAndPart(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      relations: () => [partOf('Concept Narrow', 'Concept Wide')],
+    });
+    const courses = await sectionsFrom(await provider.load());
+    const model = modelOf(courses.find((c) => c.course === 'TESTC101'));
+    if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+    expect(model.cells.map((cell) => cell.conceptName)).toEqual(['Concept Narrow']);
+    expect(model.summary.denominatorCount).toBe(1);
   });
 });
 

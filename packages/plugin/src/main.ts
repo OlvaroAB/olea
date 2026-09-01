@@ -833,6 +833,11 @@ export default class OleaPlugin extends Plugin {
         deviceId,
         settingsHost: this,
         now: () => new Date(),
+        // `ol-kghd` (C7.9): the same served relation fold `session-builder/
+        // provider.ts` and `composeReviewSession` already read — a thunk so
+        // a later ingestion tick's fresh batch reaches a grove built after
+        // this leaf was first opened, not just the one at hand when it was.
+        relations: () => this.servedRelationEdges(),
       });
       return new GroveView(leaf, {
         load: () => provider.load(),

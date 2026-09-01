@@ -101,6 +101,18 @@
  * mean a new file outside either bead's more natural home. Dismissal is
  * delegated to `createLocalRetrospectiveProvider`'s own `markDismissed` —
  * this module does not re-implement the `data.json` append.
+ *
+ * ## The C7.9 part-of fold, wired (`ol-kghd`)
+ *
+ * `buildGroveModel`'s `relations` input (`ol-5phn`) was built and tested
+ * against `olea-core` directly but never reached a production caller — this
+ * module was the gap. `CreateLocalGroveProviderDeps.relations` is the same
+ * optional thunk shape `session-builder/provider.ts` already carries;
+ * `main.ts`'s construction site passes `() => this.servedRelationEdges()`,
+ * the identical `[D-093]`-gated fold `composeReviewSession` and the Today
+ * panel's instrument source read. Absent (e.g. in a test that omits it),
+ * `deps.relations?.() ?? []` hands `buildGroveModel` an empty edge set,
+ * which is a documented no-op on that function's side.
  */
 
 import {
@@ -109,6 +121,7 @@ import {
   buildMaterialPresence,
   buildRegistryModel,
   type ConceptMaterialPresence,
+  type ConceptRelation,
   calendarDaysEndingOn,
   createFsrsScheduler,
   enumerateVaultInstruments,
@@ -147,6 +160,19 @@ export interface CreateLocalGroveProviderDeps {
   readonly now: () => Date;
   /** Overridable for tests; defaults to the window every other provider probes by. */
   readonly probeDays?: number;
+  /**
+   * `ol-kghd`: the served C7.9/C7.10 relation fold — same shape and same
+   * `[D-093]` abstention gate as `main.ts`'s `servedRelationEdges()`, which
+   * already hands this to `composeReviewSession`, the Today panel's
+   * instrument source and `session-builder/provider.ts`'s identical
+   * `relations` field. **A thunk, not a value** — `createLocalGroveProvider`
+   * is called once per leaf, but `load()` recomputes on every call, so a
+   * captured array would go stale the moment a later ingestion tick folds in
+   * a new relation batch. Optional and safe to omit: `buildGroveModel`
+   * reads an absent/empty edge set as "no part-of fold runs" (`./grove.js`'s
+   * own module doc), which is today's unchanged behaviour.
+   */
+  readonly relations?: () => readonly ConceptRelation[];
 }
 
 /** The data half of `GroveViewDeps` — `main.ts` adds `openRetrospective` at the construction site. */
@@ -309,6 +335,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             materialPresence,
             mastery: masteryByKey,
             priorGroundStreaks,
+            relations: deps.relations?.() ?? [],
           });
           const model: GroveCourseModel = built.model;
           if (model.status === 'declared') {
