@@ -31,10 +31,52 @@
  * under-discovered draft — never lost data, since the per-record file a
  * losing write already wrote survives untouched and a later `put()` from
  * either device repairs the index entry the next time that same draft is
- * touched. Building a merge-safe index (e.g. one index shard per device,
- * unioned at read time, `.olea/reviews/`'s own `<date>.<deviceId>` shape)
- * is real future work, flagged rather than attempted here — see the
- * `ol-p3t07a` close evidence.
+ * touched. **`ol-y6ty`'s look at closing this properly, and why it stays
+ * flagged rather than attempted:**
+ *
+ * - **No fix is buildable from inside this module.** Closing the race for
+ *   real needs one of two things this file does not control: a conditional/
+ *   compare-and-swap write on `VaultSource` (there is none — `write()` always
+ *   unconditionally replaces), or `ObsidianSource` gaining the ability to
+ *   enumerate `.olea/drafts/` so a stray per-record file with no index entry
+ *   could be found and the entry rebuilt. The second is `ol-yk1c`'s scope
+ *   (closed for `.olea/reviews/`'s read path, not for this folder), not this
+ *   one's. An in-process read-verify-retry around `writeIndex` was
+ *   considered and rejected: the clobber this race describes happens when a
+ *   second device's *already-written* file reaches this vault later, via
+ *   whatever sync tool she uses, on a timeline this process is not running
+ *   on — re-reading our own write moments later cannot observe a clobber
+ *   that has not synced in yet, so the retry would pass every time and
+ *   supply false confidence rather than protection.
+ * - **The concrete cost is slightly worse than "temporarily invisible."**
+ *   `findByKey` (below) answers `pipeline.ts`'s dedupe check
+ *   (`packages/plugin/src/generation/pipeline.ts:196`) from the index alone.
+ *   A dropped entry makes that check report "no existing draft" for a
+ *   concept that already has one, so the sweep drafts a **second** record for
+ *   the same `(courseCode, conceptName)` pair — a spent generation call and a
+ *   duplicate item in review, not data loss (both records' files are intact
+ *   and independently reviewable, and either can be rejected without
+ *   touching the other).
+ * - **The real fix needs two landings, not one.** A merge-safe index (one
+ *   shard per device, `.olea/reviews/`'s own `<date>.<deviceId>` shape)
+ *   removes the *write* race the same way it does there — two devices never
+ *   share a file to race on. But unioning shards at *read* time needs the
+ *   same enumeration `ol-yk1c` found missing from `ObsidianSource`; shipping
+ *   the shard half alone, before that lands, would make every non-writing
+ *   device's shards permanently invisible in production — a regression on
+ *   today's "eventually repaired by a touch," not a fix. That is why this
+ *   stays flagged rather than partially built.
+ * - **One narrower path is real and does not wait on `ol-yk1c`:** if a
+ *   caller minted `draftId` deterministically from `(courseCode,
+ *   conceptName)` instead of at random, `findByKey`'s specific race would
+ *   close outright — compute the expected `draftPath` and check it directly,
+ *   the same "no listing needed" move `reviewLogPath` makes for a known
+ *   `(date, deviceId)` pair. That is a call-site decision in `pipeline.ts`
+ *   (`generateDraftId`), outside this module's ownership and this bead's
+ *   `owns`, so it is named here rather than built here.
+ *
+ * See the `ol-p3t07a` close evidence for the original flag and `ol-y6ty` for
+ * this look.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';

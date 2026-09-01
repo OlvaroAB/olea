@@ -115,4 +115,95 @@ describe('createVaultDraftCacheStore', () => {
     await expect(cache.list()).resolves.toEqual([]);
     await expect(cache.get('a')).resolves.toBeNull();
   });
+
+  describe('the bounded index race (ol-y6ty)', () => {
+    // `index.json` is the one non-per-record file `put()` maintains (see the
+    // module doc). Two devices drafting different concepts in the same sync
+    // window can each read the index before the other's write lands, then
+    // both write their own upsert on top of that stale snapshot — the
+    // second write to actually reach this vault wins the whole file, and the
+    // other device's entry is silently gone from it. This block constructs
+    // that end state directly (rather than racing real promises, which
+    // `MemoryVaultSource`'s synchronous map can't meaningfully interleave)
+    // to pin down exactly what survives and what doesn't.
+
+    async function loseAnIndexUpdate(vault: MemoryVaultSource) {
+      const cache = createVaultDraftCacheStore(vault);
+      // Device 1 drafts "a" first — its write of a.json and its index write
+      // both land.
+      await cache.put(record({ draftId: 'a' }));
+
+      // Device 2 drafts "b" from a snapshot that never saw device 1's index
+      // write (it read the index before "a" was in it). Its own per-record
+      // file write is real and independent; its index write is the one that
+      // reaches the vault LAST in this window, so it wins outright and
+      // device 1's entry is dropped — exactly what an `upsertEntry` computed
+      // from a stale (pre-"a") snapshot would produce.
+      const bRecord = record({ draftId: 'b', conceptName: 'Attention' });
+      await vault.write(`${DRAFT_CACHE_FOLDER}/b.json`, `${JSON.stringify(bRecord, null, 2)}\n`);
+      await vault.write(
+        `${DRAFT_CACHE_FOLDER}/index.json`,
+        `${JSON.stringify(
+          {
+            version: 1,
+            entries: [
+              {
+                draftId: 'b',
+                courseCode: bRecord.courseCode,
+                conceptName: bRecord.conceptName,
+                status: bRecord.status,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return cache;
+    }
+
+    it('never loses the per-record file — "a" is readable by id straight through the race', async () => {
+      const vault = new MemoryVaultSource();
+      const cache = await loseAnIndexUpdate(vault);
+
+      const a = await cache.get('a');
+      expect(a?.draftId).toBe('a');
+      expect(a?.conceptName).toBe('Working memory');
+    });
+
+    it('drops "a" from discovery until it is touched again — list(), listPending() and findByKey all miss it', async () => {
+      const vault = new MemoryVaultSource();
+      const cache = await loseAnIndexUpdate(vault);
+
+      const all = await cache.list();
+      expect(all.map((r) => r.draftId)).toEqual(['b']);
+
+      const pending = await cache.listPending();
+      expect(pending.map((r) => r.draftId)).toEqual(['b']);
+
+      // This is the concrete cost the module doc names: a concept sweep
+      // re-checking "a" via findByKey sees no existing draft and would
+      // generate a duplicate, not because "a" is gone but because the
+      // index — the only thing findByKey consults — no longer points at it.
+      const found = await cache.findByKey('COGS214', 'Working memory');
+      expect(found).toBeNull();
+    });
+
+    it('self-heals "a" the next time IT is touched, without re-losing "b"', async () => {
+      const vault = new MemoryVaultSource();
+      const cache = await loseAnIndexUpdate(vault);
+
+      const a = await cache.get('a');
+      await cache.put({ ...a!, status: 'accepted' });
+
+      const all = await cache.list();
+      expect(all.map((r) => r.draftId).sort()).toEqual(['a', 'b']);
+      const healedA = await cache.findByKey('COGS214', 'Working memory');
+      expect(healedA?.status).toBe('accepted');
+      // "b" was never touched again and was never lost — only "a" needed
+      // repairing.
+      const stillB = await cache.findByKey('COGS214', 'Attention');
+      expect(stillB?.draftId).toBe('b');
+    });
+  });
 });
