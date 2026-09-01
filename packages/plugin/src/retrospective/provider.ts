@@ -41,7 +41,6 @@ import {
   type AssessmentRecord,
   buildRetrospective,
   createFsrsScheduler,
-  extractConcepts,
   hasAssessmentPassed,
   type RetrospectiveConceptCoverage,
   type RetrospectiveOfferEvent,
@@ -52,6 +51,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { localToday, readReviewHistory } from '../today/data-source.js';
@@ -99,7 +99,7 @@ async function evidencedCourseScope(
   course: string,
   entries: readonly ReviewLogEntry[],
 ): Promise<readonly RetrospectiveConceptCoverage[]> {
-  const concepts = await extractConcepts(vault, {});
+  const concepts = await extractConceptsFromVault(vault, {});
   const reviewedConceptIds = new Set<string>();
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
@@ -173,7 +173,7 @@ export function createLocalRetrospectiveProvider(
       const course = chosen.course ?? 'Unassigned';
       const entries = history.entries;
       const scope = await evidencedCourseScope(deps.vault, course, entries);
-      const conceptRecords = await extractConcepts(deps.vault, {});
+      const conceptRecords = await extractConceptsFromVault(deps.vault, {});
       const conceptCourses = conceptRecords.map((c) => ({ conceptId: c.key, courses: c.courses }));
 
       const isLastAssessment =

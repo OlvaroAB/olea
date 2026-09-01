@@ -27,7 +27,8 @@
  */
 
 import type { ConceptRecord, ExtractedUnit, VaultSource } from 'olea-core';
-import { DEFAULT_COURSES_FOLDER, extractConcepts } from 'olea-core';
+import { DEFAULT_COURSES_FOLDER } from 'olea-core';
+import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
 import { createDraftAcceptPort } from './accept.js';
@@ -69,7 +70,8 @@ function listConceptsForCourseFactory(
   vault: VaultSource,
   coursesFolder: string,
 ): (courseCode: string) => Promise<readonly ConceptRecord[]> {
-  return (courseCode) => extractConcepts(vault, { under: `${coursesFolder}/${courseCode}` });
+  return (courseCode) =>
+    extractConceptsFromVault(vault, { under: `${coursesFolder}/${courseCode}` });
 }
 
 export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWiring {

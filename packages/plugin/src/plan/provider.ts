@@ -55,12 +55,12 @@ import {
   buildStudyPlan,
   calendarDaysEndingOn,
   composeOracleRanking,
-  extractConcepts,
   readAssessments,
   readReviewLogHistory,
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
+import { extractConceptsFromVault } from '../concept/wiring.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import {
@@ -147,7 +147,7 @@ export function createLocalStudyPlanProvider(
       // `resolvePlanPolicyCourseInputs`'s module doc, `olea-core`).
       const [{ entries }, concepts, options, assessmentReport] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
-        extractConcepts(deps.vault, {}),
+        extractConceptsFromVault(deps.vault, {}),
         deps.readRankWeights?.() ?? Promise.resolve(undefined),
         readAssessments(deps.vault, config.assignmentsBasePath),
       ]);

@@ -94,7 +94,6 @@ import {
   discoverScheduleEvents,
   type ExtractConceptsOptions,
   enumerateVaultInstruments,
-  extractConcepts,
   extractTier3Evidence,
   type GroveCourseModel,
   parseReviewLog,
@@ -113,6 +112,7 @@ import {
   type VaultSource,
   type WeightedAssessment,
 } from 'olea-core';
+import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
 import type { ObsidianTermWindowStore } from './term-window-store.js';
 
@@ -163,6 +163,24 @@ export interface ReadReviewHistoryOptions {
 /** Matches `<YYYY-MM-DD>.<deviceId>.jsonl` — the C5.2 file name, whoever wrote it. */
 const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.[^/]+\.jsonl$/;
 
+/**
+ * `listUnder` (`ObsidianSource`/`FolderSource`) is not part of the
+ * `VaultSource` contract — see `obsidian-source.ts`'s own note — so a caller
+ * holding only the interface type has to feature-detect it rather than call
+ * it unconditionally. Same duck-typed-optional-method posture `VaultSource`
+ * already uses for `delete`/`firstSeen`.
+ */
+interface ListUnderCapableVault {
+  listUnder(
+    dotPath: VaultPath,
+    options?: { readonly extensions?: readonly string[] },
+  ): Promise<readonly VaultPath[]>;
+}
+
+function hasListUnder(vault: VaultSource): vault is VaultSource & ListUnderCapableVault {
+  return typeof (vault as Partial<ListUnderCapableVault>).listUnder === 'function';
+}
+
 function dayOfLogPath(path: VaultPath): CalendarDay | null {
   const slash = path.lastIndexOf('/');
   const name = slash === -1 ? path : path.slice(slash + 1);
@@ -184,12 +202,26 @@ export async function readReviewHistory(
   const paths = new Set<VaultPath>();
 
   // Other devices, where the host surfaces the folder at all.
+  //
+  // `listUnder` (ol-2zfj.44/`ol-2zfj.50`) is the PRIMARY path where the host
+  // implements it (`ObsidianSource`, real Obsidian): it walks
+  // `vault.adapter` directly, which is the only route that ever sees
+  // `.olea/reviews/` on that host — `list({ under })`, built on
+  // `vault.getFiles()`, never returns dot-prefixed paths there at all
+  // (`ol-yk1c`'s own finding). `FolderSource` needs no such primary path —
+  // this module's own doc already established `list({ under })` walks a
+  // dot-prefixed root correctly there — so a host without `listUnder` falls
+  // back to plain `list`, unchanged from before this bead.
   let listed: readonly VaultPath[] = [];
   try {
-    listed = await vault.list({ under: REVIEW_LOG_FOLDER });
+    listed = hasListUnder(vault)
+      ? await vault.listUnder(REVIEW_LOG_FOLDER)
+      : await vault.list({ under: REVIEW_LOG_FOLDER });
   } catch {
-    // A host that refuses to list a dot-prefixed folder is the expected case,
-    // not an error condition — the probe below is the guaranteed path.
+    // A host whose walk throws (a real adapter failure, or a plain host that
+    // refuses to list a dot-prefixed folder) is the expected degraded case,
+    // not an error condition — the probe below is the guaranteed path, and
+    // `discoveryDegraded` below is the honest signal that this happened.
     listed = [];
   }
   for (const path of listed) {
@@ -435,7 +467,7 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
   return {
     async listConceptCourses() {
       try {
-        const records = await extractConcepts(deps.vault, deps.conceptOptions ?? {});
+        const records = await extractConceptsFromVault(deps.vault, deps.conceptOptions ?? {});
         return records.map((record) => ({
           conceptId: record.key,
           courses: record.courses,
