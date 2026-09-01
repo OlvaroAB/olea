@@ -148,6 +148,53 @@
  * reads as weight 0, which hands the row's placement entirely to
  * relatedness — never a negative or inverted push from a sat exam.
  *
+ * ## F2.19 — the material-arrival cohort (`[D-149]`, `ol-v7r5.12`)
+ *
+ * A third signal, ruled onto this same blend rather than beside it as a
+ * fourth grouping key. **Grain**: exact {@link GapRow.notePaths} overlap —
+ * that field already *is* `ConceptRecord.sourcePaths` verbatim
+ * (`../gap/build.ts`'s own doc), so "one cohort per source note" costs no
+ * new extraction and no caller-resolved map, unlike relatedness/assessment
+ * scope above ({@link withinBlockCohortAffinity}: the fraction of a tie
+ * band's peers sharing at least one of a concept's own source notes — the
+ * identical adjacency-fraction shape {@link withinBlockRelatedness} already
+ * uses, over a different edge). **Precedence and decay**: the cohort BLENDS
+ * INTO relatedness, continuously, keyed on how long ago the concept's
+ * material arrived ({@link ComposeSessionRowsInput.arrivalDays}, `ARRIVE-1`)
+ * — {@link withinBlockCohortDecayWeight} reads `1` the day it arrives and
+ * decays smoothly toward `0` as `asOf` recedes from it (half-life
+ * {@link MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS}), so material read as
+ * "just arrived" leans placement toward the concepts it shares a source note
+ * with, and that lean fades back to plain C7.10 relatedness as the material
+ * ages — never a threshold, never a stored flag, never a phase. This is
+ * `[D-149]`'s ruling verbatim: input (days since arrival) and output (a
+ * blend weight) are shapes F2.19 already uses, so the continuous-never-a-
+ * phase guarantee holds by construction rather than by a new check. The
+ * proximity term above still has final say: an approaching assessment
+ * overrides the whole relatedness-plus-cohort blend exactly as it did before
+ * this bead, because the cohort is folded into what proximity blends
+ * *against*, never around it.
+ *
+ * **No-op, provably, absent `arrivalDays`** — the same posture `arrivalDays`
+ * already has for `ObligationSignals.arrivalDay` above: an omitted map, or a
+ * concept missing from it, reads `arrivalDay: null`,
+ * {@link withinBlockCohortDecayWeight} returns `0`, and the blend collapses
+ * to relatedness alone — byte-for-byte what this module computed before this
+ * bead. `compose.spec.ts` pins this equivalence explicitly, matching the
+ * relatedness/assessment-context no-op proof already established above.
+ *
+ * **The review-queue path** (`../queue/block-order.ts`, `ol-ua0i`) reuses
+ * {@link withinBlockRelatedness}/{@link withinBlockAssessmentProximity}
+ * rather than duplicating them; {@link withinBlockCohortAffinity} and
+ * {@link withinBlockCohortDecayWeight} are exported here for that same reuse
+ * once that path threads `arrivalDays` and per-item source notes through —
+ * `[D-149]` rules the cohort onto BOTH surfaces, the same reason F2.18/F2.19
+ * name both. Wiring the queue side needs two shapes that path does not carry
+ * today (`QueueCandidate` has no source-note field by design — see that
+ * type's own "note the absences" doc — and `ComposeQueueInput` has no
+ * `arrivalDays`), which is outside this module's boundary; filed as a
+ * follow-up rather than guessed at here (see the bead for its id).
+ *
  * ## Overflow is not a student-visible surface (C5.9, F6.7)
  *
  * {@link ComposeSessionRowsResult.overflow} is a count per obligation class
@@ -498,30 +545,112 @@ export function withinBlockRelatedness(
 }
 
 /**
+ * `[D-149]`'s cohort GRAIN: the fraction of `peers` this concept shares at
+ * least one EXACT source note with — `notePaths` is `GapRow.notePaths`
+ * (`ConceptRecord.sourcePaths` verbatim), so "one cohort per source note"
+ * needs no new extraction and no caller-resolved map, unlike
+ * {@link withinBlockRelatedness}'s C7.10 adjacency above. Same
+ * connected-over-peers shape as that function, over a different edge. `0`
+ * when `notePaths` or `peers` is empty, or no peer's own notes overlap at
+ * all.
+ *
+ * Exported for `../queue/block-order.ts` reuse once that path carries a
+ * source-note field on `QueueCandidate` — see the module doc's "material-
+ * arrival cohort" section for why that wiring is a follow-up rather than
+ * done here.
+ */
+export function withinBlockCohortAffinity(
+  notePaths: readonly VaultPath[],
+  peers: readonly string[],
+  peerNotePaths: ReadonlyMap<string, readonly VaultPath[]>,
+): number {
+  if (notePaths.length === 0 || peers.length === 0) return 0;
+  const own = new Set(notePaths);
+  const connected = peers.filter((peer) =>
+    (peerNotePaths.get(peer) ?? []).some((path) => own.has(path)),
+  ).length;
+  return connected / peers.length;
+}
+
+/**
+ * How many days a material-arrival cohort's pull on placement takes to fade
+ * to half strength — `[D-149]`'s "continuous decay weight". **Declared, not
+ * derived**: no production caller resolves `arrivalDays` yet (see the module
+ * doc's "arrival-day signal" section), so nothing exists to fit this
+ * against. One week is defensible on its own terms without a corpus: it is
+ * the plain reading of "a lecture's worth of material reads as freshly
+ * arrived until roughly the next one lands" — a course-cadence fact, not a
+ * fitted number, and the same kind of one-sentence defence the register asks
+ * of a declared constant. *Revisit* once `ARRIVE-1` has a real caller and
+ * enough arrival history exists to check whether a week is too short
+ * (cohorts scatter before she has revisited the material once) or too long
+ * (a stale lecture's cohort still outweighs plain concept relatedness weeks
+ * later).
+ */
+export const MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS = 7;
+
+/**
+ * `[D-149]`'s continuous decay weight: how strongly a concept's own
+ * material-arrival cohort should still pull its placement, purely as a
+ * function of how long ago that material arrived. `1` the day it arrives,
+ * decaying smoothly toward `0` as `asOf` moves away from `arrivalDay` — the
+ * same reciprocal shape {@link withinBlockAssessmentProximity} uses for a
+ * date still to come, mirrored here for one already past. `0` when there is
+ * no arrival signal at all (never an unbounded pull) and, by construction,
+ * for an arrival day `asOf` has not reached yet (clock skew, a caller
+ * passing a future day) — never a negative wait, the same clamp
+ * {@link classifyObligation} applies to `arrivalDay`.
+ *
+ * Exported for `../queue/block-order.ts` reuse — see
+ * {@link withinBlockCohortAffinity}'s doc.
+ */
+export function withinBlockCohortDecayWeight(
+  arrivalDay: CalendarDay | null,
+  asOf: CalendarDay,
+): number {
+  if (arrivalDay === null) return 0;
+  const daysSinceArrival = daysBetweenCalendarDays(arrivalDay, asOf);
+  if (daysSinceArrival < 0) return 0;
+  return 1 / (1 + daysSinceArrival / MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS);
+}
+
+/**
  * One row's F2.19 placement-affinity score within its tie band — higher
- * sorts earlier. `(1 - proximity) * relatedness + proximity * scopeMembership`:
- * a continuous blend, never a staged switch, so "no assessment near favours
- * relatedness" and "an approaching assessment favours its own scope" are the
- * SAME formula read at different points on one continuous weight, exactly as
- * F2.19 requires. `0` for every row when neither optional map is supplied —
- * see the module doc's no-op proof.
+ * sorts earlier. `(1 - proximity) * blendedRelatedness + proximity *
+ * scopeMembership`, where `blendedRelatedness` is itself `(1 - cohortWeight)
+ * * relatedness + cohortWeight * cohortAffinity` (`[D-149]`, see the module
+ * doc's "material-arrival cohort" section) — every step a continuous blend,
+ * never a staged switch, so "no assessment near favours relatedness", "just-
+ * arrived material favours its own cohort" and "an approaching assessment
+ * favours its own scope" are the SAME formula read at different points on
+ * two continuous weights, exactly as F2.19 requires. `0` for every row when
+ * none of the optional signals are supplied — see the module doc's no-op
+ * proof.
  */
 function withinBlockGroupingScore(
   c: ClassifiedRow,
   peers: readonly string[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  peerNotePaths: ReadonlyMap<string, readonly VaultPath[]>,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   asOf: CalendarDay,
 ): number {
   const relatedness = withinBlockRelatedness(c.row.conceptKey, peers, relatedConceptKeys);
+  const cohortWeight = withinBlockCohortDecayWeight(
+    arrivalDays?.get(c.row.conceptKey) ?? null,
+    asOf,
+  );
+  const cohortAffinity = withinBlockCohortAffinity(c.row.notePaths, peers, peerNotePaths);
+  const blendedRelatedness = (1 - cohortWeight) * relatedness + cohortWeight * cohortAffinity;
   const context =
     c.row.targetAssessmentPath !== null
       ? assessmentContext?.get(c.row.targetAssessmentPath)
       : undefined;
-  if (context === undefined) return relatedness;
+  if (context === undefined) return blendedRelatedness;
   const proximity = withinBlockAssessmentProximity(context.dueDay, asOf);
   const scopeMembership = context.scopeConceptKeys.has(c.row.conceptKey) ? 1 : 0;
-  return (1 - proximity) * relatedness + proximity * scopeMembership;
+  return (1 - proximity) * blendedRelatedness + proximity * scopeMembership;
 }
 
 /**
@@ -531,13 +660,14 @@ function withinBlockGroupingScore(
  * row across bands (urgency is never overridden). Bands are scored
  * independently and concatenated back in `overdueFirst`'s own band order;
  * ties within a band fall back to `overdueFirst` itself (`gapScore`, then
- * `conceptKey`), so with no relatedness/assessment-context signal this is
- * `overdueFirst` unchanged.
+ * `conceptKey`), so with no relatedness/assessment-context/arrival signal
+ * this is `overdueFirst` unchanged.
  */
 function withinBlockOrder(
   bucket: readonly ClassifiedRow[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   asOf: CalendarDay,
 ): readonly ClassifiedRow[] {
   const sorted = [...bucket].sort(overdueFirst);
@@ -550,6 +680,12 @@ function withinBlockOrder(
     while (j < sorted.length && sorted[j]?.overdueDays === first.overdueDays) j += 1;
     const band = sorted.slice(i, j);
     const keys = band.map((c) => c.row.conceptKey);
+    // `[D-149]`'s cohort grain reads straight off each row's own
+    // `notePaths` — no caller-resolved map needed, unlike relatedness and
+    // assessment context above (see the module doc).
+    const notePathsByKey = new Map<string, readonly VaultPath[]>(
+      band.map((c) => [c.row.conceptKey, c.row.notePaths]),
+    );
     const scored = band.map((c) => ({
       c,
       // Exclude self from its own peer set.
@@ -558,6 +694,8 @@ function withinBlockOrder(
         keys.filter((k) => k !== c.row.conceptKey),
         relatedConceptKeys,
         assessmentContext,
+        notePathsByKey,
+        arrivalDays,
         asOf,
       ),
     }));
@@ -651,18 +789,23 @@ function courseBudgetsFor(
  * F2.18: course blocks, ordered by the most urgent obligation class present;
  * concepts within a block kept in `overdue-first` order, refined by F2.19's
  * within-tie-band grouping (see {@link withinBlockOrder} and the module
- * doc) when `relatedConceptKeys`/`assessmentContext` are supplied.
+ * doc) when `relatedConceptKeys`/`assessmentContext`/`arrivalDays` are
+ * supplied.
  */
 function blockByCoursePresentation(
   chosen: readonly ClassifiedRow[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   asOf: CalendarDay,
 ): readonly ClassifiedRow[] {
   const byCourse = groupByCourse(chosen);
   const ordered = new Map<string, readonly ClassifiedRow[]>();
   for (const [course, bucket] of byCourse) {
-    ordered.set(course, withinBlockOrder(bucket, relatedConceptKeys, assessmentContext, asOf));
+    ordered.set(
+      course,
+      withinBlockOrder(bucket, relatedConceptKeys, assessmentContext, arrivalDays, asOf),
+    );
   }
   const blocks = [...ordered.entries()].sort((a, b) => {
     const best = (items: readonly ClassifiedRow[]) =>
@@ -866,6 +1009,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     chosen,
     relatedConceptKeys,
     assessmentContext,
+    arrivalDays,
     asOf,
   );
   const orderedRows = orderedBlocks.map((c) => c.row);

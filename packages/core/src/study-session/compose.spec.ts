@@ -30,6 +30,8 @@ import {
   classifyObligation,
   composeSessionRows,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
+  withinBlockCohortAffinity,
+  withinBlockCohortDecayWeight,
 } from './compose.js';
 import type { DurationModel } from './duration.js';
 import { buildConceptInstrumentIndex } from './instrument-index.js';
@@ -46,6 +48,8 @@ interface RowSpec {
   readonly gapScore?: number;
   readonly masteryState?: OracleMasteryState;
   readonly targetAssessmentPath?: VaultPath | null;
+  /** `[D-149]`'s cohort grain — `GapRow.notePaths` (`ConceptRecord.sourcePaths`). Defaults to none. */
+  readonly notePaths?: readonly VaultPath[];
 }
 
 function row(spec: RowSpec, rank: number): GapRow {
@@ -71,7 +75,7 @@ function row(spec: RowSpec, rank: number): GapRow {
     citations: [],
     distinctSourceCount: 1,
     reasoning: 'Because the evidence says so.',
-    notePaths: [],
+    notePaths: spec.notePaths ?? [],
     instrumentCount: 1,
     affordances: ['open-concept', 'build-session'],
   };
@@ -686,6 +690,253 @@ describe('composeSessionRows', () => {
     expect(withIrrelevantSignals.orderedRows.map((r) => r.conceptName)).toEqual(
       withoutSignals.orderedRows.map((r) => r.conceptName),
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // `[D-149]` (`ol-v7r5.12`): the material-arrival cohort — a third, continuous
+  // decay weight blended into F2.19's relatedness half, keyed on `arrivalDays`
+  // (`ARRIVE-1`) and grained on exact `GapRow.notePaths` overlap. See
+  // features/F2-review.md (olea-service) and compose.ts's own "material-
+  // arrival cohort" module-doc section.
+  // ---------------------------------------------------------------------------
+
+  describe('[D-149] withinBlockCohortDecayWeight — the pure decay curve', () => {
+    it('is 0 with no arrival signal at all', () => {
+      expect(withinBlockCohortDecayWeight(null, AS_OF)).toBe(0);
+    });
+
+    it('is 1 the day the material arrives', () => {
+      expect(withinBlockCohortDecayWeight(AS_OF, AS_OF)).toBe(1);
+    });
+
+    it('is exactly 0.5 at the declared half-life', () => {
+      const arrivedHalfLifeAgo = '2026-09-07'; // AS_OF minus MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS (7)
+      expect(withinBlockCohortDecayWeight(arrivedHalfLifeAgo, AS_OF)).toBeCloseTo(0.5, 10);
+    });
+
+    it('keeps decaying toward, but never reaching, 0 as arrival recedes further', () => {
+      const near = withinBlockCohortDecayWeight('2026-09-07', AS_OF);
+      const far = withinBlockCohortDecayWeight('2026-06-01', AS_OF);
+      expect(far).toBeLessThan(near);
+      expect(far).toBeGreaterThan(0);
+    });
+
+    it('clamps a future arrival day (clock skew) to 0, never negative', () => {
+      expect(withinBlockCohortDecayWeight('2026-09-15', AS_OF)).toBe(0);
+    });
+  });
+
+  describe('[D-149] withinBlockCohortAffinity — exact source-note overlap, the cohort grain', () => {
+    const path = (name: string) => `01 Courses/CRS101/${name}.md` as VaultPath;
+
+    it('is 0 with no notePaths of its own', () => {
+      expect(
+        withinBlockCohortAffinity([], ['Bravo'], new Map([['Bravo', [path('lecture-1')]]])),
+      ).toBe(0);
+    });
+
+    it('is 0 with no peers', () => {
+      expect(withinBlockCohortAffinity([path('lecture-1')], [], new Map())).toBe(0);
+    });
+
+    it('is 0 when no peer shares any of its source notes', () => {
+      const peerNotePaths = new Map([['Bravo', [path('lecture-2')]]]);
+      expect(withinBlockCohortAffinity([path('lecture-1')], ['Bravo'], peerNotePaths)).toBe(0);
+    });
+
+    it('is the fraction of peers sharing at least one exact source note', () => {
+      const peerNotePaths = new Map([
+        ['Bravo', [path('lecture-1')]],
+        ['Charlie', [path('lecture-2')]],
+      ]);
+      expect(
+        withinBlockCohortAffinity([path('lecture-1')], ['Bravo', 'Charlie'], peerNotePaths),
+      ).toBeCloseTo(0.5, 10);
+    });
+
+    it('counts a peer with ANY shared note, not requiring every note to match', () => {
+      const own = [path('lecture-1'), path('lecture-2')];
+      const peerNotePaths = new Map([['Bravo', [path('lecture-2'), path('lecture-9')]]]);
+      expect(withinBlockCohortAffinity(own, ['Bravo'], peerNotePaths)).toBe(1);
+    });
+  });
+
+  describe('[D-149] the cohort as a composed-session ordering signal', () => {
+    const lecture1 = '01 Courses/CRS101/lecture-1.md' as VaultPath;
+    const lecture2 = '01 Courses/CRS101/lecture-2.md' as VaultPath;
+
+    it('freshly-arrived material with no relation signal pulls its own source-note cohort adjacent', () => {
+      // Alpha and Charlie both arrived TODAY from the same source note;
+      // Bravo arrived from a different note and shares no relation with
+      // anyone. All three tie exactly on overdueDays and gapScore, and no
+      // `relatedConceptKeys` is supplied at all — cohort affinity is the
+      // only signal available to break the tie.
+      const theRows = rows([
+        { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+        { conceptName: 'Bravo', gapScore: 5, masteryState: 'sprout', notePaths: [lecture2] },
+        { conceptName: 'Charlie', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+      ]);
+      const instruments = buildConceptInstrumentIndex([
+        qa('a1', ['Alpha']),
+        qa('b1', ['Bravo']),
+        qa('c1', ['Charlie']),
+      ]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        c1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      });
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        arrivalDays: new Map([
+          ['Alpha', AS_OF],
+          ['Charlie', AS_OF],
+        ]),
+      });
+
+      // Alpha and Charlie's shared, freshly-arrived source note pulls them
+      // adjacent, ahead of Bravo — never `[Alpha, Bravo, Charlie]`, the
+      // plain-alphabetical fallback a mutation dropping the cohort term
+      // would produce instead.
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Charlie', 'Bravo']);
+    });
+
+    it("as the cohort's arrival recedes, a live C7.10 relation outranks the decayed cohort", () => {
+      // Alpha is C7.10-related to BOTH Bravo and Charlie (relatedness 1.0,
+      // unaffected by arrival — Alpha itself has no arrival entry, so its own
+      // cohort weight is 0 regardless of Charlie's). Bravo carries no cohort
+      // signal (different source note) but IS related to Alpha (relatedness
+      // 0.5, cohort weight 0 — no arrival entry either). Charlie carries NO
+      // relation at all, only a source note shared with Alpha, and it
+      // arrived long enough ago (many half-lives) that its cohort weight is
+      // small. Whatever that residual weight is (any value below 1, which a
+      // real elapsed time always gives), Charlie's blended score
+      // (`residualWeight * 0.5`) stays under Bravo's fixed 0.5 — the live
+      // relation reliably outranks the decayed cohort.
+      const staleArrival = '2026-01-01';
+      const theRows = rows([
+        { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+        { conceptName: 'Bravo', gapScore: 5, masteryState: 'sprout', notePaths: [lecture2] },
+        { conceptName: 'Charlie', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+      ]);
+      const instruments = buildConceptInstrumentIndex([
+        qa('a1', ['Alpha']),
+        qa('b1', ['Bravo']),
+        qa('c1', ['Charlie']),
+      ]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        c1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      });
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        // Only Charlie carries an arrival day — Alpha and Bravo's own
+        // cohort weight is 0 by omission, exactly like the no-signal case.
+        arrivalDays: new Map([['Charlie', staleArrival]]),
+        relatedConceptKeys: new Map([
+          ['Alpha', new Set(['Bravo', 'Charlie'])],
+          ['Bravo', new Set(['Alpha'])],
+        ]),
+      });
+
+      // Charlie still technically shares Alpha's source note, but the
+      // decayed cohort no longer keeps it adjacent — Bravo's live relation
+      // to Alpha wins the placement instead, unlike the fresh-arrival case
+      // above where the cohort alone decided the order.
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    });
+
+    it('is a no-op, byte-for-byte, when arrivalDays is omitted — even with a matching cohort present', () => {
+      const withCohortButNoArrivalSignal = rows([
+        { conceptName: 'Alpha', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+        { conceptName: 'Bravo', gapScore: 5, masteryState: 'sprout', notePaths: [lecture2] },
+        { conceptName: 'Charlie', gapScore: 5, masteryState: 'sprout', notePaths: [lecture1] },
+      ]);
+      const instruments = buildConceptInstrumentIndex([
+        qa('a1', ['Alpha']),
+        qa('b1', ['Bravo']),
+        qa('c1', ['Charlie']),
+      ]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        c1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      });
+      const base = {
+        rows: withCohortButNoArrivalSignal,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+      };
+
+      const result = composeSessionRows(base);
+
+      // No `arrivalDays` map at all: cohort weight is 0 for every row
+      // regardless of the shared `notePaths`, so this falls through to
+      // `overdueFirst`'s own `conceptKey` tiebreak — plain alphabetical.
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    });
+
+    it("F4.7's stop-at-the-assessment rule still wins over a maximally-fresh cohort", () => {
+      // Zulu is named in an imminent assessment's own scope; Alpha shares
+      // Zulu's OWN source note and arrived today (cohort weight 1, cohort
+      // affinity 1 — a maximal pull, not merely a fresh one) but is not
+      // itself in that scope. The outer proximity blend must still favour
+      // scope membership over the inner relatedness-plus-cohort blend,
+      // exactly as it already does over plain relatedness.
+      const quiz = '05 Assessments/Quiz.md' as VaultPath;
+      const theRows = rows([
+        {
+          conceptName: 'Alpha',
+          gapScore: 5,
+          masteryState: 'sprout',
+          notePaths: [lecture1],
+          targetAssessmentPath: quiz,
+        },
+        {
+          conceptName: 'Zulu',
+          gapScore: 5,
+          masteryState: 'sprout',
+          notePaths: [lecture1],
+          targetAssessmentPath: quiz,
+        },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('z1', ['Zulu'])]);
+      const sameOverdue = replay({
+        a1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+        z1: { lastReviewedDay: '2026-08-20', dueDay: '2099-01-01' },
+      });
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: sameOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        arrivalDays: new Map([['Alpha', AS_OF]]),
+        assessmentContext: new Map([
+          [quiz, { dueDay: AS_OF, scopeConceptKeys: new Set(['Zulu']) }],
+        ]),
+      });
+
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Zulu', 'Alpha']);
+    });
   });
 
   // [STEER-1] (`ol-imqy`, `[D-076]` round 2 "Can she steer it?"): course/topic
