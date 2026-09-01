@@ -20,6 +20,7 @@ import type {
   ConfusionRoutingInput,
   McqRating,
   Scheduler,
+  SchedulingObservationDecision,
 } from 'olea-core';
 import { mapMcqRating } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
@@ -134,6 +135,23 @@ export interface ReviewSessionDeps {
    */
   readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
   /**
+   * F5.3a / R7's third trigger for the SAME on-demand offer (`ol-0r92.11`,
+   * `[D-083]`/`[D-087]`): an unconsumed scheduling observation naming the
+   * just-graded instrument's concept as a neighbour. Composed at
+   * `../grading/wiring.ts`'s `evaluateSchedulingObservationRouting`, a pure
+   * delegate to `olea-core`'s function of the same name — but, unlike
+   * `evaluateConfusionRouting` just above, the `liveObservations` map that
+   * decision reads is per-vault and closed over by `../review/open-session.ts`
+   * (the only production caller, since it already reads the whole log to
+   * build `composed.entries`), not threaded onto this session's deps by
+   * `main.ts` at plugin-construction time. Optional and absent by default,
+   * same "simply cannot offer it" posture every other optional port here
+   * has — an absent evaluator reads as "never offer."
+   */
+  readonly evaluateSchedulingObservationRouting?: (input: {
+    readonly conceptIds: readonly string[];
+  }) => SchedulingObservationDecision;
+  /**
    * The grade case of the contest mechanism (`ol-fgba`, `[D-095]`). Optional
    * and absent by default for the same reason `explainWhyPort` is: a session
    * assembled without one cannot record a dispute, and an affordance that
@@ -151,6 +169,18 @@ export interface ReviewSessionDeps {
  */
 export interface PendingConfusionRoutingOffer {
   readonly instrument: ReviewInstrument;
+  readonly promptText: string;
+}
+
+/**
+ * F5.3a / R7's third-trigger pending offer (`ol-0r92.11`) — the instrument
+ * that was JUST rated (same "not necessarily the one the view is currently
+ * showing" caveat as `PendingConfusionRoutingOffer`), which concept the
+ * observation names as neighbour, and the trigger's own reason line.
+ */
+export interface PendingSchedulingObservationOffer {
+  readonly instrument: ReviewInstrument;
+  readonly neighbourConceptId: string;
   readonly promptText: string;
 }
 
@@ -186,6 +216,8 @@ export class ReviewSession {
   private dueSoonCount = 0;
   /** F2.12 (`ol-h2bx`) — set by `logAndAdvance` after every graded review, cleared by `acceptConfusionRoutingOffer`. */
   private pendingConfusionOffer: PendingConfusionRoutingOffer | null = null;
+  /** F5.3a / R7's third trigger (`ol-0r92.11`) — set by `logAndAdvance` after every graded review, cleared by `resolveSchedulingObservationOffer`. */
+  private pendingSchedulingObservationOffer: PendingSchedulingObservationOffer | null = null;
 
   constructor(private readonly deps: ReviewSessionDeps) {
     this.items = [...deps.queue];
@@ -477,6 +509,29 @@ export class ReviewSession {
     return offer;
   }
 
+  /**
+   * F5.3a / R7's offer for the caller to render, or `null` when none is
+   * pending (`ol-0r92.11`). Same "read after every render, not inside
+   * `ReviewViewModel`'s phase union" posture as `getConfusionRoutingOffer` —
+   * this offer is about the instrument that was JUST rated.
+   */
+  getSchedulingObservationOffer(): PendingSchedulingObservationOffer | null {
+    return this.pendingSchedulingObservationOffer;
+  }
+
+  /**
+   * The one available action for F5.3a's offer, mirroring
+   * `resolveConfusionRoutingOffer` exactly: resolves the just-offered
+   * instrument and clears the pending offer, nothing more. Returns `null`
+   * without touching anything when there is nothing pending.
+   */
+  resolveSchedulingObservationOffer(): PendingSchedulingObservationOffer | null {
+    const offer = this.pendingSchedulingObservationOffer;
+    if (offer === null) return null;
+    this.pendingSchedulingObservationOffer = null;
+    return offer;
+  }
+
   async skipMissingNote(): Promise<void> {
     if (this.phase !== 'note-missing') return;
     this.index += 1;
@@ -660,6 +715,24 @@ export class ReviewSession {
     });
     this.pendingConfusionOffer = decision?.shouldOffer
       ? { instrument: item.instrument, promptText: decision.promptText }
+      : null;
+
+    // F5.3a / R7's third trigger (`ol-0r92.11`): evaluated after every
+    // graded review, for the concept(s) the instrument just rated is
+    // evidence for — never gated on `rating`, unlike F2.12 above, because an
+    // unconsumed observation is worth surfacing regardless of how this
+    // particular review of the neighbour concept went (F2.14/F2.21: this
+    // proposes, it does not schedule). An absent evaluator never offers,
+    // same posture as every other optional port.
+    const schedulingObservationDecision = this.deps.evaluateSchedulingObservationRouting?.({
+      conceptIds: item.instrument.conceptIds,
+    });
+    this.pendingSchedulingObservationOffer = schedulingObservationDecision?.shouldOffer
+      ? {
+          instrument: item.instrument,
+          neighbourConceptId: schedulingObservationDecision.neighbourConceptId,
+          promptText: schedulingObservationDecision.promptText,
+        }
       : null;
 
     this.index += 1;

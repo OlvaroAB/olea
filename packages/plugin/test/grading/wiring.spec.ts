@@ -18,6 +18,7 @@ import {
   acceptExplainBackGradingWithObservation,
   buildGradingWiring,
   evaluateConfusionRouting,
+  evaluateSchedulingObservationRouting,
   gradeExplainBackAttempt,
   gradeSoloAttempt,
 } from '../../src/grading/wiring.js';
@@ -361,6 +362,36 @@ describe('evaluateConfusionRouting — the plugin-side composition delegates to 
   it('does not offer below the threshold or on a non-Again rating', () => {
     expect(evaluateConfusionRouting({ rating: 'again', lapses: 3 }).shouldOffer).toBe(false);
     expect(evaluateConfusionRouting({ rating: 'good', lapses: 99 }).shouldOffer).toBe(false);
+  });
+});
+
+// ---- evaluateSchedulingObservationRouting (ol-0r92.11, F5.3a / R7) --------
+
+describe('evaluateSchedulingObservationRouting — the plugin-side composition delegates to olea-core', () => {
+  it('offers when a live observation names one of the graded instrument’s concepts, needing no GradingWiring/Worker at all', () => {
+    const decision = evaluateSchedulingObservationRouting({
+      conceptIds: ['concept-y'],
+      liveObservations: new Map([
+        [
+          'concept-y',
+          {
+            neighbourConceptId: 'concept-y',
+            subjectConceptIds: ['concept-x'],
+            sourceEventId: 'e1',
+            observedAt: '2026-08-10T09:00:00+00:00',
+          },
+        ],
+      ]),
+    });
+    expect(decision.shouldOffer).toBe(true);
+  });
+
+  it('does not offer when no live observation names any of the instrument’s concepts', () => {
+    const decision = evaluateSchedulingObservationRouting({
+      conceptIds: ['concept-a'],
+      liveObservations: new Map(),
+    });
+    expect(decision.shouldOffer).toBe(false);
   });
 });
 

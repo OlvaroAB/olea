@@ -842,6 +842,23 @@ export {
   misconceptionLogPath,
 } from './misconception/path.js';
 export { projectMisconceptions } from './misconception/project.js';
+// F5.3a / R7's third trigger for the SAME F2.21 on-demand offer (`[D-083]`/
+// `[D-087]`, `ol-0r92.11`): an unconsumed scheduling observation naming the
+// just-graded instrument's concept as a neighbour. Lives beside
+// `confusion-routing.ts` deliberately — same pure-decision pattern, same
+// V3 framing discipline — see that file's own module doc for the full
+// argument, and `./session/replay.js`'s `replayUnconsumedSchedulingObservations`
+// for where the `liveObservations` map this reads comes from.
+export type {
+  SchedulingObservationDecision,
+  SchedulingObservationNoOffer,
+  SchedulingObservationOffer,
+  SchedulingObservationRoutingInput,
+} from './misconception/scheduling-observation-routing.js';
+export {
+  evaluateSchedulingObservationRouting,
+  schedulingObservationPromptLine,
+} from './misconception/scheduling-observation-routing.js';
 export type {
   EmbeddingVector as MisconceptionEmbeddingVector,
   MisconceptionEmbedder,
@@ -1337,8 +1354,22 @@ export type { ReadReviewLogHistoryOptions, ReviewLogHistory } from './session/hi
 export { REVIEW_LOG_EXTENSION, readReviewLogHistory } from './session/history.js';
 export type { InstrumentIdInput, InstrumentIdSource } from './session/instrument-id.js';
 export { PROVISIONAL_ID_PREFIX, provisionalInstrumentId } from './session/instrument-id.js';
-export type { ReplayedInstrument, ReplayResult } from './session/replay.js';
-export { replayedStateOf, replaySchedulerStates } from './session/replay.js';
+// F5.3a / R7's scheduling-observation reader (`[D-083]`/`[D-087]`, `ol-0r92.11`)
+// — which neighbour-concept observations are still live, replayed from the
+// same log `replaySchedulerStates` reads. See `replay.ts`'s own doc for why
+// "unconsumed" is decided by a LATER graded explain-back on the neighbour
+// concept, never by the ordinary review this reader's consumer (below) fires
+// FROM.
+export type {
+  ReplayedInstrument,
+  ReplayResult,
+  UnconsumedSchedulingObservation,
+} from './session/replay.js';
+export {
+  replayedStateOf,
+  replaySchedulerStates,
+  replayUnconsumedSchedulingObservations,
+} from './session/replay.js';
 export type {
   ClozeInstrumentRecord,
   InvalidMcqReport,

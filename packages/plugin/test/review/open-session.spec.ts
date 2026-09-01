@@ -746,3 +746,91 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
     expect(outcome.session.getConfusionRoutingOffer()).toBeNull();
   });
 });
+
+// Scenarios: features/F2-review.md, "F5.3a / R7 — the scheduling observation's
+// third trigger" — @auto:plugin/review/open-session.spec.
+describe("F5.3a / R7 — the scheduling observation's third trigger reaches the composed session (ol-0r92.11)", () => {
+  /**
+   * A real, on-disk explain-back review from two days before `NOW`, naming
+   * Beta as the neighbour concept F5.3a's observation is about — written
+   * through the same production `appendReviewLogRecord` `open-session.spec`
+   * already uses to seed history, never a fake or a hand-built log line.
+   */
+  async function seedBetaObservation(vault: ReturnType<typeof memoryVault>): Promise<void> {
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-08-08T09:00:00-04:00',
+        instrumentId: 'seed-explain-back-alpha',
+        instrumentType: 'explain-back',
+        conceptIds: [unboundKey('Alpha')],
+        rating: null,
+        wasUnsure: false,
+        durationMs: null,
+        selectionContext: {
+          dueState: 'new',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+        schedulingObservation: { neighbourConceptId: unboundKey('Beta') },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'seed-scheduling-observation' },
+    );
+  }
+
+  it('the reciprocal offer surfaces once she reaches the named neighbour concept, unprompted by any caller-supplied port', async () => {
+    const vault = studyVault();
+    await seedBetaObservation(vault);
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+
+    // Alpha's `qa` is offered first (the untouched suite's own ordering) —
+    // rating it must not itself surface the offer, since the observation
+    // names Beta, not Alpha.
+    expect(outcome.session.currentItem?.instrument.conceptIds).toContain(unboundKey('Alpha'));
+    outcome.session.reveal();
+    await outcome.session.rate('good');
+    expect(outcome.session.getSchedulingObservationOffer()).toBeNull();
+
+    // Beta's turn — this is "the next time she is in the neighbour concept".
+    expect(outcome.session.currentItem?.instrument.conceptIds).toContain(unboundKey('Beta'));
+    await advancePastCurrentItem(outcome.session);
+
+    expect(outcome.session.getSchedulingObservationOffer()?.neighbourConceptId).toBe(
+      unboundKey('Beta'),
+    );
+  });
+
+  it('with no unconsumed observation on the log, the same vault composes a session that never offers', async () => {
+    const vault = studyVault();
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+    await advancePastCurrentItem(outcome.session);
+    await advancePastCurrentItem(outcome.session);
+
+    expect(outcome.session.getSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('reading the observation changes nothing about what is queued — never queue composition (F2.14/F2.21)', async () => {
+    const withObservation = studyVault();
+    await seedBetaObservation(withObservation);
+    const withOutcome = await open(withObservation);
+    const withoutOutcome = await open(studyVault());
+    if (!withOutcome.ok || !withoutOutcome.ok) throw new Error('expected both sessions to compose');
+
+    // Same item count, same deferral count, same first instrument — the
+    // observation is read, but it moves nothing about order, due state or
+    // FSRS scheduling, only whether the on-demand offer appears later.
+    expect(withOutcome.itemCount).toBe(withoutOutcome.itemCount);
+    expect(withOutcome.deferredCount).toBe(withoutOutcome.deferredCount);
+    await withOutcome.session.start();
+    await withoutOutcome.session.start();
+    expect(withOutcome.session.currentItem?.instrument.conceptIds).toEqual(
+      withoutOutcome.session.currentItem?.instrument.conceptIds,
+    );
+  });
+});

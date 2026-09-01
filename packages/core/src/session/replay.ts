@@ -145,3 +145,73 @@ export function replaySchedulerStates(
 export function replayedStateOf(result: ReplayResult, instrumentId: string): SchedulerState | null {
   return result.states.get(instrumentId)?.state ?? null;
 }
+
+/**
+ * One scheduling observation (`[D-083]`/`[D-087]`, F5.3a, knowledge model R7)
+ * still live for its neighbour concept — the consumer half `ol-0r92.11`
+ * builds. "The scheduler reads the field" (knowledge model :623-625) means
+ * exactly this: a scheduler-side reader, never the mastery fold, and never a
+ * second scoring target (C5.11) — nothing here touches `neighbourConceptId`'s
+ * stage or vitality, only whether an already-authorised offer is proposed.
+ */
+export interface UnconsumedSchedulingObservation {
+  /** The concept the reciprocal explain-back offer would be about — never scored by this observation (C5.11). */
+  readonly neighbourConceptId: string;
+  /** The explain-back review's own subject concept(s) — X in "explain X, including how it relates to Y". */
+  readonly subjectConceptIds: readonly string[];
+  /** The `eventId` of the review that recorded this observation. */
+  readonly sourceEventId: string;
+  /** ISO-8601 timestamp of that review. */
+  readonly observedAt: string;
+}
+
+/**
+ * Which scheduling observations are still live, replayed from the log in
+ * order (`[D-083]`/`[D-087]`).
+ *
+ * **"Unconsumed" is decided by a LATER graded explain-back review of the
+ * neighbour concept itself** — the reciprocal prompt F5.3a names actually
+ * being taken — never by an ordinary review of that concept. An ordinary
+ * review is what F5.3a's offer is triggered FROM (`scheduling-observation-
+ * routing.ts`'s decision reads the SAME neighbour concept id against this
+ * map at that moment), so treating it as consumption would race the trigger
+ * against its own cause and the offer would never fire. Only the most
+ * recent observation per neighbour concept is kept, the same "most recent
+ * wins" chronological resolution GLOSSARY already uses for depth — a fresh
+ * observation on a concept whose earlier one was never acted on simply
+ * replaces it rather than stacking.
+ *
+ * Pure, over entries a caller already holds — same posture as
+ * `replaySchedulerStates` above, and the same total order
+ * (`compareByInstantThenEventId`) so a caller never needs to sort twice.
+ */
+export function replayUnconsumedSchedulingObservations(
+  entries: readonly ReviewLogEntry[],
+): ReadonlyMap<string, UnconsumedSchedulingObservation> {
+  const ordered = [...entries].sort(compareByInstantThenEventId);
+  const live = new Map<string, UnconsumedSchedulingObservation>();
+
+  for (const entry of ordered) {
+    if (entry.kind !== 'review') continue;
+
+    // A completed reciprocal explain-back on THIS concept consumes whatever
+    // observation was waiting for it — checked before this entry might also
+    // (in principle) carry its own fresh observation below, so a record can
+    // both consume one relation and open another in the same pass.
+    if (entry.instrumentType === 'explain-back') {
+      for (const conceptId of entry.conceptIds) live.delete(conceptId);
+    }
+
+    if (entry.schedulingObservation !== undefined) {
+      const { neighbourConceptId } = entry.schedulingObservation;
+      live.set(neighbourConceptId, {
+        neighbourConceptId,
+        subjectConceptIds: entry.conceptIds,
+        sourceEventId: entry.eventId,
+        observedAt: entry.timestamp,
+      });
+    }
+  }
+
+  return live;
+}

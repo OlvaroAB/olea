@@ -72,11 +72,13 @@ import {
   calendarDaysEndingOn,
   executeStudyPlan,
   replayedStateOf,
+  replayUnconsumedSchedulingObservations,
   reviewLogPath,
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
+import { evaluateSchedulingObservationRouting } from '../grading/wiring.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
@@ -250,6 +252,20 @@ export async function openReviewSession(
       ...(input.random !== undefined ? { random: input.random } : {}),
     });
 
+    // F5.3a / R7's third trigger (`ol-0r92.11`, `[D-083]`/`[D-087]`): read
+    // once per opened session, off the SAME `composed.entries` this module
+    // already reads for `buildSupportLevelHistoryLookup` above — no second
+    // vault or log read. This is the composition site `grading/wiring.ts`'s
+    // module doc names: `evaluateSchedulingObservationRouting` there is
+    // per-call pure, but the `liveObservations` map it needs is per-vault,
+    // so it is closed over HERE rather than threaded in from a caller the
+    // way `ReviewSessionPorts.evaluateConfusionRouting` is — no `VaultSource`
+    // exists at `main.ts`'s plugin-construction time to read it from there.
+    // Never queue composition: this changes nothing about `scheduled`,
+    // `queue`, `executed` or `composed` above — only whether `ReviewSession`
+    // proposes the reciprocal offer once she reaches the neighbour concept.
+    const liveSchedulingObservations = replayUnconsumedSchedulingObservations(composed.entries);
+
     // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): every still-pending
     // draft, read fresh, ahead of the ordinarily-scheduled items — see
     // `OpenReviewSessionInput.draftCache`'s doc. `[]` when no cache is
@@ -274,6 +290,16 @@ export async function openReviewSession(
         ? { evaluateConfusionRouting: input.ports.evaluateConfusionRouting }
         : {}),
       ...(input.ports.gradeContestPort ? { gradeContestPort: input.ports.gradeContestPort } : {}),
+      // Always wired, unconditionally — unlike the caller-supplied ports
+      // above, this is computed HERE (see `liveSchedulingObservations`
+      // above) rather than threaded in through `ReviewSessionPorts`, so
+      // there is no caller-omission case to guard with a conditional
+      // spread: every real session this module opens gets a real evaluator.
+      evaluateSchedulingObservationRouting: (routingInput) =>
+        evaluateSchedulingObservationRouting({
+          conceptIds: routingInput.conceptIds,
+          liveObservations: liveSchedulingObservations,
+        }),
     });
 
     return {

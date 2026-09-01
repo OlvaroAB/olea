@@ -164,6 +164,26 @@
  * instance — `GradingWiring` plus a `VaultSource`/device id — could be built)
  * is outside `ol-cqz8`'s `owns`, so wiring that one call site is named as a
  * follow-on rather than reached into.
+ *
+ * ===========================================================================
+ * `ol-0r92.11` UPDATE: F5.3a / R7's THIRD TRIGGER FOR THE SAME F2.21 OFFER
+ * ===========================================================================
+ * `evaluateSchedulingObservationRouting` below composes `olea-core`'s pure
+ * F5.3a decision (`../misconception/scheduling-observation-routing.js`),
+ * mirroring `evaluateConfusionRouting` immediately above it exactly: no
+ * `GradingWiring`/Worker dependency, pure and synchronous, living here
+ * because this file is the one composition root. The ONE difference from
+ * `evaluateConfusionRouting`'s shape: this decision needs the log's live
+ * scheduling-observation map (`replayUnconsumedSchedulingObservations`), a
+ * per-vault value this wiring layer has no access to (no `VaultSource`
+ * here) — so, unlike `evaluateConfusionRouting`, this is NOT threaded onto
+ * `ReviewSessionDeps` by `main.ts` at plugin-construction time. The map is
+ * computed once per opened session by `../review/open-session.js`, which
+ * already reads the whole log to build `composed.entries` for
+ * `buildSupportLevelHistoryLookup` — that is the actual composition site
+ * for the closure over `liveObservations`; this function is the thin, pure,
+ * independently-testable delegate that call site closes over. See
+ * `open-session.ts`'s own doc for that seam.
  */
 
 import {
@@ -177,6 +197,7 @@ import {
   createWorkerSoloJudgeCaller,
   EXPLAIN_BACK_SOLO_TASK_ID,
   evaluateConfusionRouting as evaluateConfusionRoutingCore,
+  evaluateSchedulingObservationRouting as evaluateSchedulingObservationRoutingCore,
   type GradeExplainBackInput,
   type GradeSoloInput,
   gradeExplainBack,
@@ -188,6 +209,8 @@ import {
   type MisconceptionSourceCitation,
   type PendingExplainBackGrading,
   type PendingSoloGrading,
+  type SchedulingObservationDecision,
+  type SchedulingObservationRoutingInput,
   type SoloArtifactProvenance,
   type WorkerTaskTransport,
 } from 'olea-core';
@@ -497,4 +520,21 @@ function extractSoloArtifactProvenance(
  */
 export function evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
   return evaluateConfusionRoutingCore(input);
+}
+
+/**
+ * `ol-0r92.11`'s F5.3a / R7 third-trigger decision, composed at this
+ * plugin's wiring layer. Delegates entirely to `olea-core`'s
+ * `evaluateSchedulingObservationRouting`
+ * (`../misconception/scheduling-observation-routing.js`) — pure and
+ * synchronous, no `GradingWiring`/Worker dependency, exactly like
+ * `evaluateConfusionRouting` immediately above. See this file's
+ * `ol-0r92.11 UPDATE` module-doc section for why `../review/open-session.js`,
+ * not `main.ts`, is the call site that closes over the per-vault
+ * `liveObservations` map this function's input needs.
+ */
+export function evaluateSchedulingObservationRouting(
+  input: SchedulingObservationRoutingInput,
+): SchedulingObservationDecision {
+  return evaluateSchedulingObservationRoutingCore(input);
 }

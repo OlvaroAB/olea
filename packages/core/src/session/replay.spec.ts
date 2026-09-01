@@ -5,7 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { compareByInstantThenEventId, mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { Scheduler } from '../scheduler/types.js';
-import { replayedStateOf, replaySchedulerStates } from './replay.js';
+import {
+  replayedStateOf,
+  replaySchedulerStates,
+  replayUnconsumedSchedulingObservations,
+} from './replay.js';
 
 const CONTEXT: SelectionContextV4 = {
   dueState: 'due',
@@ -21,6 +25,11 @@ function review(
   instrumentId: string,
   rating: Rating | null,
   instrumentType: InstrumentType = 'qa',
+  overrides: {
+    readonly conceptIds?: readonly string[];
+    /** F5.3a / `[D-087]` — present only on an explain-back review that demonstrated use of a named neighbour. */
+    readonly schedulingObservation?: { readonly neighbourConceptId: string };
+  } = {},
 ): ReviewLogEntry {
   return {
     schemaVersion: 5,
@@ -29,10 +38,13 @@ function review(
     timestamp,
     instrumentId,
     instrumentType,
-    conceptIds: ['concept-a'],
+    conceptIds: [...(overrides.conceptIds ?? ['concept-a'])],
     rating,
     wasUnsure: false,
     durationMs: null,
+    ...(overrides.schedulingObservation !== undefined
+      ? { schedulingObservation: overrides.schedulingObservation }
+      : {}),
     selectionContext: CONTEXT,
   };
 }
@@ -256,5 +268,120 @@ describe("shares review-log/merge.ts's total order (ol-2jod.15)", () => {
       scheduler(),
     );
     expect(first.states.get('inst-1')?.state).toEqual(second.states.get('inst-1')?.state);
+  });
+});
+
+// Scenarios: features/F2-review.md, "Knowledge model §8 test 5 / `[D-087]` —
+// Strip-invariance" ("the scheduler reads the observation the fold ignores")
+// and "F5.3a / R7 — the scheduling observation's third trigger" (the two
+// consumption scenarios) — @auto:core/session/replay.spec
+describe('replayUnconsumedSchedulingObservations — F5.3a / `[D-087]`, R7', () => {
+  it('a review with no scheduling observation contributes nothing to the map', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-x', 'good'),
+    ]);
+    expect(result.size).toBe(0);
+  });
+
+  it('the scheduler reads the observation the fold ignores: it is live for its neighbour concept', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+    ]);
+    expect(result.get('concept-y')).toEqual({
+      neighbourConceptId: 'concept-y',
+      subjectConceptIds: ['concept-x'],
+      sourceEventId: 'e1',
+      observedAt: '2026-08-10T09:00:00+00:00',
+    });
+  });
+
+  it('an ordinary graded review of the neighbour concept does NOT consume the observation', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      // Later, an ordinary (non-explain-back) review of the neighbour concept —
+      // this is what the third trigger fires FROM, so it must not also be
+      // read as the observation having already been acted on.
+      review('e2', '2026-08-11T09:00:00+00:00', 'inst-y', 'good', 'qa', {
+        conceptIds: ['concept-y'],
+      }),
+    ]);
+    expect(result.get('concept-y')?.sourceEventId).toBe('e1');
+  });
+
+  it('a LATER graded explain-back review of the neighbour concept consumes the observation', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      // The reciprocal prompt itself, later, on concept-y as an explain-back subject.
+      review('e2', '2026-08-11T09:00:00+00:00', 'inst-y-eb', null, 'explain-back', {
+        conceptIds: ['concept-y'],
+      }),
+    ]);
+    expect(result.has('concept-y')).toBe(false);
+  });
+
+  it('a reciprocal explain-back BEFORE the observation is recorded cannot consume it — chronological order, not array order', () => {
+    // e1 (an explain-back on concept-y) happens first; the observation naming
+    // concept-y as a neighbour is only recorded afterwards, by e2. Handed to
+    // this function in reverse array order to check it sorts by timestamp
+    // rather than trusting the order it was given — same discipline
+    // replaySchedulerStates above already requires.
+    const result = replayUnconsumedSchedulingObservations([
+      review('e2', '2026-08-11T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-y-eb', null, 'explain-back', {
+        conceptIds: ['concept-y'],
+      }),
+    ]);
+    expect(result.has('concept-y')).toBe(true);
+  });
+
+  it('only the most recent observation per neighbour concept is kept, chronologically', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb-1', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      review('e2', '2026-08-12T09:00:00+00:00', 'inst-eb-2', null, 'explain-back', {
+        conceptIds: ['concept-w'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+    ]);
+    expect(result.get('concept-y')?.sourceEventId).toBe('e2');
+    expect(result.get('concept-y')?.subjectConceptIds).toEqual(['concept-w']);
+  });
+
+  it('suspend/unsuspend entries never contribute or consume — they carry no conceptIds worth reading here', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      suspend('e2', '2026-08-11T09:00:00+00:00', 'inst-y'),
+    ]);
+    expect(result.has('concept-y')).toBe(true);
+  });
+
+  it('pure: same entries in a different array order produce the same result', () => {
+    const a = review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+      conceptIds: ['concept-x'],
+      schedulingObservation: { neighbourConceptId: 'concept-y' },
+    });
+    const b = review('e2', '2026-08-11T09:00:00+00:00', 'inst-y-eb', null, 'explain-back', {
+      conceptIds: ['concept-y'],
+    });
+    expect(replayUnconsumedSchedulingObservations([a, b])).toEqual(
+      replayUnconsumedSchedulingObservations([b, a]),
+    );
   });
 });

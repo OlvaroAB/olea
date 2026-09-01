@@ -615,3 +615,185 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
     expect(session.resolveConfusionRoutingOffer()).toBeNull();
   });
 });
+
+describe('F5.3a / R7 — the scheduling observation’s third trigger wired into the review flow (ol-0r92.11)', () => {
+  it('with no evaluator wired, no offer is ever produced (same "simply cannot offer it" posture as the other optional ports)', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(session.getSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('offers, for the instrument just rated, when the evaluator finds a live observation on its concept', async () => {
+    const instrument = qaFixture({ conceptIds: ['concept-y'] });
+    const item = queueItem(instrument);
+    const calls: unknown[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        evaluateSchedulingObservationRouting: (input) => {
+          calls.push(input);
+          return {
+            shouldOffer: true,
+            neighbourConceptId: 'concept-y',
+            promptText: 'reciprocal offer text',
+          };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(calls).toEqual([{ conceptIds: ['concept-y'] }]);
+    expect(session.getSchedulingObservationOffer()).toEqual({
+      instrument,
+      neighbourConceptId: 'concept-y',
+      promptText: 'reciprocal offer text',
+    });
+  });
+
+  it('is never gated on the rating just given — F2.14/F2.21: this proposes, it does not schedule', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        evaluateSchedulingObservationRouting: () => ({
+          shouldOffer: true,
+          neighbourConceptId: 'concept-1',
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getSchedulingObservationOffer()).not.toBeNull();
+  });
+
+  it('never offers when the evaluator says not to', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        evaluateSchedulingObservationRouting: () => ({ shouldOffer: false }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(session.getSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('a later graded review clears a stale offer that was never accepted (no nagging)', async () => {
+    const items = [
+      queueItem(qaFixture({ instrumentId: 'a', conceptIds: ['concept-y'] })),
+      queueItem(qaFixture({ instrumentId: 'b', conceptIds: ['concept-z'] })),
+    ];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: items,
+        evaluateSchedulingObservationRouting: (input) =>
+          input.conceptIds.includes('concept-y')
+            ? { shouldOffer: true, neighbourConceptId: 'concept-y', promptText: 'offer text' }
+            : { shouldOffer: false },
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+    expect(session.getSchedulingObservationOffer()).not.toBeNull();
+
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.getSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('resolving the offer returns the offered instrument and clears it — declining is the same no-op', async () => {
+    const instrument = qaFixture({ conceptIds: ['concept-y'] });
+    const item = queueItem(instrument);
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        evaluateSchedulingObservationRouting: () => ({
+          shouldOffer: true,
+          neighbourConceptId: 'concept-y',
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+    expect(session.getSchedulingObservationOffer()).not.toBeNull();
+
+    const resolved = session.resolveSchedulingObservationOffer();
+
+    expect(resolved?.instrument.instrumentId).toBe(instrument.instrumentId);
+    expect(resolved?.neighbourConceptId).toBe('concept-y');
+    expect(session.getSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('resolving with nothing pending returns null, never throws', async () => {
+    const session = new ReviewSession(baseDeps({ queue: [queueItem(qaFixture())] }));
+    await session.start();
+
+    expect(session.resolveSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('resolving twice in a row returns null the second time — "one available action," taken once', async () => {
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(qaFixture())],
+        evaluateSchedulingObservationRouting: () => ({
+          shouldOffer: true,
+          neighbourConceptId: 'concept-1',
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.resolveSchedulingObservationOffer()).not.toBeNull();
+    expect(session.resolveSchedulingObservationOffer()).toBeNull();
+  });
+
+  it('this offer and F2.12’s confusion-routing offer are independent — both can be pending at once', async () => {
+    const item = queueItem(qaFixture({ conceptIds: ['concept-y'] }));
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'confusion offer text',
+        }),
+        evaluateSchedulingObservationRouting: () => ({
+          shouldOffer: true,
+          neighbourConceptId: 'concept-y',
+          promptText: 'reciprocal offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()?.promptText).toBe('confusion offer text');
+    expect(session.getSchedulingObservationOffer()?.promptText).toBe('reciprocal offer text');
+  });
+});
