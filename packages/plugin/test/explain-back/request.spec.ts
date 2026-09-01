@@ -17,6 +17,7 @@ import {
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
+  buildGradeSoloInputFromTypedAnswer,
   retrieveExplainBackSourceBlocks,
 } from '../../src/explain-back/request.js';
 import { clozeFixture, mcqFixture, qaFixture } from '../review/fixtures.js';
@@ -176,5 +177,39 @@ describe('buildGradeExplainBackInputFromTypedAnswer', () => {
       sourceBlocks: context.sourceBlocks,
       misconceptionDigest: context.misconceptionDigest,
     });
+  });
+});
+
+describe('buildGradeSoloInputFromTypedAnswer (ol-cqz8)', () => {
+  it('concept-only: sourceBlocks double as the omission denominator, relationExpected is always false', () => {
+    const entries = [
+      { block: { blockId: 'b1', text: 'first passage' }, path: 'p.md', blockIndex: 0 },
+      { block: { blockId: 'b2', text: 'second passage' }, path: 'p.md', blockIndex: 1 },
+    ];
+    const context = buildExplainBackPromptContextFromInstrument(qaFixture(), entries);
+
+    const input = buildGradeSoloInputFromTypedAnswer('her explanation', context);
+
+    expect(input).toEqual({
+      question: context.question,
+      studentAnswer: 'her explanation',
+      sourceMaterial: {
+        sourceBlocks: context.sourceBlocks,
+        omissionDenominator: context.sourceBlocks,
+        candidateEdgeNomination: null,
+      },
+      relationExpected: false,
+    });
+  });
+
+  it('an empty retrieval still produces a gradeable input — an empty answer against no source blocks', () => {
+    const context = buildExplainBackPromptContextFromTopic('a topic', []);
+
+    const input = buildGradeSoloInputFromTypedAnswer('', context);
+
+    expect(input.sourceMaterial.sourceBlocks).toEqual([]);
+    expect(input.sourceMaterial.omissionDenominator).toEqual([]);
+    expect(input.sourceMaterial.candidateEdgeNomination).toBeNull();
+    expect(input.relationExpected).toBe(false);
   });
 });

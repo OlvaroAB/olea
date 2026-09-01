@@ -131,6 +131,39 @@
  * `AcceptExplainBackGradingWithObservationContext`'s `resolveCitation` /
  * `resolveConceptId` / `candidateRecordsForConcept` for real — none of which
  * this bead's `owns` reaches.
+ *
+ * ===========================================================================
+ * `ol-12gs` UPDATE (2026-08-31): THE ABOVE GAP IS CLOSED — `ol-cqz8` UPDATE
+ * BELOW ADDS THE SOLO PIPELINE'S OWN COMPOSITION
+ * ===========================================================================
+ * `ol-12gs` built `ExplainBackModal` (`packages/plugin/src/explain-back/
+ * modal.ts`), the `[D-163]` destination surface the paragraph above was
+ * still waiting on — `gradeExplainBackAttempt` and
+ * `acceptExplainBackGradingWithObservation` both have real production callers
+ * now (`main.ts`'s `openExplainBackModal`), closing the reachability gap this
+ * doc named through several update sections.
+ *
+ * That closed the CORRECTNESS pipeline's reachability, not the SOLO one:
+ * `createWorkerSoloJudgeCaller` (`explain-back.solo.v1`, `ol-95vv.2`) had no
+ * plugin-side composition anywhere, unlike its correctness sibling above.
+ * `gradeSoloAttempt` below is that composition — mirroring
+ * `gradeExplainBackAttempt`'s shape (same `GradingWiring`, same F7.8 grey-out
+ * reasons) with one addition the SOLO pipeline's write side requires: a real
+ * `SoloArtifactProvenance` (D7.3's promptVersion/modelId stamp), which a bare
+ * `SoloJudgeCaller` has nowhere to carry back to a caller — see that
+ * function's own doc.
+ *
+ * `ExplainBackModal`'s accept flow (`modal.ts`'s `acceptGrading`) calls
+ * `gradeSoloAttempt` through `../explain-back/solo-review.js`'s
+ * `recordSoloGradeAndReview`, which also composes `acceptSoloGrading` and
+ * `recordGradedExplainBackReview` (`olea-core`) into the one review-log write
+ * `[D-117]`'s "rides the same review event" ruling calls for — see that
+ * module's own doc for the full chain and for why `ExplainBackModalDeps
+ * .recordSoloGradeAndReview` is optional: `main.ts`'s `openExplainBackModal`
+ * construction site (the ONE place a real `RecordSoloGradeAndReviewDeps`
+ * instance — `GradingWiring` plus a `VaultSource`/device id — could be built)
+ * is outside `ol-cqz8`'s `owns`, so wiring that one call site is named as a
+ * follow-on rather than reached into.
  */
 
 import {
@@ -141,15 +174,21 @@ import {
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
   createWorkerJudgeCaller,
+  createWorkerSoloJudgeCaller,
+  EXPLAIN_BACK_SOLO_TASK_ID,
   evaluateConfusionRouting as evaluateConfusionRoutingCore,
   type GradeExplainBackInput,
+  type GradeSoloInput,
   gradeExplainBack,
+  gradeSolo,
   type JudgeCaller,
   type MisconceptionEmbedder,
   type MisconceptionEmbeddingCacheEngine,
   type MisconceptionRecord,
   type MisconceptionSourceCitation,
   type PendingExplainBackGrading,
+  type PendingSoloGrading,
+  type SoloArtifactProvenance,
   type WorkerTaskTransport,
 } from 'olea-core';
 import { buildMisconceptionEmbedderWiring } from '../misconception-embedder.js';
@@ -194,6 +233,19 @@ export interface GradingWiring {
    */
   readonly misconceptionEmbedder: MisconceptionEmbedder | null;
   readonly misconceptionEmbeddingCache: MisconceptionEmbeddingCacheEngine | null;
+  /**
+   * `ol-cqz8`: the SAME `WorkerTaskTransport` `judgeCaller` was built over
+   * (one Worker config, one transport per `buildGradingWiring` call — same
+   * posture `judgeCaller`/`misconceptionEmbedder` already share), kept raw
+   * rather than wrapped into a `SoloJudgeCaller` here. `gradeSoloAttempt`
+   * below is what wraps it, per call, in a stamp-capturing decorator — see
+   * that function's own doc for why a bare `SoloJudgeCaller` (a plain
+   * function returning only `ExplainBackSoloWireResponse`) cannot carry
+   * `[D-117]`'s required `artifactProvenance` (D7.3's promptVersion/modelId
+   * stamp) back to a caller on its own. `null` under the identical F7.8
+   * grey-out condition as `judgeCaller`.
+   */
+  readonly soloTransport: WorkerTaskTransport | null;
 }
 
 export async function buildGradingWiring(deps: GradingWiringDeps): Promise<GradingWiring> {
@@ -217,6 +269,7 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
       killedBySustainedAuditFailure,
       misconceptionEmbedder: misconception.embedder,
       misconceptionEmbeddingCache: misconception.cache,
+      soloTransport: null,
     };
   }
 
@@ -226,6 +279,11 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
     killedBySustainedAuditFailure,
     misconceptionEmbedder: misconception.embedder,
     misconceptionEmbeddingCache: misconception.cache,
+    // `ol-cqz8`: the correctness judge and the SOLO depth judge are
+    // independent Worker tasks (`explainBackSolo.ts`'s own module doc, "WHY
+    // THIS IS A SEPARATE PIPELINE") but share one Worker config/transport —
+    // same posture `misconception`'s embedder pair already takes above.
+    soloTransport: transport,
   };
 }
 
@@ -332,6 +390,99 @@ export async function acceptExplainBackGradingWithObservation(
     });
     return { accepted, observations: [] };
   }
+}
+
+/** What `gradeSoloAttempt` hands back — the pending SOLO grading plus the D7.3 provenance triple the write side ([D-117]'s `explainBackGrade.artifactProvenance`) requires and cannot derive on its own. */
+export interface SoloGradingOutcome {
+  readonly pending: PendingSoloGrading;
+  readonly artifactProvenance: SoloArtifactProvenance;
+}
+
+/**
+ * `ol-cqz8`: the plugin-side composition `createWorkerSoloJudgeCaller`
+ * (`olea-core`) had no caller anywhere in the plugin before this — mirrors
+ * `gradeExplainBackAttempt` above (same `null` grey-out reasons: no Worker
+ * configured, or `[D-127]`'s kill-switch has tripped) with one addition this
+ * pipeline needs that the correctness one does not: **the caller must also
+ * come away with a real `SoloArtifactProvenance`**, because
+ * `buildExplainBackGradeReviewFields` (`explainBackSolo.ts`) takes it as a
+ * required input rather than deriving it, and nothing upstream of the Worker
+ * response can supply a real `promptVersion`/`modelId` pair.
+ *
+ * A `SoloJudgeCaller` (`createWorkerSoloJudgeCaller`'s return type) is a
+ * plain `(input) => Promise<ExplainBackSoloWireResponse>` — deliberately
+ * faithful to the wire response only (that class's own module doc), so it
+ * has nowhere to carry the envelope's `stamp`. This function closes that gap
+ * itself, the same way `generation/response.ts`'s `extractDraftedProvenance`
+ * and `worker/transport.ts`'s `WorkerHttpTransport.onCallRecorded` already
+ * read `stamp.promptVersion`/`stamp.modelId` off the public envelope for
+ * D7.3 elsewhere in this plugin: it wraps `wiring.soloTransport` in a
+ * one-shot capturing decorator, builds a fresh `SoloJudgeCaller` over that
+ * decorator, and reads the captured stamp back out after `gradeSolo`
+ * resolves.
+ *
+ * Returns `null` — never throws — for any of three reasons, deliberately not
+ * distinguished in the return type (same posture `gradeExplainBackAttempt`
+ * already takes for its own two): the Worker isn't configured, the
+ * kill-switch has tripped, or (new to this function) the response carried no
+ * usable `stamp`. The third case is D-005's "never guess" posture applied to
+ * provenance specifically — `extractDraftedProvenance`'s own doc states the
+ * identical rule: "a caller that cannot prove provenance does not cache the
+ * draft." Here that becomes "does not treat the grading as usable," logged
+ * with a task id only (D-005: never the rationale or her answer).
+ */
+export async function gradeSoloAttempt(
+  wiring: GradingWiring,
+  input: GradeSoloInput,
+): Promise<SoloGradingOutcome | null> {
+  if (wiring.soloTransport === null || wiring.killedBySustainedAuditFailure) return null;
+  const soloTransport = wiring.soloTransport;
+
+  let stamp: SoloArtifactProvenance | null = null;
+  const capturingTransport: WorkerTaskTransport = {
+    send: async (request) => {
+      const body = await soloTransport.send(request);
+      stamp = extractSoloArtifactProvenance(body, request.taskId);
+      return body;
+    },
+  };
+
+  const pending = await gradeSolo(
+    input,
+    createWorkerSoloJudgeCaller({ transport: capturingTransport }),
+  );
+  if (stamp === null) {
+    console.error(
+      'Olea: SOLO grading response carried no D7.3 stamp (promptVersion/modelId) — grading discarded, not guessed',
+      { taskId: EXPLAIN_BACK_SOLO_TASK_ID },
+    );
+    return null;
+  }
+  return { pending, artifactProvenance: stamp };
+}
+
+/**
+ * Reads `{promptVersion, modelId}` off a Worker response's public `stamp`
+ * envelope — the same shape `generation/response.ts#extractDraftedProvenance`
+ * and `worker/transport.ts#WorkerHttpTransport`'s `onCallRecorded` callback
+ * already read for D7.3, duplicated here (rather than imported) because
+ * neither of those lives in this file's `owns` and both read a DIFFERENT
+ * `taskId` local constant than this pipeline's own. `null` on any malformed
+ * or missing piece — never a fabricated placeholder (D-005).
+ */
+function extractSoloArtifactProvenance(
+  body: unknown,
+  taskId: string,
+): SoloArtifactProvenance | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const envelope = body as Record<string, unknown>;
+  if (envelope.ok !== true) return null;
+  const stamp = envelope.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return { taskId, promptVersion: s.promptVersion, modelId: s.modelId };
 }
 
 /**

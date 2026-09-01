@@ -21,6 +21,9 @@
  *   using a plain `retrieve()` call over her indexed notes — the same
  *   simplification `review/explainWhy.ts`'s F2.7 grounding half already
  *   uses. Wiring the full relation-aware path is separate, larger work.
+ *   `ol-cqz8`'s `buildGradeSoloInputFromTypedAnswer` below inherits this same
+ *   concept-only simplification for the SOLO depth pipeline, for the
+ *   identical reason: `relationExpected` is always `false`.
  * - **No synthesized reference answer.** `explainBackJudgeRequest`'s
  *   `referenceAnswer` is documented service-side as "synthesized ground
  *   truth", distinct from `sourceBlocks`. No generation task exists to
@@ -35,6 +38,7 @@
 import {
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
+  type GradeSoloInput,
   type RetrieveDeps,
   retrieve,
   type SourceBlockRef,
@@ -139,6 +143,41 @@ export function buildGradeExplainBackInputFromTypedAnswer(
     referenceAnswer: context.referenceAnswer,
     sourceBlocks: context.sourceBlocks,
     misconceptionDigest: context.misconceptionDigest,
+  };
+}
+
+/**
+ * Turns a typed answer into `gradeSolo`'s input (`ol-cqz8`) — the SOLO
+ * pipeline's counterpart to `buildGradeExplainBackInputFromTypedAnswer`
+ * above, reusing the SAME `ExplainBackPromptContext` this view already
+ * resolved for the correctness pipeline rather than a second retrieval.
+ *
+ * **Concept-only, same simplification as this module's own module doc
+ * states for the correctness pipeline**: `mastery/gradingInputContract.ts`'s
+ * `buildGradingSourceMaterial` assembles subject+edge+neighbour passages for
+ * a RELATION-shaped prompt from already-resolved `ConceptDefiningPassages` —
+ * this view never builds those, so `sourceMaterial` is constructed directly
+ * here rather than through that function (whose concept-only branch needs
+ * nothing `context.sourceBlocks` doesn't already give: the subject's
+ * passages ARE the omission denominator, and there is no edge to nominate).
+ * `relationExpected: false` follows from the same fact — `groundSoloResponse`
+ * (`olea-core`) drops `neighbourUseDemonstrated` entirely whenever this is
+ * false, so `schedulingObservation` never gets fabricated from a
+ * concept-only prompt.
+ */
+export function buildGradeSoloInputFromTypedAnswer(
+  studentAnswer: string,
+  context: ExplainBackPromptContext,
+): GradeSoloInput {
+  return {
+    question: context.question,
+    studentAnswer,
+    sourceMaterial: {
+      sourceBlocks: context.sourceBlocks,
+      omissionDenominator: context.sourceBlocks,
+      candidateEdgeNomination: null,
+    },
+    relationExpected: false,
   };
 }
 

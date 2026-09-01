@@ -19,6 +19,7 @@ import {
   buildGradingWiring,
   evaluateConfusionRouting,
   gradeExplainBackAttempt,
+  gradeSoloAttempt,
 } from '../../src/grading/wiring.js';
 import { SLOT_E_MODEL_ID } from '../../src/retrieval/wiring.js';
 import { EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY } from '../../src/settings/explain-back-audit-gate.js';
@@ -233,6 +234,119 @@ describe('buildGradingWiring / gradeExplainBackAttempt — the E2b kill-switch',
     expect(wiring.judgeCaller).toBeNull();
     expect(wiring.killedBySustainedAuditFailure).toBe(true);
     expect(await gradeExplainBackAttempt(wiring, baseInput)).toBeNull();
+  });
+});
+
+// ---- gradeSoloAttempt (ol-cqz8) ------------------------------------------
+
+const baseSoloInput = {
+  question: 'What is a heap?',
+  studentAnswer: 'A tree-shaped structure that also enforces the heap property.',
+  sourceMaterial: {
+    sourceBlocks: [],
+    omissionDenominator: [],
+    candidateEdgeNomination: null,
+  },
+  relationExpected: false,
+};
+
+/** A `WorkerTaskTransport` fake that answers `explain-back.solo.v1` with a scripted grading. */
+function fakeSoloTransport(
+  reply: (request: WorkerTaskRequest) => unknown = () => ({
+    ok: true,
+    stamp: { contractVersion: 2, promptVersion: '1.0.0', modelId: 'solo-test-model' },
+    result: { soloLevel: 'relational', rationale: 'Connects both ideas under one principle.' },
+  }),
+) {
+  const calls: WorkerTaskRequest[] = [];
+  return {
+    calls,
+    send: async (request: WorkerTaskRequest) => {
+      calls.push(request);
+      return reply(request);
+    },
+  };
+}
+
+describe('gradeSoloAttempt', () => {
+  it('returns null rather than throwing when the Worker is unconfigured', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeSoloTransport(),
+    });
+
+    expect(wiring.soloTransport).toBeNull();
+    expect(await gradeSoloAttempt(wiring, baseSoloInput)).toBeNull();
+  });
+
+  it('a killed audit gate greys SOLO grading too, even though the Worker IS configured', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    host.blob = {
+      ...(host.blob as Record<string, unknown>),
+      [EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY]: { version: 1, sustainedFailure: true },
+    };
+    const transport = fakeSoloTransport();
+
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    expect(wiring.soloTransport).not.toBeNull();
+
+    expect(await gradeSoloAttempt(wiring, baseSoloInput)).toBeNull();
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('reaches gradeSolo through the real, configured caller, and captures the D7.3 stamp as artifactProvenance', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeSoloTransport();
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const outcome = await gradeSoloAttempt(wiring, baseSoloInput);
+
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.taskId).toBe('explain-back.solo.v1');
+    expect(outcome?.pending.status).toBe('pending-review');
+    expect(outcome?.pending.soloLevel).toBe('relational');
+    expect(outcome?.artifactProvenance).toEqual({
+      taskId: 'explain-back.solo.v1',
+      promptVersion: '1.0.0',
+      modelId: 'solo-test-model',
+    });
+  });
+
+  it('discards the grading rather than guessing a provenance when the Worker response carries no D7.3 stamp', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeSoloTransport(() => ({
+      ok: true,
+      result: { soloLevel: 'relational', rationale: 'Connects both ideas under one principle.' },
+      // no `stamp` at all
+    }));
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const originalConsoleError = console.error;
+    const errorLines: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errorLines.push(args);
+    };
+    try {
+      const outcome = await gradeSoloAttempt(wiring, baseSoloInput);
+      expect(outcome).toBeNull();
+      expect(errorLines).toHaveLength(1);
+      // D-005: task id only, never the rationale or her answer.
+      expect(JSON.stringify(errorLines[0])).not.toContain('Connects both ideas');
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });
 

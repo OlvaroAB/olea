@@ -12,15 +12,20 @@
  * ===========================================================================
  * Wires the two ports `ol-12gs` names as "the waiting pipeline this finally
  * makes reachable": `gradeExplainBackAttempt` and
- * `acceptExplainBackGradingWithObservation` (`../grading/wiring.ts`). It does
- * NOT:
- * - Write a review-log event for the graded attempt — recording
- *   `explainBackGrade`/`schedulingObservation` onto a `ReviewLogRecordInput`
- *   is `ol-95vv`'s mastery-fold job (see `mastery/gradingInputContract.ts`'s
- *   own module doc), not this view's. `originReviewEventId` is always `null`
- *   here for exactly that reason.
- * - Grade SOLO depth (`explain-back.solo.v1`) — a second, separate task from
- *   `explain-back.judge.v1`; wiring it is also `ol-95vv`'s charter.
+ * `acceptExplainBackGradingWithObservation` (`../grading/wiring.ts`).
+ *
+ * `ol-cqz8` UPDATE: `acceptGrading` below now ALSO runs the SOLO depth
+ * pipeline and appends the subject's own review-log event, via
+ * `deps.recordSoloGradeAndReview` — see `./solo-review.ts`'s module doc for
+ * the full chain (`gradeSoloAttempt` → `acceptSoloGrading` →
+ * `recordGradedExplainBackReview`) and for why this settles as ONE review
+ * event, not two. That dep is optional and best-effort (mirrors
+ * `acceptWithObservation`'s own failure-isolation posture): `originReview
+ * EventId` stays `null` below for the unrelated reason it already was
+ * (nothing here reads a PRIOR review event's id — `recordSoloGradeAndReview`
+ * writes a fresh one).
+ *
+ * It does NOT:
  * - Support relation-context prompts (F5.2a's neighbour-concept retrieval) —
  *   see `./request.ts`'s module doc for why this view is concept-only.
  * - Fold an accepted attempt into F4.6's session time accounting
@@ -100,6 +105,22 @@ export interface ExplainBackModalDeps {
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
   }) => Promise<AcceptExplainBackGradingWithObservationContext>;
+  /**
+   * `ol-cqz8`: runs the SOLO depth pipeline and appends the subject's own
+   * review-log event — see `./solo-review.ts`'s `recordSoloGradeAndReview`,
+   * which this normally wraps. Optional and best-effort, same posture as
+   * `acceptWithObservation`'s own embedding step: a rejection is caught in
+   * `acceptGrading` below and never fails the correctness accept it rode on.
+   * `undefined` until a caller wires a real `RecordSoloGradeAndReviewDeps`
+   * instance — see this file's module doc and `./solo-review.ts`'s own
+   * "reachability" section for exactly what that needs and where it goes.
+   */
+  readonly recordSoloGradeAndReview?: (params: {
+    readonly instrumentId: string;
+    readonly subjectConceptId: string | null;
+    readonly context: ExplainBackPromptContext;
+    readonly answer: string;
+  }) => Promise<void>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
@@ -229,6 +250,7 @@ export class ExplainBackModal extends Modal {
 
   private async acceptGrading(
     prompt: ResolvedPrompt,
+    answer: string,
     pending: PendingExplainBackGrading,
   ): Promise<void> {
     const context = await this.deps.buildObservationContext({
@@ -237,6 +259,25 @@ export class ExplainBackModal extends Modal {
       sourceBlocks: prompt.sourceBlocks,
     });
     const result = await this.deps.acceptWithObservation(pending, context);
+    if (this.deps.recordSoloGradeAndReview) {
+      try {
+        await this.deps.recordSoloGradeAndReview({
+          instrumentId: prompt.originInstrumentId,
+          subjectConceptId: prompt.subjectConceptId,
+          context: prompt.context,
+          answer,
+        });
+      } catch (error) {
+        // Mirrors `acceptWithObservation`'s own isolation
+        // (`grading/wiring.ts`'s `acceptExplainBackGradingWithObservation`
+        // doc): the SOLO depth grading and its review-log write are
+        // additional evidence, never a precondition for the correctness
+        // accept she is already looking at. D-005: a content-free line only.
+        console.error('Olea: SOLO grade/review-log write failed (grade acceptance unaffected)', {
+          error,
+        });
+      }
+    }
     const message = result === null ? null : explainBackFullDepthEncouragement(result.accepted);
     this.state = { phase: 'accepted', message };
     this.render();
@@ -353,7 +394,7 @@ export class ExplainBackModal extends Modal {
 
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
-    accept.addEventListener('click', () => void this.acceptGrading(prompt, pending));
+    accept.addEventListener('click', () => void this.acceptGrading(prompt, answer, pending));
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
   }

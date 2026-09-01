@@ -402,13 +402,34 @@ export type {
 export { assembleVoiceExemplars } from './generate/voice-sources.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
-// this is the one impure export in that file, and why calling it only
-// partially discharges `ol-95vv.3` rather than finishing it. Only the
-// contentRef-minting surface is exported here; the rest of
-// `explainBackSolo.ts`'s API (gradeSolo, acceptSoloGrading, ...) is
-// `ol-95vv.2`/`ol-95vv.3` territory, out of this bead's `owns`.
-export type { MintSoloGradingContentInput } from './grading/explainBackSolo.js';
-export { writeSoloGradingContent } from './grading/explainBackSolo.js';
+// this is the one impure export in that file. `ol-cqz8` widens this block to
+// the rest of the module's API (`gradeSolo`, `acceptSoloGrading`,
+// `buildExplainBackGradeReviewFields`, ...) so a plugin-side caller can wire
+// the SOLO pipeline without a deep import — the gap `explainBackSolo.ts`'s
+// own module doc names as blocking `ol-cqz8` specifically.
+export type {
+  AcceptedSoloGrading,
+  BuildExplainBackGradeReviewFieldsInput,
+  ExplainBackGradeReviewFields,
+  ExplainBackSoloWireRequest,
+  ExplainBackSoloWireResponse,
+  GradeSoloInput,
+  GroundedSoloGrading,
+  MintSoloGradingContentInput,
+  PendingSoloGrading,
+  SoloArtifactProvenance,
+  SoloGradingTelemetrySummary,
+  SoloJudgeCaller,
+} from './grading/explainBackSolo.js';
+export {
+  acceptSoloGrading,
+  buildExplainBackGradeReviewFields,
+  discardSoloGrading,
+  gradeSolo,
+  groundSoloResponse,
+  summarizeSoloGradingForTelemetry,
+  writeSoloGradingContent,
+} from './grading/explainBackSolo.js';
 // The explain-back grading pipeline: pre-check -> (maybe) model call ->
 // citation grounding -> accept step (ol-p4t02).
 export type {
@@ -454,6 +475,17 @@ export {
   EXPLAIN_BACK_JUDGE_TASK_ID,
   WorkerJudgeError,
 } from './grading/workerJudgeCaller.js';
+// The production `SoloJudgeCaller` for `explain-back.solo.v1` (`ol-95vv.2`),
+// mirroring `createWorkerJudgeCaller` immediately above — `ol-cqz8` is the
+// first plugin-side composition of this port (`grading/wiring.ts`'s own
+// `GradingWiring`, mirroring how it already composes `createWorkerJudgeCaller`).
+export type { WorkerSoloJudgeCallerDeps } from './grading/workerSoloJudgeCaller.js';
+export {
+  createWorkerSoloJudgeCaller,
+  EXPLAIN_BACK_SOLO_CONTRACT_VERSION,
+  EXPLAIN_BACK_SOLO_TASK_ID,
+  WorkerSoloJudgeError,
+} from './grading/workerSoloJudgeCaller.js';
 // Question-shaped heading detection (F2.10, `ol-f210bead`) — the detection
 // half only. See heading-offer/detect.ts's module doc for the rules, the
 // "has no card" coverage window, and the wiring seam this stops short of.
@@ -1417,6 +1449,20 @@ export {
   priceAcceptedExplainBacks,
   totalExplainBackSeconds,
 } from './study-session/explain-back.js';
+// `ol-95vv.3`'s verdict-seam write: the study-session half of `[D-117]`'s
+// "rides the same review event" ruling — spreads `explainBackGrade`/
+// `schedulingObservation` onto the subject's own `ReviewLogRecordInput` and
+// appends it. No barrel export until `ol-cqz8`, which is the first caller
+// outside `packages/core` (`packages/plugin/src/explain-back/solo-review.js`).
+export type {
+  ComposeGradedExplainBackReviewRecordInput,
+  GradedExplainBackReviewSubject,
+  RecordGradedExplainBackReviewInput,
+} from './study-session/explain-back-grade-write.js';
+export {
+  composeGradedExplainBackReviewRecord,
+  recordGradedExplainBackReview,
+} from './study-session/explain-back-grade-write.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';
 export { buildConceptInstrumentIndex } from './study-session/instrument-index.js';
 // Re-entry after absence (register row 3.8, `ol-nhxa`) — the SAME selection rule at a
