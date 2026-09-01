@@ -286,6 +286,194 @@ describe('F2.19 — within-block grouping on the plain review-queue path', () =>
   });
 });
 
+// -----------------------------------------------------------------------
+// `[D-149]` (`ol-v7r5.22`): the material-arrival cohort, reused from
+// `study-session/compose.ts` (`ol-v7r5.12`) rather than restated — see
+// `block-order.ts`'s "material-arrival cohort" doc section and
+// features/F2-review.md's (olea-service) matching scenario block.
+// -----------------------------------------------------------------------
+describe('[D-149] the material-arrival cohort reaches the plain review-queue path too', () => {
+  const lecture1 = '01 Courses/CRS101/lecture-1.md';
+  const lecture2 = '01 Courses/CRS101/lecture-2.md';
+
+  it('freshly-arrived material with no relation signal pulls its own source-note cohort adjacent', () => {
+    // x1 and z1 both arrived TODAY from the same source note; y1 arrived
+    // from a different note and has no arrival entry at all. All three tie
+    // exactly on overdueDays (all due `NOW`), and no `relatedConceptKeys` is
+    // supplied — cohort affinity is the only signal available to break the
+    // tie.
+    const candidates: readonly QueueCandidate[] = [
+      candidate({
+        instrumentId: 'x1',
+        conceptIds: ['x'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'y1',
+        conceptIds: ['y'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'z1',
+        conceptIds: ['z'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+    ];
+    const result = compose({
+      candidates,
+      conceptSourcePaths: new Map([
+        ['x', [lecture1]],
+        ['y', [lecture2]],
+        ['z', [lecture1]],
+      ]),
+      arrivalDays: new Map([
+        ['x', '2026-08-10'],
+        ['z', '2026-08-10'],
+      ]),
+    });
+
+    // x and z's shared, freshly-arrived source note pulls them adjacent,
+    // ahead of y — never `[x1, y1, z1]`, the plain-caller-order fallback a
+    // mutation dropping the cohort term would produce instead.
+    expect(idsOf(result)).toEqual(['x1', 'z1', 'y1']);
+  });
+
+  it("as the cohort's arrival recedes, a live relation outranks the decayed cohort", () => {
+    // a1 is related to BOTH b1 and c1 (relatedness 1.0, unaffected by
+    // arrival — a1 itself has no arrival entry, so its own cohort weight is
+    // 0 regardless of c1's). b1 carries no cohort signal (different source
+    // note) but IS related to a1 (relatedness 0.5, cohort weight 0 — no
+    // arrival entry either). c1 carries no relation at all, only a source
+    // note shared with a1, and it arrived long enough ago (many half-lives)
+    // that its cohort weight is small. Whatever that residual weight is
+    // (any value below 1, which a real elapsed time always gives), c1's
+    // blended score (`residualWeight * 0.5`) stays under b1's fixed 0.5 —
+    // the live relation reliably outranks the decayed cohort.
+    const staleArrival = '2025-01-01';
+    const candidates: readonly QueueCandidate[] = [
+      candidate({
+        instrumentId: 'a1',
+        conceptIds: ['a'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'b1',
+        conceptIds: ['b'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'c1',
+        conceptIds: ['c'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+    ];
+    const result = compose({
+      candidates,
+      conceptSourcePaths: new Map([
+        ['a', [lecture1]],
+        ['b', [lecture2]],
+        ['c', [lecture1]],
+      ]),
+      // Only c carries an arrival day — a and b's own cohort weight is 0 by
+      // omission, exactly like the no-signal case.
+      arrivalDays: new Map([['c', staleArrival]]),
+      relatedConceptKeys: new Map([
+        ['a', new Set(['b', 'c'])],
+        ['b', new Set(['a'])],
+      ]),
+    });
+
+    // c1 still technically shares a1's source note, but the decayed cohort
+    // no longer keeps it adjacent — b1's live relation to a1 wins the
+    // placement instead, unlike the fresh-arrival case above where the
+    // cohort alone decided the order.
+    expect(idsOf(result)).toEqual(['a1', 'b1', 'c1']);
+  });
+
+  it('is a no-op, byte-for-byte, when arrivalDays is omitted — even with a matching cohort present', () => {
+    const candidates: readonly QueueCandidate[] = [
+      candidate({
+        instrumentId: 'x1',
+        conceptIds: ['x'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'y1',
+        conceptIds: ['y'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+      candidate({
+        instrumentId: 'z1',
+        conceptIds: ['z'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+      }),
+    ];
+    // A matching `conceptSourcePaths` map (x and z share a note) but NO
+    // `arrivalDays` map at all: cohort weight is 0 for every item
+    // regardless of the shared source note, so this falls through to the
+    // caller's original order — plain FSRS tie order, unchanged.
+    const result = compose({
+      candidates,
+      conceptSourcePaths: new Map([
+        ['x', [lecture1]],
+        ['y', [lecture2]],
+        ['z', [lecture1]],
+      ]),
+    });
+    expect(idsOf(result)).toEqual(['x1', 'y1', 'z1']);
+  });
+
+  it('an approaching assessment still overrides even a maximally-fresh cohort', () => {
+    // 'scoped' is named in an imminent assessment's own scope; 'cohort-only'
+    // shares scoped's OWN source note and arrived today (cohort weight 1,
+    // cohort affinity 1 — a maximal pull, not merely a fresh one) but is not
+    // itself in that scope. The outer proximity blend must still favour
+    // scope membership over the inner relatedness-plus-cohort blend, exactly
+    // as it already does over plain relatedness on this path.
+    const assessmentPath = 'Assessments/midterm.md';
+    const candidates: readonly QueueCandidate[] = [
+      candidate({
+        instrumentId: 'cohort-only',
+        conceptIds: ['cohort-only-concept'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+        targetAssessmentPath: assessmentPath,
+      }),
+      candidate({
+        instrumentId: 'scoped',
+        conceptIds: ['scoped-concept'],
+        courses: ['COURSE-A'],
+        state: stateDue(NOW),
+        targetAssessmentPath: assessmentPath,
+      }),
+    ];
+    const result = compose({
+      candidates,
+      conceptSourcePaths: new Map([
+        ['cohort-only-concept', [lecture1]],
+        ['scoped-concept', [lecture1]],
+      ]),
+      // Only 'cohort-only-concept' carries an arrival day — a maximal,
+      // freshly-arrived cohort pull that would otherwise dominate.
+      arrivalDays: new Map([['cohort-only-concept', '2026-08-10']]),
+      assessmentContext: new Map([
+        [assessmentPath, { dueDay: '2026-08-10', scopeConceptKeys: new Set(['scoped-concept']) }],
+      ]),
+    });
+
+    expect(idsOf(result)).toEqual(['scoped', 'cohort-only']);
+  });
+});
+
 describe('applyCourseBlocking — the pure reordering pass, in isolation', () => {
   const candidatesById = new Map<string, QueueCandidate>([
     ['i1', candidate({ instrumentId: 'i1', conceptIds: ['c1'], courses: ['COURSE-B'] })],

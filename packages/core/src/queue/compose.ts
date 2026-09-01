@@ -40,9 +40,10 @@
  * the full account, including why `[D-113]`'s overdue-first primacy is
  * unaffected (grouping only ever moves an item within an exact tie band,
  * never across one, and never changes which instrument was selected or won a
- * dedupe tie in steps 1–5 above). `relatedConceptKeys` and
- * `assessmentContext` are both optional, caller-resolved, and a no-op when
- * omitted — see that module's doc.
+ * dedupe tie in steps 1–5 above). `relatedConceptKeys`, `assessmentContext`,
+ * and (`[D-149]`, `ol-v7r5.22`) `arrivalDays`/`conceptSourcePaths` — the
+ * material-arrival cohort, blended into relatedness — are all optional,
+ * caller-resolved, and a no-op when omitted — see that module's doc.
  *
  * ## The dedupe key is a set (`ol-t3sd`)
  *
@@ -243,6 +244,8 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     dedupeByConcept = true,
     relatedConceptKeys,
     assessmentContext,
+    arrivalDays,
+    conceptSourcePaths,
   } = input;
 
   // 1–3. Filter (F2.5), drop suspended (F2.6), keep only what is due.
@@ -345,6 +348,8 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     now,
     ...(relatedConceptKeys !== undefined ? { relatedConceptKeys } : {}),
     ...(assessmentContext !== undefined ? { assessmentContext } : {}),
+    ...(arrivalDays !== undefined ? { arrivalDays } : {}),
+    ...(conceptSourcePaths !== undefined ? { conceptSourcePaths } : {}),
   });
 
   return { items: blocked, deferred };

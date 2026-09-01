@@ -12,11 +12,33 @@
  *
  * ## Reused, not duplicated
  *
- * The two formulas that are F2.19's actual substance —
- * {@link withinBlockRelatedness}'s adjacency fraction and
- * {@link withinBlockAssessmentProximity}'s `[D-110]` half-life decay — are
- * imported from `study-session/compose.ts`, which the ratified shape already
- * ships for the Today session. They are not restated here.
+ * The formulas that are F2.19's actual substance —
+ * {@link withinBlockRelatedness}'s adjacency fraction,
+ * {@link withinBlockAssessmentProximity}'s `[D-110]` half-life decay, and
+ * (`[D-149]`, `ol-v7r5.22`) {@link withinBlockCohortAffinity}'s exact
+ * source-note overlap plus {@link withinBlockCohortDecayWeight}'s continuous
+ * decay — are imported from `study-session/compose.ts`, which the ratified
+ * shape already ships for the Today session. They are not restated here.
+ *
+ * ## The material-arrival cohort (`[D-149]`, `ol-v7r5.22`)
+ *
+ * `groupingScore` blends the cohort into relatedness exactly the way
+ * `study-session/compose.ts`'s `withinBlockGroupingScore` does:
+ * `blendedRelatedness = (1 - cohortWeight) * relatedness + cohortWeight *
+ * cohortAffinity`, computed *before* the outer `(1 - proximity) *
+ * blendedRelatedness + proximity * scopeMembership` blend — so F4.7's
+ * stop-at-the-assessment rule still has final say over cohort placement
+ * exactly as it already does over plain relatedness. The grain is exact
+ * `ComposeQueueInput.conceptSourcePaths` overlap (that map's own doc explains
+ * why it is caller-resolved rather than a new field on `QueueCandidate`); the
+ * signal is `ComposeQueueInput.arrivalDays` (`ARRIVE-1`), continuous, never a
+ * threshold or a stored flag. **No-op, provably, absent `arrivalDays`**: an
+ * omitted map, or a concept missing from it, reads `arrivalDay: null`,
+ * {@link withinBlockCohortDecayWeight} returns `0`, and `blendedRelatedness`
+ * collapses to `relatedness` alone — byte-for-byte this module's behaviour
+ * before this bead, the same posture `relatedConceptKeys`/`assessmentContext`
+ * already have (see "No signal, no-op, provably" below). `block-order.spec.ts`
+ * pins this equivalence explicitly.
  *
  * What IS rewritten is the scaffolding around them (grouping by course,
  * tie-banding, block ordering), because it has to operate over a different
@@ -64,6 +86,8 @@
 import { daysBetween } from '../dates.js';
 import {
   withinBlockAssessmentProximity,
+  withinBlockCohortAffinity,
+  withinBlockCohortDecayWeight,
   withinBlockRelatedness,
 } from '../study-session/compose.js';
 import { type CalendarDay, calendarDayOfTimestamp } from '../today/calendar-day.js';
@@ -94,6 +118,10 @@ export interface ApplyCourseBlockingInput {
   readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
   /** F2.19 — see `ComposeQueueInput.assessmentContext`. */
   readonly assessmentContext?: ReadonlyMap<VaultPath, QueueAssessmentContext>;
+  /** `[D-149]` (`ol-v7r5.22`) — see `ComposeQueueInput.arrivalDays`. */
+  readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
+  /** `[D-149]` (`ol-v7r5.22`) — see `ComposeQueueInput.conceptSourcePaths`. */
+  readonly conceptSourcePaths?: ReadonlyMap<string, readonly VaultPath[]>;
 }
 
 interface Placed {
@@ -127,26 +155,41 @@ function placementOf(
 /**
  * F2.19's placement-affinity score for one item within its tie band — higher
  * sorts earlier. Same blend `study-session/compose.ts`'s
- * `withinBlockGroupingScore` states — `(1 - proximity) * relatedness +
- * proximity * scopeMembership` — built from the two imported formulas rather
- * than restated. `0` when neither optional map is supplied.
+ * `withinBlockGroupingScore` states — `(1 - proximity) * blendedRelatedness +
+ * proximity * scopeMembership`, where `blendedRelatedness` is itself
+ * `(1 - cohortWeight) * relatedness + cohortWeight * cohortAffinity`
+ * (`[D-149]`, `ol-v7r5.22` — see the module doc's "material-arrival cohort"
+ * section) — built from the imported formulas rather than restated. `0` when
+ * none of the optional maps are supplied.
  */
 function groupingScore(
   placed: Placed,
   peers: readonly string[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, QueueAssessmentContext> | undefined,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+  conceptSourcePaths: ReadonlyMap<string, readonly VaultPath[]> | undefined,
   asOf: CalendarDay,
 ): number {
   const relatedness = withinBlockRelatedness(placed.conceptKey, peers, relatedConceptKeys);
+  const cohortWeight = withinBlockCohortDecayWeight(
+    arrivalDays?.get(placed.conceptKey) ?? null,
+    asOf,
+  );
+  const cohortAffinity = withinBlockCohortAffinity(
+    conceptSourcePaths?.get(placed.conceptKey) ?? [],
+    peers,
+    conceptSourcePaths ?? new Map(),
+  );
+  const blendedRelatedness = (1 - cohortWeight) * relatedness + cohortWeight * cohortAffinity;
   const context =
     placed.targetAssessmentPath !== null
       ? assessmentContext?.get(placed.targetAssessmentPath)
       : undefined;
-  if (context === undefined) return relatedness;
+  if (context === undefined) return blendedRelatedness;
   const proximity = withinBlockAssessmentProximity(context.dueDay, asOf);
   const scopeMembership = context.scopeConceptKeys.has(placed.conceptKey) ? 1 : 0;
-  return (1 - proximity) * relatedness + proximity * scopeMembership;
+  return (1 - proximity) * blendedRelatedness + proximity * scopeMembership;
 }
 
 /** F2.19: reorder one course's items within exact-`overdueDays` tie bands only — see the module doc. */
@@ -154,6 +197,8 @@ function withinBlockOrderForQueue(
   bucket: readonly Placed[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, QueueAssessmentContext> | undefined,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+  conceptSourcePaths: ReadonlyMap<string, readonly VaultPath[]> | undefined,
   asOf: CalendarDay,
 ): readonly Placed[] {
   const result: Placed[] = [];
@@ -181,6 +226,8 @@ function withinBlockOrderForQueue(
           keys.filter((k) => k !== p.conceptKey),
           relatedConceptKeys,
           assessmentContext,
+          arrivalDays,
+          conceptSourcePaths,
           asOf,
         ),
       }));
@@ -206,7 +253,15 @@ function bestPrecedence(bucket: readonly Placed[]): number {
  * doc. A pure reordering: same items, same length, never a different set.
  */
 export function applyCourseBlocking(input: ApplyCourseBlockingInput): readonly QueueItem[] {
-  const { items, candidatesById, now, relatedConceptKeys, assessmentContext } = input;
+  const {
+    items,
+    candidatesById,
+    now,
+    relatedConceptKeys,
+    assessmentContext,
+    arrivalDays,
+    conceptSourcePaths,
+  } = input;
   if (items.length === 0) return items;
 
   // UTC calendar day of `now`, matching `compose.ts`'s own UTC-normalised
@@ -228,7 +283,14 @@ export function applyCourseBlocking(input: ApplyCourseBlockingInput): readonly Q
   for (const [course, bucket] of byCourse) {
     ordered.set(
       course,
-      withinBlockOrderForQueue(bucket, relatedConceptKeys, assessmentContext, asOf),
+      withinBlockOrderForQueue(
+        bucket,
+        relatedConceptKeys,
+        assessmentContext,
+        arrivalDays,
+        conceptSourcePaths,
+        asOf,
+      ),
     );
   }
 

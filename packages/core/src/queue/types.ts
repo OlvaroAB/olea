@@ -23,6 +23,21 @@
  * (see `block-order.ts`). `QueueCandidate.targetAssessmentPath` and
  * `ComposeQueueInput.relatedConceptKeys`/`assessmentContext` exist only to
  * feed that layer.
+ *
+ * ## F2.19 — the material-arrival cohort (`[D-149]`, `ol-v7r5.22`)
+ *
+ * `ComposeQueueInput.arrivalDays`/`conceptSourcePaths` bring the same
+ * continuous decay-weighted cohort blend `study-session/compose.ts` ships
+ * (`ol-v7r5.12`) to this path, reusing that module's exported
+ * `withinBlockCohortAffinity`/`withinBlockCohortDecayWeight` rather than
+ * restating the formulas — see `block-order.ts`. **`conceptSourcePaths` is a
+ * caller-resolved map, not a new field on `QueueCandidate`**: that type's own
+ * "note the absences" doc says there is deliberately no note path on an
+ * instrument, and a caller-supplied map keyed by `conceptKey` — the same
+ * shape `relatedConceptKeys` already takes — reaches the cohort grain
+ * (`ConceptRecord.sourcePaths` exactly, per `GapRow.notePaths`'s own doc)
+ * without punching a hole in that absence. Both optional, and omitting either
+ * is a no-op — see `block-order.ts`'s no-op proof.
  */
 
 import type { SelectionContextV4 } from 'olea-contracts';
@@ -295,6 +310,23 @@ export interface ComposeQueueInput {
    * entirely.**
    */
   readonly assessmentContext?: ReadonlyMap<VaultPath, QueueAssessmentContext>;
+  /**
+   * `[D-149]` (`ol-v7r5.22`): `ARRIVE-1`'s days-since-arrival signal, keyed
+   * by `conceptKey` — the identical shape and key
+   * `study-session/compose.ts`'s `ComposeSessionRowsInput.arrivalDays`
+   * already uses. Drives {@link withinBlockCohortDecayWeight} in
+   * `block-order.ts`. **Optional and safe to omit entirely** — see that
+   * module's no-op proof.
+   */
+  readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
+  /**
+   * `[D-149]` (`ol-v7r5.22`): the cohort's grain — each `conceptKey`'s own
+   * source notes, verbatim `ConceptRecord.sourcePaths`/`GapRow.notePaths` —
+   * caller-resolved rather than a field on {@link QueueCandidate} (see this
+   * module's doc for why). Drives {@link withinBlockCohortAffinity} in
+   * `block-order.ts`. **Optional and safe to omit entirely.**
+   */
+  readonly conceptSourcePaths?: ReadonlyMap<string, readonly VaultPath[]>;
 }
 
 /**
