@@ -71,9 +71,9 @@
  * components 1.6 and 2.5 already use. This module never fits, tunes or
  * reasons about that derivation; `rankOracle` simply applies whichever
  * `RankOracleOptions` its caller hands it via `RankOracleInput.options` — in
- * production that is a decoded delivered artifact's body, once one is
- * wired (see the module-level note beside `resolveOptions` below for the
- * current gap).
+ * production that is a decoded delivered artifact's body where one is
+ * wired (see the module-level note beside `resolveOptions` below for which
+ * caller does, and which still don't).
  *
  * The `DECLARED_FALLBACK_*` constants below are a **different, narrower
  * thing**: this module's own client-side default for when no delivered
@@ -218,14 +218,18 @@ interface ResolvedOptions {
  * means a partial or first-generation delivered body still improves on the
  * declared fallback wherever it has an opinion.
  *
- * **Known gap (reachability, plan §2.7 clause 5):** no production caller
- * decodes a `rank-weights` envelope and passes it here yet — the
- * `rank-weights` kind has no row in `packages/contracts/src/
- * artifact-envelope.ts`, so every caller today omits `options` and this
- * always resolves to the declared fallback below. See the follow-up bead
- * this module's file ownership does not cover (packages/contracts and the
- * plugin's provider layer): filed as `ol-v7r5.3`, discovered from
- * `ol-v7r5.2`.
+ * **Reachability (plan §2.7 clause 5), closed by `ol-v7r5.3`:** the
+ * `rank-weights` envelope kind is registered in `packages/contracts/src/
+ * artifact-envelope.ts`, and one production path decodes and passes it —
+ * `main.ts` wires `rank/wiring.ts`'s `buildRankWeightsWiring` (which fetches
+ * and decodes the delivered envelope) into `deps.readRankWeights`, which
+ * `plan/provider.ts` awaits and threads onto `composeOracleRanking`'s
+ * `options`. That is the *only* production caller that does: the plugin's
+ * other two `composeOracleRanking` callers, `gap/provider.ts` and
+ * `session-builder/provider.ts`, still omit `options` on every call and
+ * always resolve to the declared fallback below — there is no product
+ * reason yet for those two call sites to read a delivered ranking-weights
+ * artifact themselves rather than reusing the study plan's.
  */
 function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions {
   const proximityHalfLifeDays =
