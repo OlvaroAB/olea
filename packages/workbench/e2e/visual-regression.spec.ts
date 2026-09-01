@@ -72,6 +72,7 @@
  */
 import { expect, test } from '@playwright/test';
 import {
+  BULK_REVIEW_STATES,
   EXPLAIN_STATES,
   GENERATE_STATES,
   gotoState,
@@ -196,6 +197,18 @@ for (const stateId of RHYTHM_STATES) {
       await applyTallViewportIfAny(page, stateId);
       await gotoState(page, 'rhythm', stateId, setId);
       await expect(hostFrameElement(page)).toHaveScreenshot(`rhythm-${stateId}--${setId}.png`);
+    });
+  }
+}
+
+// F3.3's bulk-review triage (`ol-jie3`) — 2 states across the same 6
+// variable sets, 12 more screenshots.
+for (const stateId of BULK_REVIEW_STATES) {
+  for (const setId of VARIABLE_SETS) {
+    test(`bulk-review/${stateId} @ ${setId}`, async ({ page }) => {
+      await applyTallViewportIfAny(page, stateId);
+      await gotoState(page, 'bulk-review', stateId, setId);
+      await expect(hostFrameElement(page)).toHaveScreenshot(`bulk-review-${stateId}--${setId}.png`);
     });
   }
 }

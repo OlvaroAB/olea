@@ -21,6 +21,7 @@
  */
 import { expect, test } from '@playwright/test';
 import {
+  BULK_REVIEW_STATES,
   EXPLAIN_STATES,
   frame,
   GENERATE_STATES,
@@ -80,6 +81,7 @@ const SURFACE_STATES: ReadonlyArray<readonly [Surface, readonly string[]]> = [
   ['session', SESSION_STATES],
   ['trends', TRENDS_STATES],
   ['rhythm', RHYTHM_STATES],
+  ['bulk-review', BULK_REVIEW_STATES],
 ];
 
 for (const [surface, stateIds] of SURFACE_STATES) {

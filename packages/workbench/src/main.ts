@@ -78,6 +78,13 @@ import {
   writePersonaHistory,
 } from './persona/history.js';
 import { ReviewSession, ReviewView, TodayView } from './plugin-bridge.js';
+import { BulkReviewView } from './bulk-review-bridge.js';
+import {
+  buildBulkReviewScenario,
+  BULK_REVIEW_STATES,
+  findBulkReviewState,
+  seedBulkReviewScenario,
+} from './bulk-review-scenarios.js';
 import {
   deriveWorkbenchQueue,
   describeWorkbenchQueue,
@@ -149,6 +156,7 @@ type RouteSurface =
   | 'session'
   | 'trends'
   | 'rhythm'
+  | 'bulk-review'
   | 'walk';
 
 const DEFAULT_STATE = 'qa-front';
@@ -161,6 +169,7 @@ const DEFAULT_EXPLAIN_STATE = 'explanation-grounded';
 const DEFAULT_SESSION_STATE = 'session-exam-eve-90';
 const DEFAULT_TRENDS_STATE = 'trends-cramming';
 const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
+const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -262,6 +271,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_TRENDS_STATE;
     case 'rhythm':
       return DEFAULT_RHYTHM_STATE;
+    case 'bulk-review':
+      return DEFAULT_BULK_REVIEW_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -292,6 +303,8 @@ function findStateFor(
       return findTrendsState(stateId);
     case 'rhythm':
       return findRhythmState(stateId);
+    case 'bulk-review':
+      return findBulkReviewState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -331,9 +344,11 @@ function readRoute(): Route {
                     ? 'trends'
                     : segments[0] === 'rhythm'
                       ? 'rhythm'
-                      : segments[0] === 'walk'
-                        ? 'walk'
-                        : 'review';
+                      : segments[0] === 'bulk-review'
+                        ? 'bulk-review'
+                        : segments[0] === 'walk'
+                          ? 'walk'
+                          : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -395,6 +410,7 @@ async function main(): Promise<void> {
   const sessionStateList = requireEl('[data-wb-session-states]');
   const trendsStateList = requireEl('[data-wb-trends-states]');
   const rhythmStateList = requireEl('[data-wb-rhythm-states]');
+  const bulkReviewStateList = requireEl('[data-wb-bulk-review-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -552,6 +568,18 @@ async function main(): Promise<void> {
     rhythmStateList.appendChild(button);
   }
 
+  for (const state of BULK_REVIEW_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbBulkReviewStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'bulk-review', stateId: state.id });
+    });
+    bulkReviewStateList.appendChild(button);
+  }
+
   // The walkthrough's own step list (rule: "collapses the six state lists to
   // a single ordered step list with a live/partial/gap dot per step"). Status
   // classes are set here once (status never changes at runtime) and
@@ -627,7 +655,7 @@ async function main(): Promise<void> {
     personaList.appendChild(button);
   }
 
-  let mounted: { view: ReviewView | TodayView | GapView | SessionBuilderView } | null = null;
+  let mounted: { view: ReviewView | TodayView | GapView | SessionBuilderView | BulkReviewView } | null = null;
   let generation = 0;
   /**
    * The persona history currently loaded into the vault, and where it went.
@@ -831,6 +859,14 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'rhythm' && button.dataset.wbRhythmStateLink === state.id,
+      );
+    }
+    for (const button of bulkReviewStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-bulk-review-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'bulk-review' && button.dataset.wbBulkReviewStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1173,6 +1209,46 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
+    /**
+     * F3.3's bulk-review triage (`ol-jie3`) — the REAL `BulkReviewView` over
+     * the REAL `BulkReviewController`, `createVaultDraftCacheStore` and
+     * `createDraftAcceptPort` from `packages/plugin`, run against a
+     * synthetic in-memory vault this surface seeds itself
+     * (`bulk-review-scenarios.ts`). Every accept/edit/reject click below is
+     * a real vault write and a real verdict-record append, not a rendered
+     * mock — see that file's module doc.
+     */
+    async function mountBulkReview(stateId: string): Promise<void> {
+      const scenario = buildBulkReviewScenario(stateId);
+      await seedBulkReviewScenario(scenario);
+      if (run !== generation) return;
+
+      const view = new BulkReviewView(makeLeaf(), () => scenario.controller);
+      host.appendChild(view.containerEl);
+      mounted = { view };
+
+      inspector.empty();
+      inspector.createDiv({ cls: 'wb-inspector-note', text: activeSet.note });
+      const editNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+      function renderEditNote(): void {
+        editNoteEl.setText(
+          scenario.editPort.edited.length === 0
+            ? 'No "Edit before saving" click yet this state.'
+            : `Edit hand-off recorded for: ${scenario.editPort.edited
+                .map((e) => e.sourcePath)
+                .join(', ')}`,
+        );
+      }
+      scenario.editPort.onEdit = renderEditNote;
+      renderEditNote();
+
+      void view.onOpen();
+      await settle();
+      if (run !== generation) return;
+
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
     // Walkthrough-only mounters. Neither draws a new PRODUCT screen (rule 1 —
     // see `walkthrough.ts`'s module doc for the argument in full): `mountNote`
     // shows her fixture note's own markdown, the same thing Obsidian's stock
@@ -1351,6 +1427,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'rhythm') {
       await mountRhythm(route.stateId);
+      return;
+    }
+    if (route.surface === 'bulk-review') {
+      await mountBulkReview(route.stateId);
       return;
     }
     if (route.surface === 'today') {

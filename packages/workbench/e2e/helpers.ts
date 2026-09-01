@@ -102,6 +102,9 @@ export const TRENDS_STATES = [
 // RHY-3's multicourse composition (`ol-i0zw`) — see `rhythm-scenarios.ts` for the source of truth.
 export const RHYTHM_STATES = ['rhythm-two-flagged', 'rhythm-one-flagged'] as const;
 
+// F3.3's bulk-review triage (`ol-jie3`) — see `bulk-review-scenarios.ts` for the source of truth.
+export const BULK_REVIEW_STATES = ['bulk-review-two-groups', 'bulk-review-empty'] as const;
+
 export const VARIABLE_SETS = [
   'obsidian-dark',
   'obsidian-light',
@@ -121,6 +124,7 @@ export type ExplainStateId = (typeof EXPLAIN_STATES)[number];
 export type SessionStateId = (typeof SESSION_STATES)[number];
 export type TrendsStateId = (typeof TRENDS_STATES)[number];
 export type RhythmStateId = (typeof RHYTHM_STATES)[number];
+export type BulkReviewStateId = (typeof BULK_REVIEW_STATES)[number];
 export type VariableSetId = (typeof VARIABLE_SETS)[number];
 export type Surface =
   | 'review'
@@ -132,7 +136,8 @@ export type Surface =
   | 'explain'
   | 'session'
   | 'trends'
-  | 'rhythm';
+  | 'rhythm'
+  | 'bulk-review';
 
 /**
  * WBF-4 (`ol-opjq`) — per-STATE viewport overrides for the golden suite.
@@ -248,6 +253,7 @@ export interface DiscoveredMatrix {
   readonly sessionStates: readonly string[];
   readonly trendsStates: readonly string[];
   readonly rhythmStates: readonly string[];
+  readonly bulkReviewStates: readonly string[];
   readonly variableSets: readonly string[];
 }
 
@@ -283,6 +289,9 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
   const rhythmStates = await page
     .locator('[data-wb-rhythm-state-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-rhythm-state-link') ?? ''));
+  const bulkReviewStates = await page
+    .locator('[data-wb-bulk-review-state-link]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-bulk-review-state-link') ?? ''));
   const variableSets = await page
     .locator('[data-wb-set-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-set-link') ?? ''));
@@ -297,6 +306,7 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     sessionStates,
     trendsStates,
     rhythmStates,
+    bulkReviewStates,
     variableSets,
   };
 }

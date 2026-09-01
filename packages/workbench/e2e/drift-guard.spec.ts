@@ -10,6 +10,7 @@
  */
 import { expect, test } from '@playwright/test';
 import {
+  BULK_REVIEW_STATES,
   discoverMatrix,
   EXPLAIN_STATES,
   GENERATE_STATES,
@@ -24,7 +25,7 @@ import {
   VARIABLE_SETS,
 } from './helpers.js';
 
-test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/variable-set lists match the live app', async ({
+test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/bulk-review/variable-set lists match the live app', async ({
   page,
 }) => {
   await page.goto('/');
@@ -71,6 +72,10 @@ test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/sessi
     new Set(live.rhythmStates),
     'rhythm states — see rhythm-scenarios.ts RHYTHM_STATES',
   ).toEqual(new Set(RHYTHM_STATES));
+  expect(
+    new Set(live.bulkReviewStates),
+    'bulk-review states — see bulk-review-scenarios.ts BULK_REVIEW_STATES',
+  ).toEqual(new Set(BULK_REVIEW_STATES));
   expect(new Set(live.variableSets), 'variable sets — see themes/index.ts VARIABLE_SETS').toEqual(
     new Set(VARIABLE_SETS),
   );
