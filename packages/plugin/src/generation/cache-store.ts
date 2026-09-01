@@ -66,20 +66,30 @@
  *   device's shards permanently invisible in production — a regression on
  *   today's "eventually repaired by a touch," not a fix. That is why this
  *   stays flagged rather than partially built.
- * - **One narrower path is real and does not wait on `ol-yk1c`:** if a
- *   caller minted `draftId` deterministically from `(courseCode,
- *   conceptName)` instead of at random, `findByKey`'s specific race would
- *   close outright — compute the expected `draftPath` and check it directly,
- *   the same "no listing needed" move `reviewLogPath` makes for a known
- *   `(date, deviceId)` pair. That is a call-site decision in `pipeline.ts`
- *   (`generateDraftId`), outside this module's ownership and this bead's
- *   `owns`, so it is named here rather than built here.
+ * - **The narrower path landed (`ol-zbnn`).** `pipeline.ts`'s `generateDraftId`
+ *   now mints `draftId` deterministically from `(courseCode, conceptName,
+ *   sequence)` (`deriveDraftId`, below) instead of at random, and `findByKey`
+ *   computes the `sequence: 0` id up front and probes that exact `draftPath`
+ *   directly — the same "no listing needed" move `reviewLogPath` makes for a
+ *   known `(date, deviceId)` pair — before ever reading `index.json`. A lost
+ *   index entry no longer hides a draft this path exists for: the probe finds
+ *   the per-record file straight through the race the rest of this doc
+ *   describes. The index read stays as a fallback, both for records minted
+ *   before this landed and for `revision-job-runner.ts`'s deliberately
+ *   unconditional, non-deterministic ids (see that module's own doc for why
+ *   it bypasses this dedupe entirely). `sequence` exists because one
+ *   `draftForConcept` call can produce several questions for the same
+ *   `(courseCode, conceptName)` — deriving from the pair alone would collide
+ *   every question after the first onto the same file; probing `sequence: 0`
+ *   is sufficient because dedupe only needs to know *some* draft exists for
+ *   the key, and a concept's first drafted question always lands there.
  *
- * See the `ol-p3t07a` close evidence for the original flag and `ol-y6ty` for
- * this look.
+ * See the `ol-p3t07a` close evidence for the original flag, `ol-y6ty` for
+ * this look, and `ol-zbnn` for the fix.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
+import { hashText } from 'olea-core';
 import { type DraftRecord, isDraftRecord } from './types.js';
 
 export const DRAFT_CACHE_FOLDER: VaultPath = '.olea/drafts';
@@ -115,13 +125,48 @@ function draftPath(draftId: string): VaultPath {
   return `${DRAFT_CACHE_FOLDER}/${draftId}.json`;
 }
 
+/**
+ * Deterministic draft id for one `(courseCode, conceptName, sequence)` slot
+ * (`ol-zbnn`) — the SHA-256, hex-encoded, of a JSON-array encoding of the
+ * three fields (`hashText`, `olea-core`'s ingestion hash — same algorithm
+ * `contentHash` uses, chosen for the same reason: `SubtleCrypto` is the one
+ * hashing primitive available on both desktop and mobile Obsidian, INV-1).
+ *
+ * `conceptName` is free text a course's material happens to name a concept
+ * with — unlike `reviewLogPath`'s validated `deviceId`, there is no safe
+ * charset to restrict it to, so a plain delimited join is not an option: it
+ * would let two distinct pairs collide on the same joined string (`"ab"` +
+ * `"c"` vs `"a"` + `"bc"` with a naive `-` join, say). `JSON.stringify`
+ * escapes each field before they are concatenated into one array, so two
+ * distinct `(courseCode, conceptName, sequence)` triples always produce two
+ * distinct byte strings ahead of the hash — collision-safe up to SHA-256
+ * itself, the same guarantee `contentHash` relies on elsewhere in this
+ * codebase.
+ *
+ * `sequence` is the position of this question within one `draftForConcept`
+ * call's output (`pipeline.ts`), not a global counter — it exists only to
+ * keep multiple questions for the same concept from deriving the same id,
+ * not to make every record individually probeable (`findByKey` only ever
+ * probes `sequence: 0`; see this module's doc).
+ */
+export async function deriveDraftId(
+  courseCode: string,
+  conceptName: string,
+  sequence: number,
+): Promise<string> {
+  return hashText(JSON.stringify([courseCode, conceptName, sequence]));
+}
+
+/** The `sequence` `findByKey`'s path probe checks — a concept's first drafted question, the one every `draftForConcept` call is guaranteed to produce before any later question in the same call. */
+const DEDUPE_PROBE_SEQUENCE = 0;
+
 export interface DraftCacheStore {
   /** Every draft record on file, in no particular order. Corrupt/unreadable per-record files are skipped rather than thrown on — same "report, don't crash" posture `olea-core`'s review-log parser uses for one bad line. */
   list(): Promise<readonly DraftRecord[]>;
   get(draftId: string): Promise<DraftRecord | null>;
   /** Writes (or overwrites) one draft record and keeps `index.json` in sync. Never removes a file — F3.3's "reject prunes… never deleted" (see this module's doc for the index's own, disclosed exception). */
   put(record: DraftRecord): Promise<void>;
-  /** Dedupe check (`ol-p3t07a`'s acceptance: "dupe-checked against existing instruments"): any prior draft — pending, accepted, edited, or rejected — for this exact (course, concept) pair. Reads only the index, not every record, so this is cheap to call once per candidate concept per sweep. */
+  /** Dedupe check (`ol-p3t07a`'s acceptance: "dupe-checked against existing instruments"): any prior draft — pending, accepted, edited, or rejected — for this exact (course, concept) pair. Probes the deterministic `sequence: 0` path directly first (`ol-zbnn`, one `exists()` call), falling back to a full index read only when that misses — cheap either way, and no longer solely dependent on `index.json` staying in sync (see this module's doc). */
   findByKey(courseCode: string, conceptName: string): Promise<DraftRecord | null>;
   /** Every `status: 'pending'` draft, full records — what `open-session.ts` merges into today's queue. */
   listPending(): Promise<readonly DraftRecord[]>;
@@ -197,6 +242,31 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
     },
 
     async findByKey(courseCode, conceptName) {
+      // Path-probe fallback (`ol-zbnn`): a caller minting `draftId`
+      // deterministically (`deriveDraftId`, `pipeline.ts`'s default
+      // `generateDraftId`) puts the concept's first drafted question at a
+      // known path — check it directly, bypassing `index.json` and the lost-
+      // update race this module's doc discloses, entirely for every draft
+      // created that way. The record itself is re-checked against the exact
+      // key rather than trusted on path alone, in case of a hash collision
+      // (astronomically unlikely) or a legacy record that happens to share
+      // this exact derived id by coincidence.
+      const probeId = await deriveDraftId(courseCode, conceptName, DEDUPE_PROBE_SEQUENCE);
+      if (await vault.exists(draftPath(probeId))) {
+        const probed = await this.get(probeId);
+        if (
+          probed !== null &&
+          probed.courseCode === courseCode &&
+          probed.conceptName === conceptName
+        ) {
+          return probed;
+        }
+      }
+
+      // Fallback for drafts minted before this change, or by a caller (e.g.
+      // `revision-job-runner.ts`) that does not derive its id from the key —
+      // the index-only path this module's doc already discloses the bound
+      // of.
       const index = await readIndex(vault);
       const entry = index.entries.find(
         (e) => e.courseCode === courseCode && e.conceptName === conceptName,

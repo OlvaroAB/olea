@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createVaultDraftCacheStore,
   DRAFT_CACHE_FOLDER,
+  deriveDraftId,
 } from '../../src/generation/cache-store.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import { MemoryVaultSource } from './fakes.js';
@@ -204,6 +205,61 @@ describe('createVaultDraftCacheStore', () => {
       // repairing.
       const stillB = await cache.findByKey('COGS214', 'Attention');
       expect(stillB?.draftId).toBe('b');
+    });
+  });
+
+  describe('the path-probe fallback (ol-zbnn)', () => {
+    it(
+      'findByKey finds a deterministic-id record straight through the race — ' +
+        'index.json never mentions it, and no duplicate draft would be made',
+      async () => {
+        const vault = new MemoryVaultSource();
+        const cache = createVaultDraftCacheStore(vault);
+
+        // The exact scenario `loseAnIndexUpdate` above constructs for a
+        // random id — except this time the per-record file's own name is
+        // `pipeline.ts`'s deterministic `generateDraftId` output (sequence 0,
+        // this concept's first drafted question), so `findByKey` can compute
+        // the same path without ever reading `index.json`.
+        const draftId = await deriveDraftId('COGS214', 'Attention', 0);
+        const deterministicRecord = record({ draftId, conceptName: 'Attention' });
+        await vault.write(
+          `${DRAFT_CACHE_FOLDER}/${draftId}.json`,
+          `${JSON.stringify(deterministicRecord, null, 2)}\n`,
+        );
+        // index.json is never written at all for this draft — the exact
+        // "lost update" end state, pinned down directly rather than raced.
+        expect(await vault.exists(`${DRAFT_CACHE_FOLDER}/index.json`)).toBe(false);
+
+        const found = await cache.findByKey('COGS214', 'Attention');
+        // Pre-fix, this reads null (index-only lookup) — the sweep would
+        // then draft "Attention" a second time: a wasted generation call and
+        // a duplicate review item for a concept that already has one.
+        expect(found?.draftId).toBe(draftId);
+        expect(found?.conceptName).toBe('Attention');
+      },
+    );
+
+    it('two distinct (course, concept) pairs never derive the same id (collision safety)', async () => {
+      // The naive-join failure mode this guards against: a plain delimited
+      // join could let `courseCode: 'A', conceptName: 'BC'` collide with
+      // `courseCode: 'AB', conceptName: 'C'`. `deriveDraftId` hashes a
+      // JSON-array encoding instead, which escapes each field before they
+      // are joined.
+      const a = await deriveDraftId('A', 'BC', 0);
+      const b = await deriveDraftId('AB', 'C', 0);
+      expect(a).not.toBe(b);
+
+      // Same pair, different sequence (multiple questions from one concept)
+      // must also stay distinct — that's what stops question 2 from
+      // overwriting question 1's file.
+      const seq0 = await deriveDraftId('COGS214', 'Attention', 0);
+      const seq1 = await deriveDraftId('COGS214', 'Attention', 1);
+      expect(seq0).not.toBe(seq1);
+
+      // Deterministic: the same triple always derives the same id, on any
+      // device — the property `findByKey`'s probe depends on.
+      expect(await deriveDraftId('COGS214', 'Attention', 0)).toBe(seq0);
     });
   });
 });

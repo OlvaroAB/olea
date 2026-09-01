@@ -70,6 +70,7 @@ import type {
 } from '../retrieval/draft-quiz-cards.js';
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
+import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
 import type { GenerationRoutingDeps } from './routing.js';
@@ -97,7 +98,20 @@ export interface GenerationPipelineDeps {
   ) => Promise<DraftQuizCardsResult>;
   readonly coursesFolder?: string;
   readonly now?: () => Date;
-  readonly generateDraftId?: () => string;
+  /**
+   * Defaults to `deriveDraftId` (`cache-store.ts`) — deterministic from
+   * `(courseCode, conceptName, sequence)`, `sequence` being this question's
+   * position within the current `draftForConcept` call's output. That
+   * determinism is what lets `findByKey`'s path probe bypass `index.json`
+   * (`ol-zbnn`); a caller overriding this loses that bypass for its own
+   * drafts (nothing in this module or `findByKey` requires it — the index
+   * fallback still covers a non-deterministic id).
+   */
+  readonly generateDraftId?: (
+    courseCode: string,
+    conceptName: string,
+    sequence: number,
+  ) => string | Promise<string>;
   /** Component 2.2's routing consultation — see the module doc's own section. Omitted preserves pre-`ol-tz7v` behaviour. */
   readonly routing?: GenerationRoutingDeps;
 }
@@ -123,8 +137,12 @@ const ZERO_REPORT: GenerationSweepReport = {
   skippedRouting: 0,
 };
 
-function defaultGenerateDraftId(): string {
-  return globalThis.crypto.randomUUID();
+function defaultGenerateDraftId(
+  courseCode: string,
+  conceptName: string,
+  sequence: number,
+): Promise<string> {
+  return deriveDraftId(courseCode, conceptName, sequence);
 }
 
 /** Every distinct note path that embedded at least one of `units` (F1.6) — the only units this sweep can act on, per the module doc. */
@@ -242,9 +260,10 @@ export async function runGenerationSweep(
       if (notePath === undefined) continue; // unreachable given how courseCodes was built, guarded rather than assumed
 
       const createdAt = now().toISOString();
+      let sequence = 0;
       for (const question of questions) {
         const record: DraftRecord = {
-          draftId: generateDraftId(),
+          draftId: await generateDraftId(courseCode, candidate.name, sequence),
           status: 'pending',
           courseCode,
           conceptName: candidate.name,
@@ -258,6 +277,7 @@ export async function runGenerationSweep(
           firstServedAt: null,
         };
         await deps.cache.put(record);
+        sequence += 1;
       }
       drafted += 1;
     }
