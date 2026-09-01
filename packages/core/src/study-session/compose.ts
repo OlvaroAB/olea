@@ -575,9 +575,10 @@ export function withinBlockCohortAffinity(
 /**
  * How many days a material-arrival cohort's pull on placement takes to fade
  * to half strength — `[D-149]`'s "continuous decay weight". **Declared, not
- * derived**: no production caller resolves `arrivalDays` yet (see the module
- * doc's "arrival-day signal" section), so nothing exists to fit this
- * against. One week is defensible on its own terms without a corpus: it is
+ * derived**: production callers resolve `arrivalDays` on both session
+ * surfaces (session-builder/provider.ts since ARRIVE-2; session/build.ts for
+ * the review-queue path, ol-4e7o), but no arrival *history* exists yet to
+ * fit this against. One week is defensible on its own terms without a corpus: it is
  * the plain reading of "a lecture's worth of material reads as freshly
  * arrived until roughly the next one lands" — a course-cadence fact, not a
  * fitted number, and the same kind of one-sentence defence the register asks
