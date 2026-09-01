@@ -170,7 +170,7 @@ describe('the settings tab reaches a real Worker transport (ol-k57j)', () => {
 
   it('imports the real transport factory from worker/obsidian-transport, not a stub', () => {
     expect(main).toMatch(
-      /import\s*\{\s*createObsidianWorkerTransport\s*\}\s*from\s*'\.\/worker\/obsidian-transport\.js'/,
+      /import\s*\{\s*createObsidianWorkerTransport,\s*obsidianHttpRequest\s*\}\s*from\s*'\.\/worker\/obsidian-transport\.js'/,
     );
   });
 });
@@ -840,5 +840,65 @@ describe('the manual process-now timing override is registered and reachable ([D
       /import\s*\{\s*buildAuthoredNoteUnit,\s*createProcessNowAction,\s*isProcessNowSupported,\s*type ProcessNowAction,\s*processNowNotice,?\s*\}\s*from\s*'\.\/ingestion\/process-now\.js'/,
     );
     expect(main).toMatch(/import \{ Notice, Plugin, TFile, type WorkspaceLeaf \} from 'obsidian';/);
+  });
+});
+
+describe("[D-171]'s open-source-location hand-off has a real production caller (ol-2zfj.43 / ol-2zfj.47)", () => {
+  // ol-2zfj.43's own close evidence named the exact seam not yet crossed:
+  // `createObsidianOpenSourceLocationPort` and `openRegistryEntryFor` were
+  // complete and unit-tested (`test/registry/*.spec.ts`), but nothing in
+  // `main.ts` passed `openSourceLocationPort` into `createLocalRegistryProvider`
+  // — the registry's "Open source" action logged an error instead of opening
+  // anything. These are the source-level assertions that the seam is crossed.
+
+  it('passes the real Obsidian-backed openSourceLocationPort into createLocalRegistryProvider', () => {
+    expect(main).toMatch(
+      /openSourceLocationPort:\s*createObsidianOpenSourceLocationPort\(this\.app\),/,
+    );
+  });
+
+  it('imports the real port composer, not a stub', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*createObsidianEditInstrumentPort,\s*createObsidianOpenSourceLocationPort,\s*openRegistryEntryFor,\s*\}\s*from\s*'\.\/registry\/obsidian-ports\.js'/,
+    );
+  });
+
+  it("wires the review view's one-step affordance to the real openRegistryEntryFor, not a no-op", () => {
+    expect(main).toMatch(
+      /\(instrumentId\)\s*=>\s*void openRegistryEntryFor\(this\.app,\s*\{ instrumentId \}\),/,
+    );
+  });
+});
+
+describe("component 3.5's plan-policy fetch has a real production caller ([D-167], ol-v7r5.25 / ol-v7r5.27)", () => {
+  // Same defect shape this file's own module doc opens with, and the same
+  // shape the rank-weights describe block above already proved once:
+  // `buildPlanPolicyWiring` and `fetchPlan`'s `readPlanPolicy` dep were
+  // complete and tested (`test/plan/plan-policy-wiring.spec.ts`,
+  // `test/plan/provider.spec.ts`), while nothing in `main.ts` ever
+  // constructed the wiring or threaded it into `createLocalStudyPlanProvider`
+  // — ol-v7r5.25's own close evidence recorded this as deliberately deferred
+  // to ol-v7r5.27. These assertions are the source-level proof the seam is
+  // now crossed.
+
+  it('builds the plan-policy wiring through the tested composer, against the real data host and a real POST adapter', () => {
+    expect(main).toMatch(
+      /this\.planPolicy\s*=\s*await buildPlanPolicyWiring\(\{\s*dataHost:\s*this,\s*httpPost:/,
+    );
+  });
+
+  it('imports the real composer and the real HTTP adapter it POSTs over, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildPlanPolicyWiring,\s*type PlanPolicyWiring\s*\}\s*from\s*'\.\/plan\/plan-policy-wiring\.js'/,
+    );
+    expect(main).toMatch(
+      /import \{ createObsidianWorkerTransport, obsidianHttpRequest \} from '\.\/worker\/obsidian-transport\.js';/,
+    );
+  });
+
+  it('threads the fetched policy into the study-plan provider, omitting the key when unconfigured rather than passing undefined (exactOptionalPropertyTypes, F7.8) — same shape as readRankWeights', () => {
+    expect(main).toMatch(
+      /\.\.\.\(this\.planPolicy\?\.readPlanPolicy\s*\?\s*\{ readPlanPolicy: this\.planPolicy\.readPlanPolicy \}\s*:\s*\{\}\)/,
+    );
   });
 });

@@ -74,6 +74,7 @@ import {
   mcqFeedbackSentence,
   mcqOptionKeycap,
   questionText,
+  REGISTRY_ENTRY_ACTION,
   REVIEW_UNAVAILABLE_BODY,
   REVIEW_UNAVAILABLE_TITLE,
   ratingKeycap,
@@ -165,6 +166,8 @@ export class ReviewView extends ItemView {
   private readonly activity: ReviewActivityNotifier;
   private readonly retrieveSourceChunks: RetrieveExplainWhySourceChunks | undefined;
   private readonly openExplainBack: ((instrument: ReviewInstrument) => void) | undefined;
+  /** `[D-171]`'s one-step affordance target — see `constructor`'s own param doc. */
+  private readonly openRegistryEntry: ((instrumentId: string) => void) | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -198,12 +201,23 @@ export class ReviewView extends ItemView {
     retrieveSourceChunks?: RetrieveExplainWhySourceChunks,
     /** F2.12, `[D-163]` (`ol-12gs`): opens `ExplainBackModal` for the offered instrument — see `handleAcceptConfusionOffer`'s own doc. */
     openExplainBack?: (instrument: ReviewInstrument) => void,
+    /**
+     * `[D-171]`/`ol-2zfj.47`: the one-step affordance F8.4 asks every
+     * instrument-rendering surface for — leads to that instrument's registry
+     * entry, never prints provenance here. `main.ts` wires this to
+     * `openRegistryEntryFor(this.app, { instrumentId })`
+     * (`registry/obsidian-ports.ts`); a callback rather than an `App`
+     * import keeps this file free of the real-Obsidian-host constraint that
+     * already governs `openExplainBack` above.
+     */
+    openRegistryEntry?: (instrumentId: string) => void,
   ) {
     super(leaf);
     this.openSession = openSession;
     this.activity = new ReviewActivityNotifier(onReviewActivity);
     this.retrieveSourceChunks = retrieveSourceChunks;
     this.openExplainBack = openExplainBack;
+    this.openRegistryEntry = openRegistryEntry;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -508,6 +522,18 @@ export class ReviewView extends ItemView {
         null,
         () => void this.handleExplainWhy(instrument, studentAnswerForExplain),
       );
+      // `[D-171]`'s one-step affordance (F8.4): never prints provenance here
+      // (no source path, heading or page anywhere on this card), only leads
+      // to the instrument's registry entry — present on every rendered
+      // instrument, so absent entirely rather than shown disabled when
+      // `openRegistryEntry` was never wired (F7.8-shaped grey-out via
+      // omission, same posture `retrieveSourceChunks` above already holds).
+      if (this.openRegistryEntry) {
+        const openRegistryEntry = this.openRegistryEntry;
+        this.actionButton(header, REGISTRY_ENTRY_ACTION, null, () =>
+          openRegistryEntry(instrument.instrumentId),
+        );
+      }
     }
 
     if (instrument !== null && instrument.draftId !== null) {

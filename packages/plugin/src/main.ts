@@ -110,12 +110,18 @@ import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.j
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
 import { createVaultMisconceptionStore } from './misconception/store.js';
+import type { PlanPolicyHttpPost } from './plan/plan-policy-provider.js';
+import { buildPlanPolicyWiring, type PlanPolicyWiring } from './plan/plan-policy-wiring.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
-import { createObsidianEditInstrumentPort } from './registry/obsidian-ports.js';
+import {
+  createObsidianEditInstrumentPort,
+  createObsidianOpenSourceLocationPort,
+  openRegistryEntryFor,
+} from './registry/obsidian-ports.js';
 import { ObsidianRegistryOverridesStore } from './registry/overrides-store.js';
 import { createLocalRegistryProvider } from './registry/provider.js';
 import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
@@ -162,7 +168,7 @@ import { ObsidianTermWindowStore } from './today/term-window-store.js';
 import { TodayView, VIEW_TYPE_OLEA_TODAY } from './today/view.js';
 import { ObsidianUsageLogStore } from './usage/log-store.js';
 import { ObsidianSource } from './vault/obsidian-source.js';
-import { createObsidianWorkerTransport } from './worker/obsidian-transport.js';
+import { createObsidianWorkerTransport, obsidianHttpRequest } from './worker/obsidian-transport.js';
 
 /**
  * How often `onload` polls the ingestion queue while Obsidian is open
@@ -244,6 +250,14 @@ export default class OleaPlugin extends Plugin {
   private generation: GenerationWiring | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
   private rankWeights: RankWeightsWiring | null = null;
+  /**
+   * `[D-167]`/`ol-v7r5.25` component 3.5 threading, hooked up per
+   * `ol-v7r5.27`: same F7.8 grey-out shape as `rankWeights` above, built
+   * once here and re-invoked per plan refresh in
+   * `refreshCachedStudyPlan`'s `createLocalStudyPlanProvider` call —
+   * mirrors `readRankWeights` exactly.
+   */
+  private planPolicy: PlanPolicyWiring | null = null;
   /** `[EXT-11]` (`ol-kw4a`, `[D-118]`) — the corpus-level relation stage's production port, same F7.8 grey-out terms as `concept`/`knowledgeKind` above. */
   private corpusRelation: CorpusRelationWiring | null = null;
   private corpusRelationStateStore: ObsidianCorpusRelationStateStore | null = null;
@@ -493,6 +507,10 @@ export default class OleaPlugin extends Plugin {
           // back" accept action opens `ExplainBackModal` for the offered
           // instrument — see `openExplainBackModal`'s own doc.
           (instrument) => this.openExplainBackModal({ kind: 'instrument', instrument }),
+          // `[D-171]`/`ol-2zfj.47`: the review view's one-step affordance to
+          // an instrument's registry entry — see `ReviewView`'s own param
+          // doc for why this is a callback rather than an `App` import.
+          (instrumentId) => void openRegistryEntryFor(this.app, { instrumentId }),
         ),
     );
 
@@ -869,6 +887,10 @@ export default class OleaPlugin extends Plugin {
             settingsHost: this,
             now: () => new Date(),
             editPort: createObsidianEditInstrumentPort(this.app),
+            // `[D-171]`/`ol-2zfj.43`: the open-source-location hand-off —
+            // until this line the registry's "Open source" action logged an
+            // error instead of opening anything (`ol-2zfj.47`).
+            openSourceLocationPort: createObsidianOpenSourceLocationPort(this.app),
             // `ol-r5j4`: keeps `this.registryOverridesCache` current the
             // instant she renames, withdraws or restores a concept from this
             // view — see that field's own doc.
@@ -1023,6 +1045,18 @@ export default class OleaPlugin extends Plugin {
     this.rankWeights = await buildRankWeightsWiring({
       dataHost: this,
       httpGet: obsidianRankWeightsGet,
+    });
+
+    // Component 3.5's plan-policy fetch (`[D-167]`, `ol-v7r5.25`), hooked
+    // up here per `ol-v7r5.27`: same fetch-or-null wiring shape as
+    // `rankWeights` above, POSTing over the same `obsidianHttpRequest`
+    // adapter `this.retrieval`/`this.grading`/etc already use for the
+    // Worker (`PlanPolicyHttpPost` is shape-compatible with `HttpRequestFn`
+    // minus the `method`, which is always `'POST'` here).
+    this.planPolicy = await buildPlanPolicyWiring({
+      dataHost: this,
+      httpPost: ((params) =>
+        obsidianHttpRequest({ ...params, method: 'POST' })) satisfies PlanPolicyHttpPost,
     });
 
     // `ol-2zfj.15`: register row 1.4's materiality trigger goes live —
@@ -1645,6 +1679,9 @@ export default class OleaPlugin extends Plugin {
       // same pattern `drainEmbeddings` uses for `keywordIndex` above.
       ...(this.rankWeights?.readRankWeights
         ? { readRankWeights: this.rankWeights.readRankWeights }
+        : {}),
+      ...(this.planPolicy?.readPlanPolicy
+        ? { readPlanPolicy: this.planPolicy.readPlanPolicy }
         : {}),
     });
     const result = await refreshStudyPlan({ store, provider, now: () => new Date() });

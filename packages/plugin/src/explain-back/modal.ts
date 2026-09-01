@@ -58,6 +58,7 @@ import type {
   AcceptExplainBackGradingWithObservationContext,
   AcceptExplainBackGradingWithObservationResult,
 } from '../grading/wiring.js';
+import { openRegistryEntryFor } from '../registry/obsidian-ports.js';
 import {
   EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
   EXPLAIN_WHY_UNAVAILABLE,
@@ -75,6 +76,7 @@ import {
   EXPLAIN_BACK_MISSED_HEADING,
   EXPLAIN_BACK_MODAL_TITLE,
   EXPLAIN_BACK_QUESTION_LABEL,
+  EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
@@ -379,6 +381,18 @@ export class ExplainBackModal extends Modal {
       root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_CITED_HEADING });
       const list = root.createEl('ul');
       for (const issue of grading.citedIssues) list.createEl('li', { text: issue.description });
+      // `[D-171]`'s one-step affordance (F8.4): ONE control for the whole
+      // list, not one per issue — every cited issue in this attempt is
+      // grounded in the same originating instrument (`prompt
+      // .originInstrumentId`) — leading to that instrument's registry entry.
+      // Never a source path, heading or page printed here.
+      const registryAction = root.createEl('button', {
+        cls: 'olea-explain-back-registry-action',
+        text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
+      });
+      registryAction.addEventListener('click', () => {
+        void openRegistryEntryFor(this.app, { instrumentId: prompt.originInstrumentId });
+      });
     }
 
     if (grading.misconceptionCandidates.length > 0) {

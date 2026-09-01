@@ -33,6 +33,15 @@ export const EXPLAIN_BACK_ACCEPT_LABEL = 'Keep this';
 export const EXPLAIN_BACK_DISCARD_LABEL = 'Try again';
 
 /**
+ * `[D-171]`'s one-step affordance, worded for this surface: F8.4 asks every
+ * instrument-rendering surface for a single pointer to that instrument's
+ * registry entry, never a printed source path, heading or page here. One
+ * control for the whole cited-issues list, not one per issue — every cited
+ * issue in a single attempt is grounded in the same originating instrument.
+ */
+export const EXPLAIN_BACK_REGISTRY_ENTRY_ACTION = 'See in registry';
+
+/**
  * The session-builder / Today-suggestion affordance's own label (F4.6, F6.4
  * — two of `[D-163]`'s four ruled entry points). Declared here, in the
  * OWNED explain-back package, rather than in `session-builder/copy.ts`,

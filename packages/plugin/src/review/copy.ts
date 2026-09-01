@@ -164,6 +164,15 @@ export const REVIEW_UNAVAILABLE_BODY =
   'So there is no queue to show. This is not a claim that nothing is due — try again in a moment.';
 
 /**
+ * `[D-171]`'s one-step affordance, worded for this surface: F8.4's ruling is
+ * that provenance is one step from any rendered instrument and never printed
+ * on the card face, so this is a plain pointer to the registry entry — never
+ * a source path, heading or page, which stays exactly one click further in,
+ * on the registry entry itself (`registry/copy.ts`'s `OPEN_SOURCE_LOCATION_ACTION`).
+ */
+export const REGISTRY_ENTRY_ACTION = 'See in registry';
+
+/**
  * F2.7's honest "cannot ground" refusal (`ol-sn1q`), shown by both the
  * on-demand explain-why panel and F2.12's "explain it back" offer — the two
  * share one on-demand channel (`grading/wiring.ts`'s module doc), so they
