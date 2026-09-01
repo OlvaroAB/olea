@@ -78,6 +78,7 @@ import {
   gotoState,
   hostFrameElement,
   ORACLE_STATES,
+  REGISTRY_STATES,
   RETRIEVE_STATES,
   REVIEW_STATES,
   RHYTHM_STATES,
@@ -209,6 +210,18 @@ for (const stateId of BULK_REVIEW_STATES) {
       await applyTallViewportIfAny(page, stateId);
       await gotoState(page, 'bulk-review', stateId, setId);
       await expect(hostFrameElement(page)).toHaveScreenshot(`bulk-review-${stateId}--${setId}.png`);
+    });
+  }
+}
+
+// F8.4's concept-and-instrument registry (`ol-4v2l`, `[D-171]`) — 3 states
+// across the same 6 variable sets, 18 more screenshots.
+for (const stateId of REGISTRY_STATES) {
+  for (const setId of VARIABLE_SETS) {
+    test(`registry/${stateId} @ ${setId}`, async ({ page }) => {
+      await applyTallViewportIfAny(page, stateId);
+      await gotoState(page, 'registry', stateId, setId);
+      await expect(hostFrameElement(page)).toHaveScreenshot(`registry-${stateId}--${setId}.png`);
     });
   }
 }

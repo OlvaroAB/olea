@@ -38,6 +38,14 @@
  */
 
 import { CONTEST_GESTURE_LABEL, createFsrsScheduler, type TodayViewModel } from 'olea-core';
+import { renderSyntheticProvisionalBadge } from './badge.js';
+import { BulkReviewView } from './bulk-review-bridge.js';
+import {
+  BULK_REVIEW_STATES,
+  buildBulkReviewScenario,
+  findBulkReviewState,
+  seedBulkReviewScenario,
+} from './bulk-review-scenarios.js';
 import {
   buildExplainScenario,
   EXPLAIN_STATES,
@@ -78,18 +86,13 @@ import {
   writePersonaHistory,
 } from './persona/history.js';
 import { ReviewSession, ReviewView, TodayView } from './plugin-bridge.js';
-import { BulkReviewView } from './bulk-review-bridge.js';
-import {
-  buildBulkReviewScenario,
-  BULK_REVIEW_STATES,
-  findBulkReviewState,
-  seedBulkReviewScenario,
-} from './bulk-review-scenarios.js';
 import {
   deriveWorkbenchQueue,
   describeWorkbenchQueue,
   type WorkbenchQueue,
 } from './queue/derive.js';
+import { RegistryView } from './registry-bridge.js';
+import { buildRegistryScenario, findRegistryState, REGISTRY_STATES } from './registry-scenarios.js';
 import {
   buildRetrieveScenario,
   findRetrieveState,
@@ -157,6 +160,7 @@ type RouteSurface =
   | 'trends'
   | 'rhythm'
   | 'bulk-review'
+  | 'registry'
   | 'walk';
 
 const DEFAULT_STATE = 'qa-front';
@@ -170,6 +174,7 @@ const DEFAULT_SESSION_STATE = 'session-exam-eve-90';
 const DEFAULT_TRENDS_STATE = 'trends-cramming';
 const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
 const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
+const DEFAULT_REGISTRY_STATE = 'registry-populated';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -273,6 +278,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_RHYTHM_STATE;
     case 'bulk-review':
       return DEFAULT_BULK_REVIEW_STATE;
+    case 'registry':
+      return DEFAULT_REGISTRY_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -305,6 +312,8 @@ function findStateFor(
       return findRhythmState(stateId);
     case 'bulk-review':
       return findBulkReviewState(stateId);
+    case 'registry':
+      return findRegistryState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -346,9 +355,11 @@ function readRoute(): Route {
                       ? 'rhythm'
                       : segments[0] === 'bulk-review'
                         ? 'bulk-review'
-                        : segments[0] === 'walk'
-                          ? 'walk'
-                          : 'review';
+                        : segments[0] === 'registry'
+                          ? 'registry'
+                          : segments[0] === 'walk'
+                            ? 'walk'
+                            : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -411,6 +422,7 @@ async function main(): Promise<void> {
   const trendsStateList = requireEl('[data-wb-trends-states]');
   const rhythmStateList = requireEl('[data-wb-rhythm-states]');
   const bulkReviewStateList = requireEl('[data-wb-bulk-review-states]');
+  const registryStateList = requireEl('[data-wb-registry-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -580,6 +592,18 @@ async function main(): Promise<void> {
     bulkReviewStateList.appendChild(button);
   }
 
+  for (const state of REGISTRY_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbRegistryStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'registry', stateId: state.id });
+    });
+    registryStateList.appendChild(button);
+  }
+
   // The walkthrough's own step list (rule: "collapses the six state lists to
   // a single ordered step list with a live/partial/gap dot per step"). Status
   // classes are set here once (status never changes at runtime) and
@@ -655,7 +679,9 @@ async function main(): Promise<void> {
     personaList.appendChild(button);
   }
 
-  let mounted: { view: ReviewView | TodayView | GapView | SessionBuilderView | BulkReviewView } | null = null;
+  let mounted: {
+    view: ReviewView | TodayView | GapView | SessionBuilderView | BulkReviewView | RegistryView;
+  } | null = null;
   let generation = 0;
   /**
    * The persona history currently loaded into the vault, and where it went.
@@ -867,6 +893,14 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'bulk-review' && button.dataset.wbBulkReviewStateLink === state.id,
+      );
+    }
+    for (const button of registryStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-registry-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'registry' && button.dataset.wbRegistryStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1143,6 +1177,7 @@ async function main(): Promise<void> {
       // `SESSION_ILLUSTRATIVE_LABEL`'s own comment.
       if (scenario.state.instruments === 'borrowed' || scenario.state.history === 'borrowed') {
         host.createDiv({ cls: 'wb-illustrative-label', text: SESSION_ILLUSTRATIVE_LABEL });
+        renderSyntheticProvisionalBadge(host);
       }
 
       const view = new SessionBuilderView(makeLeaf(), scenario.deps);
@@ -1176,6 +1211,7 @@ async function main(): Promise<void> {
       // trends state replays its own persona stream through the product's own
       // `buildTodayPanel`, never touching `composed`/`loaded.history`.
       host.createDiv({ cls: 'wb-illustrative-label', text: TRENDS_ILLUSTRATIVE_LABEL });
+      renderSyntheticProvisionalBadge(host);
 
       const scenario = buildTrendsScenario(stateId);
       const view = new TodayView(makeLeaf(), scenario.deps);
@@ -1200,6 +1236,7 @@ async function main(): Promise<void> {
      */
     async function mountRhythm(stateId: string): Promise<void> {
       host.createDiv({ cls: 'wb-illustrative-label', text: RHYTHM_NO_PRODUCT_VIEW_NOTICE });
+      renderSyntheticProvisionalBadge(host);
 
       const scenario = await buildRhythmScenario(stateId, vault);
       if (run !== generation) return;
@@ -1249,6 +1286,66 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
+    /**
+     * F8.4's concept-and-instrument registry (`[D-171]`, `ol-4v2l`) — the
+     * REAL `RegistryView` over the REAL `buildRegistryModel`, fed fixture
+     * `ConceptRecord`/`VaultInstrumentRecord` arrays rather than a vault walk
+     * (`registry-scenarios.ts`'s own module doc explains why). Rename,
+     * withdraw and restore run through the real `overrides.ts` pure
+     * transforms, held in memory for this scenario instance.
+     */
+    async function mountRegistry(stateId: string): Promise<void> {
+      const scenario = buildRegistryScenario(stateId);
+      if (run !== generation) return;
+
+      const originalEditInstrument = scenario.deps.editInstrument.bind(scenario.deps);
+      const originalOpenSourceLocation = scenario.deps.openSourceLocation.bind(scenario.deps);
+      const registryDeps = {
+        ...scenario.deps,
+        editInstrument: async (instrumentSummary: Parameters<typeof originalEditInstrument>[0]) => {
+          await originalEditInstrument(instrumentSummary);
+          renderRegistryNotes();
+        },
+        openSourceLocation: async (location: Parameters<typeof originalOpenSourceLocation>[0]) => {
+          await originalOpenSourceLocation(location);
+          renderRegistryNotes();
+        },
+      };
+      const view = new RegistryView(makeLeaf(), registryDeps);
+      host.appendChild(view.containerEl);
+      mounted = { view };
+
+      inspector.empty();
+      inspector.createDiv({ cls: 'wb-inspector-note', text: activeSet.note });
+      // F8.4's mastery/vitality readings shown per concept are computed over
+      // this scenario's synthetic fixture records, never a real vault read —
+      // TB-0's `[ol-opmb.6]` badge applies. Withheld on the empty state,
+      // which shows no concept row and therefore no number to mislabel.
+      if (stateId !== 'registry-empty') renderSyntheticProvisionalBadge(inspector);
+      const editNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+      const sourceNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+      function renderRegistryNotes(): void {
+        editNoteEl.setText(
+          scenario.editHandoffs.length === 0
+            ? 'No "Edit" hand-off yet this state.'
+            : `Edit hand-off recorded for: ${scenario.editHandoffs.map((e) => e.notePath).join(', ')}`,
+        );
+        sourceNoteEl.setText(
+          scenario.sourceOpens.length === 0
+            ? 'No "Open source" click yet this state.'
+            : `Source location opened: ${scenario.sourceOpens.map((l) => l.sourcePath).join(', ')}`,
+        );
+      }
+      renderRegistryNotes();
+
+      void view.onOpen();
+      await settle();
+      if (run !== generation) return;
+      renderRegistryNotes();
+
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
     // Walkthrough-only mounters. Neither draws a new PRODUCT screen (rule 1 —
     // see `walkthrough.ts`'s module doc for the argument in full): `mountNote`
     // shows her fixture note's own markdown, the same thing Obsidian's stock
@@ -1283,6 +1380,7 @@ async function main(): Promise<void> {
       if (run !== generation) return;
 
       host.createDiv({ cls: 'wb-illustrative-label', text: FIXTURE_ORACLE_ILLUSTRATIVE_LABEL });
+      renderSyntheticProvisionalBadge(host);
       host.createDiv({
         cls: 'wb-fixture-oracle-focus-note',
         text: fixtureOracleFocusNote(focus),
@@ -1431,6 +1529,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'bulk-review') {
       await mountBulkReview(route.stateId);
+      return;
+    }
+    if (route.surface === 'registry') {
+      await mountRegistry(route.stateId);
       return;
     }
     if (route.surface === 'today') {
@@ -1671,6 +1773,7 @@ function renderOracleInspector(inspector: HTMLElement, input: OracleInspectorInp
     cls: 'wb-inspector-note wb-inspector-note--dim',
     text: ORACLE_PROVISIONAL_NOTE,
   });
+  renderSyntheticProvisionalBadge(inspector);
 
   const planRow = inspector.createDiv({ cls: 'wb-inspector-row' });
   planRow.createSpan({ cls: 'wb-inspector-label', text: 'plan' });

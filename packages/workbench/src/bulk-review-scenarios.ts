@@ -50,7 +50,7 @@ export const BULK_REVIEW_STATES: readonly BulkReviewWorkbenchState[] = [
     label: 'Two documents — the density F3.3 names',
     group: 'bulk-review',
     note:
-      "Two source notes, three pending drafts between them (one document carries two — its " +
+      'Two source notes, three pending drafts between them (one document carries two — its ' +
       '"Accept remainder" button is the F3.3/ol-p3t07a batch action, resolving every still-' +
       'pending item in that group through the identical accept() a single click already uses). ' +
       'Every draft, edit and reject below runs through the REAL DraftAcceptPort — an accept ' +
@@ -88,7 +88,11 @@ function draftRecord(overrides: Partial<DraftRecord> & Pick<DraftRecord, 'draftI
       distractors: ['Distractor A', 'Distractor B', 'Distractor C', 'Distractor D'],
       feedback: 'Synthetic feedback.',
     },
-    provenance: { taskId: 'quiz.generate.v1', promptVersion: '1.0.0', modelId: 'workbench-fixture' },
+    provenance: {
+      taskId: 'quiz.generate.v1',
+      promptVersion: '1.0.0',
+      modelId: 'workbench-fixture',
+    },
     firstServedAt: null,
     ...overrides,
   };
@@ -122,7 +126,12 @@ const TWO_GROUPS_RECORDS: readonly DraftRecord[] = [
     question: {
       stem: 'Which condition triggers the beta pathway?',
       correctAnswer: 'A synthetic threshold crossing',
-      distractors: ['A calendar date', 'A random draw', 'Nothing — it never triggers', 'A manual reset'],
+      distractors: [
+        'A calendar date',
+        'A random draw',
+        'Nothing — it never triggers',
+        'A manual reset',
+      ],
       feedback: 'See Week 2.',
     },
   }),
@@ -153,7 +162,10 @@ export class RecordingBulkReviewEditPort implements BulkReviewEditPort {
   readonly edited: Array<{ sourcePath: string; blockId: string | null }> = [];
   /** Fired after every recorded edit, so `main.ts` can keep the inspector's own copy current without polling — same "notify, don't poll" shape `onOverridesChanged` uses elsewhere in this codebase. */
   onEdit: (() => void) | null = null;
-  async edit(instrument: { readonly sourcePath: string; readonly blockId: string | null }): Promise<void> {
+  async edit(instrument: {
+    readonly sourcePath: string;
+    readonly blockId: string | null;
+  }): Promise<void> {
     this.edited.push({ sourcePath: instrument.sourcePath, blockId: instrument.blockId });
     this.onEdit?.();
   }

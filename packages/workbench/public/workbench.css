@@ -481,3 +481,20 @@ body {
     overflow: visible;
   }
 }
+
+/* `ol-opmb.6`: TB-0's cheap second half — a badge on every panel showing a
+   number computed from a synthetic run, so a number read off a screen by
+   hand carries its own provenance with it. */
+.wb-synthetic-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #6b5a1f;
+  background: #3a301a;
+  color: #f0d98c;
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}

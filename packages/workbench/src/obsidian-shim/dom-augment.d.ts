@@ -19,6 +19,10 @@ declare global {
     readonly cls?: string | readonly string[];
     readonly text?: string;
     readonly attr?: Readonly<Record<string, string | number | boolean | null>>;
+    /** `registry/view.ts`'s rename input and its "show withdrawn" checkbox both pass this. */
+    readonly type?: string;
+    /** `registry/view.ts`'s rename input's starting value. */
+    readonly value?: string;
   }
 
   interface Element {
@@ -37,6 +41,8 @@ declare global {
       tag: K,
       info?: OleaShimDomElementInfo | string,
     ): HTMLElementTagNameMap[K];
+    /** `registry/view.ts`'s "Show withdrawn" label text — Obsidian's own `appendText` helper. */
+    appendText(text: string): void;
   }
 }
 

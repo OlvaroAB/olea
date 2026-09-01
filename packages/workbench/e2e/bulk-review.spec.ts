@@ -28,9 +28,7 @@ function itemsIn(group: import('@playwright/test').Locator) {
   return group.locator('.olea-bulk-review-item');
 }
 
-test('bulk-review-two-groups: drafts group by source document, oldest first', async ({
-  page,
-}) => {
+test('bulk-review-two-groups: drafts group by source document, oldest first', async ({ page }) => {
   await gotoState(page, 'bulk-review', 'bulk-review-two-groups', 'obsidian-dark');
   await expect(groups(page)).toHaveCount(2);
 
@@ -79,7 +77,7 @@ test('bulk-review-two-groups: "Edit before saving" hand-off is recorded (F3.3\'s
   await expect(page.locator('[data-wb-inspector]')).toContainText('Edit hand-off recorded for');
 });
 
-test('bulk-review-two-groups: Accept remainder resolves every still-pending item in one group (ol-p3t07a\'s batch action)', async ({
+test("bulk-review-two-groups: Accept remainder resolves every still-pending item in one group (ol-p3t07a's batch action)", async ({
   page,
 }) => {
   await gotoState(page, 'bulk-review', 'bulk-review-two-groups', 'obsidian-dark');

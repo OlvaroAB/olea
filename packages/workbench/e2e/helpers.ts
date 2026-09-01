@@ -105,6 +105,13 @@ export const RHYTHM_STATES = ['rhythm-two-flagged', 'rhythm-one-flagged'] as con
 // F3.3's bulk-review triage (`ol-jie3`) — see `bulk-review-scenarios.ts` for the source of truth.
 export const BULK_REVIEW_STATES = ['bulk-review-two-groups', 'bulk-review-empty'] as const;
 
+// F8.4's registry (`ol-4v2l`, `[D-171]`) — see `registry-scenarios.ts` for the source of truth.
+export const REGISTRY_STATES = [
+  'registry-populated',
+  'registry-empty',
+  'registry-withdrawn-shown',
+] as const;
+
 export const VARIABLE_SETS = [
   'obsidian-dark',
   'obsidian-light',
@@ -125,6 +132,7 @@ export type SessionStateId = (typeof SESSION_STATES)[number];
 export type TrendsStateId = (typeof TRENDS_STATES)[number];
 export type RhythmStateId = (typeof RHYTHM_STATES)[number];
 export type BulkReviewStateId = (typeof BULK_REVIEW_STATES)[number];
+export type RegistryStateId = (typeof REGISTRY_STATES)[number];
 export type VariableSetId = (typeof VARIABLE_SETS)[number];
 export type Surface =
   | 'review'
@@ -137,7 +145,8 @@ export type Surface =
   | 'session'
   | 'trends'
   | 'rhythm'
-  | 'bulk-review';
+  | 'bulk-review'
+  | 'registry';
 
 /**
  * WBF-4 (`ol-opjq`) — per-STATE viewport overrides for the golden suite.
@@ -254,6 +263,7 @@ export interface DiscoveredMatrix {
   readonly trendsStates: readonly string[];
   readonly rhythmStates: readonly string[];
   readonly bulkReviewStates: readonly string[];
+  readonly registryStates: readonly string[];
   readonly variableSets: readonly string[];
 }
 
@@ -292,6 +302,9 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
   const bulkReviewStates = await page
     .locator('[data-wb-bulk-review-state-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-bulk-review-state-link') ?? ''));
+  const registryStates = await page
+    .locator('[data-wb-registry-state-link]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-registry-state-link') ?? ''));
   const variableSets = await page
     .locator('[data-wb-set-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-set-link') ?? ''));
@@ -307,6 +320,7 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     trendsStates,
     rhythmStates,
     bulkReviewStates,
+    registryStates,
     variableSets,
   };
 }

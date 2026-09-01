@@ -21,6 +21,8 @@ interface DomElementInfoLike {
   readonly cls?: string | readonly string[];
   readonly text?: string;
   readonly attr?: Readonly<Record<string, string | number | boolean | null>>;
+  readonly type?: string;
+  readonly value?: string;
 }
 
 function applyInfo(el: HTMLElement, info: DomElementInfoLike | string | undefined): void {
@@ -36,6 +38,8 @@ function applyInfo(el: HTMLElement, info: DomElementInfoLike | string | undefine
     }
   }
   if (info.text !== undefined) el.textContent = info.text;
+  if (info.type !== undefined) el.setAttribute('type', info.type);
+  if (info.value !== undefined && el instanceof HTMLInputElement) el.value = info.value;
   if (info.attr !== undefined) {
     for (const [name, value] of Object.entries(info.attr)) {
       if (value === null || value === false) el.removeAttribute(name);
@@ -94,6 +98,10 @@ export function installObsidianDomHelpers(win: Realm = window): void {
 
   element.setText = function setText(this: Element, value: string): void {
     this.textContent = value;
+  };
+
+  html.appendText = function appendText(this: HTMLElement, text: string): void {
+    this.appendChild(this.ownerDocument.createTextNode(text));
   };
 
   html.createEl = function createEl<K extends keyof HTMLElementTagNameMap>(

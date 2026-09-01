@@ -15,6 +15,7 @@ import {
   EXPLAIN_STATES,
   GENERATE_STATES,
   ORACLE_STATES,
+  REGISTRY_STATES,
   RETRIEVE_STATES,
   REVIEW_STATES,
   RHYTHM_STATES,
@@ -76,6 +77,10 @@ test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/sessi
     new Set(live.bulkReviewStates),
     'bulk-review states — see bulk-review-scenarios.ts BULK_REVIEW_STATES',
   ).toEqual(new Set(BULK_REVIEW_STATES));
+  expect(
+    new Set(live.registryStates),
+    'registry states — see registry-scenarios.ts REGISTRY_STATES',
+  ).toEqual(new Set(REGISTRY_STATES));
   expect(new Set(live.variableSets), 'variable sets — see themes/index.ts VARIABLE_SETS').toEqual(
     new Set(VARIABLE_SETS),
   );

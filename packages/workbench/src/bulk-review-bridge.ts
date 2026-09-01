@@ -14,9 +14,12 @@
  */
 
 export { createDraftAcceptPort } from '../../plugin/src/generation/accept.js';
-export type { BulkReviewEditPort, BulkReviewControllerDeps } from '../../plugin/src/generation/bulk-review.js';
+export type {
+  BulkReviewControllerDeps,
+  BulkReviewEditPort,
+} from '../../plugin/src/generation/bulk-review.js';
 export { BulkReviewController } from '../../plugin/src/generation/bulk-review.js';
 export { BulkReviewView } from '../../plugin/src/generation/bulk-review-view.js';
-export { createVaultDraftCacheStore } from '../../plugin/src/generation/cache-store.js';
 export type { DraftCacheStore } from '../../plugin/src/generation/cache-store.js';
+export { createVaultDraftCacheStore } from '../../plugin/src/generation/cache-store.js';
 export type { DraftRecord } from '../../plugin/src/generation/types.js';
