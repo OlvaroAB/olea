@@ -5,11 +5,15 @@
  * and `biome.json`'s `noRestrictedImports` override for `packages/core` and
  * `packages/contracts`.
  *
- * It cannot be unit-tested without a real Obsidian host, so there is no test
- * file here and none is expected (P1-T03 acceptance: "`ObsidianSource`
- * compiles in plugin"). Correctness for this class is exercised manually
- * against a real vault, and indirectly by `FolderSource`'s tests exercising
- * the shared `VaultSource` contract this class also implements.
+ * This class cannot be unit-tested itself without a real Obsidian host — it
+ * imports `obsidian` as a runtime value (`TFile`), which has no resolvable
+ * entry point under vitest outside a real Obsidian install — and is
+ * exercised manually against a real vault, plus indirectly by
+ * `FolderSource`'s tests exercising the shared `VaultSource` contract this
+ * class also implements. `listUnder` below delegates its whole algorithm to
+ * `./dot-folder-walk.js`, an `obsidian`-free module against a narrow
+ * structural adapter type, precisely so that one capability IS unit-testable
+ * — see `dot-folder-walk.spec.ts` (`ol-2zfj.44`).
  */
 
 import { type App, TFile, type Vault } from 'obsidian';
@@ -21,6 +25,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { listUnderViaAdapter } from './dot-folder-walk.js';
 
 export class ObsidianSource implements VaultSource {
   private readonly vault: Vault;
@@ -153,6 +158,36 @@ export class ObsidianSource implements VaultSource {
     if (!isVaultPath(path)) return null;
     const file = this.vault.getFileByPath(path);
     return file === null ? null : file.stat.ctime;
+  }
+
+  /**
+   * Enumerate a caller-named DOT-PREFIXED subtree — the `ObsidianSource` half
+   * of the gap `ol-yk1c` (C5.2a) and `FolderSource.listUnder` (`ol-df19`,
+   * DF-19) both name. `this.vault.getFiles()` (what `list()` above is built
+   * on) never returns dot-prefixed paths at all — a real Obsidian host
+   * limitation, not a choice this file makes — so `list({ under: '.olea/...'
+   * })` always came back empty on a real vault regardless of what was
+   * actually on disk. This method goes around `getFiles()` entirely and
+   * walks `this.vault.adapter.list()` (the raw filesystem adapter, same one
+   * `delete()` above already uses for the same reason) recursively from
+   * `dotPath` as the walk's root, so `.olea` is never "seen" as an entry to
+   * skip — it is simply where the walk starts.
+   *
+   * Matches `FolderSource.listUnder`'s contract exactly: `dotPath` must be
+   * dot-prefixed (guards against accidental use on an ordinary folder —
+   * plain subtree restriction is `list({ under })`'s job); a dot-entry
+   * nested *inside* `dotPath` is still skipped, so this cannot smuggle
+   * `.obsidian/` or `.trash/` content out through some deeper path; a
+   * missing subtree returns `[]` rather than throwing; results come back in
+   * the same stable sorted order. Not part of the `VaultSource` contract —
+   * see the interface doc's own note that this capability is currently
+   * source-specific.
+   */
+  async listUnder(
+    dotPath: VaultPath,
+    options: { readonly extensions?: readonly string[] } = {},
+  ): Promise<readonly VaultPath[]> {
+    return listUnderViaAdapter(this.vault.adapter, dotPath, options);
   }
 
   /**

@@ -62,6 +62,7 @@ import {
   type ConceptReadBudget,
   type ConceptReaderPort,
   type ConceptReadResult,
+  type ConceptRecord,
   type ConceptRelation,
   type ConceptsRead,
   type CorpusConcept,
@@ -69,6 +70,8 @@ import {
   type CorpusRelationVerdictPort,
   classifyKnowledgeKind,
   deriveRelationSet,
+  type ExtractConceptsOptions,
+  extractConcepts,
   type KnowledgeKindClassifierPort,
   type Provenance,
   type ReadConcept,
@@ -201,6 +204,39 @@ export async function readConceptsFromVault(
       : {}),
     ...(options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {}),
   });
+}
+
+/**
+ * `extractConceptsFromVault` (`ol-2zfj.44`) — the seam that lands
+ * `ConceptKeyRecord` minting (`ol-2zfj.42`, `[D-174]`) in production.
+ *
+ * `extractConcepts` (`olea-core`) takes `stampConceptKeys`, default `false`,
+ * because `extract.spec.ts` runs extraction dozens of times over the tracked
+ * fixture vault and an unconditional write would mutate it (see that
+ * option's own doc in `packages/core/src/concept/types.ts`). No production
+ * caller passed `true` before this bead. This wrapper is the one place that
+ * default flips: every plugin-side extraction over her REAL vault should go
+ * through this function, not `extractConcepts` directly, so stamping is
+ * opt-OUT (pass `stampConceptKeys: false` explicitly) rather than opt-in —
+ * the safer default for a capability that is invisible when it silently
+ * doesn't happen.
+ *
+ * **Reachability, `ol-2zfj.44`'s own scope note.** This bead's ownership is
+ * `packages/plugin/src/vault/` and `packages/plugin/src/concept/` only.
+ * `extractConcepts(vault, {})` is called directly (not through this
+ * function, and not stamping) from six sites this bead does NOT own —
+ * `retrospective/provider.ts` (x2), `today/data-source.ts`,
+ * `plan/provider.ts`, `generation/wiring.ts`, `gap/provider.ts` — each in a
+ * live sibling lane's directory. Switching each of those six call sites to
+ * `extractConceptsFromVault` is a one-line change per site (swap the import
+ * and the call), left to a successor bead/lane per the run charter's
+ * ownership discipline rather than reached into here.
+ */
+export async function extractConceptsFromVault(
+  vault: VaultSource,
+  options: ExtractConceptsOptions = {},
+): Promise<readonly ConceptRecord[]> {
+  return extractConcepts(vault, { stampConceptKeys: true, ...options });
 }
 
 // =============================================================================
