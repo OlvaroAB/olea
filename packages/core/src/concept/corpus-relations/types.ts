@@ -141,12 +141,30 @@ export interface CorpusConcept {
  *   fact as one — nominating from it is still only nomination, same as every
  *   other kind here: `[D-082]`'s combined-passage verdict decides whether the
  *   pair actually becomes an edge, and this signal never mints one directly.
+ * - `'explain-back-relation-demonstrated'` — a graded explain-back response
+ *   correctly related the subject concept to a neighbour the graph does not
+ *   already connect (`[D-083]`'s `CandidateEdgeNomination`,
+ *   `../../mastery/gradingInputContract.js`, F5.2a's `no-edge` provenance
+ *   case: "her correct inference of a relation the graph does not have").
+ *   Surfaced by the SOLO grading pipeline
+ *   (`../../grading/explainBackSolo.js`'s
+ *   `PendingSoloGrading.candidateEdgeNomination`) as two concept IDs, no
+ *   type, no direction, no confidence — a nomination like every other kind
+ *   here, never a verdict. **Member added, not yet produced by
+ *   `./nominate.js`**: `CandidateEdgeNomination` carries concept IDs and
+ *   `NominationSignal.a`/`.b` are concept NAMES (this type's own doc,
+ *   above), so turning one into the other needs a concept-id-to-name
+ *   resolution `./nominate.js` does not yet accept — named, not built, by
+ *   `ol-95vv.2`'s own module header and `ol-95vv.3`'s scope (the enum member
+ *   only; wiring `nominate.js` to actually emit it is separate, unstarted
+ *   work, `corpus-relations/` proper being outside both beads' `owns`).
  */
 export type NominationSignalKind =
   | 'assessment-cooccurrence'
   | 'embedding-proximity'
   | 'her-link'
-  | 'assessment-error-adjacency';
+  | 'assessment-error-adjacency'
+  | 'explain-back-relation-demonstrated';
 
 /** One occurrence of a cheap signal linking two concept names, unordered. */
 export interface NominationSignal {
