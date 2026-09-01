@@ -154,6 +154,7 @@
 import type {
   CalendarDay,
   ConceptMaterialPresence,
+  ConceptRecord,
   ConceptRelation,
   Scheduler,
   SittingState,
@@ -193,6 +194,7 @@ import {
 // `entries` read below rather than a second, possibly-disagreeing one.
 import { buildSupportLevelHistoryLookup } from '../review/queue-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import type { CourseOrTopicOption } from './copy.js';
 import type { SessionBuilderRequest, SessionBuilderState, SessionBuilderViewDeps } from './view.js';
 
 /**
@@ -303,14 +305,93 @@ async function arrivalDaysByConceptKey(
   return days;
 }
 
+function sameCourseOrTopic(
+  a: CourseOrTopicOption | undefined,
+  b: CourseOrTopicOption | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.kind === b.kind && a.label === b.label;
+}
+
 /**
  * Whether `a` and `b` would ask `load` to build the same thing — the test
  * `ol-e228`'s wiring uses to tell an idempotent re-render (freeze holds, see
  * this file's own "RBLD-2" module doc section) from an explicit new ask
  * (always rebuilds, same as before this bead).
+ *
+ * STEER-2 (`ol-ijms`): `courseOrTopic` is a genuine third axis a request can
+ * differ on, same standing as `focusConceptName` — a course/topic change
+ * while a sitting is open is an explicit new ask, never something the freeze
+ * should paper over.
  */
 function sameRequest(a: SessionBuilderRequest, b: SessionBuilderRequest): boolean {
-  return a.budgetMinutes === b.budgetMinutes && a.focusConceptName === b.focusConceptName;
+  return (
+    a.budgetMinutes === b.budgetMinutes &&
+    a.focusConceptName === b.focusConceptName &&
+    sameCourseOrTopic(a.courseOrTopic, b.courseOrTopic)
+  );
+}
+
+/**
+ * STEER-2 (`ol-ijms`): every course and every named concept ("topic", F2.5's
+ * word) the vault's own concept enumeration currently knows about — the
+ * option list `SessionBuilderState` hands the view on every `load()`,
+ * regardless of whether a filter is applied this time. Built from
+ * `enumeration.concepts` (`ConceptRecord[]`) rather than from the gap view's
+ * ranked rows, so a course or concept with nothing currently ranked is still
+ * offered — the picker names what the vault HAS, not what happened to make
+ * this particular ranking.
+ *
+ * Sorted for a stable, deterministic render; de-duplicated because
+ * `ConceptRecord.courses` is M:N (one course spans many concepts) and
+ * `ConceptRecord.name` values are not guaranteed unique either.
+ */
+function courseOrTopicOptionsFrom(
+  concepts: readonly ConceptRecord[],
+): readonly CourseOrTopicOption[] {
+  const courseNames = new Set<string>();
+  const topicNames = new Set<string>();
+  for (const concept of concepts) {
+    for (const course of concept.courses) courseNames.add(course);
+    topicNames.add(concept.name);
+  }
+  const courses = [...courseNames]
+    .sort()
+    .map((label): CourseOrTopicOption => ({ kind: 'course', label }));
+  const topics = [...topicNames]
+    .sort()
+    .map((label): CourseOrTopicOption => ({ kind: 'topic', label }));
+  return [...courses, ...topics];
+}
+
+/**
+ * STEER-2 (`ol-ijms`): turns the view's round-tripped choice into the exact
+ * `courses`/`conceptIds` `composeSessionRows` expects — `courses` matches
+ * `GapRow.course` verbatim (`study-session/compose.ts`'s own doc: "never
+ * case-folded"), and `conceptIds` is the opaque `ConceptRecord.key`, never
+ * the display `name` the view sent back. Resolved against the SAME
+ * `enumeration.concepts` {@link courseOrTopicOptionsFrom} built the offered
+ * option list from, so "found in the option list" and "resolves to a real
+ * filter" can never disagree.
+ *
+ * A choice absent from `concepts` (the vault changed since the option list
+ * was offered) resolves to nothing — no restriction — rather than to an
+ * `courses: []`/`conceptIds: []` that would empty the session outright; the
+ * view's own `courseOrTopicNotFoundLine` (`./copy.js`) is what tells her the
+ * request could not be honoured.
+ */
+function resolveCourseOrTopicFilter(
+  selected: CourseOrTopicOption | undefined,
+  concepts: readonly ConceptRecord[],
+): { readonly courses?: readonly string[]; readonly conceptIds?: readonly string[] } {
+  if (selected === undefined) return {};
+  if (selected.kind === 'course') {
+    return concepts.some((concept) => concept.courses.includes(selected.label))
+      ? { courses: [selected.label] }
+      : {};
+  }
+  const keys = concepts.filter((concept) => concept.name === selected.label).map((c) => c.key);
+  return keys.length > 0 ? { conceptIds: keys } : {};
 }
 
 /**
@@ -414,6 +495,16 @@ export function createLocalSessionBuilderProvider(
         enumeration.concepts,
       );
 
+      // STEER-2 (`ol-ijms`): the option list this call offers the view
+      // regardless of what (if anything) `request.courseOrTopic` asks for —
+      // see `courseOrTopicOptionsFrom`'s own doc for why it is built from
+      // the whole-vault enumeration rather than the ranked gap rows.
+      const courseOrTopicOptions = courseOrTopicOptionsFrom(enumeration.concepts);
+      const courseOrTopicFilter = resolveCourseOrTopicFilter(
+        request.courseOrTopic,
+        enumeration.concepts,
+      );
+
       // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
       // module doc, `readReviewLogHistory`), so a real multi-week absence
       // is measured correctly regardless of `probeDays`.
@@ -446,6 +537,12 @@ export function createLocalSessionBuilderProvider(
         ...(request.focusConceptName !== undefined
           ? { focusConceptName: request.focusConceptName }
           : {}),
+        // [STEER-1]/STEER-2: passed straight through to
+        // `buildComposedStudySession` via `ComposeReentrySessionInput`'s own
+        // `Omit<BuildComposedStudySessionInput, 'budgetMinutes'>` — see
+        // `resolveCourseOrTopicFilter`'s own doc for how these two are
+        // derived.
+        ...courseOrTopicFilter,
       });
 
       // F6.6: a re-entry composition returns the narrower, count-free
@@ -454,8 +551,8 @@ export function createLocalSessionBuilderProvider(
       // doc (`./view.js`) for why that is a type, not a flag a renderer has
       // to remember to check.
       return composed.isReentry
-        ? { kind: 'reentry', view: composed.view }
-        : { kind: 'model', model: composed.full.model };
+        ? { kind: 'reentry', view: composed.view, courseOrTopicOptions }
+        : { kind: 'model', model: composed.full.model, courseOrTopicOptions };
     } catch (error) {
       console.error('Olea: could not build a study session', error);
       return { kind: 'unavailable' };

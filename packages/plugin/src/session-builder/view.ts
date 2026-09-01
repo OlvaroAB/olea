@@ -3,6 +3,20 @@
  * F4.9; `ol-p5t06b` [P5-T06b]), and F6.6's re-entry-after-absence surface
  * (`ol-v7r5.18`, discovered from `ol-blwb` / `[BKLG-1]`).
  *
+ * **STEER-2 (`ol-ijms`), the "course or topic" half of F4.6's three
+ * first-class steering inputs.** `[D-076]` round 2 ("Can she steer it?")
+ * names three inputs on this one assembly path: the time she has (already
+ * surfaced — the budget buttons below), a course or topic to work on (new
+ * here), and a stated interest (already surfaced — {@link setFocusConcept}'s
+ * sticky lift from the gap view). `SessionSteeringRequest`
+ * (`olea-core`'s `study-session/compose.ts`) has carried `courses`/
+ * `conceptIds` end to end since STEER-1 (`ol-imqy`); this bead is only the
+ * missing UI: a single-select control offering every course and every named
+ * concept ("topic", F2.5's word for it) the vault currently has, resolved by
+ * `./provider.js` into the exact filter `composeSessionRows` expects. See
+ * {@link CourseOrTopicOption}'s own doc for why the resolution happens in the
+ * provider rather than here.
+ *
  * **Thin by design, and here that is a safety property.** Everything this
  * screen *decides* is in `olea-core`'s `study-session/` — which instruments are
  * offered, in what order, at what estimated cost, and what was left out and
@@ -46,6 +60,12 @@ import type { ReentryStudySessionView, StudySessionItem, StudySessionModel } fro
 import { EXPLAIN_BACK_SESSION_ENTRY_LABEL } from '../explain-back/copy.js';
 import {
   budgetOptionLabel,
+  COURSE_OR_TOPIC_ALL_LABEL,
+  COURSE_OR_TOPIC_COURSE_GROUP_LABEL,
+  COURSE_OR_TOPIC_LABEL,
+  COURSE_OR_TOPIC_TOPIC_GROUP_LABEL,
+  type CourseOrTopicOption,
+  courseOrTopicNotFoundLine,
   DEFAULT_SESSION_BUDGET_MINUTES,
   reentryScreenCopy,
   SESSION_BUDGET_OPTIONS,
@@ -67,10 +87,32 @@ export const VIEW_TYPE_OLEA_SESSION = 'olea-session-builder';
  * `leftOutInstrumentCount`/`consideredRowCount` (`olea-core`'s
  * `ReentryStudySessionView` doc) — the same reason `composeReentrySession`
  * gives that type its own shape rather than a flag on the ordinary one.
+ *
+ * The two buildable states also carry `courseOrTopicOptions` (STEER-2): every
+ * course and every named concept the provider's vault walk currently knows
+ * about, freshly computed on every `load()` — never stale, and never gated on
+ * whether a filter is actually applied this time. `'unavailable'` carries
+ * none: there is no vault reading behind it to offer options from.
+ *
+ * **Optional, not required**, even on the two buildable states — a `deps`
+ * built by a caller that predates STEER-2 (the workbench's own
+ * `session-scenarios.ts` `load`, which composes `StudySessionModel` directly
+ * against a hand-built world with no course/topic enumeration to offer) still
+ * satisfies this type. `renderCourseOrTopicControls` reads an absent list as
+ * "nothing to offer" and renders no control at all, never a filter silently
+ * narrowed to zero options.
  */
 export type SessionBuilderState =
-  | { readonly kind: 'model'; readonly model: StudySessionModel }
-  | { readonly kind: 'reentry'; readonly view: ReentryStudySessionView }
+  | {
+      readonly kind: 'model';
+      readonly model: StudySessionModel;
+      readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
+    }
+  | {
+      readonly kind: 'reentry';
+      readonly view: ReentryStudySessionView;
+      readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
+    }
   | { readonly kind: 'unavailable' };
 
 /** What the view asks for when it (re)builds. */
@@ -78,6 +120,14 @@ export interface SessionBuilderRequest {
   readonly budgetMinutes: number;
   /** The concept the gap view's `build-session` affordance named, if any. Omitted means "build from the whole ranking". */
   readonly focusConceptName?: string;
+  /**
+   * STEER-2 (F4.6): the "course or topic" steering input, chosen from the
+   * PREVIOUS `load()`'s `courseOrTopicOptions` (or unset, on the very first
+   * call). Omitted means no restriction — the same "undefined means no
+   * restriction" default `SessionSteeringRequest.courses`/`conceptIds`
+   * document.
+   */
+  readonly courseOrTopic?: CourseOrTopicOption;
 }
 
 export interface SessionBuilderViewDeps {
@@ -115,12 +165,15 @@ export class SessionBuilderView extends ItemView {
   private readonly deps: SessionBuilderViewDeps;
   private budgetMinutes: number;
   private focusConceptName: string | undefined;
+  /** STEER-2: her current course-or-topic choice, sticky across a budget change for the same reason `focusConceptName` is (see {@link refresh}'s own doc). Only {@link renderCourseOrTopicControls}'s `change` listener sets it. */
+  private courseOrTopic: CourseOrTopicOption | undefined;
 
   constructor(leaf: WorkspaceLeaf, deps: SessionBuilderViewDeps) {
     super(leaf);
     this.deps = deps;
     this.budgetMinutes = deps.defaultBudgetMinutes ?? DEFAULT_SESSION_BUDGET_MINUTES;
     this.focusConceptName = undefined;
+    this.courseOrTopic = undefined;
   }
 
   override getViewType(): string {
@@ -150,16 +203,19 @@ export class SessionBuilderView extends ItemView {
   /**
    * Rebuilds and redraws.
    *
-   * `focusConceptName` is *sticky* across a budget change on purpose: she asked
-   * to start from a concept, then asked for more time, and dropping the first
-   * request because of the second would be the surface quietly deciding it knew
-   * better. {@link setFocusConcept} is the only thing that changes it.
+   * `focusConceptName` and `courseOrTopic` are both *sticky* across a budget
+   * change on purpose: she asked to start from a concept, or to narrow to a
+   * course or topic, then asked for more time, and dropping the first request
+   * because of the second would be the surface quietly deciding it knew
+   * better. {@link setFocusConcept} and {@link renderCourseOrTopicControls}'s
+   * `change` listener are the only things that change them.
    */
   async refresh(): Promise<void> {
-    const request: SessionBuilderRequest =
-      this.focusConceptName === undefined
-        ? { budgetMinutes: this.budgetMinutes }
-        : { budgetMinutes: this.budgetMinutes, focusConceptName: this.focusConceptName };
+    const request: SessionBuilderRequest = {
+      budgetMinutes: this.budgetMinutes,
+      ...(this.focusConceptName !== undefined ? { focusConceptName: this.focusConceptName } : {}),
+      ...(this.courseOrTopic !== undefined ? { courseOrTopic: this.courseOrTopic } : {}),
+    };
     this.render(await this.deps.load(request));
   }
 
@@ -174,6 +230,7 @@ export class SessionBuilderView extends ItemView {
     root.empty();
 
     this.renderBudgetControls(root);
+    this.renderCourseOrTopicControls(root, state);
     this.renderExplainBackEntry(root);
 
     if (state.kind === 'unavailable') {
@@ -218,6 +275,78 @@ export class SessionBuilderView extends ItemView {
         void this.refresh();
       });
     }
+  }
+
+  /**
+   * STEER-2 (F4.6): the "course or topic" steering control. One `<select>`,
+   * an "everything" default plus every course and every topic
+   * `state.courseOrTopicOptions` currently names, grouped. Skipped for
+   * `'unavailable'` — there is no vault-derived option list to offer, the
+   * same reason `renderBudgetControls`' sibling controls still render (they
+   * do not depend on `state`) while this one, which does, cannot.
+   *
+   * No `cls:`/`addClass` here on purpose, unlike every other element this
+   * file draws: adding a new class would require a matching rule in
+   * `packages/plugin/styles.css`, which sits outside this bead's file
+   * ownership (`owns: packages/plugin/src/session-builder/`) — see
+   * `test/session-builder/styles.spec.ts`'s own "every class the view emits
+   * has a rule" check, which this omission keeps vacuously true rather than
+   * red. Obsidian's host theme still renders a bare `<select>` usably;
+   * styling it to match the budget buttons is a follow-up, not a blocker.
+   */
+  private renderCourseOrTopicControls(parent: HTMLElement, state: SessionBuilderState): void {
+    if (state.kind === 'unavailable') return;
+    const options = state.courseOrTopicOptions;
+    // A `deps.load` that never offers options (see `SessionBuilderState`'s
+    // own doc) gets no control at all, rather than an empty, useless select.
+    if (options === undefined || options.length === 0) return;
+
+    const notFound = courseOrTopicNotFoundLine(this.courseOrTopic, options);
+    if (notFound !== null) parent.createDiv({ text: notFound });
+
+    // `value` is set as a plain DOM property below rather than through
+    // `createEl`'s own info object — `packages/workbench`'s
+    // `OleaShimDomElementInfo` (its own stand-in for Obsidian's real
+    // `DomElementInfo`, outside this bead's file ownership) does not declare
+    // one, and `HTMLOptionElement.value` is a standard lib.dom property
+    // either shim leaves untouched.
+    const select = parent.createEl('select', { attr: { 'aria-label': COURSE_OR_TOPIC_LABEL } });
+    const allOption = select.createEl('option', { text: COURSE_OR_TOPIC_ALL_LABEL });
+    allOption.value = '';
+
+    const courses = options.filter((option) => option.kind === 'course');
+    if (courses.length > 0) {
+      const group = select.createEl('optgroup', {
+        attr: { label: COURSE_OR_TOPIC_COURSE_GROUP_LABEL },
+      });
+      for (const option of courses) {
+        const el = group.createEl('option', { text: option.label });
+        el.value = JSON.stringify(option);
+      }
+    }
+
+    const topics = options.filter((option) => option.kind === 'topic');
+    if (topics.length > 0) {
+      const group = select.createEl('optgroup', {
+        attr: { label: COURSE_OR_TOPIC_TOPIC_GROUP_LABEL },
+      });
+      for (const option of topics) {
+        const el = group.createEl('option', { text: option.label });
+        el.value = JSON.stringify(option);
+      }
+    }
+
+    // Matches an option's `value` only when `this.courseOrTopic` is still
+    // among the options just built; a stale choice (the vault changed under
+    // her) leaves the select on "everything" — `notFound` above is what says
+    // so, rather than the select silently pretending nothing was ever asked.
+    select.value = this.courseOrTopic === undefined ? '' : JSON.stringify(this.courseOrTopic);
+
+    select.addEventListener('change', () => {
+      this.courseOrTopic =
+        select.value === '' ? undefined : (JSON.parse(select.value) as CourseOrTopicOption);
+      void this.refresh();
+    });
   }
 
   /**

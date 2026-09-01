@@ -97,6 +97,70 @@ export const SESSION_UNAVAILABLE_BODY =
   'So there is no session to build here. This is not a claim about what you have left to study — try again in a moment.';
 
 // ---------------------------------------------------------------------------
+// F4.6 / STEER-2 (`ol-ijms`) — the "course or topic" steering control
+//
+// `[D-076]` round 2 names three first-class steering inputs on this one
+// assembly path: the time she has (the budgets above), a course or topic to
+// work on (this section), and a stated interest (`focusLine` below, from the
+// gap view's lift). `courses`/`conceptIds` have carried end to end since
+// STEER-1 (`olea-core`'s `study-session/compose.ts`); this is the vocabulary
+// and the one honesty line the control needs.
+//
+// "Topic" is F2.5's own word for a concept-level filter
+// (`QueueFilter.conceptIds`'s doc: "F2.5's 'topic'"), so it is used here
+// verbatim rather than reintroduced as `concept` and forcing her to learn
+// that the two words mean the same thing on two screens.
+// ---------------------------------------------------------------------------
+
+/**
+ * One thing the control can narrow the session to. `label` is exactly what
+ * is already shown elsewhere on this screen — a course code
+ * (`StudySessionItem.course`) or a concept's display name
+ * (`StudySessionItem.conceptName`) — never the opaque `conceptKey`
+ * (`ConceptRecord.key`'s own doc: "never displayed to her", C7.11).
+ * `./view.ts` only round-trips this value; `./provider.ts` is what resolves
+ * a chosen `label` back into an exact `courses`/`conceptIds` entry, because
+ * it is the one place holding the vault's own concept/course enumeration to
+ * resolve against.
+ */
+export interface CourseOrTopicOption {
+  readonly kind: 'course' | 'topic';
+  readonly label: string;
+}
+
+/** Accessible label for the control itself — never printed as a heading (the select's own default option already says what "unset" means). */
+export const COURSE_OR_TOPIC_LABEL = 'Course or topic';
+
+/** The default option — no restriction, the same "undefined means no restriction" `SessionSteeringRequest.courses`/`conceptIds` document. */
+export const COURSE_OR_TOPIC_ALL_LABEL = 'Everything';
+
+export const COURSE_OR_TOPIC_COURSE_GROUP_LABEL = 'Courses';
+export const COURSE_OR_TOPIC_TOPIC_GROUP_LABEL = 'Topics';
+
+/**
+ * The one honesty line this control needs, and the only reason it needs one
+ * at all: the control is a visible `<select>`, so a choice that IS among
+ * `options` already shows itself — the same reason the budget buttons never
+ * get a confirming sentence. A choice that is NOT among `options` (the vault
+ * changed under her — a concept was renamed, a course dropped) has nothing
+ * to visually land on, so the select silently reverts to "Everything" unless
+ * this says why. Mirrors {@link focusLine}'s own rule: "a request silently
+ * dropped is worse than one that says it was not honoured." `null` whenever
+ * nothing was asked, or the ask is still honoured.
+ */
+export function courseOrTopicNotFoundLine(
+  selected: CourseOrTopicOption | undefined,
+  options: readonly CourseOrTopicOption[],
+): string | null {
+  if (selected === undefined) return null;
+  const stillOffered = options.some(
+    (option) => option.kind === selected.kind && option.label === selected.label,
+  );
+  if (stillOffered) return null;
+  return `Olea could not find "${selected.label}" any more, so this session is built from everything.`;
+}
+
+// ---------------------------------------------------------------------------
 // F4.9 — the framing that governs every ranked surface
 // ---------------------------------------------------------------------------
 
@@ -522,5 +586,14 @@ export function allSessionBuilderStrings(): readonly string[] {
     // --- F6.6 — re-entry composition after an absence (`ol-v7r5.18`) ---
     REENTRY_STILL_AVAILABLE_LINE,
     ...reentryEmptyLines({ items: [] }),
+    // --- STEER-2 (`ol-ijms`) — the "course or topic" control's fixed strings.
+    // `courseOrTopicNotFoundLine`'s derived sentence is exercised by
+    // `copy.spec.ts`'s own `everyProducibleString()`, same as `focusLine`/
+    // `countdownLine` above — this inventory is fixed strings only, per this
+    // module's own doc.
+    COURSE_OR_TOPIC_LABEL,
+    COURSE_OR_TOPIC_ALL_LABEL,
+    COURSE_OR_TOPIC_COURSE_GROUP_LABEL,
+    COURSE_OR_TOPIC_TOPIC_GROUP_LABEL,
   ];
 }

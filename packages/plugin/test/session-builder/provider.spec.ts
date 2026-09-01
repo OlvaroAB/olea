@@ -637,3 +637,115 @@ describe('createLocalSessionBuilderProvider — F6.6 re-entry composition wiring
     expect(state.kind).toBe('model');
   });
 });
+
+// F4.6 / STEER-2 (`ol-ijms`): the "course or topic" steering input's plugin
+// wiring. `study-session/compose.ts`'s own suite already proves the engine
+// arithmetic (courses/conceptIds narrow the ranking, AND semantics, undefined
+// means no restriction — [STEER-1], `ol-imqy`); what this suite proves is
+// that `provider.ts` (a) always offers a real, whole-vault course/topic
+// option list regardless of the request, (b) resolves a chosen option back
+// into the exact filter the engine expects, over a REAL two-concept vault
+// (`twoConceptBaseFiles`, defined above for the F2.19 suite) rather than a
+// hand-built map, and (c) never silently drops a stale choice.
+/** `createLocalSessionBuilderProvider` always sets this on a buildable state (see `provider.ts`'s own `buildFresh`); this narrows the type the same way `SessionBuilderState`'s doc says a caller like the workbench's, which never sets it, may not. */
+function optionsOf(state: {
+  readonly courseOrTopicOptions?: readonly { kind: 'course' | 'topic'; label: string }[];
+}) {
+  if (state.courseOrTopicOptions === undefined) {
+    throw new Error('expected courseOrTopicOptions to be set by createLocalSessionBuilderProvider');
+  }
+  return state.courseOrTopicOptions;
+}
+
+describe('createLocalSessionBuilderProvider — F4.6/STEER-2 course-or-topic wiring (ol-ijms)', () => {
+  function provider() {
+    return createLocalSessionBuilderProvider({
+      vault: memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE)),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+  }
+
+  it('offers every course and every topic the vault has, regardless of whether a filter is applied', async () => {
+    const state = await provider().load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    expect(state.courseOrTopicOptions).toEqual(
+      expect.arrayContaining([
+        { kind: 'course', label: 'TESTC101' },
+        { kind: 'topic', label: 'Widget theory' },
+        { kind: 'topic', label: 'Gadget theory' },
+      ]),
+    );
+  });
+
+  it('a topic choice narrows the composed session to that one concept', async () => {
+    const p = provider();
+    const first = await p.load({ budgetMinutes: 60 });
+    if (first.kind !== 'model') throw new Error('expected a model');
+    const gadget = optionsOf(first).find((o) => o.kind === 'topic' && o.label === 'Gadget theory');
+    if (gadget === undefined) throw new Error('expected a "Gadget theory" topic option');
+
+    // A different, unfrozen sitting — `endSitting()` between calls, same as
+    // a real "she closed the leaf and reopened it" boundary, so this reads
+    // as a fresh composition rather than the RBLD-2 freeze reusing the first.
+    p.endSitting?.();
+    const filtered = await p.load({ budgetMinutes: 60, courseOrTopic: gadget });
+    if (filtered.kind !== 'model') throw new Error('expected a model');
+
+    const names = conceptNamesOf(filtered.model);
+    expect(names).toEqual(['Gadget theory']);
+  });
+
+  it('a course choice matching the only course present leaves both its concepts in — a real filter, not an accidental exclusion', async () => {
+    const p = provider();
+    const first = await p.load({ budgetMinutes: 60 });
+    if (first.kind !== 'model') throw new Error('expected a model');
+    const course = optionsOf(first).find((o) => o.kind === 'course' && o.label === 'TESTC101');
+    if (course === undefined) throw new Error('expected a "TESTC101" course option');
+
+    p.endSitting?.();
+    const filtered = await p.load({ budgetMinutes: 60, courseOrTopic: course });
+    if (filtered.kind !== 'model') throw new Error('expected a model');
+
+    const names = conceptNamesOf(filtered.model);
+    expect(names).toContain('Widget theory');
+    expect(names).toContain('Gadget theory');
+  });
+
+  it('a choice naming a course or topic the vault no longer has resolves to no restriction, never an emptied session', async () => {
+    const p = provider();
+    const stale = await p.load({
+      budgetMinutes: 60,
+      courseOrTopic: { kind: 'topic', label: 'A concept that does not exist' },
+    });
+    if (stale.kind !== 'model') throw new Error('expected a model');
+
+    const names = conceptNamesOf(stale.model);
+    expect(names).toContain('Widget theory');
+    expect(names).toContain('Gadget theory');
+    // And the stale label is not among the options offered back — this is
+    // the signal `./copy.ts`'s `courseOrTopicNotFoundLine` reads to tell her
+    // the choice could not be honoured, rather than silently dropping it.
+    expect(stale.courseOrTopicOptions).not.toEqual(
+      expect.arrayContaining([{ kind: 'topic', label: 'A concept that does not exist' }]),
+    );
+  });
+
+  it('the freeze contract (RBLD-2) treats a course-or-topic change as an explicit new ask, same as a budget change', async () => {
+    const p = provider();
+    const first = await p.load({ budgetMinutes: 60 });
+    if (first.kind !== 'model') throw new Error('expected a model');
+    const gadget = optionsOf(first).find((o) => o.kind === 'topic' && o.label === 'Gadget theory');
+    if (gadget === undefined) throw new Error('expected a "Gadget theory" topic option');
+
+    // NO `endSitting()` here — the sitting from `first` is still open, so
+    // this proves the freeze itself (not just a fresh leaf) treats the
+    // steering change as a real new ask.
+    const second = await p.load({ budgetMinutes: 60, courseOrTopic: gadget });
+    expect(second).not.toBe(first);
+    if (second.kind !== 'model') throw new Error('expected a model');
+    expect(conceptNamesOf(second.model)).toEqual(['Gadget theory']);
+  });
+});

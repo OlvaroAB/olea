@@ -22,7 +22,9 @@ import {
   allSessionBuilderStrings,
   assessmentName,
   budgetOptionLabel,
+  COURSE_OR_TOPIC_ALL_LABEL,
   countdownLine,
+  courseOrTopicNotFoundLine,
   durationBasisLine,
   emptySessionLines,
   focusLine,
@@ -124,6 +126,10 @@ function reentryView(overrides: Partial<StudySessionModel> = {}): ReentryStudySe
  */
 function everyProducibleString(): readonly string[] {
   const strings: string[] = [...allSessionBuilderStrings(), ...sessionFraming()];
+
+  // STEER-2 (`ol-ijms`): the not-found line's one derived sentence.
+  const notFound = courseOrTopicNotFoundLine({ kind: 'course', label: 'CRS101' }, []);
+  if (notFound !== null) strings.push(notFound);
 
   const models: StudySessionModel[] = [
     model(),
@@ -457,6 +463,49 @@ describe('the summary and the item lines', () => {
   it('offers the budgets F4.6 names, with the 20-minute one among them', () => {
     expect(SESSION_BUDGET_OPTIONS).toContain(20);
     expect(budgetOptionLabel(20)).toBe('20 min');
+  });
+});
+
+// --------------------------------------------------------------------------
+// F4.6 / STEER-2 (`ol-ijms`) — the "course or topic" control
+// --------------------------------------------------------------------------
+
+describe('the course-or-topic control says when a choice could not be honoured, and is silent otherwise', () => {
+  it('is silent when nothing was asked', () => {
+    expect(courseOrTopicNotFoundLine(undefined, [])).toBeNull();
+  });
+
+  it('is silent when the choice is still among the options offered', () => {
+    expect(
+      courseOrTopicNotFoundLine({ kind: 'course', label: 'CRS101' }, [
+        { kind: 'course', label: 'CRS101' },
+        { kind: 'topic', label: 'Widget theory' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('names the choice when it is no longer among the options offered', () => {
+    expect(
+      courseOrTopicNotFoundLine({ kind: 'topic', label: 'Missing concept' }, [
+        { kind: 'course', label: 'CRS101' },
+      ]),
+    ).toBe(
+      'Olea could not find "Missing concept" any more, so this session is built from everything.',
+    );
+  });
+
+  it('a course and a topic sharing the same label are told apart by kind', () => {
+    // The same string could name both a course and a topic; a match against
+    // one must not silently satisfy a request for the other.
+    expect(
+      courseOrTopicNotFoundLine({ kind: 'topic', label: 'CRS101' }, [
+        { kind: 'course', label: 'CRS101' },
+      ]),
+    ).toContain('could not find "CRS101"');
+  });
+
+  it('the fixed labels are part of the corpus the F4.9/principle-12 audits above reach', () => {
+    expect(allSessionBuilderStrings()).toContain(COURSE_OR_TOPIC_ALL_LABEL);
   });
 });
 
