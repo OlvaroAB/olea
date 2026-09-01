@@ -107,15 +107,17 @@ describe('every port the session needs is the real one', () => {
     // (`ol-2zfj.19`) awaits it again to thread the same id into
     // `createVaultMisconceptionStore`, the citation-revision batch pass
     // (`ol-2zfj.35` [CORP-3b]) awaits it a third time to thread the same id
-    // into `createVaultSuspendPort`, and `ol-12gs`'s
+    // into `createVaultSuspendPort`, `ol-12gs`'s
     // `buildExplainBackObservationContextFor` awaits it a fourth time to
     // thread the same id into its OWN `createVaultMisconceptionStore` read
-    // (the accept-and-observe step's misconception-record lookup) — there is
-    // no `this.deviceId` cache to reuse instead in any of the four. The count
-    // below tracks known call sites rather than asserting "exactly once", so
-    // a future accidental duplicate still has to be a deliberate edit to this
-    // test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(4);
+    // (the accept-and-observe step's misconception-record lookup), and
+    // `ol-38kp`'s `recordExplainBackSoloGradeAndReview` awaits it a fifth
+    // time to thread the same id into `recordSoloGradeAndReview`'s SOLO
+    // review-log write — there is no `this.deviceId` cache to reuse instead
+    // in any of the five. The count below tracks known call sites rather
+    // than asserting "exactly once", so a future accidental duplicate still
+    // has to be a deliberate edit to this test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(5);
   });
 });
 
@@ -249,6 +251,38 @@ describe('the explain-back grading pipeline has a real production caller (ol-drf
   it('exposes a production entry point that reaches gradeExplainBack through the composed wiring', () => {
     expect(main).toMatch(
       /async gradeExplainBackAttempt\(\s*input:\s*GradeExplainBackInput,\s*\):\s*Promise<PendingExplainBackGrading \| null> \{\s*if \(this\.grading === null\) return null;\s*return gradeExplainBackAttempt\(this\.grading, input\);/,
+    );
+  });
+});
+
+describe('the SOLO review-log write has a real production caller (ol-38kp)', () => {
+  // `ol-cqz8` built the tested composition (`explain-back/solo-review.ts`'s
+  // `recordSoloGradeAndReview`, wired optionally into `ExplainBackModal`'s
+  // `acceptGrading`) but left `main.ts`'s `openExplainBackModal` deps
+  // literal without a real instance — the exact defect shape this file's
+  // own module doc opens with, one hop further down the same chain
+  // `gradeExplainBackAttempt`/`acceptExplainBackGradingWithObservation`
+  // above already guard against. These assertions are the source-level
+  // proof that a real instance is now supplied, built from the same
+  // `GradingWiring`/vault/deviceId construction
+  // `buildExplainBackObservationContextFor` already uses for its sibling
+  // call just above it.
+
+  it('exposes a production entry point that reaches recordSoloGradeAndReview through the composed grading wiring, guarded on this.grading', () => {
+    expect(main).toMatch(
+      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<void> \{\s*if \(this\.grading === null\) return;\s*await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*\(\) => new Date\(\),\s*\},\s*params,\s*\);/,
+    );
+  });
+
+  it("supplies that entry point as ExplainBackModal's recordSoloGradeAndReview dep", () => {
+    expect(main).toMatch(
+      /recordSoloGradeAndReview:\s*\(params\) => this\.recordExplainBackSoloGradeAndReview\(params\),/,
+    );
+  });
+
+  it('imports recordSoloGradeAndReview from the tested composition module, not a bare re-export', () => {
+    expect(main).toMatch(
+      /import \{ recordSoloGradeAndReview \} from '\.\/explain-back\/solo-review\.js';/,
     );
   });
 });

@@ -14,6 +14,7 @@ import {
   type DeviceCapability,
   detectCourseProposals,
   EMPTY_REGISTRY_OVERRIDES,
+  type ExplainBackPromptContext,
   type ExtractedUnit,
   type FirstInvitationCandidate,
   type GradeExplainBackInput,
@@ -60,6 +61,7 @@ import {
   type ExplainBackSourceBlock,
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
+import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
@@ -1876,6 +1878,35 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `ol-38kp`: the last reachability hop for `ol-cqz8`'s SOLO review-log
+   * write. Builds a real `RecordSoloGradeAndReviewDeps` — `this.grading`
+   * plus a fresh `ObsidianSource`/device id, mirroring
+   * `buildExplainBackObservationContextFor`'s own vault/deviceId
+   * construction just above — and calls `recordSoloGradeAndReview`
+   * (`./explain-back/solo-review.js`). No-op when `this.grading` is `null`,
+   * the same guard `gradeExplainBackAttempt`/
+   * `acceptExplainBackGradingWithObservation` above already take, since
+   * `GradingWiring` itself is optional at plugin level.
+   */
+  private async recordExplainBackSoloGradeAndReview(params: {
+    readonly instrumentId: string;
+    readonly subjectConceptId: string | null;
+    readonly context: ExplainBackPromptContext;
+    readonly answer: string;
+  }): Promise<void> {
+    if (this.grading === null) return;
+    await recordSoloGradeAndReview(
+      {
+        grading: this.grading,
+        vault: new ObsidianSource(this.app),
+        deviceId: await ensureDeviceId(this),
+        now: () => new Date(),
+      },
+      params,
+    );
+  }
+
+  /**
    * The ONE construction point for `ExplainBackModal` (`[D-163]`, `ol-12gs`)
    * — every one of the four ruled entry points (the command below, F2.12's
    * confusion banner in `review/view.ts`, and the session-builder/Today
@@ -1893,6 +1924,7 @@ export default class OleaPlugin extends Plugin {
           this.acceptExplainBackGradingWithObservation(pending, context),
         retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
         buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
+        recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGradeAndReview(params),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
         ...(onClosed ? { onClosed } : {}),
       },
