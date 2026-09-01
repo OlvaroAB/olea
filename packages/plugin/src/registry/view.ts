@@ -32,6 +32,7 @@ import {
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistryModel,
+  type RegistrySourceLocation,
 } from 'olea-core';
 import {
   aliasesLine,
@@ -42,6 +43,7 @@ import {
   instrumentLabel,
   masteryStatedLine,
   NO_INSTRUMENTS_LINE,
+  OPEN_SOURCE_LOCATION_ACTION,
   REGISTRY_EMPTY_LINE,
   REGISTRY_UNAVAILABLE_LINE,
   REGISTRY_VIEW_TITLE,
@@ -49,6 +51,8 @@ import {
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
   SHOW_WITHDRAWN_LABEL,
+  SOURCE_LOCATIONS_HEADING,
+  sourceLocationLabel,
   WITHDRAW_CONCEPT_ACTION,
   WITHDRAW_INSTRUMENT_ACTION,
   WITHDRAWN_LABEL,
@@ -61,6 +65,12 @@ export type RegistryViewState =
   | { readonly kind: 'model'; readonly model: RegistryModel }
   | { readonly kind: 'unavailable' };
 
+/** `[D-171]`'s one-step affordance target: which row to scroll/highlight to when a caller reveals the registry — see `./obsidian-ports.ts`'s `openRegistryEntryFor`. Exactly one of the two is set. */
+export interface RegistryEntryTarget {
+  readonly conceptKey?: string;
+  readonly instrumentId?: string;
+}
+
 export interface RegistryViewDeps {
   readonly load: () => Promise<RegistryViewState>;
   readonly rename: (entry: RegistryConceptEntry, newDisplayName: string) => Promise<void>;
@@ -69,6 +79,8 @@ export interface RegistryViewDeps {
   readonly withdrawInstrument: (instrument: RegistryInstrumentSummary) => Promise<void>;
   readonly restoreInstrument: (instrument: RegistryInstrumentSummary) => Promise<void>;
   readonly editInstrument: (instrument: RegistryInstrumentSummary) => Promise<void>;
+  /** `[D-171]`'s click-through half — opens a source location at its known grain. */
+  readonly openSourceLocation: (location: RegistrySourceLocation) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
@@ -107,6 +119,27 @@ export class RegistryView extends ItemView {
     this.render(state);
   }
 
+  /**
+   * `[D-171]`'s one-step affordance landing: scroll to and briefly highlight
+   * the row `target` names. Public and separate from `refresh()` so
+   * `./obsidian-ports.ts`'s `openRegistryEntryFor` can call `refresh()` then
+   * this, rather than folding a target into `render()`'s own state and
+   * risking a stale highlight surviving past the row it was for.
+   */
+  focusEntry(target: RegistryEntryTarget): void {
+    const selector = target.instrumentId
+      ? `[data-olea-instrument-id="${CSS.escape(target.instrumentId)}"]`
+      : target.conceptKey
+        ? `[data-olea-concept-key="${CSS.escape(target.conceptKey)}"]`
+        : null;
+    if (selector === null) return;
+    const el = this.contentEl.querySelector<HTMLElement>(selector);
+    if (el === null) return;
+    el.scrollIntoView({ block: 'center' });
+    el.addClass('olea-registry-focused');
+    setTimeout(() => el.removeClass('olea-registry-focused'), 2000);
+  }
+
   private render(state: RegistryViewState): void {
     const root = this.contentEl;
     root.empty();
@@ -141,6 +174,7 @@ export class RegistryView extends ItemView {
 
   private renderConcept(root: HTMLElement, entry: RegistryConceptEntry): void {
     const row = root.createDiv({ cls: 'olea-registry-row' });
+    row.dataset.oleaConceptKey = entry.key;
     if (entry.pruned) row.addClass('olea-registry-row-withdrawn');
 
     const header = row.createDiv({ cls: 'olea-registry-row-header' });
@@ -169,7 +203,26 @@ export class RegistryView extends ItemView {
     }
 
     this.renderActions(row, entry);
+    this.renderSourceLocations(row, entry.sourceLocations);
     this.renderInstruments(row, entry);
+  }
+
+  /** `[D-171]`: the vault location(s) a concept or instrument was derived from, each opening at its known grain — never printed as a citation string, always a place to go. */
+  private renderSourceLocations(
+    root: HTMLElement,
+    locations: readonly RegistrySourceLocation[],
+  ): void {
+    if (locations.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-registry-source-locations' });
+    section.createEl('h4', { text: SOURCE_LOCATIONS_HEADING });
+    const list = section.createEl('ul');
+    for (const location of locations) {
+      const item = list.createEl('li');
+      const button = item.createEl('button', { text: sourceLocationLabel(location) });
+      button.addEventListener('click', () => {
+        void this.deps.openSourceLocation(location);
+      });
+    }
   }
 
   private renderActions(root: HTMLElement, entry: RegistryConceptEntry): void {
@@ -208,6 +261,7 @@ export class RegistryView extends ItemView {
     const list = section.createEl('ul');
     for (const instrument of entry.instruments) {
       const item = list.createEl('li', { cls: 'olea-registry-instrument-row' });
+      item.dataset.oleaInstrumentId = instrument.instrumentId;
       if (instrument.pruned) item.addClass('olea-registry-instrument-withdrawn');
 
       const label = instrument.heading
@@ -222,6 +276,13 @@ export class RegistryView extends ItemView {
       editButton.addEventListener('click', () => {
         void this.deps.editInstrument(instrument);
       });
+
+      for (const location of instrument.sourceLocations) {
+        const openButton = item.createEl('button', { text: OPEN_SOURCE_LOCATION_ACTION });
+        openButton.addEventListener('click', () => {
+          void this.deps.openSourceLocation(location);
+        });
+      }
 
       const withdrawButton = item.createEl('button', {
         text: instrument.pruned ? RESTORE_INSTRUMENT_ACTION : WITHDRAW_INSTRUMENT_ACTION,

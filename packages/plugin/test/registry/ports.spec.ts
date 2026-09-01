@@ -23,6 +23,7 @@ describe('createVaultPruneInstrumentPort', () => {
       noteTitle: 'one',
       blockId: null,
       heading: null,
+      sourceLocations: [],
       pruned: false,
     });
 
@@ -58,6 +59,7 @@ describe('createVaultPruneInstrumentPort', () => {
       noteTitle: 'one',
       blockId: null,
       heading: null,
+      sourceLocations: [],
       pruned: false,
     };
 
@@ -87,6 +89,7 @@ describe('createVaultPruneInstrumentPort', () => {
       noteTitle: 'one',
       blockId: null,
       heading: null,
+      sourceLocations: [],
       pruned: false,
     });
 

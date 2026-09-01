@@ -35,7 +35,7 @@
  * **INV-1.** No `obsidian` import here — unit-tested under Vitest.
  */
 
-import type { RegistryConceptEntry, Vitality } from 'olea-core';
+import type { RegistryConceptEntry, RegistrySourceLocation, Vitality } from 'olea-core';
 
 export const REGISTRY_VIEW_TITLE = 'Concepts and instruments';
 
@@ -107,6 +107,25 @@ export const SHOW_WITHDRAWN_LABEL = 'Show withdrawn concepts';
 
 export const INSTRUMENTS_SECTION_HEADING = 'Instruments';
 export const NO_INSTRUMENTS_LINE = 'No instruments yet for this concept.';
+
+/** `[D-171]`'s section heading for a concept's or instrument's list of vault locations it was derived from — never a citation string, always a place to go. */
+export const SOURCE_LOCATIONS_HEADING = 'Sources';
+
+/** One instrument's per-location open affordance — "open", never a citation preposition, matching `EDIT_INSTRUMENT_ACTION`'s own plain-verb form. */
+export const OPEN_SOURCE_LOCATION_ACTION = 'Open source';
+
+/** The note's filename, without folders or extension — the same reading `instrumentLabel`'s own `noteTitle` field already gives a full `VaultInstrumentRecord`, derived here from a bare path since `RegistrySourceLocation` carries only `sourcePath`. */
+function noteNameFromPath(sourcePath: string): string {
+  const base = sourcePath.slice(sourcePath.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+/** One source-location button's label (`[D-171]`) — the note it can be opened at, plus the heading when one is known. Never a page number or citation punctuation: this is an affordance to click, not a rendered citation. */
+export function sourceLocationLabel(location: RegistrySourceLocation): string {
+  const name = noteNameFromPath(location.sourcePath);
+  return location.heading ? `${name} (${location.heading})` : name;
+}
 
 /** One instrument row's label — type and where it lives, never its content (F8.4 hands content to Obsidian). */
 export function instrumentLabel(instrumentType: 'qa' | 'cloze' | 'mcq'): string {

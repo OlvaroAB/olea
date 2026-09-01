@@ -1597,6 +1597,13 @@ button.olea-review-mcq-option:hover {
 /* Every sentence on this screen, from `copy.ts` and nowhere else. Muted
    throughout: the framing and the left-out lines are provenance, and must
    not compete with the session itself. */
+.olea-session-stale-reason {
+  padding: 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
 .olea-session-copy {
   padding: 12px 0 4px;
   font-size: 12px;

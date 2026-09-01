@@ -69,6 +69,23 @@ export type {
 };
 
 /**
+ * One vault location a concept or instrument's registry entry can open at
+ * (F8.4's amended text, `[D-171]`). Reuses nothing from `../extract/types.js`'s
+ * `SourceLocation` beyond the shape's own honesty rule — this module's inputs
+ * (`ConceptRecord`, `VaultInstrumentRecord`) do not carry `SourceLocation`
+ * itself (no `page`, no `charRange`), only a vault path plus, for an
+ * instrument, the heading/block already recorded for it. `heading` and
+ * `blockId` are `null`/absent exactly when the underlying record has none —
+ * never guessed, matching `SourceLocation.section`'s own "undefined means no
+ * structure exists, not that the lookup failed" convention.
+ */
+export interface RegistrySourceLocation {
+  readonly sourcePath: VaultPath;
+  readonly heading?: string | null;
+  readonly blockId?: string | null;
+}
+
+/**
  * One instrument in a concept's mix, as the registry shows it. A thin
  * projection of `VaultInstrumentRecord` — carries only what the browse row
  * and the edit/prune affordances need, never the parsed card/MCQ body (F8.4
@@ -83,6 +100,17 @@ export interface RegistryInstrumentSummary {
   readonly noteTitle: string;
   readonly blockId: string | null;
   readonly heading: string | null;
+  /**
+   * `[D-171]`'s per-instrument provenance — where this instrument itself
+   * lives (`notePath`/`heading`/`blockId`, restated as one openable
+   * location), so the registry has something honest to open even before the
+   * generation-time material citation (which PDF/PPTX page an instrument was
+   * DRAWN from, as distinct from the vault note it lives in) is threaded
+   * through `VaultInstrumentRecord` — see `./build.ts`'s module doc for the
+   * exact gap and the follow-up. Always exactly one entry today; never
+   * fabricated beyond what `VaultInstrumentRecord` already carries.
+   */
+  readonly sourceLocations: readonly RegistrySourceLocation[];
   /**
    * F8.5's withdrawal state, at the INSTRUMENT grain. Backed by the existing
    * suspend/unsuspend projection (`../review-log/suspension.js`) — the
@@ -132,6 +160,17 @@ export interface RegistryConceptEntry {
   /** Every schedulable instrument this concept is evidence for, in vault-then-source order — the browsable "instrument mix" (F8.4). */
   readonly instruments: readonly RegistryInstrumentSummary[];
   readonly explainBack: RegistryExplainBackSummary;
+  /**
+   * `[D-171]`'s per-concept provenance — the vault location(s) this concept
+   * was derived from: `sourcePaths` (every note whose `topic:` or wikilink
+   * named it) plus `boundNotePath` when one exists, deduplicated. Note-grain
+   * only: `ConceptRecord` (this module's own input) carries no
+   * page/section/slide for a concept — that finer grain lives on
+   * `../concept/read.js`'s `ReadConcept.anchor`/`alsoIn` (passage-grain
+   * `Provenance`), which is a different stage's output and not yet threaded
+   * into extraction's `ConceptRecord`. See `./build.ts`'s module doc.
+   */
+  readonly sourceLocations: readonly RegistrySourceLocation[];
   /** F2.11 axis 1 (growth stage) plus the evidence it was read from (`../mastery/rollup.js`, C5.4). */
   readonly mastery: ConceptMasteryResult;
   /** F2.11 axis 2 (vitality) — `[D-087]`'s fold, first surfaced live here (see `../mastery/rollup.js`'s own module doc on `readAllConceptVitality` having "no consumer outside core yet"). */

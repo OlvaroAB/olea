@@ -3,6 +3,11 @@
 // INV-1: this package (and every file under it) MUST NEVER import `obsidian`.
 // See scripts/check-inv1.mjs and packages/core/test/inv1.probe.spec.ts.
 
+// Component 3.5's client-side input resolution (`ol-v7r5.25`) — see
+// `./allocation/resolve-inputs.js`'s module doc for what each input is and
+// why the rest are declared absent rather than fabricated.
+export type { PlanPolicyCourseInput } from './allocation/resolve-inputs.js';
+export { resolvePlanPolicyCourseInputs } from './allocation/resolve-inputs.js';
 export {
   extractDeclaredProperties,
   extractExtFilters,
@@ -597,6 +602,15 @@ export {
   SR_DEFAULT_DECK_TAG,
   stampQaCardBlockId,
 } from './instrument/card-format.js';
+// Cloze identity (D-030, D-107, `ol-k7eg`) — the frontmatter-map stamping
+// path for the one instrument type that cannot carry a visible marker.
+export type { ClozeIdAnchor } from './instrument/cloze-identity.js';
+export {
+  CLOZE_ID_FRONTMATTER_KEY,
+  clozeMapKey,
+  readClozeId,
+  stampClozeId,
+} from './instrument/cloze-identity.js';
 export type {
   InsertMcqInput,
   InsertMcqResult,
@@ -943,20 +957,24 @@ export type {
   RebuildTriggerResult,
   RebuildWasteMeasured,
   RebuildWasteVerdict,
+  SittingStalenessInput,
+  SittingStalenessReason,
+  SittingStalenessResult,
   SittingState,
 } from './queue/rebuild-controller.js';
 // RBLD-1 (`ol-o7hr`), component register row 3.6, `[D-076]` round 4 "When
 // does the queue rebuild?" — the rebuild trigger set and freeze contract that
-// had no owner anywhere in the codebase. See queue/rebuild-controller.ts's
-// module doc for what is already ruled and what remains open.
+// had no owner anywhere in the codebase. The sitting-staleness cap is
+// `[D-162]` (`ol-cidn`) — see queue/rebuild-controller.ts's module doc.
 export {
   assessmentDatePassedSince,
   checkRebuildWasteRate,
-  DEFAULT_SESSION_HOLD_CAP_MINUTES,
-  DEFAULT_SESSION_HOLD_CAP_MS,
+  DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES,
+  DEFAULT_SITTING_IDLE_THRESHOLD_MS,
   decideRebuild,
   enterSitting,
   evaluateRebuildTrigger,
+  evaluateSittingStaleness,
   exitSitting,
   IDLE_SITTING,
   MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK,
@@ -998,6 +1016,7 @@ export type {
   RegistryModel,
   RegistryOverrides,
   RegistryRenameOverride,
+  RegistrySourceLocation,
 } from './registry/types.js';
 // Retrieval — embeddings, hybrid keyword+cosine retrieval, grounding refusal
 // (C2.3, C2.5, C4.7, D-004, INV-5, P3-T05). Builds on the keyword index

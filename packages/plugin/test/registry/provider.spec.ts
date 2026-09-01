@@ -9,10 +9,10 @@
  * round trip through `data.json`, and the prune/restore round trip through
  * the review log.
  */
-import type { RegistryInstrumentSummary } from 'olea-core';
+import type { RegistryInstrumentSummary, RegistrySourceLocation } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
-import type { EditInstrumentPort } from '../../src/registry/provider.js';
+import type { EditInstrumentPort, OpenSourceLocationPort } from '../../src/registry/provider.js';
 import { createLocalRegistryProvider } from '../../src/registry/provider.js';
 import type { RegistryViewState } from '../../src/registry/view.js';
 import { memoryVault, unreadableVault } from '../review/memory-vault.js';
@@ -210,5 +210,36 @@ describe('createLocalRegistryProvider — edit (F8.4: delegated to Obsidian)', (
 
     await provider.editInstrument(instrument);
     expect(editPort.opened).toEqual([instrument]);
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-171] —
+// The registry carries source provenance", tagged `@auto:plugin/registry/provider.spec`.
+describe('createLocalRegistryProvider — openSourceLocation ([D-171])', () => {
+  it('calls the injected openSourceLocationPort with the given location', async () => {
+    const opened: RegistrySourceLocation[] = [];
+    const openSourceLocationPort: OpenSourceLocationPort = {
+      open: async (location) => {
+        opened.push(location);
+      },
+    };
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      openSourceLocationPort,
+    });
+
+    const location: RegistrySourceLocation = { sourcePath: 'Notes/one.md' };
+    await provider.openSourceLocation(location);
+    expect(opened).toEqual([location]);
+  });
+
+  it('falls back to a logging no-op, never a throw, when no port is wired yet (main.ts follow-up pending)', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const location: RegistrySourceLocation = { sourcePath: 'Notes/one.md' };
+    await expect(provider.openSourceLocation(location)).resolves.toBeUndefined();
   });
 });

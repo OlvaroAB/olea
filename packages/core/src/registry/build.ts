@@ -54,7 +54,25 @@ import type {
   RegistryExplainBackSummary,
   RegistryInstrumentSummary,
   RegistryModel,
+  RegistrySourceLocation,
 } from './types.js';
+
+/**
+ * `[D-171]`'s per-instrument provenance. Today this is exactly one location —
+ * the instrument's own note/heading/block, restated as a `RegistrySourceLocation`
+ * — because `VaultInstrumentRecord` carries no generation-time material
+ * citation (which PDF page or slide the instrument was drawn FROM, as
+ * distinct from the vault note it lives IN). Threading that through needs a
+ * field on `VaultInstrumentRecord` (`../session/types.js`, outside this
+ * bead's ownership) populated at generation time from the same `Provenance`
+ * `../extract/types.js` already defines — see this module's doc and the
+ * bead's close notes for the exact follow-up.
+ */
+function instrumentSourceLocations(
+  record: BuildRegistryModelInput['instrumentRecords'][number],
+): readonly RegistrySourceLocation[] {
+  return [{ sourcePath: record.notePath, heading: record.heading, blockId: record.blockId }];
+}
 
 function instrumentSummary(
   record: BuildRegistryModelInput['instrumentRecords'][number],
@@ -68,8 +86,26 @@ function instrumentSummary(
     noteTitle: record.noteTitle,
     blockId: record.blockId,
     heading: record.heading,
+    sourceLocations: instrumentSourceLocations(record),
     pruned: suspended.has(record.instrumentId),
   };
+}
+
+/**
+ * `[D-171]`'s per-concept provenance, at the note grain `ConceptRecord`
+ * actually carries — `sourcePaths` (every note whose `topic:` or wikilink
+ * named this concept, F1.3) plus `boundNotePath` when the concept is bound to
+ * a Zettelkasten note, deduplicated and sorted for a deterministic result.
+ * Never a page/section: that grain lives on `../concept/read.js`'s
+ * `ReadConcept`, a different stage's output not yet threaded into
+ * `ConceptRecord` — see this module's doc.
+ */
+function conceptSourceLocations(
+  concept: BuildRegistryModelInput['concepts'][number],
+): readonly RegistrySourceLocation[] {
+  const paths = new Set<string>(concept.sourcePaths);
+  if (concept.boundNotePath !== undefined) paths.add(concept.boundNotePath);
+  return [...paths].sort().map((sourcePath) => ({ sourcePath }));
 }
 
 /**
@@ -177,6 +213,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       courses: concept.courses,
       tier: concept.tier,
       pruned: isConceptPruned(input.overrides, concept.key),
+      sourceLocations: conceptSourceLocations(concept),
       instruments: instrumentsByConcept.get(concept.key) ?? [],
       explainBack: explainBackSummaryFor(input.entries, concept.key),
       mastery,

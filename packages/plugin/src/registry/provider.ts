@@ -47,6 +47,7 @@ import {
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistryOverrides,
+  type RegistrySourceLocation,
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
   reviewLogPath,
@@ -78,6 +79,11 @@ export interface EditInstrumentPort {
   edit(instrument: RegistryInstrumentSummary): Promise<void>;
 }
 
+/** `[D-171]`'s click-through half: open a concept's or instrument's source location. */
+export interface OpenSourceLocationPort {
+  open(location: RegistrySourceLocation): Promise<void>;
+}
+
 export interface CreateLocalRegistryProviderDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
@@ -86,6 +92,20 @@ export interface CreateLocalRegistryProviderDeps {
   readonly now: () => Date;
   /** The one Obsidian-backed port (INV-1) — see `./obsidian-ports.ts`'s `createObsidianEditInstrumentPort`. */
   readonly editPort: EditInstrumentPort;
+  /**
+   * The one Obsidian-backed port for `[D-171]`'s click-through — see
+   * `./obsidian-ports.ts`'s `createObsidianOpenSourceLocationPort`.
+   *
+   * **Optional, deliberately, and only until `main.ts` is updated.** This
+   * bead owns `packages/plugin/src/registry/` only; `main.ts`'s existing
+   * `createLocalRegistryProvider({...})` call (the production caller, at the
+   * call site this same file's `editPort` line sits in) is one line outside
+   * that ownership. Omitting this field falls back to a port that logs and
+   * does nothing, so a build that has not yet added the line still compiles
+   * and fails LOUDLY rather than silently — never a default that pretends to
+   * work. See this bead's close notes for the exact one-line addition.
+   */
+  readonly openSourceLocationPort?: OpenSourceLocationPort;
   /** Overridable for tests; defaults to the window every other provider probes by. */
   readonly probeDays?: number;
   readonly holdingCut?: number;
@@ -124,6 +144,14 @@ export function createLocalRegistryProvider(
   );
   const holdingCut = deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT;
   const scheduler = createFsrsScheduler();
+  const openSourceLocationPort: OpenSourceLocationPort = deps.openSourceLocationPort ?? {
+    async open(location: RegistrySourceLocation) {
+      console.error(
+        'Olea: registry source-location click-through has no port wired ([D-171]) — a location was requested but not opened',
+        location.sourcePath,
+      );
+    },
+  };
 
   return {
     async load(): Promise<RegistryViewState> {
@@ -188,6 +216,10 @@ export function createLocalRegistryProvider(
 
     async editInstrument(instrument: RegistryInstrumentSummary): Promise<void> {
       await deps.editPort.edit(instrument);
+    },
+
+    async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
+      await openSourceLocationPort.open(location);
     },
   };
 }

@@ -200,3 +200,50 @@ describe('buildRegistryModel — prune, never delete (F8.5)', () => {
     expect(row?.instruments[0]?.instrumentId).toBe('qa:concept-a:1');
   });
 });
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-171] —
+// The registry carries source provenance", tagged `@auto:core/registry/build.spec`.
+describe('buildRegistryModel — source provenance (F8.4 / [D-171])', () => {
+  it("a concept's entry lists the vault location(s) it was derived from", () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          sourcePaths: ['01 Courses/COURSE-A/note.md', '01 Courses/COURSE-A/other.md'],
+          boundNotePath: 'Zettelkasten/Concept A.md',
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    expect(row?.sourceLocations).toEqual([
+      { sourcePath: '01 Courses/COURSE-A/note.md' },
+      { sourcePath: '01 Courses/COURSE-A/other.md' },
+      { sourcePath: 'Zettelkasten/Concept A.md' },
+    ]);
+  });
+
+  it('a concept with no bound note and one source note lists exactly that one location, never invented', () => {
+    const model = buildFor({ concepts: [concept()] });
+    const row = model.concepts[0];
+    expect(row?.sourceLocations).toEqual([{ sourcePath: '01 Courses/COURSE-A/note.md' }]);
+  });
+
+  it('an instrument in the mix carries its own note/heading/block as a source location', () => {
+    const model = buildFor({
+      instrumentRecords: [qaInstrument({ heading: 'Worked example', blockId: 'abc123' })],
+    });
+    const row = model.concepts[0];
+    expect(row?.instruments[0]?.sourceLocations).toEqual([
+      {
+        sourcePath: '01 Courses/COURSE-A/note.md',
+        heading: 'Worked example',
+        blockId: 'abc123',
+      },
+    ]);
+  });
+
+  it('an instrument with no heading recorded reports an absent heading, never a guessed one', () => {
+    const model = buildFor({ instrumentRecords: [qaInstrument({ heading: null })] });
+    const row = model.concepts[0];
+    expect(row?.instruments[0]?.sourceLocations[0]?.heading).toBeNull();
+  });
+});
