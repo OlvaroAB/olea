@@ -48,25 +48,35 @@
  * asserts this holds by construction, per the component register's health
  * check (3.8).
  *
- * ## Two-level allocation, and what stands in for the missing first level
+ * ## Two-level allocation, and what stood in for the missing first level
  *
  * Allocation is strictly two-level because `XCRS-1` (`ol-dq1c`, open) says
  * the pre-existing builder compared `gapScore` across courses, which the
- * contract forbids. Across courses, by **attention share** — an *input* this
- * module never computes (`ALLOC-1`/component-register 3.5, not built yet:
- * no `attention share`/course-share code exists anywhere in `packages/core`
- * today). Within a course, by `overdue-first`, over that course's own
- * concepts only — no `gapScore` or `overdueDays` is ever compared across a
- * course boundary.
+ * contract forbids. Across courses, by **attention share**. Within a course,
+ * by `overdue-first`, over that course's own concepts only — no `gapScore`
+ * or `overdueDays` is ever compared across a course boundary.
  *
- * **Until ALLOC-1 lands, each course's share is proportional to how much of
- * her ranked material lives in that course** ({@link proportionalCourseShares}) —
- * SESS-1's own headline configuration (equal shares over the vault's uneven
- * course sizes was measured to starve the larger course; proportional avoids
- * that confound). This is a declared, reversible interim policy, not a
- * ratified constant: it is replaced wholesale the day `ALLOC-1` produces a
- * real share, and nothing here needs to change when it does — the seam is
- * exactly the `courseShares` computation.
+ * **`ol-v7r5.17` [ALLOC-2] wires the real share in**, via
+ * {@link ComposeSessionRowsInput.allocation} and this module's own
+ * `./allocation-seconds.js` (A2.5's contracted share-to-seconds conversion).
+ * When it is supplied, it REPLACES both {@link proportionalCourseShares}'s
+ * interim policy AND this module's local C5.6 floor-forcing
+ * ({@link forcedCoursesFor}) wholesale, in one seam
+ * ({@link composeSessionRows}'s own `allocation`-branch) — the two floor
+ * mechanisms must never compound, because `computeAttentionShares`
+ * (`olea-service`'s component 3.5) already resolves C5.6's windowed floor at
+ * the point the share was computed, using her real sitting history rather
+ * than this module's days-since-last-seen proxy.
+ *
+ * **Until a caller has a real allocation to pass, each course's share stays
+ * proportional to how much of her ranked material lives in that course**
+ * ({@link proportionalCourseShares}) — SESS-1's own headline configuration
+ * (equal shares over the vault's uneven course sizes was measured to starve
+ * the larger course; proportional avoids that confound), with this module's
+ * own local floor-forcing still applying on that path exactly as before.
+ * `allocation` is optional and an empty array reads the same as omitted —
+ * both fall back to the interim path, so a caller with a stale or absent
+ * plan degrades to today's behaviour rather than starving every course.
  *
  * C5.6's rolling floor is enforced ({@link forcedCourseFloorDays}): a course
  * that has gone at least `runningCourses + slack` days without a concept from
@@ -266,6 +276,7 @@
  * entries the caller already read — is the only "history" this module needs.
  */
 
+import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
 import type { OracleMasteryState } from '../oracle/types.js';
@@ -277,6 +288,7 @@ import {
   shiftCalendarDay,
 } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
+import { allocationSharesToSeconds } from './allocation-seconds.js';
 import {
   type BuildStudySessionInput,
   buildStudySession,
@@ -895,6 +907,18 @@ export interface ComposeSessionRowsInput {
    * {@link courses} by AND.
    */
   readonly conceptIds?: readonly string[];
+  /**
+   * A2.5's real cross-course allocation (component 3.5), read off the
+   * caller's cached study-plan artifact (`StudyPlanBody.allocation`,
+   * `packages/contracts/src/artifact-envelope.ts`) — `ol-v7r5.17` [ALLOC-2].
+   * **Optional, and an empty array reads the same as omitted**: both mean
+   * "no real allocation yet" and fall back to
+   * {@link proportionalCourseShares}'s interim policy, this module's
+   * behaviour before this field existed. See the module doc's "Two-level
+   * allocation" section for why supplying it also disables this module's own
+   * local C5.6 floor-forcing rather than compounding with it.
+   */
+  readonly allocation?: readonly StudyPlanAllocationEntry[];
 }
 
 export interface ComposeSessionRowsResult {
@@ -938,6 +962,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     assessmentContext,
     courses: courseFilter,
     conceptIds: conceptIdFilter,
+    allocation,
   } = input;
 
   // [STEER-1]: the course-or-topic input, applied before any allocation
@@ -978,9 +1003,24 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
 
   const byCourse = groupByCourse(classified);
   const courses = [...byCourse.keys()];
-  const shares = proportionalCourseShares(byCourse);
-  const forced = forcedCoursesFor(byCourse, asOf, courses.length);
-  const budgets = courseBudgetsFor(courses, budgetSeconds, shares, forced);
+
+  // `ol-v7r5.17` [ALLOC-2]: a real allocation (non-empty) replaces both the
+  // interim proportional share AND this module's own local C5.6
+  // floor-forcing, wholesale — see the module doc's "Two-level allocation"
+  // section for why the two floor mechanisms must never compound. Absent or
+  // empty falls back to today's pre-ALLOC-2 behaviour unchanged.
+  let shares: ReadonlyMap<string, number>;
+  let forced: readonly string[];
+  let budgets: ReadonlyMap<string, number>;
+  if (allocation !== undefined && allocation.length > 0) {
+    shares = new Map(allocation.map((entry) => [entry.courseId, entry.share]));
+    forced = [];
+    budgets = allocationSharesToSeconds(allocation, budgetSeconds).secondsByCourseId;
+  } else {
+    shares = proportionalCourseShares(byCourse);
+    forced = forcedCoursesFor(byCourse, asOf, courses.length);
+    budgets = courseBudgetsFor(courses, budgetSeconds, shares, forced);
+  }
 
   const chosen: ClassifiedRow[] = [];
   const chosenKeys = new Set<string>();
@@ -1042,6 +1082,8 @@ export interface BuildComposedStudySessionInput
   readonly courses?: readonly string[];
   /** [STEER-1] — see `ComposeSessionRowsInput.conceptIds`, passed straight through. */
   readonly conceptIds?: readonly string[];
+  /** `ol-v7r5.17` [ALLOC-2] — see `ComposeSessionRowsInput.allocation`, passed straight through. */
+  readonly allocation?: readonly StudyPlanAllocationEntry[];
 }
 
 /**
@@ -1128,6 +1170,7 @@ export function buildComposedStudySession(
       ? { assessmentContext: input.assessmentContext }
       : {}),
     ...(input.courses !== undefined ? { courses: input.courses } : {}),
+    ...(input.allocation !== undefined ? { allocation: input.allocation } : {}),
     ...(input.conceptIds !== undefined ? { conceptIds: input.conceptIds } : {}),
   });
 

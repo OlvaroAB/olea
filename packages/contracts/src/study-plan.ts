@@ -134,6 +134,56 @@ export const plannedConcept = z.object({
 export type PlannedConcept = z.infer<typeof plannedConcept>;
 
 /**
+ * One running course's slice of attention (A2.5's own allocation clause,
+ * `docs/Olea_alpha_functional_scope.md` line ~247; component 3.5,
+ * `computeAttentionShares` in `olea-service`'s `src/plan/allocation.ts`;
+ * ratified alongside `[D-076]` round 4 and `[D-081]`).
+ *
+ * **Share, not seconds** — the plan is computed before any session's budget
+ * is known, so the plan carries a fraction and the conversion to seconds is
+ * contracted onto the SAME artifact (A2.5) rather than left for a client to
+ * invent: multiply by the session budget in seconds; drop any course below
+ * its own `minBlockSeconds` and redistribute its time across the remainder
+ * in proportion; assign whole seconds by largest remainder, ties broken by
+ * the nearer next assessment (this entry's own `examProximityDays`
+ * contribution, when present) and then by `courseId`. Session composition
+ * (C5.5) is the sole consumer of that conversion — see
+ * `packages/core/src/study-session`.
+ *
+ * `courseId` matches `studyPlanCourse.course` verbatim (R1/R2) — the same
+ * join key, not a second identity for the same course.
+ */
+export const studyPlanAllocationEntry = z.object({
+  /** Opaque course identifier — matches `studyPlanCourse.course` (R1/R2). */
+  courseId: z.string().min(1),
+  /** Fraction of attention this course receives this computation, `0..1`. Shares across `courses` (plus any maintenance bucket, not carried here) sum to 1 at the source (`computeAttentionShares`'s own `shareSumIsValid`) — not re-asserted by this schema, which validates one entry at a time. */
+  share: z.number().min(0).max(1),
+  /**
+   * Below this many seconds, this course's share cannot fund one usable
+   * study block. A2.5's own redistribution rule reads this at session
+   * composition — never derived from `share` itself.
+   */
+  minBlockSeconds: z.number().int().positive(),
+  /**
+   * The named lifts that produced `share`, so a contest is arguable offline
+   * without re-deriving the formula — the same "named factors" idiom
+   * `claimBasis.factors` uses in `artifact-envelope.ts`, reused here rather
+   * than re-invented. Mirrors `computeAttentionShares`'s own
+   * `CourseAllocationContribution` (risk, tempo, steeringMultiplier,
+   * rawDesire, floor, cap), plus an `examProximityDays` entry when this
+   * course has a known next assessment (omitted, never a fabricated number,
+   * when it does not — the same absence-not-zero convention
+   * `plannedConcept.examProximityDays` already uses). Non-empty: a share
+   * with nothing that produced it is not explainable, and F6.4's own scenario
+   * refuses to ship one.
+   */
+  contributions: z.array(z.object({ name: z.string().min(1), value: z.number() })).min(1),
+  /** One sentence naming why this course got what it got (F6.4). */
+  reason: z.string().min(1),
+});
+export type StudyPlanAllocationEntry = z.infer<typeof studyPlanAllocationEntry>;
+
+/**
  * One course's policy — a ranking or an abstention, never both and never
  * neither.
  *

@@ -11,6 +11,7 @@
  * against hand-built fixtures a reader can check by eye.
  */
 
+import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
 import type { AssessmentRecord } from '../assessment/types.js';
@@ -472,6 +473,134 @@ describe('composeSessionRows', () => {
 
     expect(result.forcedCourses).toEqual(['B']);
     expect(result.orderedRows.map((r) => r.conceptName)).toContain('Neglected');
+  });
+
+  describe('`ol-v7r5.17` [ALLOC-2] — a real allocation replaces the interim share', () => {
+    function allocationEntry(
+      overrides: Partial<StudyPlanAllocationEntry> & { courseId: string },
+    ): StudyPlanAllocationEntry {
+      return {
+        share: 0,
+        minBlockSeconds: 60,
+        contributions: [{ name: 'risk', value: 0.5 }],
+        reason: `${overrides.courseId} gets its share.`,
+        ...overrides,
+      };
+    }
+
+    it("courseShares reports the plan's own real shares, not the interim proportional-by-material fallback", () => {
+      const theRows = rows([
+        { conceptName: 'Big1', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'Big2', course: 'BIG', gapScore: 8, masteryState: 'sprout' },
+        { conceptName: 'Big3', course: 'BIG', gapScore: 7, masteryState: 'sprout' },
+        { conceptName: 'Small1', course: 'SMALL', gapScore: 6, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([
+        qa('b1', ['Big1']),
+        qa('b2', ['Big2']),
+        qa('b3', ['Big3']),
+        qa('s1', ['Small1']),
+      ]);
+      const equallyOverdue = replay({
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b2: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b3: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        s1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      // The plan's real shares are the OPPOSITE of "proportional to how much
+      // ranked material lives in each course" (BIG holds 3 of 4 rows, but the
+      // plan says SMALL has the assessment risk this week).
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: equallyOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        allocation: [
+          allocationEntry({ courseId: 'BIG', share: 0.25 }),
+          allocationEntry({ courseId: 'SMALL', share: 0.75 }),
+        ],
+      });
+
+      expect(result.courseShares.get('BIG')).toBeCloseTo(0.25);
+      expect(result.courseShares.get('SMALL')).toBeCloseTo(0.75);
+      // Real allocation supplied -> this module's own local C5.6
+      // floor-forcing does not also fire (see the module doc).
+      expect(result.forcedCourses).toEqual([]);
+    });
+
+    it('converts shares to whole seconds via A2.5’s contracted rule, driving how much of each course is actually chosen', () => {
+      const theRows = rows([
+        { conceptName: 'BigA', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'BigB', course: 'BIG', gapScore: 8, masteryState: 'sprout' },
+        { conceptName: 'SmallA', course: 'SMALL', gapScore: 7, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([
+        qa('ba', ['BigA']),
+        qa('bb', ['BigB']),
+        qa('sa', ['SmallA']),
+      ]);
+      const equallyOverdue = replay({
+        ba: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        bb: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        sa: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      // 600s budget, each instrument costs 60s. BIG's 0.9 share funds 540s
+      // (9 slots, capped by its 2 rows); SMALL's 0.1 share (60s) clears its
+      // own 60s minBlockSeconds exactly, so it is not dropped and gets one slot.
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: equallyOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        allocation: [
+          allocationEntry({ courseId: 'BIG', share: 0.9, minBlockSeconds: 60 }),
+          allocationEntry({ courseId: 'SMALL', share: 0.1, minBlockSeconds: 60 }),
+        ],
+      });
+
+      expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual([
+        'BigA',
+        'BigB',
+        'SmallA',
+      ]);
+    });
+
+    it('an empty allocation array falls back to the interim proportional share, same as omitting it entirely', () => {
+      const theRows = rows([
+        { conceptName: 'Big1', course: 'BIG', gapScore: 9, masteryState: 'sprout' },
+        { conceptName: 'Small1', course: 'SMALL', gapScore: 6, masteryState: 'sprout' },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('b1', ['Big1']), qa('s1', ['Small1'])]);
+      const equallyOverdue = replay({
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        s1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      const withoutAllocation = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: equallyOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+      });
+      const withEmptyAllocation = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: equallyOverdue,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+        allocation: [],
+      });
+
+      expect([...withEmptyAllocation.courseShares.entries()]).toEqual([
+        ...withoutAllocation.courseShares.entries(),
+      ]);
+    });
   });
 
   it('reports overflow as a count and worst overdueDays per class, never a list of names', () => {

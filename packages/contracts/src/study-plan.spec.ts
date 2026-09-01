@@ -3,7 +3,9 @@ import { contracts } from './registry.js';
 import {
   STUDY_PLAN_CONTRACT_ID,
   STUDY_PLAN_FORMAT_VERSION,
+  type StudyPlanAllocationEntry,
   type StudyPlanArtifact,
+  studyPlanAllocationEntry,
   studyPlanArtifact,
 } from './study-plan.js';
 
@@ -135,5 +137,74 @@ describe('studyPlanArtifact', () => {
   it('registers itself in the shared contract registry under a stable id', () => {
     expect(contracts.has(STUDY_PLAN_CONTRACT_ID)).toBe(true);
     expect(contracts.get(STUDY_PLAN_CONTRACT_ID)?.schema.parse(validPlan())).toBeDefined();
+  });
+});
+
+/**
+ * `ol-v7r5.17` [ALLOC-2]. Fixture vocabulary is synthetic and non-vault
+ * (INV-3), same as `validPlan()` above.
+ */
+function validAllocationEntry(): StudyPlanAllocationEntry {
+  return {
+    courseId: 'COURSE-A',
+    share: 0.42,
+    minBlockSeconds: 180,
+    contributions: [
+      { name: 'risk', value: 0.31 },
+      { name: 'tempo', value: 0.08 },
+      { name: 'steeringMultiplier', value: 1 },
+      { name: 'rawDesire', value: 0.39 },
+      { name: 'floor', value: 0.12 },
+      { name: 'cap', value: 0.8 },
+      { name: 'examProximityDays', value: 9 },
+    ],
+    reason:
+      'COURSE-A gets 42% of this session because it has an assessment in 9 days and she is not yet solid on it.',
+  };
+}
+
+describe('studyPlanAllocationEntry (A2.5, component 3.5)', () => {
+  it('accepts a well-formed allocation entry', () => {
+    expect(studyPlanAllocationEntry.safeParse(validAllocationEntry()).success).toBe(true);
+  });
+
+  it('accepts an entry with no examProximityDays contribution — absent, never a fabricated day', () => {
+    const entry = validAllocationEntry();
+    const withoutProximity = {
+      ...entry,
+      contributions: entry.contributions.filter((c) => c.name !== 'examProximityDays'),
+    };
+    expect(studyPlanAllocationEntry.safeParse(withoutProximity).success).toBe(true);
+  });
+
+  it('requires share to stay within 0..1', () => {
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), share: 1.1 }).success,
+    ).toBe(false);
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), share: -0.1 }).success,
+    ).toBe(false);
+  });
+
+  it('requires minBlockSeconds to be a positive integer', () => {
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), minBlockSeconds: 0 }).success,
+    ).toBe(false);
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), minBlockSeconds: 12.5 })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects an entry with no contributions — a share nobody can explain is not shipped (F6.4)', () => {
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), contributions: [] }).success,
+    ).toBe(false);
+  });
+
+  it('requires a non-empty reason', () => {
+    expect(
+      studyPlanAllocationEntry.safeParse({ ...validAllocationEntry(), reason: '' }).success,
+    ).toBe(false);
   });
 });

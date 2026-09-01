@@ -100,7 +100,7 @@
 
 import { z } from 'zod';
 import { contracts } from './registry.js';
-import { studyPlanCourse } from './study-plan.js';
+import { studyPlanAllocationEntry, studyPlanCourse } from './study-plan.js';
 import { responseStamp } from './worker.js';
 
 /** The envelope wrapper shape this build writes and is willing to read. */
@@ -579,6 +579,21 @@ export const studyPlanBody = z.object({
   asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'asOf must be a YYYY-MM-DD calendar day'),
   /** One entry per course, ascending by `course`. */
   courses: z.array(studyPlanCourse),
+  /**
+   * A2.5's cross-course allocation (component 3.5) — one entry per running
+   * course, alongside `courses`' per-course ranking. **Optional, added
+   * `ol-v7r5.17` [ALLOC-2]**: `bodyVersion` stays `1` because this is
+   * additive, not a shape change — a plan cached before this field existed
+   * has no `allocation` key at all and must keep parsing exactly as it did
+   * (see `study-plan.ts`'s own module doc on `formatVersion`/rebuild-not-
+   * migrate, which this envelope inherits via `readArtifactEnvelope`).
+   * Absence here is a statement about WHEN a plan was computed, never an
+   * empty allocation — a caller reading `undefined` must not treat it as
+   * "every course got zero", only as "no allocation policy travelled with
+   * this plan". See `studyPlanAllocationEntry`'s own doc for the field
+   * shape and the share-to-seconds conversion it contracts.
+   */
+  allocation: z.array(studyPlanAllocationEntry).optional(),
 });
 export type StudyPlanBody = z.infer<typeof studyPlanBody>;
 

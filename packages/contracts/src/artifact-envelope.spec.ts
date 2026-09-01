@@ -96,6 +96,68 @@ describe('the versioned-artifact envelope', () => {
   });
 });
 
+/**
+ * `ol-v7r5.17` [ALLOC-2] — A2.5's cross-course allocation, wired onto
+ * `studyPlanBody` as an additive, optional field so a plan cached before this
+ * field existed keeps parsing unchanged (`bodyVersion` stays 1). Fixture
+ * vocabulary synthetic and non-vault (INV-3), same as `validPlanEnvelope()`.
+ */
+describe("the study plan's allocation field (A2.5, component 3.5)", () => {
+  function envelopeWithAllocation(): StudyPlanEnvelope {
+    const base = validPlanEnvelope();
+    return {
+      ...base,
+      body: {
+        ...base.body,
+        allocation: [
+          {
+            courseId: 'COURSE-A',
+            share: 0.6,
+            minBlockSeconds: 180,
+            contributions: [
+              { name: 'risk', value: 0.4 },
+              { name: 'tempo', value: 0.1 },
+              { name: 'examProximityDays', value: 9 },
+            ],
+            reason:
+              'COURSE-A gets 60% of this session because it has an assessment in 9 days and she is not yet solid on it.',
+          },
+        ],
+      },
+    };
+  }
+
+  it('a plan with no allocation entries at all still parses — absence predates the field, not an empty policy', () => {
+    // validPlanEnvelope() carries no `allocation` key at all, exactly as a
+    // plan cached before ol-v7r5.17 would.
+    const result = studyPlanEnvelope.safeParse(validPlanEnvelope());
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.body.allocation).toBeUndefined();
+  });
+
+  it('accepts a plan carrying one allocation entry per running course', () => {
+    const result = studyPlanEnvelope.safeParse(envelopeWithAllocation());
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.body.allocation?.[0]?.courseId).toBe('COURSE-A');
+  });
+
+  it('rejects an allocation entry whose share falls outside 0..1', () => {
+    const bad = envelopeWithAllocation();
+    const entry = bad.body.allocation?.[0];
+    if (entry === undefined) throw new Error('fixture drift');
+    bad.body.allocation = [{ ...entry, share: 1.5 }];
+    expect(studyPlanEnvelope.safeParse(bad).success).toBe(false);
+  });
+
+  it('rejects an allocation entry with no named contributions — a share nobody can explain is not shipped', () => {
+    const bad = envelopeWithAllocation();
+    const entry = bad.body.allocation?.[0];
+    if (entry === undefined) throw new Error('fixture drift');
+    bad.body.allocation = [{ ...entry, contributions: [] }];
+    expect(studyPlanEnvelope.safeParse(bad).success).toBe(false);
+  });
+});
+
 describe('unknown versions are discarded, never migrated and never rendered', () => {
   it('reads a known artifact', () => {
     const result = readArtifactEnvelope(studyPlanEnvelope, STUDY_PLAN_KIND, validPlanEnvelope());
