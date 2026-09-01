@@ -70,11 +70,13 @@ import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-ke
 import type { AssessmentRecord } from '../assessment/types.js';
 import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
+import type { ConceptRecord } from '../concept/types.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { composeQueue } from '../queue/compose.js';
 import type { ComposedQueue, QueueCandidate, QueueFilter } from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import type { Scheduler } from '../scheduler/types.js';
+import { type CalendarDay, calendarDayFromLocalDate } from '../today/calendar-day.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { filterContainmentCoPresence } from './containment.js';
 import type { EnumerateVaultInstrumentsOptions } from './enumerate.js';
@@ -141,6 +143,15 @@ export interface BuildReviewSessionInput {
    * doc.
    */
   readonly assessments?: readonly AssessmentRecord[];
+  // `[D-149]`'s material-arrival cohort (`ol-4e7o`) deliberately adds NO field
+  // here. Unlike `relations`/`assessments` above, both maps `composeQueue`
+  // needs (`conceptSourcePaths`, `arrivalDays`) are fully resolvable from
+  // inputs this interface already carries — `vault` (for `firstSeen`) and
+  // `instruments.concepts` (already enumerated above) — so there is nothing
+  // for a caller to supply. See `conceptSourcePathsByConceptKey`'s and
+  // `arrivalDaysByConceptKey`'s own docs, and `queue/types.ts`'s
+  // `ComposeQueueInput.arrivalDays`/`conceptSourcePaths` for the shapes this
+  // resolves into.
 }
 
 export interface ReviewSession {
@@ -258,6 +269,57 @@ function isSoonerTarget(
 }
 
 /**
+ * `[D-149]` (`ol-4e7o`): each concept's own source-note grain, keyed by
+ * `conceptKey` — `ConceptRecord.sourcePaths` verbatim, the identical shape
+ * `queue/types.ts`'s `ComposeQueueInput.conceptSourcePaths` doc names
+ * (`ol-v7r5.22`). Pure and total over `instruments.concepts`, the same
+ * enumeration {@link resolveRelatedConceptKeys}/{@link resolveAssessmentGroupingContext}
+ * already join against — no second vault walk, no new concept read.
+ */
+function conceptSourcePathsByConceptKey(
+  concepts: readonly ConceptRecord[],
+): ReadonlyMap<string, readonly VaultPath[]> {
+  return new Map(concepts.map((concept) => [concept.key, concept.sourcePaths]));
+}
+
+/**
+ * `[D-149]` (`ol-4e7o`): `ARRIVE-1`'s days-since-arrival signal, resolved
+ * here rather than taken pre-resolved — the same posture `relatedConceptKeys`/
+ * `assessmentContext` already take (`ol-vr8z`'s hand-back, option (b)), so a
+ * caller never enumerates concepts a second time just to join arrival days
+ * against them. Mirrors `session-builder/provider.ts`'s own
+ * `arrivalDaysByConceptKey` (`ARRIVE-2`, `ol-epi9`) exactly — EARLIEST
+ * `VaultSource.firstSeen` across a concept's own `sourcePaths`, keyed by
+ * `conceptKey` — over `ConceptRecord.sourcePaths` instead of `GapRow.notePaths`,
+ * because this path enumerates concepts, not gap rows.
+ *
+ * `firstSeen` is optional on `VaultSource` (same doc, same reasoning): a host
+ * that cannot say — including every `VaultSource` fake in this package's own
+ * tests, `memoryVault` included — yields an empty map immediately, no I/O
+ * attempted, which `block-order.ts`'s no-op proof already reads identically
+ * to `arrivalDays` being omitted entirely. So this makes no observable change
+ * to any existing caller or test until a real host's `firstSeen` is present.
+ */
+async function arrivalDaysByConceptKey(
+  vault: VaultSource,
+  concepts: readonly ConceptRecord[],
+): Promise<ReadonlyMap<string, CalendarDay>> {
+  const firstSeen = vault.firstSeen?.bind(vault);
+  if (firstSeen === undefined) return new Map();
+
+  const days = new Map<string, CalendarDay>();
+  await Promise.all(
+    concepts.map(async (concept) => {
+      const stats = await Promise.all(concept.sourcePaths.map((path) => firstSeen(path)));
+      const known = stats.filter((ms): ms is number => ms !== null);
+      if (known.length === 0) return;
+      days.set(concept.key, calendarDayFromLocalDate(new Date(Math.min(...known))));
+    }),
+  );
+  return days;
+}
+
+/**
  * Walk the vault, replay the log, compose today's session.
  *
  * The single call a plugin, a panel or a harness makes. Everything it returns
@@ -297,6 +359,14 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   );
   const targetAssessmentPathByConceptKey = targetAssessmentPathIndex(assessmentContext);
 
+  // `[D-149]` (`ol-4e7o`): the material-arrival cohort's two caller-resolved
+  // maps, same posture as the pair above — resolved unconditionally against
+  // `instruments.concepts`, a provable no-op (empty maps) when `input.vault`
+  // has no `firstSeen` to offer. See `conceptSourcePathsByConceptKey`'s and
+  // `arrivalDaysByConceptKey`'s own docs.
+  const conceptSourcePaths = conceptSourcePathsByConceptKey(instruments.concepts);
+  const arrivalDays = await arrivalDaysByConceptKey(input.vault, instruments.concepts);
+
   const enumeratedCandidates = instruments.records.map((record) =>
     toQueueCandidate(record, replay, targetAssessmentPathByConceptKey),
   );
@@ -316,6 +386,8 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     ...(input.dedupeByConcept !== undefined ? { dedupeByConcept: input.dedupeByConcept } : {}),
     relatedConceptKeys,
     assessmentContext,
+    conceptSourcePaths,
+    arrivalDays,
   });
 
   const recordsById = new Map(instruments.records.map((record) => [record.instrumentId, record]));

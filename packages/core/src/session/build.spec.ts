@@ -11,6 +11,7 @@ import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { reviewLogPath } from '../review-log/path.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
+import type { VaultPath, VaultSource } from '../vault/types.js';
 import { buildReviewSession } from './build.js';
 import { toDueInstruments } from './due-instruments.js';
 import { readReviewLogHistory } from './history.js';
@@ -647,5 +648,124 @@ describe('F2.19 (`ol-f3qu`) — `toQueueCandidate` populates `targetAssessmentPa
     expect(candidateFor(session.candidates, 'ConceptZ').targetAssessmentPath).toBe(
       'Assessments/aaa-no-due.md',
     );
+  });
+});
+
+/**
+ * `[D-149]` (`ol-4e7o`): `buildReviewSession` resolves `conceptSourcePaths` and
+ * `arrivalDays` internally — no raw input for either exists on
+ * `BuildReviewSessionInput` (see that interface's own doc) — from `vault`
+ * (`VaultSource.firstSeen`) and `instruments.concepts`, both already in hand.
+ * This is the reachability gap `ol-v7r5.22` filed and named precisely:
+ * `session/build.ts:310`'s `composeQueue` call, and through it
+ * `open-session.ts`'s `buildReviewSession` call (the real "Olea: Start
+ * today's review" command), both now thread the maps `queue/block-order.ts`'s
+ * cohort blend reads.
+ *
+ * Same tie-band construction as the `ol-vr8z` block above (three same-course
+ * concepts landing in one exact overdue-days band — the only place F2.19's
+ * grouping can move anything), plus a fourth, card-less note whose `topic:`
+ * flow list names BOTH `ConceptX` and `ConceptZ`. `concept/extract.ts` merges
+ * a same-name unbound concept's `sourcePaths` across every note that names it
+ * (proven by `extract.spec.ts`'s own "course association is M:N" case), so
+ * this one bridging note lands in *both* concepts' own `sourcePaths` without
+ * adding a fourth queue candidate — `ConceptX`'s and `ConceptZ`'s
+ * `conceptSourcePaths` entries now overlap, `ConceptY`'s does not.
+ */
+function cohortVault(): ReturnType<typeof memoryVault> {
+  return memoryVault({
+    'Courses/GEO/x.md': note('ConceptX', 'GEO101', ['## X?', '', 'X front::X back ^x1']),
+    'Courses/GEO/z.md': note('ConceptZ', 'GEO101', ['## Z?', '', 'Z front::Z back ^z1']),
+    'Courses/GEO/y.md': note('ConceptY', 'GEO101', ['## Y?', '', 'Y front::Y back ^y1']),
+    'Courses/GEO/shared-lecture.md': [
+      '---',
+      'topic: [ConceptX, ConceptZ]',
+      'course: GEO101',
+      '---',
+      '',
+      'Bridging lecture note, no card of its own — it exists purely to give',
+      'ConceptX and ConceptZ a shared source-note grain for the cohort signal.',
+      '',
+    ].join('\n'),
+  });
+}
+
+const COHORT_NOW = new Date('2026-09-20T12:00:00Z');
+const COHORT_REVIEWED_AT = '2026-08-01T09:00:00+00:00';
+
+/**
+ * `cohortVault()` wrapped with a `firstSeen` that answers only for the
+ * bridging note — `x.md`/`y.md`/`z.md` all read `null` (unknown), same
+ * "cannot say" posture `memoryVault` itself takes for every path by omitting
+ * the accessor entirely. `ConceptX`'s and `ConceptZ`'s own `sourcePaths` each
+ * include the bridging note, so the EARLIEST-`firstSeen` resolution
+ * (`arrivalDaysByConceptKey`'s doc) gives both an arrival day of `COHORT_NOW`
+ * itself — maximally fresh, decay weight `1`. `ConceptY` never touches the
+ * bridging note, so its own `sourcePaths` has no path this fake can answer
+ * for at all, and it gets no `arrivalDays` entry — decay weight `0`, the same
+ * "no signal" case `withinBlockCohortDecayWeight`'s doc names.
+ */
+function cohortVaultWithFreshBridge(): VaultSource {
+  const vault = cohortVault();
+  return {
+    ...vault,
+    async firstSeen(path: VaultPath) {
+      return path === 'Courses/GEO/shared-lecture.md' ? COHORT_NOW.getTime() : null;
+    },
+  };
+}
+
+async function cohortItemOrder(vault: VaultSource): Promise<readonly string[]> {
+  const enumerated = await buildReviewSession({
+    vault,
+    scheduler: createFsrsScheduler(),
+    now: COHORT_NOW,
+  });
+  const idOf = (conceptName: string): string => {
+    const record = enumerated.instruments.records.find((r) =>
+      r.conceptIds.includes(unboundKey(conceptName)),
+    );
+    if (record === undefined) throw new Error(`expected an instrument for ${conceptName}`);
+    return record.instrumentId;
+  };
+  const entries: readonly ReviewLogEntry[] = ['ConceptX', 'ConceptY', 'ConceptZ'].map(
+    (conceptName) =>
+      reviewOf(
+        `cohort-${conceptName}`,
+        COHORT_REVIEWED_AT,
+        idOf(conceptName),
+        unboundKey(conceptName),
+      ),
+  );
+  const session = await buildReviewSession({
+    vault,
+    scheduler: createFsrsScheduler(),
+    now: COHORT_NOW,
+    entries,
+  });
+  // Sanity: three items, one tie band — the same guard `bandedItemOrder`
+  // above carries, for the same reason.
+  expect(session.queue.items).toHaveLength(3);
+  return session.queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
+}
+
+describe('[D-149] (`ol-4e7o`) — arrivalDays/conceptSourcePaths resolved internally and threaded through', () => {
+  it('with a host that cannot answer `firstSeen`, the tie band keeps plain enumeration order — a real no-op', async () => {
+    // `cohortVault()` unwrapped: `memoryVault` has no `firstSeen` at all, so
+    // `arrivalDaysByConceptKey` returns an empty map without attempting any
+    // I/O, and the shared-note cohort (via `conceptSourcePaths` alone,
+    // `arrivalDays` absent) contributes nothing — `block-order.ts`'s own
+    // no-op proof for exactly this combination.
+    const order = await cohortItemOrder(cohortVault());
+    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptY'), unboundKey('ConceptZ')]);
+  });
+
+  it('a real `firstSeen` reaching a shared, freshly-arrived source note pulls that cohort adjacent — the mutation this catches', async () => {
+    const order = await cohortItemOrder(cohortVaultWithFreshBridge());
+    // ConceptX and ConceptZ's shared, freshly-arrived bridging note pulls them
+    // adjacent ahead of ConceptY — never `[X, Y, Z]`, the plain-caller-order
+    // fallback above, which is what a mutation dropping either resolved map
+    // (or failing to thread it into `composeQueue`) would produce instead.
+    expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptZ'), unboundKey('ConceptY')]);
   });
 });

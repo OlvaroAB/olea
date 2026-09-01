@@ -19,7 +19,7 @@
  */
 
 import { type Rating, STUDY_PLAN_BODY_VERSION, type StudyPlanEnvelope } from 'olea-contracts';
-import type { ConceptRelation, RandomSource } from 'olea-core';
+import type { ConceptRelation, RandomSource, VaultPath, VaultSource } from 'olea-core';
 import {
   appendReviewLogRecord,
   calendarDayFromLocalDate,
@@ -298,6 +298,58 @@ describe('C7.9 containment co-presence reaches this call site (ol-v7r5.7)', () =
       throw new Error(`expected an offered item, got phase ${vm.phase}`);
     }
     expect(vm.instrument.sourcePath).toBe('Courses/TEST101/Week two.md');
+  });
+});
+
+/**
+ * `[D-149]` (`ol-4e7o`): unlike `relations` above, `arrivalDays`/
+ * `conceptSourcePaths` need no new field on `OpenReviewSessionInput` at
+ * all — `buildReviewSession` resolves both fully from `vault` (already
+ * forwarded here, unconditionally, as `input.vault`) and its own
+ * `instruments.concepts` enumeration (`session/build.ts`'s
+ * `arrivalDaysByConceptKey`/`conceptSourcePathsByConceptKey`). So the thing
+ * to prove reachable at *this* call site is narrower than the C7.9 block
+ * above: not a new forwarded value, but that the real "Olea: Start today's
+ * review" path actually calls the injected vault's `firstSeen` at all — the
+ * accessor `session/build.ts` had no caller resolving before this bead
+ * (`ol-v7r5.22`'s own honest gap).
+ */
+describe('[D-149] (`ol-4e7o`) — arrivalDays resolution reaches this call site too', () => {
+  function vaultWithFirstSeenSpy(vault: ReturnType<typeof memoryVault>): {
+    readonly vault: VaultSource;
+    readonly calls: readonly VaultPath[];
+  } {
+    const calls: VaultPath[] = [];
+    const vaultWithSpy: VaultSource = {
+      ...vault,
+      async firstSeen(path: VaultPath) {
+        calls.push(path);
+        return null;
+      },
+    };
+    return { vault: vaultWithSpy, calls };
+  }
+
+  it("opening a session queries the vault's firstSeen over the concepts it enumerated — the mutation this catches is build.ts never calling it at all", async () => {
+    const { vault, calls } = vaultWithFirstSeenSpy(studyVault());
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault as ReturnType<typeof memoryVault>).ports,
+      random: fixedRandom,
+      probeDays: 30,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    // Alpha's only `topic:` occurrence is `Week one.md`; Beta's is
+    // `Week two.md` — exactly `ConceptRecord.sourcePaths` for each, per
+    // `arrivalDaysByConceptKey`'s doc. Order-independent: what matters is
+    // that both were queried through this real command path, not a second,
+    // parallel enumeration this suite would have no way to catch drifting.
+    expect(new Set(calls)).toEqual(
+      new Set(['Courses/TEST101/Week one.md', 'Courses/TEST101/Week two.md']),
+    );
   });
 });
 
