@@ -5,15 +5,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   assessmentDatePassedSince,
+  assessmentProximityBand,
   checkRebuildWasteRate,
   DEFAULT_SITTING_IDLE_THRESHOLD_MS,
   decideRebuild,
+  diffSittingScopeSnapshots,
+  EMPTY_SITTING_SCOPE_SNAPSHOT,
   enterSitting,
   evaluateRebuildTrigger,
   evaluateSittingStaleness,
   exitSitting,
   MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK,
   type RebuildOutcomeCase,
+  type SittingScopeSnapshot,
   type SittingStalenessInput,
   type SittingState,
   WASTED_REBUILD_RATE_CEILING,
@@ -399,5 +403,89 @@ describe('checkRebuildWasteRate', () => {
   it('counts and reports wasted rebuilds by id rather than passing silently', () => {
     const verdict = checkRebuildWasteRate(cases(MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK, 3));
     expect(verdict.measured.wasted).toEqual(['case-0', 'case-1', 'case-2']);
+  });
+});
+
+// `ol-v7r5.26` — the three staleness facts, wired to real signals: bucketing
+// a proximity date, and diffing two scope snapshots into real
+// `SittingStalenessInput` facts. See `queue/rebuild-controller.ts`'s own
+// module doc, "turning the three staleness facts into real signals".
+describe('assessmentProximityBand', () => {
+  it('reads a same-day-or-tomorrow due date as imminent-or-passed', () => {
+    expect(assessmentProximityBand(0)).toBe('imminent-or-passed');
+    expect(assessmentProximityBand(1)).toBe('imminent-or-passed');
+    expect(assessmentProximityBand(-3)).toBe('imminent-or-passed');
+  });
+
+  it('reads a week out as near, a fortnight out as approaching, further as far', () => {
+    expect(assessmentProximityBand(7)).toBe('near');
+    expect(assessmentProximityBand(14)).toBe('approaching');
+    expect(assessmentProximityBand(21)).toBe('far');
+  });
+
+  it('reads an unknown/unparseable date as far, never as a veto or a crash', () => {
+    expect(assessmentProximityBand(null)).toBe('far');
+  });
+});
+
+describe('diffSittingScopeSnapshots', () => {
+  function snapshot(overrides: Partial<SittingScopeSnapshot> = {}): SittingScopeSnapshot {
+    return { ...EMPTY_SITTING_SCOPE_SNAPSHOT, ...overrides };
+  }
+
+  it('fires itemsDueInScope only for a concept newly due, never one already due at freeze', () => {
+    const freeze = snapshot({ dueConceptKeys: new Set(['already-due']) });
+    const unchanged = snapshot({ dueConceptKeys: new Set(['already-due']) });
+    expect(diffSittingScopeSnapshots(freeze, unchanged).itemsDueInScope).toBe(false);
+
+    const newlyDue = snapshot({ dueConceptKeys: new Set(['already-due', 'new-concept']) });
+    expect(diffSittingScopeSnapshots(freeze, newlyDue).itemsDueInScope).toBe(true);
+  });
+
+  it('fires materialArrivedInScope only when the watermark actually advances', () => {
+    const freeze = snapshot({ materialArrivalWatermark: '2026-08-10' });
+    expect(
+      diffSittingScopeSnapshots(freeze, snapshot({ materialArrivalWatermark: '2026-08-10' }))
+        .materialArrivedInScope,
+    ).toBe(false);
+    expect(
+      diffSittingScopeSnapshots(freeze, snapshot({ materialArrivalWatermark: '2026-08-11' }))
+        .materialArrivedInScope,
+    ).toBe(true);
+    // No arrival signal at freeze, one appearing now — also a real arrival.
+    expect(
+      diffSittingScopeSnapshots(
+        snapshot({ materialArrivalWatermark: undefined }),
+        snapshot({ materialArrivalWatermark: '2026-08-10' }),
+      ).materialArrivedInScope,
+    ).toBe(true);
+  });
+
+  it('fires assessmentProximityBandCrossedInScope only when a band actually differs', () => {
+    const freeze = snapshot({
+      assessmentProximityBands: new Map([['a.md', 'approaching']]),
+    });
+    const unchanged = snapshot({ assessmentProximityBands: new Map([['a.md', 'approaching']]) });
+    expect(diffSittingScopeSnapshots(freeze, unchanged).assessmentProximityBandCrossedInScope).toBe(
+      false,
+    );
+
+    const crossed = snapshot({ assessmentProximityBands: new Map([['a.md', 'near']]) });
+    expect(diffSittingScopeSnapshots(freeze, crossed).assessmentProximityBandCrossedInScope).toBe(
+      true,
+    );
+  });
+
+  it('reports all three facts false when nothing in scope changed at all', () => {
+    const same = snapshot({
+      dueConceptKeys: new Set(['x']),
+      materialArrivalWatermark: '2026-08-10',
+      assessmentProximityBands: new Map([['a.md', 'far']]),
+    });
+    expect(diffSittingScopeSnapshots(same, same)).toEqual({
+      itemsDueInScope: false,
+      materialArrivedInScope: false,
+      assessmentProximityBandCrossedInScope: false,
+    });
   });
 });

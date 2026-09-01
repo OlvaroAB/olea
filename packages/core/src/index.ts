@@ -949,6 +949,7 @@ export type {
 // to concepts — see queue/types.ts for why that join lives only here.
 export { composeQueue } from './queue/compose.js';
 export type {
+  AssessmentProximityBand,
   DecideRebuildInput,
   RebuildDecision,
   RebuildOutcomeCase,
@@ -957,6 +958,7 @@ export type {
   RebuildTriggerResult,
   RebuildWasteMeasured,
   RebuildWasteVerdict,
+  SittingScopeSnapshot,
   SittingStalenessInput,
   SittingStalenessReason,
   SittingStalenessResult,
@@ -967,11 +969,15 @@ export type {
 // had no owner anywhere in the codebase. The sitting-staleness cap is
 // `[D-162]` (`ol-cidn`) — see queue/rebuild-controller.ts's module doc.
 export {
+  ASSESSMENT_PROXIMITY_BAND_EDGES_DAYS,
   assessmentDatePassedSince,
+  assessmentProximityBand,
   checkRebuildWasteRate,
   DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES,
   DEFAULT_SITTING_IDLE_THRESHOLD_MS,
   decideRebuild,
+  diffSittingScopeSnapshots,
+  EMPTY_SITTING_SCOPE_SNAPSHOT,
   enterSitting,
   evaluateRebuildTrigger,
   evaluateSittingStaleness,

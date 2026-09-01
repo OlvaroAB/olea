@@ -220,6 +220,131 @@ export const DEFAULT_SITTING_IDLE_THRESHOLD_MS =
   DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES * MS_PER_MINUTE;
 
 // ---------------------------------------------------------------------------
+// `ol-v7r5.26`: turning the three staleness facts into real signals.
+//
+// `evaluateSittingStaleness` above answers "given these three booleans, is
+// the sitting stale" — it does not say WHERE the booleans come from. A
+// caller with a memory of the sitting's state at freeze time (a
+// `SittingScopeSnapshot`) and a fresh read of the same shape at re-entry can
+// get real facts by diffing the two, scoped to the frozen sitting's own
+// courses, without this module ever touching a vault, a review log or a
+// clock read of its own (INV-1 discipline unchanged: the caller resolves
+// both snapshots, this module only compares them).
+// ---------------------------------------------------------------------------
+
+/**
+ * A coarse, discrete reading of "how close is this assessment", named rather
+ * than a raw day count so two snapshots can be compared by "did it move a
+ * band" rather than "did the number change by one" — the latter would fire
+ * on every day that passes even when nothing material happened, which is
+ * exactly the clock-in-an-event-costume C5.8 (as amended by `[D-162]`) rules
+ * out. `'far'` also covers an unknown/unparseable date (`daysUntilDue ===
+ * null`) — the same honest-unknown posture `oracle/rank.ts`'s
+ * `computeExamProximityScore` gives a missing date, and it can still cross
+ * into a nearer band later if the date becomes readable.
+ */
+export type AssessmentProximityBand = 'far' | 'approaching' | 'near' | 'imminent-or-passed';
+
+/**
+ * DECLARED (never fitted) — band edges in days-until-due, read as "at or
+ * inside this many days". Reuses `study-session/compose.ts`'s own
+ * `WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS` (14) for the outermost edge rather
+ * than inventing a second "how soon is soon" number for a structurally
+ * identical question; `near` and `imminent` are then plain-English fractions
+ * of that same fortnight (a week out, a day out) rather than separately
+ * fitted values. None of these need a corpus: any reasonable reader would
+ * call a same-day-or-tomorrow assessment "imminent" and a three-week-out one
+ * "far", and the bands exist only to say WHEN one has moved, not to weight
+ * anything.
+ */
+export const ASSESSMENT_PROXIMITY_BAND_EDGES_DAYS = Object.freeze({
+  approaching: 14,
+  near: 7,
+  imminent: 1,
+});
+
+/**
+ * Buckets a days-until-due count into {@link AssessmentProximityBand}. Pure
+ * and total; `null` (no known/parseable date) reads as `'far'`, never as a
+ * veto or a crash — the caller's own veto logic (`oracle/rank.ts`'s
+ * `checkEdgeVeto`) is a different question this module does not answer.
+ */
+export function assessmentProximityBand(daysUntilDue: number | null): AssessmentProximityBand {
+  if (daysUntilDue === null) return 'far';
+  if (daysUntilDue <= ASSESSMENT_PROXIMITY_BAND_EDGES_DAYS.imminent) return 'imminent-or-passed';
+  if (daysUntilDue <= ASSESSMENT_PROXIMITY_BAND_EDGES_DAYS.near) return 'near';
+  if (daysUntilDue <= ASSESSMENT_PROXIMITY_BAND_EDGES_DAYS.approaching) return 'approaching';
+  return 'far';
+}
+
+/**
+ * Everything {@link diffSittingScopeSnapshots} needs to answer all three of
+ * `[D-162]`'s facts for one frozen sitting, scoped to that sitting's own
+ * composition (its courses, its concepts) rather than the vault at large —
+ * a caller builds one of these at freeze time and a second one at re-entry,
+ * over the identical scope, and hands both here. Never persisted by this
+ * module — a caller (the session-builder provider) is free to hold this in
+ * memory for as long as the sitting itself lives, and it is exactly as
+ * rebuildable as the sitting's own composition is.
+ */
+export interface SittingScopeSnapshot {
+  /** Concept keys, scoped to the sitting's own courses, classified `'recall-due'` or `'baseline-due'` (`study-session/compose.ts`'s `ObligationClass`) as of this snapshot. */
+  readonly dueConceptKeys: ReadonlySet<string>;
+  /** The latest known material-arrival day across the sitting's own scope, or `undefined` when no arrival signal is available at all — never a fabricated day. */
+  readonly materialArrivalWatermark: CalendarDay | undefined;
+  /** Each assessment relevant to the sitting's own scope, keyed by its note path, banded at this snapshot's instant. */
+  readonly assessmentProximityBands: ReadonlyMap<string, AssessmentProximityBand>;
+}
+
+/** The empty {@link SittingScopeSnapshot} — no due concepts, no arrival signal, no assessments in scope. Useful as a starting point when a scope has nothing to compare. */
+export const EMPTY_SITTING_SCOPE_SNAPSHOT: SittingScopeSnapshot = Object.freeze({
+  dueConceptKeys: new Set<string>(),
+  materialArrivalWatermark: undefined,
+  assessmentProximityBands: new Map<string, AssessmentProximityBand>(),
+});
+
+/**
+ * Turns two {@link SittingScopeSnapshot}s of the same scope — one taken at
+ * freeze time, one taken now — into the three real {@link
+ * SittingStalenessInput} facts {@link evaluateSittingStaleness} consults.
+ * Pure and total; no clock, no I/O, no notion of "now" at all — both
+ * snapshots already carry whatever instant they were built at.
+ *
+ * - `itemsDueInScope`: any concept key in `current.dueConceptKeys` that was
+ *   NOT in `freeze.dueConceptKeys` — a concept newly due since the freeze,
+ *   never a concept that was already due and still is (that was already true
+ *   the moment she opened the sitting, so it is not a change).
+ * - `materialArrivedInScope`: `current`'s watermark is later than
+ *   `freeze`'s, or `freeze` had no watermark at all and `current` does.
+ * - `assessmentProximityBandCrossedInScope`: any assessment path present in
+ *   both maps whose band differs, OR present in `current` but not in
+ *   `freeze` (a new assessment entering scope at a band nearer than `'far'`
+ *   is itself a proximity change worth surfacing; one entering at `'far'`
+ *   changes nothing a band comparison would call material, so it is folded
+ *   into the same "differs from `'far'`" comparison as everything else via
+ *   the `?? 'far'` default below).
+ */
+export function diffSittingScopeSnapshots(
+  freeze: SittingScopeSnapshot,
+  current: SittingScopeSnapshot,
+): SittingStalenessInput {
+  const itemsDueInScope = [...current.dueConceptKeys].some(
+    (key) => !freeze.dueConceptKeys.has(key),
+  );
+
+  const materialArrivedInScope =
+    current.materialArrivalWatermark !== undefined &&
+    (freeze.materialArrivalWatermark === undefined ||
+      current.materialArrivalWatermark > freeze.materialArrivalWatermark);
+
+  const assessmentProximityBandCrossedInScope = [...current.assessmentProximityBands].some(
+    ([path, band]) => (freeze.assessmentProximityBands.get(path) ?? 'far') !== band,
+  );
+
+  return { itemsDueInScope, materialArrivedInScope, assessmentProximityBandCrossedInScope };
+}
+
+// ---------------------------------------------------------------------------
 // Between sittings: named triggers, never a timer.
 // ---------------------------------------------------------------------------
 

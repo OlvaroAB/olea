@@ -156,26 +156,63 @@
  * fresh below, this time with the reason surfaced via `copy.ts`'s
  * `sittingStaleReasonLine`.
  *
- * **The three staleness facts are not reachable from this surface today**,
- * for the identical reason the between-sittings trigger facts above are
- * not: this provider is rebuilt fresh per leaf (`main.ts`), so within one
- * `load()` call there is no vault-change-stream/review-log/assessment-date
- * signal wired in yet to answer "did new items come due in this sitting's
- * own courses since it was entered". Every fact below is therefore supplied
- * honestly as `false` — the same "no fact this surface can reach" discipline
- * the `trigger` object below already uses — so in practice `'sitting-stale'`
- * cannot fire from this call site yet; only the idle-threshold-independent
- * `decideRebuild` mechanics are exercised. Wiring real staleness facts here
- * is follow-up work once this provider's lifetime outlives a single leaf,
- * same as the between-sittings trigger set's own follow-up note above.
+ * ## `ol-v7r5.26` — the three staleness facts, wired for real
+ *
+ * The paragraph above described the state before this bead: every fact was
+ * supplied as `false` because a fresh `load()` call had no memory of what
+ * the sitting's own composition looked like at freeze time. This bead gives
+ * `load()` that memory, scoped to exactly the frozen sitting's own lifetime
+ * (the same closure `sitting`/`lastRequest` already live in — **not** a
+ * cross-leaf or on-disk cache; a closed leaf still loses everything, which
+ * is fine, because the between-sittings trigger set above is what governs
+ * re-opening a closed leaf, and it is deliberately unchanged by this bead).
+ *
+ * `buildFresh` now also builds a `SittingScopeSnapshot`
+ * (`olea-core`'s `queue/rebuild-controller.ts`) over every `GapRow`
+ * candidate the composition considered (`gapRows`, not just the chosen
+ * items — a candidate that only narrowly lost the budget cut is still part
+ * of "this sitting's own composition" for staleness purposes), and holds it
+ * in the closure alongside `sitting`. When `decideRebuild`'s active branch
+ * is actually reached (past the idle threshold), `load()` builds a SECOND
+ * snapshot over the identical scope and hands both to
+ * `diffSittingScopeSnapshots` for the three real booleans.
+ *
+ * **What needs no new I/O, and why:** `itemsDueInScope` re-derives from data
+ * already read at freeze time (`lastRetrievalDay`/`recallDueDay` per
+ * concept, `masteryState` from the frozen `GapRow`) — `classifyObligation`
+ * is pure, so re-running it with `asOf` moved forward from the freeze day to
+ * today is a real, honest re-check of an already-known due date, never a
+ * duration read dressed up as an event (C5.8's own test: a due date that was
+ * always going to arrive on this day is a fact about the material, not
+ * about a clock). It does **not** catch a review she completed on another
+ * device since freeze — this surface has no cross-device stream (boundary
+ * doc §1: "no sync, no reconciliation"), so that is out of reach by
+ * construction, not an oversight.
+ *
+ * **What needs a light re-read:** `materialArrivedInScope` re-runs
+ * {@link arrivalDaysByConceptKey} over the frozen scope's own `notePaths` —
+ * the same `vault.firstSeen` stat calls `ARRIVE-2` already makes, no
+ * heavier. `assessmentProximityBandCrossedInScope` re-bands the FROZEN
+ * assessment records (`AssessmentRecord.due`, read once at freeze time)
+ * against today's date — it catches a date arriving at a nearer band
+ * through elapsed time (the ordinary case) but not an edited due date,
+ * which would need a fresh `readAssessments` call this bead does not add;
+ * an edited assessment date is still caught eventually by the ordinary
+ * between-sittings path once this sitting ends for any other reason, or by
+ * her closing and reopening the leaf.
  */
 
 import type {
+  AssessmentProximityBand,
   CalendarDay,
+  ConceptInstrumentIndex,
   ConceptMaterialPresence,
   ConceptRecord,
   ConceptRelation,
+  OracleMasteryState,
+  ReplayResult,
   Scheduler,
+  SittingScopeSnapshot,
   SittingStalenessReason,
   SittingState,
   VaultPath,
@@ -183,19 +220,26 @@ import type {
 } from 'olea-core';
 import {
   allGapRows,
+  assessmentProximityBand,
   buildConceptInstrumentIndex,
   buildGapView,
   buildMaterialPresence,
+  calendarDayOfTimestamp,
   calendarDaysEndingOn,
   composeOracleRanking,
   composeReentrySession,
+  DEFAULT_SITTING_IDLE_THRESHOLD_MS,
+  daysBetween,
   daysSinceLastReview,
   decideRebuild,
+  diffSittingScopeSnapshots,
+  EMPTY_SITTING_SCOPE_SNAPSHOT,
   enterSitting,
   enumerateVaultInstruments,
   estimateInstrumentDurations,
   exitSitting,
   IDLE_SITTING,
+  isCalendarDay,
   readReviewLogHistory,
   replaySchedulerStates,
   resolveAssessmentGroupingContext,
@@ -415,6 +459,167 @@ function resolveCourseOrTopicFilter(
   return keys.length > 0 ? { conceptIds: keys } : {};
 }
 
+// ---------------------------------------------------------------------------
+// `ol-v7r5.26`: the real signals behind `[D-162]`'s three staleness facts.
+// See this file's own module doc, "the three staleness facts, wired for
+// real", for what needs I/O and what does not.
+// ---------------------------------------------------------------------------
+
+/**
+ * One frozen candidate concept's obligation-relevant facts, held across the
+ * whole sitting so `SittingScopeSnapshot`s can be rebuilt at any later
+ * instant without re-reading the vault or the review log. Everything here
+ * is already known at freeze time; only `asOf` moves between the freeze
+ * snapshot and a later re-check.
+ */
+interface FrozenScopeConcept {
+  readonly conceptKey: string;
+  readonly notePaths: readonly VaultPath[];
+  readonly masteryState: OracleMasteryState;
+  readonly lastRetrievalDay: CalendarDay | null;
+  readonly recallDueDay: CalendarDay | null;
+}
+
+/**
+ * `study-session/compose.ts`'s own `obligationSignalsFor` does exactly this
+ * over a `ConceptInstrumentIndex` and a `ReplayResult`, but it is not
+ * exported and `compose.ts` sits outside this lane's owned paths
+ * (`packages/plugin/src/session-builder/`, `packages/core/src/queue/`) — see
+ * `ol-v7r5.26`'s brief. Duplicated here rather than exported from an unowned
+ * file: the latest reviewed day and the soonest FSRS due day across a
+ * concept's instruments, from data this provider already reads in full for
+ * the mastery join and the SESS-2 replay.
+ */
+function obligationSignalsForConcept(
+  conceptKey: string,
+  instruments: ConceptInstrumentIndex,
+  replay: ReplayResult,
+): { readonly lastRetrievalDay: CalendarDay | null; readonly recallDueDay: CalendarDay | null } {
+  let lastRetrievalDay: CalendarDay | null = null;
+  let recallDueDay: CalendarDay | null = null;
+  for (const record of instruments.instrumentsFor(conceptKey)) {
+    const replayed = replay.states.get(record.instrumentId);
+    if (replayed === undefined) continue;
+    const reviewedDay = calendarDayOfTimestamp(replayed.lastReviewedAt);
+    if (reviewedDay !== null && (lastRetrievalDay === null || reviewedDay > lastRetrievalDay)) {
+      lastRetrievalDay = reviewedDay;
+    }
+    const dueDay = calendarDayOfTimestamp(replayed.state.due);
+    if (dueDay !== null && (recallDueDay === null || dueDay < recallDueDay)) {
+      recallDueDay = dueDay;
+    }
+  }
+  return { lastRetrievalDay, recallDueDay };
+}
+
+/** `daysBetween` over two `CalendarDay` labels — the same `T00:00:00.000Z` construction `study-session/compose.ts` uses for the identical shape of comparison. */
+function daysBetweenCalendarDays(from: CalendarDay, to: CalendarDay): number {
+  return daysBetween(new Date(`${from}T00:00:00.000Z`), new Date(`${to}T00:00:00.000Z`));
+}
+
+/**
+ * `classifyObligation`'s own klass split, reduced to the one question a
+ * staleness diff needs: is this concept one of the two "an obligation is now
+ * due" classes (`recall-due`, `baseline-due`)? `unmet` is deliberately
+ * excluded — a concept that has never been retrieved is `unmet` at freeze
+ * time and stays `unmet` at re-check (nothing about `classifyObligation`'s
+ * `unmet` branch moves it into a due class as days pass; only a later full
+ * rebuild's own `arrivalDay` widening does), so including it here would
+ * either never fire or fire on every scope with any never-reviewed concept —
+ * neither is "a new item came due".
+ */
+function isDueClass(concept: FrozenScopeConcept, asOf: CalendarDay): boolean {
+  if (concept.lastRetrievalDay === null) return false;
+  if (concept.recallDueDay !== null && concept.recallDueDay <= asOf) return true;
+  const gap = baselineGapDaysForMasteryState(concept.masteryState);
+  if (gap === null) return false;
+  const baselineDueDay = shiftCalendarDayBy(concept.lastRetrievalDay, gap);
+  return baselineDueDay <= asOf;
+}
+
+/**
+ * `RETRIEVAL_BASELINE_STAGE_LADDER_DAYS` restated for `OracleMasteryState`
+ * (which widens `MasteryState` with `'unknown'`) — `'unknown'`/`'seed'` have
+ * no rung, same as `study-session/compose.ts`'s `baselineGapDaysFor`.
+ */
+function baselineGapDaysForMasteryState(masteryState: OracleMasteryState): number | null {
+  if (masteryState === 'sprout' || masteryState === 'sapling' || masteryState === 'tree') {
+    return RETRIEVAL_BASELINE_STAGE_LADDER_DAYS[masteryState];
+  }
+  return null;
+}
+
+function shiftCalendarDayBy(day: CalendarDay, days: number): CalendarDay {
+  const shifted = new Date(`${day}T00:00:00.000Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10) as CalendarDay;
+}
+
+/** `study-session/compose.ts`'s own ladder — see this file's `baselineGapDaysForMasteryState` doc for why it is restated rather than imported. */
+const RETRIEVAL_BASELINE_STAGE_LADDER_DAYS: Readonly<
+  Record<'sprout' | 'sapling' | 'tree', number>
+> = Object.freeze({ sprout: 5, sapling: 12, tree: 21 });
+
+/** One frozen candidate assessment — the note path and the raw `due` string, banded fresh at every snapshot instant. */
+interface FrozenScopeAssessment {
+  readonly path: VaultPath;
+  readonly due: string | undefined;
+}
+
+function bandFor(assessment: FrozenScopeAssessment, asOf: CalendarDay): AssessmentProximityBand {
+  if (assessment.due === undefined || !isCalendarDay(assessment.due)) {
+    return assessmentProximityBand(null);
+  }
+  return assessmentProximityBand(daysBetweenCalendarDays(asOf, assessment.due));
+}
+
+/**
+ * The full frozen scope a sitting is checked against — everything
+ * {@link buildScopeSnapshotAt} needs to answer `[D-162]`'s three facts at
+ * any later instant, over the exact candidate set (`GapRow`s, not just
+ * chosen items) `buildFresh` considered.
+ */
+interface FrozenSittingScope {
+  readonly concepts: readonly FrozenScopeConcept[];
+  readonly assessments: readonly FrozenScopeAssessment[];
+  readonly vault: VaultSource;
+}
+
+/**
+ * Builds a {@link SittingScopeSnapshot} at `asOf` from a {@link
+ * FrozenSittingScope} — no I/O for the due-concept half (pure re-run of
+ * already-read facts, see this file's module doc), a light
+ * `vault.firstSeen` re-read for the arrival-watermark half (the same stat
+ * calls `arrivalDaysByConceptKey` already makes at freeze time).
+ */
+async function buildScopeSnapshotAt(
+  scope: FrozenSittingScope,
+  asOf: CalendarDay,
+): Promise<SittingScopeSnapshot> {
+  const dueConceptKeys = new Set<string>();
+  for (const concept of scope.concepts) {
+    if (isDueClass(concept, asOf)) dueConceptKeys.add(concept.conceptKey);
+  }
+
+  const firstSeen = scope.vault.firstSeen?.bind(scope.vault);
+  let materialArrivalWatermark: CalendarDay | undefined;
+  if (firstSeen !== undefined) {
+    const allPaths = scope.concepts.flatMap((concept) => concept.notePaths);
+    const stats = await Promise.all(allPaths.map((path) => firstSeen(path)));
+    const known = stats.filter((ms): ms is number => ms !== null);
+    if (known.length > 0) {
+      materialArrivalWatermark = localToday(new Date(Math.min(...known)));
+    }
+  }
+
+  const assessmentProximityBands = new Map<string, AssessmentProximityBand>();
+  for (const assessment of scope.assessments) {
+    assessmentProximityBands.set(assessment.path, bandFor(assessment, asOf));
+  }
+
+  return { dueConceptKeys, materialArrivalWatermark, assessmentProximityBands };
+}
+
 /**
  * A `SessionBuilderViewDeps` whose `load` composes a fresh session from the
  * vault and the review log, entirely on-device, no Worker call.
@@ -434,12 +639,23 @@ export function createLocalSessionBuilderProvider(
   // surface it (`attachStaleReason`) — never held any longer than that one
   // rebuild.
   let staleReasons: readonly SittingStalenessReason[] | undefined;
+  // `ol-v7r5.26`: the frozen sitting's own scope, held alongside `sitting` —
+  // see this file's module doc, "the three staleness facts, wired for real".
+  // `undefined` exactly when `sitting.status === 'idle'`.
+  let frozenScope: FrozenSittingScope | undefined;
+  let frozenSnapshot: SittingScopeSnapshot | undefined;
+  // `buildFresh` has no return-type reason to know about `frozenScope` — it
+  // stashes the scope it built here, and `load()` (the only caller) decides
+  // whether to keep it, exactly the same shape `staleReasons` above already
+  // uses to cross the `buildFresh` call without widening its signature.
+  let pendingFrozenScope: FrozenSittingScope | undefined;
 
   /** The full, expensive composition — unchanged from before `ol-e228` except that it now takes `now` from the caller rather than reading `deps.now()` a second time, so a build and the `SittingState.enteredAt` it is frozen under are always the same instant. */
   async function buildFresh(
     request: SessionBuilderRequest,
     now: Date,
   ): Promise<SessionBuilderState> {
+    pendingFrozenScope = undefined;
     try {
       const config = await settingsStore.load();
       if (!isStudyPlanConfigured(config)) return { kind: 'unavailable' };
@@ -505,6 +721,34 @@ export function createLocalSessionBuilderProvider(
       // rows, so only concepts actually in play cost a stat call.
       const gapRows = allGapRows(gap);
       const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
+      const conceptInstrumentIndex = buildConceptInstrumentIndex(enumeration.records);
+
+      // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
+      // candidate `buildFresh` considered (not just the ones the budget cut
+      // kept), so a concept that only narrowly missed the cut still counts
+      // toward "this sitting's own composition" for staleness purposes. Held
+      // in the closure below once this build actually becomes the new
+      // sitting (`load()`'s own assignment, after this function returns) —
+      // never persisted, rebuildable from the same `enumeration`/`replay`
+      // this call already produced.
+      const nextFrozenScope: FrozenSittingScope = {
+        concepts: gapRows.map(
+          (row): FrozenScopeConcept => ({
+            conceptKey: row.conceptKey,
+            notePaths: row.notePaths,
+            masteryState: row.masteryState,
+            ...obligationSignalsForConcept(row.conceptKey, conceptInstrumentIndex, replay),
+          }),
+        ),
+        assessments: [...new Set(gapRows.map((row) => row.targetAssessmentPath))]
+          .filter((path): path is VaultPath => path !== null)
+          .map((path) => ({
+            path,
+            due: edges.assessmentsRead.records.find((record) => record.path === path)?.due,
+          })),
+        vault: deps.vault,
+      };
+      pendingFrozenScope = nextFrozenScope;
 
       // F2.19 (`ol-v7r5.11`): both resolvers are pure and synchronous, over
       // data this call already holds — `enumeration.concepts` is the same
@@ -616,6 +860,24 @@ export function createLocalSessionBuilderProvider(
         lastRequest !== undefined &&
         sameRequest(lastRequest, request)
       ) {
+        // `ol-v7r5.26`: real facts, at last. Mirrors `decideRebuild`'s own
+        // idle-threshold gate before doing the (light) async work a real
+        // snapshot needs — under the threshold this stays all-`false`, which
+        // is exactly what `decideRebuild` would do with it anyway (it never
+        // reads `staleness` before the threshold), so no work is wasted on
+        // an idempotent re-render that is nowhere near going stale.
+        const elapsedMs = now.getTime() - sitting.enteredAt.getTime();
+        const staleness =
+          elapsedMs >= DEFAULT_SITTING_IDLE_THRESHOLD_MS && frozenScope !== undefined
+            ? diffSittingScopeSnapshots(
+                frozenSnapshot ?? EMPTY_SITTING_SCOPE_SNAPSHOT,
+                await buildScopeSnapshotAt(frozenScope, localToday(now)),
+              )
+            : {
+                itemsDueInScope: false,
+                materialArrivedInScope: false,
+                assessmentProximityBandCrossedInScope: false,
+              };
         const decision = decideRebuild(sitting, {
           now,
           // `decideRebuild` never reads `trigger` while `state.status ===
@@ -632,17 +894,7 @@ export function createLocalSessionBuilderProvider(
             materialLandedSinceLastRebuild: false,
             assessmentDatePassedSinceLastRebuild: false,
           },
-          // `[D-162]`: consulted only once the idle threshold has passed —
-          // see the module doc's "staleness facts are not reachable" note
-          // for why every fact here is honestly `false` rather than
-          // fabricated. That means `'sitting-stale'` cannot actually fire
-          // from this call site yet; the branch below exists so the ruled
-          // behaviour is wired the moment a real fact is.
-          staleness: {
-            itemsDueInScope: false,
-            materialArrivedInScope: false,
-            assessmentProximityBandCrossedInScope: false,
-          },
+          staleness,
         });
         if (decision.action === 'hold') return sitting.items;
         // `decision.action === 'sitting-stale'`: `[D-162]` rules the sitting
@@ -660,15 +912,28 @@ export function createLocalSessionBuilderProvider(
       // Nothing to freeze over an error/unavailable screen — the next call
       // (even an identical request) should try again rather than hold a
       // failure.
-      sitting =
-        resultWithReason.kind === 'unavailable'
-          ? exitSitting()
-          : enterSitting(now, resultWithReason);
+      if (resultWithReason.kind === 'unavailable') {
+        sitting = exitSitting();
+        frozenScope = undefined;
+        frozenSnapshot = undefined;
+      } else {
+        sitting = enterSitting(now, resultWithReason);
+        // `ol-v7r5.26`: the new sitting's own freeze snapshot, taken at the
+        // exact instant it was entered — `pendingFrozenScope` is always set
+        // by `buildFresh` whenever it did not return `'unavailable'`.
+        frozenScope = pendingFrozenScope;
+        frozenSnapshot =
+          frozenScope !== undefined
+            ? await buildScopeSnapshotAt(frozenScope, localToday(now))
+            : undefined;
+      }
       return resultWithReason;
     },
     /** `SessionBuilderViewDeps.endSitting` — see that field's own doc. */
     endSitting(): void {
       sitting = exitSitting();
+      frozenScope = undefined;
+      frozenSnapshot = undefined;
     },
     // F4.6 / F6.4, `[D-163]`: forwarded, never called, from `deps.openExplainBack`
     // — see this file's own `CreateLocalSessionBuilderProviderDeps.openExplainBack` doc.

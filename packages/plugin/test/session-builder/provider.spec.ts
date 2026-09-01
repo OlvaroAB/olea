@@ -542,7 +542,7 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     expect(second).not.toBe(first);
   });
 
-  it('[D-162]: a genuinely unchanged sitting resumes as-is even well past the idle threshold — elapsed time alone is not a trigger, and no staleness fact is reachable from this surface today', async () => {
+  it('[D-162]: a genuinely unchanged sitting resumes as-is even well past the idle threshold — elapsed time alone is not a trigger', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
     const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
     const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
@@ -560,14 +560,89 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     const callsAfterFirst = calls();
 
     // An hour later, same request — well past `DEFAULT_SITTING_IDLE_
-    // THRESHOLD_MINUTES`, but with none of the three material-change facts
-    // true (they are not reachable from this surface yet — see provider.ts's
-    // own module doc). The sitting holds rather than ending.
+    // THRESHOLD_MINUTES`. `ol-v7r5.26` wires the three facts to a real
+    // snapshot diff now, but this concept's own due state genuinely has not
+    // moved in that hour, so the diff still comes back all-`false` and the
+    // sitting holds rather than ending.
     now = new Date(NOW.getTime() + 61 * 60_000);
     const second = await provider.load({ budgetMinutes: 60 });
 
     expect(calls()).toBe(callsAfterFirst);
     expect(second).toBe(first);
+  });
+
+  // `ol-v7r5.26`: the three staleness facts wired to real signals — see
+  // provider.ts's own module doc, "the three staleness facts, wired for
+  // real". `itemsDueInScope` is the one exercised end-to-end here because it
+  // needs no vault re-read at all (a pure re-classification against the
+  // frozen `lastRetrievalDay`/`recallDueDay` at a later `asOf`) — the other
+  // two facts' own arithmetic is covered directly by
+  // `queue/rebuild-controller.spec.ts`'s `diffSittingScopeSnapshots` suite.
+  it('[D-162]: a concept crossing into its own recall-due day past the idle threshold ends the sitting — a real "your list changed because..." fact, not a stub', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    // Reviewed the day before the sitting opens (close enough that the
+    // baseline-retrieval ladder does not ALSO fire at freeze — a `'sprout'`
+    // concept's 5-day baseline gap from `2026-08-09` lands on `2026-08-14`,
+    // well after both `asOf`s below), and its FSRS state is due the day
+    // AFTER the sitting is entered — not due yet at freeze, due by the time
+    // she returns to it.
+    const record = reviewRecord(conceptKey, instrumentId, {
+      timestamp: '2026-08-09T09:00:00-04:00',
+    });
+    const vault = memoryVault({
+      ...BASE_FILES,
+      [reviewLogPath('2026-08-09', DEVICE)]: JSON.stringify(record),
+    });
+    let calls = 0;
+    const scheduler: Scheduler = {
+      schedule({ instrumentId: id }) {
+        calls += 1;
+        const state: SchedulerState = {
+          schemaVersion: 1,
+          due: '2026-08-11T09:00:00-04:00',
+          stability: 1,
+          difficulty: 5,
+          scheduledDays: 1,
+          learningStepIndex: 0,
+          reps: 1,
+          lapses: 0,
+          learningState: 'review',
+          lastReview: '2026-08-09T09:00:00-04:00',
+        };
+        return { instrumentId: id, state, intervalDays: 1 };
+      },
+      retrievability({ instrumentId: id }) {
+        if (id !== instrumentId) {
+          throw new Error(`unexpected retrievability query for ${id}`);
+        }
+        return { instrumentId: id, recallProbability: 1 };
+      },
+    };
+    let now = NOW; // 2026-08-10T09:00:00-04:00 — the day BEFORE the due day above.
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => now,
+      scheduler,
+    });
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls;
+
+    // Past both the idle threshold AND the calendar-day boundary the FSRS
+    // state above is due on — this is the sitting's own composition
+    // genuinely going stale, not a timer.
+    now = new Date(Date.parse('2026-08-11T10:00:00-04:00'));
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls).toBeGreaterThan(callsAfterFirst); // a real rebuild ran
+    expect(second).not.toBe(first);
+    if (second.kind !== 'model')
+      throw new Error(`expected a fresh 'model' state, got ${second.kind}`);
+    expect(second.staleReasonLine).toBeDefined();
+    expect(second.staleReasonLine).toMatch(/came due/);
   });
 });
 
