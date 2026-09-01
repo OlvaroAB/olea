@@ -42,6 +42,7 @@
  * row, which is the honest behaviour for an alphabetised list.
  */
 
+import type { Provenance } from '../extract/types.js';
 import {
   computeAllConceptMastery,
   conceptIdsInLog,
@@ -58,20 +59,42 @@ import type {
 } from './types.js';
 
 /**
- * `[D-171]`'s per-instrument provenance. Today this is exactly one location —
- * the instrument's own note/heading/block, restated as a `RegistrySourceLocation`
- * — because `VaultInstrumentRecord` carries no generation-time material
- * citation (which PDF page or slide the instrument was drawn FROM, as
- * distinct from the vault note it lives IN). Threading that through needs a
- * field on `VaultInstrumentRecord` (`../session/types.js`, outside this
- * bead's ownership) populated at generation time from the same `Provenance`
- * `../extract/types.js` already defines — see this module's doc and the
- * bead's close notes for the exact follow-up.
+ * `RegistrySourceLocation`'s optional `page`/`section` follow `SourceLocation`'s
+ * own "undefined means no structure exists" convention — never present as a
+ * key with value `undefined`, only genuinely absent, so a caller that does
+ * `Object.keys` or serialises the location never sees a phantom field.
+ */
+function passageGrain(
+  location: Provenance['location'],
+): Pick<RegistrySourceLocation, 'page' | 'section'> {
+  return location.section === undefined
+    ? { page: location.page }
+    : { page: location.page, section: location.section };
+}
+
+/**
+ * `[D-171]`'s per-instrument provenance. Always exactly one location — the
+ * instrument's own note/heading/block, restated as a `RegistrySourceLocation`
+ * — plus page/section grain when `VaultInstrumentRecord.sourceProvenance`
+ * (`ol-2zfj.48`) is present. That field is itself optional and `undefined`
+ * for every record `enumerate.ts` produces today: this walk reports
+ * instruments already written INTO a note, never a generation-time citation
+ * to the PDF/PPTX page or slide the material was drawn FROM. So a real vault
+ * read still shows note-grain-only locations until a generation-time caller
+ * populates `sourceProvenance` — see `../session/types.js`'s doc on that
+ * field and this module's own doc.
  */
 function instrumentSourceLocations(
   record: BuildRegistryModelInput['instrumentRecords'][number],
 ): readonly RegistrySourceLocation[] {
-  return [{ sourcePath: record.notePath, heading: record.heading, blockId: record.blockId }];
+  const base: RegistrySourceLocation = {
+    sourcePath: record.notePath,
+    heading: record.heading,
+    blockId: record.blockId,
+  };
+  const provenance = record.sourceProvenance;
+  if (provenance === undefined) return [base];
+  return [{ ...base, ...passageGrain(provenance.location) }];
 }
 
 function instrumentSummary(
@@ -92,20 +115,42 @@ function instrumentSummary(
 }
 
 /**
- * `[D-171]`'s per-concept provenance, at the note grain `ConceptRecord`
- * actually carries — `sourcePaths` (every note whose `topic:` or wikilink
- * named this concept, F1.3) plus `boundNotePath` when the concept is bound to
- * a Zettelkasten note, deduplicated and sorted for a deterministic result.
- * Never a page/section: that grain lives on `../concept/read.js`'s
- * `ReadConcept`, a different stage's output not yet threaded into
- * `ConceptRecord` — see this module's doc.
+ * `[D-171]`'s per-concept provenance — `sourcePaths` (every note whose
+ * `topic:` or wikilink named this concept, F1.3) plus `boundNotePath` when
+ * the concept is bound to a Zettelkasten note, deduplicated by path and
+ * sorted for a deterministic result. Each path carries page/section grain
+ * too when `ConceptRecord.anchor`/`.alsoIn` (`ol-2zfj.48`) names that same
+ * path — those fields are themselves optional and `undefined` on every mint
+ * site `../concept/extract.js` owns today (passage grain is
+ * `../concept/read.js`'s `ReadConcept.anchor`/`alsoIn`, a different stage's
+ * output not yet folded back onto the same `ConceptRecord`), so a real
+ * vault read still shows note-grain-only locations until that fold lands —
+ * see this module's doc.
  */
 function conceptSourceLocations(
   concept: BuildRegistryModelInput['concepts'][number],
 ): readonly RegistrySourceLocation[] {
-  const paths = new Set<string>(concept.sourcePaths);
-  if (concept.boundNotePath !== undefined) paths.add(concept.boundNotePath);
-  return [...paths].sort().map((sourcePath) => ({ sourcePath }));
+  const byPath = new Map<string, RegistrySourceLocation>();
+  const notePaths = new Set<string>(concept.sourcePaths);
+  if (concept.boundNotePath !== undefined) notePaths.add(concept.boundNotePath);
+  for (const sourcePath of notePaths) byPath.set(sourcePath, { sourcePath });
+
+  const passages: readonly Provenance[] = [
+    ...(concept.anchor !== undefined ? [concept.anchor] : []),
+    ...(concept.alsoIn ?? []),
+  ];
+  for (const passage of passages) {
+    byPath.set(passage.sourcePath, {
+      sourcePath: passage.sourcePath,
+      ...passageGrain(passage.location),
+    });
+  }
+
+  return [...byPath.keys()].sort().map((sourcePath) => {
+    const location = byPath.get(sourcePath);
+    if (location === undefined) throw new Error(`unreachable: missing location for ${sourcePath}`);
+    return location;
+  });
 }
 
 /**

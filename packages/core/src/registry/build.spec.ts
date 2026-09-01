@@ -247,3 +247,112 @@ describe('buildRegistryModel — source provenance (F8.4 / [D-171])', () => {
     expect(row?.instruments[0]?.sourceLocations[0]?.heading).toBeNull();
   });
 });
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-171] —
+// The registry carries source provenance", the passage-grain scenarios added
+// by `ol-2zfj.48`, tagged `@auto:core/registry/build.spec`.
+describe('buildRegistryModel — passage-grain provenance (ol-2zfj.48)', () => {
+  it('a concept derived from a PDF-backed passage lists the page it was read from', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          sourcePaths: [],
+          anchor: {
+            sourcePath: '01 Courses/COURSE-A/lecture.pdf',
+            location: { page: 4, charRange: { start: 0, end: 10 } },
+          },
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    expect(row?.sourceLocations).toEqual([
+      { sourcePath: '01 Courses/COURSE-A/lecture.pdf', page: 4 },
+    ]);
+  });
+
+  it('a concept derived from a note passage lists the heading, never a page', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          anchor: {
+            sourcePath: '01 Courses/COURSE-A/note.md',
+            location: { page: 1, charRange: { start: 0, end: 10 }, section: 'Worked example' },
+          },
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    const location = row?.sourceLocations.find(
+      (loc) => loc.sourcePath === '01 Courses/COURSE-A/note.md',
+    );
+    expect(location?.section).toBe('Worked example');
+  });
+
+  it('absent passage grain is omitted, never fabricated', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          sourcePaths: ['01 Courses/COURSE-A/note.md', '01 Courses/COURSE-A/other.md'],
+          boundNotePath: 'Zettelkasten/Concept A.md',
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    for (const location of row?.sourceLocations ?? []) {
+      expect(location.page).toBeUndefined();
+      expect(location.section).toBeUndefined();
+    }
+  });
+
+  it('carries only page and section from a PDF-sourced passage — never document metadata (ol-pdfmeta)', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          sourcePaths: [],
+          anchor: {
+            sourcePath: '01 Courses/COURSE-A/lecture.pdf',
+            location: { page: 7, charRange: { start: 0, end: 5 } },
+          },
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    const location = row?.sourceLocations.find(
+      (loc) => loc.sourcePath === '01 Courses/COURSE-A/lecture.pdf',
+    );
+    expect(location).toEqual({ sourcePath: '01 Courses/COURSE-A/lecture.pdf', page: 7 });
+    expect(Object.keys(location ?? {}).sort()).toEqual(['page', 'sourcePath']);
+  });
+
+  it("an instrument's own generation-time provenance carries page grain onto its source location", () => {
+    const model = buildFor({
+      instrumentRecords: [
+        qaInstrument({
+          heading: null,
+          sourceProvenance: {
+            sourcePath: '01 Courses/COURSE-A/deck.pptx',
+            location: { page: 3, charRange: { start: 0, end: 5 }, section: 'Introduction' },
+          },
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    expect(row?.instruments[0]?.sourceLocations).toEqual([
+      {
+        sourcePath: '01 Courses/COURSE-A/note.md',
+        heading: null,
+        blockId: 'abc123',
+        page: 3,
+        section: 'Introduction',
+      },
+    ]);
+  });
+
+  it('an instrument with no generation-time provenance omits page/section, never fabricating them', () => {
+    const model = buildFor({ instrumentRecords: [qaInstrument({ heading: 'H' })] });
+    const row = model.concepts[0];
+    const location = row?.instruments[0]?.sourceLocations[0];
+    expect(location?.page).toBeUndefined();
+    expect(location?.section).toBeUndefined();
+  });
+});

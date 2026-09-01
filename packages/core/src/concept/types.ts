@@ -22,6 +22,7 @@
  * see `./evidence.js`'s module doc for why.
  */
 
+import type { Provenance } from '../extract/types.js';
 import type { RegisteredFileSpec } from '../source/types.js';
 import type { VaultPath } from '../vault/types.js';
 import type { ConceptSize } from './size.js';
@@ -228,6 +229,28 @@ export interface ConceptRecord {
    * as "this concept has no size."
    */
   readonly size?: ConceptSize;
+  /**
+   * The passage that introduced this concept, when this record was minted
+   * (or later joined) from a passage read rather than from `topic:`/binding
+   * alone — `[D-082]`'s passage-grain provenance, threaded here unchanged
+   * from `./read.js`'s `ReadConcept.anchor` rather than defined a second
+   * time (`[D-085]` rules exactly one passage-identity scheme: reuse
+   * `../extract/types.js`'s `Provenance`, never a local shape).
+   *
+   * **Optional and `undefined` for every mint site this module owns today.**
+   * `./extract.js`'s two mint sites derive a `ConceptRecord` from
+   * `topic:`/wikilink/binding evidence alone and have no passage to offer;
+   * `./read.js`'s `readConcepts` produces a `ReadConcept`, a *different*
+   * stage's output, and nothing yet folds a `ReadConcept.anchor` back onto
+   * the `ConceptRecord` for the same concept (`../registry/build.ts`'s
+   * module doc names this exact gap). This field exists so that fold has
+   * somewhere honest to land — `../registry/types.ts`'s
+   * `RegistrySourceLocation` reads it when present and omits page/section
+   * entirely when it is not, never guessing one from `sourcePaths` alone.
+   */
+  readonly anchor?: Provenance;
+  /** Every other passage that named it — matches `ReadConcept.alsoIn`. Optional for the same reason `anchor` is. */
+  readonly alsoIn?: readonly Provenance[];
   // `ambiguousTopicPaths` was here, and is deliberately gone (`ol-t3sd`).
   //
   // It recorded, on each concept, the notes whose instruments had been

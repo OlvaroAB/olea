@@ -25,6 +25,7 @@
  */
 
 import type { ConceptRecord } from '../concept/types.js';
+import type { Provenance } from '../extract/types.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type {
   ClozeCardInstrument,
@@ -67,6 +68,26 @@ interface VaultInstrumentCommon {
   readonly heading: string | null;
   /** 1-based position within this instrument's anchor — the id's ordinal component. */
   readonly ordinal: number;
+  /**
+   * The passage this instrument was generated FROM — as distinct from
+   * `notePath`/`heading`/`blockId` above, which say where it now *lives* —
+   * `[D-082]`/`[D-171]`'s passage-grain provenance, reusing
+   * `../extract/types.js`'s `Provenance` rather than a second scheme
+   * (`[D-085]`).
+   *
+   * **Optional and `undefined` for every record `enumerate.ts` produces
+   * today.** This walk is read-only over instruments she has already
+   * written INTO a note (this module's own doc: "the only place a note's
+   * bytes become an instrument record") — it has a hand-authored
+   * `^blockid`/heading pair to report, never a generation-time citation to
+   * the PDF/PPTX page or slide the material came from, because nothing in
+   * this pipeline generates instruments from extracted passages yet. The
+   * field is threaded here so `../registry/build.ts`'s
+   * `RegistrySourceLocation` has somewhere honest to read page/section grain
+   * from once a generation-time caller populates it; until then it stays
+   * absent, never guessed from `notePath`/`heading` alone.
+   */
+  readonly sourceProvenance?: Provenance;
 }
 
 export interface QaInstrumentRecord extends VaultInstrumentCommon {

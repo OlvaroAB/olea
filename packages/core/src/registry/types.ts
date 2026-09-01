@@ -83,6 +83,25 @@ export interface RegistrySourceLocation {
   readonly sourcePath: VaultPath;
   readonly heading?: string | null;
   readonly blockId?: string | null;
+  /**
+   * Passage grain, mirroring `../extract/types.js`'s `SourceLocation.page`
+   * and `.section` fields (`ol-2zfj.48`) rather than defining a second
+   * scheme (`[D-085]`). `page` is 1-based and, per that type's own
+   * documented convention, IS the slide number for a PPTX-sourced passage —
+   * there is no separate "slide" field because the contract type has none
+   * either. `section` is the heading/title-placeholder text, exactly when
+   * the source format carries one.
+   *
+   * **Present only when `./build.ts` had a `Provenance` to read it from** —
+   * `ConceptRecord.anchor`/`.alsoIn` or `VaultInstrumentRecord`'s
+   * `sourceProvenance`. Absent means "no passage-grain source for this
+   * location yet", never "the passage has no page" — the same
+   * honesty-over-silent-default convention `SourceLocation.section` itself
+   * documents. Never populated from PDF document metadata (Author, Title,
+   * etc.) — this pipeline does not extract or surface that metadata at all.
+   */
+  readonly page?: number;
+  readonly section?: string;
 }
 
 /**
@@ -163,12 +182,15 @@ export interface RegistryConceptEntry {
   /**
    * `[D-171]`'s per-concept provenance — the vault location(s) this concept
    * was derived from: `sourcePaths` (every note whose `topic:` or wikilink
-   * named it) plus `boundNotePath` when one exists, deduplicated. Note-grain
-   * only: `ConceptRecord` (this module's own input) carries no
-   * page/section/slide for a concept — that finer grain lives on
-   * `../concept/read.js`'s `ReadConcept.anchor`/`alsoIn` (passage-grain
-   * `Provenance`), which is a different stage's output and not yet threaded
-   * into extraction's `ConceptRecord`. See `./build.ts`'s module doc.
+   * named it) plus `boundNotePath` when one exists, deduplicated, each
+   * carrying page/section grain too when `ConceptRecord.anchor`/`.alsoIn`
+   * (`ol-2zfj.48`) supplies it for that path. That field is itself optional
+   * and `undefined` on every mint site `./extract.js` owns today — passage
+   * grain is `../concept/read.js`'s `ReadConcept.anchor`/`alsoIn`, a
+   * different stage's output, and nothing yet folds it back onto the
+   * `ConceptRecord` for the same concept. So a real vault read still shows
+   * note-grain-only locations until that fold lands. See `./build.ts`'s
+   * module doc.
    */
   readonly sourceLocations: readonly RegistrySourceLocation[];
   /** F2.11 axis 1 (growth stage) plus the evidence it was read from (`../mastery/rollup.js`, C5.4). */
