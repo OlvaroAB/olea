@@ -53,6 +53,7 @@ import {
   type ResponseStamp,
   STUDY_PLAN_BODY_VERSION,
   STUDY_PLAN_KIND,
+  type StudyPlanAllocationEntry,
   type StudyPlanCourse,
   type StudyPlanEnvelope,
   studyPlanEnvelope,
@@ -96,6 +97,16 @@ export interface BuildStudyPlanInput {
   readonly computedAt: string;
   /** D7.3 provenance, when a Worker call contributed. Omitted for a locally computed plan. */
   readonly stamp?: ResponseStamp;
+  /**
+   * `ol-v7r5.25` — component 3.5's cross-course allocation, when
+   * `POST /v1/plan-policy` (`ol-v7r5.23`) answered this refresh. Landed
+   * verbatim onto `StudyPlanBody.allocation` (`artifact-envelope.ts`):
+   * absence here means "no allocation policy travelled with this plan,"
+   * never "every course got zero" — the same reading that field's own doc
+   * states, carried through by simply not fabricating an entry when there
+   * is nothing to carry.
+   */
+  readonly allocation?: readonly StudyPlanAllocationEntry[];
 }
 
 /**
@@ -235,7 +246,11 @@ export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyP
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
     governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
     ...(input.stamp === undefined ? {} : { stamp: input.stamp }),
-    body: { asOf: input.ranking.asOf, courses },
+    body: {
+      asOf: input.ranking.asOf,
+      courses,
+      ...(input.allocation === undefined ? {} : { allocation: [...input.allocation] }),
+    },
   };
   return studyPlanEnvelope.parse(envelope);
 }

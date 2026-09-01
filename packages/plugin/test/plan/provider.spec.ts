@@ -163,6 +163,76 @@ describe('createLocalStudyPlanProvider — delivered ranking weights ([D-110], o
   });
 });
 
+describe('createLocalStudyPlanProvider — allocation policy ([D-167], ol-v7r5.25)', () => {
+  it('no readPlanPolicy dep at all — plan is byte-identical to today (no allocation field)', async () => {
+    const raw = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    }).fetchPlan();
+
+    const plan = studyPlanEnvelope.parse(raw);
+    expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
+  });
+
+  it('readPlanPolicy resolving undefined (offline/unconfigured/failed) — same absent-allocation plan, no throw', async () => {
+    const raw = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readPlanPolicy: async () => undefined,
+    }).fetchPlan();
+
+    const plan = studyPlanEnvelope.parse(raw);
+    expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
+  });
+
+  it('a delivered allocation policy is threaded onto body.allocation, with the resolved per-course inputs it was asked for', async () => {
+    let requestedCourses: readonly { readonly courseId: string }[] = [];
+    const raw = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readPlanPolicy: async (request) => {
+        requestedCourses = request.courses;
+        return {
+          asOf: request.asOf,
+          rankWeights: {
+            proximityHalfLifeDays: 14,
+            assessmentWeightDivisor: 40,
+            masteryNeedWeight: { seed: 1, sprout: 1, sapling: 1, tree: 1, unknown: 1 },
+          },
+          allocation: [
+            {
+              courseId: 'TESTC101',
+              share: 1,
+              minBlockSeconds: 180,
+              contributions: [{ name: 'risk', value: 1 }],
+              reason: 'the only running course receives the whole session.',
+            },
+          ],
+          floorsFundable: true,
+        };
+      },
+    }).fetchPlan();
+
+    const plan = studyPlanEnvelope.parse(raw);
+    expect(plan.body.allocation).toEqual([
+      {
+        courseId: 'TESTC101',
+        share: 1,
+        minBlockSeconds: 180,
+        contributions: [{ name: 'risk', value: 1 }],
+        reason: 'the only running course receives the whole session.',
+      },
+    ]);
+    expect(requestedCourses.map((c) => c.courseId)).toEqual(['TESTC101']);
+  });
+});
+
 describe('createLocalStudyPlanProvider — configured', () => {
   it('composes a valid StudyPlanArtifact entirely on-device, reflecting her real review log', async () => {
     const vault = studyVault();

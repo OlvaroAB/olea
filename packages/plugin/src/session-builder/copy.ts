@@ -54,6 +54,7 @@ import type {
   DurationModelBasis,
   ReentryStudySessionView,
   SessionAssessmentCountdown,
+  SittingStalenessReason,
   StudySessionItem,
   StudySessionModel,
   StudySessionOmission,
@@ -559,6 +560,37 @@ export function reentryScreenCopy(view: ReentryStudySessionView): readonly strin
   if (view.items.length > 0) lines.push(durationBasisLine(view));
 
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// [D-162]: a fresh session that replaced one that just went stale
+// ---------------------------------------------------------------------------
+
+/**
+ * One clause per {@link SittingStalenessReason} — always in the reporting
+ * voice C5.8 tests for: the tool finishing "your list changed because...",
+ * never a verdict on her and never framed as loss. No forbidden vocabulary
+ * (`Olea_vocabulary_registry.md`), no "delete", no apology — the previous
+ * sitting's completed reviews already kept their outcomes; this line only
+ * explains why the remainder is a fresh list rather than the old one
+ * continuing.
+ */
+const STALE_REASON_CLAUSES: Record<SittingStalenessReason, string> = {
+  'items-due-in-scope': 'new items came due in one of its courses',
+  'material-arrived-in-scope': 'new material arrived in its scope',
+  'assessment-proximity-band-crossed-in-scope': 'an assessment it was built around moved closer',
+};
+
+/**
+ * `[D-162]`'s own honesty test applied verbatim: "your list changed because
+ * ...", finished with every material-change kind that actually fired,
+ * joined in fixed order. Reviews she already finished keep their outcomes —
+ * this sentence is only ever shown beside the fresh remainder, never framed
+ * as anything of hers being lost.
+ */
+export function sittingStaleReasonLine(reasons: readonly SittingStalenessReason[]): string {
+  const clauses = reasons.map((reason) => STALE_REASON_CLAUSES[reason]);
+  return `Your list changed because ${clauses.join(', and ')}.`;
 }
 
 // ---------------------------------------------------------------------------

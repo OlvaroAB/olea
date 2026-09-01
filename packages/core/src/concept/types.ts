@@ -309,4 +309,16 @@ export interface ExtractConceptsOptions {
    * why this is an option rather than persisted state.
    */
   readonly registeredFiles?: readonly RegisteredFileSpec[];
+  /**
+   * Resolve `ConceptRecord.key` through the `[D-174]` sidecar (`./key-store.js`) — reading an
+   * existing `ConceptKeyRecord` back verbatim when one matches this candidate's anchor, minting
+   * and persisting a new one under `.olea/concepts/` otherwise. **Off by default.** This
+   * function is called against fixture vaults shared read-only across many tests
+   * (`extract.spec.ts`'s `FIXTURE_ROOT`); an unconditional write here would mutate a tracked
+   * fixture tree on every test run. Every real caller building toward `[D-174]`'s durable-key
+   * promise should pass `true`; `false` preserves today's `provisionalConceptKey` derivation
+   * (re-minted fresh on every call, not yet stable across a rename) for callers that have not
+   * opted in yet.
+   */
+  readonly stampConceptKeys?: boolean;
 }

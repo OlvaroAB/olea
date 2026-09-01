@@ -143,12 +143,31 @@
  * (a cache keyed off something other than the leaf factory), the
  * between-sittings path belongs here at that point — not before.
  *
- * **`[D-162]` (`ol-cidn`) is a PROPOSED decision, not ruled**: what happens
- * once `decideRebuild` reports `'hold-cap-exceeded'` (end the sitting, or
- * recompose the tail) is exactly what it is open on. Until it rules, this
- * file treats `'hold-cap-exceeded'` the same as an explicit new ask —
- * ending the sitting and recomposing fresh — per `ol-e228`'s own
- * instruction to take the lower-risk of the two options rather than guess.
+ * **`[D-162]` (`ol-cidn`) is now RULED**, replacing the interim fixed-duration
+ * hold cap `decideRebuild` used to report as `'hold-cap-exceeded'` with an
+ * event-named `'sitting-stale'` outcome: staleness is a material change to
+ * the FROZEN SITTING'S OWN COMPOSITION (new items due in its courses, new
+ * material arrived, an assessment crossed a proximity band the composition
+ * cares about) gated by a declared minutes-scale idle threshold that decides
+ * only when staleness may be checked, never whether it is stale. When it
+ * fires, `[D-162]` rules the sitting ENDS — never a recompose of the
+ * unreviewed tail — so this file treats `'sitting-stale'` exactly as it
+ * already treated an explicit new ask: ending the sitting and recomposing
+ * fresh below, this time with the reason surfaced via `copy.ts`'s
+ * `sittingStaleReasonLine`.
+ *
+ * **The three staleness facts are not reachable from this surface today**,
+ * for the identical reason the between-sittings trigger facts above are
+ * not: this provider is rebuilt fresh per leaf (`main.ts`), so within one
+ * `load()` call there is no vault-change-stream/review-log/assessment-date
+ * signal wired in yet to answer "did new items come due in this sitting's
+ * own courses since it was entered". Every fact below is therefore supplied
+ * honestly as `false` — the same "no fact this surface can reach" discipline
+ * the `trigger` object below already uses — so in practice `'sitting-stale'`
+ * cannot fire from this call site yet; only the idle-threshold-independent
+ * `decideRebuild` mechanics are exercised. Wiring real staleness facts here
+ * is follow-up work once this provider's lifetime outlives a single leaf,
+ * same as the between-sittings trigger set's own follow-up note above.
  */
 
 import type {
@@ -157,6 +176,7 @@ import type {
   ConceptRecord,
   ConceptRelation,
   Scheduler,
+  SittingStalenessReason,
   SittingState,
   VaultPath,
   VaultSource,
@@ -195,6 +215,7 @@ import {
 import { buildSupportLevelHistoryLookup } from '../review/queue-adapter.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { CourseOrTopicOption } from './copy.js';
+import { sittingStaleReasonLine } from './copy.js';
 import type { SessionBuilderRequest, SessionBuilderState, SessionBuilderViewDeps } from './view.js';
 
 /**
@@ -408,6 +429,11 @@ export function createLocalSessionBuilderProvider(
   // closure), `IDLE_SITTING` until the first real build.
   let sitting: SittingState<SessionBuilderState> = IDLE_SITTING;
   let lastRequest: SessionBuilderRequest | undefined;
+  // `[D-162]` (`ol-cidn`): the reason the PREVIOUS sitting ended, carried
+  // across the fall-through to `buildFresh` below so the fresh result can
+  // surface it (`attachStaleReason`) — never held any longer than that one
+  // rebuild.
+  let staleReasons: readonly SittingStalenessReason[] | undefined;
 
   /** The full, expensive composition — unchanged from before `ol-e228` except that it now takes `now` from the caller rather than reading `deps.now()` a second time, so a build and the `SittingState.enteredAt` it is frozen under are always the same instant. */
   async function buildFresh(
@@ -559,6 +585,24 @@ export function createLocalSessionBuilderProvider(
     }
   }
 
+  /**
+   * `[D-162]`: when `reasons` is set (the previous sitting just ended
+   * because its own composition went stale), attaches
+   * {@link sittingStaleReasonLine}'s copy to the fresh result so the view
+   * can tell her "your list changed because..." rather than silently
+   * swapping the session under her — never on an explicit new ask or an
+   * unavailable screen, which carry no such reason.
+   */
+  function attachStaleReason(
+    result: SessionBuilderState,
+    reasons: readonly SittingStalenessReason[] | undefined,
+  ): SessionBuilderState {
+    if (reasons === undefined || reasons.length === 0 || result.kind === 'unavailable') {
+      return result;
+    }
+    return { ...result, staleReasonLine: sittingStaleReasonLine(reasons) };
+  }
+
   return {
     async load(request: SessionBuilderRequest): Promise<SessionBuilderState> {
       const now = deps.now();
@@ -575,8 +619,8 @@ export function createLocalSessionBuilderProvider(
         const decision = decideRebuild(sitting, {
           now,
           // `decideRebuild` never reads `trigger` while `state.status ===
-          // 'active'` (it only compares `now` against `enteredAt`/the hold
-          // cap) — see `rebuild-controller.ts`. This satisfies the required
+          // 'active'` (it only evaluates staleness past the idle threshold)
+          // — see `rebuild-controller.ts`. This satisfies the required
           // field honestly (today's own date, both sides, so it would read
           // as "nothing fired" even if it were somehow consulted) rather
           // than fabricating a fact this surface cannot reach — see the
@@ -588,20 +632,39 @@ export function createLocalSessionBuilderProvider(
             materialLandedSinceLastRebuild: false,
             assessmentDatePassedSinceLastRebuild: false,
           },
+          // `[D-162]`: consulted only once the idle threshold has passed —
+          // see the module doc's "staleness facts are not reachable" note
+          // for why every fact here is honestly `false` rather than
+          // fabricated. That means `'sitting-stale'` cannot actually fire
+          // from this call site yet; the branch below exists so the ruled
+          // behaviour is wired the moment a real fact is.
+          staleness: {
+            itemsDueInScope: false,
+            materialArrivedInScope: false,
+            assessmentProximityBandCrossedInScope: false,
+          },
         });
         if (decision.action === 'hold') return sitting.items;
-        // `decision.action === 'hold-cap-exceeded'`: `[D-162]` is proposed,
-        // not ruled — treated as ending the sitting (see module doc) and
-        // falling through to a fresh build below.
+        // `decision.action === 'sitting-stale'`: `[D-162]` rules the sitting
+        // ENDS — never a recompose of the unreviewed tail — so this falls
+        // through to a fresh build below exactly as an explicit new ask
+        // does, and carries the reason forward for the fresh result to
+        // surface via `copy.ts`'s `sittingStaleReasonLine`.
+        staleReasons = decision.action === 'sitting-stale' ? decision.reasons : undefined;
       }
 
       const result = await buildFresh(request, now);
       lastRequest = request;
+      const resultWithReason = attachStaleReason(result, staleReasons);
+      staleReasons = undefined;
       // Nothing to freeze over an error/unavailable screen — the next call
       // (even an identical request) should try again rather than hold a
       // failure.
-      sitting = result.kind === 'unavailable' ? exitSitting() : enterSitting(now, result);
-      return result;
+      sitting =
+        resultWithReason.kind === 'unavailable'
+          ? exitSitting()
+          : enterSitting(now, resultWithReason);
+      return resultWithReason;
     },
     /** `SessionBuilderViewDeps.endSitting` — see that field's own doc. */
     endSitting(): void {

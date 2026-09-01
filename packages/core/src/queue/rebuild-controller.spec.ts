@@ -6,13 +6,15 @@ import { describe, expect, it } from 'vitest';
 import {
   assessmentDatePassedSince,
   checkRebuildWasteRate,
-  DEFAULT_SESSION_HOLD_CAP_MS,
+  DEFAULT_SITTING_IDLE_THRESHOLD_MS,
   decideRebuild,
   enterSitting,
   evaluateRebuildTrigger,
+  evaluateSittingStaleness,
   exitSitting,
   MIN_REBUILD_SAMPLE_FOR_WASTE_CHECK,
   type RebuildOutcomeCase,
+  type SittingStalenessInput,
   type SittingState,
   WASTED_REBUILD_RATE_CEILING,
 } from './rebuild-controller.js';
@@ -95,6 +97,14 @@ describe('assessmentDatePassedSince', () => {
   });
 });
 
+function noStaleness(): SittingStalenessInput {
+  return {
+    itemsDueInScope: false,
+    materialArrivedInScope: false,
+    assessmentProximityBandCrossedInScope: false,
+  };
+}
+
 describe('decideRebuild — the freeze contract', () => {
   it('holds unconditionally while idle-caused triggers would otherwise fire, once a sitting is active', () => {
     const state = enterSitting(new Date('2026-08-10T09:00:00.000Z'), ['a', 'b', 'c']);
@@ -108,50 +118,97 @@ describe('decideRebuild — the freeze contract', () => {
         materialLandedSinceLastRebuild: true,
         assessmentDatePassedSinceLastRebuild: true,
       },
+      staleness: noStaleness(),
     });
     expect(decision).toEqual({ action: 'hold' });
   });
 
-  it('holds right up to, but not past, the hold cap', () => {
+  it('holds right up to, but not past, the idle threshold — but only rebuilds past it if the sitting is ALSO materially stale', () => {
     const enteredAt = new Date('2026-08-10T09:00:00.000Z');
     const state = enterSitting(enteredAt, ['a']);
-    const holdCapMs = 10 * 60_000;
+    const idleThresholdMs = 10 * 60_000;
     const justUnder = decideRebuild(state, {
-      now: new Date(enteredAt.getTime() + holdCapMs - 1),
-      holdCapMs,
+      now: new Date(enteredAt.getTime() + idleThresholdMs - 1),
+      idleThresholdMs,
       trigger: noTrigger(),
+      staleness: { ...noStaleness(), itemsDueInScope: true },
     });
     expect(justUnder).toEqual({ action: 'hold' });
 
-    const atCap = decideRebuild(state, {
-      now: new Date(enteredAt.getTime() + holdCapMs),
-      holdCapMs,
+    const atThresholdButUnchanged = decideRebuild(state, {
+      now: new Date(enteredAt.getTime() + idleThresholdMs),
+      idleThresholdMs,
       trigger: noTrigger(),
+      staleness: noStaleness(),
     });
-    expect(atCap).toEqual({ action: 'hold-cap-exceeded' });
+    expect(atThresholdButUnchanged).toEqual({ action: 'hold' });
+
+    const atThresholdAndStale = decideRebuild(state, {
+      now: new Date(enteredAt.getTime() + idleThresholdMs),
+      idleThresholdMs,
+      trigger: noTrigger(),
+      staleness: { ...noStaleness(), itemsDueInScope: true },
+    });
+    expect(atThresholdAndStale).toEqual({
+      action: 'sitting-stale',
+      reasons: ['items-due-in-scope'],
+    });
   });
 
-  it('uses the declared default hold cap when none is supplied', () => {
+  it('uses the declared default idle threshold when none is supplied', () => {
     const enteredAt = new Date('2026-08-10T09:00:00.000Z');
     const state = enterSitting(enteredAt, ['a']);
     const justUnderDefault = decideRebuild(state, {
-      now: new Date(enteredAt.getTime() + DEFAULT_SESSION_HOLD_CAP_MS - 1),
+      now: new Date(enteredAt.getTime() + DEFAULT_SITTING_IDLE_THRESHOLD_MS - 1),
       trigger: noTrigger(),
+      staleness: { ...noStaleness(), materialArrivedInScope: true },
     });
     expect(justUnderDefault).toEqual({ action: 'hold' });
 
     const atDefault = decideRebuild(state, {
-      now: new Date(enteredAt.getTime() + DEFAULT_SESSION_HOLD_CAP_MS),
+      now: new Date(enteredAt.getTime() + DEFAULT_SITTING_IDLE_THRESHOLD_MS),
       trigger: noTrigger(),
+      staleness: { ...noStaleness(), materialArrivedInScope: true },
     });
-    expect(atDefault).toEqual({ action: 'hold-cap-exceeded' });
+    expect(atDefault).toEqual({ action: 'sitting-stale', reasons: ['material-arrived-in-scope'] });
+  });
+
+  it('a genuinely unchanged afternoon-old sitting resumes as-is: elapsed time alone, arbitrarily far past the idle threshold, never ends it absent a material change', () => {
+    const enteredAt = new Date('2026-08-10T09:00:00.000Z');
+    const state = enterSitting(enteredAt, ['a']);
+    const hoursLater = new Date(enteredAt.getTime() + 6 * 60 * 60_000);
+    const decision = decideRebuild(state, {
+      now: hoursLater,
+      trigger: noTrigger(),
+      staleness: noStaleness(),
+    });
+    expect(decision).toEqual({ action: 'hold' });
+  });
+
+  it('a plan-version tick with materially identical scope is not a trigger: the idle threshold alone never ends a sitting without a staleness reason', () => {
+    const enteredAt = new Date('2026-08-10T09:00:00.000Z');
+    const state = enterSitting(enteredAt, ['a']);
+    // Past the idle threshold, but the caller's own recompute produced no
+    // materially different answer for this sitting's scope — every
+    // staleness fact is false, exactly as a periodic version-counter tick
+    // with no real change would report.
+    const decision = decideRebuild(state, {
+      now: new Date(enteredAt.getTime() + DEFAULT_SITTING_IDLE_THRESHOLD_MS + 60_000),
+      trigger: noTrigger(),
+      staleness: noStaleness(),
+    });
+    expect(decision).toEqual({ action: 'hold' });
   });
 
   it('throws if now precedes the sitting entry — a caller clock bug, never a negative elapsed time', () => {
     const enteredAt = new Date('2026-08-10T09:00:00.000Z');
     const state = enterSitting(enteredAt, ['a']);
     expect(() =>
-      decideRebuild(state, { now: new Date(enteredAt.getTime() - 1), trigger: noTrigger() }),
+      decideRebuild(state, {
+        now: new Date(enteredAt.getTime() - 1),
+        trigger: noTrigger(),
+        staleness: noStaleness(),
+      }),
     ).toThrow(/precedes the sitting's own entry time/);
   });
 
@@ -160,12 +217,14 @@ describe('decideRebuild — the freeze contract', () => {
     const rebuilds = decideRebuild(idle, {
       now: new Date('2026-08-10T09:00:00.000Z'),
       trigger: { ...noTrigger(), materialLandedSinceLastRebuild: true },
+      staleness: noStaleness(),
     });
     expect(rebuilds).toEqual({ action: 'rebuild', reasons: ['material-landed'] });
 
     const holds = decideRebuild(idle, {
       now: new Date('2026-08-10T09:00:00.000Z'),
       trigger: noTrigger(),
+      staleness: noStaleness(),
     });
     expect(holds).toEqual({ action: 'no-rebuild' });
   });
@@ -174,8 +233,55 @@ describe('decideRebuild — the freeze contract', () => {
     const idle: SittingState<readonly string[]> = { status: 'idle' };
     // Advance "now" by a huge amount with nothing named having changed.
     const oneYearLater = new Date('2027-08-10T09:00:00.000Z');
-    const decision = decideRebuild(idle, { now: oneYearLater, trigger: noTrigger() });
+    const decision = decideRebuild(idle, {
+      now: oneYearLater,
+      trigger: noTrigger(),
+      staleness: noStaleness(),
+    });
     expect(decision).toEqual({ action: 'no-rebuild' });
+  });
+});
+
+describe('evaluateSittingStaleness', () => {
+  it('never stale when none of the three material-change facts hold', () => {
+    expect(evaluateSittingStaleness(noStaleness())).toEqual({ stale: false, reasons: [] });
+  });
+
+  it('fires on new items coming due in the sitting"s own scope', () => {
+    expect(evaluateSittingStaleness({ ...noStaleness(), itemsDueInScope: true })).toEqual({
+      stale: true,
+      reasons: ['items-due-in-scope'],
+    });
+  });
+
+  it('fires on new material arriving in scope', () => {
+    expect(evaluateSittingStaleness({ ...noStaleness(), materialArrivedInScope: true })).toEqual({
+      stale: true,
+      reasons: ['material-arrived-in-scope'],
+    });
+  });
+
+  it('fires on an assessment crossing a proximity band the composition cares about', () => {
+    expect(
+      evaluateSittingStaleness({
+        ...noStaleness(),
+        assessmentProximityBandCrossedInScope: true,
+      }),
+    ).toEqual({ stale: true, reasons: ['assessment-proximity-band-crossed-in-scope'] });
+  });
+
+  it('reports every material-change kind that fired, not just the first', () => {
+    const result = evaluateSittingStaleness({
+      itemsDueInScope: true,
+      materialArrivedInScope: true,
+      assessmentProximityBandCrossedInScope: true,
+    });
+    expect(result.stale).toBe(true);
+    expect(result.reasons).toEqual([
+      'items-due-in-scope',
+      'material-arrived-in-scope',
+      'assessment-proximity-band-crossed-in-scope',
+    ]);
   });
 });
 
@@ -184,16 +290,16 @@ describe('property: the item list at session exit equals the item list at sessio
     const enteredAt = new Date('2026-08-10T09:00:00.000Z');
     const originalItems = Object.freeze(['card-1', 'card-2', 'mcq-3', 'cloze-4']);
     let state: SittingState<readonly string[]> = enterSitting(enteredAt, originalItems);
-    const holdCapMs = 45 * 60_000;
+    const idleThresholdMs = 45 * 60_000;
 
     // A deterministic pseudo-random walk over trigger combinations and clock
-    // advances, all strictly inside the hold cap — the freeze must survive
-    // every one of them, and `state.items` must never be swapped for anything
-    // else while `status` stays 'active'. This module exposes no function
-    // that could replace `state.items` short of leaving and re-entering, so
-    // the property is really "no code path here ever calls enterSitting
-    // again on its own" — asserted by never doing so in this loop and
-    // checking identity held anyway.
+    // advances, all strictly inside the idle threshold — the freeze must
+    // survive every one of them, and `state.items` must never be swapped for
+    // anything else while `status` stays 'active'. This module exposes no
+    // function that could replace `state.items` short of leaving and
+    // re-entering, so the property is really "no code path here ever calls
+    // enterSitting again on its own" — asserted by never doing so in this
+    // loop and checking identity held anyway.
     let seed = 42;
     function nextPseudoRandom(): number {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
@@ -201,15 +307,20 @@ describe('property: the item list at session exit equals the item list at sessio
     }
 
     for (let step = 0; step < 200; step += 1) {
-      const elapsedMs = Math.floor(nextPseudoRandom() * (holdCapMs - 1));
+      const elapsedMs = Math.floor(nextPseudoRandom() * (idleThresholdMs - 1));
       const decision = decideRebuild(state, {
         now: new Date(enteredAt.getTime() + elapsedMs),
-        holdCapMs,
+        idleThresholdMs,
         trigger: {
           lastRebuiltDay: DAY_1,
           today: nextPseudoRandom() < 0.5 ? DAY_1 : DAY_2,
           materialLandedSinceLastRebuild: nextPseudoRandom() < 0.5,
           assessmentDatePassedSinceLastRebuild: nextPseudoRandom() < 0.5,
+        },
+        staleness: {
+          itemsDueInScope: nextPseudoRandom() < 0.5,
+          materialArrivedInScope: nextPseudoRandom() < 0.5,
+          assessmentProximityBandCrossedInScope: nextPseudoRandom() < 0.5,
         },
       });
       expect(decision).toEqual({ action: 'hold' });

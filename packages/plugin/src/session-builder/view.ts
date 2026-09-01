@@ -107,11 +107,15 @@ export type SessionBuilderState =
       readonly kind: 'model';
       readonly model: StudySessionModel;
       readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
+      /** `[D-162]`: set exactly when this session replaces one that just ended because its own composition went stale — `copy.ts`'s `sittingStaleReasonLine`, ready to render as-is. Absent on an ordinary build. */
+      readonly staleReasonLine?: string;
     }
   | {
       readonly kind: 'reentry';
       readonly view: ReentryStudySessionView;
       readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
+      /** See the `'model'` branch's own doc. */
+      readonly staleReasonLine?: string;
     }
   | { readonly kind: 'unavailable' };
 
@@ -238,6 +242,14 @@ export class SessionBuilderView extends ItemView {
       box.createDiv({ cls: 'olea-session-unavailable-title', text: SESSION_UNAVAILABLE_TITLE });
       box.createDiv({ cls: 'olea-session-unavailable-body', text: SESSION_UNAVAILABLE_BODY });
       return;
+    }
+
+    // `[D-162]`: when this build replaces one that just ended because its
+    // own composition went stale, say so before the ordinary copy — the
+    // same "cite by path, never quote" precedent every other line here
+    // follows, sourced entirely from `copy.ts`.
+    if (state.staleReasonLine !== undefined) {
+      root.createDiv({ cls: 'olea-session-stale-reason', text: state.staleReasonLine });
     }
 
     // Every sentence on this screen comes from `copy.ts` — `sessionScreenCopy`

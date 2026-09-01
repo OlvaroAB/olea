@@ -542,7 +542,7 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     expect(second).not.toBe(first);
   });
 
-  it('the hold cap: past an hour into the same sitting, an otherwise-identical request rebuilds rather than holding indefinitely — [D-162] is proposed, not ruled, so this is treated as ending the sitting, the lower-risk option, until it is', async () => {
+  it('[D-162]: a genuinely unchanged sitting resumes as-is even well past the idle threshold — elapsed time alone is not a trigger, and no staleness fact is reachable from this surface today', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
     const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
     const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
@@ -559,13 +559,15 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     const first = await provider.load({ budgetMinutes: 60 });
     const callsAfterFirst = calls();
 
-    // 61 minutes later, same request — still well within a plausible single
-    // open tab, but past `DEFAULT_SESSION_HOLD_CAP_MINUTES`.
+    // An hour later, same request — well past `DEFAULT_SITTING_IDLE_
+    // THRESHOLD_MINUTES`, but with none of the three material-change facts
+    // true (they are not reachable from this surface yet — see provider.ts's
+    // own module doc). The sitting holds rather than ending.
     now = new Date(NOW.getTime() + 61 * 60_000);
     const second = await provider.load({ budgetMinutes: 60 });
 
-    expect(calls()).toBeGreaterThan(callsAfterFirst);
-    expect(second).not.toBe(first);
+    expect(calls()).toBe(callsAfterFirst);
+    expect(second).toBe(first);
   });
 });
 

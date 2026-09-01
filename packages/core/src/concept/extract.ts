@@ -85,13 +85,16 @@
 import { buildOutline } from '../block/outline.js';
 import { parseDocument } from '../block/parse.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
-import { extractWikilinks, readList, wikilinkTarget } from '../frontmatter/read.js';
+import { extractWikilinks, readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
+import { OLEA_UID_KEY } from '../uid/stamp.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
 import { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractTier3Evidence } from './evidence.js';
+import type { ConceptKeyAnchor } from './key-store.js';
+import { resolveConceptKey } from './key-store.js';
 import { conceptRecordSize } from './size.js';
-import type { ConceptRecord, ExtractConceptsOptions } from './types.js';
+import type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './types.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER, noteTitle } from './zettelkasten.js';
 
 export { DEFAULT_COURSES_FOLDER, DEFAULT_ZETTELKASTEN_FOLDER };
@@ -311,14 +314,59 @@ export async function extractConcepts(
   // cheap to guard against regardless — would be read twice). `vault.read`
   // only, never a write: definition capture is extraction, and INV-2 holds
   // by construction because nothing here touches the vault source.
-  const definitionCache = new Map<VaultPath, Promise<string | undefined>>();
-  function definitionFor(path: VaultPath, title: string): Promise<string | undefined> {
-    let cached = definitionCache.get(path);
+  const noteContentCache = new Map<VaultPath, Promise<string>>();
+  function contentFor(path: VaultPath): Promise<string> {
+    let cached = noteContentCache.get(path);
     if (cached === undefined) {
-      cached = vault.read(path).then((content) => noteDefinition(content, title));
-      definitionCache.set(path, cached);
+      cached = vault.read(path);
+      noteContentCache.set(path, cached);
     }
     return cached;
+  }
+  function definitionFor(path: VaultPath, title: string): Promise<string | undefined> {
+    return contentFor(path).then((content) => noteDefinition(content, title));
+  }
+  // `[D-174]`, `ol-2zfj.42`: the same `olea-uid` frontmatter `../uid/stamp.ts` already stamps and
+  // `../session/instrument-id.ts` already reads as its identity root — used here, unchanged, as
+  // the bound-note anchor's `noteUid` (design doc §7, "a real, small widening of the seam").
+  // Never written here: this module only reads it.
+  function noteUidFor(path: VaultPath): Promise<string | null> {
+    return contentFor(path).then((content) => {
+      const doc = parseDocument(content);
+      const first = doc.blocks[0];
+      if (first?.kind !== 'frontmatter') return null;
+      const fm = parseFrontmatter(first.inner);
+      const uid = readScalar(fm, OLEA_UID_KEY).scalar;
+      return uid === '' ? null : uid;
+    });
+  }
+
+  /**
+   * `[D-174]` read-back (design doc §7): look up an existing `ConceptKeyRecord` by this
+   * candidate's anchor before minting anything, so a re-extraction resolves to the key already
+   * on file rather than deriving a fresh one. `courses` picks the first (sorted) course as the
+   * topic anchor's single `course` field — a concept may belong to several (M:N, see
+   * `ConceptRecord.courses`'s doc), and the anchor is a lookup signal, not identity, so this is a
+   * deliberate simplification rather than a claim that only one course applies.
+   *
+   * Gated on `options.stampConceptKeys` (see `ExtractConceptsOptions`'s doc) — off by default so
+   * a call against a shared, tracked fixture vault never writes into it; falls back to the
+   * pre-`[D-174]` `provisionalConceptKey` derivation when off.
+   */
+  async function keyFor(
+    tier: ConceptTier,
+    name: string,
+    boundNotePath: VaultPath | undefined,
+    courses: readonly string[],
+  ): Promise<string> {
+    if (options.stampConceptKeys !== true) {
+      return provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null });
+    }
+    const anchor: ConceptKeyAnchor =
+      boundNotePath !== undefined
+        ? { kind: 'note', noteUid: await noteUidFor(boundNotePath), notePath: boundNotePath }
+        : { kind: 'topic', course: [...courses].sort()[0] ?? '', name, aliases: [] };
+    return resolveConceptKey(vault, tier, anchor);
   }
 
   const records: ConceptRecord[] = await Promise.all(
@@ -326,10 +374,12 @@ export async function extractConcepts(
       const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
       const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
       const sourcePaths = [...acc.sourcePaths].sort();
+      const tier: ConceptTier = bound !== undefined ? 1 : 2;
+      const key = await keyFor(tier, name, bound, [...acc.courses]);
       const record: ConceptRecord = {
-        key: provisionalConceptKey({ name, boundNotePath: bound ?? null }),
+        key,
         name,
-        tier: bound !== undefined ? 1 : 2,
+        tier,
         courses: [...acc.courses].sort(),
         sourcePaths,
         ...(bound !== undefined ? { boundNotePath: bound } : {}),
@@ -392,8 +442,9 @@ export async function extractConcepts(
       // wrote, matched by exact title, so its definition is captured the
       // same way (`[DF-13]`) even though nothing tagged it as a `topic`.
       const definition = await definitionFor(boundNotePath, name);
+      const key = await keyFor(3, name, boundNotePath, [...courses]);
       records.push({
-        key: provisionalConceptKey({ name, boundNotePath }),
+        key,
         name,
         tier: 3,
         courses: [...courses].sort(),

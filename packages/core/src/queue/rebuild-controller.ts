@@ -23,15 +23,18 @@
  *   wasted work (counted, never silently passed); a sitting whose
  *   composition changes mid-session is a bug.
  *
- * What the ruling and the register leave open (recorded, not resolved, by
- * this module — see the two constants' own docs and `RBLD-1`'s notes):
- * the hold-cap **value**, and what happens once it is reached (end the
- * sitting, or recompose the tail — `[D-076]` names neither, and the
- * bead's own "UNDECIDED" section says so explicitly). This module's answer
- * to the second question is to surface `'hold-cap-exceeded'` as its own
- * decision and stop there — a genuine open product question, filed
- * separately rather than guessed at in code (see `ol-o7hr`'s notes for the
- * filed decision bead).
+ * `[D-076]` left the hold-cap **value** and what happens once a sitting goes
+ * stale genuinely open (the bead's own "UNDECIDED" section said so
+ * explicitly). Both are now ruled by `[D-162]` (`ol-cidn`), replacing this
+ * module's original fixed-duration hold cap: staleness is a **material
+ * change to the sitting's own composition** — never elapsed time — gated by
+ * one declared minutes-scale idle threshold that decides only *when*
+ * staleness is evaluated, never *whether* it is stale. When the condition
+ * fires, this module surfaces `'sitting-stale'` and the caller **ends the
+ * sitting** (completed reviews keep their outcomes; the remainder competes
+ * again in a fresh composition — recomposing the tail in place is ruled
+ * out). See {@link SittingStalenessReason}, {@link evaluateSittingStaleness}
+ * and {@link DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES}'s own docs.
  *
  * ## Why this is a controller and not a composer
  *
@@ -40,8 +43,8 @@
  * own doc: "reads no clock, opens no file and holds no state between
  * sessions." This module is the deliberate exception the register calls for:
  * component 3.6 sits *above* that chain as "a controller over purely local
- * events... carrying no policy beyond the hold cap it is handed," and a
- * controller's whole job is remembering what happened last time.
+ * events... carrying no policy beyond the idle threshold it is handed," and
+ * a controller's whole job is remembering what happened last time.
  *
  * It is still pure in the sense every other module here is pure: no clock
  * read internally (`now` is always the caller's), no I/O, no import of
@@ -62,7 +65,7 @@
  * whether material has *finished* landing, already debounced — so adding a
  * second debounce here would be re-litigating a ratified number rather than
  * declaring a new one. There is exactly one number in this module:
- * {@link DEFAULT_SESSION_HOLD_CAP_MINUTES}.
+ * {@link DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES}.
  *
  * ## No production caller yet (`[D-072]` clause 5)
  *
@@ -128,45 +131,93 @@ export function exitSitting<T>(): SittingState<T> {
 }
 
 // ---------------------------------------------------------------------------
-// The hold cap: holding stops being stability somewhere past an hour.
+// Sitting staleness: an event about the material, never a clock.
+// [D-162] (`ol-cidn`) replaces the interim fixed-duration hold cap with
+// this — C5.8's "One limit on holding still, and it is an event, never a
+// clock."
 // ---------------------------------------------------------------------------
 
 /**
- * DECLARED (never fitted) — `RBLD-1`'s own default, shipped per David's
- * 2026-08-23 ruling (option 3 of the offered set, `ol-o7hr`'s notes): the
- * implementing lane ships a defensible declared default and flags it for
- * retroactive review, no value pre-ruled.
- *
- * **Plain-English defence.** The bead's own framing supplies it verbatim:
- * holding steady "stops being stability somewhere past an hour." An hour is
- * also long enough that almost every real sitting — including F4.6's longest
- * ordinary budget and F6.6's re-entry sessions, both well under it — finishes
- * inside the freeze, so the cap is very rarely the reason a sitting ends; it
- * exists for the case she opens a session, gets interrupted for the
- * afternoon, and comes back to a "sitting" that is no longer meaningfully one.
- *
- * **Why this is a single constant, not scaled by session length**, per
- * David's own question ("evaluate whether the cap should vary with session
- * length"): a scaling formula needs a length signal, and only one of this
- * component's two consumers has one — `study-session/build.ts`'s
- * `budgetMinutes` (F4.6). `queue/compose.ts`'s review queue has no budget at
- * all; F2.5-F2.19 describe a due-instrument list she drains until she stops,
- * not a timed session. A formula keyed on `budgetMinutes` would have nothing
- * to read for the other consumer, and the register's own words — "carrying
- * no policy beyond the hold cap it is handed" — say this controller does not
- * own deriving the cap in the first place. So {@link decideRebuild} takes
- * `holdCapMs` as a plain parameter rather than computing one, and this
- * constant is only the default a caller reaches for absent a better one. A
- * caller with `study-session/build.ts`'s `budgetMinutes` in hand and a
- * reason to scale from it remains free to compute its own `holdCapMs` and
- * pass that instead — this module neither prevents nor requires it.
+ * Every material-change kind C5.8 (as amended by `[D-162]`) names as capable
+ * of expiring a frozen sitting, scoped to **that sitting's own composition**
+ * — never a fact about the world in general. A rebuild decision carrying one
+ * or more of these must be able to truthfully finish the sentence "your list
+ * changed because..."; a duration never could, which is the whole reason the
+ * fixed hold cap this replaces is gone.
  */
-export const DEFAULT_SESSION_HOLD_CAP_MINUTES = 60;
+export type SittingStalenessReason =
+  | 'items-due-in-scope'
+  | 'material-arrived-in-scope'
+  | 'assessment-proximity-band-crossed-in-scope';
+
+/**
+ * The three material-change facts {@link evaluateSittingStaleness} consults,
+ * every one scoped to the frozen sitting's own composition (its courses, its
+ * concepts) rather than to the vault at large — a change outside that scope
+ * is not a change to the promise this sitting made her. There is deliberately
+ * no elapsed-duration field here for the same reason {@link RebuildTriggerInput}
+ * has none: `[D-162]` rules a plan-version tick that produced no materially
+ * different answer for this sitting's scope is not a trigger either, so a
+ * caller must resolve "did this recompute actually change my scope" before
+ * setting these fields, not hand this function a version counter to guess
+ * from.
+ */
+export interface SittingStalenessInput {
+  /** New items came due in one of the sitting's own courses since it was entered. */
+  readonly itemsDueInScope: boolean;
+  /** New material arrived in the sitting's own scope since it was entered. */
+  readonly materialArrivedInScope: boolean;
+  /** An assessment the sitting's composition cares about crossed a proximity band since it was entered. */
+  readonly assessmentProximityBandCrossedInScope: boolean;
+}
+
+/** {@link evaluateSittingStaleness}'s result. `reasons` is empty exactly when `stale` is `false`. */
+export interface SittingStalenessResult {
+  readonly stale: boolean;
+  /** Every material-change kind that fired, in the fixed order {@link SittingStalenessReason} declares them — enough to finish "your list changed because...". */
+  readonly reasons: readonly SittingStalenessReason[];
+}
+
+/**
+ * Whether a frozen sitting's own composition has materially changed. Pure
+ * and total — no clock read here at all; that is {@link decideRebuild}'s
+ * idle-threshold gate, which decides only *when* this function may be
+ * consulted, never folds into *what* it answers.
+ */
+export function evaluateSittingStaleness(input: SittingStalenessInput): SittingStalenessResult {
+  const reasons: SittingStalenessReason[] = [];
+  if (input.itemsDueInScope) reasons.push('items-due-in-scope');
+  if (input.materialArrivedInScope) reasons.push('material-arrived-in-scope');
+  if (input.assessmentProximityBandCrossedInScope)
+    reasons.push('assessment-proximity-band-crossed-in-scope');
+  return { stale: reasons.length > 0, reasons };
+}
+
+/**
+ * DECLARED (never fitted) — the residual clock `[D-162]` admits rather than
+ * smuggles. It gates **when** a frozen sitting's staleness may be evaluated
+ * (at her next interaction, or the tool's own periodic recompute, once this
+ * much time has passed since she last touched the sitting) and **never
+ * whether** it is stale — {@link evaluateSittingStaleness}'s material-change
+ * condition does all of that work.
+ *
+ * **Plain-English defence** (the ruling's own words, `ol-cidn`'s close
+ * reason): "long enough that coming back is a return, not a continuation."
+ * Fifteen minutes is short enough to still be "she paused to think" — a
+ * pause well inside any ordinary read-then-answer rhythm this product asks
+ * of her — and long enough that resuming past it reads as coming back to the
+ * sitting rather than continuing an unbroken train of thought. It needs no
+ * fitting and no corpus: any value a reasonable person would call "she
+ * stepped away" satisfies the ruling, because the material-change condition
+ * — not this number — is what actually decides staleness.
+ */
+export const DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES = 15;
 
 const MS_PER_MINUTE = 60_000;
 
-/** {@link DEFAULT_SESSION_HOLD_CAP_MINUTES} in milliseconds, since every clock comparison here works in `Date` instants. */
-export const DEFAULT_SESSION_HOLD_CAP_MS = DEFAULT_SESSION_HOLD_CAP_MINUTES * MS_PER_MINUTE;
+/** {@link DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES} in milliseconds, since every clock comparison here works in `Date` instants. */
+export const DEFAULT_SITTING_IDLE_THRESHOLD_MS =
+  DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES * MS_PER_MINUTE;
 
 // ---------------------------------------------------------------------------
 // Between sittings: named triggers, never a timer.
@@ -257,7 +308,7 @@ export function assessmentDatePassedSince(
 }
 
 // ---------------------------------------------------------------------------
-// The one decision: hold, rebuild, or flag the cap.
+// The one decision: hold, rebuild, or end the stale sitting.
 // ---------------------------------------------------------------------------
 
 /**
@@ -270,13 +321,16 @@ export type RebuildDecision =
   | { readonly action: 'hold' }
   | {
       /**
-       * The sitting has run at least {@link DecideRebuildInput.holdCapMs}
-       * since it was entered. **What happens next is not this module's to
-       * decide** — see the module doc's "what is already ruled" section and
-       * `ol-o7hr`'s filed follow-up decision. The caller must not read this
-       * as "rebuild happened"; it is a flag, not an action.
+       * The frozen sitting's own composition has materially changed
+       * (`[D-162]`) — `reasons` names which of {@link SittingStalenessReason}
+       * fired, enough for a caller to truthfully finish "your list changed
+       * because...". **The sitting ENDS on this decision** — completed
+       * reviews keep their outcomes, the caller must not recompose the
+       * unreviewed remainder in place (recompose-the-tail is ruled out); the
+       * ordinary "build a fresh sitting" path takes over instead.
        */
-      readonly action: 'hold-cap-exceeded';
+      readonly action: 'sitting-stale';
+      readonly reasons: readonly SittingStalenessReason[];
     }
   | { readonly action: 'rebuild'; readonly reasons: readonly RebuildTriggerReason[] }
   | { readonly action: 'no-rebuild' };
@@ -284,23 +338,37 @@ export type RebuildDecision =
 export interface DecideRebuildInput {
   /** The caller's own clock reading — never read internally (INV-1/§7.1 discipline: no clock inside `packages/core`). */
   readonly now: Date;
-  /** How long a sitting may hold before {@link RebuildDecision}'s `'hold-cap-exceeded'` fires. Defaults to {@link DEFAULT_SESSION_HOLD_CAP_MS} — see that constant's doc for why this is a parameter rather than a computed value. */
-  readonly holdCapMs?: number;
-  /** Consulted only when `state.status === 'idle'` — an active sitting never evaluates triggers, by the freeze contract. */
+  /**
+   * How long a sitting may sit idle before its own composition is even
+   * checked for staleness. Defaults to
+   * {@link DEFAULT_SITTING_IDLE_THRESHOLD_MS} — see that constant's doc.
+   * Gates **when** {@link evaluateSittingStaleness} runs, never **whether**
+   * its answer is stale.
+   */
+  readonly idleThresholdMs?: number;
+  /** Consulted only when `state.status === 'idle'` — an active sitting never evaluates the between-sittings trigger set, by the freeze contract. */
   readonly trigger: RebuildTriggerInput;
+  /**
+   * Consulted only when `state.status === 'active'` AND `now` has run past
+   * `idleThresholdMs` since `state.enteredAt` — the freeze holds
+   * unconditionally before that, regardless of what this carries.
+   */
+  readonly staleness: SittingStalenessInput;
 }
 
 /**
  * The whole controller. `state.status === 'active'` holds steady
- * unconditionally — the freeze contract — until `now` has run past the hold
- * cap since `state.enteredAt`, at which point it reports
- * `'hold-cap-exceeded'` rather than silently continuing to hold or silently
- * rebuilding. `state.status === 'idle'` evaluates the three named triggers
- * via {@link evaluateRebuildTrigger} and nothing else.
+ * unconditionally — the freeze contract — until `now` has run past the idle
+ * threshold since `state.enteredAt`, at which point (and only then) it
+ * checks whether the sitting's own composition has materially changed via
+ * {@link evaluateSittingStaleness}; a genuinely unchanged sitting keeps
+ * holding regardless of how long it has sat idle. `state.status === 'idle'`
+ * evaluates the three named between-sittings triggers via
+ * {@link evaluateRebuildTrigger} and nothing else.
  *
  * Throws if `now` precedes `state.enteredAt` — a caller's clock going
  * backwards is a bug this function should not paper over by reporting a
- * negative elapsed time as "not yet exceeded."
+ * negative elapsed time as "not yet idle."
  */
 export function decideRebuild<T>(
   state: SittingState<T>,
@@ -313,8 +381,12 @@ export function decideRebuild<T>(
         `decideRebuild: now (${input.now.toISOString()}) precedes the sitting's own entry time (${state.enteredAt.toISOString()})`,
       );
     }
-    const holdCapMs = input.holdCapMs ?? DEFAULT_SESSION_HOLD_CAP_MS;
-    return elapsedMs >= holdCapMs ? { action: 'hold-cap-exceeded' } : { action: 'hold' };
+    const idleThresholdMs = input.idleThresholdMs ?? DEFAULT_SITTING_IDLE_THRESHOLD_MS;
+    if (elapsedMs < idleThresholdMs) return { action: 'hold' };
+    const staleness = evaluateSittingStaleness(input.staleness);
+    return staleness.stale
+      ? { action: 'sitting-stale', reasons: staleness.reasons }
+      : { action: 'hold' };
   }
   const result = evaluateRebuildTrigger(input.trigger);
   return result.shouldRebuild

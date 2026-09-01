@@ -42,6 +42,7 @@ import {
   sessionItemLine,
   sessionScreenCopy,
   sessionSummaryLine,
+  sittingStaleReasonLine,
 } from '../../src/session-builder/copy.js';
 
 // --------------------------------------------------------------------------
@@ -130,6 +131,20 @@ function everyProducibleString(): readonly string[] {
   // STEER-2 (`ol-ijms`): the not-found line's one derived sentence.
   const notFound = courseOrTopicNotFoundLine({ kind: 'course', label: 'CRS101' }, []);
   if (notFound !== null) strings.push(notFound);
+
+  // `[D-162]`: one derived sentence per material-change reason, and one
+  // combining all three, so the audit sees every clause
+  // `sittingStaleReasonLine` can produce.
+  strings.push(sittingStaleReasonLine(['items-due-in-scope']));
+  strings.push(sittingStaleReasonLine(['material-arrived-in-scope']));
+  strings.push(sittingStaleReasonLine(['assessment-proximity-band-crossed-in-scope']));
+  strings.push(
+    sittingStaleReasonLine([
+      'items-due-in-scope',
+      'material-arrived-in-scope',
+      'assessment-proximity-band-crossed-in-scope',
+    ]),
+  );
 
   const models: StudySessionModel[] = [
     model(),

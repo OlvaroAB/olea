@@ -56,10 +56,13 @@ import {
   calendarDaysEndingOn,
   composeOracleRanking,
   extractConcepts,
+  readAssessments,
   readReviewLogHistory,
+  resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import {
   isStudyPlanConfigured,
   type ObsidianDataHost,
@@ -83,6 +86,18 @@ export interface CreateLocalStudyPlanProviderDeps {
    * doc above.
    */
   readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  /**
+   * `[D-167]` / `ol-v7r5.25`: reads component 3.5's allocation policy from
+   * `POST /v1/plan-policy`, behind `plan-policy-wiring.ts`'s fingerprint
+   * gate — an unchanged fingerprint reuses the cached result rather than
+   * calling out. Absent, or resolving `undefined` (unconfigured, offline, a
+   * failed call with nothing cached yet — `buildPlanPolicyWiring`'s own
+   * doc), means this refresh's plan carries no `allocation` field at all,
+   * exactly the same "no policy travelled" reading
+   * `StudyPlanBody.allocation`'s own doc states — never a caller-invented
+   * zero.
+   */
+  readonly readPlanPolicy?: (request: PlanPolicyRequest) => Promise<PlanPolicyResult | undefined>;
 }
 
 /**
@@ -121,10 +136,20 @@ export function createLocalStudyPlanProvider(
       // one reads her material, the other is a network call to the Worker
       // (or a same-tick `undefined` when `readRankWeights` is absent) — so
       // all three run concurrently, same discipline as the two walks below.
-      const [{ entries }, concepts, options] = await Promise.all([
+      // `readAssessments` here is a SECOND read of the same Base file
+      // `composeOracleRanking` reads internally — accepted duplication
+      // rather than widening that function's already-external result shape
+      // (`ComposeOracleRankingResult` is `oracle/compose.ts`, outside this
+      // bead's granted `owns`): both reads are the same read-only vault
+      // walk, and this is the only raw source component 3.5's
+      // `assessmentWorth`/`daysToNextAssessment` inputs can be resolved
+      // from without duplicating 3.3's own half-life/divisor (see
+      // `resolvePlanPolicyCourseInputs`'s module doc, `olea-core`).
+      const [{ entries }, concepts, options, assessmentReport] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
         extractConcepts(deps.vault, {}),
         deps.readRankWeights?.() ?? Promise.resolve(undefined),
+        readAssessments(deps.vault, config.assignmentsBasePath),
       ]);
 
       const { ranking } = await composeOracleRanking({
@@ -136,7 +161,30 @@ export function createLocalStudyPlanProvider(
         ...(options !== undefined ? { options } : {}),
       });
 
-      return buildStudyPlan({ ranking, computedAt: now.toISOString() });
+      // `[D-167]` / `ol-v7r5.25`: resolve component 3.5's per-course inputs
+      // from what this device already has, ask for the allocation policy
+      // behind the fingerprint gate, and land whatever comes back (or
+      // nothing) onto the plan. `deps.readPlanPolicy` absent, or resolving
+      // `undefined`, means `allocation` stays unset below — F7.8's
+      // degrade-not-half-work posture, same as `readRankWeights` above: a
+      // plan with no allocation is byte-identical to today's plan before
+      // this bead, never a plan with every course silently zeroed.
+      const courses = resolvePlanPolicyCourseInputs(today, ranking, assessmentReport.records);
+      const policy =
+        courses.length === 0 ? undefined : await deps.readPlanPolicy?.({ asOf: today, courses });
+
+      return buildStudyPlan({
+        ranking,
+        computedAt: now.toISOString(),
+        ...(policy !== undefined
+          ? {
+              allocation: policy.allocation.map((entry) => ({
+                ...entry,
+                contributions: [...entry.contributions],
+              })),
+            }
+          : {}),
+      });
     },
   };
 }

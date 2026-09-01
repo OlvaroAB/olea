@@ -255,6 +255,36 @@ describe('buildStudyPlan', () => {
     });
   });
 
+  describe('allocation (ol-v7r5.25)', () => {
+    it('lands the allocation entries verbatim onto body.allocation when supplied', async () => {
+      const allocation = [
+        {
+          courseId: 'COURSE-A',
+          share: 0.6,
+          minBlockSeconds: 180,
+          contributions: [{ name: 'risk', value: 0.5 }],
+          reason: 'COURSE-A has an assessment in nine days.',
+        },
+      ];
+      const plan = await buildStudyPlan({
+        ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        computedAt: COMPUTED_AT,
+        allocation,
+      });
+
+      expect(plan.body.allocation).toEqual(allocation);
+    });
+
+    it('omits body.allocation entirely when none is supplied — absence, never an empty policy', async () => {
+      const plan = await buildStudyPlan({
+        ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        computedAt: COMPUTED_AT,
+      });
+
+      expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
+    });
+  });
+
   describe('examProximityDays', () => {
     it('is the nearest still-future assessment, not the strongest-contributing one', async () => {
       const plan = await buildStudyPlan({
