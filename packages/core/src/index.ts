@@ -1629,7 +1629,13 @@ export type {
   RhythmStatus,
   TermWindow,
 } from './today/rhythm.js';
-export { detectRhythm, QUIET_DAYS_THRESHOLD, resolveTermBoundary } from './today/rhythm.js';
+export {
+  DECLARED_FLAT_TEMPO_WEIGHT,
+  detectRhythm,
+  MIN_TEMPO_WEIGHT_FOR_THRESHOLD_DIVISOR,
+  QUIET_DAYS_THRESHOLD,
+  resolveTermBoundary,
+} from './today/rhythm.js';
 export type { ComputeStreakOptions, StreakDay, StreakSummary } from './today/streak.js';
 export { computeStreak, DEFAULT_WEEK_LENGTH, studyDays } from './today/streak.js';
 // F5.1 voice input: audio -> transcript -> the SAME `GradeExplainBackInput`

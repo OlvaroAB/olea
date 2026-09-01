@@ -9,38 +9,57 @@
  * end (asked once, her own recorded dates outranking the ask); **tempo** —
  * credit weight and expected weekly hours — as "an internal yardstick, never
  * a displayed figure"; and a per-course last-material-arrival timestamp.
- * Only the third of these has anywhere to come from today — there is no
+ * Two of the three still have nowhere real to come from: there is no
  * extraction stage anywhere in this codebase that reads a term start date, a
- * term end date, a credit weight or an expected-weekly-hours figure, and no
- * settings surface that asks for the first two. Building those is real work
- * belonging to the extraction and settings lanes, not to this one.
+ * term end date or a credit-weight/expected-weekly-hours figure, and no
+ * settings surface asks for the term dates either (that remains
+ * `ol-0r92.6`'s scope). Building those is real work belonging to the
+ * extraction and settings lanes, not to this one.
  *
- * More importantly, **the clause never states the arithmetic that turns
- * tempo into a yardstick.** "The expectation comes from tempo" says what
- * feeds the calculation, not what the calculation is, and this register row
- * itself leaves the one constant it names ("how quiet is quiet enough to
- * mention") explicitly open: *"Declared if chosen in English; derived if
- * ever fitted. Decide that when it is chosen."* Inventing a formula that
- * folds credit weight and expected weekly hours into a day-count would be
- * fitting one on the spot, with no corpus and no ruling behind it — exactly
- * what N-015 exists to forbid. So this build implements only the form the
- * clause spells out **completely**, in its own worked example: *"nothing
- * from this course has arrived in three weeks"* — a flat, declared quiet
- * threshold, with no term-relative or tempo-relative adjustment. This is not
- * a corner cut; it is the reading F6.9 explicitly provides for: *"Absent
- * term dates degrade the reading to what is arriving, without a yardstick;
- * they never block it."* Every real course in the reference vault has no
- * term dates at all, so the degraded form is not a fallback path here — it
- * is the only path that will ever fire against real material.
+ * **Tempo's SOURCE is no longer one of the absent two.** `[D-155]`
+ * (`ol-egov.55`, ruled 2026-08-31) closed the question of where a tempo
+ * value comes from during v0.9: a flat declared default, in place of an
+ * ask-once field or a document-extraction claim the reference vault does not
+ * support — the same posture the sibling allocation module already
+ * implements (`src/plan/allocation.ts`'s `DECLARED_FLAT_TEMPO_WEIGHT`, in
+ * the service repo; no import path crosses the two repos, so the value and
+ * its defence are restated here, not shared). `ol-v7r5.8` wires that same
+ * input into this module below — `DECLARED_FLAT_TEMPO_WEIGHT` and
+ * `RhythmCourseInput.tempoWeight` — as a per-course scale on
+ * `QUIET_DAYS_THRESHOLD`, with no new student-visible surface and no clause
+ * change (`[D-155]` rules both out).
+ *
+ * **This is deliberately NOT the clause's full term-relative yardstick.**
+ * The clause never states the arithmetic that turns *term dates and tempo
+ * together* into a displayed expectation, and that gap has not closed:
+ * inventing a formula that folds credit weight, expected weekly hours *and*
+ * a term window into a day-count would still be fitting one on the spot,
+ * with no corpus and no ruling behind it — exactly what N-015 forbids, and
+ * term dates still have no source to feed it. What changed is narrower: with
+ * a source now ruled for tempo alone, this module scales its own existing
+ * flat threshold by that one input, in isolation, using the same
+ * plain-English, declared-not-fitted posture the rest of this module's
+ * constants use. At `DECLARED_FLAT_TEMPO_WEIGHT` (every course, until a real
+ * per-course value exists), the scale is a no-op and every course's
+ * threshold is still exactly `QUIET_DAYS_THRESHOLD` — this build changes
+ * nothing observable for the vault as it exists today; the seam exists so a
+ * later per-course tempo value takes effect without a second wiring pass.
+ * This build still implements only the flat-threshold form of the clause's
+ * worked example — *"nothing from this course has arrived in three
+ * weeks"* — never a term-relative or fitted tempo-relative one. Every real
+ * course in the reference vault has no term dates at all, so the degraded
+ * form is not a fallback path here — it is the only path that will ever
+ * fire against real material.
  *
  * `resolveTermBoundary` and `TermWindow` exist so a term window can be
  * threaded through once one is ever asked for, and so the two scenarios
  * `features/F6-today.md` already commits to under this file's name
  * (`core/today/rhythm.spec`) are answerable now: recorded dates outrank the
  * ask, and an unresolved window never blocks the reading. Neither currently
- * changes `detectRhythm`'s verdict — that wiring is exactly the tempo
- * formula this doc declines to invent, and is future work for whoever picks
- * up the term-relative yardstick.
+ * changes `detectRhythm`'s verdict — that wiring is still future work for
+ * whoever picks up the term-relative yardstick, unaffected by the tempo
+ * wiring above (a term window and a tempo weight are two different inputs;
+ * only the second has a source today).
  *
  * ## The three-way status, same discipline as F6.5
  *
@@ -76,6 +95,48 @@ import { type CalendarDay, isCalendarDay } from './calendar-day.js';
  * this affects only which day a reading crosses over on.
  */
 export const QUIET_DAYS_THRESHOLD = 21;
+
+/**
+ * DECLARED, per `[D-155]` (`ol-egov.55`, ruled 2026-08-31). Every course gets
+ * the same tempo weight until a real per-course value exists — option (c) of
+ * that decision's three surveyed candidates, adopted because it needs no new
+ * ask-once surface and no unsupported document-extraction claim (round 34
+ * found tempo readable in only 1 of 21 course-document PDFs against the
+ * reference vault). Restated from `src/plan/allocation.ts`'s constant of the
+ * same name in the service repo — no import path crosses the two repos, so
+ * the value and its provenance travel by comment, not by code.
+ *
+ * At this flat default, `effectiveQuietDaysThreshold` below returns
+ * `QUIET_DAYS_THRESHOLD` unchanged for every course — the tempo input does
+ * not yet discriminate between courses, the same accepted consequence
+ * `DECLARED_FLAT_TEMPO_WEIGHT`'s allocation.ts twin states for its own
+ * formula. **Revisit only if the still-open tempo-to-yardstick arithmetic
+ * design shows per-course tempo variance is load-bearing** — `[D-155]`'s own
+ * revisit condition — or a real per-course tempo value becomes available
+ * (`RhythmCourseInput.tempoWeight` overrides this default per course when
+ * supplied).
+ *
+ * @provenance declared — `[D-155]` (ruled 2026-08-31): a flat tempo default,
+ * option (c) of three surveyed candidates, adopted because no defensible
+ * extraction or ask-once source exists yet. Not fitted against a corpus,
+ * vault snapshot or simulation.
+ */
+export const DECLARED_FLAT_TEMPO_WEIGHT = 1;
+
+/**
+ * DECLARED. Floor under a supplied `tempoWeight` before it is used as a
+ * threshold divisor, so a caller passing zero (or a negative value, which is
+ * a bug upstream rather than a real signal) cannot produce an infinite or
+ * negative quiet threshold. Same defensive posture as
+ * `MIN_DAYS_FOR_PROXIMITY_DIVISOR` in `src/plan/allocation.ts` (service
+ * repo): a guard against a malformed input, not a claim about a realistic
+ * tempo value. A tenth of the flat default is comfortably below any tempo
+ * weight this module expects to see supplied.
+ *
+ * @provenance declared — a defensive divisor floor, argued in plain English
+ * above; not fitted against a corpus, vault snapshot or simulation.
+ */
+export const MIN_TEMPO_WEIGHT_FOR_THRESHOLD_DIVISOR = 0.1;
 
 export type RhythmStatus = 'observed' | 'not-observed' | 'not-enough-history';
 
@@ -114,6 +175,17 @@ export interface RhythmCourseInput {
    * measure the gap from.
    */
   readonly lastMaterialArrivalDay: CalendarDay | null;
+  /**
+   * Credit weight / expected-weekly-hours tempo signal, normalised so the
+   * course-average is 1 — the same normalisation
+   * `CourseAllocationInput.tempoWeight` documents in `src/plan/
+   * allocation.ts` (service repo). Defaults to `DECLARED_FLAT_TEMPO_WEIGHT`
+   * when omitted; see that constant's doc. Scales this course's own quiet
+   * threshold (`effectiveQuietDaysThreshold`) — does not change any other
+   * arithmetic in this module, and does not itself constitute the clause's
+   * term-relative yardstick (see the module doc).
+   */
+  readonly tempoWeight?: number;
 }
 
 export interface RhythmCourseReading {
@@ -121,6 +193,15 @@ export interface RhythmCourseReading {
   readonly status: RhythmStatus;
   /** Days between the last observed arrival and `today`. `null` only when `status` is `not-enough-history`. */
   readonly quietDays: number | null;
+  /**
+   * This course's own quiet threshold, in days — `QUIET_DAYS_THRESHOLD`
+   * scaled by its `tempoWeight` (`effectiveQuietDaysThreshold`). Equal to
+   * `QUIET_DAYS_THRESHOLD` whenever `tempoWeight` was omitted or equals
+   * `DECLARED_FLAT_TEMPO_WEIGHT`. Always populated, even for
+   * `not-enough-history`, since it is a property of the course's input, not
+   * of whether a gap could be measured.
+   */
+  readonly quietDaysThreshold: number;
   /** Short, content-free — for tests and a workbench inspector. Never rendered to her, never logged. */
   readonly reason: string;
 }
@@ -128,8 +209,12 @@ export interface RhythmCourseReading {
 export interface RhythmMeasured {
   readonly courses: readonly RhythmCourseReading[];
   /**
-   * The course whose quiet gap reached `QUIET_DAYS_THRESHOLD` by the widest
-   * margin, or `null` when none did. Named explicitly per the course-naming
+   * The course whose quiet gap reached ITS OWN quiet threshold
+   * (`RhythmCourseReading.quietDaysThreshold`) by the widest margin, or
+   * `null` when none did. Compared by margin, not by raw `quietDays`, so a
+   * course with a longer (lighter-tempo) threshold cannot out-rank a course
+   * that crossed its own, shorter bar by more — see
+   * `effectiveQuietDaysThreshold`. Named explicitly per the course-naming
    * rule (`../insights/index.js`, ARC-1): this reading's truth is about ONE
    * course's arrivals, never an aggregate across her running courses, so a
    * caller has no way to reach a quiet finding without also holding the
@@ -141,8 +226,9 @@ export interface RhythmMeasured {
   /**
    * Whether a resolved term window was supplied when this was computed.
    * Carried for a caller's own bookkeeping only — see this module's doc: it
-   * does not currently change the verdict, because no tempo-relative
-   * yardstick is built yet.
+   * does not currently change the verdict, because no term-relative
+   * yardstick is built yet (term dates still have no source; unaffected by
+   * tempo's own wiring below).
    */
   readonly hadTermWindow: boolean;
 }
@@ -168,13 +254,32 @@ function daysBetween(from: CalendarDay, to: CalendarDay): number {
   );
 }
 
+/**
+ * This course's quiet threshold, scaled by its tempo weight: a course
+ * expected to produce material twice as often as the flat default (tempo
+ * weight 2) reaches the same absolute silence at half the wait; a course
+ * expected half as often (tempo weight 0.5) gets twice as long before the
+ * same silence counts as quiet. At `DECLARED_FLAT_TEMPO_WEIGHT` — every
+ * course, until a real per-course value exists — this returns
+ * `QUIET_DAYS_THRESHOLD` unchanged; see that constant's doc for why the flat
+ * default does not yet discriminate between courses.
+ */
+function effectiveQuietDaysThreshold(tempoWeight: number): number {
+  const divisor = Math.max(tempoWeight, MIN_TEMPO_WEIGHT_FOR_THRESHOLD_DIVISOR);
+  return QUIET_DAYS_THRESHOLD / divisor;
+}
+
 function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourseReading {
   const { lastMaterialArrivalDay } = course;
+  const tempoWeight = course.tempoWeight ?? DECLARED_FLAT_TEMPO_WEIGHT;
+  const quietDaysThreshold = effectiveQuietDaysThreshold(tempoWeight);
+
   if (lastMaterialArrivalDay === null || !isCalendarDay(lastMaterialArrivalDay)) {
     return {
       course: course.course,
       status: 'not-enough-history',
       quietDays: null,
+      quietDaysThreshold,
       reason: 'no material arrival has ever been observed for this course',
     };
   }
@@ -187,23 +292,26 @@ function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourse
       course: course.course,
       status: 'not-enough-history',
       quietDays: null,
+      quietDaysThreshold,
       reason: 'last-arrival day falls after today',
     };
   }
 
-  if (quietDays >= QUIET_DAYS_THRESHOLD) {
+  if (quietDays >= quietDaysThreshold) {
     return {
       course: course.course,
       status: 'observed',
       quietDays,
-      reason: `${quietDays} days since the last observed arrival reaches the ${QUIET_DAYS_THRESHOLD}-day quiet threshold`,
+      quietDaysThreshold,
+      reason: `${quietDays} days since the last observed arrival reaches this course's ${quietDaysThreshold}-day quiet threshold`,
     };
   }
   return {
     course: course.course,
     status: 'not-observed',
     quietDays,
-    reason: `${quietDays} days since the last observed arrival is below the ${QUIET_DAYS_THRESHOLD}-day quiet threshold`,
+    quietDaysThreshold,
+    reason: `${quietDays} days since the last observed arrival is below this course's ${quietDaysThreshold}-day quiet threshold`,
   };
 }
 
@@ -240,11 +348,18 @@ export function detectRhythm(input: RhythmInput): RhythmInsight {
     };
   }
 
+  // Ranked by margin over EACH course's own threshold, not raw quietDays —
+  // see `RhythmMeasured.quietestCourse`'s doc: a lighter-tempo course's
+  // longer threshold must not let it out-rank a heavier-tempo course that
+  // crossed its own, shorter bar by more.
   let quietest: RhythmCourseReading | null = null;
+  let quietestMargin = Number.NEGATIVE_INFINITY;
   for (const reading of withHistory) {
     if (reading.status !== 'observed') continue;
-    if (quietest === null || (reading.quietDays ?? 0) > (quietest.quietDays ?? 0)) {
+    const margin = (reading.quietDays ?? 0) - reading.quietDaysThreshold;
+    if (quietest === null || margin > quietestMargin) {
       quietest = reading;
+      quietestMargin = margin;
     }
   }
 
@@ -267,6 +382,6 @@ export function detectRhythm(input: RhythmInput): RhythmInsight {
     id: 'rhythm',
     status: 'not-observed',
     measured,
-    reason: `${withHistory.length} course(s) with an observed arrival, none past the ${QUIET_DAYS_THRESHOLD}-day threshold`,
+    reason: `${withHistory.length} course(s) with an observed arrival, none past its own quiet threshold`,
   };
 }

@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CalendarDay } from './calendar-day.js';
 import {
+  DECLARED_FLAT_TEMPO_WEIGHT,
   detectRhythm,
   QUIET_DAYS_THRESHOLD,
   type RhythmCourseInput,
@@ -27,8 +28,12 @@ function shiftedDay(daysAgo: number): CalendarDay {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-function course(id: string, daysAgo: number | null): RhythmCourseInput {
-  return { course: id, lastMaterialArrivalDay: daysAgo === null ? null : shiftedDay(daysAgo) };
+function course(id: string, daysAgo: number | null, tempoWeight?: number): RhythmCourseInput {
+  return {
+    course: id,
+    lastMaterialArrivalDay: daysAgo === null ? null : shiftedDay(daysAgo),
+    ...(tempoWeight === undefined ? {} : { tempoWeight }),
+  };
 }
 
 describe('resolveTermBoundary', () => {
@@ -127,5 +132,62 @@ describe('detectRhythm', () => {
     expect(badResult.measured?.courses[0]?.quietDays).toBeNull();
     // sanity: the constant this whole suite leans on is what the clause names
     expect(QUIET_DAYS_THRESHOLD).toBe(21);
+  });
+});
+
+describe('detectRhythm — tempo input ([D-155], ol-v7r5.8)', () => {
+  it('an omitted tempoWeight defaults to DECLARED_FLAT_TEMPO_WEIGHT and leaves the threshold unchanged', () => {
+    expect(DECLARED_FLAT_TEMPO_WEIGHT).toBe(1);
+    const result = detectRhythm({ today: TODAY, courses: [course('C1', 21)] });
+    expect(result.measured?.courses[0]?.quietDaysThreshold).toBe(QUIET_DAYS_THRESHOLD);
+    expect(result.status).toBe('observed');
+  });
+
+  it("a heavier declared tempo weight scales this course's own quiet threshold down, changing the verdict", () => {
+    // 25 quiet days is below the flat 21-day threshold's double (42) but would
+    // clear a threshold halved by a tempo weight of 2 (21 / 2 = 10.5).
+    const flat = detectRhythm({ today: TODAY, courses: [course('C1', 12)] });
+    const heavyTempo = detectRhythm({ today: TODAY, courses: [course('C1', 12, 2)] });
+    expect(flat.status).toBe('not-observed');
+    expect(heavyTempo.status).toBe('observed');
+    expect(heavyTempo.measured?.courses[0]?.quietDaysThreshold).toBeCloseTo(10.5);
+  });
+
+  it('a lighter declared tempo weight scales the threshold up, so the same gap no longer counts as quiet', () => {
+    const flat = detectRhythm({ today: TODAY, courses: [course('C1', 21)] });
+    const lightTempo = detectRhythm({ today: TODAY, courses: [course('C1', 21, 0.5)] });
+    expect(flat.status).toBe('observed');
+    expect(lightTempo.status).toBe('not-observed');
+    expect(lightTempo.measured?.courses[0]?.quietDaysThreshold).toBeCloseTo(42);
+  });
+
+  it('ranks the quietest course by margin over ITS OWN threshold, not by raw quiet days', () => {
+    // RAW_WINNER: 50 quiet days against a tempo-halved 42-day threshold — margin 8, and the
+    // larger raw quietDays of the two, so the pre-tempo (raw-days) ranking would pick this one.
+    // MARGIN_WINNER: 25 quiet days against a tempo-doubled 10.5-day threshold — margin 14.5,
+    // the larger margin, though its raw quietDays (25) is smaller than RAW_WINNER's (50).
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('RAW_WINNER', 50, 0.5), course('MARGIN_WINNER', 25, 2)],
+    });
+    expect(result.status).toBe('observed');
+    const raw = result.measured?.courses.find((c) => c.course === 'RAW_WINNER');
+    const margin = result.measured?.courses.find((c) => c.course === 'MARGIN_WINNER');
+    expect(raw?.status).toBe('observed');
+    expect(margin?.status).toBe('observed');
+    // Sanity on the margins the test's claim depends on.
+    expect((raw?.quietDays ?? 0) - (raw?.quietDaysThreshold ?? 0)).toBeCloseTo(8);
+    expect((margin?.quietDays ?? 0) - (margin?.quietDaysThreshold ?? 0)).toBeCloseTo(14.5);
+    expect(result.measured?.quietestCourse).toBe('MARGIN_WINNER');
+  });
+
+  it('a zero or negative tempoWeight is guarded against an infinite or negative threshold', () => {
+    const zero = detectRhythm({ today: TODAY, courses: [course('C1', 21, 0)] });
+    const negative = detectRhythm({ today: TODAY, courses: [course('C1', 21, -3)] });
+    expect(zero.measured?.courses[0]?.quietDaysThreshold).toBeGreaterThan(0);
+    expect(Number.isFinite(zero.measured?.courses[0]?.quietDaysThreshold)).toBe(true);
+    expect(negative.measured?.courses[0]?.quietDaysThreshold).toBe(
+      zero.measured?.courses[0]?.quietDaysThreshold,
+    );
   });
 });
