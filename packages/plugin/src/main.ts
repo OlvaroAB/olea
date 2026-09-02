@@ -120,6 +120,7 @@ import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
 import {
+  createObsidianAcceptNoteOfferPort,
   createObsidianEditInstrumentPort,
   createObsidianOpenSourceLocationPort,
   openRegistryEntryFor,
@@ -973,6 +974,11 @@ export default class OleaPlugin extends Plugin {
             // until this line the registry's "Open source" action logged an
             // error instead of opening anything (`ol-2zfj.47`).
             openSourceLocationPort: createObsidianOpenSourceLocationPort(this.app),
+            // F8.4a/`[D-176]` (`ol-r1by`): the note-offer accept hand-off —
+            // without this line, accepting the offer would log an error
+            // instead of creating a note. See `obsidian-ports.ts`'s own doc
+            // for what this port does and does not yet do (key binding).
+            acceptNoteOfferPort: createObsidianAcceptNoteOfferPort(vault),
             // `ol-r5j4`: keeps `this.registryOverridesCache` current the
             // instant she renames, withdraws or restores a concept from this
             // view — see that field's own doc.

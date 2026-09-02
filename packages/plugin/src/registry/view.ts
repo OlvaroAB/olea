@@ -52,6 +52,9 @@ import {
   instrumentLabel,
   masteryStatedLine,
   NO_INSTRUMENTS_LINE,
+  NOTE_OFFER_ACCEPT_ACTION,
+  NOTE_OFFER_DECLINE_ACTION,
+  NOTE_OFFER_LINE,
   OPEN_SOURCE_LOCATION_ACTION,
   REGISTRY_EMPTY_LINE,
   REGISTRY_UNAVAILABLE_LINE,
@@ -69,6 +72,17 @@ import {
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_REGISTRY = 'olea-registry';
+
+/**
+ * `ol-l5og.14`: every interactive control the registry renders — every
+ * button and every input — mirroring `review/view.ts`'s own
+ * `data-olea-focusable`/`FOCUSABLE_ATTR` restore convention, but by tag
+ * rather than a marker attribute: unlike that file's per-screen renders,
+ * every control this view draws is already exactly a `<button>` or an
+ * `<input>` (the rename field, the show-withdrawn checkbox), so no row
+ * render site needs a new attribute added to opt in.
+ */
+const FOCUSABLE_SELECTOR = 'button, input';
 
 export type RegistryViewState =
   | { readonly kind: 'model'; readonly model: RegistryModel }
@@ -90,11 +104,22 @@ export interface RegistryViewDeps {
   readonly editInstrument: (instrument: RegistryInstrumentSummary) => Promise<void>;
   /** `[D-171]`'s click-through half — opens a source location at its known grain. */
   readonly openSourceLocation: (location: RegistrySourceLocation) => Promise<void>;
+  /** F8.4a's `[D-176]` accept half — creates the new Zettelkasten note the offer promised. */
+  readonly acceptNoteOffer: (entry: RegistryConceptEntry) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
   private readonly deps: RegistryViewDeps;
   private showWithdrawn = false;
+  /**
+   * `ol-l5og.14`'s aria-live confirmation — a single stable node, created
+   * once in `onOpen` as a sibling of `contentEl` rather than inside it, so
+   * `render()`'s `root.empty()` never tears it down between refreshes (an
+   * aria-live region has to stay put for a text change inside it to be the
+   * thing announced). Visually hidden: this is an announcement channel for
+   * assistive tech, not a second copy of the row's own visible text.
+   */
+  private liveRegion!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, deps: RegistryViewDeps) {
     super(leaf);
@@ -115,6 +140,10 @@ export class RegistryView extends ItemView {
 
   override async onOpen(): Promise<void> {
     this.contentEl.addClass('olea-registry-root');
+    this.liveRegion = this.containerEl.createDiv({
+      cls: 'olea-registry-live-region',
+      attr: { 'aria-live': 'polite', 'aria-atomic': 'true' },
+    });
     await this.refresh();
   }
 
@@ -126,6 +155,24 @@ export class RegistryView extends ItemView {
   async refresh(): Promise<void> {
     const state = await this.deps.load();
     this.render(state);
+  }
+
+  /**
+   * `ol-l5og.14`'s aria-live confirmation — announces `text` (an EXISTING
+   * copy string this view already shows somewhere, never new wording coined
+   * for the announcement alone) by writing it into `liveRegion`. Only wired
+   * for withdraw so far (`WITHDRAWN_NOTE`/`WITHDRAWN_LABEL`, both already
+   * rendered on the row) — rename and restore have no existing copy string
+   * that states completion ("Renamed" / "Restored"), so no announcement is
+   * added for either; that needs new, ratified copy, which is a clause this
+   * bead does not have.
+   */
+  private announce(text: string): void {
+    this.liveRegion.setText(text);
+  }
+
+  private focusableControls(): HTMLElement[] {
+    return Array.from(this.contentEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
   }
 
   /**
@@ -149,12 +196,26 @@ export class RegistryView extends ItemView {
     setTimeout(() => el.removeClass('olea-registry-focused'), 2000);
   }
 
+  /**
+   * `ol-l5og.14`: focus is not restored to a sensible element after this
+   * view refreshes (e.g. after an accept/withdraw/restore action), which
+   * strands keyboard focus outside the view entirely once `root.empty()`
+   * below discards whatever held it. Mirrors `review/view.ts`'s own
+   * `render()` — capture whether focus was somewhere inside this view
+   * BEFORE emptying it, and if so, focus the first focusable control after
+   * redrawing, at every exit path (`review/view.ts` restores at its
+   * `renderUnavailable`-equivalent early return and again at the end; this
+   * view's two early returns — unavailable, empty — and its normal
+   * fall-through all do the same here).
+   */
   private render(state: RegistryViewState): void {
     const root = this.contentEl;
+    const hadFocus = root.contains(root.ownerDocument.activeElement);
     root.empty();
 
     if (state.kind === 'unavailable') {
       root.createDiv({ cls: 'olea-registry-unavailable', text: REGISTRY_UNAVAILABLE_LINE });
+      if (hadFocus) this.focusableControls()[0]?.focus();
       return;
     }
 
@@ -174,11 +235,14 @@ export class RegistryView extends ItemView {
 
     if (visible.length === 0) {
       root.createDiv({ cls: 'olea-registry-empty', text: REGISTRY_EMPTY_LINE });
+      if (hadFocus) this.focusableControls()[0]?.focus();
       return;
     }
 
     const list = root.createDiv({ cls: 'olea-registry-list' });
     for (const entry of visible) this.renderConcept(list, entry);
+
+    if (hadFocus) this.focusableControls()[0]?.focus();
   }
 
   private renderConcept(root: HTMLElement, entry: RegistryConceptEntry): void {
@@ -211,9 +275,48 @@ export class RegistryView extends ItemView {
       row.createDiv({ cls: 'olea-registry-withdrawn-note', text: WITHDRAWN_NOTE });
     }
 
+    this.renderNoteOffer(row, entry);
     this.renderActions(row, entry);
     this.renderSourceLocations(row, entry.sourceLocations);
     this.renderInstruments(row, entry);
+  }
+
+  /**
+   * F8.4a's `[D-176]` standing note-offer affordance — "the offer lives on
+   * the concept's own view, never a queue or notification" is exactly why
+   * this renders inline on the concept row rather than anywhere else.
+   *
+   * **Gated on `entry.noteOffer.eligible` AND `tier !== 1`.**
+   * `../../core/registry/build.ts`'s `noteOfferFor` already reads `false`
+   * unconditionally for a tier-1 concept (it already has an authored note —
+   * offering to create a second one makes no sense), so the `tier !== 1`
+   * check here is redundant with the model today; it stays as an explicit
+   * belt-and-braces surface-level gate rather than trusting a single
+   * upstream computation to be the only thing standing between an authored
+   * concept and an offer that would make no sense for it.
+   *
+   * **Decline is local and mechanical, never a port call.** `[D-176]`'s own
+   * words: declining "creates nothing, records nothing," and states no
+   * re-offer condition — there is nothing to persist, so "Not now" simply
+   * removes this section from the current render; nothing is saved, and the
+   * offer is free to appear again on a later refresh (unspecified either
+   * way, per the clause).
+   */
+  private renderNoteOffer(root: HTMLElement, entry: RegistryConceptEntry): void {
+    if (entry.tier === 1 || !entry.noteOffer.eligible) return;
+
+    const section = root.createDiv({ cls: 'olea-registry-note-offer' });
+    section.createEl('p', { text: NOTE_OFFER_LINE });
+
+    const acceptButton = section.createEl('button', { text: NOTE_OFFER_ACCEPT_ACTION });
+    acceptButton.addEventListener('click', () => {
+      void this.deps.acceptNoteOffer(entry).then(() => this.refresh());
+    });
+
+    const declineButton = section.createEl('button', { text: NOTE_OFFER_DECLINE_ACTION });
+    declineButton.addEventListener('click', () => {
+      section.remove();
+    });
   }
 
   /**
@@ -285,10 +388,18 @@ export class RegistryView extends ItemView {
       text: entry.pruned ? RESTORE_CONCEPT_ACTION : WITHDRAW_CONCEPT_ACTION,
     });
     withdrawButton.addEventListener('click', () => {
+      // `ol-l5og.14`'s aria-live confirmation: only the withdraw direction
+      // has an existing copy string that states completion (`WITHDRAWN_NOTE`,
+      // already rendered on the row above once `entry.pruned` is true) — see
+      // `announce`'s own doc for why restore is not announced here.
+      const wasPruned = entry.pruned;
       const action = entry.pruned
         ? this.deps.restoreConcept(entry)
         : this.deps.withdrawConcept(entry);
-      void action.then(() => this.refresh());
+      void action.then(() => {
+        void this.refresh();
+        if (!wasPruned) this.announce(WITHDRAWN_NOTE);
+      });
     });
   }
 
@@ -345,10 +456,17 @@ export class RegistryView extends ItemView {
         text: instrument.pruned ? RESTORE_INSTRUMENT_ACTION : WITHDRAW_INSTRUMENT_ACTION,
       });
       withdrawButton.addEventListener('click', () => {
+        // `ol-l5og.14`: same withdraw-only announcement as the concept-grain
+        // action above, reusing `WITHDRAWN_LABEL` (already rendered as this
+        // row's badge once `instrument.pruned` is true) — no new copy coined.
+        const wasPruned = instrument.pruned;
         const action = instrument.pruned
           ? this.deps.restoreInstrument(instrument)
           : this.deps.withdrawInstrument(instrument);
-        void action.then(() => this.refresh());
+        void action.then(() => {
+          void this.refresh();
+          if (!wasPruned) this.announce(WITHDRAWN_LABEL);
+        });
       });
     }
   }

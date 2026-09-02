@@ -64,12 +64,15 @@
  * grain by `explainBackSummaryFor` below.
  */
 
+import { noteOfferEligible } from '../concept/note-offer.js';
 import type { Provenance } from '../extract/types.js';
+import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import {
   computeAllConceptMastery,
   conceptIdsInLog,
   readAllConceptVitality,
 } from '../mastery/rollup.js';
+import type { CourseOracleRanking } from '../oracle/types.js';
 import { quarantinedGradeInstrumentIds } from '../review-log/contest.js';
 import {
   type ExplainBackHistoryEntry,
@@ -244,6 +247,75 @@ function groupInstrumentsByConcept(
   return byConcept;
 }
 
+/**
+ * The raw `VaultInstrumentRecord`s filed under each concept id — a second,
+ * simpler grouping alongside `groupInstrumentsByConcept` above, because
+ * `noteOfferFor` below feeds `../concept/note-offer.js`'s `noteOfferEligible`,
+ * whose `NoteOfferEvidence.instruments` is typed against the raw record, not
+ * the `RegistryInstrumentSummary` projection this module builds for display.
+ * Same M:N loop shape as `groupInstrumentsByConcept`, no explain-back/pruned
+ * overlay needed since the gate only asks "is this list non-empty".
+ */
+function groupInstrumentRecordsByConcept(
+  instrumentRecords: BuildRegistryModelInput['instrumentRecords'],
+): ReadonlyMap<string, BuildRegistryModelInput['instrumentRecords'][number][]> {
+  const byConcept = new Map<string, BuildRegistryModelInput['instrumentRecords'][number][]>();
+  for (const record of instrumentRecords) {
+    for (const conceptId of record.conceptIds) {
+      const bucket = byConcept.get(conceptId);
+      if (bucket === undefined) byConcept.set(conceptId, [record]);
+      else bucket.push(record);
+    }
+  }
+  return byConcept;
+}
+
+/**
+ * F8.4a's `[D-176]` note-offer gate (`../concept/note-offer.js`'s
+ * `noteOfferEligible`) — this function gathers exactly the evidence that
+ * module asks for from projections this one already computed
+ * (`instrumentRecordsByConcept`, `masteryByConcept`) plus the caller-supplied
+ * `courseRankingsByCourse`, and never re-derives any of the three
+ * conditions itself.
+ *
+ * **Never evaluated for a tier-1 concept.** `note-offer.ts`'s own doc is
+ * explicit that a concept already bound to an authored note should never
+ * reach this gate — a tier-1 entry's `noteOffer.eligible` is unconditionally
+ * `false`, without inspecting instruments, mastery or ranking at all.
+ *
+ * **Multi-course rule (Class B — this bead's own default; `[D-176]`'s text
+ * does not say, since it was ratified against a single-course reading):
+ * eligible when the concept sits in the top band of ANY ONE of its courses'
+ * F4.2 rankings**, not every course it names (C7.2 is M:N). Requiring every
+ * course would make a concept shared across courses LESS likely to earn the
+ * offer the more courses it usefully spans, which reads backwards against
+ * the clause's own "carrying real weight" test — a concept only has to carry
+ * real weight somewhere. A course this concept names with no entry in
+ * `courseRankingsByCourse` (no ranking composed, or the course abstained)
+ * simply contributes no top-band membership, never a fabricated one.
+ * Revisit alongside `note-offer.ts`'s own `TOP_BAND_DIVISOR` once real
+ * offer/accept/decline data exists.
+ */
+function noteOfferFor(
+  concept: BuildRegistryModelInput['concepts'][number],
+  mastery: ConceptMasteryResult,
+  instrumentRecordsByConcept: ReadonlyMap<
+    string,
+    BuildRegistryModelInput['instrumentRecords'][number][]
+  >,
+  courseRankingsByCourse: ReadonlyMap<string, CourseOracleRanking>,
+): RegistryConceptEntry['noteOffer'] {
+  if (concept.tier === 1) return { eligible: false };
+  const instruments = instrumentRecordsByConcept.get(concept.key) ?? [];
+  const eligible = concept.courses.some((course) => {
+    const ranking = courseRankingsByCourse.get(course);
+    if (ranking === undefined) return false;
+    return noteOfferEligible({ conceptKey: concept.key }, { instruments, mastery, ranking })
+      .eligible;
+  });
+  return { eligible };
+}
+
 /** F8.4's "instrument mix... plus explain-back" — explain-back has no vault-persisted record to browse, so it is counted from the review log rather than the instrument walk (see `./types.ts`'s `RegistryExplainBackSummary` doc). */
 function explainBackSummaryFor(
   entries: BuildRegistryModelInput['entries'],
@@ -289,6 +361,10 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
     input.suspendedInstrumentIds,
     explainBackHistoryByInstrument,
     quarantinedInstrumentIds,
+  );
+  const instrumentRecordsByConcept = groupInstrumentRecordsByConcept(input.instrumentRecords);
+  const courseRankingsByCourse = new Map(
+    (input.courseRankings ?? []).map((ranking) => [ranking.course, ranking] as const),
   );
 
   // Every concept id the review log itself names, unioned with the concepts
@@ -336,6 +412,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       explainBack: explainBackSummaryFor(input.entries, concept.key),
       mastery,
       vitality,
+      noteOffer: noteOfferFor(concept, mastery, instrumentRecordsByConcept, courseRankingsByCourse),
     };
   });
 

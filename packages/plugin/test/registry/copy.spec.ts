@@ -10,6 +10,9 @@ import {
   explainBackLine,
   instrumentLabel,
   masteryStatedLine,
+  NOTE_OFFER_ACCEPT_ACTION,
+  NOTE_OFFER_DECLINE_ACTION,
+  NOTE_OFFER_LINE,
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
   vitalityLabel,
@@ -62,6 +65,9 @@ function everyStringThisModuleCanProduce(): readonly string[] {
       soloLevel: 'prestructural',
       contested: true,
     }),
+    NOTE_OFFER_LINE,
+    NOTE_OFFER_ACCEPT_ACTION,
+    NOTE_OFFER_DECLINE_ACTION,
   ];
 }
 

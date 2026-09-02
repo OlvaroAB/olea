@@ -56,6 +56,7 @@ import type {
   EvidenceTier,
 } from '../mastery/rollup.js';
 import type { VitalityReading } from '../mastery/vitality.js';
+import type { CourseOracleRanking } from '../oracle/types.js';
 import type { DisputeLogRecord } from '../review-log/contest.js';
 import type { Scheduler } from '../scheduler/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
@@ -240,6 +241,17 @@ export interface RegistryConceptEntry {
   readonly mastery: ConceptMasteryResult;
   /** F2.11 axis 2 (vitality) — `[D-087]`'s fold, first surfaced live here (see `../mastery/rollup.js`'s own module doc on `readAllConceptVitality` having "no consumer outside core yet"). */
   readonly vitality: VitalityReading;
+  /**
+   * F8.4a's `[D-176]` note-offer gate (`../concept/note-offer.js`'s
+   * `noteOfferEligible`, unmodified) — whether the registry may show the
+   * "create a note for this" standing affordance on this row. Always
+   * `false` for a tier-1 concept (it already has an authored note; see
+   * `note-offer.ts`'s own doc on why the gate is never reached for one) and
+   * whenever `BuildRegistryModelInput.courseRankings` carries no ranking for
+   * any course this concept names (nothing to sit in a top band of). See
+   * `./build.ts`'s `noteOfferFor` for the multi-course rule.
+   */
+  readonly noteOffer: { readonly eligible: boolean };
 }
 
 /** The whole browsable inventory (F8.4). Concepts in no course are included (F1.3: a statement, not a failure) — filtering by course is a view concern, not a model concern. */
@@ -271,6 +283,19 @@ export interface BuildRegistryModelInput {
    * fabricated "not contested" read where the truth is unknown.
    */
   readonly disputes?: readonly DisputeLogRecord[];
+  /**
+   * F4.2's per-course high-yield ranking (`rankOracle`/`composeOracleRanking`'s
+   * `RankOracleResult.courses`), unmodified — this module's `noteOfferFor`
+   * (`./build.ts`) reads it to feed `../concept/note-offer.js`'s
+   * `noteOfferEligible` and never re-derives a ranking of its own.
+   *
+   * **Optional, and absent/empty is a real, non-error state**, matching
+   * `disputes` above: a vault with no assignments Base configured yet
+   * (F1.1) has no ranking to compose, and every concept's
+   * `RegistryConceptEntry.noteOffer.eligible` simply reads `false` rather
+   * than the caller inventing one or the whole registry failing to build.
+   */
+  readonly courseRankings?: readonly CourseOracleRanking[];
 }
 
 /** One concept's rename history and current override. */

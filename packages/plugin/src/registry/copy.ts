@@ -192,6 +192,23 @@ export const RENAME_ACTION = 'Rename';
 
 export const SHOW_WITHDRAWN_LABEL = 'Show withdrawn concepts';
 
+/**
+ * F8.4a's note-offer standing affordance (`[D-176]`, `ol-r1by`) — genuinely
+ * NEW copy, permitted for the same reason F8.4b's explain-back phrases are:
+ * the clause defines this surface and no prior ratified wording exists for
+ * it. States a fact about the concept's standing, never a nudge about her
+ * compliance (this file's own rule) — nothing here says she "should" write a
+ * note, matching `HEADING_OFFER_ACCEPT_LABEL`/`HEADING_OFFER_DISMISS_LABEL`'s
+ * own plain-verb, no-pressure tone (`review/heading-offer.ts`, F2.10's
+ * offer — a different object, same register: "Create a card" / "Not now").
+ * `[D-176]`'s own clause is explicit the offer is rare and never chases her,
+ * so this is one line, one accept, one decline, no urgency language.
+ */
+export const NOTE_OFFER_LINE =
+  'This concept is carrying real weight. Olea could create a note for it in your Zettelkasten.';
+export const NOTE_OFFER_ACCEPT_ACTION = 'Create the note';
+export const NOTE_OFFER_DECLINE_ACTION = 'Not now';
+
 export const INSTRUMENTS_SECTION_HEADING = 'Instruments';
 export const NO_INSTRUMENTS_LINE = 'No instruments yet for this concept.';
 

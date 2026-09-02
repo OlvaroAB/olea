@@ -53,12 +53,32 @@
  * the first corpus-relation tick completes: `enumeration.concepts` passes
  * through unchanged, so the no-read-yet fallback is identical to before this
  * field existed.
+ *
+ * **`[D-176]`/F8.4a's note-offer gate (`ol-r1by`) needs one more thing this
+ * provider did not read before: F4.2's per-course high-yield ranking.**
+ * `plan/provider.ts` and `gap/provider.ts` are the plugin's two existing
+ * `composeOracleRanking` callers — this is a third, reusing exactly that
+ * function (never a second ranking algorithm) the same way `gap/provider.ts`
+ * reuses it alongside its own vault walk. Composing a ranking needs the
+ * assignments Base path from `plan/settings-store.ts`'s
+ * `ObsidianStudyPlanSettingsStore`, a plan-specific setting this provider had
+ * no reason to read before; `courseRankingsForNoteOffer` below isolates that
+ * read and the compose call in their own try/catch, separate from this
+ * provider's main `load()` try/catch, so a vault with no assignments Base
+ * configured (or a ranking compose that throws) degrades to "no course
+ * rankings this load" — every concept's `noteOffer.eligible` reads `false` —
+ * rather than taking the whole registry down with it. F7.8's degrade-not-
+ * half-work posture, same as `readRankWeights`/`readPlanPolicy` elsewhere in
+ * this package.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildRegistryModel,
   type ConceptRecord,
+  type CourseOracleRanking,
   calendarDaysEndingOn,
+  composeOracleRanking,
   createFsrsScheduler,
   type DisputeLogRecord,
   enumerateVaultInstruments,
@@ -76,6 +96,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { ObsidianDataHost } from './overrides-store.js';
 import { ObsidianRegistryOverridesStore } from './overrides-store.js';
@@ -104,6 +125,17 @@ export interface OpenSourceLocationPort {
   open(location: RegistrySourceLocation): Promise<void>;
 }
 
+/**
+ * F8.4a's `[D-176]` accept half: given an eligible concept, create the new
+ * Zettelkasten note the offer promised — see `./obsidian-ports.ts`'s
+ * `createObsidianAcceptNoteOfferPort` for the one production implementation
+ * and its own doc for what it does and does not yet do about binding the
+ * concept's existing key onto the new note.
+ */
+export interface AcceptNoteOfferPort {
+  accept(entry: RegistryConceptEntry): Promise<void>;
+}
+
 export interface CreateLocalRegistryProviderDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
@@ -126,6 +158,15 @@ export interface CreateLocalRegistryProviderDeps {
    * work. See this bead's close notes for the exact one-line addition.
    */
   readonly openSourceLocationPort?: OpenSourceLocationPort;
+  /**
+   * F8.4a's `[D-176]` accept half — see `./obsidian-ports.ts`'s
+   * `createObsidianAcceptNoteOfferPort`.
+   *
+   * **Optional, same reason `openSourceLocationPort` above is**: omitting it
+   * falls back to a port that logs and does nothing, so a caller that has
+   * not wired it yet still compiles and fails loudly rather than silently.
+   */
+  readonly acceptNoteOfferPort?: AcceptNoteOfferPort;
   /** Overridable for tests; defaults to the window every other provider probes by. */
   readonly probeDays?: number;
   readonly holdingCut?: number;
@@ -220,6 +261,45 @@ async function disputesFromFiles(
   return reads.flatMap((read) => read.disputes);
 }
 
+/**
+ * F8.4a's `[D-176]` note-offer gate needs F4.2's per-course ranking —
+ * see this module's own doc for why this is a third `composeOracleRanking`
+ * caller rather than a second ranking algorithm. Own try/catch, deliberately
+ * separate from `load()`'s: "no assignments Base configured" is the
+ * ordinary, unconfigured state every other `composeOracleRanking` caller in
+ * this package already treats as unremarkable (`plan/provider.ts`,
+ * `gap/provider.ts`), and a compose failure here must never take the whole
+ * registry down with it — `[]` (no course rankings this load) degrades every
+ * concept's `noteOffer.eligible` to `false`, exactly the same "absent is a
+ * real, non-error state" `BuildRegistryModelInput.courseRankings` documents.
+ */
+async function courseRankingsForNoteOffer(
+  vault: VaultSource,
+  settingsHost: ObsidianDataHost,
+  entries: readonly ReviewLogEntry[],
+  concepts: readonly ConceptRecord[],
+  asOf: string,
+): Promise<readonly CourseOracleRanking[]> {
+  try {
+    const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
+    if (!isStudyPlanConfigured(config)) return [];
+    const { ranking } = await composeOracleRanking({
+      vault,
+      basePath: config.assignmentsBasePath,
+      reviewLog: entries,
+      asOf,
+      concepts,
+    });
+    return ranking.courses;
+  } catch (error) {
+    console.error(
+      'Olea: could not compose F4.2 rankings for the note-offer gate ([D-176]) — the offer will not appear this load',
+      error,
+    );
+    return [];
+  }
+}
+
 /** A `RegistryViewDeps` whose every method reads the vault and the log fresh — the production wiring `main.ts` hands to `RegistryView`. */
 export function createLocalRegistryProvider(
   deps: CreateLocalRegistryProviderDeps,
@@ -239,6 +319,14 @@ export function createLocalRegistryProvider(
       );
     },
   };
+  const acceptNoteOfferPort: AcceptNoteOfferPort = deps.acceptNoteOfferPort ?? {
+    async accept(entry: RegistryConceptEntry) {
+      console.error(
+        'Olea: the note-offer accept action has no port wired ([D-176]) — no note was created',
+        entry.key,
+      );
+    },
+  };
 
   return {
     async load(): Promise<RegistryViewState> {
@@ -253,7 +341,16 @@ export function createLocalRegistryProvider(
           enumerateVaultInstruments(deps.vault),
           overridesStore.load(),
         ]);
-        const disputes = await disputesFromFiles(deps.vault, files);
+        const [disputes, courseRankings] = await Promise.all([
+          disputesFromFiles(deps.vault, files),
+          courseRankingsForNoteOffer(
+            deps.vault,
+            deps.settingsHost,
+            entries,
+            enumeration.concepts,
+            today,
+          ),
+        ]);
 
         const model = buildRegistryModel({
           concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
@@ -265,6 +362,7 @@ export function createLocalRegistryProvider(
           overrides,
           suspendedInstrumentIds: suspendedInstrumentIds(entries),
           disputes,
+          courseRankings,
         });
 
         return { kind: 'model', model };
@@ -309,6 +407,10 @@ export function createLocalRegistryProvider(
 
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       await openSourceLocationPort.open(location);
+    },
+
+    async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
+      await acceptNoteOfferPort.accept(entry);
     },
   };
 }

@@ -201,6 +201,8 @@ export interface RegistryScenario {
   readonly deps: RegistryViewDeps;
   readonly editHandoffs: RecordedOpen[];
   readonly sourceOpens: RegistrySourceLocation[];
+  /** F8.4a's `[D-176]` accept half (`ol-r1by`) — recorded rather than written anywhere, matching `sourceOpens`'/`editHandoffs`' own posture of proving the CALL reached this mock, never a real vault write (this package has none to make). */
+  readonly noteOfferAccepts: RegistryConceptEntry[];
 }
 
 /**
@@ -221,6 +223,7 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
   const withdrawnInstrumentIds = new Set<string>();
   const editHandoffs: RecordedOpen[] = [];
   const sourceOpens: RegistrySourceLocation[] = [];
+  const noteOfferAccepts: RegistryConceptEntry[] = [];
 
   function buildModel(): RegistryModel {
     return buildRegistryModel({
@@ -258,7 +261,10 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       sourceOpens.push(location);
     },
+    async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
+      noteOfferAccepts.push(entry);
+    },
   };
 
-  return { stateId, deps, editHandoffs, sourceOpens };
+  return { stateId, deps, editHandoffs, sourceOpens, noteOfferAccepts };
 }

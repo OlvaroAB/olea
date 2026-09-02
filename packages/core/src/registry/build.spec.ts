@@ -8,6 +8,7 @@
 import type { ExplainBackGrade, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptRecord } from '../concept/types.js';
+import type { ConceptPriority, CourseOracleRanking } from '../oracle/types.js';
 import { contestClaim, type DisputeLogRecord, resolveDispute } from '../review-log/contest.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
@@ -88,6 +89,7 @@ function buildFor(
     overridesState: RegistryOverrides;
     suspended: ReadonlySet<string>;
     disputes: readonly DisputeLogRecord[];
+    courseRankings: readonly CourseOracleRanking[];
   }> = {},
 ) {
   return buildRegistryModel({
@@ -99,10 +101,12 @@ function buildFor(
     holdingCut: HOLDING_CUT,
     overrides: overrides.overridesState ?? EMPTY_REGISTRY_OVERRIDES,
     suspendedInstrumentIds: overrides.suspended ?? new Set(),
-    // `exactOptionalPropertyTypes`: an explicit `disputes: undefined` is a
-    // type error on an optional field, so the key is omitted entirely
-    // rather than set to `undefined` when a test does not supply one.
+    // `exactOptionalPropertyTypes`: an explicit `disputes`/`courseRankings:
+    // undefined` is a type error on an optional field, so the key is
+    // omitted entirely rather than set to `undefined` when a test does not
+    // supply one.
     ...(overrides.disputes === undefined ? {} : { disputes: overrides.disputes }),
+    ...(overrides.courseRankings === undefined ? {} : { courseRankings: overrides.courseRankings }),
   });
 }
 
@@ -540,5 +544,116 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
     expect(row?.instruments[0]?.explainBackHistory.map((h) => h.eventId)).toEqual(['r-eb-1']);
     // Still counted at the CONCEPT grain, which matches by conceptIds rather than instrumentId:
     expect(row?.explainBack).toEqual({ attempted: true, attemptCount: 2 });
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4a / [D-176] —
+// The offer-to-create-a-note gate", the wiring half: `noteOfferEligible`
+// itself (all three conditions, individually) is proven at
+// `../concept/note-offer.spec.ts`; these tests prove `buildRegistryModel`
+// actually reaches it with the right per-concept evidence, including the
+// multi-course rule that module's own doc leaves to this bead.
+describe('buildRegistryModel — the note-offer gate (F8.4a, [D-176])', () => {
+  /** A minimal, valid `ConceptPriority` — every field beyond `conceptKey`/`rank` is filler these tests never inspect, mirroring `note-offer.spec.ts`'s own fixture. */
+  function rankedEntry(conceptKey: string, rank: number, course = 'COURSE-A'): ConceptPriority {
+    return {
+      conceptName: conceptKey,
+      conceptKey,
+      course,
+      rank,
+      priorityScore: 1 / rank,
+      factors: {
+        citations: [],
+        distinctSourceCount: 0,
+        contributions: [],
+        preMasteryScore: 1 / rank,
+        masteryState: 'sprout',
+        masteryNeedWeight: 1,
+        priorityScore: 1 / rank,
+      },
+      citations: [],
+      reasoning: `Ranked ${rank}.`,
+    };
+  }
+
+  /** Three-entry ranking — `TOP_BAND_DIVISOR = 3` puts rank 1 alone in the top band. */
+  function threeWayRanking(course = 'COURSE-A'): CourseOracleRanking {
+    return {
+      course,
+      status: 'ranked',
+      ranked: [
+        rankedEntry('concept-a', 1, course),
+        rankedEntry('concept-other-1', 2, course),
+        rankedEntry('concept-other-2', 3, course),
+      ],
+    };
+  }
+
+  it('is eligible when the concept has an accepted instrument, a scored review, and top-band rank in its own course', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
+  });
+
+  it('is never eligible for a tier-1 concept, even with every other condition satisfied — the gate is not reached for it', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 1 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: false });
+  });
+
+  it('is not eligible with no scored review — explain-back attempts alone do not count (mirrors note-offer.ts)', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [explainBackReview()],
+      courseRankings: [threeWayRanking()],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: false });
+  });
+
+  it("is not eligible with no ranking composed for any of the concept's courses", () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: false });
+  });
+
+  it('multi-course rule: eligible when top band in ANY one of its courses, not necessarily every course', () => {
+    // Top band in COURSE-B (rank 1 of 3) but well outside it in COURSE-A
+    // (rank 3 of 3, `TOP_BAND_DIVISOR = 3` puts only rank 1 in the top band).
+    const model = buildFor({
+      concepts: [concept({ tier: 2, courses: ['COURSE-A', 'COURSE-B'] })],
+      entries: [review()],
+      courseRankings: [
+        {
+          course: 'COURSE-A',
+          status: 'ranked',
+          ranked: [
+            rankedEntry('concept-other-1', 1, 'COURSE-A'),
+            rankedEntry('concept-other-2', 2, 'COURSE-A'),
+            rankedEntry('concept-a', 3, 'COURSE-A'),
+          ],
+        },
+        threeWayRanking('COURSE-B'),
+      ],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
+  });
+
+  it('a pruned instrument still counts toward "has accepted instruments" — pruning is a queue-visibility flag, never an un-accept', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+      suspended: new Set(['qa:concept-a:1']),
+    });
+    expect(model.concepts[0]?.instruments[0]?.pruned).toBe(true);
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
   });
 });
