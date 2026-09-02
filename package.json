@@ -17,7 +17,8 @@
     "wiring-register": "node scripts/check-wiring-register.mjs",
     "wiring-register:test": "node --test scripts/check-wiring-register.test.mjs",
     "surface-register": "node scripts/check-surface-register.mjs",
-    "surface-register:test": "node --test scripts/check-surface-register.test.mjs"
+    "surface-register:test": "node --test scripts/check-surface-register.test.mjs",
+    "dev:install": "node scripts/dev-install.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
