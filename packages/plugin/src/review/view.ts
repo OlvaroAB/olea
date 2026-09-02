@@ -83,6 +83,11 @@ import {
   verifiedKeycap,
 } from './copy.js';
 import type { ExplainWhyOutcome } from './explainWhy.js';
+import {
+  HEADING_OFFER_ACCEPT_LABEL,
+  HEADING_OFFER_DISMISS_LABEL,
+  HEADING_OFFER_PROMPT_TEXT,
+} from './heading-offer.js';
 import type { RatingPreview } from './interval.js';
 import {
   hasGlobalBindings,
@@ -160,6 +165,69 @@ const FOCUSABLE_ATTR = 'data-olea-focusable';
  * all. See `open-session.ts`.
  */
 export type ReviewSessionProvider = () => ReviewSession | null | Promise<ReviewSession | null>;
+
+// ---------------------------------------------------------------------------
+// F2.10 heading-offer banner — THE MOUNT ONLY (`[D-170]`/`[GEN-2]`, `ol-0r92.27`).
+//
+// A free function rather than a `ReviewView` method, deliberately: F2.10's
+// offer belongs to a heading in whichever note she has open, not to "the
+// currently reviewed instrument" `this.session` tracks — it is not scoped to
+// a review session at all and may never appear inside one. Matching a live,
+// open note's headings to a `HeadingOfferCandidate` (`olea-core`'s
+// `detectHeadingOffers`) and deciding *where and when* to mount this banner
+// is `ol-0r92`'s surface-wiring bead (`ol-i19f`, still open, blocked on this
+// one) — this function is the reachable, addressable unit it wires against,
+// matching `ol-0r92.23`'s "the destination exists behind the surface `ol-i19f`
+// wires." It is not called from `render()` below and does not touch
+// `this.session`, `this.confusionBanner` or any other review-loop state, so
+// it cannot regress anything on that path while the live surface is still
+// unbuilt.
+//
+// Copy comes from `heading-offer.ts` (F2.10's own wording, `[D-170]`'s two
+// verbs) rather than being hand-typed a second time here — the same
+// discipline this file's own module doc asks of every *derived* string, one
+// step further: these three strings are fixed, but still owned by the module
+// whose contract citation they carry, not duplicated into a UI-only file.
+//
+// Click wiring is left to the caller (returned as plain `HTMLButtonElement`s)
+// rather than bound here with `addEventListener`/`registerDomEvent`: this
+// function has no `Component` of its own to scope a listener's lifecycle to,
+// and `ol-i19f`'s eventual caller — whichever view or editor extension that
+// turns out to be — is the one positioned to call `registerDomEvent` against
+// ITS OWN component and to call `dismiss`/`accept` against a real
+// `HeadingOfferPort`. Untested here for the same reason every other DOM
+// builder in this file is untested (module doc, above): `createDiv`/
+// `createEl` are Obsidian's own `HTMLElement` extensions and only exist
+// inside a real Obsidian host.
+export interface HeadingOfferBannerHandles {
+  readonly container: HTMLElement;
+  readonly acceptButton: HTMLButtonElement;
+  readonly dismissButton: HTMLButtonElement;
+}
+
+export function renderHeadingOfferBanner(
+  parent: HTMLElement,
+  promptText: string = HEADING_OFFER_PROMPT_TEXT,
+): HeadingOfferBannerHandles {
+  const banner = parent.createDiv({ cls: 'olea-review-heading-offer-banner' });
+  banner.createEl('p', { cls: 'olea-review-heading-offer-prompt', text: promptText });
+
+  const actions = banner.createDiv({ cls: 'olea-review-heading-offer-actions' });
+
+  const acceptButton = actions.createEl('button', {
+    cls: 'olea-review-primary-action',
+    attr: { [FOCUSABLE_ATTR]: 'true' },
+  });
+  acceptButton.createSpan({ text: HEADING_OFFER_ACCEPT_LABEL });
+
+  const dismissButton = actions.createEl('button', {
+    cls: 'olea-review-ghost-action',
+    attr: { [FOCUSABLE_ATTR]: 'true' },
+  });
+  dismissButton.createSpan({ text: HEADING_OFFER_DISMISS_LABEL });
+
+  return { container: banner, acceptButton, dismissButton };
+}
 
 export class ReviewView extends ItemView {
   private readonly openSession: ReviewSessionProvider;

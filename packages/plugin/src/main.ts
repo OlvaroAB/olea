@@ -139,6 +139,7 @@ import { createLocalRetrospectiveProvider } from './retrospective/provider.js';
 import { RetrospectiveView, VIEW_TYPE_OLEA_RETROSPECTIVE } from './retrospective/view.js';
 import { createVaultGradeContestPort } from './review/contest.js';
 import { retrieveExplainWhySourceChunks, WorkerExplainWhyGenerator } from './review/explainWhy.js';
+import { createHeadingOfferPort, type HeadingOfferPort } from './review/heading-offer.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
 import {
@@ -250,6 +251,21 @@ export default class OleaPlugin extends Plugin {
   private knowledgeKind: KnowledgeKindWiring | null = null;
   /** F3.3's automatic generation pipeline (`ol-p3t07a`) — built unconditionally (unlike `retrieval`/`keywordIndex`, it needs no Worker token: the cache and accept/reject flow work offline, and only the sweep itself is a no-op with no Worker configured, F7.8). */
   private generation: GenerationWiring | null = null;
+  /**
+   * F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
+   * built unconditionally, same reason `generation` above is: the cache
+   * write and the in-memory dismiss set need no Worker token, only `accept`'s
+   * actual draft call does, and that reads `draftQuizCardsDeps()` fresh per
+   * call (F7.8), never a value captured here.
+   *
+   * **Not yet called from any production surface.** `ol-i19f` (open, blocked
+   * on this bead) matches a live, open note's headings to `ConceptRecord`s
+   * and mounts `review/view.ts`'s `renderHeadingOfferBanner` against this
+   * port; until it lands, this field is constructed and correct but has no
+   * caller — the reachability gap is tracked there, not silently assumed
+   * closed here.
+   */
+  private headingOffer: HeadingOfferPort | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
   private rankWeights: RankWeightsWiring | null = null;
   /**
@@ -456,6 +472,17 @@ export default class OleaPlugin extends Plugin {
     // something that is, in fact, built unconditionally right here.
     const generationWiring = buildGenerationWiring({ vault, deviceId });
     this.generation = generationWiring;
+
+    // F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
+    // shares `generationWiring.cache` with the automatic sweep above, so a
+    // heading-offer-accepted draft and a sweep-drafted one live in the same
+    // cache and are indistinguishable to `open-session.ts`. `draftDeps` is a
+    // thunk, not `this.draftQuizCardsDeps()` called once here, for the exact
+    // reason `revision.draftDeps` below is one too (F7.8: read fresh per call).
+    this.headingOffer = createHeadingOfferPort({
+      cache: generationWiring.cache,
+      draftDeps: () => this.draftQuizCardsDeps(),
+    });
 
     this.review = {
       vault,

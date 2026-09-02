@@ -681,6 +681,32 @@ button.olea-review-mcq-option:hover {
   margin: 0;
 }
 
+/* ---- F2.10 heading offer (`[D-170]`/`[GEN-2]`, ol-0r92.27) ----
+   Same card shape as the F2.12 confusion banner just above: this is the
+   mount `view.ts`'s `renderHeadingOfferBanner` builds, not yet mounted from
+   any live surface (`ol-i19f` wires that). */
+
+.olea-review-heading-offer-banner {
+  width: 100%;
+  text-align: left;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+}
+
+.olea-review-heading-offer-prompt {
+  font: 400 15px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  margin: 0 0 12px;
+}
+
+.olea-review-heading-offer-actions {
+  display: flex;
+  gap: 10px;
+}
+
 /* ---- Mobile (Obsidian mobile / F2.13): thumb-sized targets, no key hints ---- */
 
 @media (max-width: 480px) {
