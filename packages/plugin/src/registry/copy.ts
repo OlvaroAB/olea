@@ -31,16 +31,36 @@
  *   (this bead's brief). Nothing here says "you haven't reviewed this" or
  *   "you should study this concept" — every sentence states what Olea holds,
  *   never what she has or hasn't done about it.
+ * - **F8.4b (`[D-175]`) adds the per-instrument explain-back history line**
+ *   (`explainBackHistoryRowLine` and its helpers below) — genuinely NEW
+ *   copy, permitted because F8.4b's own ratified clause defines this
+ *   surface. No scoreboard: one attempt, one date, one depth phrase, never
+ *   a total or a streak.
  *
  * **INV-1.** No `obsidian` import here — unit-tested under Vitest.
  */
 
+import type { SoloLevel } from 'olea-contracts';
 import {
   formatSourceCitation,
   type RegistryConceptEntry,
+  type RegistryInstrumentSummary,
   type RegistrySourceLocation,
   type Vitality,
 } from 'olea-core';
+
+/**
+ * F8.4b's per-instrument explain-back history row. Derived by indexed
+ * access rather than imported by name: `RegistryExplainBackHistoryRow`
+ * (`packages/core/src/registry/types.ts`) is not yet re-exported from
+ * `olea-core`'s package index — that file has a live concurrent edit from
+ * another lane this run found in progress, and this bead's `owns` does not
+ * cover it. `RegistryInstrumentSummary` (already exported) carries the same
+ * shape on its `explainBackHistory` field, so this alias needs no index.ts
+ * change at all. Safe to replace with a direct import once that export
+ * lands.
+ */
+type ExplainBackHistoryRow = RegistryInstrumentSummary['explainBackHistory'][number];
 
 export const REGISTRY_VIEW_TITLE = 'Concepts and instruments';
 
@@ -94,6 +114,68 @@ export function explainBackLine(summary: RegistryConceptEntry['explainBack']): s
   if (!summary.attempted) return null;
   const noun = summary.attemptCount === 1 ? 'time' : 'times';
   return `Explained back ${summary.attemptCount} ${noun}.`;
+}
+
+/**
+ * F8.4b's SOLO-depth reading, in the reporting voice (GLOSSARY SOLO rule 5:
+ * the raw level name and a number are both forbidden to her; rule 1: grade
+ * the response, never label the student — "this explanation connects two
+ * ideas" is legal, "you are at multistructural level" is not). These five
+ * phrases are new copy this bead coins under F8.4b's own permission ("new
+ * copy strings are permitted here because F8.4b defines the surface") —
+ * there is no prior ratified SOLO-depth wordlist anywhere in this codebase
+ * or the vocabulary registry to reuse. The top phrase, "full depth", is not
+ * invented: it matches `docs/Olea_vocabulary_registry.md` §9's own V5
+ * worked example ("explained at full depth") verbatim, rather than a second
+ * phrase for the same idea. `no scoreboard` (F8.4b): this reads one
+ * attempt's depth, never a running total or a streak.
+ */
+export function explainBackDepthPhrase(soloLevel: SoloLevel): string {
+  switch (soloLevel) {
+    case 'prestructural':
+      return 'at surface level';
+    case 'unistructural':
+      return 'with one point made';
+    case 'multistructural':
+      return 'with several points, not yet connected';
+    case 'relational':
+      return 'with the points tied together';
+    case 'extended-abstract':
+      return 'at full depth';
+  }
+}
+
+/**
+ * F8.4b: "formatted per existing date conventions... no new date format
+ * introduced here" — reuses `course-setup/copy.ts`'s `lastCorrectClause`
+ * convention (`12 Aug 2026`, `en-GB`, short month) rather than inventing a
+ * second scheme for the registry. Not imported from that module directly
+ * (a different feature's owned file); the three format options are the
+ * whole of what would be shared, so restating them here costs less than a
+ * cross-feature dependency for three literals.
+ */
+function historyDateLabel(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** F8.4b's `[D-095]` contested marker — names the re-review state, exactly as the clause requires, never silently dropping the reading it is about. */
+export const EXPLAIN_BACK_HISTORY_CONTESTED_MARKER = 'under re-review';
+
+export const EXPLAIN_BACK_HISTORY_HEADING = 'Explain-back history';
+
+/**
+ * F8.4b's one history row: "Explained [depth phrase] on [date]", with the
+ * `[D-095]` contested marker appended when this row is the instrument's
+ * current graded attempt and it is presently quarantined. Never the raw
+ * `soloLevel` name, never a number, and never the student's answer text or
+ * the grader's feedback — those stay behind `[D-077]`'s content store,
+ * which this surface never resolves.
+ */
+export function explainBackHistoryRowLine(row: ExplainBackHistoryRow): string {
+  const line = `Explained ${explainBackDepthPhrase(row.soloLevel)} on ${historyDateLabel(row.timestamp)}.`;
+  return row.contested ? `${line} (${EXPLAIN_BACK_HISTORY_CONTESTED_MARKER})` : line;
 }
 
 /** F8.5's withdrawal state, at either grain — a fact about the record, never a verdict. */

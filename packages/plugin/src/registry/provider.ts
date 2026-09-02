@@ -60,12 +60,14 @@ import {
   type ConceptRecord,
   calendarDaysEndingOn,
   createFsrsScheduler,
+  type DisputeLogRecord,
   enumerateVaultInstruments,
   pruneConcept as pruneConceptOverride,
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistryOverrides,
   type RegistrySourceLocation,
+  readReviewLogFile,
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
   reviewLogPath,
@@ -190,6 +192,34 @@ async function additionalReviewLogPaths(
   return calendarDaysEndingOn(today, probeDays).map((day) => reviewLogPath(day, deviceId));
 }
 
+/**
+ * F8.4b's `[D-095]` contested marker needs dispute records, and
+ * `readReviewLogHistory` (`../../core/session/history.ts`) deliberately
+ * does not surface them — `../../core/review-log/parse.ts`'s own doc says
+ * why: a dispute is a different question from "every review event," so no
+ * consumer switching exhaustively over `ReviewLogEntry['kind']` has to grow
+ * an arm it has nothing to say about. `session/history.ts` sits outside
+ * this bead's `owns`, so rather than widen it, this re-reads exactly the
+ * `files` `readReviewLogHistory` already reported as read — no new
+ * discovery, no new merge policy, just the one field that walk drops.
+ *
+ * **No dedup, and none is needed.** `quarantinedGradeInstrumentIds`
+ * (`../../core/review-log/contest.ts`) only ever turns its input into a
+ * SET of instrument ids; feeding it the same dispute record twice (a
+ * genuine possibility if a record were ever duplicated across files, which
+ * `ol-egov.20`'s per-device-per-day file convention does not produce in
+ * practice) changes nothing about the resulting set. A second I/O pass per
+ * `load()` is the accepted cost — this provider's own module doc already
+ * states "no cache... recomputes from scratch every time."
+ */
+async function disputesFromFiles(
+  vault: VaultSource,
+  files: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
+}
+
 /** A `RegistryViewDeps` whose every method reads the vault and the log fresh — the production wiring `main.ts` hands to `RegistryView`. */
 export function createLocalRegistryProvider(
   deps: CreateLocalRegistryProviderDeps,
@@ -218,11 +248,12 @@ export function createLocalRegistryProvider(
         const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
         const additionalPaths = await additionalReviewLogPaths(today, probeDays, deps.deviceId);
 
-        const [{ entries }, enumeration, overrides] = await Promise.all([
+        const [{ entries, files }, enumeration, overrides] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault),
           overridesStore.load(),
         ]);
+        const disputes = await disputesFromFiles(deps.vault, files);
 
         const model = buildRegistryModel({
           concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
@@ -233,6 +264,7 @@ export function createLocalRegistryProvider(
           holdingCut,
           overrides,
           suspendedInstrumentIds: suspendedInstrumentIds(entries),
+          disputes,
         });
 
         return { kind: 'model', model };

@@ -5,9 +5,10 @@
 // Concept/instrument/course identifiers below are structural placeholders
 // ("concept-a", "COURSE-A", "qa:concept-a:1"), never fixture vocabulary —
 // INV-3.
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type { ExplainBackGrade, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptRecord } from '../concept/types.js';
+import { contestClaim, type DisputeLogRecord, resolveDispute } from '../review-log/contest.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import { buildRegistryModel } from './build.js';
@@ -86,6 +87,7 @@ function buildFor(
     entries: readonly ReviewLogEntry[];
     overridesState: RegistryOverrides;
     suspended: ReadonlySet<string>;
+    disputes: readonly DisputeLogRecord[];
   }> = {},
 ) {
   return buildRegistryModel({
@@ -97,6 +99,33 @@ function buildFor(
     holdingCut: HOLDING_CUT,
     overrides: overrides.overridesState ?? EMPTY_REGISTRY_OVERRIDES,
     suspendedInstrumentIds: overrides.suspended ?? new Set(),
+    // `exactOptionalPropertyTypes`: an explicit `disputes: undefined` is a
+    // type error on an optional field, so the key is omitted entirely
+    // rather than set to `undefined` when a test does not supply one.
+    ...(overrides.disputes === undefined ? {} : { disputes: overrides.disputes }),
+  });
+}
+
+/** A graded explain-back attempt for `qaInstrument()`'s id — F8.4b fixtures. Fixture strings are structural placeholders, never fixture vocabulary — INV-3. */
+function explainBackReview(
+  overrides: Partial<Omit<ReviewLogRecord, 'explainBackGrade'>> & {
+    readonly explainBackGrade?: Partial<ExplainBackGrade>;
+  } = {},
+): ReviewLogRecord {
+  const { explainBackGrade, ...rest } = overrides;
+  return review({
+    eventId: 'r-eb-1',
+    instrumentId: 'qa:concept-a:1',
+    instrumentType: 'explain-back',
+    rating: null,
+    explainBackGrade: {
+      soloLevel: 'relational',
+      contentRef: 'content-ref-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      ...explainBackGrade,
+    },
+    ...rest,
   });
 }
 
@@ -354,5 +383,162 @@ describe('buildRegistryModel — passage-grain provenance (ol-2zfj.48)', () => {
     const location = row?.instruments[0]?.sourceLocations[0];
     expect(location?.page).toBeUndefined();
     expect(location?.section).toBeUndefined();
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4b — The
+// explain-back history surface", tagged `@auto:core/registry/build.spec`.
+describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-175])', () => {
+  it('an instrument never explained back carries an empty history, not an absent field', () => {
+    const model = buildFor();
+    expect(model.concepts[0]?.instruments[0]?.explainBackHistory).toEqual([]);
+  });
+
+  it('a graded explain-back attempt appears as a history row on the ORIGINATING instrument, keyed by the review event, never scored into the instrument mix', () => {
+    const model = buildFor({ entries: [explainBackReview()] });
+    const row = model.concepts[0];
+    expect(row?.instruments).toHaveLength(1); // still exactly the one qa instrument — no second row invented
+    expect(row?.instruments[0]?.explainBackHistory).toEqual([
+      {
+        eventId: 'r-eb-1',
+        timestamp: '2026-01-10T09:00:00-04:00',
+        soloLevel: 'relational',
+        contested: false,
+      },
+    ]);
+  });
+
+  it('never carries the student answer text, the grader feedback, or a raw scalar/percentage — only eventId, timestamp and the SOLO enum value', () => {
+    const model = buildFor({ entries: [explainBackReview()] });
+    const row = model.concepts[0]?.instruments[0]?.explainBackHistory[0];
+    expect(row && Object.keys(row).sort()).toEqual([
+      'contested',
+      'eventId',
+      'soloLevel',
+      'timestamp',
+    ]);
+  });
+
+  it('multiple attempts are oldest first, and the fold never treats a superseded attempt as current', () => {
+    const model = buildFor({
+      entries: [
+        explainBackReview({
+          eventId: 'r-eb-1',
+          timestamp: '2026-01-10T09:00:00-04:00',
+          explainBackGrade: { soloLevel: 'unistructural' },
+        }),
+        explainBackReview({
+          eventId: 'r-eb-2',
+          timestamp: '2026-01-15T09:00:00-04:00',
+          explainBackGrade: { soloLevel: 'relational' },
+        }),
+      ],
+    });
+    const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
+    expect(history?.map((row) => row.eventId)).toEqual(['r-eb-1', 'r-eb-2']);
+    expect(history?.map((row) => row.soloLevel)).toEqual(['unistructural', 'relational']);
+  });
+
+  it('no `disputes` supplied — every row reads not-contested, never a fabricated guess either way', () => {
+    const model = buildFor({ entries: [explainBackReview()] });
+    expect(model.concepts[0]?.instruments[0]?.explainBackHistory[0]?.contested).toBe(false);
+  });
+
+  it('a `[D-095]` dispute against the CURRENT grade marks that row contested', () => {
+    const dispute = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:concept-a:1',
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-01-20T09:00:00-04:00',
+    });
+    const disputeRecord: DisputeLogRecord = {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: 'dispute-1',
+      ...dispute.record,
+    };
+    const model = buildFor({ entries: [explainBackReview()], disputes: [disputeRecord] });
+    expect(model.concepts[0]?.instruments[0]?.explainBackHistory[0]?.contested).toBe(true);
+  });
+
+  it('an OLDER, already-superseded attempt never carries the contested marker even when a dispute exists — only the current row can', () => {
+    const dispute = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:concept-a:1',
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-01-20T09:00:00-04:00',
+    });
+    const disputeRecord: DisputeLogRecord = {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: 'dispute-1',
+      ...dispute.record,
+    };
+    const model = buildFor({
+      entries: [
+        explainBackReview({ eventId: 'r-eb-1', timestamp: '2026-01-10T09:00:00-04:00' }),
+        explainBackReview({ eventId: 'r-eb-2', timestamp: '2026-01-15T09:00:00-04:00' }),
+      ],
+      disputes: [disputeRecord],
+    });
+    const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
+    expect(history?.[0]).toMatchObject({ eventId: 'r-eb-1', contested: false });
+    expect(history?.[1]).toMatchObject({ eventId: 'r-eb-2', contested: true });
+  });
+
+  it('a resolved dispute (upheld or corrected) clears the marker on the same row — it never becomes a second, separate entry', () => {
+    const opening = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:concept-a:1',
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-01-20T09:00:00-04:00',
+    });
+    const openingRecord: DisputeLogRecord = {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: 'dispute-1',
+      ...opening.record,
+    };
+    const resolution = resolveDispute({
+      dispute: openingRecord,
+      outcome: 'upheld',
+      timestamp: '2026-01-22T09:00:00-04:00',
+    });
+    const resolutionRecord: DisputeLogRecord = {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: 'dispute-2',
+      ...resolution,
+    };
+    const model = buildFor({
+      entries: [explainBackReview()],
+      disputes: [openingRecord, resolutionRecord],
+    });
+    const history = model.concepts[0]?.instruments[0]?.explainBackHistory;
+    expect(history).toHaveLength(1); // still exactly one row for this one attempt
+    expect(history?.[0]).toMatchObject({ eventId: 'r-eb-1', contested: false });
+  });
+
+  it('a freeform/topic-seeded explain-back attempt (a synthetic instrument id, no vault instrument) never appears in any instrument row', () => {
+    const model = buildFor({
+      entries: [
+        explainBackReview(),
+        explainBackReview({ eventId: 'r-eb-freeform', instrumentId: 'explain-back:concept-a:1' }),
+      ],
+    });
+    const row = model.concepts[0];
+    expect(row?.instruments).toHaveLength(1); // the one real qa instrument, unaffected
+    expect(row?.instruments[0]?.explainBackHistory.map((h) => h.eventId)).toEqual(['r-eb-1']);
+    // Still counted at the CONCEPT grain, which matches by conceptIds rather than instrumentId:
+    expect(row?.explainBack).toEqual({ attempted: true, attemptCount: 2 });
   });
 });

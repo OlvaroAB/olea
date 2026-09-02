@@ -24,6 +24,7 @@ describe('createVaultPruneInstrumentPort', () => {
       blockId: null,
       heading: null,
       sourceLocations: [],
+      explainBackHistory: [],
       pruned: false,
     });
 
@@ -60,6 +61,7 @@ describe('createVaultPruneInstrumentPort', () => {
       blockId: null,
       heading: null,
       sourceLocations: [],
+      explainBackHistory: [],
       pruned: false,
     };
 
@@ -90,6 +92,7 @@ describe('createVaultPruneInstrumentPort', () => {
       blockId: null,
       heading: null,
       sourceLocations: [],
+      explainBackHistory: [],
       pruned: false,
     });
 

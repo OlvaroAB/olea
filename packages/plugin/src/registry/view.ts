@@ -24,6 +24,13 @@
  * inventory that silently drops withdrawn rows would read as though they
  * had been. The default view hides them only to keep the working list
  * legible; the toggle is one click away, not a separate surface.
+ *
+ * **F8.4b (`[D-175]`) adds one instrument-grain section: explain-back
+ * history**, rendered by `renderExplainBackHistory` right on the same row
+ * `[D-171]`'s one-step affordance already scrolls and highlights to — see
+ * that method's own doc. No scoreboard: no total, no streak, and a
+ * contested attempt shows its `[D-095]` re-review state in place rather
+ * than being hidden or dropped.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -38,6 +45,8 @@ import {
   aliasesLine,
   coursesLine,
   EDIT_INSTRUMENT_ACTION,
+  EXPLAIN_BACK_HISTORY_HEADING,
+  explainBackHistoryRowLine,
   explainBackLine,
   INSTRUMENTS_SECTION_HEADING,
   instrumentLabel,
@@ -230,6 +239,34 @@ export class RegistryView extends ItemView {
     }
   }
 
+  /**
+   * F8.4b (`[D-175]`): an instrument's explain-back history, rendered right
+   * on its registry row — the same row `[D-171]`'s `openRegistryEntryFor`
+   * (`./obsidian-ports.ts`) already scrolls and highlights via
+   * `focusEntry`'s `data-olea-instrument-id` selector, so the explain-back
+   * modal's existing "See in registry" affordance lands here with history
+   * already visible, no second call needed. Omitted entirely when empty —
+   * matching `explainBackLine`'s own convention at the concept grain, since
+   * "never attempted" is the common case for a plain qa/cloze/mcq card and
+   * an explicit "not explained back yet" note on every such row would be
+   * noise, not information. Oldest first, exactly the order `./copy.js`'s
+   * `explainBackHistoryRowLine` and the underlying projection both use —
+   * never re-sorted here.
+   */
+  private renderExplainBackHistory(
+    root: HTMLElement,
+    history: RegistryInstrumentSummary['explainBackHistory'],
+  ): void {
+    if (history.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-registry-explain-back-history' });
+    section.createEl('h5', { text: EXPLAIN_BACK_HISTORY_HEADING });
+    const list = section.createEl('ul');
+    for (const row of history) {
+      const item = list.createEl('li', { text: explainBackHistoryRowLine(row) });
+      if (row.contested) item.addClass('olea-registry-explain-back-contested');
+    }
+  }
+
   private renderActions(root: HTMLElement, entry: RegistryConceptEntry): void {
     const actions = root.createDiv({ cls: 'olea-registry-concept-actions' });
 
@@ -277,6 +314,8 @@ export class RegistryView extends ItemView {
       if (instrument.pruned) {
         item.createSpan({ cls: 'olea-registry-withdrawn-badge', text: ` ${WITHDRAWN_LABEL}` });
       }
+
+      this.renderExplainBackHistory(item, instrument.explainBackHistory);
 
       const editButton = item.createEl('button', { text: EDIT_INSTRUMENT_ACTION });
       editButton.addEventListener('click', () => {

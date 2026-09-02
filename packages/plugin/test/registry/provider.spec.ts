@@ -9,7 +9,14 @@
  * round trip through `data.json`, and the prune/restore round trip through
  * the review log.
  */
-import type { ConceptRecord, RegistryInstrumentSummary, RegistrySourceLocation } from 'olea-core';
+import {
+  appendDisputeRecord,
+  appendReviewLogRecord,
+  type ConceptRecord,
+  contestClaim,
+  type RegistryInstrumentSummary,
+  type RegistrySourceLocation,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
 import type { EditInstrumentPort, OpenSourceLocationPort } from '../../src/registry/provider.js';
@@ -386,5 +393,86 @@ describe('createLocalRegistryProvider — conceptRecords thunk (ol-2zfj.49 closi
     });
     const model = await modelFrom(await provider.load());
     expect(model.concepts.map((c) => c.displayName).sort()).toEqual(['Concept A', 'Concept B']);
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4b — The
+// explain-back history surface", tagged `@auto:plugin/registry/provider.spec`.
+describe('createLocalRegistryProvider — explain-back history wiring (F8.4b, [D-175])', () => {
+  it('surfaces a graded explain-back attempt on the originating instrument, and marks it contested once a [D-095] dispute quarantines it', async () => {
+    const vault = fixtureVault();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const instrument = before.concepts[0]?.instruments[0];
+    if (instrument === undefined) throw new Error('missing instrument');
+    expect(instrument.explainBackHistory).toEqual([]);
+
+    const { record } = await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-01-20T09:00:00-04:00',
+        instrumentId: instrument.instrumentId,
+        instrumentType: 'explain-back',
+        conceptIds: [...instrument.conceptIds],
+        rating: null,
+        wasUnsure: false,
+        durationMs: 4000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['explain-back'],
+          planVersion: null,
+        },
+        explainBackGrade: {
+          soloLevel: 'relational',
+          contentRef: 'content-ref-1',
+          revisionOf: null,
+          artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'event-1' },
+    );
+
+    const afterGrade = await modelFrom(await provider.load());
+    const historied = afterGrade.concepts[0]?.instruments[0];
+    expect(historied?.explainBackHistory).toEqual([
+      {
+        eventId: 'event-1',
+        timestamp: record.timestamp,
+        soloLevel: 'relational',
+        contested: false,
+      },
+    ]);
+
+    // This provider is `session/history.ts`'s dispute-blind reader plus a
+    // second dispute-only read over the same files — see `disputesFromFiles`'s
+    // own doc. Proving that path here, not just at `buildRegistryModel`'s own
+    // unit level, is exactly the wiring this suite's own module doc says is
+    // its job (build.spec.ts already proves the fold itself).
+    const dispute = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: instrument.conceptIds,
+        instrumentId: instrument.instrumentId,
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-01-21T09:00:00-04:00',
+    });
+    await appendDisputeRecord(vault, dispute.record, {
+      deviceId: DEVICE,
+      generateEventId: () => 'dispute-1',
+    });
+
+    const afterDispute = await modelFrom(await provider.load());
+    const contested = afterDispute.concepts[0]?.instruments[0];
+    expect(contested?.explainBackHistory).toEqual([
+      {
+        eventId: 'event-1',
+        timestamp: record.timestamp,
+        soloLevel: 'relational',
+        contested: true,
+      },
+    ]);
   });
 });

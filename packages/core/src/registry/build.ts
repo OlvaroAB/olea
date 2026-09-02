@@ -40,6 +40,28 @@
  * doc) stable across a rename that lands in the same alphabetical bucket it
  * started in only coincidentally; a rename that changes the bucket moves the
  * row, which is the honest behaviour for an alphabetised list.
+ *
+ * ## F8.4b — per-instrument explain-back history (`[D-175]`, `ol-0r92.18`)
+ *
+ * `RegistryInstrumentSummary.explainBackHistory` is a THIN, read-time
+ * overlay: `explainBackGradeHistoryByInstrument` (`../review-log/explain-back-
+ * history.ts`) already folds the whole log into "which graded attempts
+ * belong to which instrument, oldest first, which one is current" — this
+ * module does no folding of its own, only a lookup by `instrumentId` per
+ * instrument summary, the same posture it already takes toward mastery and
+ * vitality. `input.disputes` is `[]` by default because
+ * `session/history.ts`'s `readReviewLogHistory` (the walk `provider.ts`
+ * uses) does not surface dispute records — see `BuildRegistryModelInput`'s
+ * own doc in `./types.ts`. A caller that never supplies `disputes` still
+ * gets a fully honest history, simply with no row ever marked contested,
+ * which is the correct default for "unknown" rather than a fabricated
+ * "definitely not contested."
+ *
+ * Only an INSTRUMENT-SEEDED explain-back attempt gets a row here — see
+ * `RegistryInstrumentSummary.explainBackHistory`'s own doc in `./types.ts`
+ * for why a freeform/topic-seeded attempt (no real vault instrument to
+ * attach to) is invisible at this grain and still counted at the concept
+ * grain by `explainBackSummaryFor` below.
  */
 
 import type { Provenance } from '../extract/types.js';
@@ -48,10 +70,16 @@ import {
   conceptIdsInLog,
   readAllConceptVitality,
 } from '../mastery/rollup.js';
+import { quarantinedGradeInstrumentIds } from '../review-log/contest.js';
+import {
+  type ExplainBackHistoryEntry,
+  explainBackGradeHistoryByInstrument,
+} from '../review-log/explain-back-history.js';
 import { aliasesFor, isConceptPruned, resolvedDisplayName } from './overrides.js';
 import type {
   BuildRegistryModelInput,
   RegistryConceptEntry,
+  RegistryExplainBackHistoryRow,
   RegistryExplainBackSummary,
   RegistryInstrumentSummary,
   RegistryModel,
@@ -97,9 +125,37 @@ function instrumentSourceLocations(
   return [{ ...base, ...passageGrain(provenance.location) }];
 }
 
+/**
+ * F8.4b's per-instrument explain-back history row set — oldest first,
+ * exactly `explainBackGradeHistoryByInstrument`'s own order, with the
+ * `[D-095]` contested marker overlaid on the CURRENT (non-superseded) row
+ * only. An older, already-superseded attempt never carries the marker even
+ * if it was disputed once: `quarantinedGradeInstrumentIds` already applies
+ * `[D-095]`'s evidence-relative aging (a dispute retires once the claim it
+ * rode recomputes on new evidence), so the only grade that CAN be presently
+ * quarantined is the instrument's current standing one — the same reading
+ * GLOSSARY's SOLO rule 3 gives depth ("the MOST RECENT graded explain-back")
+ * applied to contest state instead of to the fold.
+ */
+function explainBackHistoryFor(
+  historyByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
+  quarantinedInstrumentIds: ReadonlySet<string>,
+  instrumentId: string,
+): readonly RegistryExplainBackHistoryRow[] {
+  const entries = historyByInstrument.get(instrumentId) ?? [];
+  return entries.map((entry) => ({
+    eventId: entry.eventId,
+    timestamp: entry.timestamp,
+    soloLevel: entry.soloLevel,
+    contested: !entry.superseded && quarantinedInstrumentIds.has(instrumentId),
+  }));
+}
+
 function instrumentSummary(
   record: BuildRegistryModelInput['instrumentRecords'][number],
   suspended: ReadonlySet<string>,
+  explainBackHistoryByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
+  quarantinedInstrumentIds: ReadonlySet<string>,
 ): RegistryInstrumentSummary {
   return {
     instrumentId: record.instrumentId,
@@ -110,6 +166,11 @@ function instrumentSummary(
     blockId: record.blockId,
     heading: record.heading,
     sourceLocations: instrumentSourceLocations(record),
+    explainBackHistory: explainBackHistoryFor(
+      explainBackHistoryByInstrument,
+      quarantinedInstrumentIds,
+      record.instrumentId,
+    ),
     pruned: suspended.has(record.instrumentId),
   };
 }
@@ -163,10 +224,17 @@ function conceptSourceLocations(
 function groupInstrumentsByConcept(
   instrumentRecords: BuildRegistryModelInput['instrumentRecords'],
   suspended: ReadonlySet<string>,
+  explainBackHistoryByInstrument: ReadonlyMap<string, readonly ExplainBackHistoryEntry[]>,
+  quarantinedInstrumentIds: ReadonlySet<string>,
 ): ReadonlyMap<string, RegistryInstrumentSummary[]> {
   const byConcept = new Map<string, RegistryInstrumentSummary[]>();
   for (const record of instrumentRecords) {
-    const summary = instrumentSummary(record, suspended);
+    const summary = instrumentSummary(
+      record,
+      suspended,
+      explainBackHistoryByInstrument,
+      quarantinedInstrumentIds,
+    );
     for (const conceptId of record.conceptIds) {
       const bucket = byConcept.get(conceptId);
       if (bucket === undefined) byConcept.set(conceptId, [summary]);
@@ -213,9 +281,14 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
     return true;
   });
 
+  const explainBackHistoryByInstrument = explainBackGradeHistoryByInstrument(input.entries);
+  const quarantinedInstrumentIds = new Set(quarantinedGradeInstrumentIds(input.disputes ?? []));
+
   const instrumentsByConcept = groupInstrumentsByConcept(
     input.instrumentRecords,
     input.suspendedInstrumentIds,
+    explainBackHistoryByInstrument,
+    quarantinedInstrumentIds,
   );
 
   // Every concept id the review log itself names, unioned with the concepts

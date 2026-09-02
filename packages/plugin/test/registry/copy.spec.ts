@@ -1,7 +1,12 @@
+import type { SoloLevel } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import {
   aliasesLine,
   coursesLine,
+  EXPLAIN_BACK_HISTORY_CONTESTED_MARKER,
+  EXPLAIN_BACK_HISTORY_HEADING,
+  explainBackDepthPhrase,
+  explainBackHistoryRowLine,
   explainBackLine,
   instrumentLabel,
   masteryStatedLine,
@@ -13,6 +18,14 @@ import {
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
 } from '../../src/registry/copy.js';
+
+const ALL_SOLO_LEVELS: readonly SoloLevel[] = [
+  'prestructural',
+  'unistructural',
+  'multistructural',
+  'relational',
+  'extended-abstract',
+];
 
 /** Every exported string constant/function's output this module owns, gathered once so the vocabulary sweep below is exhaustive rather than a hand-picked sample. */
 function everyStringThisModuleCanProduce(): readonly string[] {
@@ -34,6 +47,21 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     instrumentLabel('cloze'),
     instrumentLabel('mcq'),
     masteryStatedLine('sapling', { value: 'holding', weakest: null, instrumentsRead: 0 }),
+    EXPLAIN_BACK_HISTORY_HEADING,
+    EXPLAIN_BACK_HISTORY_CONTESTED_MARKER,
+    ...ALL_SOLO_LEVELS.map((level) => explainBackDepthPhrase(level)),
+    explainBackHistoryRowLine({
+      eventId: 'r-eb-1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      soloLevel: 'relational',
+      contested: false,
+    }),
+    explainBackHistoryRowLine({
+      eventId: 'r-eb-2',
+      timestamp: '2026-01-20T09:00:00-04:00',
+      soloLevel: 'prestructural',
+      contested: true,
+    }),
   ];
 }
 
@@ -130,5 +158,63 @@ describe('explainBackLine', () => {
 
   it('states the count, never a judgement about whether it is enough', () => {
     expect(explainBackLine({ attempted: true, attemptCount: 1 })).toBe('Explained back 1 time.');
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4b — The
+// explain-back history surface", tagged `@auto:plugin/registry/copy.spec`.
+describe('explainBackDepthPhrase (F8.4b, GLOSSARY SOLO rule 5)', () => {
+  it('never prints the raw SOLO enum name for any level', () => {
+    for (const level of ALL_SOLO_LEVELS) {
+      expect(explainBackDepthPhrase(level).toLowerCase()).not.toBe(level);
+      expect(explainBackDepthPhrase(level).toLowerCase()).not.toContain(level);
+    }
+  });
+
+  it('never prints a number, for any level', () => {
+    for (const level of ALL_SOLO_LEVELS) {
+      expect(explainBackDepthPhrase(level)).not.toMatch(/\d/);
+    }
+  });
+
+  it('the top level matches the vocabulary registry\'s own V5 worked example verbatim ("explained at full depth")', () => {
+    expect(explainBackDepthPhrase('extended-abstract')).toBe('at full depth');
+  });
+
+  it('every level produces a distinct phrase — no two SOLO levels collapse to the same reported reading', () => {
+    const phrases = ALL_SOLO_LEVELS.map((level) => explainBackDepthPhrase(level));
+    expect(new Set(phrases).size).toBe(ALL_SOLO_LEVELS.length);
+  });
+});
+
+describe('explainBackHistoryRowLine (F8.4b)', () => {
+  it('states the depth phrase and the date, with no contested marker on an uncontested row', () => {
+    const line = explainBackHistoryRowLine({
+      eventId: 'r-eb-1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      soloLevel: 'relational',
+      contested: false,
+    });
+    expect(line).toBe('Explained with the points tied together on 10 Jan 2026.');
+  });
+
+  it('appends the [D-095] contested marker, naming the re-review state, when this row is contested', () => {
+    const line = explainBackHistoryRowLine({
+      eventId: 'r-eb-1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      soloLevel: 'relational',
+      contested: true,
+    });
+    expect(line).toBe('Explained with the points tied together on 10 Jan 2026. (under re-review)');
+  });
+
+  it('never carries the answer text, the grader feedback, or a raw number/percentage — only the depth phrase and the date', () => {
+    const line = explainBackHistoryRowLine({
+      eventId: 'r-eb-1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      soloLevel: 'prestructural',
+      contested: false,
+    });
+    expect(line).not.toMatch(/\d%|\bscore\b/i);
   });
 });

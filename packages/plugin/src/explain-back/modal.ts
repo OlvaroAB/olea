@@ -466,6 +466,10 @@ export class ExplainBackModal extends Modal {
       // grounded in the same originating instrument (`prompt
       // .originInstrumentId`) — leading to that instrument's registry entry.
       // Never a source path, heading or page printed here.
+      // `[D-175]`/F8.4b: that same registry entry now also carries this
+      // instrument's explain-back history, so this click target needed no
+      // change to also satisfy F8.4b's own one-step-affordance clause — see
+      // `./copy.ts`'s `EXPLAIN_BACK_REGISTRY_ENTRY_ACTION` doc.
       const registryAction = root.createEl('button', {
         cls: 'olea-explain-back-registry-action',
         text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,

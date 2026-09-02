@@ -38,6 +38,16 @@ export const EXPLAIN_BACK_DISCARD_LABEL = 'Try again';
  * registry entry, never a printed source path, heading or page here. One
  * control for the whole cited-issues list, not one per issue — every cited
  * issue in a single attempt is grounded in the same originating instrument.
+ *
+ * **F8.4b (`[D-175]`) reuses this exact string and click target rather than
+ * adding a second affordance for "see my explain-back history".** The
+ * ruling's own words: "mirroring `[D-171]`'s existing provenance shape...
+ * rather than inventing a second pattern for a second kind of history." The
+ * registry entry this button already opens (`prompt.originInstrumentId`,
+ * `./modal.ts`) now also carries that instrument's explain-back history
+ * (`packages/plugin/src/registry/view.ts`'s `renderExplainBackHistory`) —
+ * no functional change needed here beyond this note, since the button
+ * already lands on the right row.
  */
 export const EXPLAIN_BACK_REGISTRY_ENTRY_ACTION = 'See in registry';
 

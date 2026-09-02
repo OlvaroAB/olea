@@ -48,7 +48,7 @@
  * needs), so a real generative call does not exercise this today.
  */
 
-import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
+import type { MasteryState, ReviewLogEntry, SoloLevel } from 'olea-contracts';
 import type { ConceptRecord, ConceptTier } from '../concept/types.js';
 import type {
   ConceptMasteryEvidence,
@@ -56,6 +56,7 @@ import type {
   EvidenceTier,
 } from '../mastery/rollup.js';
 import type { VitalityReading } from '../mastery/vitality.js';
+import type { DisputeLogRecord } from '../review-log/contest.js';
 import type { Scheduler } from '../scheduler/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -66,6 +67,7 @@ export type {
   EvidenceTier,
   MasteryState,
   ReviewLogEntry,
+  SoloLevel,
 };
 
 /**
@@ -131,6 +133,19 @@ export interface RegistryInstrumentSummary {
    */
   readonly sourceLocations: readonly RegistrySourceLocation[];
   /**
+   * F8.4b's explain-back history for THIS instrument, oldest first — empty
+   * when explain-back has never been attempted against it. Only an
+   * INSTRUMENT-SEEDED explain-back attempt (F5's on-demand-from-a-card,
+   * confusion routing, session assembly, Today's suggestion entry points)
+   * ever appears here: a freeform/topic-seeded attempt
+   * (`ExplainBackModal`'s `generateInstrumentId` case) carries a synthetic
+   * id with no vault-persisted instrument to attach to, so it has no row
+   * here — it still counts toward `RegistryConceptEntry.explainBack`'s
+   * concept-grain summary, which matches by concept id rather than
+   * instrument id for exactly this reason.
+   */
+  readonly explainBackHistory: readonly RegistryExplainBackHistoryRow[];
+  /**
    * F8.5's withdrawal state, at the INSTRUMENT grain. Backed by the existing
    * suspend/unsuspend projection (`../review-log/suspension.js`) — the
    * registry's prune affordance is a second caller of that already-frozen,
@@ -148,6 +163,34 @@ export interface RegistryInstrumentSummary {
 export interface RegistryExplainBackSummary {
   readonly attempted: boolean;
   readonly attemptCount: number;
+}
+
+/**
+ * One graded explain-back attempt on an instrument's registry entry
+ * (F8.4b, `[D-175]`) — oldest first, exactly
+ * `../review-log/explain-back-history.ts`'s `explainBackGradeHistoryByInstrument`
+ * order. Deliberately thin: never the student's answer text or the
+ * grader's feedback — those stay behind `[D-077]`'s content store
+ * (`contentRef`), resolved only for an entry a caller chooses to expand,
+ * which this registry surface does not do. Never a raw scalar or
+ * percentage either (F8.3, F2.11's two-axis discipline) — `soloLevel` is
+ * the SOLO enum value itself, for `./build.ts`'s doc's own reasons the
+ * PLUGIN copy layer renders in the reporting voice (GLOSSARY SOLO rule 5:
+ * the raw name is never exposed to her), never rendered by this module.
+ */
+export interface RegistryExplainBackHistoryRow {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly soloLevel: SoloLevel;
+  /**
+   * True only for the instrument's CURRENT (non-superseded) graded attempt,
+   * and only while that grade is presently quarantined under `[D-095]`.
+   * An older, already-superseded attempt never carries this even if it was
+   * disputed once — `[D-095]`'s evidence-relative aging means a dispute
+   * retires with the reading it rode once a fresher grade lands, and this
+   * field never re-derives that itself; see `./build.ts`'s doc.
+   */
+  readonly contested: boolean;
 }
 
 /** One row of the registry — one concept, everything F8.4 says the browse surface must show about it. */
@@ -216,6 +259,18 @@ export interface BuildRegistryModelInput {
   readonly overrides: RegistryOverrides;
   /** `../review-log/suspension.js`'s `suspendedInstrumentIds(entries)` — passed in rather than recomputed, since a caller building several views from one log should not re-fold it per view. */
   readonly suspendedInstrumentIds: ReadonlySet<string>;
+  /**
+   * `[D-095]` dispute records, folded into F8.4b's per-instrument contested
+   * marker via `../review-log/contest.js`'s `quarantinedGradeInstrumentIds`.
+   * **Optional, and absent is a real, non-error state**: `../session/history.js`'s
+   * `readReviewLogHistory` (this codebase's one whole-log reader) keeps
+   * dispute records out of the `entries` it returns — `./build.ts`'s own
+   * doc on `parse.ts`'s separate `disputes` field states why — so a caller
+   * that has not been updated to also gather them (or genuinely has none)
+   * simply produces no contested markers, never a crash and never a
+   * fabricated "not contested" read where the truth is unknown.
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
 }
 
 /** One concept's rename history and current override. */
