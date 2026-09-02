@@ -71,6 +71,39 @@ describe('materializeAcceptedDraft', () => {
     expect(vault.raw(notePath)).toBe('prose\n');
   });
 
+  it('a leading BOM on a frontmatter note still lands the block after frontmatter, not before it (ol-2zfj.51)', async () => {
+    // A BOM-prefixed note is still recognised as opening with frontmatter
+    // (block/parse.ts's fix for ol-2zfj.51) — so this file's own block-0
+    // special case (module doc's `ol-p3t07b` note) still inserts after it
+    // rather than pushing the frontmatter down past the new MCQ block, which
+    // is exactly the defect that would silently unbind the note's concept.
+    const notePath = '01 Courses/COGS214/Week 2.md';
+    const original = '﻿---\ncourse: coined-course\n---\n\n# Week 2\n\nSome coined prose.\n';
+    const vault = new MemoryVaultSource({ [notePath]: original });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 'What limits working memory capacity?',
+        correctAnswer: 'Chunking',
+        distractors: ['A', 'B', 'C', 'D'],
+        feedback: 'See the lecture notes.',
+      },
+    });
+
+    const written = vault.raw(notePath) ?? '';
+    // The BOM is still the very first byte of the file (INV-2), and the
+    // frontmatter block is still first — not buried after the inserted MCQ
+    // block the way it would be if this fell back to literal-offset-zero.
+    expect(written.startsWith('﻿---\ncourse: coined-course\n---\n')).toBe(true);
+    expect(written).toContain('Some coined prose.');
+
+    const { instruments, invalid } = parseMcqBlocks(written);
+    expect(invalid).toEqual([]);
+    expect(instruments).toHaveLength(1);
+    expect(instruments[0]?.id).toBe(result.instrumentId);
+  });
+
   it('no predecessor supplied: the block carries none, and no succession record is appended', async () => {
     const notePath = 'note-no-predecessor.md';
     const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });

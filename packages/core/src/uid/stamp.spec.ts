@@ -194,6 +194,53 @@ describe('stampUid — CRLF file that also carries frontmatter (Reyes fixture)',
   });
 });
 
+describe('stampUid — a leading UTF-8 BOM file that also carries frontmatter (ol-2zfj.51)', () => {
+  // Coined content (INV-3) — no fixture in the vault carries a BOM, so this
+  // is constructed directly, mirroring the CRLF describe block above.
+  const before = '﻿---\ncourse: coined-course\nweek: 3\n---\n\nCoined prose.\n';
+
+  it('the fixture really opens with a BOM (sanity check)', () => {
+    expect(before.charCodeAt(0)).toBe(0xfeff);
+  });
+
+  it('stamps into the note’s existing frontmatter rather than prepending a second, spurious block', () => {
+    const result = stampUid(before, { generateId: () => 'fixed-uid-bom' });
+    expect(result.changed).toBe(true);
+
+    // Exactly one new line, everything else byte-identical, same proof
+    // shape as every other describe block in this file.
+    const beforeLines = toLines(before);
+    const afterLines = toLines(result.content);
+    expect(afterLines.length).toBe(beforeLines.length + 1);
+    const newLineIndex = afterLines.findIndex((l) => l.startsWith(`${OLEA_UID_KEY}:`));
+    expect(newLineIndex).toBeGreaterThan(-1);
+    const spliced = [...afterLines];
+    spliced.splice(newLineIndex, 1);
+    expect(spliced.join('')).toBe(before);
+
+    // The BOM is still the very first character of the result (INV-2) —
+    // never stripped, never pushed down behind a second frontmatter block.
+    expect(result.content.charCodeAt(0)).toBe(0xfeff);
+    expect(result.content.startsWith('﻿---\n')).toBe(true);
+
+    // The ORIGINAL frontmatter's own fields are still readable as
+    // frontmatter, not buried as body text after a spurious second block.
+    const innerStart = result.content.indexOf('\n') + 1;
+    const closeIdx = result.content.indexOf('\n---', innerStart);
+    const inner = result.content.slice(innerStart, closeIdx + 1);
+    const fm = parseFrontmatter(inner);
+    const course = fm.nodes.find((n) => n.kind === 'entry' && n.key === 'course');
+    expect(course).toBeDefined();
+  });
+
+  it('is idempotent on the BOM fixture too', () => {
+    const first = stampUid(before, { generateId: () => 'fixed-uid-bom' });
+    const second = stampUid(first.content, { generateId: () => 'should-not-be-used' });
+    expect(second.changed).toBe(false);
+    expect(second.content).toBe(first.content);
+  });
+});
+
 describe('stampUid — a frontmatter entry that already exists but is empty (template-style placeholder)', () => {
   it('fills the empty value in place rather than inserting a second entry', () => {
     const before = '---\nolea-uid: \ncourse: GEOL204\n---\n\n# Title\n';

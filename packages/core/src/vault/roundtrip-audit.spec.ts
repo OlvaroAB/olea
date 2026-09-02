@@ -178,35 +178,42 @@ describe('stampUid (uid/stamp.ts) — round-trip audit', () => {
     });
   }
 
-  // --- FINDING: leading BOM defeats frontmatter recognition ---------------
+  // --- FIXED: leading BOM no longer defeats frontmatter recognition -------
   //
-  // `block/parse.ts`'s frontmatter detection matches line 0 against the
-  // literal string '---' (parse.ts:178). A leading BOM survives as the
+  // `block/parse.ts`'s frontmatter detection used to match line 0 against
+  // the literal string '---' (parse.ts:178). A leading BOM survives as the
   // first character of that same line (folder-source.ts's own doc: reading
-  // and writing never strip or add one), so `first.content` is '﻿---',
-  // which never equals '---'. `stampUid` (stamp.ts:185) then falls through
-  // to `stampNoFrontmatter` and prepends a BRAND NEW frontmatter block
-  // ahead of the BOM, rather than stamping the note's real one. The result
-  // is still a pure insertion (assertPureInsertion above passes on it) — no
-  // byte is corrupted — but the original `course:`/`week:` frontmatter is
-  // now buried as ordinary body text after a second, spurious frontmatter
-  // block, invisible to anything that reads frontmatter for meaning
-  // (`frontmatter/read.ts` and every caller of it) from then on.
-  it.fails('SHOULD stamp the uid into the note’s existing frontmatter block even when the file opens with a BOM — it instead creates a second, spurious frontmatter block ahead of the real one (block/parse.ts:178, uid/stamp.ts:185)', () => {
+  // and writing never strip or add one), so `first.content` was '﻿---',
+  // which never equalled '---'. `stampUid` (stamp.ts:185) then fell through
+  // to `stampNoFrontmatter` and prepended a BRAND NEW frontmatter block
+  // ahead of the BOM, rather than stamping the note's real one, burying the
+  // original `course:`/`week:` frontmatter as body text after a second,
+  // spurious frontmatter block. Fixed (`ol-2zfj.51`) by stripping a leading
+  // BOM only for the '---' comparison, never from the recorded span — see
+  // `block/parse.ts`'s frontmatter-detection comment.
+  it('stamps the uid into the note’s existing frontmatter block even when the file opens with a BOM (ol-2zfj.51)', () => {
     const before = withLeadingBom(UID_BASE);
     const result = stampUid(before, { generateId: () => 'audit-uid-1' });
+
+    // The BOM is still the very first byte of the result (INV-2) — never
+    // stripped, never pushed down behind a second frontmatter block.
+    expect(result.content.charCodeAt(0)).toBe(0xfeff);
 
     const doc = parseDocument(result.content);
     const fmBlock = doc.blocks[0];
     if (fmBlock?.kind !== 'frontmatter') {
       throw new Error('expected the first block of the result to be recognised frontmatter');
     }
+    // Exactly one frontmatter block — no spurious second one prepended.
+    expect(doc.blocks.filter((b) => b.kind === 'frontmatter')).toHaveLength(1);
+
     const fm = parseFrontmatter(fmBlock.inner);
     const course = fm.nodes.find((n): n is EntryNode => n.kind === 'entry' && n.key === 'course');
-    // This is the real defect: `course` was in the ORIGINAL frontmatter
-    // and is not recoverable from the one block a fresh parse now calls
-    // "frontmatter" at all.
+    // `course` was in the ORIGINAL frontmatter, and is recoverable from the
+    // one block a fresh parse calls "frontmatter" — the stamp landed inside
+    // it rather than ahead of it.
     expect(course).toBeDefined();
+    assertPureInsertion(before, result.content);
   });
 });
 

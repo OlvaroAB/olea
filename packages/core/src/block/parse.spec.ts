@@ -45,6 +45,28 @@ describe('parseDocument — frontmatter (C1.3: delimited, not interpreted)', () 
     expect(doc.blocks.some((b) => b.kind === 'frontmatter')).toBe(false);
     expect(doc.blocks[0]?.kind).toBe('thematicBreak');
   });
+
+  it('a leading UTF-8 BOM does not defeat frontmatter recognition (ol-2zfj.51)', () => {
+    const source = '﻿---\nfoo: bar\n---\n\n# Title\n';
+    const doc = parseAndCheck(source);
+    expect(doc.blocks[0]?.kind).toBe('frontmatter');
+    if (doc.blocks[0]?.kind === 'frontmatter') {
+      // The BOM is inside the block's own recorded span (start === 0), never
+      // stripped — every writer that inserts by span reproduces it untouched.
+      expect(doc.blocks[0].raw).toBe('﻿---\nfoo: bar\n---\n');
+      expect(doc.blocks[0].raw.startsWith('﻿')).toBe(true);
+      expect(doc.blocks[0].start).toBe(0);
+      // `inner` is unaffected — the BOM lives on line 0's delimiter, not in
+      // the interpreted value space.
+      expect(doc.blocks[0].inner).toBe('foo: bar\n');
+    }
+  });
+
+  it('a bare BOM with no closing delimiter still falls through, same as the no-BOM case', () => {
+    const source = '﻿---\nno closing delimiter here\n';
+    const doc = parseAndCheck(source);
+    expect(doc.blocks.some((b) => b.kind === 'frontmatter')).toBe(false);
+  });
 });
 
 describe('parseDocument — headings', () => {

@@ -174,8 +174,21 @@ export function parseDocument(source: string): ParsedDocument {
   // matching `---` closing line actually exists — an unclosed `---` at the
   // top of the file is not frontmatter, it falls through to the normal scan
   // below and is treated as a thematic-break line.
+  //
+  // A leading UTF-8 BOM (U+FEFF) survives folder-source read/write as the
+  // first character of line 0 (`ol-2zfj.51`) — some editors and OSes add
+  // one, Olea never strips it (INV-2). Tolerated here by comparing line 0's
+  // content *after* stripping a leading BOM against the literal '---'; the
+  // BOM itself is never stripped from the recorded span, since `first.start`
+  // is always 0 and every block's `raw` is a direct `source.slice`. Every
+  // downstream writer that inserts by span (never by rebuilding the block's
+  // text) therefore reproduces the BOM byte-for-byte with no further change.
   const first = lines[0];
-  if (first && first.content === '---') {
+  const BOM = '\uFEFF';
+  const firstContent = first?.content.startsWith(BOM)
+    ? first.content.slice(BOM.length)
+    : first?.content;
+  if (first && firstContent === '---') {
     let closeIdx = -1;
     for (let k = 1; k < lines.length; k++) {
       const line = lines[k];
