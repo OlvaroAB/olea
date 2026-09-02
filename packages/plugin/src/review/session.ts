@@ -528,13 +528,38 @@ export class ReviewSession {
    * `requestExplainWhy` takes, and the reason `contestGestureLabel` is `null`
    * in that case, so she is never offered a gesture that would drop her
    * dispute.
+   *
+   * **Reachable while the current item is still a pending draft**
+   * (`instrument.draftId !== null`) — `[D-189]`/`ol-0r92.42` defers an MCQ
+   * draft's materialization to `mcqNext` specifically so the edit/reject
+   * pair stays live through `mcq-answered`, and the contest gesture renders
+   * on that same screen (`view.ts`'s header), independently of that pair.
+   * Contesting commits her to the grade being about a real instrument — the
+   * same "engaging with it is accepting it" posture `rate()` already has for
+   * Q&A/cloze — so this resolves the draft first, exactly as `rate()` does,
+   * before the contest key or `GradeContestPort` call is built. That keeps
+   * `contestedGrades`, this call, and the review-log entry `logAndAdvance`
+   * eventually writes all keyed on the SAME materialized id, never the
+   * transient draft-id stand-in (`ol-0r92.43`) — without it, the dispute
+   * record and `quarantinedGradeInstrumentIds`'s later fold would disagree
+   * on which instrument is quarantined and the re-derivation would never
+   * find it.
+   *
+   * `resolveDraftAt`'s own no-op-when-already-resolved and idempotent-accept
+   * guarantees mean `mcqNext`'s later `resolveDraftAt` call on this same item
+   * is then a true no-op — the same shape any item resolved earlier by
+   * `rate()`/`acceptEditDraft` already produces. The one visible side effect:
+   * once contested, `instrument.draftId` is `null`, so a subsequent
+   * `acceptEditDraft`/`rejectDraft` on this item silently no-ops — the same
+   * "no-op past an already-resolved draft" contract those two already
+   * document, not a new one introduced here.
    */
   async contestGrade(): Promise<void> {
     if (this.phase !== 'mcq-answered') return;
     const port = this.deps.gradeContestPort;
     if (port === undefined) return;
 
-    const item = this.requireCurrent();
+    const item = await this.resolveDraftAt(this.index, 'accepted');
     const instrument = this.requireMcq(item);
     if (this.contestedGrades.has(instrument.instrumentId)) return;
 
@@ -773,10 +798,14 @@ export class ReviewSession {
    * null`), resolves it through `draftAcceptPort.accept` and replaces it IN
    * PLACE with a `draftId: null` copy carrying the real, materialized
    * `instrumentId` — the one moment `[D-097]`'s "answering it is accepting
-   * it" actually happens (`rate`/`mcqAnswer`/`acceptEditDraft` are this
-   * method's only callers). A no-op returning the item unchanged for an
-   * ordinary instrument, so every caller can call this unconditionally
-   * rather than branching on `draftId` itself.
+   * it" actually happens (`rate`/`acceptEditDraft`/`contestGrade`/`mcqNext`
+   * are this method's only callers — NOT `mcqAnswer`, which deliberately
+   * defers resolution so the reveal-gated edit/reject pair stays live
+   * through `mcq-answered`, per that method's own doc). A no-op returning
+   * the item unchanged for an ordinary instrument, or one already resolved
+   * by an earlier caller (`accept`'s own idempotency guarantee makes a
+   * second `accept` on the same draft id safe too), so every caller can call
+   * this unconditionally rather than branching on `draftId` itself.
    */
   private async resolveDraftAt(
     index: number,

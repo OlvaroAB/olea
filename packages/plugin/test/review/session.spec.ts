@@ -6,8 +6,9 @@
  * parts of those features that are pure state-machine logic, not the
  * cross-process or rendered-pixel parts.
  */
-import { mapMcqRating } from 'olea-core';
+import { type DisputeLogRecord, mapMcqRating } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import type { GradeContestPort } from '../../src/review/contest.js';
 import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
 import {
   clozeFixture,
@@ -1177,5 +1178,123 @@ describe('[D-189] (ol-0r92.42) — MCQ passive-accept resolution defers to mcqNe
     ]);
     expect(editPort.calls).toHaveLength(1);
     expect(reviewLog.calls).toEqual([]);
+  });
+});
+
+/**
+ * A minimal `GradeContestPort` double, local to this file: `session.ts`
+ * never reads the record `contestGrade` resolves with, so a `Partial`-style
+ * stub is enough — the point of these tests is what KEY the session hands
+ * the port, not what the port hands back.
+ */
+function fakeGradeContestPort(): GradeContestPort & {
+  readonly contestCalls: Array<{
+    readonly instrumentId: string;
+    readonly conceptIds: readonly string[];
+    readonly evidenceBasis: string;
+  }>;
+} {
+  const contestCalls: Array<{
+    readonly instrumentId: string;
+    readonly conceptIds: readonly string[];
+    readonly evidenceBasis: string;
+  }> = [];
+  return {
+    contestCalls,
+    async contestGrade(input) {
+      contestCalls.push(input);
+      return {} as DisputeLogRecord;
+    },
+    async resolveContestedGrade(input) {
+      return input.dispute;
+    },
+  };
+}
+
+describe('ol-0r92.43 — contestGrade on a still-pending MCQ draft keys by the materialized id', () => {
+  // The bug: contesting during `mcq-answered` used `instrument.instrumentId`
+  // straight off the current item. For an ordinary, already-materialized
+  // instrument that's the real id — fine. But `[D-189]`/`ol-0r92.42`
+  // deliberately leaves a still-pending MCQ draft's `draftId` set all the
+  // way through `mcq-answered` (so the edit/reject pair stays live), which
+  // means `instrument.instrumentId` is STILL the transient draft-id stand-in
+  // at that point (`generation/review-adapter.ts`'s `toDraftReviewQueueItem`
+  // doc) — reachable because the contest gesture renders on the very same
+  // `mcq-answered` screen, independently of the draft pair (`view.ts`'s
+  // header). Contesting under that stand-in would key the dispute record
+  // one way and `logAndAdvance`'s later review-log write (via `mcqNext`'s
+  // own `resolveDraftAt`) another, so `quarantinedGradeInstrumentIds`'s fold
+  // would never find the instrument the dispute was actually about.
+
+  it('contesting a still-pending draft resolves it first, and keys the dispute on the materialized id', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort((draftId) => `resolved:${draftId}`);
+    const gradeContestPort = fakeGradeContestPort();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], draftAcceptPort, gradeContestPort }),
+    );
+    await session.start();
+    await session.mcqAnswer(0); // the fixture's correct option — still a pending draft here
+
+    await session.contestGrade();
+
+    // The draft was resolved (accepted) before the contest was recorded —
+    // not left for `mcqNext` to discover later.
+    expect(draftAcceptPort.calls).toEqual([
+      { kind: 'accept', draftId: 'draft-mcq-1', verdict: 'accepted' },
+    ]);
+    // And the contest call itself carries that same materialized id, never
+    // the transient `draft-mcq-1` stand-in.
+    expect(gradeContestPort.contestCalls).toHaveLength(1);
+    expect(gradeContestPort.contestCalls[0]?.instrumentId).toBe('resolved:draft-mcq-1');
+
+    const vm = session.getViewModel();
+    if (vm.phase !== 'mcq-answered') throw new Error('expected mcq-answered');
+    // The draft pair is gone — the same "no-op past an already-resolved
+    // draft" contract `acceptEditDraft`/`rejectDraft` already carry, not a
+    // new one — but the badge and the instrument agree on the resolved id.
+    expect(vm.instrument.draftId).toBeNull();
+    expect(vm.instrument.instrumentId).toBe('resolved:draft-mcq-1');
+  });
+
+  it('agrees with the review-log entry mcqNext later writes for the same item', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort((draftId) => `resolved:${draftId}`);
+    const gradeContestPort = fakeGradeContestPort();
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], draftAcceptPort, gradeContestPort, reviewLog }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.contestGrade();
+
+    await session.mcqNext();
+
+    // `mcqNext`'s own `resolveDraftAt` call is a true no-op here — `accept`
+    // was already made, exactly once, by `contestGrade` above.
+    expect(draftAcceptPort.calls).toHaveLength(1);
+    expect(reviewLog.calls).toHaveLength(1);
+    // The id the dispute was recorded under and the id the review-log entry
+    // carries are the SAME id — the whole point of this bead.
+    expect(reviewLog.calls[0]?.instrument.instrumentId).toBe(
+      gradeContestPort.contestCalls[0]?.instrumentId,
+    );
+  });
+
+  it('an already-materialized instrument (no draft) is untouched — contestGrade never calls the draft port', async () => {
+    const item = queueItem(mcqFixture()); // draftId: null by fixture default
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const gradeContestPort = fakeGradeContestPort();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], draftAcceptPort, gradeContestPort }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+
+    await session.contestGrade();
+
+    expect(draftAcceptPort.calls).toEqual([]);
+    expect(gradeContestPort.contestCalls[0]?.instrumentId).toBe('inst-mcq-1');
   });
 });
