@@ -163,6 +163,16 @@ export {
   MIN_SAMPLE_FOR_DISTRIBUTION_CHECK,
   summariseKnowledgeKindDistribution,
 } from './concept/knowledge-kind.js';
+// The [D-176]/IDN-2 offer-to-create-a-note gate (knowledge model §3, F4.2's
+// matching cross-reference) — see `./concept/note-offer.js`'s module doc for
+// the three-way check and which module each condition reuses without
+// recomputing it.
+export type {
+  NoteOfferConcept,
+  NoteOfferEvidence,
+  NoteOfferVerdict,
+} from './concept/note-offer.js';
+export { noteOfferEligible } from './concept/note-offer.js';
 export type {
   ConceptPassage,
   ConceptReadBudget,
@@ -1227,12 +1237,14 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendDisputeLogResult,
+  AppendExplainBackOfferLogResult,
   AppendRetrospectiveOfferLogResult,
   AppendReviewLogOptions,
   AppendReviewLogResult,
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
+  ExplainBackOfferLogRecordInput,
   RetrospectiveOfferLogRecordInput,
   ReviewLogRecordInput,
   SuccessionLogRecordInput,
@@ -1241,6 +1253,7 @@ export type {
 } from './review-log/write.js';
 export {
   appendDisputeRecord,
+  appendExplainBackOfferRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
