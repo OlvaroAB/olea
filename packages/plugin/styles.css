@@ -820,6 +820,32 @@ button.olea-review-mcq-option:hover {
   border-radius: 4px;
 }
 
+/* ol-l5og.14 (`[D-171]`): the registry pane's one-step hand-off — scroll to
+   and briefly highlight a citation's or instrument's row — had a working
+   `focusEntry()` in `registry/view.ts` with no visual effect: neither of
+   these two classes existed. `:focus-visible` here mirrors
+   `.olea-today-root :focus-visible` immediately above, same reasoning and
+   same token (`--interactive-accent` is branch-invariant — see that rule's
+   comment). `.olea-registry-focused` is the class `focusEntry()` toggles
+   for 2s on hand-off (`registry/view.ts`'s `focusEntry`); it gets the same
+   ring plus a background wash so the highlighted row reads as "this one"
+   even for a mouse user who never triggers `:focus-visible`. Reads
+   `--background-modifier-hover` directly with the same dark-floor literal
+   already established as `--olea-dark-wash` above, rather than standing up
+   this pane's own copy of the host-read indirection for one property. */
+.olea-registry-root :focus-visible {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.olea-registry-focused {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
+  background: var(--background-modifier-hover, rgba(255, 255, 255, 0.055));
+}
+
 .olea-today-header {
   display: flex;
   align-items: center;
