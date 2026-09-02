@@ -12,41 +12,50 @@
  * all, so the command is never a dead end. Reversible, and named here
  * rather than left implicit.
  *
- * ## The scope gap this provider does NOT close
+ * ## The scope resolution D-134 Q6 rules, and the gap that remains (`ol-0r92.31`)
  *
  * `retrospective/types.ts`'s module doc explains why `buildRetrospective`
- * takes `scope` as an explicit input: neither F1.7's stated-scope text nor
- * `buildConceptAssessmentEdges`'s course-level join produces a per-
- * assessment concept-id list. This provider always resolves
+ * takes `scope` as an explicit input. D-134 Q6 rules two paths, never
+ * blended: the assessment's own stated scope (F1.7) where recorded, else
+ * the evidenced concept set. This provider resolves the first path via
+ * `../../core/src/assessment/scope-concept-keys.ts`'s
+ * `resolveAssessmentGroupingContext` — the same comma-split,
+ * exact-normalized-name, course-scoped resolver `session-builder/
+ * provider.ts` already uses for F2.19's grouping seam — applied to just the
+ * chosen assessment. `scopeOrigin: 'assessment-stated'` is used whenever
+ * `chosen.scope` carries any non-blank text, even if every comma-segment
+ * fails to match a concept name (an honest empty stated scope, never
+ * silently reinterpreted as "no scope" and blended into the evidenced set).
  * `scopeOrigin: 'evidenced'` — "every concept belonging to this course that
- * has at least one review-log entry" (D-134 Q6's second path, "drawn from
- * her review history") — and never attempts the `'assessment-stated'` path.
- * `AssessmentRecord.scope` (the F1.7 prose) is read and reported to the
- * caller for display only (`assessmentScopeText` below), never fed into
- * `buildRetrospective` as a concept list, because doing so would mean
- * inventing a text→concept-id resolver this bead does not own and the
- * contract does not define.
+ * has at least one review-log entry" (D-134 Q6's second path) — fires only
+ * when the assessment records no scope text at all.
  *
- * ## D-134 Q3's fallback, applied the same coarse way
+ * ## D-134 Q3's fallback, still the coarse evidenced set
  *
- * `finalAssessmentScope` is the SAME evidenced set (every concept in the
- * course with review-log evidence) rather than a scope specific to the
- * course's actual final assessment — the same per-assessment join gap above
- * applies here too, so "the final assessment's concepts" collapses to "the
- * course's concepts" for the same honest reason.
+ * `finalAssessmentScope` is still the SAME evidenced set (every concept in
+ * the course with review-log evidence) rather than the course's actual
+ * final assessment's own resolved scope — `buildConceptAssessmentEdges`'s
+ * course-level join still does not produce a per-assessment-other-than-
+ * chosen concept list, so "the final assessment's concepts" still collapses
+ * to "the course's concepts" for the same honest reason `retrospective/
+ * types.ts` names. Out of this bead's scope: Q6 governs `scope`/
+ * `scopeOrigin` above, not Q3's separate carry-forward fallback.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
   type AssessmentRecord,
   buildRetrospective,
+  type ConceptRecord,
   createFsrsScheduler,
   hasAssessmentPassed,
   type RetrospectiveConceptCoverage,
   type RetrospectiveOfferEvent,
   type RetrospectiveOfferStatus,
   type RetrospectiveReading,
+  type RetrospectiveScopeOrigin,
   readAssessments,
+  resolveAssessmentGroupingContext,
   resolveRetrospectiveOfferStatus,
   type VaultPath,
   type VaultSource,
@@ -94,12 +103,11 @@ export interface RetrospectiveProviderDeps {
 }
 
 /** Every course concept with at least one review-log entry — D-134 Q6's "evidenced concept set, drawn from her review history". */
-async function evidencedCourseScope(
-  vault: VaultSource,
+function evidencedCourseScope(
+  concepts: readonly ConceptRecord[],
   course: string,
   entries: readonly ReviewLogEntry[],
-): Promise<readonly RetrospectiveConceptCoverage[]> {
-  const concepts = await extractConceptsFromVault(vault, {});
+): readonly RetrospectiveConceptCoverage[] {
   const reviewedConceptIds = new Set<string>();
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
@@ -109,6 +117,36 @@ async function evidencedCourseScope(
     .filter((c) => c.courses.includes(course) && reviewedConceptIds.has(c.key))
     .map((c) => ({ conceptId: c.key, conceptName: c.name }))
     .sort((a, b) => (a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0));
+}
+
+/**
+ * D-134 Q6's `'assessment-stated'` path: resolves `assessment.scope`'s F1.7
+ * prose into a concept-key set via `resolveAssessmentGroupingContext`
+ * (course-scoped, exact-normalized-name match, no fuzzy matching — see that
+ * module's own doc), then maps each resolved key back to the display name
+ * `RetrospectiveConceptCoverage` needs. A comma-segment matching no concept
+ * name is silently dropped by the resolver (counted in
+ * `unresolvedScopeSegmentCount`, not surfaced here) — this function's
+ * caller only runs this path once `hasStatedScope` has already confirmed
+ * the assessment records scope text at all, so an empty result here is an
+ * honest "stated but unresolved", never reinterpreted as "no scope".
+ */
+function assessmentStatedScope(
+  assessment: AssessmentRecord,
+  concepts: readonly ConceptRecord[],
+): readonly RetrospectiveConceptCoverage[] {
+  const { assessmentContext } = resolveAssessmentGroupingContext([assessment], concepts);
+  const scopeConceptKeys =
+    assessmentContext.get(assessment.path)?.scopeConceptKeys ?? new Set<string>();
+  const nameByKey = new Map(concepts.map((c) => [c.key, c.name] as const));
+  return [...scopeConceptKeys]
+    .map((key) => ({ conceptId: key, conceptName: nameByKey.get(key) ?? key }))
+    .sort((a, b) => (a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0));
+}
+
+/** D-134 Q6: a stated scope is used whenever the assessment records ANY non-blank scope text, regardless of whether every segment resolves to a concept — "where recorded" is about the text existing, not about match success. */
+function hasStatedScope(assessment: AssessmentRecord): boolean {
+  return assessment.scope !== undefined && assessment.scope.trim() !== '';
 }
 
 function compareByDueDescending(a: AssessmentRecord, b: AssessmentRecord): number {
@@ -172,9 +210,16 @@ export function createLocalRetrospectiveProvider(
 
       const course = chosen.course ?? 'Unassigned';
       const entries = history.entries;
-      const scope = await evidencedCourseScope(deps.vault, course, entries);
       const conceptRecords = await extractConceptsFromVault(deps.vault, {});
       const conceptCourses = conceptRecords.map((c) => ({ conceptId: c.key, courses: c.courses }));
+
+      const scopeOrigin: RetrospectiveScopeOrigin = hasStatedScope(chosen)
+        ? 'assessment-stated'
+        : 'evidenced';
+      const scope =
+        scopeOrigin === 'assessment-stated'
+          ? assessmentStatedScope(chosen, conceptRecords)
+          : evidencedCourseScope(conceptRecords, course, entries);
 
       const isLastAssessment =
         assessmentsRead.records.filter((r) => r.course === course).sort(compareByDueDescending)[0]
@@ -184,13 +229,20 @@ export function createLocalRetrospectiveProvider(
         assessmentPath: chosen.path,
         course,
         scope,
-        scopeOrigin: 'evidenced',
+        scopeOrigin,
         entries,
         scheduler,
         now,
         holdingCut,
         conceptCourses,
-        ...(isLastAssessment ? {} : { finalAssessmentScope: scope }),
+        // D-134 Q3's fallback is still the coarse course-wide evidenced set
+        // (this module's doc, "D-134 Q3's fallback") — deliberately NOT
+        // `scope` above, which as of this bead can be the narrower
+        // assessment-stated set for `chosen` itself and would be the wrong
+        // stand-in for a DIFFERENT (later) assessment's own scope.
+        ...(isLastAssessment
+          ? {}
+          : { finalAssessmentScope: evidencedCourseScope(conceptRecords, course, entries) }),
       });
 
       const status = resolveRetrospectiveOfferStatus(offerEvents, chosen.path, true);
