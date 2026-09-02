@@ -15,8 +15,21 @@
  * `accept.spec.ts`'s own `[D-133] predecessor threading` suite exercises it
  * end to end); this suite stays as the direct, unit-level proof of the
  * stamping/append mechanics themselves.
+ *
+ * The third `describe` below (`[D-181]`, `ol-2zfj.52`) covers the citation
+ * sidecar: a supplied `sourceCitation` is written keyed by the frozen
+ * instrument id, an absent one writes no sidecar file at all (omitted,
+ * never fabricated), and the last test proves the round trip end to end
+ * through `enumerateVaultInstruments` — the same reader
+ * `session/enumerate.spec.ts` unit-tests directly against a pre-written
+ * sidecar record.
  */
-import { enumerateVaultInstruments, parseMcqBlocks, reviewLogPath } from 'olea-core';
+import {
+  enumerateVaultInstruments,
+  parseMcqBlocks,
+  readInstrumentCitation,
+  reviewLogPath,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { ensureHomeNoteForConcept } from '../../src/generation/home-note.js';
 import { materializeAcceptedDraft } from '../../src/generation/materialize-mcq.js';
@@ -154,6 +167,83 @@ describe('materializeAcceptedDraft', () => {
     expect(instruments[0]?.predecessor).toBeNull();
     // No daily review-log file was ever created — nothing appended at all.
     expect(await vault.list({ under: '.olea' })).toEqual([]);
+  });
+});
+
+// `[D-181]` (`ol-2zfj.52`) — see this file's module doc.
+describe('materializeAcceptedDraft — [D-181] citation sidecar', () => {
+  function question() {
+    return {
+      stem: 's',
+      correctAnswer: 'a',
+      distractors: ['w', 'x', 'y', 'z'],
+      feedback: 'f',
+    };
+  }
+
+  it('writes the sidecar, keyed by the frozen instrument id, when the draft carries a citation', async () => {
+    const notePath = 'note-with-citation.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+      sourceCitation: {
+        sourcePath: 'coined-source.pdf',
+        page: 4,
+        section: 'Coined section heading',
+      },
+    });
+
+    expect(await readInstrumentCitation(vault, result.instrumentId)).toEqual({
+      sourcePath: 'coined-source.pdf',
+      page: 4,
+      section: 'Coined section heading',
+    });
+  });
+
+  it('writes no sidecar file at all when the draft carries no citation — omitted, never fabricated', async () => {
+    const notePath = 'note-no-citation.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+    });
+
+    expect(await readInstrumentCitation(vault, result.instrumentId)).toBeUndefined();
+    expect(await vault.list({ under: '.olea/citations' })).toEqual([]);
+  });
+
+  it('end to end: enumerateVaultInstruments reads the freshly-written citation back as sourceProvenance', async () => {
+    // Same bare-drop home-note fixture as the suite above, so the
+    // materialized instrument is actually bound and reachable through the
+    // vault-walk this citation is meant to be read by.
+    const sourcePath = '01 Courses/GEOL204/Lecture 4.pdf';
+    const vault = new MemoryVaultSource();
+    const notePath = await ensureHomeNoteForConcept(vault, sourcePath, 'Stratigraphy');
+    if (notePath === null) throw new Error('test setup: expected a home note path');
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 'Which structure preserves the storm record?',
+        correctAnswer: 'Hummocky stratification',
+        distractors: ['Ripple lamination', 'Cementation', 'Bioturbation', 'Paraconformity'],
+        feedback: 'See the lecture notes.',
+      },
+      sourceCitation: { sourcePath, page: 4, section: 'Storm deposits' },
+    });
+
+    const enumeration = await enumerateVaultInstruments(vault);
+    const record = enumeration.records.find((r) => r.instrumentId === result.instrumentId);
+    expect(record).toBeDefined();
+    // Never coupled to whatever grain `citationToSourceProvenance` fills
+    // `location.charRange` with (`enumerate.ts`'s own concern) — only that
+    // the cited document and page/section made the round trip.
+    expect(record?.sourceProvenance?.sourcePath).toBe(sourcePath);
+    expect(record?.sourceProvenance?.location.page).toBe(4);
+    expect(record?.sourceProvenance?.location.section).toBe('Storm deposits');
   });
 });
 

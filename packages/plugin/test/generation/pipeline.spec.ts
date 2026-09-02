@@ -144,6 +144,54 @@ describe('runGenerationSweep', () => {
     });
   });
 
+  it("[D-181]/`ol-2zfj.52`: threads the drafting unit's passage location into `sourceCitation` — the cited source document, never the embedding note", async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const unit: ExtractedUnit = {
+      text: 'irrelevant to this suite — the pipeline never reads unit text directly',
+      provenance: {
+        sourcePath: 'some-lecture.pdf',
+        location: { page: 7, charRange: { start: 0, end: 1 }, section: 'Encoding' },
+        embeddedIn: { notePath: COURSE_FOLDER_NOTE, blockStart: 0, blockEnd: 10 },
+      },
+    };
+
+    await runGenerationSweep([unit], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    const pending = await cache.listPending();
+    expect(pending[0]?.sourceCitation).toEqual({
+      sourcePath: 'some-lecture.pdf',
+      page: 7,
+      section: 'Encoding',
+    });
+    // The embedding note is `sourcePath` above — never confused with the cited source document.
+    expect(pending[0]?.sourcePath).toBe(COURSE_FOLDER_NOTE);
+  });
+
+  it('[D-181]: a bare-drop draft cites the standalone source itself, not the Olea-created home note', async () => {
+    const sourcePath = '01 Courses/COGS214/Lecture 4.pdf';
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([standaloneUnit(sourcePath)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    const pending = await cache.listPending();
+    expect(pending[0]?.sourceCitation).toEqual({ sourcePath, page: 1 });
+    expect(pending[0]?.sourcePath).not.toBe(sourcePath); // the home note, not the source
+  });
+
   it('INV-6: drafting never writes into her authored note — only the cache is touched', async () => {
     const herProse = '# Week 2\n\nHer own words about working memory, untouched.\n';
     const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: herProse });

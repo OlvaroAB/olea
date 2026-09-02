@@ -78,7 +78,7 @@
  * not yet" writes a cache entry either.
  */
 
-import type { ConceptRecord, ExtractedUnit, VaultSource } from 'olea-core';
+import type { ConceptRecord, ExtractedUnit, InstrumentCitation, VaultSource } from 'olea-core';
 import { courseFromPath, DEFAULT_COURSES_FOLDER } from 'olea-core';
 import type {
   DraftQuizCardsDeps,
@@ -184,6 +184,22 @@ function standaloneSourcePaths(units: readonly ExtractedUnit[]): readonly string
     if (unit.provenance.embeddedIn === undefined) seen.add(unit.provenance.sourcePath);
   }
   return [...seen].sort();
+}
+
+/**
+ * `[D-181]`/`ol-2zfj.52`: `ExtractedUnit.provenance` at `InstrumentCitation`'s grain — the source
+ * document's own `sourcePath` plus `location.page`/`.section`, never `location.charRange` (the
+ * sidecar this feeds has nowhere to keep a char offset — see `citation-store.ts`'s module doc) and
+ * never the unit's `embeddedIn` note (that is the *destination* `DraftRecord.sourcePath` already
+ * names, not the cited passage).
+ */
+function citationFromUnit(unit: ExtractedUnit): InstrumentCitation {
+  const { location } = unit.provenance;
+  return {
+    sourcePath: unit.provenance.sourcePath,
+    page: location.page,
+    ...(location.section !== undefined ? { section: location.section } : {}),
+  };
 }
 
 /**
@@ -293,6 +309,13 @@ export async function runGenerationSweep(
       if (questions === null || provenance === null) continue; // unparseable — nothing content-bearing to cache; revisited next sweep
 
       let notePath = notePaths.find((path) => courseFromPath(path, coursesFolder) === courseCode);
+      // `[D-181]`: the unit that resolved this course's drafting target for this sweep — the same
+      // approximation `notePath`/`sourcePath` above already make at the concept level (this sweep
+      // never determines which unit introduced which concept — see the module doc). `undefined`
+      // only if no unit actually matches, which should not happen given how `notePaths`/
+      // `sourcePaths` were built from `units` above — guarded rather than assumed, and the citation
+      // is simply omitted rather than fabricated when it doesn't.
+      let sourceUnit: ExtractedUnit | undefined;
       if (notePath === undefined) {
         // No embedding note named this course among this sweep's units —
         // the bare-drop case (`[D-179]`, F3.1/F3.3's amendment). A
@@ -306,7 +329,14 @@ export async function runGenerationSweep(
         const homeNote = await ensureHomeNoteForConcept(deps.vault, sourcePath, candidate.name);
         if (homeNote === null) continue; // a non-Olea file already sits at that path (INV-6) — nothing safe to write into this sweep
         notePath = homeNote;
+        sourceUnit = units.find((unit) => unit.provenance.sourcePath === sourcePath);
+      } else {
+        const embeddingNotePath = notePath;
+        sourceUnit = units.find(
+          (unit) => unit.provenance.embeddedIn?.notePath === embeddingNotePath,
+        );
       }
+      const sourceCitation = sourceUnit === undefined ? undefined : citationFromUnit(sourceUnit);
 
       const createdAt = now().toISOString();
       let sequence = 0;
@@ -320,6 +350,7 @@ export async function runGenerationSweep(
           // — see `types.ts`'s doc on `DraftRecord.conceptIds`.
           conceptIds: [candidate.key],
           sourcePath: notePath,
+          ...(sourceCitation !== undefined ? { sourceCitation } : {}),
           createdAt,
           question,
           provenance,

@@ -93,18 +93,34 @@
  * threading` suite) — both remaining gaps are one layer further upstream,
  * at the job-composition and revision-detection boundary, not in this
  * function's own call chain.
+ *
+ * ## The `[D-181]` citation sidecar (`ol-2zfj.52`)
+ *
+ * Immediately after `stampMcqId` mints the frozen instrument id, and before
+ * either write branch above, this writes `input.sourceCitation` — when
+ * supplied — to the citation sidecar (`writeInstrumentCitation`,
+ * `olea-core`'s `instrument/citation-store.ts`) keyed by that same id. This
+ * is the one write neither branch above needs to know about: it never
+ * touches `stamped.content`, never lands in her note (`[D-181]`'s own
+ * ruling — the sidecar, never text written into her notes), and happens
+ * exactly once regardless of which branch runs next. `accept.ts` forwards
+ * `DraftRecord.sourceCitation` here verbatim; omitted (never fabricated)
+ * when the pipeline had none to record — see that field's own doc
+ * (`generation/types.ts`) for why that can happen.
  */
 
 import {
   acceptGeneratedMcq,
   appendSuccessionRecord,
   buildSuccessionEvent,
+  type InstrumentCitation,
   insertMcqBlock,
   parseDocument,
   parseMcqBlocks,
   stampMcqId,
   type VaultPath,
   type VaultSource,
+  writeInstrumentCitation,
 } from 'olea-core';
 import { stampPredecessorField } from '../instrument-blocks/predecessor.js';
 import { isoWithLocalOffset } from '../review/ports.js';
@@ -120,6 +136,14 @@ export interface MaterializeAcceptedDraftInput {
    * reachability note.
    */
   readonly predecessorInstrumentId?: string;
+  /**
+   * `[D-181]`/`ol-2zfj.52`: the passage this draft was generated from
+   * (`DraftRecord.sourceCitation`, `generation/types.ts`) — written to the
+   * citation sidecar keyed by the frozen instrument id this call mints. See
+   * the module doc's own section. `undefined` when the pipeline had none —
+   * the sidecar write is skipped entirely rather than guessing one.
+   */
+  readonly sourceCitation?: InstrumentCitation;
 }
 
 /**
@@ -181,6 +205,13 @@ export async function materializeAcceptedDraft(
   }
 
   const stamped = stampMcqId(content, inserted.span);
+
+  // `[D-181]`: the sidecar, never text written into her notes — see the
+  // module doc's own section. Skipped, not fabricated, when the pipeline
+  // had no citation to record for this draft.
+  if (input.sourceCitation !== undefined) {
+    await writeInstrumentCitation(vault, stamped.id, input.sourceCitation);
+  }
 
   if (input.predecessorInstrumentId === undefined) {
     await vault.write(input.sourcePath, stamped.content);

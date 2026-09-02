@@ -18,6 +18,8 @@
  * reason among others — see `cache-store.ts`).
  */
 
+import type { InstrumentCitation } from 'olea-core';
+
 /** Mirrors `QuizGenerateResponsePayload['questions'][number]` (`draft-quiz-cards.ts`, olea repo) — the one question shape `draftQuizCardsForConcept` can currently produce. */
 export interface DraftQuestion {
   readonly stem: string;
@@ -61,6 +63,23 @@ export interface DraftRecord {
   readonly conceptIds: readonly string[];
   /** The note this draft's material was embedded in (F1.6) — where `accept.ts` inserts the MCQ block on acceptance, and the instrument's `sourcePath` thereafter. */
   readonly sourcePath: string;
+  /**
+   * `[D-181]`/`ol-2zfj.52`: the passage `pipeline.ts` drafted this concept
+   * from — `ExtractedUnit.provenance` threaded at draft time, at the same
+   * coarse grain `sourcePath` above already uses (the embedding note's or
+   * standalone source's own unit; `pipeline.ts`'s module doc explains why
+   * that grain is already an approximation at the concept level, not a new
+   * one this field introduces). **Never `sourcePath`'s note** — this is the
+   * cited source DOCUMENT's own location (a PDF/PPTX/DOCX page, optionally a
+   * section), mirroring `SourceLocation`'s `page`/`section` fields but never
+   * its `charRange` (`InstrumentCitation`'s own doc, `olea-core`).
+   * `undefined` when the pipeline had no unit to draft from — omitted, never
+   * fabricated. On accept, `accept.ts` forwards this verbatim into
+   * `materializeAcceptedDraft`, which writes it to the citation sidecar
+   * (`writeInstrumentCitation`) keyed by the frozen instrument id, or skips
+   * that write entirely when this is absent.
+   */
+  readonly sourceCitation?: InstrumentCitation;
   /** ISO-8601 with offset — when the pipeline drafted this. */
   readonly createdAt: string;
   readonly question: DraftQuestion;
@@ -139,6 +158,24 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   if (v.resolvedAt !== undefined && typeof v.resolvedAt !== 'string') return false;
   if (v.instrumentId !== undefined && typeof v.instrumentId !== 'string') return false;
   if (v.predecessorInstrumentId !== undefined && typeof v.predecessorInstrumentId !== 'string') {
+    return false;
+  }
+  if (v.sourceCitation !== undefined && !isInstrumentCitationShape(v.sourceCitation)) return false;
+  return true;
+}
+
+/**
+ * `InstrumentCitation`'s own shape (`sourcePath`, optional `page`/`section`) — not that module's
+ * export (`isCitationRecord`, `olea-core`), which additionally requires `instrumentId` and
+ * `schemaVersion`. `DraftRecord.sourceCitation` is the bare citation, minted before an
+ * `instrumentId` exists to key it by.
+ */
+function isInstrumentCitationShape(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  if (typeof c.sourcePath !== 'string' || c.sourcePath.length === 0) return false;
+  if (c.page !== undefined && typeof c.page !== 'number') return false;
+  if (c.section !== undefined && (typeof c.section !== 'string' || c.section.length === 0)) {
     return false;
   }
   return true;

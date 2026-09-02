@@ -105,6 +105,11 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
           ...(record.predecessorInstrumentId !== undefined
             ? { predecessorInstrumentId: record.predecessorInstrumentId }
             : {}),
+          // `[D-181]` (`ol-2zfj.52`): forwarded verbatim so the citation
+          // sidecar gets written keyed by the id this call mints — omitted,
+          // never fabricated, when `pipeline.ts` had no citation to record
+          // for this draft.
+          ...(record.sourceCitation !== undefined ? { sourceCitation: record.sourceCitation } : {}),
         },
         {
           // Only actually required by `materializeAcceptedDraft` when a
