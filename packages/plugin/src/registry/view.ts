@@ -207,7 +207,12 @@ export class RegistryView extends ItemView {
     this.renderInstruments(row, entry);
   }
 
-  /** `[D-171]`: the vault location(s) a concept or instrument was derived from, each opening at its known grain — never printed as a citation string, always a place to go. */
+  /**
+   * `[D-171]`: the vault location(s) a concept or instrument was derived
+   * from, each opening at its known grain — always a place to go, and now
+   * (`ol-2zfj.25`) labelled with that grain too via `./copy.js`'s
+   * `sourceLocationLabel`, rather than note name and heading alone.
+   */
   private renderSourceLocations(
     root: HTMLElement,
     locations: readonly RegistrySourceLocation[],

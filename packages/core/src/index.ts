@@ -996,6 +996,7 @@ export type {
   QueueSelectionContext,
 } from './queue/types.js';
 export { buildRegistryModel } from './registry/build.js';
+export { formatSourceCitation, passageGrainLabel } from './registry/citation.js';
 // The concept and instrument registry (F8.4/F8.4a/F8.5, `[REG-1]`,
 // `ol-4v2l`, amended acceptance `[D-135]`) — the browsable inventory over
 // concepts, their course associations, their instrument mix, and their

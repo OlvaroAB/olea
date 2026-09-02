@@ -35,7 +35,12 @@
  * **INV-1.** No `obsidian` import here — unit-tested under Vitest.
  */
 
-import type { RegistryConceptEntry, RegistrySourceLocation, Vitality } from 'olea-core';
+import {
+  formatSourceCitation,
+  type RegistryConceptEntry,
+  type RegistrySourceLocation,
+  type Vitality,
+} from 'olea-core';
 
 export const REGISTRY_VIEW_TITLE = 'Concepts and instruments';
 
@@ -114,17 +119,23 @@ export const SOURCE_LOCATIONS_HEADING = 'Sources';
 /** One instrument's per-location open affordance — "open", never a citation preposition, matching `EDIT_INSTRUMENT_ACTION`'s own plain-verb form. */
 export const OPEN_SOURCE_LOCATION_ACTION = 'Open source';
 
-/** The note's filename, without folders or extension — the same reading `instrumentLabel`'s own `noteTitle` field already gives a full `VaultInstrumentRecord`, derived here from a bare path since `RegistrySourceLocation` carries only `sourcePath`. */
-function noteNameFromPath(sourcePath: string): string {
-  const base = sourcePath.slice(sourcePath.lastIndexOf('/') + 1);
-  const dot = base.lastIndexOf('.');
-  return dot > 0 ? base.slice(0, dot) : base;
-}
-
-/** One source-location button's label (`[D-171]`) — the note it can be opened at, plus the heading when one is known. Never a page number or citation punctuation: this is an affordance to click, not a rendered citation. */
+/**
+ * One source-location button's label (`[D-171]`) — the note it can be
+ * opened at, plus the passage grain when one is known.
+ *
+ * **Updated `ol-2zfj.25` (F8.4 amended Sep 2026 — `[D-171]`):** this used
+ * to say "never a page number" and render heading only. `ol-2zfj.25`'s
+ * display rule — `location.section ?? page/slide-appropriate fallback` —
+ * now applies here via `olea-core`'s `formatSourceCitation`: a page-bearing
+ * PDF-like source shows `p. N`, a `.pptx` source shows `slide N` (the
+ * contract type's own convention — `page` IS the slide number, there is no
+ * separate slide field), and `section`/`heading` are used exactly as that
+ * formatter documents. Still an affordance to click, not a formal citation
+ * with punctuation rules — just an honest one now that shows the grain she
+ * can use to place it.
+ */
 export function sourceLocationLabel(location: RegistrySourceLocation): string {
-  const name = noteNameFromPath(location.sourcePath);
-  return location.heading ? `${name} (${location.heading})` : name;
+  return formatSourceCitation(location);
 }
 
 /** One instrument row's label — type and where it lives, never its content (F8.4 hands content to Obsidian). */
