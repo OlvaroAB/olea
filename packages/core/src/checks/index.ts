@@ -81,6 +81,10 @@ export {
   type ReplayDeterminismMeasured,
 } from './replay-determinism.js';
 export {
+  checkRetrospectiveOutsideIndex,
+  type RetrospectiveOutsideIndexMeasured,
+} from './retrospective-outside-index.js';
+export {
   checkRhythmNeutralisedTwin,
   type RhythmNeutralisedTwinMeasured,
   type RhythmTwinCase,
