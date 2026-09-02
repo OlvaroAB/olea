@@ -102,7 +102,7 @@ describe('chooseSupportLevel — self-assessment: may only ever raise the offer,
   });
 });
 
-describe('chooseSupportLevel — the ordering rule (register 3.9: read evidence as of the instant before the new review is written)', () => {
+describe('chooseSupportLevel — the ordering rule ([D-186]: fixed at composition, never inside a session)', () => {
   it("the decision for review N depends only on outcomes strictly before N, never on N's own outcome", () => {
     const historyBeforeReviewN: SessionSupportOutcome[] = [outcome(), outcome()];
     const decisionForReviewN = chooseSupportLevel(historyBeforeReviewN);
@@ -122,5 +122,37 @@ describe('chooseSupportLevel — the ordering rule (register 3.9: read evidence 
 
     expect(decisionForReviewN).toEqual({ level: 'independent', provenance: 'not-offered' });
     expect(wronglyComputedDecisionForReviewN).not.toEqual(decisionForReviewN);
+  });
+
+  it('reversal: the level cannot move mid-session — every review composed from the SAME frozen history agrees, even though a mid-session miss would have moved it', () => {
+    // F2.20/[D-186]'s rule is coarser than "per review N": the whole SESSION
+    // is fixed at composition, from sessions closed before it — never a
+    // per-review re-read of a growing log. A session with several reviews on
+    // the same concept × tier must therefore offer every one of them the
+    // identical level, computed once, even though the FIRST review's own
+    // (hypothetical, in-progress) outcome would — if it were wrongly folded
+    // in before the second review was scored — move the level the second
+    // review is shown at. That "read as of the instant before review N"
+    // per-review framing is exactly what this test shows the freeze
+    // forbids: reviews inside one session never read each other.
+    const historyClosedBeforeThisSession: SessionSupportOutcome[] = [outcome(), outcome()];
+
+    // Every item in the session being composed reads this SAME frozen
+    // input — never a per-item advance of it.
+    const firstReviewInSession = chooseSupportLevel(historyClosedBeforeThisSession);
+    const secondReviewInSession = chooseSupportLevel(historyClosedBeforeThisSession);
+    expect(firstReviewInSession).toEqual({ level: 'independent', provenance: 'not-offered' });
+    expect(secondReviewInSession).toEqual(firstReviewInSession);
+
+    // The counterfactual a per-review (mid-session) reading would produce:
+    // the first review's own outcome, already known, folded in before the
+    // second review is scored. It differs — proving the two readings are
+    // not interchangeable, and that only the frozen one is what F2.20
+    // permits.
+    const wronglyAdvancedMidSession = chooseSupportLevel([
+      ...historyClosedBeforeThisSession,
+      outcome({ failureShape: 'blank' }),
+    ]);
+    expect(wronglyAdvancedMidSession).not.toEqual(secondReviewInSession);
   });
 });

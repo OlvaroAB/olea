@@ -156,6 +156,19 @@
  * fresh below, this time with the reason surfaced via `copy.ts`'s
  * `sittingStaleReasonLine`.
  *
+ * **F2.20 (Amended Sep 2026 — `[D-186]`): the freeze already carries row
+ * 3.9's support levels, with no extra field needed here.** `sitting` below
+ * freezes whatever `SessionBuilderState` `buildFresh` returned — for
+ * `kind: 'model'`, `StudySessionModel.items`, each already carrying its own
+ * `StudySessionItem.supportLevel` (`study-session/build.ts`'s fill loop,
+ * computed once from `buildSupportLevelHistoryLookup(entries)` in the same
+ * step that composes the rest of the session). Because that computation and
+ * the freeze both happen inside this one `buildFresh` call, and `entries` is
+ * read once before either, a `hold` re-render (above) returns `sitting.items`
+ * verbatim — the level shown on a review can never drift between two
+ * `load()` calls over one open sitting, and never reads anything from the
+ * sitting in progress.
+ *
  * ## `ol-v7r5.26` — the three staleness facts, wired for real
  *
  * The paragraph above described the state before this bead: every fact was

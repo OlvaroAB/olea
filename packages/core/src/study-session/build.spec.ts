@@ -26,6 +26,7 @@ import {
 } from './duration.js';
 import type { AcceptedExplainBack } from './explain-back.js';
 import { buildConceptInstrumentIndex, type ConceptInstrumentIndex } from './instrument-index.js';
+import { chooseSupportLevel } from './support-level-chooser.js';
 
 const AS_OF = '2026-09-14';
 
@@ -1190,6 +1191,48 @@ describe('the support-level chooser, wired into the fill (row 3.9, [SUPP-2])', (
       { level: 'guided', provenance: 'self-requested' },
       { level: 'guided', provenance: 'self-requested' },
     ]);
+  });
+
+  it('reversal ([D-186]): two reviews on the same concept in ONE composed session get the identical frozen level, never one advanced by the other', () => {
+    // The evidence-derived level from sessions closed BEFORE this one — held
+    // fixed for the whole fill, per F2.20 (Amended Sep 2026 — `[D-186]`).
+    const cleanOutcome: SessionSupportOutcome = { failureShape: 'none', hintUptake: false };
+    const historyClosedBeforeThisSession: SessionSupportOutcome[] = [cleanOutcome, cleanOutcome];
+    const history = fixedHistory(historyClosedBeforeThisSession);
+
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('a2', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      supportHistory: history,
+    });
+
+    // Both instruments practise concept A at the recall tier, and both are
+    // composed in this one fill call — the same step that composes the rest
+    // of the session's contents, never at review time.
+    expect(session.items).toHaveLength(2);
+    const levels = session.items.map((i) => i.supportLevel);
+    expect(levels[0]).toEqual({ level: 'independent', provenance: 'not-offered' });
+    // Item 2 reads the SAME frozen `outcomesFor` result item 1 did — never a
+    // version advanced by item 1's own (in-progress, not-yet-real) outcome.
+    expect(levels[1]).toEqual(levels[0]);
+    expect(history.asked).toEqual([
+      { conceptKey: 'A', tier: 'recall' },
+      { conceptKey: 'A', tier: 'recall' },
+    ]);
+
+    // The counterfactual a mid-session (per-review) reading would produce:
+    // item 1's own outcome, already known, folded in before item 2 is
+    // scored. It differs from what item 2 actually got — proof the fill's
+    // single frozen `supportHistory` is what stands between this session
+    // and the drift `[D-186]` forbids.
+    const wronglyAdvancedMidSession = chooseSupportLevel([
+      ...historyClosedBeforeThisSession,
+      { failureShape: 'blank', hintUptake: false },
+    ]);
+    expect(wronglyAdvancedMidSession).not.toEqual(levels[1]);
   });
 });
 

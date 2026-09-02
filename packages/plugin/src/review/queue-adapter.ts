@@ -192,7 +192,7 @@ export function buildSupportLevelHistoryLookup(
       hintUptake: false,
     };
     for (const conceptId of entry.conceptIds) {
-      const key = `${conceptId} recall`;
+      const key = `${conceptId}:recall`;
       const bucket = byKey.get(key);
       if (bucket === undefined) byKey.set(key, [outcome]);
       else bucket.push(outcome);
@@ -200,7 +200,7 @@ export function buildSupportLevelHistoryLookup(
   }
   return {
     outcomesFor(conceptId, tier) {
-      return byKey.get(`${conceptId} ${tier}`) ?? [];
+      return byKey.get(`${conceptId}:${tier}`) ?? [];
     },
   };
 }

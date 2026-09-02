@@ -1,6 +1,9 @@
 /**
- * Component register row 3.9's CHOOSER — the function nothing calls today.
- * `../support-level/` (round 19/20) built the ladder's rules
+ * Component register row 3.9's CHOOSER, wired into composition ([SUPP-2],
+ * `ol-95vv.4`): `./build.ts`'s fill loop is its production caller, invoking
+ * {@link chooseSupportLevel} once per eligible item in the same step that
+ * composes the session's contents (see that module's `SupportLevelHistoryLookup`
+ * doc). `../support-level/` (round 19/20) built the ladder's rules
  * ({@link advanceSupportLevel}), the self-assessment adjustment
  * ({@link applySelfAssessment}) and the review-log write shape
  * (`supportLevelReviewFields`), but nothing turns a concept's actual review
@@ -24,22 +27,31 @@
  *
  * ## The ordering rule, stated as part of THIS component's contract
  *
- * The register: *"THE ONE GENUINE CYCLE IN THE MACHINERY LIVES HERE ...
- * Break it the way mastery already breaks the identical loop: READ THE
- * EVIDENCE AS OF THE INSTANT BEFORE THE NEW REVIEW IS WRITTEN ... State the
- * ordering as part of 3.9's contract, not as an implementation detail."**
- * This is that statement: `priorOutcomes` passed to either function below
- * must be every past session's outcome for this concept × instrument-tier
- * cell **strictly before** the review currently being composed — never
- * including it. Composing a session needs to know the level BEFORE the
- * review that will be shown at that level has happened, so the review whose
- * level is being chosen cannot be in its own input; a caller that
- * accidentally includes it has broken the one cycle this component sits on,
- * and both this module and `../support-session/build.ts`'s eventual caller
- * would return a plausible, silently-wrong answer — the register's own
- * warning. Neither function here can detect that mistake (no clock, no
+ * F2.20: *"Fixed at composition. The support level shown on a review is
+ * fixed when the session containing it is composed, and reads only sessions
+ * closed before then — never the session in progress."* (Amended Sep 2026 —
+ * `[D-186]`.) The register's "one real cycle" section states the same rule
+ * coarser than a per-review reading, and says why the coarser form is the
+ * one that binds: *"the level shown on every review in a session is folded
+ * from sessions that closed before this one was composed, is fixed at
+ * composition alongside the queue, and never reads the session in
+ * progress. This is stricter than 'read as of the instant before the new
+ * review is written': that per-review framing would let the level move
+ * INSIDE one open session on a mid-session miss, which the freeze already
+ * forbids."* This is that statement, at this module's level: `priorOutcomes`
+ * passed to either function below must be every outcome from a SESSION that
+ * closed **strictly before** the composition instant of the session now
+ * being built — never anything from that session itself, even a single item
+ * of it. Composing a session needs to know the level BEFORE any review in it
+ * has happened, so nothing from the session whose items are being scored can
+ * be in its own input; a caller that accidentally includes it has broken the
+ * one cycle this component sits on, and both this module and `./build.ts`'s
+ * fill loop would return a plausible, silently-wrong answer — the register's
+ * own warning. Neither function here can detect that mistake (no clock, no
  * session identity, only what is handed in), so the discipline is on the
- * caller, stated here rather than left implicit.
+ * caller, stated here rather than left implicit. A test proves the level
+ * cannot move mid-session: see this module's own spec, describe block "the
+ * ordering rule ([D-186]: fixed at composition, never inside a session)".
  *
  * ## Never a stage label, never elapsed time
  *

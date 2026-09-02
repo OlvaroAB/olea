@@ -145,15 +145,22 @@ export type SessionFormatMatch = 'preferred-format' | 'other-format' | 'no-prefe
 
 /**
  * Row 3.9's chooser input, threaded through composition ([SUPP-2],
- * `ol-95vv.4`). One cell per concept × ladder tier: every past session's
- * outcome for it, **strictly before** the review this fill is about to
- * compose — never including it. See `./support-level-chooser.js`'s module
- * doc for why: the fill is choosing what to show at a review that has not
- * happened yet, so a lookup that (accidentally or not) folded in that same
- * review's own outcome would answer a different, retroactively-wrong
- * question, and neither this module nor the chooser has a clock or a session
- * id to catch the mistake — the discipline is on whatever builds this
- * lookup, stated here rather than left implicit.
+ * `ol-95vv.4`). One cell per concept × ladder tier: every outcome from a
+ * SESSION that closed **strictly before** the composition instant of the
+ * session this fill call is building — never anything from that session
+ * itself. This fill loop calls {@link chooseSupportLevel} once per eligible
+ * item, in the same step that composes the rest of the session's contents
+ * (never at review time), and every item this call produces reads the same
+ * frozen `supportHistory` handed in here — so two items on the same concept
+ * × tier in one session always agree, and nothing decided for an earlier
+ * item in this same fill can feed the later one. See
+ * `./support-level-chooser.js`'s module doc and F2.20 (Amended Sep 2026 —
+ * `[D-186]`, "Fixed at composition") for why: a lookup that (accidentally or
+ * not) folded in an outcome from the session being composed would answer a
+ * different, retroactively-wrong question — exactly the mid-session drift
+ * the freeze forbids — and neither this module nor the chooser has a clock
+ * or a session id to catch the mistake — the discipline is on whatever
+ * builds this lookup, stated here rather than left implicit.
  *
  * A cell with no signal (a concept never reviewed at this tier, or a caller
  * with no history to offer) returns an empty array — the chooser's own cold
