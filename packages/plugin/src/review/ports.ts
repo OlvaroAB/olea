@@ -20,6 +20,8 @@ import {
   appendExplainBackOfferRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
+  type BuildSchedulingObservationFieldInput,
+  buildSchedulingObservationField,
   masteryAtTimeForConceptIds,
   type SupportLevelPresentation,
   supportLevelReviewFields,
@@ -56,6 +58,21 @@ export interface RecordReviewInput {
    * structural, not a discipline this port has to remember.
    */
   readonly supportLevel?: SupportLevelPresentation;
+  /**
+   * F5.3a / C5.11's scheduling observation (`[D-087]`, widened kind-general
+   * by `[D-185]`, `ol-0r92.41`) — the caller's RAW decision about whether
+   * this review demonstrated correct use of a neighbour concept, never the
+   * already-built field. This port is what calls `olea-core`'s
+   * `buildSchedulingObservationField` on it (see `createVaultReviewLogPort`
+   * below), the same "caller decides, port writes" split `supportLevel` just
+   * above already uses for `supportLevelReviewFields`. `undefined` for a
+   * review whose item named no neighbour concept as context — which today is
+   * every qa/cloze/mcq review (`session.ts`'s
+   * `evaluateSchedulingObservationForGradeWrite` doc explains why no producer
+   * is wired yet) — and the record is written with no `schedulingObservation`
+   * field at all, never a fabricated one.
+   */
+  readonly schedulingObservationInput?: BuildSchedulingObservationFieldInput;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -132,6 +149,16 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
       });
       const masteryAtTime = masteryAtTimeForConceptIds(history.entries, conceptIds);
 
+      // F5.3a / C5.11 (`[D-185]`): built here, from the caller's RAW decision
+      // — see `RecordReviewInput.schedulingObservationInput`'s doc for why
+      // this port calls `olea-core`'s one producer rather than the caller.
+      // `undefined` in, `undefined` out, when the item named no neighbour
+      // concept as context.
+      const schedulingObservation =
+        input.schedulingObservationInput === undefined
+          ? undefined
+          : buildSchedulingObservationField(input.schedulingObservationInput);
+
       await appendReviewLogRecord(
         vault,
         {
@@ -155,6 +182,9 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
           ...(input.supportLevel !== undefined
             ? supportLevelReviewFields(input.supportLevel.level)
             : {}),
+          // Merged only when a scheduling observation was actually produced
+          // above — never a fabricated one.
+          ...(schedulingObservation !== undefined ? { schedulingObservation } : {}),
         },
         { deviceId },
       );

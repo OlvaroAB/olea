@@ -226,3 +226,107 @@ describe('createVaultReviewLogPort — the supportLevel write seam (ol-95vv.4)',
     expect(Object.hasOwn(record, 'supportLevelShown')).toBe(false);
   });
 });
+
+describe('createVaultReviewLogPort — the scheduling-observation write seam ([D-185], ol-0r92.41)', () => {
+  const DEVICE = 'ports-spec-scheduling-observation-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-mcq-1',
+    conceptIds: ['concept-a'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'mcq',
+    stem: 'Which of these?',
+    options: [
+      { id: 'opt-1', label: 'This one', correct: true },
+      { id: 'opt-2', label: 'Not this one', correct: false },
+    ],
+    feedback: 'Correct — this one.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['mcq'],
+    planVersion: null,
+  };
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  // [D-185] (`ol-0r92.41`) widened F5.3a/C5.11's scheduling observation from
+  // explain-back-only to any instrument kind. This proves the write seam end
+  // to end for an MCQ review — the type path this bead wires — even though no
+  // production composer supplies `schedulingObservationInput` yet for any of
+  // the three kinds `ReviewSession` owns (`session.ts`'s
+  // `evaluateSchedulingObservationForGradeWrite` doc names that as a
+  // follow-up, not this test's job).
+  it('builds and merges schedulingObservation from the caller’s raw input, on a non-explain-back review', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+      schedulingObservationInput: {
+        neighbourUseDemonstrated: true,
+        neighbourConceptId: 'concept-neighbour',
+      },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(record.instrumentType).toBe('mcq');
+    expect(record.schedulingObservation).toEqual({ neighbourConceptId: 'concept-neighbour' });
+  });
+
+  it('writes no schedulingObservation field when the caller’s input says nothing was demonstrated', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+      schedulingObservationInput: { neighbourUseDemonstrated: undefined },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(Object.hasOwn(record, 'schedulingObservation')).toBe(false);
+  });
+
+  it('writes no schedulingObservation field at all when the caller passes no input, never a fabricated one', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(Object.hasOwn(record, 'schedulingObservation')).toBe(false);
+  });
+});

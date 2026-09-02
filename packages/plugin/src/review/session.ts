@@ -16,6 +16,7 @@
 
 import type { Rating } from 'olea-contracts';
 import type {
+  BuildSchedulingObservationFieldInput,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
   McqRating,
@@ -159,6 +160,40 @@ export interface ReviewSessionDeps {
   readonly evaluateSchedulingObservationRouting?: (input: {
     readonly conceptIds: readonly string[];
   }) => SchedulingObservationDecision;
+  /**
+   * The kind-general grade-write producer for F5.3a/C5.11's scheduling
+   * observation (`[D-185]`, `ol-0r92.41`) — NOT to be confused with
+   * `evaluateSchedulingObservationRouting` just above, which reads an
+   * observation a PRIOR review already wrote to decide whether to offer the
+   * reciprocal explain-back; this one decides whether the review being
+   * written RIGHT NOW carries a fresh observation of its own. Called for
+   * every graded item, of any kind, and handed straight to `ReviewLogPort`
+   * as the raw input — this class never calls `olea-core`'s single producer,
+   * `buildSchedulingObservationField`, itself; `ports.ts`'s
+   * `createVaultReviewLogPort` does, the same "caller decides, port writes"
+   * split `RecordReviewInput.supportLevel` already uses for
+   * `supportLevelReviewFields`, so this class holds no per-kind judgement of
+   * its own about what counts as demonstrated use. Optional and absent by
+   * default, same "simply cannot offer it" posture every other optional
+   * port here has.
+   *
+   * **No production composer wires this yet, for any kind — that is a
+   * follow-up, not an oversight.** MCQ, Q&A and cloze items carry no
+   * "authored with a neighbour concept as context" signal anywhere in
+   * today's queue-composition or generation pipeline (`ol-0r92.41`'s own
+   * note: C5.11's kind-general authoring rule, `[D-185]`/ITEM-1, is ruled
+   * but its generator-side wiring — `ol-0r92.33` — has not landed a caller
+   * that could fill this in). Explain-back already has its own, separate
+   * grade-write path (`packages/core/src/study-session/explain-back-grade-
+   * write.ts`, driven from `explain-back/solo-review.ts`, not this class)
+   * and is untouched by this dep. This exists so `logAndAdvance` is ready
+   * the day a neighbour signal exists for one of the three kinds this class
+   * does own, without a second wiring pass through this file.
+   */
+  readonly evaluateSchedulingObservationForGradeWrite?: (input: {
+    readonly instrument: ReviewInstrument;
+    readonly rating: Rating;
+  }) => BuildSchedulingObservationFieldInput | undefined;
   /**
    * The grade case of the contest mechanism (`ol-fgba`, `[D-095]`). Optional
    * and absent by default for the same reason `explainWhyPort` is: a session
@@ -823,6 +858,21 @@ export class ReviewSession {
     const durationMs =
       this.presentedAtMs !== null ? Math.max(0, now.getTime() - this.presentedAtMs) : null;
 
+    // F5.3a / C5.11's grade-write half, widened kind-general by `[D-185]`
+    // (`ol-0r92.41`): built BEFORE the write below, from the same optional,
+    // absent-by-default port every other decision in this method reads. The
+    // RAW producer input is handed to `recordReview`, not the built field —
+    // `ports.ts`'s `createVaultReviewLogPort` is what calls `olea-core`'s
+    // `buildSchedulingObservationField`, same "caller decides, port writes"
+    // split `supportLevel` already uses below. See
+    // `evaluateSchedulingObservationForGradeWrite`'s own doc for why nothing
+    // wires the evaluator itself yet for any of the three kinds this class
+    // owns.
+    const schedulingObservationInput = this.deps.evaluateSchedulingObservationForGradeWrite?.({
+      instrument: stamped.instrument,
+      rating,
+    });
+
     await this.deps.reviewLog.recordReview({
       instrument: stamped.instrument,
       rating,
@@ -839,6 +889,9 @@ export class ReviewSession {
       ...(stamped.instrument.supportLevel !== undefined
         ? { supportLevel: stamped.instrument.supportLevel }
         : {}),
+      // Same conditional-spread discipline as `supportLevel` just above, and
+      // for the same `exactOptionalPropertyTypes` reason.
+      ...(schedulingObservationInput !== undefined ? { schedulingObservationInput } : {}),
     });
 
     // Called directly (rather than through `previewSingleInterval`) because

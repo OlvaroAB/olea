@@ -511,6 +511,72 @@ describe('review-log write shape (D7.1, F2.14)', () => {
 
     expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
   });
+
+  // F5.3a / C5.11's grade-write half, widened kind-general by `[D-185]`
+  // (`ol-0r92.41`): `evaluateSchedulingObservationForGradeWrite` is the raw,
+  // caller-decided input `logAndAdvance` forwards verbatim into
+  // `RecordReviewInput.schedulingObservationInput` — the same "caller
+  // decides, port writes" split `supportLevel` above already proves. No
+  // production composer wires this evaluator yet for any of the three kinds
+  // this suite exercises (`session.ts`'s own doc names that as a follow-up);
+  // these three cases prove the plumbing this bead is responsible for.
+  it('forwards the grade-write evaluator’s decision into RecordReviewInput.schedulingObservationInput, on an MCQ review', async () => {
+    const item = queueItem(mcqFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        reviewLog,
+        evaluateSchedulingObservationForGradeWrite: () => ({
+          neighbourUseDemonstrated: true,
+          neighbourConceptId: 'concept-neighbour',
+        }),
+      }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+
+    expect(reviewLog.calls[0]?.schedulingObservationInput).toEqual({
+      neighbourUseDemonstrated: true,
+      neighbourConceptId: 'concept-neighbour',
+    });
+  });
+
+  it('forwards a "nothing demonstrated" decision verbatim too — this class makes no judgement of its own', async () => {
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        reviewLog,
+        evaluateSchedulingObservationForGradeWrite: () => ({
+          neighbourUseDemonstrated: undefined,
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    // Forwarded as-is, `neighbourUseDemonstrated: undefined` and all —
+    // `createVaultReviewLogPort` (ports.spec.ts) is what turns this into "no
+    // schedulingObservation field", never this class.
+    expect(reviewLog.calls[0]?.schedulingObservationInput).toEqual({
+      neighbourUseDemonstrated: undefined,
+    });
+  });
+
+  it('an absent evaluator writes no schedulingObservationInput field at all — the "simply cannot offer it" posture', async () => {
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'schedulingObservationInput')).toBe(false);
+  });
 });
 
 describe('F2.16 — the session maps through core, and holds no mapping of its own', () => {

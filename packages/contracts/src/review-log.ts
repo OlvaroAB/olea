@@ -48,8 +48,9 @@
  * never what she said), `explainBackGrade` (R9's SOLO depth verdict, a
  * `revisionOf` backward pointer, and a `[D-077]` content-store reference —
  * explain-back reviews only), and `schedulingObservation` (MAT-4's
- * non-scoring neighbour-use signal, `[D-087]`, C5.11 — explain-back reviews
- * only, and the mastery fold must never read it).
+ * non-scoring neighbour-use signal, `[D-087]`, C5.11 — originally
+ * explain-back-only, **widened by `[D-185]` (`ol-0r92.41`) to any instrument
+ * kind**, and the mastery fold must never read it).
  *
  * **All three are `.optional()`, not `.nullable()`-required, and that is a
  * deliberate build-time simplification, not the design doc's literal
@@ -765,20 +766,29 @@ export const explainBackGrade = z.object({
 export type ExplainBackGrade = z.infer<typeof explainBackGrade>;
 
 /**
- * Her demonstrated correct use of a neighbour concept while explaining the
- * SUBJECT concept (`[D-087]`, C5.11, MAT-4's `SchedulingObservation`,
- * `ol-tka5`). Marks the reciprocal prompt as likely to succeed; NEVER scores
- * `neighbourConceptId`, never moves its stage or vitality — C5.11's
- * exception-free rule against a second scoring target. Present only when the
- * grading pipeline found demonstrated use; absent otherwise.
+ * Her demonstrated correct use of a neighbour concept while the SUBJECT
+ * concept was the one being scored (`[D-087]`, C5.11, MAT-4's
+ * `SchedulingObservation`, `ol-tka5`). Marks the reciprocal prompt as likely
+ * to succeed; NEVER scores `neighbourConceptId`, never moves its stage or
+ * vitality — C5.11's exception-free rule against a second scoring target.
+ * Present only when the grading pipeline found demonstrated use; absent
+ * otherwise.
+ *
+ * **Kind-general, not explain-back-only (`[D-185]`, `ol-0r92.41`).** F5.3a
+ * was widened from "while explaining X" to any item kind: wherever an item's
+ * scoring subject is X and a neighbour concept Y appeared as context, Y's
+ * demonstrated use lands here regardless of `instrumentType`. This field's
+ * shape does not change — it never carried an `instrumentType` or
+ * discriminant of its own — only `refineExplainBackGradeInstrumentType`
+ * below, which used to gate its presence to `explain-back`, no longer does.
  *
  * **The mastery fold must never read this field.** Knowledge model §8 test 5
  * (strip-invariance) is the contract test: folding a log and a copy of it
  * with every `schedulingObservation` (and every `explainBackGrade.revisionOf`)
- * stripped must produce byte-identical scoring readings. Exclusion is
- * enforced by no fold function importing this field, not by filtering an
- * event kind — the same mechanism the knowledge model already names for this
- * exact type.
+ * stripped must produce byte-identical scoring readings, for a log built from
+ * any mix of instrument kinds. Exclusion is enforced by no fold function
+ * importing this field, not by filtering an event kind — the same mechanism
+ * the knowledge model already names for this exact type.
  */
 export const schedulingObservation = z.object({
   /** The concept her demonstrated use was evidence about — never conceptIds[0], never scored. */
@@ -787,17 +797,27 @@ export const schedulingObservation = z.object({
 export type SchedulingObservation = z.infer<typeof schedulingObservation>;
 
 /**
- * `explainBackGrade`/`schedulingObservation` may only appear on an
- * explain-back review — SOLO grades a response, and only an explain-back
- * response is gradable (GLOSSARY SOLO rule 2). Applied with `superRefine` on
- * the record, the same pattern as `refineMasteryAgreesWithConcepts`, because
- * the check spans two fields.
+ * `explainBackGrade` may only appear on an explain-back review — SOLO grades
+ * a response, and only an explain-back response is gradable (GLOSSARY SOLO
+ * rule 2).
+ *
+ * **`schedulingObservation` is deliberately NOT restricted here.** It used to
+ * be, alongside `explainBackGrade`, until `[D-185]` (`ol-0r92.41`) widened
+ * F5.3a/C5.11 from explain-back-only to any instrument kind: a neighbour
+ * concept's demonstrated use may now ride the review event of an MCQ, Q&A or
+ * cloze review exactly as it can an explain-back one. Only `explainBackGrade`
+ * still names a SOLO verdict, which only an explain-back response can earn —
+ * that half of the old rule survives unchanged.
+ *
+ * Applied with `superRefine` on the record, the same pattern as
+ * `refineMasteryAgreesWithConcepts` — kept even though only one field is
+ * checked now, so a future field needing the same "explain-back only" gate
+ * has a place to land beside this one.
  */
 function refineExplainBackGradeInstrumentType(
   value: {
     readonly instrumentType: InstrumentType;
     readonly explainBackGrade?: ExplainBackGrade | undefined;
-    readonly schedulingObservation?: SchedulingObservation | undefined;
   },
   ctx: z.RefinementCtx,
 ): void {
@@ -807,13 +827,6 @@ function refineExplainBackGradeInstrumentType(
       code: 'custom',
       path: ['explainBackGrade'],
       message: 'explainBackGrade may only appear on an explain-back review',
-    });
-  }
-  if (value.schedulingObservation !== undefined) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['schedulingObservation'],
-      message: 'schedulingObservation may only appear on an explain-back review',
     });
   }
 }
@@ -852,8 +865,9 @@ function refineSchedulingObservationNotSubject(
  * v4 plus three fields, all optional (see this file's header for why they
  * are optional rather than required-nullable): `supportLevelShown` (every
  * recall/explanation review, D-094), `explainBackGrade` (explain-back
- * reviews only, R9/GLOSSARY SOLO), `schedulingObservation` (explain-back
- * reviews naming a relation, D-087). Migrated IN PLACE per `[D-109]`: v4 is
+ * reviews only, R9/GLOSSARY SOLO), `schedulingObservation` (a review of any
+ * kind naming a neighbour concept as context, D-087, widened from
+ * explain-back-only by `[D-185]`). Migrated IN PLACE per `[D-109]`: v4 is
  * not retained as a frozen, readable historical version — no real v4 record
  * exists anywhere (prod dark, no BRAT install, `[D-109]`'s own expiry test),
  * so there is nothing to stay compatible with. `reviewLogRecordV4`,
@@ -892,7 +906,10 @@ export const reviewLogRecordV5 = z
     supportLevelShown: supportLevel.optional(),
     /** Present only for graded explain-back reviews. Nothing writes it yet (`ol-drfy`). */
     explainBackGrade: explainBackGrade.optional(),
-    /** Present only when this explain-back review demonstrated use of a named neighbour. */
+    /**
+     * Present only when this review — of ANY instrument kind, `[D-185]` —
+     * demonstrated use of a neighbour concept named as context.
+     */
     schedulingObservation: schedulingObservation.optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)

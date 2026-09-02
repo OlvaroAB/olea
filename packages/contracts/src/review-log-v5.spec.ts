@@ -14,8 +14,10 @@
 //   1. v5 is v4 plus three fields — `supportLevelShown`, `explainBackGrade`,
 //      `schedulingObservation` — all optional, and nothing else moved,
 //      appeared or vanished;
-//   2. the two new fields are gated to explain-back reviews only
-//      (`refineExplainBackGradeInstrumentType`);
+//   2. `explainBackGrade` is gated to explain-back reviews only
+//      (`refineExplainBackGradeInstrumentType`); `schedulingObservation` is
+//      NOT — `[D-185]` (`ol-0r92.41`) widened F5.3a/C5.11 to any instrument
+//      kind, so the same refinement no longer restricts it;
 //   3. `schedulingObservation.neighbourConceptId` can never be one of the
 //      record's own `conceptIds` (`refineSchedulingObservationNotSubject`);
 //   4. `explainBackGrade.soloLevel` is the five-level SOLO enum, never a
@@ -199,7 +201,7 @@ describe('supportLevelShown — objective, never her self-rating', () => {
   });
 });
 
-describe('explainBackGrade and schedulingObservation are gated to explain-back reviews', () => {
+describe('explainBackGrade is gated to explain-back reviews; schedulingObservation is not ([D-185])', () => {
   it('accepts explainBackGrade on an explain-back review', () => {
     const parsed = reviewLogRecordV5.parse(explainBackLine({ explainBackGrade: GRADE }));
     expect(parsed.explainBackGrade).toEqual(GRADE);
@@ -211,21 +213,51 @@ describe('explainBackGrade and schedulingObservation are gated to explain-back r
     );
   });
 
+  it('rejects explainBackGrade on an mcq review — the same rule, a different non-gradable kind', () => {
+    expect(
+      reviewLogRecordV5.safeParse(v5ReviewLine({ instrumentType: 'mcq', explainBackGrade: GRADE }))
+        .success,
+    ).toBe(false);
+  });
+
   it('accepts schedulingObservation on an explain-back review naming a different concept', () => {
     const parsed = reviewLogRecordV5.parse(explainBackLine({ schedulingObservation: OBSERVATION }));
     expect(parsed.schedulingObservation).toEqual(OBSERVATION);
   });
 
-  it('rejects schedulingObservation on a qa review', () => {
-    expect(
-      reviewLogRecordV5.safeParse(v5ReviewLine({ schedulingObservation: OBSERVATION })).success,
-    ).toBe(false);
+  // `[D-185]` (`ol-0r92.41`) widened F5.3a/C5.11 from explain-back-only to any
+  // instrument kind: `refineExplainBackGradeInstrumentType` no longer gates
+  // `schedulingObservation` at all, so it must validate on every kind this
+  // schema knows about.
+  it('accepts schedulingObservation on a qa review — widened by [D-185]', () => {
+    const parsed = reviewLogRecordV5.parse(v5ReviewLine({ schedulingObservation: OBSERVATION }));
+    expect(parsed.schedulingObservation).toEqual(OBSERVATION);
   });
 
-  it('the refinement fires through the union too, not only on the bare record', () => {
+  it('accepts schedulingObservation on an mcq review — widened by [D-185]', () => {
+    const parsed = reviewLogRecordV5.parse(
+      v5ReviewLine({ instrumentType: 'mcq', schedulingObservation: OBSERVATION }),
+    );
+    expect(parsed.schedulingObservation).toEqual(OBSERVATION);
+  });
+
+  it('accepts schedulingObservation on a cloze review — widened by [D-185]', () => {
+    const parsed = reviewLogRecordV5.parse(
+      v5ReviewLine({ instrumentType: 'cloze', schedulingObservation: OBSERVATION }),
+    );
+    expect(parsed.schedulingObservation).toEqual(OBSERVATION);
+  });
+
+  it('the explainBackGrade refinement still fires through the union, not only on the bare record', () => {
     expect(reviewLogEntryV5.safeParse(v5ReviewLine({ explainBackGrade: GRADE })).success).toBe(
       false,
     );
+  });
+
+  it('the schedulingObservation widening holds through the union too', () => {
+    expect(
+      reviewLogEntryV5.safeParse(v5ReviewLine({ schedulingObservation: OBSERVATION })).success,
+    ).toBe(true);
   });
 
   it('both fields can compose on the same explain-back review', () => {
