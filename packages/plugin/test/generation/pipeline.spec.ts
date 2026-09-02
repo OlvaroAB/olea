@@ -612,3 +612,102 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
     });
   });
 });
+
+describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `deps.formatMatch`)', () => {
+  it('omits purpose and registerHint entirely when deps.formatMatch is absent — byte-identical to before this bead', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    let seenRequest: { readonly purpose?: unknown; readonly registerHint?: unknown } | undefined;
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async (_deps, request) => {
+        seenRequest = request;
+        return groundedResponse(request.conceptName);
+      },
+    });
+
+    expect(seenRequest).toBeDefined();
+    expect(seenRequest && 'purpose' in seenRequest).toBe(false);
+    expect(seenRequest && 'registerHint' in seenRequest).toBe(false);
+  });
+
+  it('a course deps.formatMatch marks format-matched sends purpose "readiness" and the registerHint for every concept in that course', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const seenRequests: { readonly purpose?: unknown; readonly registerHint?: unknown }[] = [];
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        concept('Working memory', 'key-1'),
+        concept('Long-term potentiation', 'key-2'),
+      ],
+      draftForConcept: async (_deps, request) => {
+        seenRequests.push(request);
+        return groundedResponse(request.conceptName);
+      },
+      formatMatch: (courseCode) =>
+        courseCode === 'COGS214'
+          ? { registerHint: { terminology: ['long-term potentiation'] } }
+          : undefined,
+    });
+
+    expect(report.attempted).toBe(2);
+    expect(seenRequests).toHaveLength(2);
+    for (const request of seenRequests) {
+      expect(request.purpose).toBe('readiness');
+      expect(request.registerHint).toEqual({ terminology: ['long-term potentiation'] });
+    }
+  });
+
+  it('a course deps.formatMatch declines (returns undefined) omits purpose and registerHint for that course', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    let seenRequest: { readonly purpose?: unknown; readonly registerHint?: unknown } | undefined;
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async (_deps, request) => {
+        seenRequest = request;
+        return groundedResponse(request.conceptName);
+      },
+      // Opted in, but declines every course — the same as it never having
+      // been supplied at all.
+      formatMatch: () => undefined,
+    });
+
+    expect(seenRequest).toBeDefined();
+    expect(seenRequest && 'purpose' in seenRequest).toBe(false);
+    expect(seenRequest && 'registerHint' in seenRequest).toBe(false);
+  });
+
+  it('a format-matched course with no registerHint sends purpose "readiness" alone', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    let seenRequest: { readonly purpose?: unknown; readonly registerHint?: unknown } | undefined;
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async (_deps, request) => {
+        seenRequest = request;
+        return groundedResponse(request.conceptName);
+      },
+      formatMatch: () => ({}),
+    });
+
+    expect(seenRequest?.purpose).toBe('readiness');
+    expect(seenRequest && 'registerHint' in seenRequest).toBe(false);
+  });
+});

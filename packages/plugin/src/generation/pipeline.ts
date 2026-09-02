@@ -76,6 +76,19 @@
  * `retrieve()` a refusal costs — is made for it. It is re-consulted every
  * sweep, the same as a refused concept, because nothing about "routing says
  * not yet" writes a cache entry either.
+ *
+ * **Purpose-at-build consultation (`ol-0r92.35` / `[D-188]`), opt-in via
+ * `deps.formatMatch`.** When absent — every caller today, `pipeline.spec.ts`
+ * included — every `quiz.generate.v1` request this sweep sends omits
+ * `purpose`/`registerHint` entirely, exactly as before this bead: the
+ * service treats an absent `purpose` as `'learning'`, her own voice. When
+ * present, it is consulted once per course (never per concept — see the
+ * call site) and, for a course whose nearest assessment is format-matched,
+ * every quiz drafted for that course this sweep carries `purpose:
+ * 'readiness'` and whatever `registerHint` was supplied. See
+ * `GenerationPipelineDeps.formatMatch`'s own doc for why no production
+ * wiring exists yet and `draft-quiz-cards.ts`'s "PURPOSE / REGISTER" section
+ * for the request-shaping half this consultation feeds.
  */
 
 import type { ConceptRecord, ExtractedUnit, InstrumentCitation, VaultSource } from 'olea-core';
@@ -132,6 +145,41 @@ export interface GenerationPipelineDeps {
   ) => string | Promise<string>;
   /** Component 2.2's routing consultation — see the module doc's own section. Omitted preserves pre-`ol-tz7v` behaviour. */
   readonly routing?: GenerationRoutingDeps;
+  /**
+   * F4.8/`[D-188]`'s purpose-at-build capability (`ol-0r92.35`), opt-in the
+   * same way `routing` above is — see the module doc's own section. Absent
+   * because assembling this from her actual assignments table plus
+   * classified past-paper/instructor material is `main.ts`'s composition-
+   * root job (the same "reachability deferred, documented rather than
+   * silently absent" posture `classify-passage.ts`'s own module doc records
+   * for `classifyPassage`), and no such wiring exists yet. Called at most
+   * once per course this sweep visits (never per concept — purpose is a
+   * property of the course's nearest assessment, not of any one concept). A
+   * non-`undefined` result marks every `quiz.generate.v1` build for that
+   * course as format-matched: `quiz.generate.v1` always builds MCQ, the one
+   * format F4.8 currently maps a `type` to (`readiness.ts`'s
+   * `FORMAT_BY_ASSESSMENT_TYPE`), so a course whose nearest assessment
+   * resolves to `'mcq'` has every quiz drafted for it built in that
+   * assessment's register (F3.8's purpose clause, `[D-188]`). Absent, or
+   * returning `undefined` for a given course, leaves `purpose` unset on that
+   * course's requests — the service then defaults to `'learning'`, her own
+   * voice, unchanged from before this bead.
+   */
+  readonly formatMatch?: (courseCode: string) => FormatMatchDecision | undefined;
+}
+
+/**
+ * What `deps.formatMatch` returns for a course whose nearest assessment is
+ * format-matched (F4.8, `[D-188]`). `registerHint` mirrors
+ * `DraftQuizCardsRequest`'s own field one-for-one — see that type's doc
+ * (`draft-quiz-cards.ts`) for what each half means and the plain-declarative
+ * fallback when `sentenceShapes` is absent.
+ */
+export interface FormatMatchDecision {
+  readonly registerHint?: {
+    readonly terminology: readonly string[];
+    readonly sentenceShapes?: readonly string[];
+  };
 }
 
 export interface GenerationSweepReport {
@@ -234,6 +282,7 @@ export async function runGenerationSweep(
   const now = deps.now ?? (() => new Date());
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
   const routing = deps.routing;
+  const formatMatch = deps.formatMatch;
 
   // Built at most once per sweep, and only if routing was actually opted
   // into — a real vault walk (`enumerateVaultInstruments`) is not worth
@@ -258,6 +307,12 @@ export async function runGenerationSweep(
     // Stable order (by name) so which concepts win the per-sweep cap does
     // not depend on `extractConcepts`' own internal iteration order.
     const sorted = [...candidates].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    // F4.8/`[D-188]`'s purpose-at-build capability (`ol-0r92.35`), opt-in —
+    // see the module doc's own section on `deps.formatMatch`. Called once
+    // per course, not per concept: purpose is a property of the course's
+    // nearest assessment, never of any one concept's material.
+    const courseFormatMatch = formatMatch?.(courseCode);
 
     for (const candidate of sorted) {
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
@@ -291,6 +346,19 @@ export async function runGenerationSweep(
         result = await draftForConcept(deps.draftDeps, {
           courseCode,
           conceptName: candidate.name,
+          // F4.8/`[D-188]`: `purpose`/`registerHint` are set together, only
+          // when this course's nearest assessment is format-matched — see
+          // `deps.formatMatch`'s doc. Every other course omits both, so
+          // `quiz.generate.v1` sees exactly the request it saw before this
+          // bead (`ol-0r92.35`).
+          ...(courseFormatMatch === undefined
+            ? {}
+            : {
+                purpose: 'readiness' as const,
+                ...(courseFormatMatch.registerHint === undefined
+                  ? {}
+                  : { registerHint: courseFormatMatch.registerHint }),
+              }),
         });
       } catch {
         // A generative call failing outright (network, malformed transport

@@ -85,6 +85,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type DraftQuizCardsDeps,
   draftQuizCardsForConcept,
+  type RegisterHint,
 } from '../../src/retrieval/draft-quiz-cards.js';
 
 // ---- shared fakes -----------------------------------------------------
@@ -261,7 +262,7 @@ async function makeRetrieveDeps(
   return { keywordIndex, embeddingCache, embeddingProvider: provider };
 }
 
-const REQUEST = { courseCode: 'PSYCH305', conceptName: QUERY_TEXT };
+const REQUEST = { courseCode: 'COGS214', conceptName: QUERY_TEXT };
 
 // `D112_GROUNDING_BAND` is lower 0.555 / upper 0.800 (`[D-112]`).
 // `RECOMMENDED_COMPOSITE_THRESHOLDS.top1` is 0.545 (`[D-192]`) — since
@@ -328,7 +329,7 @@ describe('draftQuizCardsForConcept — above the upper bar, generation proceeds 
       conceptName: string;
       sourceChunks: readonly string[];
     };
-    expect(payload.courseCode).toBe('PSYCH305');
+    expect(payload.courseCode).toBe('COGS214');
     expect(payload.conceptName).toBe(QUERY_TEXT);
     expect(payload.sourceChunks).toContain(TARGET_TEXT);
   });
@@ -486,6 +487,87 @@ describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, 
     };
 
     const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(transport.calls).toHaveLength(0);
+  });
+});
+
+describe('draftQuizCardsForConcept — purpose/registerHint passthrough (`[D-188]`, ol-0r92.35)', () => {
+  const RICH_HINT: RegisterHint = {
+    terminology: ['event-related potential'],
+    sentenceShapes: ['State the mechanism by which X produces Y.'],
+  };
+
+  it('sends neither purpose nor registerHint when the caller supplies neither — byte-identical to before this bead', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    const payload = transport.calls[0]?.payload as {
+      purpose?: unknown;
+      registerHint?: unknown;
+    };
+    expect(payload.purpose).toBeUndefined();
+    expect(payload.registerHint).toBeUndefined();
+    expect('purpose' in payload).toBe(false);
+    expect('registerHint' in payload).toBe(false);
+  });
+
+  it('passes purpose and registerHint through to the request verbatim — this function decides neither', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    await draftQuizCardsForConcept(deps, {
+      ...REQUEST,
+      purpose: 'readiness',
+      registerHint: RICH_HINT,
+    });
+
+    const payload = transport.calls[0]?.payload as {
+      purpose?: string;
+      registerHint?: RegisterHint;
+    };
+    expect(payload.purpose).toBe('readiness');
+    expect(payload.registerHint).toEqual(RICH_HINT);
+  });
+
+  it('sends registerHint only when purpose was also supplied as readiness — a caller building a learning instrument never sends a stray hint', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST); // no purpose, no registerHint
+
+    const payload = transport.calls[0]?.payload as { registerHint?: unknown };
+    expect(payload.registerHint).toBeUndefined();
+  });
+
+  it('purpose/registerHint never affect the refusal decision — a below-band request still refuses with zero transport sends', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, {
+      ...REQUEST,
+      purpose: 'readiness',
+      registerHint: RICH_HINT,
+    });
 
     expect(result).toEqual({ status: 'refused', reason: 'below-band' });
     expect(transport.calls).toHaveLength(0);

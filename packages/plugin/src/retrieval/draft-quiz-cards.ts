@@ -61,6 +61,24 @@
  * affects the grounding decision above: an empty-context refusal happens
  * before this section runs.
  *
+ * ===========================================================================
+ * PURPOSE / REGISTER (`[D-188]`, F3.8's purpose clause, `ol-0r92.35`)
+ * ===========================================================================
+ * `request.purpose`/`request.registerHint` are passed through to
+ * `payload.purpose`/`payload.registerHint` verbatim — this function decides
+ * nothing about which instruments are format-matched to an assessment. That
+ * decision belongs to whichever caller can actually see the assessment data
+ * (F4.8): `runGenerationSweep` (`../generation/pipeline.js`)'s own
+ * `deps.formatMatch`, opt-in the same way `deps.classifyPassage` above is,
+ * and absent today for the identical reason — assembling a register hint
+ * from her assignments table plus classified past-paper/instructor material
+ * has no production wiring yet (`main.ts`'s composition-root job, a
+ * different lane's this round; see `classify-passage.ts`'s own module doc
+ * for the same posture on `classifyPassage`). Every caller of this function
+ * today (`pipeline.ts` with no `deps.formatMatch` supplied) sends neither
+ * field, which `quiz.generate.v1` treats identically to `purpose:
+ * 'learning'` — her own voice, byte-identical to before this bead.
+ *
  * **The judge is constructed here, from `deps.transport`, not injected as a
  * new field on `DraftQuizCardsDeps`.** That is deliberate: `DraftQuizCardsDeps`
  * is what the live F3.3 pipeline lane is building against this same round,
@@ -124,6 +142,31 @@ import {
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**
+ * `[D-188]` / `ol-0r92.35`'s purpose, restated locally for the same reason
+ * `QuizGenerateRequestPayload` below is — field-for-field match with
+ * `olea-service/src/tasks/personalizationContext.ts`'s `purposeSchema`
+ * (private; read for shape only, never quoted). Absent means `'learning'` —
+ * F3.8's existing her-own-voice rule — which is what every request
+ * predating this bead is equivalent to.
+ */
+export type GenerationPurpose = 'learning' | 'readiness';
+
+/**
+ * `[D-188]`'s register hint, sent only alongside `purpose: 'readiness'`.
+ * Mirrors `registerHintSchema` one-for-one: `terminology` is instructor-
+ * curated terms for the assessment's subject, quoted verbatim (the same
+ * discipline `VoiceExemplars.terminology` uses); `sentenceShapes` is
+ * past-paper sentence-shape exemplars, present only where past-paper
+ * material is held for the matched assessment — absent or empty means past
+ * papers are thin, and the service falls back to plain declarative wording
+ * rather than a manufactured examiner.
+ */
+export interface RegisterHint {
+  readonly terminology: readonly string[];
+  readonly sentenceShapes?: readonly string[];
+}
+
+/**
  * `quiz.generate.v1`'s request shape, restated locally rather than imported
  * from the private service repo — same discipline
  * `packages/workbench/src/oracle/generate.ts` already documents for the
@@ -135,7 +178,10 @@ import { WorkerGroundingJudge } from './workerGroundingJudge.js';
  * `conceptName` are both required, `sourceChunks` is a plain string array,
  * `questionCount` is optional. `personalization` is new (`ol-p3t07c`, F3.8):
  * transient `[D-008]` context, mirroring `quizGenerateRequest`'s own
- * `personalization` field one-for-one.
+ * `personalization` field one-for-one. `purpose`/`registerHint`
+ * (`ol-0r92.35`, `[D-188]`) mirror `quizGenerateRequest`'s own fields the
+ * same way — both optional, both absent by default, so a caller that never
+ * supplies them sends exactly the request it sent before this bead.
  */
 export interface QuizGenerateRequestPayload {
   readonly courseCode: string;
@@ -145,6 +191,8 @@ export interface QuizGenerateRequestPayload {
   readonly personalization?: {
     readonly voiceExemplars: VoiceExemplars;
   };
+  readonly purpose?: GenerationPurpose;
+  readonly registerHint?: RegisterHint;
 }
 
 /**
@@ -167,6 +215,23 @@ export interface DraftQuizCardsRequest {
   readonly courseCode: string;
   readonly conceptName: string;
   readonly questionCount?: number;
+  /**
+   * `[D-188]` / `ol-0r92.35`. Absent (the default for every caller today)
+   * sends no `purpose` at all, which `quiz.generate.v1` treats identically
+   * to `'learning'` — her own voice, unchanged from before this field
+   * existed. Set to `'readiness'` only by a caller that has independently
+   * decided this build is matched to an assessment's format (F4.8) — this
+   * function makes no such decision itself; see `runGenerationSweep`
+   * (`../generation/pipeline.js`) for the one production caller that does.
+   */
+  readonly purpose?: GenerationPurpose;
+  /**
+   * `[D-188]`'s register hint. Meaningful only alongside `purpose:
+   * 'readiness'` — sent without it, the service ignores it (see
+   * `quizGenerateRequest`'s own doc, private), so a caller that always
+   * assembles both need not conditionally omit this one.
+   */
+  readonly registerHint?: RegisterHint;
 }
 
 export type DraftQuizCardsResult =
@@ -269,6 +334,12 @@ export async function draftQuizCardsForConcept(
     sourceChunks: grounding.chunks.map((chunk) => chunk.text),
     ...(request.questionCount === undefined ? {} : { questionCount: request.questionCount }),
     personalization: { voiceExemplars },
+    // `[D-188]` / `ol-0r92.35`: passed through verbatim, never decided here —
+    // `exactOptionalPropertyTypes` forbids an explicit `undefined`, so both
+    // keys are omitted entirely when the caller didn't set them, the same
+    // discipline `questionCount` above already uses.
+    ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
+    ...(request.registerHint === undefined ? {} : { registerHint: request.registerHint }),
   };
 
   const response = await deps.transport.send({
