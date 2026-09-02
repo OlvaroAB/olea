@@ -175,7 +175,7 @@ export function courseCountLabel(count: number): string {
  * ## Principle 12, applied to each of them
  *
  * - **The mastery strip states counts and stops.** It says how many concepts
- *   sit in each of F2.11's five named states and never sums, averages, ranks
+ *   sit in each of F2.11's four named growth stages and never sums, averages, ranks
  *   or grades them. `MASTERY_DISPLAY.meaning` is deliberately NOT rendered
  *   here: those lines describe the state to somebody meeting the vocabulary,
  *   and repeating them beside every course would turn a compact strip into a
@@ -720,9 +720,9 @@ export function allTodayStrings(): readonly string[] {
     INSIGHTS_LABEL,
     INSIGHTS_TOO_EARLY,
     RHYTHM_LABEL,
-    // Every one of F2.11's five words, at the two counts whose wording could
+    // Every one of F2.11's four words, at the two counts whose wording could
     // differ. Sampling the vocabulary rather than one state of it is what makes
-    // the panel-wide rules apply to all five.
+    // the panel-wide rules apply to all four.
     ...MASTERY_ORDER.flatMap((state) => [masteryCountLabel(state, 1), masteryCountLabel(state, 7)]),
     conceptCountLabel(0),
     conceptCountLabel(1),

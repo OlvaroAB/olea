@@ -192,8 +192,37 @@ export class TodayView extends ItemView {
    * would be wrong here — that string exists because a *read failed*, and a
    * caller that never asked has not had a read fail.
    *
-   * A course whose concepts are every one of them `new` still renders, showing
-   * that. It is a fact about a course she has not opened, not an empty state.
+   * A course whose concepts are every one of them `seed` still renders,
+   * showing that. It is a fact about a course she has not opened, not an
+   * empty state.
+   *
+   * **This block predates D-049/F2.11's ratified display and does not
+   * currently comply with it (`ol-l5og.16`).** Read in two sentences: F2.11
+   * ratifies exactly two forms of a mastery distribution — a *field* at
+   * ≥860px and a *ladder* (rows named by stage, one dot per concept, a
+   * tending line beneath naming affected concepts) below that — chosen by
+   * width, and the co-presence clause D-116 adds (`ol-hgtb`,
+   * `findings/VIT-1-holding-cut.md` §6, binding "the review view, the Today
+   * panel, the gap view and the sprig chip" by name) makes both forms show a
+   * growth stage only alongside its vitality reading, "worded, marked, or
+   * drawn as the sprig's wilt," with an explicit fallback: "where a surface
+   * genuinely cannot carry both, it shows neither." This sidebar sits in the
+   * vocabulary registry's "Mastery side pane, 280–460px" width bucket (§1's
+   * own table), which resolves to the **ladder**, not this decorative strip.
+   *
+   * It is not reconciled here, and this is not a deliberate ruled-compatible
+   * variant — it is a genuine gap this bead found but could not close within
+   * its own `owns`. `CourseMastery`/`MasteryDistribution`
+   * (`packages/core/src/today/mastery-overview.ts`,
+   * `packages/core/src/mastery/sprig.ts`) carry growth-stage counts only; no
+   * vitality field reaches this course-level aggregate anywhere, even though
+   * per-concept vitality is already computed (`packages/core/src/mastery/
+   * vitality.ts`'s `readVitality`, wired by `ol-95vv.1`). Building the ladder
+   * and its tending line needs that core-side wiring plus new rules in the
+   * shared `styles.css`, both outside `today/view.ts` and `today/copy.ts`.
+   * Filed as `[VIT-2]` (`ol-a3hv`, `discovered-from` this bead); its
+   * scenarios already exist, pre-written, in `features/F6-today.md`'s "F6.2
+   * — What the overview may show for vitality" block.
    */
   private renderMastery(parent: HTMLElement, vm: TodayViewModel): void {
     const overview = vm.mastery;
@@ -220,9 +249,13 @@ export class TodayView extends ItemView {
 
     // The strip is decorative and says so. Everything it encodes is stated as
     // text in the counts row below it, so a screen reader gets the numbers and
-    // the five words rather than a row of unlabelled boxes — and the bar is
+    // the four words rather than a row of unlabelled boxes — and the bar is
     // free to fade its segments without a contrast question, because no
     // meaning rides on the colour alone.
+    //
+    // Not the ratified ladder, and no vitality reading anywhere in this
+    // block — see `renderMastery`'s doc comment for the F2.11/D-116 reading
+    // and `[VIT-2]` (`ol-a3hv`), the follow-up this gap is filed on.
     const strip = row.createDiv({ cls: 'olea-today-mastery-strip' });
     strip.setAttr('aria-hidden', 'true');
     const counts = row.createDiv({ cls: 'olea-today-mastery-counts' });
@@ -257,7 +290,7 @@ export class TodayView extends ItemView {
    * `ol-4qvc`) — one line per running course, the count and the source it
    * came from, never a sum or a rank (F8.3, C5.7). A separate section from
    * `renderMastery`: the two are different computations over different
-   * models (`buildMasteryOverview`'s five-state distribution vs
+   * models (`buildMasteryOverview`'s four-stage distribution vs
    * `buildCrossCourseScopeOverview`'s examiner-declared count), grouped only
    * by both being F6.2's cross-course default reading — so they render as
    * two sections, not one merged row.
