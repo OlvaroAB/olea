@@ -378,6 +378,19 @@ export class ReviewView extends ItemView {
     ) {
       return;
     }
+    // Space/Enter on a focused button (or anchor, or role="button" element)
+    // activates that control, not the screen-wide binding (ol-l5og.13).
+    // Every review control is a real <button> wired to its own click
+    // handler, so letting native activation win here is sufficient.
+    if (
+      (evt.key === ' ' || evt.key === 'Spacebar' || evt.key === 'Enter') &&
+      target instanceof HTMLElement &&
+      (target.tagName === 'BUTTON' ||
+        target.tagName === 'A' ||
+        target.getAttribute('role') === 'button')
+    ) {
+      return;
+    }
 
     const action = resolveReviewKey({ key: evt.key }, this.currentScreen());
     if (action === null) return;
