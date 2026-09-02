@@ -23,6 +23,18 @@
  *   - the standing note-offer: an eligible tier-2 concept shows both verbs; a tier-1
  *     concept with the same instrument/review/ranking evidence never shows it; accept
  *     calls through to `RegistryViewDeps.acceptNoteOffer`, decline removes it locally
+ *
+ * `[D-183]`'s rank-gated rename proposal (knowledge model §3, `ol-2zfj.58`), covering the
+ * `@manual` scenario "the proposal lives on the concept's own row, through the same
+ * accept/decline shape as the note-offer" (`olea-service/features/F8-concepts-scope.md`):
+ *   - the proposal renders inline on the concept's own row, beside its own facts — one
+ *     accept ("Use this wording"), one decline ("Keep the current wording"), no banner
+ *     or badge anywhere else on the page
+ *   - accepting calls through to `RegistryViewDeps.acceptRenameProposal`: the row's own
+ *     `RegistryView.refresh()` then shows the candidate wording, with the old wording
+ *     demoted to an alias
+ *   - declining calls through to `RegistryViewDeps.declineRenameProposal`: the section
+ *     disappears immediately, AND the same proposal does not re-fire on a later refresh
  */
 import { expect, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -217,4 +229,71 @@ test('registry-note-offer: declining removes the offer locally, and calls no por
   await expect(page.locator('[data-wb-inspector]')).toContainText(
     'No note-offer accept yet this state.',
   );
+});
+
+// ---------------------------------------------------------------------------
+// `[D-183]` (`ol-2zfj.58`) — the rank-gated rename proposal, on its own row.
+// F8-concepts-scope.md, @manual: "the proposal lives on the concept's own row,
+// through the same accept/decline shape as the note-offer".
+// ---------------------------------------------------------------------------
+
+test("registry-rename-proposal: the proposal renders on the concept's own row, with one accept and one decline, no banner or badge", async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-rename-proposal', 'obsidian-dark');
+  const row = rows(page).filter({ hasText: 'syn:concept:renwick' });
+  await expect(row).toHaveCount(1);
+
+  // Lives INSIDE the concept's own row — not a page-level banner or dialog.
+  const proposal = row.locator('.olea-registry-rename-proposal');
+  await expect(proposal).toHaveCount(1);
+  await expect(page.locator('[role="dialog"], [role="alert"]')).toHaveCount(0);
+
+  // Exactly one accept, one decline — no badge anywhere in the section (the
+  // only badge class this surface has at all is the withdrawn one, F8.5's).
+  await expect(proposal.getByRole('button', { name: 'Use this wording' })).toHaveCount(1);
+  await expect(proposal.getByRole('button', { name: 'Keep the current wording' })).toHaveCount(1);
+  await expect(row.locator('[class*="badge" i]')).toHaveCount(0);
+
+  // States the fact and its evidence, never a nudge.
+  await expect(proposal).toContainText('syn:concept:renwick-clarified');
+  await expect(proposal).toContainText('syn:concept:renwick');
+});
+
+test('registry-rename-proposal: accepting adopts the candidate wording and demotes the old wording to an alias', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-rename-proposal', 'obsidian-dark');
+  const row = rows(page).filter({ hasText: 'syn:concept:renwick' });
+  await row
+    .locator('.olea-registry-rename-proposal')
+    .getByRole('button', { name: 'Use this wording' })
+    .click();
+
+  const renamed = rows(page).filter({ hasText: 'syn:concept:renwick-clarified' });
+  await expect(renamed.locator('h3')).toHaveText('syn:concept:renwick-clarified');
+  await expect(renamed.locator('.olea-registry-aliases')).toContainText('syn:concept:renwick');
+  // The proposal itself is gone once accepted — nothing left pending on the row.
+  await expect(renamed.locator('.olea-registry-rename-proposal')).toHaveCount(0);
+});
+
+test('registry-rename-proposal: declining removes the proposal, and it does not re-fire on a later refresh', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-rename-proposal', 'obsidian-dark');
+  const row = rows(page).filter({ hasText: 'syn:concept:renwick' });
+  const proposal = row.locator('.olea-registry-rename-proposal');
+  await proposal.getByRole('button', { name: 'Keep the current wording' }).click();
+  await expect(proposal).toHaveCount(0);
+  // Declining is local wording-wise: the row keeps its current name.
+  await expect(row.locator('h3')).toHaveText('syn:concept:renwick');
+
+  // Force a real `RegistryViewDeps.load()` round-trip (the "Show withdrawn"
+  // toggle calls `RegistryView.refresh()`) — proves the decline reached the
+  // deps' session-scoped memory, not just this render.
+  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').check();
+  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').uncheck();
+  const rowAfterRefresh = rows(page).filter({ hasText: 'syn:concept:renwick' });
+  await expect(rowAfterRefresh.locator('.olea-registry-rename-proposal')).toHaveCount(0);
+  await expect(rowAfterRefresh.locator('h3')).toHaveText('syn:concept:renwick');
 });

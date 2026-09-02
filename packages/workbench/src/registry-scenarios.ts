@@ -114,6 +114,20 @@ export const REGISTRY_STATES: readonly RegistryWorkbenchState[] = [
       '1 — already bound to an authored note — and never shows the offer at all, proving the ' +
       'tier gate rather than the evidence gate is what is being tested.',
   },
+  {
+    id: 'registry-rename-proposal',
+    label: "A rank-gated rename proposal, on the concept's own row",
+    group: 'registry',
+    note:
+      "`[D-183]`'s rank-gated rename proposal (knowledge model §3, `ol-2zfj.58`). One concept " +
+      "carries a pending proposal — it renders inline on that row, beside the concept's own " +
+      'facts, with one accept ("Use this wording") and one decline ("Keep the current ' +
+      'wording"), no banner and no badge anywhere else on the page. Accepting adopts the ' +
+      'candidate wording through the real overrides.ts renameConcept transform (the frozen old ' +
+      'wording survives as an alias); declining records the (tier, wording) pair in memory, ' +
+      'held for this scenario instance, so the same proposal never re-fires — the row keeps its ' +
+      'current wording either way.',
+  },
 ];
 
 export function findRegistryState(
@@ -453,6 +467,53 @@ const NOTE_OFFER_RANKINGS: readonly CourseOracleRanking[] = [
   }),
 ];
 
+// ---------------------------------------------------------------------------
+// `[D-183]` (`ol-2zfj.58`) — the rank-gated rename proposal, on its own row.
+// ---------------------------------------------------------------------------
+
+/** `RegistryConceptEntry.renameProposal`'s non-null shape, by indexed access rather than a named import — `RenameProposal` is not re-exported from `olea-core`'s index (out of `ol-2zfj.58`'s `owns`), the identical situation `packages/plugin/src/registry/view.ts` and `./provider.ts` already document for the same type. */
+type RenameProposal = NonNullable<RegistryConceptEntry['renameProposal']>;
+
+/**
+ * Tier 2, no override yet — its raw extraction wording is what the row
+ * currently shows and what `[D-183]` freezes as `currentDisplayName` while
+ * the proposal below is pending.
+ */
+const RENWICK = concept({
+  key: 'syn:concept-key:renwick',
+  name: 'syn:concept:renwick',
+  tier: 2,
+  courses: ['syn:course:vantrel'],
+  sourcePaths: ['01 Courses/syn:course:vantrel/Week 6.md'],
+});
+
+const RENWICK_INSTRUMENT = instrument({
+  instrumentId: 'qa:syn:concept-key:renwick:1',
+  conceptIds: ['syn:concept-key:renwick'],
+  notePath: '01 Courses/syn:course:vantrel/Week 6.md',
+  noteTitle: 'Week 6',
+  blockId: 'syn-block-renwick-1',
+});
+
+/**
+ * The candidate a tier-1 source (her own concept note, outranking `RENWICK`'s
+ * tier 2) has proposed — never applied to `RENWICK.name` itself, which stays
+ * the frozen "current" wording per `[D-183]`'s own rule until she acts.
+ */
+const RENAME_PROPOSAL_CANDIDATE: RenameProposal['candidate'] = {
+  tier: 1,
+  wording: 'syn:concept:renwick-clarified',
+  sourceLocation: {
+    sourcePath: '01 Courses/syn:course:vantrel/Renwick.md',
+    heading: 'Renwick',
+  },
+};
+
+/** Mirrors `../../core/registry/rename-proposal.ts`'s `declineSignature` — same "(tier, wording), not the concept alone" unit, kept local for the same reason `RenameProposal` above is an indexed-access type rather than an import. */
+function renameProposalDeclineSignature(candidate: RenameProposal['candidate']): string {
+  return `${candidate.tier}:${candidate.wording}`;
+}
+
 function inputFor(stateId: string): BuildRegistryModelInput {
   if (stateId === 'registry-empty') {
     return {
@@ -492,6 +553,18 @@ function inputFor(stateId: string): BuildRegistryModelInput {
       suspendedInstrumentIds: new Set(),
     };
   }
+  if (stateId === 'registry-rename-proposal') {
+    return {
+      concepts: [RENWICK],
+      instrumentRecords: [RENWICK_INSTRUMENT],
+      entries: [],
+      scheduler,
+      now: NOW,
+      holdingCut: HOLDING_CUT,
+      overrides: EMPTY_REGISTRY_OVERRIDES,
+      suspendedInstrumentIds: new Set(),
+    };
+  }
   const entries: readonly ReviewLogEntry[] = [];
   return {
     concepts: [ALPHA, BETA],
@@ -517,6 +590,10 @@ export interface RegistryScenario {
   readonly sourceOpens: RegistrySourceLocation[];
   /** F8.4a's `[D-176]` accept half (`ol-r1by`) — recorded rather than written anywhere, matching `sourceOpens`'/`editHandoffs`' own posture of proving the CALL reached this mock, never a real vault write (this package has none to make). */
   readonly noteOfferAccepts: RegistryConceptEntry[];
+  /** `[D-183]` accept half — recorded, AND applied through the real `renameConcept` transform below, so a subsequent `load()` shows the candidate wording and the old wording demoted to an alias. */
+  readonly renameProposalAccepts: RenameProposal[];
+  /** `[D-183]` decline half — recorded, AND the (tier, wording) signature is remembered so `buildModel()` never re-attaches this exact proposal again for this scenario instance. */
+  readonly renameProposalDeclines: RenameProposal[];
 }
 
 /**
@@ -538,13 +615,43 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
   const editHandoffs: RecordedOpen[] = [];
   const sourceOpens: RegistrySourceLocation[] = [];
   const noteOfferAccepts: RegistryConceptEntry[] = [];
+  const renameProposalAccepts: RenameProposal[] = [];
+  const renameProposalDeclines: RenameProposal[] = [];
+  const declinedRenameSignatures = new Set<string>();
 
   function buildModel(): RegistryModel {
-    return buildRegistryModel({
+    const model = buildRegistryModel({
       ...baseInput,
       overrides,
       suspendedInstrumentIds: withdrawnInstrumentIds,
     });
+    if (stateId !== 'registry-rename-proposal') return model;
+
+    // `buildRegistryModel` never computes `renameProposal` itself (`./view.ts`'s
+    // own doc: that field is overlaid AFTER the pure build, by
+    // `packages/plugin/src/registry/provider.ts` in production). This mirrors
+    // that overlay for one fixture concept: present exactly while no override
+    // has been accepted yet (`overrides.renames[RENWICK.key]` unset — the same
+    // "hers already wins" gate `gateRenameCandidate` reads off `displayName
+    // !== originalName`) and this exact candidate has not been declined.
+    const hasAcceptedOverride = overrides.renames[RENWICK.key] !== undefined;
+    const declined = declinedRenameSignatures.has(
+      renameProposalDeclineSignature(RENAME_PROPOSAL_CANDIDATE),
+    );
+    const showProposal = !hasAcceptedOverride && !declined;
+    return {
+      concepts: model.concepts.map((entry): RegistryConceptEntry => {
+        if (entry.key !== RENWICK.key) return entry;
+        if (!showProposal) return { ...entry, renameProposal: null };
+        const proposal: RenameProposal = {
+          key: entry.key,
+          currentDisplayName: entry.displayName,
+          currentTier: entry.tier,
+          candidate: RENAME_PROPOSAL_CANDIDATE,
+        };
+        return { ...entry, renameProposal: proposal };
+      }),
+    };
   }
 
   const deps: RegistryViewDeps = {
@@ -578,11 +685,49 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
       noteOfferAccepts.push(entry);
     },
-    // [D-183] (ol-2zfj.58): no workbench state raises a rename proposal yet, so
-    // both halves are inert here; a future registry tranche adds the state.
-    async acceptRenameProposal(): Promise<void> {},
-    async declineRenameProposal(): Promise<void> {},
+    /**
+     * `[D-183]` accept half. Reuses `renameConcept` exactly as `rename()`
+     * above does, and exactly as `../../plugin/src/registry/provider.ts`'s
+     * own `acceptRenameProposal` does in production: `proposal.currentDisplayName`
+     * (the frozen old wording), never `entry.originalName`, is what must be
+     * passed as `renameConcept`'s `originalName` parameter — the other order
+     * silently no-ops and drops the alias (see
+     * `../../core/registry/rename-proposal.ts`'s own doc on `acceptRenameProposal`).
+     */
+    async acceptRenameProposal(
+      _entry: RegistryConceptEntry,
+      proposal: RenameProposal,
+    ): Promise<void> {
+      overrides = renameConcept(
+        overrides,
+        proposal.key,
+        proposal.currentDisplayName,
+        proposal.candidate.wording,
+      );
+      renameProposalAccepts.push(proposal);
+    },
+    /**
+     * `[D-183]` decline half. Session-scoped, matching production's own
+     * documented gap: records the (tier, wording) signature so `buildModel()`
+     * above never re-attaches this exact proposal again for this scenario
+     * instance, but the row's own wording is untouched.
+     */
+    async declineRenameProposal(
+      _entry: RegistryConceptEntry,
+      proposal: RenameProposal,
+    ): Promise<void> {
+      declinedRenameSignatures.add(renameProposalDeclineSignature(proposal.candidate));
+      renameProposalDeclines.push(proposal);
+    },
   };
 
-  return { stateId, deps, editHandoffs, sourceOpens, noteOfferAccepts };
+  return {
+    stateId,
+    deps,
+    editHandoffs,
+    sourceOpens,
+    noteOfferAccepts,
+    renameProposalAccepts,
+    renameProposalDeclines,
+  };
 }

@@ -119,6 +119,7 @@ export const REGISTRY_STATES = [
   'registry-withdrawn-shown',
   'registry-explain-back-history',
   'registry-note-offer',
+  'registry-rename-proposal',
 ] as const;
 
 // F7's plugin surface (`ol-z6x2`) — see `plugin-surface-scenarios.ts` for the source of truth.
