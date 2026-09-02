@@ -35,13 +35,14 @@ test('gap-mastery: melspar renders as a mastery-gap row', async ({ page }) => {
   await expect(frame(page).locator('.olea-gap-row-mastery-gap')).not.toHaveCount(0);
 });
 
-test('gap-coverage: dornith renders as a coverage-gap row, draft-cards affordance present', async ({
+test('gap-coverage: dornith renders as a coverage-gap row and, per [D-063], offers no draft verb', async ({
   page,
 }) => {
   await gotoState(page, 'oracle', 'gap-coverage', 'obsidian-dark');
   const row = frame(page).locator('.olea-gap-row-coverage-gap');
   await expect(row).not.toHaveCount(0);
-  await expect(row.first().locator('.olea-gap-action-draft-cards')).toBeVisible();
+  await expect(row.first().locator('.olea-gap-action-draft-cards')).toHaveCount(0);
+  await expect(row.first().locator('.olea-gap-action-build-session')).toBeVisible();
 });
 
 test('gap-material (F4.10): kelvane renders as a material-gap row and NEVER offers draft-cards', async ({

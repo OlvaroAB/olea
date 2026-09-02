@@ -218,15 +218,15 @@ export function gapRowLine(row: GapRow): string {
 }
 
 /**
- * Action labels. `'draft-cards'` never reaches a material-gap row — that is
- * enforced in `olea-core`'s `affordancesFor`, by construction, so this map
- * never has to be the guard (F4.10: not relabelled, not disabled, not
- * conditional).
+ * Action labels. There is no commissioning label here — `olea-core`'s
+ * `affordancesFor` never returns a draft/generate affordance on any class
+ * (F4.5's draft verb is withdrawn under `[D-063]`; F4.10 never had one: "not
+ * relabelled, not disabled, not conditional") — so this map never has to be
+ * the guard.
  */
 const AFFORDANCE_LABELS: Readonly<Record<GapAffordance, string>> = {
   'open-concept': 'Open the concept',
   'build-session': 'Build a session from this',
-  'draft-cards': 'Ask Olea to draft material for this',
   'find-source': 'Find the source',
 };
 

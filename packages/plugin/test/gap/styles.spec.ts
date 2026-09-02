@@ -144,7 +144,7 @@ describe('styles.css covers the gap view', () => {
     const emitted = classesEmittedByView();
     expect(emitted).toContain('olea-gap-root');
     expect(emitted).toContain('olea-gap-row-mastery-gap');
-    expect(emitted).toContain('olea-gap-action-draft-cards');
+    expect(emitted).toContain('olea-gap-action-open-concept');
     expect(emitted).toContain('olea-gap-scope-source-unreadable');
   });
 
@@ -154,8 +154,12 @@ describe('styles.css covers the gap view', () => {
     expect(missing).toEqual([]);
   });
 
-  it("F4.10's rule is structural, not just a style choice: draft-cards never reaches a material-gap row", () => {
-    expect(affordancesFor('material-gap')).not.toContain('draft-cards');
+  it("F4.5 and F4.10's rules are structural, not just a style choice: no gap class offers a commissioning affordance", () => {
+    // The full affordance vocabulary across all three classes, derived from
+    // olea-core rather than hard-coded here — a commissioning affordance
+    // reappearing anywhere (coverage-gap's withdrawn draft verb included)
+    // would show up in this set.
+    expect(AFFORDANCES).toEqual(['build-session', 'find-source', 'open-concept']);
   });
 });
 

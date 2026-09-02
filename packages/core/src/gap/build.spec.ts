@@ -13,6 +13,7 @@ import {
   buildMaterialPresence,
   type ConceptMaterialPresence,
   classifyGap,
+  type GapAffordance,
   type GapClass,
 } from './build.js';
 
@@ -129,23 +130,36 @@ describe('classifyGap — the three classes the contract refuses to merge', () =
   });
 });
 
-describe("affordancesFor — F4.10's rule, enforced by construction", () => {
-  it('offers the draft affordance on a coverage gap, where the grounding exists', () => {
-    expect(affordancesFor('coverage-gap')).toContain('draft-cards');
+describe("affordancesFor — F4.5 and F4.10's rules, enforced by construction", () => {
+  it('offers open-concept and build-session on a coverage gap, and no commissioning affordance (F4.5, amended [D-063])', () => {
+    // The draft verb is withdrawn: Olea is already drafting under [D-063]'s
+    // unbounded automatic generation, so the row offers a progress reading
+    // (open, or reorder her own queue) and nothing that asks her to
+    // commission work that is already commissioned.
+    expect(affordancesFor('coverage-gap')).toEqual(['open-concept', 'build-session']);
   });
 
-  it('offers locate-or-open on a material gap, and nothing else', () => {
+  it('offers locate-or-open on a material gap, and nothing else (F4.10)', () => {
     expect(affordancesFor('material-gap')).toEqual(['find-source']);
   });
 
-  it('never offers a draft affordance on a material gap, for any class value', () => {
-    // F4.10: not relabelled, not disabled, not conditional. Asserted across
-    // every class so adding a fourth without deciding its affordances is a
-    // compile error, and mislabelling this one is a red test.
+  it('leaves no commissioning affordance reachable from any gap class', () => {
+    // Neither F4.5's withdrawn draft verb nor F4.10's rule ("not relabelled,
+    // not disabled, not conditional") leaves a generate-from-nothing button
+    // reachable anywhere — the GapAffordance union itself carries no such
+    // member any more. Asserted across every class so a fourth class added
+    // without deciding its affordances is a compile error, not a silent
+    // default.
     const classes: readonly GapClass[] = ['mastery-gap', 'coverage-gap', 'material-gap'];
+    const allowed: ReadonlySet<GapAffordance> = new Set<GapAffordance>([
+      'open-concept',
+      'build-session',
+      'find-source',
+    ]);
     for (const gapClass of classes) {
-      const offered = affordancesFor(gapClass).includes('draft-cards');
-      expect(offered).toBe(gapClass === 'coverage-gap');
+      for (const affordance of affordancesFor(gapClass)) {
+        expect(allowed.has(affordance)).toBe(true);
+      }
     }
   });
 });
@@ -166,9 +180,11 @@ describe('buildGapView', () => {
       ['Gamma', 'material-gap'],
     ]);
     // Gamma is cited by a past paper and named by no note of hers — the row
-    // with nothing to generate from, and the row with no draft button.
-    expect(rows[2]?.affordances).not.toContain('draft-cards');
-    expect(rows[1]?.affordances).toContain('draft-cards');
+    // with nothing to generate from, and locate-or-open only (F4.10).
+    expect(rows[2]?.affordances).toEqual(['find-source']);
+    // Beta has notes but no cards yet — a progress reading, not a call to
+    // action: open and build, never a draft verb (F4.5, amended [D-063]).
+    expect(rows[1]?.affordances).toEqual(['open-concept', 'build-session']);
   });
 
   it('carries the oracle reasoning and citations through verbatim, never re-narrating them', () => {

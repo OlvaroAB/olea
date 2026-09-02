@@ -17,13 +17,19 @@
  *  - `'material-gap'` (F4.10) — the assessment evidence names it and **her
  *    material does not**. *"We don't have it."*
  *
- * The distinction is load-bearing rather than editorial, and F4.10 says so
- * outright: F4.5's draft affordance is safe *precisely because the notes
- * exist* — the cards are missing, the grounding is not. On a material-gap row
- * there is nothing to ground on, so drafting is exactly the confabulation C4.7
- * refuses and INV-5 tests for. **A surface that merges the two classes attaches
- * a generate-from-nothing button to the one row where nothing exists to
- * generate from.** {@link affordancesFor} is where that is enforced, and it is
+ * The distinction is load-bearing rather than editorial, and neither
+ * gap-without-cards class offers a commissioning affordance, for two
+ * different reasons that must not collapse into one. A coverage-gap concept
+ * has grounding — under `[D-063]` unbounded automatic generation its
+ * instruments are already commissioned and in flight, so there is nothing
+ * left to ask for, and **the draft verb is withdrawn there too**: there is no
+ * *"Draft 6?"*, because a button asking for what is already happening
+ * teaches her that Olea waits to be told (F4.5, amended `[D-063]`). A
+ * material-gap concept has no grounding at all, so drafting from it is
+ * exactly the confabulation C4.7 refuses and INV-5 tests for (F4.10). **A
+ * surface that merges the two classes attaches a generate-from-nothing
+ * button to the one row where nothing exists to generate from.**
+ * {@link affordancesFor} is where both rules are enforced, and they are
  * enforced by construction rather than by a caller remembering.
  *
  * **What this module does not do, and why that is not a hedge.** With today's
@@ -77,12 +83,16 @@ export type GapClass = 'mastery-gap' | 'coverage-gap' | 'material-gap';
 /**
  * What a row offers her.
  *
- * `'draft-cards'` is the one that carries a rule rather than a preference:
- * F4.10 forbids it on a material-gap row outright — *"not relabelled, not
- * disabled, not conditional"*, because a disabled button still advertises a
- * capability the row cannot have.
+ * There is no commissioning/generate affordance in this union at all, on any
+ * class. `'draft-cards'` was withdrawn from `'coverage-gap'` (F4.5, amended
+ * `[D-063]`: Olea is already drafting, so there is nothing left for the
+ * student to ask for) and was never offered on `'material-gap'` either —
+ * *"not relabelled, not disabled, not conditional"* (F4.10), because a
+ * disabled button still advertises a capability the row cannot have. A
+ * generate-from-nothing affordance on either class would be a contract
+ * violation, not a value to add back here.
  */
-export type GapAffordance = 'open-concept' | 'build-session' | 'draft-cards' | 'find-source';
+export type GapAffordance = 'open-concept' | 'build-session' | 'find-source';
 
 /**
  * What her own material holds for one concept — the input that decides the gap
@@ -200,20 +210,26 @@ export interface BuildGapViewInput {
 /**
  * Which affordances a row of this class offers.
  *
- * The `'material-gap'` branch is the one with a contract behind it and it is
- * written as an exhaustive switch so a fourth class cannot be added without
- * deciding its affordances — a default branch here would silently hand a new
- * class the draft button.
+ * Two of the three branches carry a contract rule rather than a preference —
+ * `'coverage-gap'` had its commissioning affordance withdrawn under `[D-063]`
+ * (F4.5: the row is a progress reading, not a call to action) and
+ * `'material-gap'` never had one to begin with (F4.10: nothing to ground a
+ * draft on) — and it is written as an exhaustive switch so a fourth class
+ * cannot be added without deciding its affordances, rather than silently
+ * inheriting a commissioning affordance from a default branch.
  */
 export function affordancesFor(gapClass: GapClass): readonly GapAffordance[] {
   switch (gapClass) {
     case 'mastery-gap':
       return ['open-concept', 'build-session'];
     case 'coverage-gap':
-      // The draft affordance, and the only class that gets it: the notes exist,
-      // so there is grounding to draft from (F4.5). INV-6's accept step still
-      // stands between anything generated and her vault.
-      return ['open-concept', 'draft-cards', 'build-session'];
+      // No draft affordance: under [D-063] unbounded automatic generation,
+      // this population is work Olea has already commissioned and not yet
+      // done (the same set F8.2 calls `ground`), so there is nothing for the
+      // student to ask for. The row states the gap and lets her reorder
+      // Olea's own queue (build-session); it commissions nothing (F4.5,
+      // amended [D-063]).
+      return ['open-concept', 'build-session'];
     case 'material-gap':
       // Locate-or-open, and nothing else. Not a disabled draft, not a
       // relabelled one — F4.10.

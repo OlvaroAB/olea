@@ -1444,14 +1444,6 @@ button.olea-review-mcq-option:hover {
   cursor: pointer;
 }
 
-/* F4.10, structurally rather than by a colour alone: `affordancesFor`
-   (`olea-core`) never emits `draft-cards` for a material-gap row, so this
-   rule exists for the three affordances that reach a coverage-gap or
-   mastery-gap row and never for the fourth. */
-.olea-gap-action-draft-cards {
-  color: var(--olea-host-attention);
-}
-
 .olea-gap-action-open-concept,
 .olea-gap-action-build-session,
 .olea-gap-action-find-source {

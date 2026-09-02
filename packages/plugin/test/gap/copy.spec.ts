@@ -377,8 +377,9 @@ describe('row copy', () => {
     );
   });
 
-  it('labels the draft affordance only where core offered it', () => {
-    expect(affordanceLabel('draft-cards')).toBe('Ask Olea to draft material for this');
+  it('labels every affordance core can actually offer, and no commissioning affordance exists to label', () => {
+    expect(affordanceLabel('open-concept')).toBe('Open the concept');
+    expect(affordanceLabel('build-session')).toBe('Build a session from this');
     expect(affordanceLabel('find-source')).toBe('Find the source');
   });
 });
