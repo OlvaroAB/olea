@@ -237,6 +237,7 @@ export class RegistryView extends ItemView {
       type: 'text',
       cls: 'olea-registry-rename-input',
       value: entry.displayName,
+      attr: { 'aria-label': RENAME_ACTION },
     });
     const renameButton = actions.createEl('button', { text: RENAME_ACTION });
     renameButton.addEventListener('click', () => {
@@ -283,7 +284,19 @@ export class RegistryView extends ItemView {
       });
 
       for (const location of instrument.sourceLocations) {
-        const openButton = item.createEl('button', { text: OPEN_SOURCE_LOCATION_ACTION });
+        const openButton = item.createEl('button', {
+          text: OPEN_SOURCE_LOCATION_ACTION,
+          // Every button in this loop shares the same visible text, which
+          // collapses to one indistinguishable accessible name when an
+          // instrument has more than one source location (`sourceLocations`
+          // is `readonly RegistrySourceLocation[]`, `../../core/registry/types.ts`).
+          // `sourceLocationLabel` — already used verbatim as the concept-level
+          // button's own text a few lines up in `renderSourceLocations` — says
+          // which location this one opens without adding any new copy.
+          attr: {
+            'aria-label': `${OPEN_SOURCE_LOCATION_ACTION}: ${sourceLocationLabel(location)}`,
+          },
+        });
         openButton.addEventListener('click', () => {
           void this.deps.openSourceLocation(location);
         });
