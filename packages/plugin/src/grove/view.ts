@@ -34,6 +34,18 @@
  * runtime outside a real host; the honesty properties are asserted against
  * `./copy.ts` and `./provider.ts` under Vitest instead (same convention
  * `today/view.ts`/`gap/view.ts` document).
+ *
+ * **The scope-correction receipt, wired (`[D-184]`, F8.1, `ol-v7r5.32`).**
+ * `./copy.ts#groveScopeCorrectionReceiptLine` existed with no production
+ * caller until this bead: `./provider.ts` now computes, per `'declared'`
+ * course, whether this read's `denominatorCount` fell against its own
+ * persisted prior (`./prior-denominator-store.ts`) and — only when it can
+ * name the document that caused the fall — attaches a
+ * `GroveScopeCorrectionReceipt` to that course's `GroveCourseSection`.
+ * `renderDeclared` below renders it exactly once, beside `groveSummaryLine`'s
+ * own count, and never on a growth (F1.5(c) already treats a growing
+ * denominator as unremarkable — `groveSummaryLine`'s own new numbers say
+ * that without ceremony).
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -53,6 +65,7 @@ import {
   GROVE_VIEW_TITLE,
   GROVE_VOLUNTEER_SECTION_HEADING,
   GROVE_VOLUNTEER_SECTION_NOTE,
+  groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
   groveUnreadableReasonLabel,
@@ -60,6 +73,21 @@ import {
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_GROVE = 'olea-grove';
+
+/**
+ * `[D-184]`, F8.1, `ol-v7r5.32`: the scope-correction receipt's three
+ * facts for one course's `'declared'` reading — computed once by
+ * `./provider.ts` against its persisted `./prior-denominator-store.ts`
+ * snapshot, and absent whenever nothing shrank this read (a growth, or the
+ * very first read for this course on this install). See `./copy.ts
+ * #groveScopeCorrectionReceiptLine` for the rendered sentence these three
+ * facts produce.
+ */
+export interface GroveScopeCorrectionReceipt {
+  readonly reclassifiedDocumentPath: VaultPath;
+  readonly priorDenominatorCount: number;
+  readonly newDenominatorCount: number;
+}
 
 /** One course's grove section — the real `GroveCourseModel` (`olea-core`) plus this course's own standing offer card(s). */
 export interface GroveCourseSection {
@@ -78,6 +106,13 @@ export interface GroveCourseSection {
    * surfaces.
    */
   readonly unreadableFiles: readonly UnreadableFile[];
+  /**
+   * `[D-184]`, F8.1, `ol-v7r5.32`: present only when `./provider.ts` found
+   * both a shrink AND a document to name for it this read — see
+   * `GroveScopeCorrectionReceipt`'s own doc. Only ever set alongside
+   * `model.status === 'declared'`.
+   */
+  readonly scopeCorrectionReceipt?: GroveScopeCorrectionReceipt;
 }
 
 export type GroveViewState =
@@ -168,7 +203,12 @@ export class GroveView extends ItemView {
         }
         break;
       case 'declared':
-        this.renderDeclared(box, section.model, section.unreadableFiles);
+        this.renderDeclared(
+          box,
+          section.model,
+          section.unreadableFiles,
+          section.scopeCorrectionReceipt,
+        );
         break;
     }
 
@@ -179,6 +219,7 @@ export class GroveView extends ItemView {
     parent: HTMLElement,
     model: Extract<GroveCourseModel, { readonly status: 'declared' }>,
     unreadableFiles: readonly UnreadableFile[],
+    scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined,
   ): void {
     // F8.3: the count and the denominator's source, shown separately — never
     // their ratio, and no percentage anywhere on this line.
@@ -187,6 +228,20 @@ export class GroveView extends ItemView {
       cls: 'olea-grove-summary-line',
       text: groveSummaryLine(model.summary),
     });
+    // `[D-184]`, F8.1, `ol-v7r5.32`: "the same honesty runs in reverse" —
+    // rendered ONCE, beside the count above, only when `./provider.ts`
+    // found an actual shrink with a document to name for it. Never on a
+    // growth: F1.5(c) already treats that as unremarkable.
+    if (scopeCorrectionReceipt !== undefined) {
+      summaryEl.createSpan({
+        cls: 'olea-grove-scope-correction-receipt',
+        text: groveScopeCorrectionReceiptLine(
+          scopeCorrectionReceipt.reclassifiedDocumentPath,
+          scopeCorrectionReceipt.priorDenominatorCount,
+          scopeCorrectionReceipt.newDenominatorCount,
+        ),
+      });
+    }
     // F8.1: "the readiness view" — the same list F1.5(b)'s designed-state
     // ask carries, shown here beside the count and its source.
     this.renderUnreadableFiles(parent, unreadableFiles);

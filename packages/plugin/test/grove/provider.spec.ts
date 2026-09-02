@@ -236,6 +236,195 @@ function fixtureVaultWithUnreadableFiles() {
   });
 }
 
+/**
+ * A course with TWO registered objectives documents, each naming its own
+ * concept with real material — `denominatorCount` 2, from two distinct
+ * `denominatorSourcePaths` (`[D-184]`, `ol-v7r5.32`'s scope-correction
+ * receipt fixtures).
+ */
+function fixtureVaultWithTwoDeclaredDocs() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '03 Research/Objectives A.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept A in depth.',
+      '',
+    ].join('\n'),
+    '03 Research/Objectives B.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept B in depth.',
+      '',
+    ].join('\n'),
+    'Notes/a.md': [
+      '---',
+      'topic: [Concept A]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/b.md': [
+      '---',
+      'topic: [Concept B]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+  });
+}
+
+/**
+ * Same as `fixtureVaultWithTwoDeclaredDocs`, except `Objectives B.md`'s role
+ * has been corrected away from `objectives` to `course-material` (F3.1 —
+ * never declares scope). Concept B's own material is untouched: this is a
+ * pure reclassification, the SAME `buildGroveModel` path a growth uses
+ * (`../../../core/src/scope/grove.ts`'s module doc), never a second one.
+ */
+function fixtureVaultWithOneDocReclassifiedAway() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '03 Research/Objectives A.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept A in depth.',
+      '',
+    ].join('\n'),
+    '03 Research/Objectives B.md': [
+      '---',
+      'role: course-material',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept B in depth.',
+      '',
+    ].join('\n'),
+    'Notes/a.md': [
+      '---',
+      'topic: [Concept A]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/b.md': [
+      '---',
+      'topic: [Concept B]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+  });
+}
+
+/**
+ * `fixtureVaultWithRegisteredSource` plus a SECOND registered objectives
+ * document naming a brand-new concept — a growth, never a reclassification
+ * (F1.5(c)'s "system working" case), used to prove an addition gets no
+ * scope-correction receipt.
+ */
+function fixtureVaultWithRegisteredSourceAndAddition() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '02 Assignments/Quiz 1.md':
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-08-20\nstatus: done\n---\n\n# Quiz 1\n',
+    '03 Research/Objectives.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept A in depth.',
+      '',
+    ].join('\n'),
+    '03 Research/Objectives Extra.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course also covers Concept C in depth.',
+      '',
+    ].join('\n'),
+    'Notes/one.md': [
+      '---',
+      'topic: [Concept A]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/three.md': [
+      '---',
+      'topic: [Concept C]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/two.md': [
+      '---',
+      'topic: [Concept B]',
+      'course: TESTC202',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+  });
+}
+
 function relationPassage(sourcePath: string): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
 }
@@ -531,6 +720,93 @@ describe('createLocalGroveProvider — unreadable files ([D-196], F1.5(b), F8.1,
     });
     const courses = await sectionsFrom(await provider.load());
     for (const course of courses) expect(course.unreadableFiles).toEqual([]);
+  });
+});
+
+describe('createLocalGroveProvider — scope-correction receipt ([D-184], F8.1, ol-v7r5.32)', () => {
+  it('renders the receipt once, naming the reclassified document and the prior count, on the read where the denominator actually falls', async () => {
+    const host = hostWithBasePath(BASE_PATH);
+
+    // First "session": both documents still declare scope. Nothing shrank
+    // yet (no prior stored at all), so no receipt regardless.
+    const provider1 = createLocalGroveProvider({
+      vault: fixtureVaultWithTwoDeclaredDocs(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const first = await sectionsFrom(await provider1.load());
+    const firstModel = modelOf(first.find((c) => c.course === 'TESTC101'));
+    if (firstModel.status !== 'declared')
+      throw new Error(`expected declared, got ${firstModel.status}`);
+    expect(firstModel.summary.denominatorCount).toBe(2);
+    expect(first.find((c) => c.course === 'TESTC101')?.scopeCorrectionReceipt).toBeUndefined();
+
+    // Second "session": a BRAND NEW provider instance reading the SAME
+    // host/data.json — `Objectives B.md` has been reclassified away from
+    // `objectives`, so its citation stops qualifying and the denominator
+    // falls from 2 to 1.
+    const provider2 = createLocalGroveProvider({
+      vault: fixtureVaultWithOneDocReclassifiedAway(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const second = await sectionsFrom(await provider2.load());
+    const secondSection = second.find((c) => c.course === 'TESTC101');
+    const secondModel = modelOf(secondSection);
+    if (secondModel.status !== 'declared')
+      throw new Error(`expected declared, got ${secondModel.status}`);
+    expect(secondModel.summary.denominatorCount).toBe(1);
+    expect(secondSection?.scopeCorrectionReceipt).toEqual({
+      reclassifiedDocumentPath: '03 Research/Objectives B.md',
+      priorDenominatorCount: 2,
+      newDenominatorCount: 1,
+    });
+
+    // A THIRD session, same host, same (already-reclassified) vault: the
+    // stored prior now equals the current count, so the receipt does not
+    // render a second time for the same correction.
+    const provider3 = createLocalGroveProvider({
+      vault: fixtureVaultWithOneDocReclassifiedAway(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const third = await sectionsFrom(await provider3.load());
+    expect(third.find((c) => c.course === 'TESTC101')?.scopeCorrectionReceipt).toBeUndefined();
+  });
+
+  it('an addition (the denominator growing) never renders a receipt — its cause is already visible in the new numbers', async () => {
+    const host = hostWithBasePath(BASE_PATH);
+
+    const provider1 = createLocalGroveProvider({
+      vault: fixtureVaultWithRegisteredSource(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const first = await sectionsFrom(await provider1.load());
+    const firstModel = modelOf(first.find((c) => c.course === 'TESTC101'));
+    if (firstModel.status !== 'declared')
+      throw new Error(`expected declared, got ${firstModel.status}`);
+    expect(firstModel.summary.denominatorCount).toBe(1);
+
+    // Second session, same host: a new registered objectives document
+    // arrives, naming a brand-new concept — the denominator grows.
+    const provider2 = createLocalGroveProvider({
+      vault: fixtureVaultWithRegisteredSourceAndAddition(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+    });
+    const second = await sectionsFrom(await provider2.load());
+    const secondSection = second.find((c) => c.course === 'TESTC101');
+    const secondModel = modelOf(secondSection);
+    if (secondModel.status !== 'declared')
+      throw new Error(`expected declared, got ${secondModel.status}`);
+    expect(secondModel.summary.denominatorCount).toBe(2);
+    expect(secondSection?.scopeCorrectionReceipt).toBeUndefined();
   });
 });
 

@@ -113,6 +113,33 @@
  * panel's instrument source read. Absent (e.g. in a test that omits it),
  * `deps.relations?.() ?? []` hands `buildGroveModel` an empty edge set,
  * which is a documented no-op on that function's side.
+ *
+ * ## The scope-correction receipt, wired (`[D-184]`, F8.1, `ol-v7r5.32`)
+ *
+ * `./copy.ts#groveScopeCorrectionReceiptLine` existed with no production
+ * caller — that module's own doc named the missing piece: a durable
+ * "prior `denominatorCount`/`denominatorSourcePaths` per course" store,
+ * since `olea-core#buildGroveModel` holds no memory of a previous read
+ * (recomputes `GroveCourseSummary` fresh every call, by design — see that
+ * module's own doc). `./prior-denominator-store.ts`
+ * (`ObsidianGrovePriorDenominatorStore`) is that store, read alongside the
+ * ground-streak store above. For each `'declared'` course this module
+ * compares the fresh `summary.denominatorCount` against the persisted
+ * prior: a genuine fall (`newDenominatorCount < priorDenominatorCount`)
+ * with an identifiable document — one present in the prior
+ * `denominatorSourcePaths` and absent from the new ones, sorted for
+ * determinism if more than one dropped in the same read — becomes a
+ * `GroveScopeCorrectionReceipt` on that course's `GroveCourseSection`;
+ * anything else (a growth, an unchanged count, or a shrink this module
+ * cannot pin on a specific document) attaches nothing, matching
+ * `groveScopeCorrectionReceiptLine`'s own "state what you're given, never
+ * invent" posture. Only `'declared'` courses ever get a real
+ * `GroveCourseSummary` to compare (the other two statuses carry none at
+ * the TYPE level), so — same convention the ground-streak persistence
+ * above already follows — the whole stored map is REPLACED each save with
+ * exactly this read's `'declared'`-course summaries: a course that stops
+ * being `'declared'` has nothing current to report and must not linger as
+ * a stale prior either.
  */
 
 import {
@@ -145,7 +172,11 @@ import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import { ObsidianGroveGroundStreakStore } from './ground-streak-store.js';
-import type { GroveCourseSection, GroveViewState } from './view.js';
+import {
+  type GrovePriorDenominatorEntry,
+  ObsidianGrovePriorDenominatorStore,
+} from './prior-denominator-store.js';
+import type { GroveCourseSection, GroveScopeCorrectionReceipt, GroveViewState } from './view.js';
 
 /**
  * Same DECLARED shape `registry/provider.ts` and `retrospective/
@@ -300,6 +331,45 @@ async function safeAssessmentRecords(
   }
 }
 
+/**
+ * `[D-184]`, F8.1, `ol-v7r5.32`: which document to name in the
+ * scope-correction receipt, given one course's persisted prior denominator
+ * snapshot and its freshly-computed one — see this module's own doc for
+ * why this comparison, not `olea-core#buildGroveModel`, is where it lives.
+ *
+ * Fires ONLY on an actual fall (`current.denominatorCount <
+ * prior.denominatorCount`) — a growth is F1.5(c)'s "system working" case
+ * and gets no receipt, matching `./copy.ts#groveScopeCorrectionReceiptLine`'s
+ * own contract. The document named is a registered source present in the
+ * PRIOR `denominatorSourcePaths` and absent from the new ones — the one
+ * whose role no longer declares scope (`../../../core/src/scope/grove.ts`'s
+ * own module doc: a reclassification is read through the exact same
+ * source/citation inputs a growth is, never a second code path) — sorted so
+ * the choice is deterministic if more than one document dropped out in the
+ * same read. Absent a droppable document to name (a fall with no
+ * identifiable removed source), this returns `undefined` rather than
+ * guessing: `groveScopeCorrectionReceiptLine` states whatever it is given,
+ * never re-derives, so this function does not invent a document for it to
+ * state.
+ */
+function scopeCorrectionReceiptFor(
+  prior: GrovePriorDenominatorEntry | undefined,
+  current: GrovePriorDenominatorEntry,
+): GroveScopeCorrectionReceipt | undefined {
+  if (prior === undefined || current.denominatorCount >= prior.denominatorCount) {
+    return undefined;
+  }
+  const currentPaths = new Set(current.denominatorSourcePaths);
+  const removed = prior.denominatorSourcePaths.filter((path) => !currentPaths.has(path)).sort();
+  const reclassifiedDocumentPath = removed[0];
+  if (reclassifiedDocumentPath === undefined) return undefined;
+  return {
+    reclassifiedDocumentPath,
+    priorDenominatorCount: prior.denominatorCount,
+    newDenominatorCount: current.denominatorCount,
+  };
+}
+
 export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): GroveDataDeps {
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
   const offerStore = createRetrospectiveOfferEventLog({
@@ -313,6 +383,9 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
   const overridesStore = new ObsidianRegistryOverridesStore(deps.settingsHost);
   // F4.5/`ol-0r92.20`: the durable ground-streak store — see module doc.
   const groundStreakStore = new ObsidianGroveGroundStreakStore(deps.settingsHost);
+  // `[D-184]`/`ol-v7r5.32`: the durable prior-denominator store for the
+  // scope-correction receipt — see module doc.
+  const priorDenominatorStore = new ObsidianGrovePriorDenominatorStore(deps.settingsHost);
   const retrospective = createLocalRetrospectiveProvider({
     vault: deps.vault,
     deviceId: deps.deviceId,
@@ -344,6 +417,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           assessmentRecords,
           overrides,
           priorGroundStreaks,
+          priorDenominators,
         ] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault),
@@ -351,6 +425,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           safeAssessmentRecords(deps.vault, assignmentsBasePath),
           overridesStore.load(),
           groundStreakStore.load(),
+          priorDenominatorStore.load(),
         ]);
 
         // Match against every concept she already has (topic-derived or
@@ -418,8 +493,13 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
 
         // Only `'declared'` courses contribute a real ground-streak reading
         // back — see module doc for why the other two statuses' echoed
-        // `nextGroundStreaks` must NOT be merged in here.
+        // `nextGroundStreaks` must NOT be merged in here. The prior-
+        // denominator map follows the identical rule, for the identical
+        // reason (`[D-184]`, `ol-v7r5.32`): only a `'declared'` course ever
+        // has a real `GroveCourseSummary` to hand forward as the NEXT read's
+        // prior.
         const nextGroundStreaks = new Map<string, number>();
+        const nextPriorDenominators = new Map<string, GrovePriorDenominatorEntry>();
         const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => {
           const courseConcepts = visibleConcepts.filter((concept) =>
             concept.courses.includes(course),
@@ -435,20 +515,35 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             relations: deps.relations?.() ?? [],
           });
           const model: GroveCourseModel = built.model;
+          let scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined;
           if (model.status === 'declared') {
             for (const [conceptKey, streak] of built.nextGroundStreaks) {
               nextGroundStreaks.set(conceptKey, streak);
             }
+            const currentDenominator: GrovePriorDenominatorEntry = {
+              denominatorCount: model.summary.denominatorCount,
+              denominatorSourcePaths: model.summary.denominatorSourcePaths,
+            };
+            scopeCorrectionReceipt = scopeCorrectionReceiptFor(
+              priorDenominators.get(course),
+              currentDenominator,
+            );
+            // After rendering, the stored prior becomes the current — the
+            // NEXT read compares against what THIS read just computed,
+            // whether or not a receipt fired this time.
+            nextPriorDenominators.set(course, currentDenominator);
           }
           return {
             course,
             model,
             offerCards: allCards.filter((card) => card.course === course),
             unreadableFiles: unreadableByCourse.get(course) ?? [],
+            ...(scopeCorrectionReceipt !== undefined ? { scopeCorrectionReceipt } : {}),
           };
         });
 
         await groundStreakStore.save(nextGroundStreaks);
+        await priorDenominatorStore.save(nextPriorDenominators);
 
         return { kind: 'model', courses };
       } catch (error) {
