@@ -44,9 +44,20 @@
  * `explain-back-declined` pair instead of the `explain-back` review record —
  * `[D-178 / LOG-3]` item 2's "offered, and separately left untaken" event,
  * additive to the same v5 union and interleaved in the same stream.
+ *
+ * The `contestChance` dial emits a `kind: 'dispute'` record (`[D-095]`,
+ * `disputeLogRecordV5`) right after any review record — ordinary or a taken
+ * explain-back alike — that carries a mastery reading (`masteryAtTime` set).
+ * It is built by calling `olea-core`'s own `contestClaim` against the
+ * `mastery-reading` rendering, so the routing (`claimKind: 'reading'`,
+ * `effect: 'held'`) is the product's, never re-derived here; only the
+ * opening half of a dispute is ever produced, since a reading has no
+ * re-derivation in this generator to resolve it against (see
+ * `personas.ts`'s `contestChance` doc for the full argument).
  */
 
 import type {
+  DisputeLogRecord,
   ExplainBackOfferLogRecord,
   InstrumentType,
   MasteryAtTime,
@@ -59,7 +70,7 @@ import type {
   SuspendLogRecord,
 } from 'olea-contracts';
 import type { SchedulerState } from 'olea-core';
-import { createFsrsScheduler, mapMcqRating } from 'olea-core';
+import { contestClaim, createFsrsScheduler, evidenceBasisOf, mapMcqRating } from 'olea-core';
 import type { Behaviour, PersonaId } from './personas.js';
 import { PERSONAS } from './personas.js';
 import { buildProvenance, type SyntheticProvenance, syntheticEventId } from './provenance.js';
@@ -197,6 +208,13 @@ export interface DeclaredGroundTruth {
    * offered/declined pair, never a mix.
    */
   readonly explainBackDeclinedConceptIds: readonly string[];
+  /**
+   * Concept ids whose mastery reading was disputed at least once
+   * (`contestChance`, `[D-095]`). Every dispute this generator emits is a
+   * `claimKind: 'reading'` opening record — `held`, never resolved — so this
+   * list is exactly the concepts `disputeEvents` names.
+   */
+  readonly disputedConceptIds: readonly string[];
 }
 
 export interface SyntheticStream {
@@ -287,6 +305,11 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
   // offer is declined is its own decision and must not re-roll (or be
   // re-rolled by) any other model when this dial changes.
   const explainBackDeclineRng = root.derive('explain-back-decline');
+  // A separate family again, for the same reason: whether she contests a
+  // reading is its own decision and must not re-roll (or be re-rolled by) the
+  // explain-back-decline draw, even though both dials can fire on the same
+  // explain-back record.
+  const contestRng = root.derive('contest');
 
   const deck: DeckSlot[] = INSTRUMENTS.map((instrument) => ({
     instrument,
@@ -317,6 +340,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
   const unsuspendedInstrumentIds = new Set<string>();
   const explainBackConceptIds = new Set<string>();
   const explainBackDeclinedConceptIds = new Set<string>();
+  const disputedConceptIds = new Set<string>();
 
   const streamTag = `${spec.persona}-${spec.seed}`;
   let eventCounter = 0;
@@ -324,6 +348,44 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
     eventCounter += 1;
     return syntheticEventId(streamTag, eventCounter);
   };
+
+  /**
+   * `[D-095]`'s reading case, rolled at `contestChance` right after a review
+   * record (ordinary or a taken explain-back) records a mastery reading for
+   * `conceptId`. Reuses `olea-core`'s own `contestClaim` against the
+   * `mastery-reading` rendering rather than re-deriving the effect table —
+   * the same argument this file's header gives for driving the FSRS
+   * scheduler for real. `sourceEventId` is the just-emitted record's own id,
+   * folded into the fingerprint so the claim ties back to a record the
+   * stream actually produced rather than to a fabricated reference.
+   *
+   * Only ever returns an OPENING dispute (`resolves`/`outcome` both absent):
+   * a reading holds and moves only when a grade beneath it is re-derived,
+   * which this generator has no mechanism to simulate. `null` when the roll
+   * misses or `contestChance` is the neutral `0`.
+   */
+  function maybeDisputeMasteryReading(
+    conceptId: string,
+    masteryState: MasteryState,
+    sourceEventId: string,
+    atMs: number,
+  ): DisputeLogRecord | null {
+    if (!contestRng.chance(behaviour.contestChance)) return null;
+    const outcome = contestClaim({
+      claim: {
+        rendering: 'mastery-reading',
+        conceptIds: [conceptId],
+        evidenceBasis: evidenceBasisOf(['mastery-reading', conceptId, masteryState, sourceEventId]),
+      },
+      timestamp: isoWithOffset(atMs, offsetMinutes),
+    });
+    return {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: nextEventId(),
+      ...outcome.record,
+    };
+  }
 
   /** Days from `date` to the next assessment on or after it; null when none remains. */
   const examProximityOn = (dayIndex: number): number | null => {
@@ -562,6 +624,21 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
         durationMs +
         durationRng.int(behaviour.betweenItemsMsRange[0], behaviour.betweenItemsMsRange[1]);
 
+      // --- [D-095]: she contests the mastery reading she was just shown ----
+      if (masteryAtTime !== null) {
+        const dispute = maybeDisputeMasteryReading(
+          instrument.conceptId,
+          masteryAtTime,
+          record.eventId,
+          cursorMs,
+        );
+        if (dispute) {
+          pendingEntries.push(dispute);
+          disputedConceptIds.add(instrument.conceptId);
+          cursorMs += 1_000;
+        }
+      }
+
       // --- F2.12: repeated failure routes her to explain-back --------------
       const priorAgain = consecutiveAgainByConcept.get(instrument.conceptId) ?? 0;
       const runOfAgain = ratingValue === 'again' ? priorAgain + 1 : 0;
@@ -652,6 +729,21 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
             pendingEntries.push(explainBack);
             explainBackConceptIds.add(concept.conceptId);
             cursorMs += explainMs + 30_000;
+
+            // --- [D-095]: the graded explain-back carries a reading too ----
+            if (masteryAtTime !== null) {
+              const dispute = maybeDisputeMasteryReading(
+                concept.conceptId,
+                masteryAtTime,
+                explainBack.eventId,
+                cursorMs,
+              );
+              if (dispute) {
+                pendingEntries.push(dispute);
+                disputedConceptIds.add(concept.conceptId);
+                cursorMs += 1_000;
+              }
+            }
           }
           // F2.14a: declining changes nothing about her mastery state, but the
           // routing trigger itself is consumed either way — the same reset
@@ -713,6 +805,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       unsuspendedInstrumentIds: [...unsuspendedInstrumentIds].sort(),
       explainBackConceptIds: [...explainBackConceptIds].sort(),
       explainBackDeclinedConceptIds: [...explainBackDeclinedConceptIds].sort(),
+      disputedConceptIds: [...disputedConceptIds].sort(),
     },
   };
 }

@@ -49,7 +49,17 @@ describe('contract validity', () => {
     (_persona, stream) => {
       const result = parseReviewLog(toJsonl(stream.entries));
       expect(result.invalidLines).toEqual([]);
-      expect(result.records).toEqual(stream.entries);
+      // `parseReviewLog` deliberately pulls `kind: 'dispute'` lines OUT of
+      // `records` into their own `disputes` field (`./parse.ts`'s own doc) —
+      // `contest-heavy`'s dial (`contestChance`, `ol-3ux7.5.32`) is the first
+      // persona to emit any, so the split has to be asserted on both sides
+      // rather than folded back into one `toEqual`.
+      const [disputes, records] = [
+        stream.entries.filter((e) => e.kind === 'dispute'),
+        stream.entries.filter((e) => e.kind !== 'dispute'),
+      ];
+      expect(result.records).toEqual(records);
+      expect(result.disputes).toEqual(disputes);
     },
   );
 

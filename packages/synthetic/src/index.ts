@@ -88,6 +88,7 @@ export {
 export type { BothOfferedShare, CourseLapseRate } from './measures.js';
 export {
   dayCounts,
+  disputeEvents,
   dueStateCounts,
   earlyPullShare,
   eventDays,

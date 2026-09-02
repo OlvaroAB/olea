@@ -43,6 +43,7 @@ import {
   COURSE_QUORBIN,
   COURSE_VANTREL,
   courseOfConcept,
+  disputeEvents,
   dueStateCounts,
   earlyPullShare,
   eventDays,
@@ -305,6 +306,47 @@ const EXPLAIN_BACK_DECLINER_CLAIMS: readonly Claim[] = [
   },
 ];
 
+/**
+ * `[D-095]`'s reading case, planted by `contestChance`. The claims have to
+ * show both halves — she disputes a meaningful share of the mastery readings
+ * she is shown, AND every dispute this generator writes is an honest opening
+ * `held` record referencing a real concept, never a resolution it has no
+ * mechanism to produce — or a persona named "contest-heavy" that happened to
+ * emit a handful of malformed records would be exactly the `ol-inv2vacuity`
+ * shape this file exists to catch.
+ */
+const CONTEST_HEAVY_CLAIMS: readonly Claim[] = [
+  {
+    name: 'she disputes a large share of the mastery readings she is shown',
+    holds: (s) => {
+      const readings = reviewsOf(s.entries).filter((r) => r.masteryAtTime !== undefined).length;
+      const disputes = disputeEvents(s.entries).length;
+      return readings > 20 && disputes / readings > 0.15;
+    },
+  },
+  {
+    name: 'her dispute count is far above the control’s (which never contests at all)',
+    holds: (s, c) => disputeEvents(s.entries).length > 5 * (disputeEvents(c.entries).length + 1),
+  },
+  {
+    name: 'every dispute is an opening `claimKind: reading` record that HOLDS, never resolved',
+    holds: (s) => {
+      const disputes = disputeEvents(s.entries);
+      if (disputes.length === 0) return false;
+      return disputes.every(
+        (d) =>
+          d.claimKind === 'reading' &&
+          d.claimRendering === 'mastery-reading' &&
+          d.effect === 'held' &&
+          d.instrumentId === undefined &&
+          d.resolves === undefined &&
+          d.outcome === undefined &&
+          d.conceptIds.length > 0,
+      );
+    },
+  },
+];
+
 const CLAIMS: Readonly<Partial<Record<PersonaId, readonly Claim[]>>> = {
   crammer: CRAMMER_CLAIMS,
   'instrument-skipper': SKIPPER_CLAIMS,
@@ -312,6 +354,7 @@ const CLAIMS: Readonly<Partial<Record<PersonaId, readonly Claim[]>>> = {
   struggler: STRUGGLER_CLAIMS,
   'lopsided-effort': LOPSIDED_CLAIMS,
   'explain-back-decliner': EXPLAIN_BACK_DECLINER_CLAIMS,
+  'contest-heavy': CONTEST_HEAVY_CLAIMS,
 };
 
 describe('planted patterns hold', () => {
@@ -370,7 +413,7 @@ describe('supporting observations (not falsifiability claims)', () => {
 });
 
 describe('the control is genuinely neutral', () => {
-  it('never crams, never vanishes, never suspends, never routes to explain-back', () => {
+  it('never crams, never vanishes, never suspends, never routes to explain-back, never contests', () => {
     for (const seed of SEEDS) {
       const steady = control(seed);
       expect(steady.groundTruth.burstDates).toEqual([]);
@@ -378,6 +421,8 @@ describe('the control is genuinely neutral', () => {
       expect(steady.groundTruth.suspendedInstrumentIds).toEqual([]);
       expect(steady.groundTruth.explainBackConceptIds).toEqual([]);
       expect(steady.groundTruth.explainBackDeclinedConceptIds).toEqual([]);
+      expect(steady.groundTruth.disputedConceptIds).toEqual([]);
+      expect(disputeEvents(steady.entries)).toEqual([]);
       expect(earlyPullShare(steady.entries)).toBe(0);
       expect(steady.entries.every((e) => e.kind === 'review')).toBe(true);
       // She turns up on most of the days in the window.

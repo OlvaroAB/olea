@@ -41,7 +41,8 @@ export type PersonaId =
   | 'lopsided-effort'
   | 'empty-history'
   | 'single-session'
-  | 'explain-back-decliner';
+  | 'explain-back-decliner'
+  | 'contest-heavy';
 
 /** A stretch of days on which no event of any kind is emitted. */
 export interface Blackout {
@@ -163,6 +164,32 @@ export interface Behaviour {
    * fires again on the very next failure.
    */
   readonly explainBackDeclineChance: number;
+
+  // --- contest-heavy -------------------------------------------------------
+  /**
+   * Probability that, right after a review record carries a mastery reading
+   * (`masteryAtTime` set — an ordinary review or a taken, "graded"
+   * explain-back alike; F2.11/F6.2's own claim), she contests it (`[D-095]`,
+   * mechanised by `olea-core`'s `contestClaim`/`packages/core/src/today/
+   * contest.ts:244`'s `mastery-reading` route, `packages/plugin/src/review/
+   * contest.ts:97`'s sibling for the grade case). `0` is the neutral value —
+   * no dispute record is ever emitted.
+   *
+   * **The routing is never invented here.** This dial calls the product's own
+   * `contestClaim` against the `mastery-reading` rendering — the same call
+   * `enumerateTodayClaims`/`contestedClaimFor` make for a real reading — so
+   * the emitted `effect` (`'held'`, per `[D-095]`) comes from the product's
+   * routing table, never a synthetic guess.
+   *
+   * **Only the OPENING half of a dispute is ever emitted.** A reading holds
+   * and only ever moves later, when a grade beneath it is re-derived
+   * (`contestOutcomeShapes()`'s `{ moves: false, mayMoveLater: true }`) — this
+   * generator has no such re-derivation to resolve against, so `resolves`/
+   * `outcome` are always absent together, which `disputeLogRecordV5`'s own
+   * `superRefine` accepts as a valid opening dispute.
+   */
+  readonly contestChance: number;
+
   /** Total lapses on one instrument before she suspends it (F2.6). `0` disables. */
   readonly suspendAfterLapses: number;
   /** Days after a suspend that she unsuspends. `null` = never (D-020: unsuspend is a second event, not a retraction). */
@@ -193,6 +220,7 @@ const NEUTRAL: Behaviour = {
   unsureChance: 0.1,
   explainBackAfterConsecutiveAgain: 0,
   explainBackDeclineChance: 0,
+  contestChance: 0,
   suspendAfterLapses: 0,
   unsuspendAfterDays: null,
   sessionStartHour: 19,
@@ -438,6 +466,33 @@ export const PERSONAS: Readonly<Record<PersonaId, Persona>> = Object.fromEntries
       // `struggler` and taking every offer — the smallest reversal that
       // isolates "declined" as the one thing this persona adds.
       neutralise: { explainBackDeclineChance: 0 },
+    },
+  ),
+
+  persona(
+    'contest-heavy',
+    {
+      // The planted pattern, and the whole of it: an otherwise ordinary
+      // reviewer who repeatedly disputes the mastery reading Olea shows her.
+      // `[D-095]`'s reading case — the claim always HOLDS and routes her to
+      // the evidence it was folded from, never a one-tap discount — so this
+      // persona is what makes `disputeLogRecordV5`'s `claimKind: 'reading'`
+      // shape (`[D-178]`) exist in a corpus at all (`ol-3ux7.5.32`, second
+      // half of `ol-3ux7.5.6`'s decliner work).
+      contestChance: 0.3,
+      dailyCap: 20,
+    },
+    {
+      description:
+        'A steady reviewer who contests roughly a third of the mastery readings Olea shows her. ' +
+        "`[D-095]`'s reading case: the claim HOLDS at the moment of contest and routes her to the " +
+        'events it was folded from — never a discount, never a verdict reversed. Exists so the ' +
+        "dispute record's `claimKind: 'reading'` shape ships in a corpus at all, the gap named on " +
+        '`ol-3ux7.5.32`.',
+      carriedBy: ['contestChance'],
+      // Removing the dial leaves an ordinary steady reviewer: same success
+      // rate, same pacing, nothing else moved.
+      neutralise: { contestChance: 0 },
     },
   ),
 ]) as Readonly<Record<PersonaId, Persona>>;

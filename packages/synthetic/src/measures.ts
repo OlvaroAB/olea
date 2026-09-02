@@ -18,7 +18,12 @@
  * and the early-warning signal reads `instrumentShareWhenBothOffered`.
  */
 
-import type { ExplainBackOfferLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type {
+  DisputeLogRecord,
+  ExplainBackOfferLogRecord,
+  ReviewLogEntry,
+  ReviewLogRecord,
+} from 'olea-contracts';
 import { CARD_TYPES, courseOfConcept, type ScheduledType } from './vocabulary.js';
 
 /** Review events only — suspend/unsuspend entries are facts about the deck, not reviews. */
@@ -305,6 +310,19 @@ export function explainBackDeclineEvents(
   entries: readonly ReviewLogEntry[],
 ): readonly ExplainBackOfferLogRecord[] {
   return entries.filter((e): e is ExplainBackOfferLogRecord => e.kind === 'explain-back-declined');
+}
+
+/**
+ * Every dispute record (`[D-095]`, `disputeLogRecordV5`) — the contest
+ * mechanism's own event, planted by `contestChance` (`ol-3ux7.5.32`). This
+ * generator only ever emits opening, `claimKind: 'reading'` disputes, so
+ * every record this returns carries `effect: 'held'` and neither `resolves`
+ * nor `outcome` — but the filter is on `kind`, not on those fields, so a
+ * future trigger that emits a different claim kind or a resolution is
+ * measured by the same function rather than needing a second one.
+ */
+export function disputeEvents(entries: readonly ReviewLogEntry[]): readonly DisputeLogRecord[] {
+  return entries.filter((e): e is DisputeLogRecord => e.kind === 'dispute');
 }
 
 /**
