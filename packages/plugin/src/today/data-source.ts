@@ -94,6 +94,7 @@ import {
   type DisputeLogRecord,
   type DueInstrument,
   discoverScheduleEvents,
+  EMPTY_REGISTRY_OVERRIDES,
   type ExtractConceptsOptions,
   enumerateVaultInstruments,
   extractTier3Evidence,
@@ -101,8 +102,10 @@ import {
   loadCachedStudyPlan,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
+  type RegistryOverrides,
   type RhythmCourseInput,
   readReviewLogHistory,
+  resolvedDisplayName,
   resolveTermBoundary,
   reviewLogPath,
   type Scheduler,
@@ -435,13 +438,28 @@ export function localToday(now: Date): CalendarDay {
  * `createVaultTrendsSource({ vault, assessmentsBasePath })` and hands it to
  * `loadTodayPanel` as `trends`, so this is reachable, not just buildable.
  */
+/**
+ * `ConceptCourses` plus the one thing it deliberately omits (`ol-63e1`,
+ * `[D-088]`/`[D-109]`: `conceptId` is the opaque join key, never the display
+ * name) — widened here, in `data-source.ts`, rather than at `ConceptCourses`'
+ * own definition (`../insights/types.ts`, outside this bead's `owns`), for
+ * the Today tending line's naming gap (`ol-95vv.6`). `TodayPanelInput
+ * .concepts` still only asks for `ConceptCourses`'s two fields, so an object
+ * of this shape satisfies it unchanged; `loadTodayPanel` below is what reads
+ * the extra field back off, to resolve `TendingConcept.displayName`.
+ */
+export interface TodayConceptCourses extends ConceptCourses {
+  /** Her vault's own display wording for this concept (`ConceptRecord.name`, optionally overlaid by a registry rename) — never the opaque `conceptId`. */
+  readonly displayName: string;
+}
+
 export interface TodayTrendsSource {
   /**
    * `null` means "could not enumerate", which is not an empty vault. The panel
    * renders nothing rather than an overview of no courses, for the same reason
    * `listDueCandidates` returns `null` rather than `[]`.
    */
-  listConceptCourses(): Promise<readonly ConceptCourses[] | null>;
+  listConceptCourses(): Promise<readonly TodayConceptCourses[] | null>;
   /**
    * The plan's per-course windowed floor shares (component 3.5,
    * `[D-081]`/`[D-092]`). `[]` is a real and common answer — no cached plan
@@ -485,16 +503,38 @@ export interface VaultTrendsSourceDeps {
    * the same `plan: null` this method treats as `[]` — see that function's
    * own doc.
    *
-   * **Optional, and not yet supplied by production** (`ol-v7r5.38`): both of
-   * `main.ts`'s `createVaultTrendsSource` call sites (`packages/plugin/src/
-   * main.ts:774` and `:807`) already construct an `ObsidianStudyPlanStore`
-   * earlier in `onload` (`main.ts:503`, bound to the local `studyPlanStore`)
-   * but do not pass it here yet — that one-line follow-up at each call site
-   * is outside this file's owned paths. Until it lands,
-   * `listCourseFloorShares` keeps returning `[]` in the shipped app, the
-   * same honest-absence answer it already gave.
+   * **Now supplied by production** (`ol-v7r5.38`, landed `2afcc76`):
+   * `main.ts`'s Today-panel `createVaultTrendsSource` call site passes its
+   * `studyPlanStore` here, so `listCourseFloorShares` reads a real allocation
+   * once one is cached. (The second call site, feeding the contest gesture's
+   * `conceptIdsByCourse` resolver, deliberately omits every optional field —
+   * it needs only `conceptId`/`courses`, never floor shares or names.)
    */
   readonly studyPlanStore?: StudyPlanStore;
+  /**
+   * A cached `RegistryOverrides` snapshot (`ol-95vv.6`), read synchronously —
+   * the same posture `main.ts`'s own `registryOverridesCache` field
+   * (`ol-r5j4`) already takes for its generative `RetrieveDeps` assemblers:
+   * a synchronous read avoids awaiting `ObsidianRegistryOverridesStore
+   * .load()` on every panel refresh. When supplied, `listConceptCourses`
+   * below resolves each concept's `displayName` through it (her chosen
+   * rename, when one exists, via `resolvedDisplayName` — the same pure
+   * function `../registry/build.ts#buildRegistryModel` itself calls);
+   * absent, or `EMPTY_REGISTRY_OVERRIDES`, falls back to `ConceptRecord
+   * .name` — her vault's own wording, and for a tier-1 concept literally its
+   * bound note's title (`../concept/types.ts`'s own doc) — which is the
+   * honest default either way, never a raw concept id.
+   *
+   * **Optional, and not yet supplied by production.** `main.ts` already
+   * builds `this.registryOverridesCache` for its generative deps, but its
+   * Today-panel `createVaultTrendsSource` call site does not pass it here
+   * yet — that one-line follow-up is outside this bead's (`ol-95vv.6`)
+   * owned paths, the same gap shape `studyPlanStore` above had before
+   * `ol-v7r5.38` closed it. Until it lands, the tending line still names
+   * every concept correctly (`ConceptRecord.name` is always real vault
+   * wording), just without her local rename overlay.
+   */
+  readonly registryOverrides?: RegistryOverrides;
   /** Clock for `loadCachedStudyPlan`'s freshness check. Defaults to `() => new Date()`; overridable for tests. */
   readonly now?: () => Date;
 }
@@ -516,15 +556,26 @@ export interface VaultTrendsSourceDeps {
  * (`session/enumerate.ts`), `name` is her verbatim display string. The mapping
  * is one line and is written here rather than inside core so that the seam
  * where it could stop matching is visible.
+ *
+ * **`displayName` resolution (`ol-95vv.6`)** reuses `record.name` — already
+ * on hand from the same walk, no second read — overlaid by
+ * `resolvedDisplayName` when `deps.registryOverrides` is supplied. This is
+ * the identical pure function `../registry/build.ts#buildRegistryModel` (F8.4's
+ * registry) calls for the same purpose; calling it directly here, over a
+ * cached overrides snapshot, is cheaper than assembling that whole model
+ * (which additionally wants instrument records, disputes and course
+ * rankings this source has no reason to walk for a display-name lookup).
  */
 export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrendsSource {
   return {
     async listConceptCourses() {
       try {
         const records = await extractConceptsFromVault(deps.vault, deps.conceptOptions ?? {});
+        const overrides = deps.registryOverrides ?? EMPTY_REGISTRY_OVERRIDES;
         return records.map((record) => ({
           conceptId: record.key,
           courses: record.courses,
+          displayName: resolvedDisplayName(overrides, record.key, record.name),
         }));
       } catch {
         return null;
@@ -855,7 +906,7 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   // `concepts: undefined` is NOT the same as omitting it, and the difference
   // is exactly the one that matters here: core reads "absent" as "this panel
   // was never asked", never as "asked, and it read nothing".
-  const trendsFields = await resolveTrendsFields(deps.trends);
+  const trends = await resolveTrendsFields(deps.trends);
   const rhythmFields = await resolveRhythmFields(deps.rhythm);
   const scopeFields = await resolveScopeFields(deps.scope);
 
@@ -868,24 +919,95 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
     'courseMaterialArrivals' in rhythmFields ? rhythmFields.courseMaterialArrivals : null;
   const courseFreshness = await resolveScheduleFreshness(deps.vault, courseMaterialArrivals, today);
 
-  return buildTodayPanel({
+  const result = buildTodayPanel({
     ...base,
-    ...trendsFields,
+    ...trends.fields,
     ...rhythmFields,
     courseFreshness,
     ...scopeFields,
   });
+
+  // Names the tending line's concepts by her own vault wording rather than
+  // their opaque keys (`ol-95vv.6`) — a pure rewrite of the already-built
+  // model, never a second computation of mastery or vitality. See
+  // `olea-core`'s `mastery/sprig.ts#TendingConcept` for why this has to
+  // happen here rather than inside the fold that builds `tending` itself.
+  return withTendingDisplayNames(result, trends.conceptDisplayNames);
 }
 
-/** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */
+/**
+ * Attaches each tending concept's resolved display name (`ol-95vv.6`) to an
+ * already-built `TodayViewModel` — a pure rewrite, reading no vault and no
+ * log, and touching nothing but `mastery.courses[].vitality.tending`.
+ *
+ * **Why the rewrite happens here, and not where `TendingConcept` is built.**
+ * `masteryVitalityByStage` (`olea-core`'s `mastery/sprig.ts`) is a pure fold
+ * over entries and bare concept ids — it has no vault access and cannot
+ * resolve a name. Its one production caller, `today/mastery-overview.ts`,
+ * sits outside this bead's `owns` and has no name map to thread through
+ * either. `loadTodayPanel` above is the one place inside this bead's `owns`
+ * that holds both an already-built `TodayViewModel` and a resolved
+ * `conceptId → displayName` map (from the very same `listConceptCourses()`
+ * call `buildTodayPanel`'s `concepts` input came from) at the same time, so
+ * this is where the two meet.
+ *
+ * `conceptDisplayNames.size === 0` short-circuits to the untouched `vm` —
+ * both the "no trends source wired" and "trends source failed to enumerate"
+ * cases `resolveTrendsFields` collapses to `{}` for, so this never allocates
+ * a new model for a panel that could not have resolved any names anyway.
+ */
+function withTendingDisplayNames(
+  vm: TodayViewModel,
+  conceptDisplayNames: ReadonlyMap<string, string>,
+): TodayViewModel {
+  if (vm.mastery === null || conceptDisplayNames.size === 0) return vm;
+  return {
+    ...vm,
+    mastery: {
+      ...vm.mastery,
+      courses: vm.mastery.courses.map((course) => {
+        if (course.vitality === null) return course;
+        return {
+          ...course,
+          vitality: {
+            ...course.vitality,
+            tending: course.vitality.tending.map((concept) => {
+              const displayName = conceptDisplayNames.get(concept.conceptId);
+              // `exactOptionalPropertyTypes`: an unresolved name omits the
+              // key entirely rather than setting it to `undefined`, so
+              // `tendingLine`'s own `?? conceptId` fallback is reached the
+              // same way an absent field always reaches it.
+              return displayName === undefined ? concept : { ...concept, displayName };
+            }),
+          },
+        };
+      }),
+    },
+  };
+}
+
+/**
+ * F6.2/F6.5's half of `TodayPanelInput`, plus the concept-id → display-name
+ * map `withTendingDisplayNames` below needs (`ol-95vv.6`) — read off the same
+ * `listConceptCourses()` call rather than a second one, so resolving the
+ * tending line's naming costs no extra vault walk.
+ */
+interface TrendsResolution {
+  readonly fields: Pick<TodayPanelInput, 'concepts' | 'floorShares'> | Record<string, never>;
+  /** `conceptId` → her resolved display wording. Empty when `trends` is absent or could not enumerate — the same cases `fields` is `{}` for. */
+  readonly conceptDisplayNames: ReadonlyMap<string, string>;
+}
+
 async function resolveTrendsFields(
   trends: TodayTrendsSource | undefined,
-): Promise<Pick<TodayPanelInput, 'concepts' | 'floorShares'> | Record<string, never>> {
-  if (trends === undefined) return {};
+): Promise<TrendsResolution> {
+  const empty: TrendsResolution = { fields: {}, conceptDisplayNames: new Map() };
+  if (trends === undefined) return empty;
   const concepts = await trends.listConceptCourses();
-  if (concepts === null) return {};
+  if (concepts === null) return empty;
   const floorShares = await trends.listCourseFloorShares();
-  return { concepts, floorShares };
+  const conceptDisplayNames = new Map(concepts.map((c) => [c.conceptId, c.displayName] as const));
+  return { fields: { concepts, floorShares }, conceptDisplayNames };
 }
 
 /** F6.9's half of `TodayPanelInput` — `{}` when `rhythm` is absent or could not enumerate. */

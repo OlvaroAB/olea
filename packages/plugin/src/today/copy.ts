@@ -278,18 +278,24 @@ export function vitalityCountLabel(vitality: Vitality, count: number): string {
  * One concept currently reading `needs tending`, as the tending line needs to
  * see it (F2.11, D-116, `[D-087]`).
  *
- * **Known limitation, flagged rather than hidden.** Neither a concept display
- * name nor a human-readable instrument label reaches this surface today —
- * `olea-core`'s `ConceptCourses` (what `TodayPanelInput.concepts` carries)
- * has only `conceptId`, and the vitality fold's own named reason
- * (`readVitality`'s `weakest`) has only `instrumentId`. This line names them
- * by their raw ids until a display-name field is threaded onto
- * `ConceptCourses` or an instrument-title lookup is wired in — both outside
- * this bead's `owns`.
+ * **Concept naming closed, instrument naming still raw (`ol-95vv.6`).**
+ * `displayName` is optional and, when present, is her vault's own wording —
+ * `data-source.ts`'s `loadTodayPanel` resolves it from
+ * `ConceptRecord.name`/the registry's rename override and attaches it to the
+ * `TendingConcept` this interface mirrors (see `olea-core`'s
+ * `mastery/sprig.ts#TendingConcept` for why the resolution has to happen
+ * there rather than inside the fold itself). `weakestInstrumentId` still has
+ * no human label reaching this surface: a label needs the instrument's
+ * `notePath`/`heading`/`instrumentType`, which live only in a full vault walk
+ * (`VaultInstrumentRecord`) that no production caller inside this bead's
+ * `owns` exposes here — see that same `sprig.ts` doc for the full reasoning.
+ * `tendingLine` below therefore still names the instrument by its raw id.
  */
 export interface TendingLineConcept {
   readonly conceptId: string;
   readonly weakestInstrumentId: string;
+  /** Her vault's own wording for this concept, when the caller resolved one. Absent falls back to `conceptId`. */
+  readonly displayName?: string;
 }
 
 /**
@@ -314,7 +320,9 @@ export function tendingLine(concepts: readonly TendingLineConcept[]): string | n
   if (concepts.length === 0) return null;
   const label = vitalityLabel('tending');
   const named = concepts
-    .map((concept) => `${concept.conceptId} (${concept.weakestInstrumentId})`)
+    .map(
+      (concept) => `${concept.displayName ?? concept.conceptId} (${concept.weakestInstrumentId})`,
+    )
     .join('; ');
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}: ${named}.`;
 }
@@ -839,11 +847,24 @@ export function allTodayStrings(): readonly string[] {
     vitalityCountLabel('early', 1),
     vitalityCountLabel('early', 4),
     // `null` at zero concepts is not a string; the non-null forms are every
-    // wording this function has (one concept, and more than one).
+    // wording this function has (one concept, and more than one; with and
+    // without a resolved `displayName`, `ol-95vv.6`).
     tendingLine([{ conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' }]) ?? '',
     tendingLine([
       { conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' },
       { conceptId: 'concept-b', weakestInstrumentId: 'cloze:concept-b:2' },
+    ]) ?? '',
+    tendingLine([
+      {
+        conceptId: 'concept-a',
+        weakestInstrumentId: 'qa:concept-a:1',
+        displayName: 'Coined concept A',
+      },
+      {
+        conceptId: 'concept-b',
+        weakestInstrumentId: 'cloze:concept-b:2',
+        displayName: 'Coined concept B',
+      },
     ]) ?? '',
     // --- F6.2's cross-course scope reading (`[D-076]` round 2, `ol-4qvc`) ---
     SCOPE_LABEL,

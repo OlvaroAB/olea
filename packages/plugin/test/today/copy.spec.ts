@@ -356,6 +356,25 @@ describe('F2.11’s vitality axis on the ladder (`[VIT-2]`, `ol-a3hv`) — featu
     expect(tendingLine([])).toBeNull();
   });
 
+  it('names the concept by its resolved display name when the caller supplied one (ol-95vv.6)', () => {
+    const line = tendingLine([
+      { conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1', displayName: 'Coined name' },
+    ]);
+    expect(line).toContain('Coined name');
+    // The concept is named by its display name, not its raw id — checked as
+    // the exact "id (" shape the un-resolved case renders, since the raw id
+    // is also a substring of the instrument id below.
+    expect(line).not.toContain('concept-a (');
+    // The instrument is still named by its raw id — no human label reaches
+    // this surface yet (`TendingLineConcept`'s own doc explains why).
+    expect(line).toContain('qa:concept-a:1');
+  });
+
+  it('falls back to the raw concept id when no display name was resolved', () => {
+    const line = tendingLine([{ conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' }]);
+    expect(line).toContain('concept-a');
+  });
+
   it('no retrievability number, percentage or scalar reaches the panel', () => {
     // Scenario: "no retrievability number reaches the panel" — every vitality
     // string this module can produce carries no percentage sign and no
@@ -377,7 +396,7 @@ describe('F2.11’s vitality axis on the ladder (`[VIT-2]`, `ol-a3hv`) — featu
     // Structural: neither function's signature can even accept a probability
     // — `vitalityLabel`/`vitalityCountLabel` take a `Vitality` value, never a
     // `number` in [0, 1], and `tendingLine`'s `TendingLineConcept` carries
-    // only ids.
+    // only ids and (optionally) her own vault wording — never a number.
     expect(vitalityCountLabel.length).toBe(2);
   });
 

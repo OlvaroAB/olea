@@ -778,6 +778,10 @@ export default class OleaPlugin extends Plugin {
               // artifact, never recomputed client-side.
               studyPlanStore,
               now: () => new Date(),
+              // F6.2 (ol-95vv.6): her rename overlay for the tending line's
+              // concept names; the cache is refreshed by the overrides store
+              // subscription above, so this read is current per load.
+              registryOverrides: this.registryOverridesCache,
             }),
             // F6.2's cross-course scope reading (`ol-4qvc`): one grove model
             // per running course, placed side by side — counts never summed

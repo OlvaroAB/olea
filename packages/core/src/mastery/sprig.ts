@@ -118,11 +118,34 @@ export interface MasteryVitalityInputs {
  * `recallProbability` — the three vitality words are the position a copy
  * layer may state, and a number beside them is the score principle 12's
  * second part bans.
+ *
+ * **`displayName`, optional, supplied by the caller (`ol-95vv.6`) — never by
+ * this module.** `masteryVitalityByStage` below is a pure fold over entries
+ * and bare concept ids; it has no vault access and cannot resolve wording of
+ * its own. Its one production caller, `../today/mastery-overview.ts`, sits
+ * outside this bead's `owns` and has no name map to pass through either — so
+ * every `TendingConcept` this fold builds still carries `displayName`
+ * absent, exactly as before this field existed. What changed instead:
+ * `../../plugin/src/today/data-source.ts`'s `loadTodayPanel` is the one
+ * place inside this bead's `owns` that sees both an already-built
+ * `TodayViewModel` and a resolved concept-id → display-name map at once, so
+ * it rewrites `tending` entries with a `displayName` after the fact — a pure
+ * widening of an already-computed value, never a second computation of
+ * mastery or vitality. `weakestInstrumentId` gets no such treatment: no
+ * production surface inside this bead's `owns` can reach a human-readable
+ * instrument label without a second, full vault walk (the instrument's
+ * `notePath`/`heading`/`instrumentType` live only in `VaultInstrumentRecord`,
+ * behind a walk `data-source.ts`'s `TodayInstrumentSource` does not expose,
+ * and the "weakest" instrument need not even be one of the "due" instruments
+ * that walk would return) — so it is kept raw, on purpose, until a caller
+ * that already holds that walk's output can thread one through.
  */
 export interface TendingConcept {
   readonly conceptId: string;
   readonly state: MasteryState;
   readonly weakestInstrumentId: string;
+  /** Her vault's own wording for this concept, when a caller has resolved one. `undefined` falls back to `conceptId` at the copy layer (`../../plugin/src/today/copy.ts#tendingLine`). */
+  readonly displayName?: string;
 }
 
 /** How a stage's concepts split across the three vitality values. Every value present, even at 0 — the same "never a sparse map" rule `MasteryDistribution.counts` already holds. */

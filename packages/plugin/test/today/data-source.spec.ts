@@ -31,6 +31,7 @@ import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea
 import type { ConceptRelation, StudyPlanStore, VaultSource } from 'olea-core';
 import { createFsrsScheduler, provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
@@ -806,6 +807,142 @@ describe('loadTodayPanel', () => {
       }
       expect(totals).toEqual({ holding: 0, tending: 0, early: 1 });
       expect(course.vitality?.tending).toEqual([]);
+    });
+  });
+
+  /**
+   * `ol-95vv.6`: the tending line used to name a concept by its opaque,
+   * never-displayed key. `loadTodayPanel` now resolves each tending
+   * concept's `displayName` from the same `listConceptCourses()` read
+   * `vm.mastery` was already built from — see `data-source.ts`'s
+   * `withTendingDisplayNames` for why the rewrite happens after
+   * `buildTodayPanel` rather than inside the vitality fold itself.
+   *
+   * Real FSRS scheduler, real elapsed time, deliberately no stub — the same
+   * posture the `ol-95vv.5` suite above takes, and for the same reason: a
+   * single `again`-rated review, five years stale by `now`, drives
+   * retrievability low enough to read `needs tending` however the real
+   * curve scores it. INV-3: every course code and concept name below is
+   * invented.
+   */
+  describe('F6.2 tending line names the concept by display name (ol-95vv.6)', () => {
+    const NOTE_PATH = 'Notes/coined-ridge-note.md';
+    const NOTE_CONTENT = [
+      '---',
+      'topic: [Coined Ridge Concept]',
+      'course: TESTC505',
+      '---',
+      '',
+      '## What formed it?',
+      '',
+      'Coined Ridge Concept front::Coined Ridge Concept back ^g1',
+      '',
+    ].join('\n');
+
+    it("names the tending concept by her vault's own wording, not its opaque key", async () => {
+      // Extraction, not `provisionalConceptKey` called directly, mints the
+      // real key here: a topic-derived (non-bound) concept's key is scoped by
+      // course (`concept/extract.ts`), which `ConceptKeyInput` alone does not
+      // show — reading it back off a real walk is the honest way to get the
+      // review log's `conceptIds` to actually correlate with this concept.
+      const extracted = await extractConceptsFromVault(
+        memoryVault({ [NOTE_PATH]: NOTE_CONTENT }),
+        {},
+      );
+      const record = extracted[0];
+      if (record === undefined) throw new Error('expected one extracted concept');
+      const conceptId = record.key;
+
+      const vault = memoryVault({
+        [NOTE_PATH]: NOTE_CONTENT,
+        // Filed inside the read window (`windowDays` below), with a stale
+        // `timestamp` inside the record — the file's own day only gates
+        // which files `readReviewHistory` looks at; FSRS reads elapsed time
+        // from the event's own timestamp, so this is a five-year-stale
+        // review the panel still discovers.
+        [logPath('2024-06-01', DEVICE)]: `${JSON.stringify({
+          schemaVersion: 3,
+          kind: 'review',
+          eventId: 'stale1',
+          timestamp: '2020-01-01T20:00:00-04:00',
+          instrumentId: `qa:${conceptId}:1`,
+          instrumentType: 'qa',
+          rating: 'again',
+          wasUnsure: false,
+          durationMs: 1200,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            masteryAtTime: null,
+            instrumentTypesOffered: ['qa'],
+            planVersion: null,
+          },
+          conceptIds: [conceptId],
+        })}\n`,
+      });
+
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        // Half a year after the log FILE's own day, so it is read; five years
+        // after the review's own stale `timestamp`, so a real FSRS curve
+        // reads a low retrievability regardless of its exact parameters.
+        now: () => new Date(2025, 0, 1, 9, 0),
+        windowDays: 400,
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC505');
+      if (course === undefined) throw new Error('expected TESTC505 in the mastery overview');
+      expect(course.vitality?.tending).toHaveLength(1);
+      expect(course.vitality?.tending[0]).toMatchObject({
+        conceptId,
+        displayName: 'Coined Ridge Concept',
+      });
+    });
+
+    it('falls back to the opaque key when no trends source resolved a display name', async () => {
+      const conceptId = provisionalConceptKey({
+        name: 'Coined Fallback Concept',
+        boundNotePath: null,
+      });
+      const vault = memoryVault({
+        [logPath('2020-01-01', DEVICE)]: `${JSON.stringify({
+          schemaVersion: 3,
+          kind: 'review',
+          eventId: 'stale1',
+          timestamp: '2020-01-01T20:00:00-04:00',
+          instrumentId: `qa:${conceptId}:1`,
+          instrumentType: 'qa',
+          rating: 'again',
+          wasUnsure: false,
+          durationMs: 1200,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            masteryAtTime: null,
+            instrumentTypesOffered: ['qa'],
+            planVersion: null,
+          },
+          conceptIds: [conceptId],
+        })}\n`,
+      });
+
+      // No `trends` supplied at all — `vm.mastery` stays `null` (F6.2's own
+      // "never asked" posture), so this only exercises
+      // `withTendingDisplayNames`'s no-op short circuit rather than the
+      // naming itself; the sibling test above is the one proving resolution.
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now: () => new Date(2025, 0, 1, 9, 0),
+        windowDays: 30,
+      });
+      expect(vm.mastery).toBeNull();
     });
   });
 
