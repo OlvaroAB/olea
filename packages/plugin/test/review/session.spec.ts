@@ -121,6 +121,90 @@ describe('F2.2 — advancing is immediate', () => {
   });
 });
 
+describe('[D-091] ol-0r92.32 — continuing past a completed queue is never a cap', () => {
+  async function completedSession(
+    courseCode = 'PSYC210',
+  ): Promise<{ session: ReviewSession; item: ReturnType<typeof queueItem> }> {
+    const item = queueItem(qaFixture({ instrumentId: 'first', courseCode }));
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+    expect(session.getViewModel().phase).toBe('complete');
+    return { session, item };
+  }
+
+  it('continueWith resumes a complete session into the items it is handed, verbatim and in order', async () => {
+    const { session } = await completedSession();
+    const more = [
+      queueItem(qaFixture({ instrumentId: 'second', courseCode: 'HIST150' })),
+      queueItem(qaFixture({ instrumentId: 'third', courseCode: 'HIST150' })),
+    ];
+
+    const extended = await session.continueWith(more);
+
+    expect(extended).toBe(true);
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('front');
+    // Never a second policy: the FIRST of what it was handed comes up next,
+    // in the order the caller supplied — this class reorders nothing of its
+    // own (`[D-091]` point 1, "never a second proportional policy").
+    if (vm.phase === 'front') expect(vm.instrument.instrumentId).toBe('second');
+  });
+
+  it('the session it resumes into is the SAME session — counters accumulate rather than restarting at zero', async () => {
+    const { session } = await completedSession('PSYC210');
+    const more = [queueItem(qaFixture({ instrumentId: 'second', courseCode: 'HIST150' }))];
+    await session.continueWith(more);
+
+    session.reveal();
+    await session.rate('good');
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('complete');
+    if (vm.phase === 'complete') {
+      // Both the original item and the extension's item counted toward the
+      // ONE sitting's summary — a fresh, second `ReviewSession` would have
+      // reported only 1 and only HIST150.
+      expect(vm.summary.reviewedCount).toBe(2);
+      expect(vm.summary.courseCodes).toEqual(['HIST150', 'PSYC210']);
+    }
+  });
+
+  it('is a no-op when there is nothing to continue into — nothing due is the honest state, not a dead extension', async () => {
+    const { session } = await completedSession();
+    const extended = await session.continueWith([]);
+    expect(extended).toBe(false);
+    expect(session.getViewModel().phase).toBe('complete');
+  });
+
+  it('is a no-op outside the complete phase — continuing mid-card is meaningless', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+
+    const extended = await session.continueWith([queueItem(qaFixture({ instrumentId: 'x' }))]);
+
+    expect(extended).toBe(false);
+    expect(session.getViewModel().phase).toBe('front');
+  });
+
+  it('queueSnapshot is a defensive copy of the queue as it stands, growing across continueWith', async () => {
+    const { session, item } = await completedSession();
+    expect(session.queueSnapshot).toEqual([item]);
+
+    const more = [queueItem(qaFixture({ instrumentId: 'second' }))];
+    await session.continueWith(more);
+
+    const snapshot = session.queueSnapshot;
+    expect(snapshot.map((q) => q.instrument.instrumentId)).toEqual(['first', 'second']);
+
+    // Mutating the returned array does nothing to the live session.
+    (snapshot as unknown as unknown[]).pop();
+    expect(session.queueSnapshot).toHaveLength(2);
+  });
+});
+
 describe('F2.16 — MCQ rating mapping, as wired through the session', () => {
   it('correct with no tap logs Good and never offers Easy', async () => {
     const item = queueItem(mcqFixture());

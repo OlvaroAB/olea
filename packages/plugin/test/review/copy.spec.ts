@@ -31,6 +31,7 @@ import {
   REVIEW_UNAVAILABLE_TITLE,
   ratingKeycap,
   ratingLabel,
+  SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
 } from '../../src/review/copy.js';
@@ -128,6 +129,20 @@ describe('sessionCompleteSentence', () => {
 
   it('clamps a due-soon count that exceeds the reviewed count rather than asserting a remainder', () => {
     expect(sessionCompleteSentence(summary(2, 9))).not.toContain('the rest');
+  });
+});
+
+describe('SESSION_COMPLETE_CONTINUE_LABEL — [D-091] / ol-0r92.32', () => {
+  it('is the pass6 kit\'s own wording for the "keep going" exit, verbatim', () => {
+    expect(SESSION_COMPLETE_CONTINUE_LABEL).toBe('Keep going');
+  });
+
+  it('carries no streak, total, verdict or effort language — a target reached is not an achievement', () => {
+    const text = SESSION_COMPLETE_CONTINUE_LABEL.toLowerCase();
+    for (const word of ['streak', 'score', 'total', 'great', 'well done', 'effort', 'behind']) {
+      expect(text).not.toContain(word);
+    }
+    expect(SESSION_COMPLETE_CONTINUE_LABEL).not.toMatch(/\d/);
   });
 });
 

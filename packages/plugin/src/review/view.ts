@@ -79,6 +79,7 @@ import {
   REVIEW_UNAVAILABLE_TITLE,
   ratingKeycap,
   ratingLabel,
+  SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
 } from './copy.js';
@@ -1193,6 +1194,19 @@ export class ReviewView extends ItemView {
     this.registerDomEvent(close, 'click', () => this.leaf.detach());
   }
 
+  /**
+   * `[D-091]`'s "always free to keep going" (`ol-0r92.32`, component
+   * register §3.7): today's due queue running out is a declared target
+   * reached, never a cap, so this screen must offer a way past it — "Keep
+   * going" beside "Close", never Close alone. See `copy.ts`'s
+   * `SESSION_COMPLETE_CONTINUE_LABEL` for the wording's own citation and
+   * `ReviewSession.continueWith`'s doc for why extending never becomes a
+   * second selection policy: `more` below is sourced from the SAME
+   * `this.openSession` provider (`ol-p2t08a`'s `ReviewSessionProvider`) this
+   * view already opens every session through — whatever plan is cached now,
+   * read fresh, exactly as `onOpen` reads it — never a second, invented
+   * source of items.
+   */
   private renderComplete(summary: SessionCompleteSummary): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body olea-review-complete' });
     body.createEl('h2', { cls: 'olea-review-question', text: "That's the queue for today." });
@@ -1202,12 +1216,47 @@ export class ReviewView extends ItemView {
       text: sessionCompleteSentence(summary),
     });
 
-    const close = body.createEl('button', {
+    const actions = body.createDiv({ cls: 'olea-review-actions-row' });
+
+    const keepGoing = actions.createEl('button', {
       cls: 'olea-review-primary-action',
+      attr: { [FOCUSABLE_ATTR]: 'true' },
+    });
+    keepGoing.createSpan({ text: SESSION_COMPLETE_CONTINUE_LABEL });
+    this.registerDomEvent(keepGoing, 'click', () => void this.continueSessionAfterComplete());
+
+    const close = actions.createEl('button', {
+      cls: 'olea-review-ghost-action',
       attr: { [FOCUSABLE_ATTR]: 'true' },
     });
     close.createSpan({ text: 'Close' });
     this.keycap(close, verifiedKeycap({ kind: 'session-complete' }, 'Escape', 'Esc', 'close-tab'));
     this.registerDomEvent(close, 'click', () => this.leaf.detach());
+  }
+
+  /**
+   * "Keep going"'s click handler (`renderComplete`, `ol-0r92.32`). Opens a
+   * fresh session through the SAME `this.openSession` provider `onOpen`
+   * itself uses — whatever plan is cached this instant, read fresh, never a
+   * copy captured earlier (see `main.ts`'s `composeReviewSession` doc) — and
+   * hands its queue to the CURRENT session's `continueWith`, so `complete`'s
+   * own counters (items reviewed, courses touched) keep accumulating across
+   * the extension instead of a second session restarting them at zero.
+   *
+   * When there is nothing to continue into (the fresh compose's queue is
+   * empty — nothing more is due right now), `continueWith` is a no-op and
+   * this falls back to showing that fresh session's own state directly
+   * (ordinarily `empty`'s "You're caught up.", never a second `complete`
+   * screen) — the honest read, not a silently inert button.
+   */
+  private async continueSessionAfterComplete(): Promise<void> {
+    const fresh = await this.openSession();
+    const more = fresh?.queueSnapshot ?? [];
+    const extended = (await this.session?.continueWith(more)) ?? false;
+    if (!extended) {
+      this.session = fresh;
+      await this.session?.start();
+    }
+    this.render();
   }
 }

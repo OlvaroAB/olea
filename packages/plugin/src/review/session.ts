@@ -268,6 +268,51 @@ export class ReviewSession {
     return this.items[this.index] ?? null;
   }
 
+  /**
+   * The queue this session is walking, exactly as it stands — every item it
+   * was constructed with plus anything appended by {@link continueWith}.
+   *
+   * Exists so a caller extending one session from a second, freshly-opened
+   * one (`view.ts`'s "Continue" handler, `ol-0r92.32`) can hand that second
+   * session's own queue over to {@link continueWith} without this class ever
+   * reaching for a provider or a plan of its own — see that method's doc.
+   * A snapshot, never the live array: mutating the result does nothing.
+   */
+  get queueSnapshot(): readonly ReviewQueueItem[] {
+    return [...this.items];
+  }
+
+  /**
+   * `[D-091]`'s "always free to keep going" (`ol-0r92.32`, component
+   * register §3.7): resumes a `complete` session into `more` instead of
+   * ending it, rather than replacing it with a second session that would
+   * restart `reviewedCount`/`courseCodesSeen`/`dueSoonCount` from zero —
+   * finishing today's due items is the declared target reached, never a
+   * cap, so continuing past it stays the SAME session rather than a new one.
+   *
+   * **Never a second policy (D-091 point 1).** This method reorders,
+   * re-ranks, re-selects or drops nothing of `more` — it is appended
+   * verbatim and walked in the order it arrives. The only policy that ever
+   * decided what she sees is whatever composed `deps.queue` in the first
+   * place (`open-session.ts`'s `executeStudyPlan`, over the SAME cached
+   * plan); `more` is expected to have come from that identical path — see
+   * {@link queueSnapshot}'s doc for how `view.ts` sources it — so
+   * "continuing" can never become a rival selection mechanism standing next
+   * to it.
+   *
+   * A no-op returning `false` when not currently `complete`, or when `more`
+   * is empty: nothing due beyond what she already finished is exactly the
+   * honest state the ordinary empty screen already states, so this leaves
+   * `complete` showing (Close still there) rather than inventing a second
+   * "nothing to continue into" screen of its own.
+   */
+  async continueWith(more: readonly ReviewQueueItem[]): Promise<boolean> {
+    if (this.phase !== 'complete' || more.length === 0) return false;
+    this.items = [...this.items, ...more];
+    await this.presentCurrent();
+    return true;
+  }
+
   getViewModel(): ReviewViewModel {
     switch (this.phase) {
       case 'loading':

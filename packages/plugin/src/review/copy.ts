@@ -371,6 +371,32 @@ export function sessionCompleteSentence(summary: SessionCompleteSummary): string
 }
 
 /**
+ * The end-of-session screen's "keep going" affordance (`ol-0r92.32`,
+ * `[D-091]`, component register §3.7). Today's due queue running out is the
+ * declared target reached, never a cap — `[D-091]`'s ruling text is explicit
+ * that "when she outruns the plan, the extension follows the SAME plan's
+ * shares" — so this screen may never leave leaving (`Close`) as the only
+ * affordance, the exact defect the pass6 design kit named against its own
+ * walkthrough (`docs/design/pass6-walkthrough` in the service repo).
+ *
+ * The wording is the kit's own redrawn end-of-session screen —
+ * `ui_kits/olea-plugin/Pass6MidC.jsx`'s `M12bOutrun` — reused verbatim
+ * rather than re-invented, whose own note calls the two exits "equal ...
+ * and no completion state": continuing costs nothing and stopping costs
+ * nothing, so neither string may read as the "real" ending. No streak, no
+ * total, no verdict — this button names the action, nothing else.
+ *
+ * Exported despite being, in every other respect, the kind of unconditional
+ * fixed label this file's own module doc says belongs in `view.ts` instead:
+ * the exact wording here is the compliance-bearing artifact (it is what
+ * makes this screen satisfy `[D-091]` rather than merely add a second
+ * button), not an arbitrary UI choice, so — same reasoning as
+ * `CONTEST_GESTURE_LABEL` below — it is asserted once, in `copy.spec.ts`,
+ * rather than typed again at its one call site.
+ */
+export const SESSION_COMPLETE_CONTINUE_LABEL = 'Keep going';
+
+/**
  * The MCQ feedback paragraph: the instrument's own feedback (model-generated
  * in the product, F2.15) followed by when the item comes back.
  *
