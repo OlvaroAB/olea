@@ -129,6 +129,26 @@ export { reconcileCorpusVerdicts } from './concept/corpus-relations/verdict.js';
 // itself.
 export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
 export { extractConcepts, foldReadAnchors } from './concept/extract.js';
+// The `ConceptKeyRecord` sidecar (`[D-174]`, `ol-2zfj.42`) and its two seams:
+// `resolveConceptKey` (anchor-match, mint-or-lookup) and `bindConceptKeyToNote`
+// (`ol-2zfj.55`, key-driven rebind onto a newly-accepted note, `[D-176]`/`[D-183]`).
+// See `./concept/key-store.js`'s module doc.
+export type {
+  ConceptKeyAnchor,
+  ConceptKeyRecord,
+  NoteAnchor,
+  ResolveConceptKeyOptions,
+  TopicAnchor,
+} from './concept/key-store.js';
+export {
+  bindConceptKeyToNote,
+  CONCEPT_KEY_RECORD_SCHEMA_VERSION,
+  CONCEPT_KEY_STORE_FOLDER,
+  conceptKeyRecordPath,
+  isConceptKeyRecord,
+  listConceptKeyRecords,
+  resolveConceptKey,
+} from './concept/key-store.js';
 // Knowledge-kind classification (component register row 1.5, `[KCT-1]`,
 // `ol-kxr6`) — a label, or explicitly unclassified, read by component 2.2
 // (instrument-type routing). `KnowledgeKindClassifierPort` is the service

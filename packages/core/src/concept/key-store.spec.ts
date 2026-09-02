@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
 import { extractConcepts } from './extract.js';
 import {
+  bindConceptKeyToNote,
   CONCEPT_KEY_STORE_FOLDER,
   conceptKeyRecordPath,
   isConceptKeyRecord,
@@ -197,6 +198,131 @@ describe('resolveConceptKey — mint once, read back thereafter ([D-174])', () =
       aliases: [],
     });
     expect(typeof key).toBe('string');
+  });
+});
+
+// Scenarios: olea-service/features/F8-concepts-scope.md — "Accepting a note offer rebinds the
+// existing concept key onto the new note ([D-088], [D-176], [D-183], ol-2zfj.55)", tagged
+// `@auto:core/concept/key-store.spec`.
+describe('bindConceptKeyToNote — key-driven rebind onto a new note ([D-088], [D-176], [D-183])', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-key-rebind-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('rebinding a topic-anchored record then re-resolving via the OLD topic anchor still resolves the same key', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+
+    await bindConceptKeyToNote(source, key, {
+      kind: 'note',
+      noteUid: 'uid-basalt',
+      notePath: '05 Zettelkasten/Basalt weathering.md',
+    });
+
+    // A stale extraction pass that still proposes her old `topic:` wording (before it has
+    // learned about the new note) resolves to the SAME key rather than minting a second one.
+    const reResolved = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    expect(reResolved).toBe(key);
+  });
+
+  it('mints no second sidecar file — one record, now note-anchored', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Isostasy',
+      aliases: [],
+    });
+
+    await bindConceptKeyToNote(source, key, {
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Isostasy.md',
+    });
+
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.key).toBe(key);
+    expect(records[0]?.record.anchor).toEqual({
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Isostasy.md',
+    });
+  });
+
+  it('keeps the previous topic wording as an alias ([D-183])', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Cross-bedding',
+      aliases: ['Cross bedding'],
+    });
+
+    await bindConceptKeyToNote(source, key, {
+      kind: 'note',
+      noteUid: 'uid-xb',
+      notePath: '05 Zettelkasten/Cross-bedding.md',
+    });
+
+    const records = await listConceptKeyRecords(source);
+    expect(records[0]?.record.aliases).toEqual(
+      expect.arrayContaining(['Cross-bedding', 'Cross bedding']),
+    );
+  });
+
+  it('is idempotent: calling it twice with the same key and anchor writes no second time', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Volcanic tuff',
+      aliases: [],
+    });
+    const noteAnchor = {
+      kind: 'note' as const,
+      noteUid: 'uid-vt',
+      notePath: '05 Zettelkasten/Volcanic tuff.md',
+    };
+
+    await bindConceptKeyToNote(source, key, noteAnchor);
+    const path = conceptKeyRecordPath(key);
+    const bytesAfterFirst = await source.read(path);
+
+    await bindConceptKeyToNote(source, key, noteAnchor);
+    const bytesAfterSecond = await source.read(path);
+
+    expect(bytesAfterSecond).toBe(bytesAfterFirst);
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.aliases).toEqual(['Volcanic tuff']);
+  });
+
+  it('throws rather than minting when the key has no existing record', async () => {
+    await expect(
+      bindConceptKeyToNote(source, 'concept-prov1:nonexistent', {
+        kind: 'note',
+        noteUid: null,
+        notePath: '05 Zettelkasten/Nonexistent.md',
+      }),
+    ).rejects.toThrow();
+
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(0);
   });
 });
 

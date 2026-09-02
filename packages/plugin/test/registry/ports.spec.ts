@@ -1,7 +1,33 @@
-import { suspendedInstrumentIds } from 'olea-core';
+import type { RegistryConceptEntry } from 'olea-core';
+import { listConceptKeyRecords, resolveConceptKey, suspendedInstrumentIds } from 'olea-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createVaultPruneInstrumentPort } from '../../src/registry/ports.js';
+import {
+  createObsidianAcceptNoteOfferPort,
+  createVaultPruneInstrumentPort,
+} from '../../src/registry/ports.js';
 import { memoryVault } from '../review/memory-vault.js';
+
+/**
+ * A minimal `RegistryConceptEntry` fixture. `createObsidianAcceptNoteOfferPort.accept` reads
+ * only `key` and `displayName` — see `../../src/registry/ports.ts`'s own doc — so every other
+ * field is a placeholder value never touched by the port under test, hence the cast rather than
+ * hand-filling `mastery`/`vitality`/`explainBack`'s full shapes.
+ */
+function conceptEntry(overrides: Partial<Pick<RegistryConceptEntry, 'key' | 'displayName'>>) {
+  return {
+    key: 'concept-prov1:placeholder',
+    displayName: 'Placeholder concept',
+    originalName: 'Placeholder concept',
+    aliases: [],
+    courses: [],
+    tier: 2,
+    pruned: false,
+    instruments: [],
+    sourceLocations: [],
+    noteOffer: { eligible: true },
+    ...overrides,
+  } as unknown as RegistryConceptEntry;
+}
 
 const INSTRUMENT_ID = 'qa:concept-a:1';
 const DEVICE = 'olea-testdevice1';
@@ -100,5 +126,63 @@ describe('createVaultPruneInstrumentPort', () => {
     if (logPath === undefined) throw new Error('expected a write');
     const record = JSON.parse((await vault.read(logPath)).trim());
     expect(record.conceptIds).toEqual(['concept-a', 'concept-b']);
+  });
+});
+
+// Scenarios: olea-service/features/F8-concepts-scope.md — "Accepting a note offer rebinds the
+// existing concept key onto the new note ([D-088], [D-176], [D-183], ol-2zfj.55)", tagged
+// `@auto:plugin/registry/ports.spec`.
+describe('createObsidianAcceptNoteOfferPort — creates the note AND rebinds the existing key ([D-176], ol-2zfj.55)', () => {
+  it('creates a note at the vault root named for her display name', async () => {
+    const vault = memoryVault();
+    const key = await resolveConceptKey(vault, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    const port = createObsidianAcceptNoteOfferPort(vault);
+
+    await port.accept(conceptEntry({ key, displayName: 'Basalt weathering' }));
+
+    expect(vault.contentOf('Basalt weathering.md')).toBe('# Basalt weathering\n');
+  });
+
+  it('rebinds the existing key onto the new note instead of minting a second one', async () => {
+    const vault = memoryVault();
+    const key = await resolveConceptKey(vault, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Isostasy',
+      aliases: [],
+    });
+    const port = createObsidianAcceptNoteOfferPort(vault);
+
+    await port.accept(conceptEntry({ key, displayName: 'Isostasy' }));
+
+    const records = await listConceptKeyRecords(vault);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.key).toBe(key);
+    expect(records[0]?.record.anchor).toEqual({
+      kind: 'note',
+      noteUid: null,
+      notePath: 'Isostasy.md',
+    });
+  });
+
+  it('keeps the old topic wording as an alias, per [D-183]', async () => {
+    const vault = memoryVault();
+    const key = await resolveConceptKey(vault, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Cross-bedding',
+      aliases: [],
+    });
+    const port = createObsidianAcceptNoteOfferPort(vault);
+
+    await port.accept(conceptEntry({ key, displayName: 'Cross-bedding' }));
+
+    const records = await listConceptKeyRecords(vault);
+    expect(records[0]?.record.aliases).toEqual(['Cross-bedding']);
   });
 });

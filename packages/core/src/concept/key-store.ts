@@ -25,6 +25,23 @@
  * lineage event with its own home (`[D-119]`'s second precondition), entirely out of this
  * module's scope — it never touches a record here.
  *
+ * **`bindConceptKeyToNote` (`ol-2zfj.55`) is the second seam, and it is key-driven, not
+ * anchor-driven.** F8.4a's accept-a-note-offer flow (`ol-r1by`, `[D-176]`) creates a brand-new
+ * note for a concept that already has a key — usually a tier-2/3 `TopicAnchor` record, since a
+ * tier-1 concept already has a note. `resolveConceptKey`'s anchor-match seam cannot do this
+ * rebind: a `TopicAnchor` never matches the brand-new note's `NoteAnchor` (`kind` differs), so
+ * calling it here would MINT A SECOND KEY for the same concept — silently duplicating identity,
+ * the exact failure `[D-088]`'s conservation property exists to prevent. `bindConceptKeyToNote`
+ * instead looks the record up **by its durable `key`** (the caller already holds it — the
+ * concept's join key, not its anchor) and rewrites that one record's `anchor` in place, never
+ * minting. Per `[D-183]`'s alias rule (knowledge model §3), the topic wording the record is
+ * rebound FROM is folded into `aliases` rather than discarded, so a stale extraction pass that
+ * still proposes the old `TopicAnchor` (her `topic:` property hasn't changed, or a reconciliation
+ * step hasn't learned about the note yet) still resolves to the same key —
+ * `resolveConceptKey`'s matching below is extended accordingly, cross-kind, off `aliases`.
+ * Idempotent: calling it twice with the same key and the same note anchor writes nothing the
+ * second time.
+ *
  * ===========================================================================
  * FILE NAMING (Class A, left open by `[D-174]`/design doc §9) — `encodeURIComponent(key)`
  * ===========================================================================
@@ -96,11 +113,19 @@ export type ConceptKeyAnchor = NoteAnchor | TopicAnchor;
  * `key` is the durable, never-recomputed field once minted. `anchor` is deliberately NOT part of
  * the identity being protected — it is the current best match signal, allowed to drift (a
  * rename updates `anchor.notePath`; `noteUid`, the part that actually matters, does not move).
+ *
+ * `aliases` (added `ol-2zfj.55`, additive/non-breaking — `schemaVersion` unchanged) holds prior
+ * wordings this key has answered to, kept per `[D-183]`'s alias rule rather than discarded. Today
+ * the only writer is `bindConceptKeyToNote`, which folds a `TopicAnchor`'s `name`/`aliases` in
+ * here when rebinding the record onto a `NoteAnchor`. Optional, and absent on every record minted
+ * before this field existed — every reader treats a missing value as `[]`, never as invalid.
  */
 export interface ConceptKeyRecord {
   readonly key: string;
   readonly tier: ConceptTier;
   readonly anchor: ConceptKeyAnchor;
+  /** Prior wordings this key has answered to (`[D-183]`) — see the interface doc above. */
+  readonly aliases?: readonly string[];
   /** ISO date the key was first minted. Debugging only — not personal, no content. */
   readonly mintedAt: string;
   readonly schemaVersion: number;
@@ -144,9 +169,19 @@ export function isConceptKeyRecord(value: unknown): value is ConceptKeyRecord {
   if (!isNonEmptyString(v.key)) return false;
   if (!isConceptTier(v.tier)) return false;
   if (!isConceptKeyAnchor(v.anchor)) return false;
+  // Optional and additive (see the interface doc): absent is valid — every record minted before
+  // `ol-2zfj.55` has no `aliases` field at all — but a present value must be a string array.
+  if (v.aliases !== undefined) {
+    if (!Array.isArray(v.aliases) || !v.aliases.every((a) => typeof a === 'string')) return false;
+  }
   if (!isNonEmptyString(v.mintedAt)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
   return true;
+}
+
+/** `record.aliases ?? []` — the one place that default lives, so no reader re-invents it. */
+function recordAliases(record: ConceptKeyRecord): readonly string[] {
+  return record.aliases ?? [];
 }
 
 /**
@@ -226,6 +261,43 @@ function anchorMatches(existing: ConceptKeyAnchor, candidate: ConceptKeyAnchor):
   return false;
 }
 
+/**
+ * `anchorMatches` extended cross-kind (`ol-2zfj.55`, `[D-183]`): a record already rebound onto a
+ * `NoteAnchor` (`bindConceptKeyToNote`, below) still answers to the `TopicAnchor` wording it was
+ * rebound FROM, because that wording lives on in `record.aliases` rather than being discarded.
+ * Without this, a stale extraction pass still proposing the old topic wording would find no
+ * match on the now-note-anchored record and mint a second key — exactly the duplication
+ * `bindConceptKeyToNote` exists to prevent from the other direction. Only `note`-existing /
+ * `topic`-candidate is meaningful here: nothing rebinds a record the other way, and a
+ * `note`-candidate has no wording to compare against `aliases` (a plain string list, not
+ * anchors).
+ */
+function recordMatchesAnchor(record: ConceptKeyRecord, candidate: ConceptKeyAnchor): boolean {
+  if (anchorMatches(record.anchor, candidate)) return true;
+  if (record.anchor.kind === 'note' && candidate.kind === 'topic') {
+    const aliases = recordAliases(record);
+    if (aliases.includes(candidate.name)) return true;
+    if (candidate.aliases.some((alias) => aliases.includes(alias))) return true;
+  }
+  return false;
+}
+
+/** Order-preserving de-duplication, dropping empty strings — the one place `aliases` merges live. */
+function dedupeAliases(values: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (value.length === 0 || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
 /** Structural equality good enough for "does the anchor need rewriting" — anchors are small, flat-ish objects. */
 function anchorEquals(a: ConceptKeyAnchor, b: ConceptKeyAnchor): boolean {
   if (a.kind !== b.kind) return false;
@@ -261,7 +333,12 @@ function defaultNow(): string {
  * one otherwise. **Never mints a second record for an anchor that already matches one** (the
  * scenario "re-extraction resolves to the existing key"), and **never deletes, retires or
  * mutates `key` on any existing record** (the conservation property, `[D-088]`) — the only field
- * this function ever rewrites on a hit is `anchor`, and only when it has drifted.
+ * this function ever rewrites on a hit is `anchor`, and only when it has drifted **within the same
+ * anchor kind**. A cross-kind match (`recordMatchesAnchor`'s `[D-183]` alias fallback, above)
+ * never rewrites `anchor` here: a stale `TopicAnchor` candidate matching a rebound `NoteAnchor`
+ * record must resolve to the same key without regressing the record back off the note it was
+ * bound to — undoing that is `bindConceptKeyToNote`'s job to prevent, not this function's to
+ * cause.
  */
 export async function resolveConceptKey(
   vault: VaultSource,
@@ -271,10 +348,10 @@ export async function resolveConceptKey(
 ): Promise<string> {
   const now = options.now ?? defaultNow;
   const existing = await listConceptKeyRecords(vault);
-  const hit = existing.find(({ record }) => anchorMatches(record.anchor, anchor));
+  const hit = existing.find(({ record }) => recordMatchesAnchor(record, anchor));
 
   if (hit !== undefined) {
-    if (!anchorEquals(hit.record.anchor, anchor)) {
+    if (hit.record.anchor.kind === anchor.kind && !anchorEquals(hit.record.anchor, anchor)) {
       const refreshed: ConceptKeyRecord = { ...hit.record, anchor };
       await vault.write(hit.path, serialize(refreshed));
     }
@@ -286,9 +363,66 @@ export async function resolveConceptKey(
     key,
     tier,
     anchor,
+    aliases: [],
     mintedAt: now(),
     schemaVersion: CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   };
   await vault.write(conceptKeyRecordPath(key), serialize(record));
   return key;
+}
+
+/**
+ * The second seam (`ol-2zfj.55`) — key-driven, not anchor-driven. See the module doc's
+ * "`bindConceptKeyToNote`" section for why `resolveConceptKey`'s anchor-match seam cannot do
+ * this rebind at all.
+ *
+ * Looks the record up by its durable `key` (never by matching `noteAnchor` against anything —
+ * matching is `resolveConceptKey`'s job, not this function's), rewrites its `anchor` to
+ * `noteAnchor`, and — per `[D-183]`'s alias rule — folds whatever wording the record is being
+ * rebound FROM into `aliases` rather than discarding it:
+ *
+ *   - Rebinding a `TopicAnchor` record: that anchor's own `name` and `aliases` are folded in.
+ *   - Rebinding an already-`NoteAnchor` record (calling this again, e.g. idempotently, or on a
+ *     record `resolveConceptKey` already bound by note): nothing new to fold in beyond what
+ *     `aliases` already holds — the old anchor carries no wording of its own.
+ *
+ * **Never mints.** A key with no existing record is a caller error — there is nothing to rebind
+ * — and this function throws rather than silently minting one, which would be exactly the
+ * "second record for the same concept" `[D-088]`'s conservation property forbids.
+ *
+ * **Idempotent.** Calling this twice with the same `key` and the same `noteAnchor` writes
+ * nothing the second time: both `anchor` and the merged `aliases` are already exactly what this
+ * call would produce, so the no-op is a real no-op (no file write), not merely a harmless
+ * duplicate write.
+ */
+export async function bindConceptKeyToNote(
+  vault: VaultSource,
+  key: string,
+  noteAnchor: NoteAnchor,
+): Promise<void> {
+  const existing = await listConceptKeyRecords(vault);
+  const hit = existing.find(({ record }) => record.key === key);
+  if (hit === undefined) {
+    throw new Error(
+      `bindConceptKeyToNote: no existing ConceptKeyRecord for key "${key}" — this function ` +
+        'rebinds an existing record and never mints one (see the module doc).',
+    );
+  }
+
+  const priorWordings =
+    hit.record.anchor.kind === 'topic'
+      ? [hit.record.anchor.name, ...hit.record.anchor.aliases]
+      : [];
+  const mergedAliases = dedupeAliases([...recordAliases(hit.record), ...priorWordings]);
+
+  const anchorChanged = !anchorEquals(hit.record.anchor, noteAnchor);
+  const aliasesChanged = !stringArraysEqual(recordAliases(hit.record), mergedAliases);
+  if (!anchorChanged && !aliasesChanged) return;
+
+  const updated: ConceptKeyRecord = {
+    ...hit.record,
+    anchor: noteAnchor,
+    aliases: mergedAliases,
+  };
+  await vault.write(hit.path, serialize(updated));
 }

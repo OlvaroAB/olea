@@ -67,16 +67,33 @@
  * declaring a new one. There is exactly one number in this module:
  * {@link DEFAULT_SITTING_IDLE_THRESHOLD_MINUTES}.
  *
- * ## No production caller yet (`[D-072]` clause 5)
+ * ## One production caller wired, one still open (`[D-072]` clause 5)
  *
- * `packages/plugin/src/session-builder/view.ts` calls `refresh()` →
- * `deps.load()` on every render with no freeze at all today — every
- * `SessionBuilderView.refresh()` recomputes from scratch — and
+ * `packages/plugin/src/session-builder/provider.ts` (`ol-e228`, `[RBLD-2]`)
+ * is the wired half: `createLocalSessionBuilderProvider` closes over a
+ * `SittingState<SessionBuilderState>` per leaf, and `load()` calls
+ * `decideRebuild` on every `SessionBuilderView.refresh()` rather than
+ * recomposing unconditionally — an identical, still-fresh request returns
+ * the frozen `SessionBuilderState` by reference, and `onClose` calls the
+ * provider's `endSitting()` to release the freeze. `ol-v7r5.26` closed the
+ * remaining gap in that wiring: `buildFresh` freezes a `SittingScopeSnapshot`
+ * (per-concept retrieval/recall/mastery state plus assessment due strings)
+ * alongside the sitting, and `load()` diffs a fresh snapshot against it —
+ * once past the idle threshold — to produce the three real material-change
+ * facts `evaluateSittingStaleness` (below) needs, in place of the
+ * always-`false` stand-in the provider passed before. Still honestly
+ * incomplete: the *between-sittings* named-trigger path has no reachable
+ * call site on this surface at all (a closed leaf's state does not survive
+ * to be weighed against a trigger when she reopens it — see `provider.ts`'s
+ * own module doc), and `[D-162]` (`ol-cidn`) is PROPOSED, not ruled, so
+ * `hold-cap-exceeded` is treated as ending the sitting rather than
+ * recomposing the tail.
+ *
  * `packages/plugin/src/review/queue-adapter.ts` (owned by a different lane's
- * `queue/`-consuming surface) composes the review queue the same way. Wiring
- * either caller to hold a `SittingState` across renders, and to source the
- * three trigger facts from the vault change stream / review log / local
- * clock, is client-surface work outside this lane's owned paths
+ * `queue/`-consuming surface) still composes the review queue with no freeze
+ * at all — every call recomputes from scratch. Wiring it to hold a
+ * `SittingState` across calls, and to source its own three trigger facts, is
+ * client-surface work outside this lane's owned paths
  * (`packages/core/src/study-session/`, `packages/core/src/queue/`) — filed
  * as a follow-up (see `ol-o7hr`'s notes) rather than built here silently.
  */
