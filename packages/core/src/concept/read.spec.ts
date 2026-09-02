@@ -534,8 +534,10 @@ describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', (
 
     expect(passages.length).toBeGreaterThan(0);
     for (const passage of passages) {
-      expect(passage.anchor.location.charRange.end).toBeGreaterThan(
-        passage.anchor.location.charRange.start,
+      // biome-ignore lint/style/noNonNullAssertion: gatherPassages always sets charRange.
+      expect(passage.anchor.location.charRange!.end).toBeGreaterThan(
+        // biome-ignore lint/style/noNonNullAssertion: gatherPassages always sets charRange.
+        passage.anchor.location.charRange!.start,
       );
     }
   });
@@ -545,7 +547,8 @@ describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', (
     const passage = passages[0] as ConceptPassage;
 
     const content = await BARE_VAULT.read(passage.anchor.sourcePath);
-    const { start, end } = passage.anchor.location.charRange;
+    // biome-ignore lint/style/noNonNullAssertion: `gatherPassages` always sets `charRange`.
+    const { start, end } = passage.anchor.location.charRange!;
 
     expect(content.slice(start, end)).toBe(passage.text);
   });
@@ -812,7 +815,7 @@ describe('gatherPassages — non-markdown material (F1.6, F3.1, ol-fkya)', () =>
     expect(deck).toBeDefined();
     expect(deck?.text).toBe('GEOL204 Week 2 - Stratigraphic succession');
     expect(deck?.anchor.location.page).toBe(1);
-    expect(deck?.anchor.location.charRange.end).toBeGreaterThan(0);
+    expect(deck?.anchor.location.charRange?.end).toBeGreaterThan(0);
     expect(deck?.anchor.embeddedIn?.notePath).toBe(
       '01 Courses/GEOL204/WEEK 2/Lecture - Deposition & Bedform Stratification.md',
     );

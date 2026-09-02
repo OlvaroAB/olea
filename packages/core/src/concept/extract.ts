@@ -477,7 +477,13 @@ export async function extractConcepts(
  */
 function provenanceKey(provenance: Provenance): string {
   const { sourcePath, location } = provenance;
-  return `${sourcePath} ${location.page} ${location.charRange.start} ${location.charRange.end} ${location.section ?? ''}`;
+  // `charRange` is optional (`../extract/types.js`, `ol-2zfj.54`) — every anchor this module
+  // actually mints still carries one (see the module doc above), but the key stays honest for a
+  // `Provenance` with none: absence renders as `-`/`-`, distinct from any real numeric offset
+  // (including 0), never a fabricated 0/0 that would collide with a real zero-length span.
+  const start = location.charRange?.start ?? '-';
+  const end = location.charRange?.end ?? '-';
+  return `${sourcePath} ${location.page} ${start} ${end} ${location.section ?? ''}`;
 }
 
 /** Order-preserving de-duplication by `provenanceKey` — the first occurrence of a location wins. */

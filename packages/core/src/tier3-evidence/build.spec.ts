@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { extractConcepts } from '../concept/extract.js';
 import { FolderSource } from '../vault/folder-source.js';
-import { extractTier3Evidence } from './build.js';
+import { extractTier3Evidence, sortCitations } from './build.js';
+import type { ConceptCitation } from './types.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 
@@ -30,8 +31,10 @@ describe('extractTier3Evidence — default vocabulary (every Zettelkasten title)
     for (const q of imbrication?.questions ?? []) {
       expect(q.text.toLowerCase()).toContain('imbrication');
       expect(q.provenance.sourcePath).toBe(q.sourcePath);
-      expect(q.provenance.location.charRange.end).toBeGreaterThan(
-        q.provenance.location.charRange.start,
+      // biome-ignore lint/style/noNonNullAssertion: real past-paper questions always carry a charRange.
+      expect(q.provenance.location.charRange!.end).toBeGreaterThan(
+        // biome-ignore lint/style/noNonNullAssertion: real past-paper questions always carry a charRange.
+        q.provenance.location.charRange!.start,
       );
     }
 
@@ -477,8 +480,8 @@ describe('extractTier3Evidence — registration without an embedding note (F3.1,
     // char range into the extracted text.
     expect(citation?.provenance.sourcePath).toBe('01 Courses/COURSEA/Book.pdf');
     expect(citation?.provenance.location.page).toBe(1);
-    expect(citation?.provenance.location.charRange.end).toBeGreaterThan(
-      citation?.provenance.location.charRange.start ?? 0,
+    expect(citation?.provenance.location.charRange?.end).toBeGreaterThan(
+      citation?.provenance.location.charRange?.start ?? 0,
     );
     // `embeddedIn` is absent rather than faked — no note embeds this file, and
     // inventing a block range would put a lie into every downstream citation.
@@ -753,5 +756,54 @@ describe('extractTier3Evidence — coverage states its own scope (ol-cvsc)', () 
     // A denominator derived a second way is a denominator that can disagree
     // with its own numerator, so this asserts they are the same number.
     expect(total).toBe(result.citations.length);
+  });
+});
+
+describe('sortCitations — absent `charRange` (`ol-2zfj.54`, `SourceLocation.charRange` now optional)', () => {
+  // Coined, not real material (INV-3) — only conceptName/sourcePath/charRange presence matter.
+  function citation(
+    conceptName: string,
+    sourcePath: string,
+    charRange: { start: number; end: number } | undefined,
+  ): ConceptCitation {
+    return {
+      conceptName,
+      kind: 'generated-content',
+      sourcePath,
+      course: undefined,
+      provenance: {
+        sourcePath,
+        location: { page: 1, ...(charRange !== undefined ? { charRange } : {}) },
+      },
+    };
+  }
+
+  it('citations with a real charRange still sort by start, ascending', () => {
+    const c1 = citation('Alpha', 'a.pdf', { start: 40, end: 50 });
+    const c2 = citation('Alpha', 'a.pdf', { start: 10, end: 20 });
+    expect(sortCitations([c1, c2])).toEqual([c2, c1]);
+  });
+
+  it('a citation with no charRange sorts AFTER every citation for the same concept/source that has one', () => {
+    const withRange = citation('Alpha', 'a.pdf', { start: 100, end: 110 });
+    const noRange = citation('Alpha', 'a.pdf', undefined);
+    // No-range citation given first, to prove the comparator moves it, not the input order.
+    expect(sortCitations([noRange, withRange])).toEqual([withRange, noRange]);
+  });
+
+  it('two citations with no charRange keep their incoming (stable-sort) order, never a fabricated position', () => {
+    const first = citation('Alpha', 'a.pdf', undefined);
+    const second = citation('Alpha', 'a.pdf', undefined);
+    expect(sortCitations([first, second])).toEqual([first, second]);
+    expect(sortCitations([second, first])).toEqual([second, first]);
+  });
+
+  it('conceptName and sourcePath still take priority over charRange presence', () => {
+    const laterConceptWithRange = citation('Beta', 'a.pdf', { start: 0, end: 5 });
+    const earlierConceptNoRange = citation('Alpha', 'a.pdf', undefined);
+    expect(sortCitations([laterConceptWithRange, earlierConceptNoRange])).toEqual([
+      earlierConceptNoRange,
+      laterConceptWithRange,
+    ]);
   });
 });

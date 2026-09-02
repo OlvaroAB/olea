@@ -675,11 +675,21 @@ function binaryPastPaperCitations(
   return citations;
 }
 
-function sortCitations(citations: readonly ConceptCitation[]): ConceptCitation[] {
+/** Exported solely for `build.spec.ts`'s direct unit coverage of the absent-`charRange` ordering rule below. */
+export function sortCitations(citations: readonly ConceptCitation[]): ConceptCitation[] {
   return [...citations].sort((a, b) => {
     if (a.conceptName !== b.conceptName) return a.conceptName < b.conceptName ? -1 : 1;
     if (a.sourcePath !== b.sourcePath) return a.sourcePath < b.sourcePath ? -1 : 1;
-    return a.provenance.location.charRange.start - b.provenance.location.charRange.start;
+    // `charRange` is optional (`../extract/types.js`) — a citation with no char-level
+    // precision (e.g. `[D-181]`'s instrument-citation grain) sorts after every citation that
+    // has one, and ties among no-range citations keep their incoming order: `Array.sort` is
+    // stable, so returning `0` here is enough, never a fabricated position.
+    const aStart = a.provenance.location.charRange?.start;
+    const bStart = b.provenance.location.charRange?.start;
+    if (aStart === undefined && bStart === undefined) return 0;
+    if (aStart === undefined) return 1;
+    if (bStart === undefined) return -1;
+    return aStart - bStart;
   });
 }
 

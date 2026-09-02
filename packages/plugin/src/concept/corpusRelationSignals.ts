@@ -390,8 +390,14 @@ export async function gatherCorpusRelationVaultContext(
 
   for (const concept of concepts) {
     const content = await readCached(concept.anchor.sourcePath);
-    const { start, end } = concept.anchor.location.charRange;
-    passageTextByName.set(concept.name, content.slice(start, end));
+    // `charRange` is optional (`../../core/src/extract/types.js`, `ol-2zfj.54`); every anchor a
+    // concept actually gets is one block's real `[start, end)` (see the module doc above), so
+    // this is never absent in practice — but a nomination signal degrades honestly rather than
+    // throwing if it ever is, by falling back to the whole passage's text.
+    const charRange = concept.anchor.location.charRange;
+    const passageText =
+      charRange !== undefined ? content.slice(charRange.start, charRange.end) : content;
+    passageTextByName.set(concept.name, passageText);
 
     for (const target of wikilinkTargets(content)) {
       const linked = byName.get(target);

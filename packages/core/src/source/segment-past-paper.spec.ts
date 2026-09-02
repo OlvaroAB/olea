@@ -105,7 +105,8 @@ describe('segmentPastPaper — against the fixture past paper (P5-T01, F1.5)', (
     for (const q of result.questions) {
       expect(q.provenance.sourcePath).toBe(PAST_PAPER_PATH);
       expect(q.provenance.location.page).toBe(1);
-      const { start, end } = q.provenance.location.charRange;
+      // biome-ignore lint/style/noNonNullAssertion: the segmenter always sets charRange.
+      const { start, end } = q.provenance.location.charRange!;
       expect(end).toBeGreaterThan(start);
       // The char range actually addresses real source text.
       expect(text.slice(start, end).length).toBe(end - start);

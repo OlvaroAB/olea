@@ -36,14 +36,14 @@
  * fabricate") warns against — a citation store that doesn't have passage-quoting precision says
  * so by never claiming a char range, not by guessing one.
  *
- * **This leaves a real, named type gap at the read side, not silently absorbed:**
- * `VaultInstrumentRecord.sourceProvenance` (`../session/types.js`) is typed `Provenance`, which
- * reuses `SourceLocation` and therefore requires `location.charRange` and `location.page` as
- * non-optional. `./enumerate.js`'s own doc comment on `citationToSourceProvenance` records the
- * exact accommodation it makes (never a silently-invented `page`, and a documented, unread
- * placeholder for `charRange`) and calls out the honest fix — widening `SourceLocation.charRange`
- * to optional — as a follow-up outside this bead's owned files (that field ripples into
- * `../tier3-evidence/build.ts`'s sort comparator, which reads `.charRange.start` directly).
+ * **The read-side type gap this used to leave is closed.** `VaultInstrumentRecord.sourceProvenance`
+ * (`../session/types.js`) is typed `Provenance`, which reuses `SourceLocation`
+ * (`../extract/types.js`); `location.page` stays non-optional but `location.charRange` is now
+ * optional (`ol-2zfj.54`), so `./enumerate.js`'s `citationToSourceProvenance` builds a `location`
+ * with `page`/`section` only, `charRange` simply absent, rather than the `{ start: 0, end: 0 }`
+ * sentinel this comment used to describe. `../tier3-evidence/build.ts`'s sort comparator was the
+ * one other reader that dereferenced `.charRange.start` directly; it now sorts absent ranges
+ * after present ones.
  *
  * ===========================================================================
  * NEVER PDF DOCUMENT METADATA

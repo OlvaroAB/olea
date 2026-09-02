@@ -47,14 +47,27 @@ export interface CharRange {
  *    whole document is treated as one logical page. See `docx.ts`.
  *  - image: always `1` — a single image is a single page by construction.
  *
- * `charRange` is always relative to that page's own extracted text (or, for
- * DOCX where there is only one logical page, the whole document's
- * concatenated paragraph text) — precise enough that a citation can quote
- * the exact span, not just name the source and page.
+ * `charRange`, when present, is always relative to that page's own extracted
+ * text (or, for DOCX where there is only one logical page, the whole
+ * document's concatenated paragraph text) — precise enough that a citation
+ * can quote the exact span, not just name the source and page.
+ *
+ * `charRange` is optional: **absent means this location's grain is the page
+ * (or, with `section` set, the section) — never a fabricated zero-length or
+ * whole-page range.** Every extractor in this package still produces one for
+ * every unit it emits (a page's or block's real `[start, end)`), so absence
+ * is not something extraction itself does — it is for a `SourceLocation`
+ * built somewhere with no cached passage text an offset could index into
+ * (`../instrument/citation-store.ts`'s sidecar grain, `[D-181]`, is the
+ * motivating case: it stores `sourcePath`/`page?`/`section?` only, written
+ * long after the extraction pass that would have produced a real range is
+ * over). A reader that needs a range must treat `undefined` the same way it
+ * already treats `section: undefined` — an honest "no such precision here,"
+ * never guessed.
  */
 export interface SourceLocation {
   readonly page: number;
-  readonly charRange: CharRange;
+  readonly charRange?: CharRange;
   /**
    * The section this location falls within, when — and only when — the
    * source format carries a genuine, author-placed structural signal an
