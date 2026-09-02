@@ -66,19 +66,20 @@ Both blocks are in **canonical** form, so `serializeMcq(parse(block)) === block`
 
 - **A pool of five**, with `feedback:` and `id:` — the shape with room to rotate, and the two
   optional fields exercised.
-- **A pool of exactly four**, with neither optional field — the documented floor, and the
-  fallback the amendment names for when a fifth distractor cannot be produced: present the
-  four there are and shuffle them, rather than withdraw the feature. The suite asserts the
-  fixture covers both the boundary and above it, so "≥ 4" is never tested only from the safe
-  side.
+- **A pool of exactly two** (`[D-195]` lowered the floor from four to two), with neither optional
+  field — the documented floor, and the shuffle-only fallback the amendment names for a
+  genuinely short grounded pool: present the two there are and shuffle them, rather than
+  manufacture a third or withdraw the feature. The suite asserts the fixture covers both the
+  boundary and above it, so "≥ `MIN_DISTRACTOR_POOL`" is never tested only from the safe side.
 
 ## MCQ — what must fail to parse — `mcq-invalid.md`
 
 Eight blocks, seven distinct reasons, one reason each, every one reported with its span rather
 than dropped:
 
-1. **Three distractors** — `insufficient-distractors`. The case F2.15 exists for: sampling three
-   from three shows her the same options every time.
+1. **One distractor** — `insufficient-distractors`. Below the `[D-195]` floor of two: a single
+   grounded distractor is a true/false item, not an MCQ, and F2.15 exists to stop it presenting
+   as one.
 2. **No stem** — `missing-stem`.
 3. **No answer** — `missing-answer`.
 4. **Two answers** — `repeated-field`.

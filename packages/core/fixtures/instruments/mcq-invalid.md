@@ -9,15 +9,14 @@ report every one of them — with its reason and its location — rather than sk
 quiz item that vanishes silently is worse than one that never existed: she wrote it, she expects
 to see it, and nothing tells her why she does not.
 
-Three distractors. Sampling three from three shows her the same options every time, so this is
-not a slightly-worse MCQ, it is a different instrument wearing the name.
+One distractor. Below the pool floor (`[D-195]` lowered it from four to two), this is not a
+slightly-worse MCQ, it is a different instrument wearing the name — a single grounded distractor
+is a true/false item, not an MCQ.
 
 ```olea-mcq
 stem: Which of these is metamorphic rather than igneous?
 answer: Gneiss
 distractor: Basalt
-distractor: Granite
-distractor: Pumice
 ```
 
 No stem.

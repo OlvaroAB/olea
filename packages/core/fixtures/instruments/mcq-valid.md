@@ -24,10 +24,9 @@ stem: Which of these is metamorphic rather than igneous or sedimentary?
 answer: Gneiss
 distractor: Basalt
 distractor: Granite
-distractor: Breccia
-distractor: Pumice
 ```
 
-The floor case: exactly four distractors, no feedback, no id — the documented minimum an MCQ can
-be and still rotate, and the shape the amendment names as the fallback if pool generation proves
-weak.
+The floor case (`[D-195]`, lowered from four to two): exactly two distractors, no feedback, no
+id — the documented minimum an MCQ can be and still parse. It does not rotate — there is nothing
+left to sample from once the whole pool is shown — but it presents, shuffled, rather than being
+padded with an invented distractor or withheld outright (`mcq-present.ts`'s short-pool degrade).
