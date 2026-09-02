@@ -2,8 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Provenance } from '../extract/types.js';
 import { FolderSource } from '../vault/folder-source.js';
-import { extractConcepts, noteDefinition } from './extract.js';
+import { extractConcepts, foldReadAnchors, noteDefinition } from './extract.js';
+import type { ReadConcept } from './read.js';
+import { conceptRecordSize, readConceptSize } from './size.js';
+import type { ConceptRecord } from './types.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 
@@ -1095,5 +1099,113 @@ describe('extractConcepts — course-reference course attribution (F1.3 widened,
       'COURSEA',
       'COURSEB',
     ]);
+  });
+});
+
+describe('foldReadAnchors — folding a completed read’s passage anchors onto matching concept records (ol-2zfj.49, `[D-082]`)', () => {
+  function passage(
+    sourcePath: string,
+    start: number,
+    end: number,
+    extra: { readonly page?: number; readonly section?: string } = {},
+  ): Provenance {
+    return {
+      sourcePath,
+      location: {
+        page: extra.page ?? 1,
+        charRange: { start, end },
+        ...(extra.section !== undefined ? { section: extra.section } : {}),
+      },
+    };
+  }
+
+  function record(name: string, extra: Partial<ConceptRecord> = {}): ConceptRecord {
+    const sourcePaths = extra.sourcePaths ?? [];
+    return {
+      key: `key:${name}`,
+      name,
+      tier: 2,
+      courses: [],
+      sourcePaths,
+      size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
+      ...extra,
+    };
+  }
+
+  function readConcept(
+    name: string,
+    anchor: Provenance | undefined,
+    alsoIn: readonly Provenance[] = [],
+  ): ReadConcept {
+    const sourcePaths: readonly string[] = [];
+    return {
+      name,
+      aliases: [],
+      provenanceTier: 3,
+      courses: [],
+      anchor,
+      alsoIn,
+      sourcePaths,
+      size: readConceptSize({ anchor, alsoIn, sourcePaths }),
+    };
+  }
+
+  it('a concept minted from a read passage carries its anchor', () => {
+    const found = passage('Sediment provenance.md', 0, 40);
+    const folded = foldReadAnchors(
+      [record('Sediment provenance')],
+      [readConcept('Sediment provenance', found)],
+    );
+    expect(folded[0]?.anchor).toEqual(found);
+    expect(folded[0]?.alsoIn).toBeUndefined();
+  });
+
+  it('a second, distinct passage for the same concept lands in alsoIn, not a second anchor', () => {
+    const first = passage('Sediment provenance.md', 0, 40);
+    const second = passage('Lecture 2.md', 100, 140, { section: 'Weathering' });
+    const folded = foldReadAnchors(
+      [record('Sediment provenance')],
+      [readConcept('Sediment provenance', first, [second])],
+    );
+    expect(folded[0]?.anchor).toEqual(first);
+    expect(folded[0]?.alsoIn).toEqual([second]);
+  });
+
+  it('an identical location seen twice (two proposals corroborating to the same name) is folded once, never duplicated in alsoIn', () => {
+    const shared = passage('Sediment provenance.md', 0, 40);
+    const elsewhere = passage('Lecture 2.md', 100, 140);
+    const folded = foldReadAnchors(
+      [record('Sediment provenance')],
+      [
+        readConcept('Sediment provenance', shared),
+        readConcept('Sediment provenance', shared, [elsewhere]),
+      ],
+    );
+    expect(folded[0]?.anchor).toEqual(shared);
+    expect(folded[0]?.alsoIn).toEqual([elsewhere]);
+  });
+
+  it('no location means nothing is fabricated — anchor and alsoIn stay absent', () => {
+    const before = record('Sediment provenance');
+    const folded = foldReadAnchors([before], [readConcept('Sediment provenance', undefined)]);
+    expect(folded[0]).toEqual(before);
+    expect(folded[0]?.anchor).toBeUndefined();
+    expect(folded[0]?.alsoIn).toBeUndefined();
+  });
+
+  it('a concept record with no matching read concept is returned unchanged', () => {
+    const untouched = record('Bioturbation');
+    const folded = foldReadAnchors(
+      [untouched, record('Sediment provenance')],
+      [readConcept('Sediment provenance', passage('X.md', 0, 10))],
+    );
+    // Same object reference — no allocation for a record the fold does not touch.
+    expect(folded[0]).toBe(untouched);
+  });
+
+  it('with no readConcepts at all, every record is returned unchanged (the same reference)', () => {
+    const records = [record('Bioturbation'), record('Sediment provenance')];
+    const folded = foldReadAnchors(records, []);
+    expect(folded).toBe(records);
   });
 });

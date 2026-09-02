@@ -84,6 +84,7 @@
 
 import { buildOutline } from '../block/outline.js';
 import { parseDocument } from '../block/parse.js';
+import type { Provenance } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { extractWikilinks, readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
 import { OLEA_UID_KEY } from '../uid/stamp.js';
@@ -93,6 +94,11 @@ import { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './cours
 import { extractTier3Evidence } from './evidence.js';
 import type { ConceptKeyAnchor } from './key-store.js';
 import { resolveConceptKey } from './key-store.js';
+// Type-only, and deliberately the one edge of this module that reaches into `./read.js` — see
+// `foldReadAnchors`'s own doc comment for why the join lives here rather than in that module.
+// `isolatedModules` erases this import entirely, so it creates no runtime cycle with `read.ts`,
+// which imports `extractConcepts` from here at runtime.
+import type { ReadConcept } from './read.js';
 import { conceptRecordSize } from './size.js';
 import type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './types.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER, noteTitle } from './zettelkasten.js';
@@ -461,4 +467,85 @@ export async function extractConcepts(
   // for verbatim names to be treated as "the same, roughly" (R1/R2).
   records.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return records;
+}
+
+/**
+ * A `Provenance`'s identity for de-duplication purposes: same file, same page, same span, same
+ * section. Two anchors this function calls equal are the *same passage*, not merely similar ones
+ * — `[D-085]`'s single passage-identity scheme is exact by construction (a `charRange` names one
+ * span), so string equality on its parts is sufficient and no fuzzier compare is invented here.
+ */
+function provenanceKey(provenance: Provenance): string {
+  const { sourcePath, location } = provenance;
+  return `${sourcePath} ${location.page} ${location.charRange.start} ${location.charRange.end} ${location.section ?? ''}`;
+}
+
+/** Order-preserving de-duplication by `provenanceKey` — the first occurrence of a location wins. */
+function dedupeProvenance(passages: readonly Provenance[]): readonly Provenance[] {
+  const seen = new Set<string>();
+  const out: Provenance[] = [];
+  for (const passage of passages) {
+    const key = provenanceKey(passage);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(passage);
+  }
+  return out;
+}
+
+/**
+ * Fold `[D-082]`'s passage-grain provenance from a completed `./read.js` `readConcepts` pass onto
+ * the `ConceptRecord`s this module minted for the same names — the gap `ConceptRecord.anchor`'s
+ * own doc comment names, and `../registry/build.ts`'s module doc points at: "nothing yet folds a
+ * `ReadConcept.anchor` back onto the `ConceptRecord` for the same concept." This is that fold.
+ * (`ol-2zfj.49`, the first half — carrying a generation-time citation onto `VaultInstrumentRecord`
+ * is the second, deliberately separate, half; see `session/enumerate.ts`.)
+ *
+ * **Why this lives here, not in `read.ts` or at a call site.** `ConceptRecord` is this module's
+ * type to mint, and the join needs nothing `read.ts` owns beyond the already-public `ReadConcept`
+ * shape — pulling the fold into a third location would be the "intermediate document between a
+ * clause and its owner" mistake at code scale. A caller that has both a fresh `extractConcepts`
+ * result and a completed `readConcepts` result (none exists in production yet — that wiring is
+ * `ol-2zfj.49`'s second half) applies this afterwards: `foldReadAnchors(records, readConcepts)`.
+ *
+ * **Matched by exact `name` — R1/R2's verbatim-string identity, the same one `ConceptRecord` and
+ * `ReadConcept` both already use.** A `ReadConcept`'s `name` is `hers` when her convention won the
+ * match (`./read.js`'s `corroborate`) — exactly the `ConceptRecord.name` this function receives —
+ * so the join needs no fuzzy matching, casing fold or alias expansion of its own; those are R1/R2
+ * violations this module refuses everywhere else and would not become correct here.
+ *
+ * **Omit-never-fabricate.** A `ReadConcept` with no `anchor` — her convention named it, but no
+ * passage in this read introduced it (`./read.js`'s own doc on `ReadConcept.anchor`) — contributes
+ * nothing: the matching `ConceptRecord`'s `anchor`/`alsoIn` stay absent, exactly as every mint site
+ * in this module already leaves them. A record with no matching `ReadConcept` at all comes back
+ * unchanged (the same object reference, no new allocation) — most callers of `extractConcepts`
+ * pass no `readConcepts` at all, and this function must be a no-op for every record in that case.
+ *
+ * **Every passage counted once.** More than one `ReadConcept` can carry the same `name` — two
+ * distinct proposals across separate reader calls, both corroborating to the same convention. This
+ * function pools every anchor and `alsoIn` entry across all of them, de-duplicates identical
+ * locations (`dedupeProvenance`, above), and takes the first survivor as `anchor` with the rest as
+ * `alsoIn` — so a passage the read encountered twice never lands twice on the folded record.
+ */
+export function foldReadAnchors(
+  records: readonly ConceptRecord[],
+  readConcepts: readonly ReadConcept[],
+): readonly ConceptRecord[] {
+  const passagesByName = new Map<string, Provenance[]>();
+  for (const concept of readConcepts) {
+    if (concept.anchor === undefined) continue; // honestly un-anchored — nothing to fold
+    const passages = passagesByName.get(concept.name);
+    if (passages === undefined)
+      passagesByName.set(concept.name, [concept.anchor, ...concept.alsoIn]);
+    else passages.push(concept.anchor, ...concept.alsoIn);
+  }
+  if (passagesByName.size === 0) return records;
+
+  return records.map((record) => {
+    const passages = passagesByName.get(record.name);
+    if (passages === undefined) return record;
+    const [anchor, ...alsoIn] = dedupeProvenance(passages);
+    if (anchor === undefined) return record; // unreachable given the `continue` above, kept honest
+    return { ...record, anchor, ...(alsoIn.length > 0 ? { alsoIn } : {}) };
+  });
 }
