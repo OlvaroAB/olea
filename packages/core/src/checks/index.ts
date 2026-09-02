@@ -91,6 +91,11 @@ export {
   type ScheduleFreshnessTwinCase,
 } from './schedule-freshness-neutralised-twin.js';
 export {
+  checkSizeDenominatorFold,
+  type SizeDenominatorMeasured,
+  type SizeDenominatorScopeCase,
+} from './size-denominator.js';
+export {
   checkSupportLevelRecordShape,
   checkSupportOfferRateByDepth,
   type OfferRateBin,
