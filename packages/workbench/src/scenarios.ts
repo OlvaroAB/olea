@@ -65,6 +65,17 @@ export const REVIEW_STATES: readonly WorkbenchState[] = [
     note: 'A real `::` card from the fixture vault, offered by the composer.',
   },
   {
+    id: 'heading-offer-banner',
+    label: 'Q&A · front, with the heading-offer banner',
+    group: 'card',
+    note:
+      "F2.10's `[D-170]` heading-offer banner, mounted over the same Q&A front screen as " +
+      '`qa-front` — its own accept ("Create a card") and dismiss ("Not now") are bound to a ' +
+      "canned tracker (`main.ts`'s `buildHeadingOfferFixture`), never the real note-detection " +
+      'walk. Dismiss hides the banner for the rest of this mounted session — it is never re-' +
+      'offered without a fresh mount.',
+  },
+  {
     id: 'qa-reveal',
     label: 'Q&A · reveal',
     group: 'card',
@@ -335,6 +346,14 @@ export function buildScenario(options: BuildScenarioOptions): Scenario {
       };
 
     case 'qa-front':
+      return { deps: { ...base, queue: single(qa) }, keys: [], logged };
+
+    case 'heading-offer-banner':
+      // The banner itself is `main.ts`'s concern (`buildHeadingOfferFixture`,
+      // passed straight to `ReviewView`'s own constructor argument) — this
+      // state reuses `qa-front`'s exact deps and keys because the banner
+      // mounts over whatever screen has a current item, and Q&A front is the
+      // plainest one.
       return { deps: { ...base, queue: single(qa) }, keys: [], logged };
 
     case 'qa-reveal':

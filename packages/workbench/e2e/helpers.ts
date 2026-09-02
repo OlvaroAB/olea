@@ -19,6 +19,7 @@ export const REVIEW_STATES = [
   'loading',
   'empty',
   'qa-front',
+  'heading-offer-banner',
   'qa-reveal',
   'cloze-front',
   'cloze-reveal',
@@ -113,6 +114,8 @@ export const REGISTRY_STATES = [
   'registry-populated',
   'registry-empty',
   'registry-withdrawn-shown',
+  'registry-explain-back-history',
+  'registry-note-offer',
 ] as const;
 
 // F7's plugin surface (`ol-z6x2`) — see `plugin-surface-scenarios.ts` for the source of truth.

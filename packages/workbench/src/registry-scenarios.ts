@@ -28,11 +28,12 @@
  * its own corpus.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry, SoloLevel } from 'olea-contracts';
 import type { ConceptRecord, VaultInstrumentRecord } from 'olea-core';
 import { createFsrsScheduler } from 'olea-core';
 import type {
   BuildRegistryModelInput,
+  CourseOracleRanking,
   RegistryConceptEntry,
   RegistryInstrumentSummary,
   RegistryModel,
@@ -88,6 +89,30 @@ export const REGISTRY_STATES: readonly RegistryWorkbenchState[] = [
       "F8.5's prune-never-delete: one concept starts withdrawn. It is hidden by default and " +
       'reappears — never re-fetched, never re-derived, the SAME row — once "Show withdrawn" is ' +
       'checked. No control anywhere in this surface offers deletion.',
+  },
+  {
+    id: 'registry-explain-back-history',
+    label: 'One instrument with a contested history, one with none',
+    group: 'registry',
+    note:
+      "F8.4b's per-instrument explain-back history (`[D-175]`), rendered right on the " +
+      "instrument's own registry row. One instrument carries two real graded attempts at " +
+      'different SOLO depths — the current (later) one presently `[D-095]`-quarantined, shown ' +
+      'as "under re-review" rather than hidden or discounted. Its sibling instrument, same ' +
+      'concept, has never been explained back and renders no history section at all — "never ' +
+      'attempted" is omission, not an empty list.',
+  },
+  {
+    id: 'registry-note-offer',
+    label: 'The standing note offer — eligible, and gated by tier',
+    group: 'registry',
+    note:
+      "F4.2a's `[D-176]` standing note-offer affordance. One tier-2 concept clears all three " +
+      'conditions (accepted instrument, at least one scored review, top band of its own ' +
+      "course's F4.2 ranking) and shows the offer with both verbs, Create the note and Not " +
+      'now. A second concept clears the same three conditions in its own course but is tier ' +
+      '1 — already bound to an authored note — and never shows the offer at all, proving the ' +
+      'tier gate rather than the evidence gate is what is being tested.',
   },
 ];
 
@@ -165,12 +190,301 @@ const BETA_INSTRUMENT = instrument({
   blockId: 'syn-block-2',
 });
 
+// ---------------------------------------------------------------------------
+// F8.4b (`[D-175]`) — per-instrument explain-back history.
+// ---------------------------------------------------------------------------
+
+const BRIVANE = concept({
+  key: 'syn:concept-key:brivane',
+  name: 'syn:concept:brivane',
+});
+
+/** No graded explain-back attempt anywhere in `entries` — "an instrument with none". */
+const BRIVANE_INSTRUMENT_BARE = instrument({
+  instrumentId: 'qa:syn:concept-key:brivane:1',
+  conceptIds: ['syn:concept-key:brivane'],
+  blockId: 'syn-block-brivane-1',
+});
+
+/** Carries two graded explain-back attempts in `entries` below, the later one contested. */
+const BRIVANE_INSTRUMENT_HISTORY = instrument({
+  instrumentId: 'qa:syn:concept-key:brivane:2',
+  conceptIds: ['syn:concept-key:brivane'],
+  blockId: 'syn-block-brivane-2',
+});
+
+/** Fixture-only — never a real Worker call, matching `explainBackGradeEntry`'s own doc. */
+const EXPLAIN_BACK_FIXTURE_PROVENANCE = {
+  taskId: 'workbench.explain-back.fixture.v1',
+  promptVersion: 'wb-fixture',
+  modelId: 'workbench:fixture-model',
+} as const;
+
+/** One graded explain-back review record, hand-built the same way `session-scenarios.ts`'s `borrowedHistory` builds a plain scored review — see this file's own module doc on why fixture records rather than a vault walk. */
+function explainBackGradeEntry(input: {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly instrumentId: string;
+  readonly conceptIds: readonly string[];
+  readonly soloLevel: SoloLevel;
+}): ReviewLogEntry {
+  return {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: input.eventId,
+    timestamp: input.timestamp,
+    instrumentId: input.instrumentId,
+    instrumentType: 'explain-back',
+    conceptIds: [...input.conceptIds],
+    rating: null,
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['explain-back'],
+      planVersion: null,
+    },
+    explainBackGrade: {
+      soloLevel: input.soloLevel,
+      contentRef: `content:${input.eventId}`,
+      revisionOf: null,
+      artifactProvenance: EXPLAIN_BACK_FIXTURE_PROVENANCE,
+    },
+  } as ReviewLogEntry;
+}
+
+/** An OPEN `[D-095]` grade dispute on one instrument — never resolved, so `quarantinedGradeInstrumentIds` keeps marking its current attempt contested. */
+function openGradeDispute(input: {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly instrumentId: string;
+  readonly conceptIds: readonly string[];
+}): DisputeLogRecord {
+  return {
+    schemaVersion: 5,
+    kind: 'dispute',
+    eventId: input.eventId,
+    timestamp: input.timestamp,
+    claimKind: 'grade',
+    claimRendering: 'explain-back-grade',
+    conceptIds: [...input.conceptIds],
+    instrumentId: input.instrumentId,
+    evidenceBasis: 'syn:evidence-basis:brivane-history-1',
+    effect: 'quarantined',
+  };
+}
+
+const BRIVANE_HISTORY_ENTRIES: readonly ReviewLogEntry[] = [
+  explainBackGradeEntry({
+    eventId: 'wb-explain-back-brivane-1',
+    timestamp: '2027-01-05T09:00:00-08:00',
+    instrumentId: BRIVANE_INSTRUMENT_HISTORY.instrumentId,
+    conceptIds: ['syn:concept-key:brivane'],
+    soloLevel: 'unistructural',
+  }),
+  explainBackGradeEntry({
+    eventId: 'wb-explain-back-brivane-2',
+    timestamp: '2027-01-10T09:00:00-08:00',
+    instrumentId: BRIVANE_INSTRUMENT_HISTORY.instrumentId,
+    conceptIds: ['syn:concept-key:brivane'],
+    soloLevel: 'relational',
+  }),
+];
+
+const BRIVANE_DISPUTES: readonly DisputeLogRecord[] = [
+  openGradeDispute({
+    eventId: 'wb-dispute-brivane-1',
+    timestamp: '2027-01-11T09:00:00-08:00',
+    instrumentId: BRIVANE_INSTRUMENT_HISTORY.instrumentId,
+    conceptIds: ['syn:concept-key:brivane'],
+  }),
+];
+
+// ---------------------------------------------------------------------------
+// F4.2a (`[D-176]`) — the standing note-offer affordance, gated by tier.
+// ---------------------------------------------------------------------------
+
+/** Tier 2, eligible: an accepted instrument, a scored review below, and a top-band ranking. */
+const WORVENN = concept({
+  key: 'syn:concept-key:worvenn',
+  name: 'syn:concept:worvenn',
+  courses: ['syn:course:vantrel'],
+  sourcePaths: ['01 Courses/syn:course:vantrel/Week 5.md'],
+});
+
+/** Same evidence shape as `WORVENN`, in its own course — but tier 1 (already has an authored note), so `[D-176]`'s gate must stay closed regardless. */
+const CAPRIST = concept({
+  key: 'syn:concept-key:caprist',
+  name: 'syn:concept:caprist',
+  tier: 1,
+  courses: ['syn:course:melspar'],
+  sourcePaths: ['01 Courses/syn:course:melspar/Week 5.md'],
+});
+
+const WORVENN_INSTRUMENT = instrument({
+  instrumentId: 'qa:syn:concept-key:worvenn:1',
+  conceptIds: ['syn:concept-key:worvenn'],
+  notePath: '01 Courses/syn:course:vantrel/Week 5.md',
+  noteTitle: 'Week 5',
+  blockId: 'syn-block-worvenn-1',
+});
+
+const CAPRIST_INSTRUMENT = instrument({
+  instrumentId: 'qa:syn:concept-key:caprist:1',
+  conceptIds: ['syn:concept-key:caprist'],
+  courses: ['syn:course:melspar'],
+  notePath: '01 Courses/syn:course:melspar/Week 5.md',
+  noteTitle: 'Week 5',
+  blockId: 'syn-block-caprist-1',
+});
+
+/** "Has been reviewed at least once" — a plain scored (never explain-back) review. */
+function scoredReviewEntry(input: {
+  readonly eventId: string;
+  readonly instrumentId: string;
+  readonly conceptIds: readonly string[];
+}): ReviewLogEntry {
+  return {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: input.eventId,
+    timestamp: '2027-01-08T09:00:00-08:00',
+    instrumentId: input.instrumentId,
+    instrumentType: 'qa',
+    conceptIds: [...input.conceptIds],
+    rating: 'good',
+    wasUnsure: false,
+    durationMs: 12_000,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  } as ReviewLogEntry;
+}
+
+const NOTE_OFFER_ENTRIES: readonly ReviewLogEntry[] = [
+  scoredReviewEntry({
+    eventId: 'wb-scored-worvenn-1',
+    instrumentId: WORVENN_INSTRUMENT.instrumentId,
+    conceptIds: ['syn:concept-key:worvenn'],
+  }),
+  scoredReviewEntry({
+    eventId: 'wb-scored-caprist-1',
+    instrumentId: CAPRIST_INSTRUMENT.instrumentId,
+    conceptIds: ['syn:concept-key:caprist'],
+  }),
+];
+
+/** "Sits in the top band" — one ranked entry, alone, in a list of one: `ceil(1/3)` floors to 1, so rank 1 of 1 always qualifies (`note-offer.ts`'s `isInTopBand`). */
+function topBandRanking(input: {
+  readonly course: string;
+  readonly conceptKey: string;
+  readonly conceptName: string;
+}): CourseOracleRanking {
+  const assessmentPath = `02 Assignments/syn:assessment:${input.conceptKey}.md`;
+  return {
+    course: input.course,
+    status: 'ranked',
+    ranked: [
+      {
+        conceptName: input.conceptName,
+        conceptKey: input.conceptKey,
+        course: input.course,
+        rank: 1,
+        priorityScore: 1,
+        factors: {
+          citations: [
+            {
+              sourcePath: assessmentPath,
+              questionLabel: 'Q1',
+              questionText: 'syn:question-text:fixture-1',
+              provenance: { sourcePath: assessmentPath, location: { page: 1 } },
+            },
+          ],
+          distinctSourceCount: 1,
+          contributions: [
+            {
+              assessmentPath,
+              yieldRank: 1,
+              yieldScore: 1,
+              confidence: 1,
+              assessmentWeightKnown: true,
+              assessmentWeightScore: 1,
+              daysUntilDue: 14,
+              examProximityScore: 1,
+              evidenceStrength: 1,
+              contribution: 1,
+            },
+          ],
+          preMasteryScore: 1,
+          masteryState: 'unknown',
+          masteryNeedWeight: 1,
+          priorityScore: 1,
+        },
+        citations: [
+          {
+            sourcePath: assessmentPath,
+            questionLabel: 'Q1',
+            questionText: 'syn:question-text:fixture-1',
+            provenance: { sourcePath: assessmentPath, location: { page: 1 } },
+          },
+        ],
+        reasoning: 'syn:reasoning:top-band-fixture',
+      },
+    ],
+  };
+}
+
+const NOTE_OFFER_RANKINGS: readonly CourseOracleRanking[] = [
+  topBandRanking({
+    course: 'syn:course:vantrel',
+    conceptKey: 'syn:concept-key:worvenn',
+    conceptName: 'syn:concept:worvenn',
+  }),
+  topBandRanking({
+    course: 'syn:course:melspar',
+    conceptKey: 'syn:concept-key:caprist',
+    conceptName: 'syn:concept:caprist',
+  }),
+];
+
 function inputFor(stateId: string): BuildRegistryModelInput {
   if (stateId === 'registry-empty') {
     return {
       concepts: [],
       instrumentRecords: [],
       entries: [],
+      scheduler,
+      now: NOW,
+      holdingCut: HOLDING_CUT,
+      overrides: EMPTY_REGISTRY_OVERRIDES,
+      suspendedInstrumentIds: new Set(),
+    };
+  }
+  if (stateId === 'registry-explain-back-history') {
+    return {
+      concepts: [BRIVANE],
+      instrumentRecords: [BRIVANE_INSTRUMENT_BARE, BRIVANE_INSTRUMENT_HISTORY],
+      entries: BRIVANE_HISTORY_ENTRIES,
+      disputes: BRIVANE_DISPUTES,
+      scheduler,
+      now: NOW,
+      holdingCut: HOLDING_CUT,
+      overrides: EMPTY_REGISTRY_OVERRIDES,
+      suspendedInstrumentIds: new Set(),
+    };
+  }
+  if (stateId === 'registry-note-offer') {
+    return {
+      concepts: [WORVENN, CAPRIST],
+      instrumentRecords: [WORVENN_INSTRUMENT, CAPRIST_INSTRUMENT],
+      entries: NOTE_OFFER_ENTRIES,
+      courseRankings: NOTE_OFFER_RANKINGS,
       scheduler,
       now: NOW,
       holdingCut: HOLDING_CUT,

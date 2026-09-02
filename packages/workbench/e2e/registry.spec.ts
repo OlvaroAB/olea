@@ -15,6 +15,14 @@
  *   - rename mutates the displayed name
  *   - prune withdraws, never deletes — no "Delete" string anywhere on this surface
  *   - the honest empty state
+ *
+ * F8.4b (`[D-175]`) and F4.2a (`[D-176]`), added this tranche (`ol-z6x2` [WB-2]):
+ *   - an instrument's explain-back history: two attempts oldest-first, the current one
+ *     marked "under re-review" while `[D-095]`-quarantined; a sibling instrument with no
+ *     history renders no section at all
+ *   - the standing note-offer: an eligible tier-2 concept shows both verbs; a tier-1
+ *     concept with the same instrument/review/ranking evidence never shows it; accept
+ *     calls through to `RegistryViewDeps.acceptNoteOffer`, decline removes it locally
  */
 import { expect, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -125,4 +133,88 @@ test('registry: no "Delete" AFFORDANCE (button/action) appears anywhere on this 
     .locator('.olea-registry-root button, .olea-registry-root [role="button"]')
     .allInnerTexts();
   for (const label of controlLabels) expect(label).not.toMatch(/delete/i);
+});
+
+// ---------------------------------------------------------------------------
+// F8.4b (`[D-175]`) — per-instrument explain-back history.
+// ---------------------------------------------------------------------------
+
+test('registry-explain-back-history: an instrument with two graded attempts shows both, oldest first, the current one marked under re-review', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
+  const withHistory = frame(page).locator(
+    '[data-olea-instrument-id="qa:syn:concept-key:brivane:2"]',
+  );
+  const historyRows = withHistory.locator('.olea-registry-explain-back-history li');
+  await expect(historyRows).toHaveCount(2);
+
+  // Oldest first: the earlier, shallower attempt is never marked contested.
+  await expect(historyRows.nth(0)).toContainText('with one point made');
+  await expect(historyRows.nth(0)).not.toContainText('under re-review');
+
+  // The later, current attempt is presently `[D-095]`-quarantined.
+  await expect(historyRows.nth(1)).toContainText('with the points tied together');
+  await expect(historyRows.nth(1)).toContainText('under re-review');
+  await expect(withHistory.locator('.olea-registry-explain-back-contested')).toHaveCount(1);
+});
+
+test('registry-explain-back-history: an instrument that has never been explained back shows no history section at all', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
+  const bare = frame(page).locator('[data-olea-instrument-id="qa:syn:concept-key:brivane:1"]');
+  await expect(bare.locator('.olea-registry-explain-back-history')).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// F4.2a (`[D-176]`) — the standing note-offer affordance, gated by tier.
+// ---------------------------------------------------------------------------
+
+test('registry-note-offer: an eligible tier-2 concept shows the offer with both verbs', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-note-offer', 'obsidian-dark');
+  const eligible = rows(page).filter({ hasText: 'syn:concept:worvenn' });
+  const offer = eligible.locator('.olea-registry-note-offer');
+  await expect(offer).toContainText('This concept is carrying real weight');
+  await expect(offer.getByRole('button', { name: 'Create the note' })).toBeVisible();
+  await expect(offer.getByRole('button', { name: 'Not now' })).toBeVisible();
+});
+
+test('registry-note-offer: a tier-1 concept never shows the offer, even given the same instrument/review/ranking evidence', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-note-offer', 'obsidian-dark');
+  const tierOne = rows(page).filter({ hasText: 'syn:concept:caprist' });
+  await expect(tierOne.locator('.olea-registry-note-offer')).toHaveCount(0);
+});
+
+test('registry-note-offer: accepting the offer calls through to RegistryViewDeps.acceptNoteOffer', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-note-offer', 'obsidian-dark');
+  const eligible = rows(page).filter({ hasText: 'syn:concept:worvenn' });
+  await eligible
+    .locator('.olea-registry-note-offer')
+    .getByRole('button', { name: 'Create the note' })
+    .click();
+  await expect(page.locator('[data-wb-inspector]')).toContainText(
+    'Note-offer accepted for: syn:concept:worvenn',
+  );
+});
+
+test('registry-note-offer: declining removes the offer locally, and calls no port at all', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-note-offer', 'obsidian-dark');
+  const eligible = rows(page).filter({ hasText: 'syn:concept:worvenn' });
+  const offer = eligible.locator('.olea-registry-note-offer');
+  await offer.getByRole('button', { name: 'Not now' }).click();
+  await expect(offer).toHaveCount(0);
+  // The row itself, and its evidence, are untouched — only the offer section is gone.
+  await expect(eligible.locator('h3')).toHaveText('syn:concept:worvenn');
+  await expect(page.locator('[data-wb-inspector]')).toContainText(
+    'No note-offer accept yet this state.',
+  );
 });

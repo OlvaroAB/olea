@@ -92,7 +92,14 @@ import {
   type WorkbenchPersonaId,
   writePersonaHistory,
 } from './persona/history.js';
-import { ReviewSession, ReviewView, TodayView } from './plugin-bridge.js';
+import {
+  HEADING_OFFER_PROMPT_TEXT,
+  type HeadingOfferAcceptOutcome,
+  type HeadingOfferBannerTracker,
+  ReviewSession,
+  ReviewView,
+  TodayView,
+} from './plugin-bridge.js';
 import {
   buildPluginSurfaceScenario,
   findPluginSurfaceState,
@@ -1239,7 +1246,21 @@ async function main(): Promise<void> {
       // session over a vault is not (see `review/view.ts`'s
       // `ReviewSessionProvider`). The workbench already holds a fully built
       // session for the scenario it is mounting, so its provider is the identity.
-      const view = new ReviewView(makeLeaf(), () => session);
+      //
+      // F2.10's heading-offer banner (`[D-170]`) is wired ONLY for its own
+      // dedicated state — see `buildHeadingOfferFixture`'s own doc for why a
+      // canned tracker, and why not on every state.
+      const headingOffer =
+        stateId === 'heading-offer-banner' ? buildHeadingOfferFixture() : undefined;
+      const view = new ReviewView(
+        makeLeaf(),
+        () => session,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        headingOffer?.tracker,
+      );
       host.appendChild(view.containerEl);
       mounted = { view };
 
@@ -1264,9 +1285,92 @@ async function main(): Promise<void> {
         boundary,
         scenario,
       });
+      if (headingOffer) {
+        // Reactive, not one-shot: accept/dismiss happen later, from a real
+        // browser click well after this function has returned — see
+        // `buildHeadingOfferFixture`'s own `onChange` doc. `offer` is a
+        // fresh local binding (rather than `headingOffer` itself) so this
+        // closure keeps TypeScript's narrowing to non-`undefined`.
+        const offer = headingOffer;
+        const noteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+        function renderHeadingOfferNote(): void {
+          noteEl.setText(
+            offer.accepts.length === 0
+              ? 'No heading-offer accept yet this state.'
+              : `Heading-offer accepted: ${offer.accepts.map((o) => o.kind).join(', ')}.`,
+          );
+        }
+        offer.onChange(renderHeadingOfferNote);
+        renderHeadingOfferNote();
+      }
       if (stateId !== 'loading') {
         document.documentElement.setAttribute('data-wb-ready', 'true');
       }
+    }
+
+    /**
+     * F2.10's heading-offer banner (`[D-170]`/`[GEN-2]`) — a CANNED
+     * `HeadingOfferBannerTracker`, never the real `createHeadingOfferForItem`'s
+     * vault-read-and-detect machinery (`packages/plugin/src/review/heading-
+     * offer-wiring.spec.ts` already covers detection fully, Obsidian-free,
+     * under Vitest). This proves the SCREEN — `ReviewView` mounts the banner
+     * on the current item, the two buttons are wired to the two verbs, and
+     * dismiss really does hide it for the rest of this mounted session — the
+     * same "prove the screen, not the walk" split `registry-scenarios.ts`'s
+     * own module doc states for its surface.
+     *
+     * `bannerFor` is synchronous and never calls `onUpdate` itself: unlike
+     * the real tracker's own async note-read-then-check, this one already
+     * knows its answer (the `dismissed` flag) the instant it is asked, so
+     * there is nothing to resolve later that would need a follow-up
+     * re-render — `ReviewView` already calls its own `render()` right after
+     * `state.accept()`/`state.dismiss()` resolve.
+     *
+     * `onChange` is a setter rather than a constructor argument because the
+     * inspector element it notifies is created AFTER this fixture (and the
+     * `ReviewView` it feeds) — `mountReview` calls it once its own note
+     * element exists, and every later accept/dismiss (a real, later browser
+     * click) fires it from inside this closure.
+     */
+    function buildHeadingOfferFixture(): {
+      readonly tracker: HeadingOfferBannerTracker;
+      readonly accepts: readonly HeadingOfferAcceptOutcome[];
+      onChange(callback: () => void): void;
+    } {
+      let dismissed = false;
+      const accepts: HeadingOfferAcceptOutcome[] = [];
+      let notify: () => void = () => {};
+      const tracker: HeadingOfferBannerTracker = {
+        bannerFor(item) {
+          if (item === null || dismissed) return null;
+          return {
+            promptText: HEADING_OFFER_PROMPT_TEXT,
+            async accept(): Promise<HeadingOfferAcceptOutcome> {
+              const outcome: HeadingOfferAcceptOutcome = {
+                kind: 'drafted',
+                draftIds: ['wb:heading-offer-draft-1'],
+              };
+              accepts.push(outcome);
+              // `[D-170]`'s own "accepting also dismisses" — see
+              // `heading-offer-wiring.ts`'s module doc.
+              dismissed = true;
+              notify();
+              return outcome;
+            },
+            dismiss(): void {
+              dismissed = true;
+              notify();
+            },
+          };
+        },
+      };
+      return {
+        tracker,
+        accepts,
+        onChange(callback: () => void): void {
+          notify = callback;
+        },
+      };
     }
 
     async function mountExplain(stateId: string): Promise<void> {
@@ -1427,6 +1531,7 @@ async function main(): Promise<void> {
 
       const originalEditInstrument = scenario.deps.editInstrument.bind(scenario.deps);
       const originalOpenSourceLocation = scenario.deps.openSourceLocation.bind(scenario.deps);
+      const originalAcceptNoteOffer = scenario.deps.acceptNoteOffer.bind(scenario.deps);
       const registryDeps = {
         ...scenario.deps,
         editInstrument: async (instrumentSummary: Parameters<typeof originalEditInstrument>[0]) => {
@@ -1435,6 +1540,10 @@ async function main(): Promise<void> {
         },
         openSourceLocation: async (location: Parameters<typeof originalOpenSourceLocation>[0]) => {
           await originalOpenSourceLocation(location);
+          renderRegistryNotes();
+        },
+        acceptNoteOffer: async (entry: Parameters<typeof originalAcceptNoteOffer>[0]) => {
+          await originalAcceptNoteOffer(entry);
           renderRegistryNotes();
         },
       };
@@ -1451,6 +1560,7 @@ async function main(): Promise<void> {
       if (stateId !== 'registry-empty') renderSyntheticProvisionalBadge(inspector);
       const editNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
       const sourceNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+      const noteOfferNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
       function renderRegistryNotes(): void {
         editNoteEl.setText(
           scenario.editHandoffs.length === 0
@@ -1461,6 +1571,16 @@ async function main(): Promise<void> {
           scenario.sourceOpens.length === 0
             ? 'No "Open source" click yet this state.'
             : `Source location opened: ${scenario.sourceOpens.map((l) => l.sourcePath).join(', ')}`,
+        );
+        // F4.2a's `[D-176]` accept half — proves the click reached
+        // `RegistryViewDeps.acceptNoteOffer`, never that anything was
+        // written (this package has no vault to write to). Decline is
+        // local-only DOM removal (`RegistryView.renderNoteOffer`'s own
+        // doc) and deliberately calls no port, so it leaves no trace here.
+        noteOfferNoteEl.setText(
+          scenario.noteOfferAccepts.length === 0
+            ? 'No note-offer accept yet this state.'
+            : `Note-offer accepted for: ${scenario.noteOfferAccepts.map((e) => e.displayName).join(', ')}`,
         );
       }
       renderRegistryNotes();

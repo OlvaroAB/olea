@@ -42,6 +42,20 @@ export {
 // what the workbench's own oracle driver takes from `olea-core` to feed it.
 export type { GapViewDeps, GapViewState } from '../../plugin/src/gap/view.js';
 export { GapView, VIEW_TYPE_OLEA_GAP } from '../../plugin/src/gap/view.js';
+export type { HeadingOfferAcceptOutcome } from '../../plugin/src/review/heading-offer.js';
+// F2.10's heading-offer banner (`[D-170]`, `ol-z6x2` [WB-2] this tranche) — the two files
+// `renderHeadingOfferBannerIfAny` (`review/view.ts`) actually consumes. Neither imports
+// `obsidian`, so this is a plain type/logic bridge, same posture `queue-adapter.ts`'s own
+// export just above already has.
+export {
+  HEADING_OFFER_ACCEPT_LABEL,
+  HEADING_OFFER_DISMISS_LABEL,
+  HEADING_OFFER_PROMPT_TEXT,
+} from '../../plugin/src/review/heading-offer.js';
+export type {
+  HeadingOfferBannerState,
+  HeadingOfferBannerTracker,
+} from '../../plugin/src/review/heading-offer-wiring.js';
 // `QA_CLOZE_RATING_ORDER` moved here from `review/rating.ts`, which is gone:
 // its MCQ mapping was a documented provisional duplicate of `olea-core`'s
 // `mapMcqRating`, and the plugin now calls core's directly. Anything in this

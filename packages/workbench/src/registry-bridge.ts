@@ -14,6 +14,7 @@
 
 export type {
   BuildRegistryModelInput,
+  CourseOracleRanking,
   RegistryConceptEntry,
   RegistryInstrumentSummary,
   RegistryModel,

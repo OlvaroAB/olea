@@ -215,10 +215,10 @@ describe('the composer, not a synthesiser — real fixture instruments in, a ses
 });
 
 describe('scenarios — every advertised state is reachable', () => {
-  it('builds a scenario for each of the twelve states in the nav', async () => {
+  it('builds a scenario for each of the thirteen states in the nav', async () => {
     const queue = await composeFixtureSession();
     const scheduler = createFsrsScheduler();
-    expect(REVIEW_STATES).toHaveLength(12);
+    expect(REVIEW_STATES).toHaveLength(13);
     for (const state of REVIEW_STATES) {
       const scenario = buildScenario({ vault: memory, scheduler, queue, stateId: state.id });
       expect(scenario.deps.queue, state.id).toBeDefined();
