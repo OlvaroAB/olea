@@ -79,26 +79,36 @@ export interface RetrieveOptions {
   readonly minCosineScore?: number;
   readonly rerank?: RerankProvider;
   /**
-   * Forwarded to `assembleGroundedContext` (`ol-azo7`). Defaults to `false` —
-   * see that option's own doc for why turning this on is a separate,
+   * Forwarded to `assembleGroundedContext` when `band` is unset, or to
+   * `assembleBandedGroundedContext` (as the band's additional lower-bar
+   * veto, `[D-192]`) when `band` is set — see `band`'s own doc below for how
+   * the two compose. Defaults to `false` — see the option's own doc on
+   * `AssembleGroundedContextOptions` for why turning this on is a separate,
    * David-only ratification, not implied by it existing. When `true`, this
    * function computes `CompositeGroundingSignals` (`compositeSignals.ts`)
    * itself, since it is the layer that already holds `chunks` and
-   * `embeddings` — `assembleGroundedContext` never does. Left uncomputed
-   * (and the extra corpus-wide cosine/lexicon pass skipped entirely) when
-   * this is not set.
+   * `embeddings` — neither `assembleGroundedContext` nor
+   * `assembleBandedGroundedContext` does. Left uncomputed (and the extra
+   * corpus-wide cosine/lexicon pass skipped entirely) when neither this nor
+   * `band` is set.
    */
   readonly requireComposite?: boolean;
   readonly compositeThresholds?: CompositeGroundingThresholds;
   /**
    * `[D-089]`'s two-threshold band. Supplying it switches this function from
-   * the single-gate mechanism to the band path
-   * (`resolveGroundedContext`), and **takes precedence over
-   * `requireComposite`** — the two are different answers to the same question
-   * and running both would apply two operating points at once. There is no
-   * default: an absent `band` means the band is not in force, which is the
-   * only safe reading while its bars are unratified (see
+   * the single-gate mechanism to the band path (`resolveGroundedContext`).
+   * There is no default: an absent `band` means the band is not in force,
+   * which is the only safe reading while its bars are unratified (see
    * `PROVISIONAL_GROUNDING_BAND`).
+   *
+   * **Composes with `requireComposite` rather than being mutually exclusive
+   * with it (`[D-192]`, `ol-0r92.39`).** Set both to run the composite as an
+   * ADDITIONAL lower-bar veto ahead of band classification — see
+   * `assembleBandedGroundedContext`'s doc: the composite can only refuse,
+   * never grant a pass, so it never substitutes for the band's own bars or
+   * the judge. (Before `[D-192]`, `band` took precedence and the two were
+   * never combined; that history is worth knowing if you meet code or a
+   * comment still describing them as exclusive.)
    *
    * The composite signals the band is placed on are computed here for the same
    * reason `requireComposite` computes them here — this is the layer holding
@@ -162,6 +172,14 @@ export async function retrieve(
       ...(options.minCosineScore !== undefined ? { minCosineScore: options.minCosineScore } : {}),
       ...(options.judge !== undefined ? { judge: options.judge } : {}),
       ...(options.judgeTimeoutMs !== undefined ? { judgeTimeoutMs: options.judgeTimeoutMs } : {}),
+      // `[D-192]`: composed with the band, not replaced by it — see
+      // `AssembleBandedGroundedContextOptions`'s `requireComposite` doc.
+      ...(options.requireComposite !== undefined
+        ? { requireComposite: options.requireComposite }
+        : {}),
+      ...(options.compositeThresholds !== undefined
+        ? { compositeThresholds: options.compositeThresholds }
+        : {}),
       ...(compositeSignals !== undefined ? { compositeSignals } : {}),
     });
   }

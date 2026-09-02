@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { CompositeGroundingSignals } from './compositeSignals.js';
+import {
+  type CompositeGroundingSignals,
+  RECOMMENDED_COMPOSITE_THRESHOLDS,
+} from './compositeSignals.js';
 import { cosinePercentile } from './cosine.js';
 import {
   assembleBandedGroundedContext,
@@ -656,5 +659,104 @@ describe('INV-5 — the adversarial empty-context suite runs against the band pa
   it('N-013: the band is load-bearing — the same input grounds without it', () => {
     const hits = [hit({ cosineScore: MEASURED.unrelated.p90, keywordScore: 1 })];
     expect(assembleGroundedContext(hits).status).toBe('grounded');
+  });
+});
+
+// -----------------------------------------------------------------------------------------------
+// `[D-192]` (`ol-egov.75` / `ol-0r92.39`) — the composite composes with the band as an ADDITIONAL
+// lower-bar veto, checked before band classification runs, rather than the two mechanisms being
+// mutually exclusive. Scenarios: features/F4-oracle.md, the composite-veto addition to C4.7 /
+// `[D-089]`'s band block.
+// -----------------------------------------------------------------------------------------------
+describe('[D-192] the composite composes with the band as an additional lower-bar veto (ol-0r92.39)', () => {
+  it('RECOMMENDED_COMPOSITE_THRESHOLDS matches the ratified operating point', () => {
+    expect(RECOMMENDED_COMPOSITE_THRESHOLDS).toEqual({ lex: 0.18, top1: 0.545, marginP99: 0.055 });
+  });
+
+  it('vetoes an ABOVE-band query before band classification ever runs — a query the band alone would have GROUNDED outright', () => {
+    const decision = assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+      // top1 clears both the band's upper bar and the composite's own top1
+      // sub-threshold; lexBest alone is what fails the composite here, to
+      // prove the veto is independent of — and checked ahead of — the tier
+      // the band's own numbers would have produced.
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1, 0.05),
+    });
+    expect(decision).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+  });
+
+  it('vetoes an IN-band query before the judge is ever consulted', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+      compositeSignals: bandSignals(IN_BAND_TOP1, 0.05),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'below-composite-threshold' });
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it('leaves band-only behaviour byte-identical when requireComposite is unset — the pre-[D-192] default posture', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      // requireComposite intentionally NOT set — the same signals that veto
+      // above would fail the composite's lex clause if it ran.
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1, 0.05),
+    });
+    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it('the above-band path is unchanged when the composite ALSO clears every clause — grounds directly, no judge consulted', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1), // default lexBest 0.4 clears 0.18
+    });
+    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it('the in-band, judge-supported path is unchanged when the composite ALSO clears every clause', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(1);
+  });
+
+  it('a composite veto reads as an "insufficient notes" reason, never a transient one', () => {
+    // Same reason family assertion `[D-089] §5`'s block makes for `below-band`
+    // and `judge-rejected` — a composite veto is "checked and found nothing,"
+    // categorically different from `composite-check-unavailable` /
+    // `judge-unavailable`, which mean the check never ran at all.
+    const decision = assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1, 0.05),
+    });
+    expect(decision).toMatchObject({ reason: 'below-composite-threshold' });
+    if (decision.status === 'refused') {
+      expect(['composite-check-unavailable', 'judge-unavailable']).not.toContain(decision.reason);
+    }
   });
 });

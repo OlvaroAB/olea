@@ -18,12 +18,27 @@
  * ===========================================================================
  * This call site now passes `band: D112_GROUNDING_BAND`
  * (`packages/core/src/retrieval/operating-point.ts`) and a
- * `WorkerGroundingJudge` (`./workerGroundingJudge.js`) to `retrieve()` in
- * place of `requireComposite`/`compositeThresholds` — `retrieve()`'s own doc
- * says a `band` takes precedence over `requireComposite` for exactly this
- * reason, so the two are never both in force. `retrieve()` already threads
- * `request.conceptName` through as the band's `query` for escalation; this
- * call site does not need to repeat it.
+ * `WorkerGroundingJudge` (`./workerGroundingJudge.js`) to `retrieve()`.
+ * `retrieve()` already threads `request.conceptName` through as the band's
+ * `query` for escalation; this call site does not need to repeat it.
+ *
+ * ===========================================================================
+ * THE COMPOSITE LOWER-BAR VETO (`[D-192]` / `ol-0r92.39`)
+ * ===========================================================================
+ * This call site ALSO passes `requireComposite: true` with
+ * `compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS`
+ * (`packages/core/src/retrieval/compositeSignals.ts`), composed with the band
+ * above rather than a replacement for it — `retrieve()`'s own doc on `band`
+ * says the two now compose per `[D-192]`, superseding the earlier
+ * mutually-exclusive posture this comment used to describe. The composite
+ * runs as an ADDITIONAL veto ahead of `D112_GROUNDING_BAND`'s own
+ * classification: a query whose composite signals miss the ratified lower
+ * bar refuses (`below-composite-threshold`) before the band or the judge
+ * ever sees it, at the measured point 14/20 refused, 0/40 false refusals
+ * (`eval/THRESHOLDS.md`'s composite section, `olea-service`, private).
+ * Veto-only, provisional: it can never grant a pass on its own, so a query
+ * the composite does not refuse still goes through `D112_GROUNDING_BAND`'s
+ * band/judge path exactly as before this bead.
  *
  * ===========================================================================
  * PERSONALIZATION CONTEXT (`[D-008]`, F3.8/F3.9, `ol-p3t07c`)
@@ -102,6 +117,7 @@ import {
   assembleVoiceExemplars,
   D112_GROUNDING_BAND,
   type GroundingRefusalReason,
+  RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
   retrieve,
 } from 'olea-core';
@@ -156,7 +172,7 @@ export interface DraftQuizCardsRequest {
 export type DraftQuizCardsResult =
   | {
       readonly status: 'refused';
-      /** Which `GroundingRefusalReason` fired — since the band switch this includes `'below-band'`, `'judge-rejected'` and `'judge-unavailable'` alongside the single-gate reasons. `ol-riwn`'s transient reasons (`'composite-check-unavailable'`, `'judge-unavailable'`) distinguish "we could not check" from "checked and found nothing," and a caller surfacing this to her must keep that distinction rather than collapsing both into one "your notes don't cover this" message ([D-089]). */
+      /** Which `GroundingRefusalReason` fired — since the band switch this includes `'below-band'`, `'judge-rejected'` and `'judge-unavailable'` alongside the single-gate reasons, and since `[D-192]`'s composite veto this also includes `'below-composite-threshold'` (the composite's own lower-bar refusal, reached before the band or the judge ever run). `ol-riwn`'s transient reasons (`'composite-check-unavailable'`, `'judge-unavailable'`) distinguish "we could not check" from "checked and found nothing," and a caller surfacing this to her must keep that distinction rather than collapsing both into one "your notes don't cover this" message ([D-089]). */
       readonly reason: GroundingRefusalReason;
     }
   | {
@@ -189,9 +205,10 @@ export interface DraftQuizCardsDeps {
 
 /**
  * Drafts `quiz.generate.v1` questions for one concept, refusing before any
- * generative call unless `request.conceptName` clears `[D-089]`'s
- * two-threshold band against her indexed material, at the operating point
- * `[D-112]` ratified.
+ * generative call unless `request.conceptName` clears BOTH: `[D-192]`'s
+ * composite lower-bar veto (`RECOMMENDED_COMPOSITE_THRESHOLDS`) checked
+ * first, and `[D-089]`'s two-threshold band against her indexed material, at
+ * the operating point `[D-112]` ratified, checked after.
  *
  * `band: D112_GROUNDING_BAND` is passed EXPLICITLY on every call — never
  * omitted in favour of `retrieve`'s own default (no band at all, per
@@ -200,7 +217,11 @@ export interface DraftQuizCardsDeps {
  * `draft-quiz-cards.spec.ts`'s N-013 test pins: the same below-band fixture,
  * retrieved again with no `band` option, grounds — proving this call site's
  * explicit band is the only thing standing between "refuses" and "never
- * refuses" for that input. `judge: new WorkerGroundingJudge({ transport:
+ * refuses" for that input. `requireComposite: true` with
+ * `compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS` is passed
+ * alongside it for the same reason, per `[D-192]` (see the module doc's "THE
+ * COMPOSITE LOWER-BAR VETO" section) — composing rather than choosing one
+ * mechanism over the other. `judge: new WorkerGroundingJudge({ transport:
  * deps.transport })` is constructed fresh per call — it is stateless and
  * holds only the transport reference `deps` already carries, so there is
  * nothing to gain from constructing it once and caching it here.
@@ -211,6 +232,8 @@ export async function draftQuizCardsForConcept(
 ): Promise<DraftQuizCardsResult> {
   const grounding = await retrieve(deps.retrieve, request.conceptName, {
     band: D112_GROUNDING_BAND,
+    requireComposite: true,
+    compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
   });
 

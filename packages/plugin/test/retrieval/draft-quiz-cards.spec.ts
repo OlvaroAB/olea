@@ -23,19 +23,31 @@
  *    of them ever reached the Worker.
  * 3. **N-013 on the wiring itself, restated for the band** (`ol-i0y6`): this
  *    call site passes `band: D112_GROUNDING_BAND` EXPLICITLY. A below-band
- *    fixture — cosine 0.4, which clears `assembleGroundedContext`'s own
- *    default relevance bar (0.25) but not the band's lower bar (0.555) —
- *    refuses through this call site and would GROUND if `band` were ever
- *    silently dropped from it. That contrast is pinned directly against
- *    `retrieve()` itself (same deps, no `band` option) rather than asserted
- *    by prose, so removing the option from `draft-quiz-cards.ts` turns the
- *    first assertion in that test red.
+ *    fixture — cosine 0.55, which clears `assembleGroundedContext`'s own
+ *    default relevance bar (0.25) AND the composite's own top1 sub-threshold
+ *    (0.545) but not the band's lower bar (0.555) — refuses through this
+ *    call site and would GROUND if `band` were ever silently dropped from
+ *    it. That contrast is pinned directly against `retrieve()` itself (same
+ *    deps, no options at all) rather than asserted by prose, so removing the
+ *    option from `draft-quiz-cards.ts` turns the first assertion in that
+ *    test red. The cosine is chosen just above the composite's own bar
+ *    specifically so this isolates the BAND's contribution — see point 5.
  * 4. **The band's in-band tier (`[D-089]`, `[D-112]`) escalates through the
  *    real `WorkerGroundingJudge` this call site now constructs**, and folds
  *    the judge's verdict into the same refused/drafted split — a supported
  *    verdict proceeds to `quiz.generate.v1` (two transport calls, in
  *    order); an unsupported one refuses BEFORE the generative call ever
  *    happens (one transport call, never two).
+ * 5. **The composite lower-bar veto composes with the band rather than being
+ *    replaced by it (`[D-192]`, `ol-0r92.39`).** This call site now also
+ *    passes `requireComposite: true` with `compositeThresholds:
+ *    RECOMMENDED_COMPOSITE_THRESHOLDS`. A cosine below the composite's own
+ *    top1 bar (0.545) refuses as `'below-composite-threshold'` — BEFORE
+ *    `D112_GROUNDING_BAND`'s own classification or the judge ever run — even
+ *    though, at that same cosine, the composite is the ONLY thing that would
+ *    have refused (0.4 also sits below the band's lower bar, so both
+ *    mechanisms agree here; the point being tested is which one answers
+ *    first and that neither is silently skipped).
  *
  * **Why the embedding space here is orthogonal, unlike `engine.spec.ts`'s.**
  * `engine.spec.ts`'s realistic overlapping-bands fixture exists to prove
@@ -65,6 +77,7 @@ import {
   type EmbedResult,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
+  RECOMMENDED_COMPOSITE_THRESHOLDS,
   retrieve,
   type WorkerTaskRequest,
 } from 'olea-core';
@@ -250,12 +263,18 @@ async function makeRetrieveDeps(
 
 const REQUEST = { courseCode: 'PSYCH305', conceptName: QUERY_TEXT };
 
-// `D112_GROUNDING_BAND` is lower 0.555 / upper 0.800 (`[D-112]`). Fixture
-// cosines below are chosen relative to those two bars, not to the retired
-// single-gate composite's thresholds.
-const BELOW_BAND_COSINE = 0.4; // < 0.555
-const IN_BAND_COSINE = 0.65; // 0.555 <= x < 0.800
-const ABOVE_BAND_COSINE = 1.0; // >= 0.800
+// `D112_GROUNDING_BAND` is lower 0.555 / upper 0.800 (`[D-112]`).
+// `RECOMMENDED_COMPOSITE_THRESHOLDS.top1` is 0.545 (`[D-192]`) — since
+// `[D-192]`, this call site checks the composite FIRST, so a fixture cosine
+// needs to be chosen relative to BOTH bars to isolate which mechanism fired.
+// This fixture's `QUERY_TEXT`/`TARGET_TEXT` share the token "mitochondria"
+// and nothing else in the corpus does, so `lexBest` is always 1.0 here and
+// `marginP99` always equals `top1` itself (100 orthogonal zero-cosine filler
+// chunks) — every cosine below isolates purely on `top1`.
+const BELOW_COMPOSITE_COSINE = 0.4; // < composite top1 (0.545) AND < band lower (0.555) — the composite vetoes FIRST, before band classification ever runs
+const BELOW_BAND_ONLY_COSINE = 0.55; // >= composite top1 (0.545), so the composite does not veto — but < band lower (0.555), isolating the band's own bar
+const IN_BAND_COSINE = 0.65; // 0.555 <= x < 0.800, and clears the composite too
+const ABOVE_BAND_COSINE = 1.0; // >= 0.800, and clears the composite too
 
 // -------------------------------------------------------------------------
 
@@ -276,7 +295,7 @@ describe('draftQuizCardsForConcept — INV-5 zero-transport-sends on refusal (ol
   });
 
   it('a below-band concept refuses and NEVER calls transport.send — not the generative call, and not the judge either', async () => {
-    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
     const transport = fakeTransport({});
     const deps: DraftQuizCardsDeps = {
       retrieve: await makeRetrieveDeps(keywordIndex, provider),
@@ -458,7 +477,7 @@ describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, 
   });
 
   it('personalization never affects the refusal decision — a below-band request still refuses with zero transport sends regardless of classifyPassage', async () => {
-    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
     const transport = fakeTransport({});
     const deps: DraftQuizCardsDeps = {
       retrieve: await makeRetrieveDeps(keywordIndex, provider),
@@ -475,7 +494,7 @@ describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, 
 
 describe('draftQuizCardsForConcept — N-013: the band is load-bearing at this call site (ol-i0y6)', () => {
   it('the same below-band input this call site refuses would GROUND if `band` were ever dropped from it', async () => {
-    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
     const retrieveDeps = await makeRetrieveDeps(keywordIndex, provider);
     const transport = fakeTransport({});
 
@@ -497,5 +516,63 @@ describe('draftQuizCardsForConcept — N-013: the band is load-bearing at this c
 
   it('sanity: D112_GROUNDING_BAND is the ratified pair this call site is pinned to', () => {
     expect(D112_GROUNDING_BAND).toEqual({ lower: 0.555, upper: 0.8 });
+  });
+});
+
+describe('draftQuizCardsForConcept — the composite lower-bar veto composes with the band (`[D-192]`, ol-0r92.39)', () => {
+  it('a below-composite concept refuses as below-composite-threshold and NEVER calls transport.send — before the band or the judge ever run', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_COMPOSITE_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    // The refusal copy this reason maps to (`draft-cards-copy.ts`'s
+    // `describeRefusal`) is `NOT_ENOUGH_GROUNDING`, the same
+    // "Olea didn't find enough grounding in your notes for this yet."
+    // sentence every other insufficient-notes reason gets — REFUSAL WORDING
+    // IS UNCHANGED per `[D-192]`'s own ruling text. `'below-composite-threshold'`
+    // is not in that file's `TRANSIENT_REASONS` set, so it already falls
+    // through to that copy with no change needed there.
+    expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('the ABOVE-band path is unchanged when the composite also clears every clause — one transport send, no judge', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result.status).toBe('drafted');
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.taskId).toBe('quiz.generate.v1');
+  });
+
+  it('the IN-band, judge-supported path is unchanged when the composite also clears every clause — judge then quiz, two sends', async () => {
+    const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result.status).toBe('drafted');
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[0]?.taskId).toBe('grounding.judge.v1');
+    expect(transport.calls[1]?.taskId).toBe('quiz.generate.v1');
+  });
+
+  it('sanity: RECOMMENDED_COMPOSITE_THRESHOLDS is the ratified point this call site is pinned to', () => {
+    expect(RECOMMENDED_COMPOSITE_THRESHOLDS).toEqual({ lex: 0.18, top1: 0.545, marginP99: 0.055 });
   });
 });

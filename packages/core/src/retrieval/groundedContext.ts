@@ -91,6 +91,16 @@ export type GroundingRefusalReason =
    * per-hit filtering runs at all — and distinct from
    * `composite-check-unavailable`, below, which is about the check never
    * having run at all.
+   *
+   * **Also the band path's composite veto (`[D-192]`, `ol-0r92.39`).**
+   * `assembleBandedGroundedContext` fires this same reason when
+   * `options.requireComposite` is set on a band call and the composite
+   * signals miss the ratified lower bar (`RECOMMENDED_COMPOSITE_THRESHOLDS`)
+   * — checked *before* band classification, so a composite veto is reached
+   * without ever consulting `options.band` or the judge. It is one reason
+   * shared by both mechanisms because it is the same check
+   * (`meetsCompositeThreshold`) reached from two entry points, not two
+   * different facts about her vault.
    */
   | 'below-composite-threshold'
   /**
@@ -203,12 +213,23 @@ export interface AssembleGroundedContextOptions {
    * corpus-percentile margin, evaluated once for the whole query before any
    * per-hit filtering. Defaults to `false`.
    *
-   * **This is plumbing, not a ratification.** David's Ruling 1a ratified
-   * `eval/grounding/grounding-set-v1.0.1.json` as a measurement basis; it did
-   * not ratify replacing `minCosineScore`'s per-hit filter as the shipped
-   * default (a Class C, "changes what the alpha user experiences" call —
-   * run charter). No caller in this codebase sets this true today. When it
-   * is true but `compositeSignals` is absent, this refuses conservatively
+   * **Ratified for the band path by `[D-192]` (`ol-egov.75` / `ol-0r92.39`,
+   * 2026-09-02, `eval/THRESHOLDS.md`'s composite section in `olea-service`):
+   * the composite switches on as the refusal band's lower-bar veto, at
+   * `RECOMMENDED_COMPOSITE_THRESHOLDS`, provisional.** It composes with
+   * `options.band` rather than being mutually exclusive with it — set both
+   * to get an extra veto ahead of band classification (see
+   * `assembleBandedGroundedContext`) — and stays veto-only: it can refuse,
+   * never grant a pass, so everything it does not refuse still reaches the
+   * band/judge path exactly as before. `draft-quiz-cards.ts` is the
+   * production caller that sets this true today, alongside
+   * `D112_GROUNDING_BAND` (`operating-point.ts`).
+   *
+   * **What is still NOT ratified:** replacing `minCosineScore`'s per-hit
+   * filter as the single-gate mechanism's own shipped default remains a
+   * separate, Class C call ("changes what the alpha user experiences" — run
+   * charter) that `[D-192]` does not make. When this is true but
+   * `compositeSignals` is absent, this refuses conservatively
    * (`composite-check-unavailable`, `ol-riwn` — an opt-in gate a caller
    * forgot to wire the signals for genuinely never ran the check) rather
    * than silently skipping it — INV-5 does not get to fail open either way.
@@ -432,6 +453,20 @@ export function assembleBandedGroundedContext(
     // The bars are placed on a signal that was never computed. Fail closed,
     // with the reason that is actually true: the check did not run.
     return { status: 'refused', reason: 'composite-check-unavailable' };
+  }
+
+  // `[D-192]` (`ol-egov.75` / `ol-0r92.39`): the three-number composite check
+  // composes with the band rather than being mutually exclusive with it —
+  // an ADDITIONAL lower-bar veto, checked before band classification runs.
+  // Veto-only, same as the single-gate mechanism above: it can only refuse
+  // (`below-composite-threshold`), never grant a pass, so leaving
+  // `requireComposite` unset reproduces byte-identical band-only behaviour
+  // for every caller that has not opted in.
+  if (options.requireComposite) {
+    const thresholds = options.compositeThresholds ?? RECOMMENDED_COMPOSITE_THRESHOLDS;
+    if (!meetsCompositeThreshold(signals, thresholds)) {
+      return { status: 'refused', reason: 'below-composite-threshold' };
+    }
   }
 
   const tier = classifyGroundingBand(signals, options.band);

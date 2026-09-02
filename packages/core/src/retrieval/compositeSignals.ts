@@ -53,12 +53,27 @@ export interface CompositeGroundingThresholds {
 }
 
 /**
- * `grounding-eval.mjs`'s `RECOMMENDED` constant, ported verbatim. David's
- * Ruling 1a (2026-08-16) ratified the *labelled set* this was measured
- * against as a measurement basis — it did not ratify this specific threshold
- * as the shipped default. `assembleGroundedContext` therefore only applies
- * these when a caller opts in (`requireComposite`); nothing wires that opt-in
- * on by default. See that function's doc.
+ * `grounding-eval.mjs`'s `RECOMMENDED` constant, ported verbatim.
+ *
+ * **Ratified by `[D-192]` (`ol-egov.75`, 2026-09-02) as the composite
+ * grounding check's production lower bar** — `eval/THRESHOLDS.md`'s
+ * "composite grounding lower bar" section, `olea-service` (private), carries
+ * the evidence and the provisional/veto-only posture: the composite switches
+ * on at exactly this measured point, may only refuse (never grant a pass),
+ * and everything it does not refuse still reaches the model-judge layer,
+ * since no upper bar has been measured. `[D-192]` composes this with
+ * `[D-089]`'s band rather than replacing it — see `groundedContext.ts`'s
+ * `requireComposite` doc and `assembleBandedGroundedContext` for how the two
+ * combine. Wired into production by `ol-0r92.39`:
+ * `packages/plugin/src/retrieval/draft-quiz-cards.ts` passes this constant
+ * explicitly alongside `D112_GROUNDING_BAND` (`operating-point.ts`).
+ *
+ * David's earlier Ruling 1a (2026-08-16) ratified only the *labelled set*
+ * this was measured against as a measurement basis; `[D-192]` is the
+ * ratification of this specific value as a shipped operating point.
+ * `assembleGroundedContext`/`assembleBandedGroundedContext` still only apply
+ * these when a caller opts in (`requireComposite`) — nothing wires that
+ * opt-in on for every caller by default. See those functions' docs.
  */
 export const RECOMMENDED_COMPOSITE_THRESHOLDS: CompositeGroundingThresholds = {
   lex: 0.18,
