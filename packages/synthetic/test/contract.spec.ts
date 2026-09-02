@@ -90,7 +90,13 @@ describe('contract validity', () => {
   it.each(STREAMS.map((s) => [s.spec.persona, s] as const))(
     '%s: suspend/unsuspend entries carry exactly D-020’s frozen key set',
     (_persona, stream) => {
-      const suspensions = stream.entries.filter((e) => e.kind !== 'review');
+      // Inclusive filter, not `!== 'review'`: this suite now emits kinds
+      // beyond review/suspend/unsuspend (the explain-back-offer pair,
+      // `[D-178 / LOG-3]` item 2), and an exclusive filter would wrongly hand
+      // those to `suspendLogRecord` instead of skipping them.
+      const suspensions = stream.entries.filter(
+        (e) => e.kind === 'suspend' || e.kind === 'unsuspend',
+      );
       for (const entry of suspensions) {
         expect(suspendLogRecord.safeParse(entry).success).toBe(true);
         expect(Object.keys(entry).sort()).toEqual([

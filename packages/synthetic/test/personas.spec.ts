@@ -46,6 +46,8 @@ import {
   dueStateCounts,
   earlyPullShare,
   eventDays,
+  explainBackDeclineEvents,
+  explainBackOfferEvents,
   explainBackRecords,
   generateStream,
   instrumentShareWhenBothOffered,
@@ -275,12 +277,41 @@ const LOPSIDED_SUPPORTING: readonly Claim[] = [
   },
 ];
 
+/**
+ * `[D-178 / LOG-3]` item 2: the same routing setup as `struggler`, but every
+ * offer is declined rather than attempted. The claims have to show both
+ * halves — the offered/declined pair is written, AND the review-record path
+ * struggler exercises is never taken — or a persona named "decliner" that
+ * happened to also emit reviews would be exactly the `ol-inv2vacuity` shape
+ * this file exists to catch.
+ */
+const EXPLAIN_BACK_DECLINER_CLAIMS: readonly Claim[] = [
+  {
+    name: 'she is routed to explain-back, and no explain-back review record is ever produced',
+    holds: (s) =>
+      explainBackOfferEvents(s.entries).length > 0 && explainBackRecords(s.entries).length === 0,
+  },
+  {
+    name: 'every offer is answered by exactly one honest decline naming it',
+    holds: (s) => {
+      const offered = explainBackOfferEvents(s.entries);
+      const declined = explainBackDeclineEvents(s.entries);
+      if (offered.length === 0 || offered.length !== declined.length) return false;
+      const offeredIds = new Set(offered.map((o) => o.eventId));
+      return declined.every(
+        (d) => d.answers !== undefined && offeredIds.has(d.answers) && d.manner === 'not-taken',
+      );
+    },
+  },
+];
+
 const CLAIMS: Readonly<Partial<Record<PersonaId, readonly Claim[]>>> = {
   crammer: CRAMMER_CLAIMS,
   'instrument-skipper': SKIPPER_CLAIMS,
   'lapsed-returner': RETURNER_CLAIMS,
   struggler: STRUGGLER_CLAIMS,
   'lopsided-effort': LOPSIDED_CLAIMS,
+  'explain-back-decliner': EXPLAIN_BACK_DECLINER_CLAIMS,
 };
 
 describe('planted patterns hold', () => {
@@ -346,6 +377,7 @@ describe('the control is genuinely neutral', () => {
       expect(steady.groundTruth.blackoutDates).toEqual([]);
       expect(steady.groundTruth.suspendedInstrumentIds).toEqual([]);
       expect(steady.groundTruth.explainBackConceptIds).toEqual([]);
+      expect(steady.groundTruth.explainBackDeclinedConceptIds).toEqual([]);
       expect(earlyPullShare(steady.entries)).toBe(0);
       expect(steady.entries.every((e) => e.kind === 'review')).toBe(true);
       // She turns up on most of the days in the window.

@@ -40,7 +40,8 @@ export type PersonaId =
   | 'struggler'
   | 'lopsided-effort'
   | 'empty-history'
-  | 'single-session';
+  | 'single-session'
+  | 'explain-back-decliner';
 
 /** A stretch of days on which no event of any kind is emitted. */
 export interface Blackout {
@@ -142,6 +143,26 @@ export interface Behaviour {
    * (F2.12). `0` disables routing and is the neutral value.
    */
   readonly explainBackAfterConsecutiveAgain: number;
+  /**
+   * Probability that a routed explain-back offer (F2.12) is left on the
+   * surface unaccepted rather than attempted (`[D-178 / LOG-3]` item 2). `0`
+   * is the neutral value — every routing produces an `explain-back` review
+   * record, same as before this dial existed. Only meaningful when
+   * `explainBackAfterConsecutiveAgain > 0`; a persona with no routing has
+   * nothing this dial could decline.
+   *
+   * **What it emits, either way.** A decline never produces the
+   * `explain-back` review record — she never engaged the instrument — and
+   * instead emits an `explain-back-offered` record immediately followed by an
+   * `explain-back-declined` one naming it, `manner: 'not-taken'` (F2.12's
+   * banner offers one action and clears itself; see contracts'
+   * `explainBackDeclineManner` doc). This does not change what routing itself
+   * means: `consecutiveAgainByConcept` still resets, exactly as it does when
+   * she takes the offer, because F2.14a's "declining changes nothing" is a
+   * ruling about her mastery state, not about whether the routing trigger
+   * fires again on the very next failure.
+   */
+  readonly explainBackDeclineChance: number;
   /** Total lapses on one instrument before she suspends it (F2.6). `0` disables. */
   readonly suspendAfterLapses: number;
   /** Days after a suspend that she unsuspends. `null` = never (D-020: unsuspend is a second event, not a retraction). */
@@ -171,6 +192,7 @@ const NEUTRAL: Behaviour = {
   defaultSuccess: 0.86,
   unsureChance: 0.1,
   explainBackAfterConsecutiveAgain: 0,
+  explainBackDeclineChance: 0,
   suspendAfterLapses: 0,
   unsuspendAfterDays: null,
   sessionStartHour: 19,
@@ -384,6 +406,38 @@ export const PERSONAS: Readonly<Record<PersonaId, Persona>> = Object.fromEntries
         'on any of them.',
       carriedBy: [],
       neutralise: {},
+    },
+  ),
+
+  persona(
+    'explain-back-decliner',
+    {
+      // Same routing setup as `struggler` — a course she is losing badly
+      // enough to run consecutive `again`s on the same concept and trip
+      // F2.12 — so this persona differs from struggler by exactly one thing:
+      // what happens once the routing fires.
+      successByCourse: { [COURSE_VANTREL]: 0.34 },
+      defaultSuccess: 0.88,
+      unsureChance: 0.24,
+      explainBackAfterConsecutiveAgain: 2,
+      // The planted pattern, and the whole of it: every routed offer is left
+      // untaken rather than attempted.
+      explainBackDeclineChance: 1,
+      dailyCap: 20,
+    },
+    {
+      description:
+        'Routed to explain-back by repeated failure exactly like `struggler` (F2.12), but ' +
+        'every offer is left on the surface unaccepted rather than attempted — `[D-178 / LOG-3]` ' +
+        "item 2's explain-back-offered/explain-back-declined pair, and never the `explain-back` " +
+        'review record a taken offer would produce. F2.14a: declining changes nothing and is ' +
+        'not itself a state — this persona is the honest absence a synthetic student needed to ' +
+        'exercise that record at all (`ol-3ux7.5.6`).',
+      carriedBy: ['explainBackDeclineChance'],
+      // Removing the decline leaves her routed into explain-back exactly like
+      // `struggler` and taking every offer — the smallest reversal that
+      // isolates "declined" as the one thing this persona adds.
+      neutralise: { explainBackDeclineChance: 0 },
     },
   ),
 ]) as Readonly<Record<PersonaId, Persona>>;

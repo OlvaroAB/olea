@@ -9,11 +9,13 @@ import { reviewLogPath } from './path.js';
 import { suspendedInstrumentIds } from './suspension.js';
 import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
+  appendExplainBackOfferRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
+  type ExplainBackOfferLogRecordInput,
   type RetrospectiveOfferLogRecordInput,
   type ReviewLogRecordInput,
   type SuccessionLogRecordInput,
@@ -814,6 +816,195 @@ describe('appendRetrospectiveOfferRecord ([D-134] Q5)', () => {
     expect(merged.duplicateEventIds).toEqual([]);
     expect(merged.records.map((r) => r.kind).sort()).toEqual(
       ['retrospective-dismissed', 'retrospective-offered', 'retrospective-opened'].sort(),
+    );
+  });
+});
+
+describe('appendExplainBackOfferRecord ([D-178 / LOG-3] item 2)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-explain-back-offer-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function offerInput(
+    overrides: Partial<ExplainBackOfferLogRecordInput> = {},
+  ): ExplainBackOfferLogRecordInput {
+    return {
+      kind: 'explain-back-offered',
+      timestamp: '2026-09-02T09:20:00-04:00',
+      conceptIds: ['imbrication'],
+      trigger: 'repeated-failure',
+      instrumentId: 'explain-back:imbrication:1',
+      ...overrides,
+    };
+  }
+
+  function declineInput(
+    overrides: Partial<ExplainBackOfferLogRecordInput> = {},
+  ): ExplainBackOfferLogRecordInput {
+    return {
+      kind: 'explain-back-declined',
+      timestamp: '2026-09-02T09:21:00-04:00',
+      conceptIds: ['imbrication'],
+      trigger: 'repeated-failure',
+      instrumentId: 'explain-back:imbrication:1',
+      answers: 'offer-1',
+      manner: 'not-taken',
+      ...overrides,
+    };
+  }
+
+  it('appends an offer event into the same C5.2 daily file every other kind lives in', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('explain-back-offered');
+    expect(result.record.eventId).toBe('offer-1');
+    expect(result.record.conceptIds).toEqual(['imbrication']);
+    expect(result.path).toBe(reviewLogPath('2026-09-02', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('writes an offered/declined pair and both parse as valid, current-shape entries, never an invalidLine', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+    const declined = await appendExplainBackOfferRecord(
+      source,
+      declineInput({ answers: 'offer-1' }),
+      { deviceId: 'desktop', generateEventId: () => 'decline-1' },
+    );
+
+    const raw = await readFile(join(tempRoot, declined.path), 'utf8');
+    const parsed = parseReviewLog(raw);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual([
+      'explain-back-offered',
+      'explain-back-declined',
+    ]);
+  });
+
+  it('a decline names the offer it answers, and the manner is honestly "not-taken"', async () => {
+    const source = new FolderSource(tempRoot);
+    const offer = await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+    const decline = await appendExplainBackOfferRecord(
+      source,
+      declineInput({ answers: offer.record.eventId }),
+      { deviceId: 'desktop', generateEventId: () => 'decline-1' },
+    );
+
+    expect(decline.record.kind).toBe('explain-back-declined');
+    if (decline.record.kind !== 'explain-back-declined') throw new Error('unreachable');
+    expect(decline.record.answers).toBe(offer.record.eventId);
+    expect(decline.record.manner).toBe('not-taken');
+  });
+
+  it('interleaves with reviews in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-09-02T09:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    const beforeOffer = await readFile(
+      join(tempRoot, reviewLogPath('2026-09-02', 'desktop')),
+      'utf8',
+    );
+    const offer = await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'offer-1',
+    });
+    const after = await readFile(join(tempRoot, offer.path), 'utf8');
+
+    expect(after.startsWith(beforeOffer)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'explain-back-offered']);
+  });
+
+  it('validates before writing: an offered record carrying `manner` never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendExplainBackOfferRecord(source, offerInput({ manner: 'not-taken' }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-02', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: a declined record missing `answers` never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const { answers: _drop, ...withoutAnswers } = declineInput();
+    await expect(
+      appendExplainBackOfferRecord(source, withoutAnswers, { deviceId: 'desktop' }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-02', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: an empty conceptIds never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendExplainBackOfferRecord(source, offerInput({ conceptIds: [] }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-02', 'desktop'))).toBe(false);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'desktop',
+    });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('a second device converges on the same offer/decline history — merge-by-eventId, no bespoke sync', async () => {
+    const source = new FolderSource(tempRoot);
+    // Device A offers, then declines.
+    await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'device-a',
+      generateEventId: () => 'offer-a',
+    });
+    await appendExplainBackOfferRecord(source, declineInput({ answers: 'offer-a' }), {
+      deviceId: 'device-a',
+      generateEventId: () => 'decline-a',
+    });
+    // Device B independently offers the same concept before syncing —
+    // convergence is the ordinary `eventId`-keyed merge every other kind in
+    // this union already gets (`./merge.ts`), never a device-local store.
+    await appendExplainBackOfferRecord(source, offerInput(), {
+      deviceId: 'device-b',
+      generateEventId: () => 'offer-b',
+    });
+
+    const rawA = await readFile(join(tempRoot, reviewLogPath('2026-09-02', 'device-a')), 'utf8');
+    const rawB = await readFile(join(tempRoot, reviewLogPath('2026-09-02', 'device-b')), 'utf8');
+    const merged = mergeReviewLogRecords(
+      parseReviewLog(rawA).records,
+      parseReviewLog(rawB).records,
+    );
+
+    expect(merged.duplicateEventIds).toEqual([]);
+    expect(merged.records.map((r) => r.kind).sort()).toEqual(
+      ['explain-back-declined', 'explain-back-offered', 'explain-back-offered'].sort(),
     );
   });
 });

@@ -18,7 +18,7 @@
  * and the early-warning signal reads `instrumentShareWhenBothOffered`.
  */
 
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type { ExplainBackOfferLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { CARD_TYPES, courseOfConcept, type ScheduledType } from './vocabulary.js';
 
 /** Review events only — suspend/unsuspend entries are facts about the deck, not reviews. */
@@ -285,6 +285,26 @@ export function timeShareByCourse(entries: readonly ReviewLogEntry[]): ReadonlyM
 /** Every explain-back attempt (F2.12's routing history). */
 export function explainBackRecords(entries: readonly ReviewLogEntry[]): readonly ReviewLogRecord[] {
   return reviewsOf(entries).filter((r) => r.instrumentType === 'explain-back');
+}
+
+/**
+ * Every explain-back-offered event (`[D-178 / LOG-3]` item 2) — the routing
+ * moment itself, whether or not it was ever taken.
+ */
+export function explainBackOfferEvents(
+  entries: readonly ReviewLogEntry[],
+): readonly ExplainBackOfferLogRecord[] {
+  return entries.filter((e): e is ExplainBackOfferLogRecord => e.kind === 'explain-back-offered');
+}
+
+/**
+ * Every explain-back-declined event — an offer that left the surface
+ * unaccepted (F2.14a: declining changes nothing and is not itself a state).
+ */
+export function explainBackDeclineEvents(
+  entries: readonly ReviewLogEntry[],
+): readonly ExplainBackOfferLogRecord[] {
+  return entries.filter((e): e is ExplainBackOfferLogRecord => e.kind === 'explain-back-declined');
 }
 
 /**

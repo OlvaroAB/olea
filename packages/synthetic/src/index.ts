@@ -91,6 +91,8 @@ export {
   dueStateCounts,
   earlyPullShare,
   eventDays,
+  explainBackDeclineEvents,
+  explainBackOfferEvents,
   explainBackRecords,
   instrumentShareWhenBothOffered,
   lapseRateByCourse,

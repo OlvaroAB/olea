@@ -33,6 +33,8 @@
 import {
   type DisputeLogRecord,
   disputeLogRecord,
+  type ExplainBackOfferLogRecord,
+  explainBackOfferLogRecord,
   REVIEW_LOG_SCHEMA_VERSION,
   type RetrospectiveOfferLogRecord,
   type ReviewLogEntry,
@@ -152,6 +154,26 @@ export type RetrospectiveOfferLogRecordInput = Omit<
 export interface AppendRetrospectiveOfferLogResult {
   /** The full, validated record actually written (schemaVersion and eventId included). */
   readonly record: RetrospectiveOfferLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+/**
+ * Every `ExplainBackOfferLogRecord` field the caller supplies (`[D-178 /
+ * LOG-3]` item 2); the writer stamps the rest. `kind` **is** part of the
+ * input, unlike `ReviewLogRecordInput`/`VerdictLogRecordInput` — the same
+ * reason `SuspendLogRecordInput`/`RetrospectiveOfferLogRecordInput` carry it:
+ * which of `'explain-back-offered'`/`'explain-back-declined'` happened is the
+ * caller's actual decision, not a constant this writer knows.
+ */
+export type ExplainBackOfferLogRecordInput = Omit<
+  ExplainBackOfferLogRecord,
+  'schemaVersion' | 'eventId'
+>;
+
+export interface AppendExplainBackOfferLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: ExplainBackOfferLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -481,6 +503,61 @@ export async function appendRetrospectiveOfferRecord(
   if (!parsed.success) {
     throw new Error(
       `appendRetrospectiveOfferRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **explain-back-offer** event —
+ * `explain-back-offered` or `explain-back-declined` (`[D-178 / LOG-3]` item 2,
+ * `ol-3ux7.5.6`, `ol-0r92.13`).
+ *
+ * The seventh sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`/`appendSuccessionRecord`/`appendDisputeRecord`/
+ * `appendRetrospectiveOfferRecord`, sharing the same append path and the same
+ * durability discipline. `kind` is part of `input`, not stamped — the same
+ * reason `appendSuspendRecord`/`appendRetrospectiveOfferRecord` take it: which
+ * of the two happened is the caller's actual decision.
+ *
+ * **Records that an offer happened, and — separately — that it went
+ * untaken.** F2.14a rules that declining changes nothing and is not itself a
+ * state; this writer does not contradict that, because an append-only event
+ * is a record of something that *happened*, never a state she is in. There is
+ * no `accepted` counterpart to call here — an accepted offer is evidenced by
+ * the `explain-back` review record `appendReviewLogRecord` already produces —
+ * and calling this function is not itself a decline: it is called once for
+ * the offer and, only when the offer goes untaken, a second time with
+ * `kind: 'explain-back-declined'` naming the first record's `eventId` as
+ * `answers`.
+ *
+ * **Reachability.** No production caller yet. The banner this authorises a
+ * record for renders at `packages/plugin/src/review/view.ts` and clears
+ * itself on an unaccepted offer around lines 682-719 (`view.ts`'s own
+ * `dismiss`/timeout handling for the F2.12 repeated-failure banner);
+ * wiring that surface to call this writer is follow-up work on another lane,
+ * not this one.
+ */
+export async function appendExplainBackOfferRecord(
+  vault: VaultSource,
+  input: ExplainBackOfferLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendExplainBackOfferLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = explainBackOfferLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendExplainBackOfferRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

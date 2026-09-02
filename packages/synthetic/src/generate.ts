@@ -38,9 +38,16 @@
  * everywhere (Phase A, pre-F2.8) — recorded as explicit nulls rather than
  * omitted, which is the property that makes a Phase A baseline and a Phase B
  * comparison the same shape.
+ *
+ * F2.12 routing (`explainBackAfterConsecutiveAgain`) also emits, on the
+ * `explainBackDeclineChance` dial, an `explain-back-offered` /
+ * `explain-back-declined` pair instead of the `explain-back` review record —
+ * `[D-178 / LOG-3]` item 2's "offered, and separately left untaken" event,
+ * additive to the same v5 union and interleaved in the same stream.
  */
 
 import type {
+  ExplainBackOfferLogRecord,
   InstrumentType,
   MasteryAtTime,
   MasteryState,
@@ -181,6 +188,15 @@ export interface DeclaredGroundTruth {
   readonly unsuspendedInstrumentIds: readonly string[];
   /** Concept ids routed to explain-back at least once (F2.12). */
   readonly explainBackConceptIds: readonly string[];
+  /**
+   * Concept ids routed to explain-back at least once but never attempted —
+   * every offer left on the surface unaccepted (`explainBackDeclineChance`,
+   * `[D-178 / LOG-3]` item 2). Disjoint from `explainBackConceptIds`: a
+   * concept lands in exactly one of the two per routing, never both, because
+   * a single routing either produces the `explain-back` review record or the
+   * offered/declined pair, never a mix.
+   */
+  readonly explainBackDeclinedConceptIds: readonly string[];
 }
 
 export interface SyntheticStream {
@@ -266,6 +282,11 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
   const unsureRng = root.derive('unsure');
   const ratingRng = root.derive('rating');
   const durationRng = root.derive('duration');
+  // A separate family from every other draw, for the same reason
+  // `course-attention` is split from `instrument-skip`: whether a routed
+  // offer is declined is its own decision and must not re-roll (or be
+  // re-rolled by) any other model when this dial changes.
+  const explainBackDeclineRng = root.derive('explain-back-decline');
 
   const deck: DeckSlot[] = INSTRUMENTS.map((instrument) => ({
     instrument,
@@ -295,6 +316,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
   const suspendedInstrumentIds = new Set<string>();
   const unsuspendedInstrumentIds = new Set<string>();
   const explainBackConceptIds = new Set<string>();
+  const explainBackDeclinedConceptIds = new Set<string>();
 
   const streamTag = `${spec.persona}-${spec.seed}`;
   let eventCounter = 0;
@@ -551,44 +573,90 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       ) {
         const concept = conceptById(instrument.conceptId);
         if (concept) {
-          const explainMs = Math.round(
-            durationRng.int(minMs, maxMs) * DURATION_SCALE['explain-back'],
-          );
-          // The explain-back is routed by this same concept's repeated
-          // failures, so the value belongs to the concept the record names.
-          // Re-keyed, not re-derived: it is the mastery at the moment the
-          // routing happened, which is what `masteryAtTime` means.
-          const explainBackMastery = perConceptMastery(concept.conceptId, masteryAtTime);
-          const explainBack: ReviewLogRecord = {
-            schemaVersion: 5,
-            kind: 'review',
-            eventId: nextEventId(),
-            timestamp: isoWithOffset(cursorMs, offsetMinutes),
-            instrumentId: concept.explainBackInstrumentId,
-            instrumentType: 'explain-back',
-            conceptIds: [concept.conceptId],
-            // Explain-back produces no rating at all (F2.16).
-            rating: null,
-            wasUnsure: false,
-            durationMs: explainMs,
-            selectionContext: {
-              // Explain-back is never FSRS-scheduled (contracts' `instrumentType`
-              // doc: on-demand, routed on repeated failure, evidence into mastery
-              // rather than a scheduled item). It therefore has no due date and no
-              // honest answer to "was it due" — `'new'` is the only value in the
-              // frozen enum that means "this item was not previously scheduled".
-              // Flagged in the SYN-1 report rather than papered over.
-              dueState: 'new',
-              examProximity: proximity,
-              yieldRank: null,
-              instrumentTypesOffered: offered,
-              planVersion: null,
-            },
-            ...(explainBackMastery === undefined ? {} : { masteryAtTime: explainBackMastery }),
-          };
-          pendingEntries.push(explainBack);
-          explainBackConceptIds.add(concept.conceptId);
-          cursorMs += explainMs + 30_000;
+          const declines = explainBackDeclineRng.chance(behaviour.explainBackDeclineChance);
+
+          if (declines) {
+            // `[D-178 / LOG-3]` item 2: the offer happened, and — separately
+            // — it went untaken. No `explain-back` review record is written;
+            // she never engaged the instrument. `answers` names the offer's
+            // own `eventId`, which is what lets a reader pair the two without
+            // guessing.
+            const offerEventId = nextEventId();
+            const offer: ExplainBackOfferLogRecord = {
+              schemaVersion: 5,
+              kind: 'explain-back-offered',
+              eventId: offerEventId,
+              timestamp: isoWithOffset(cursorMs, offsetMinutes),
+              conceptIds: [concept.conceptId],
+              trigger: 'repeated-failure',
+              instrumentId: concept.explainBackInstrumentId,
+            };
+            pendingEntries.push(offer);
+            // She notices the banner and moves past it — no attempt, so no
+            // instrument-duration cost, just the ordinary between-items pause.
+            cursorMs += durationRng.int(
+              behaviour.betweenItemsMsRange[0],
+              behaviour.betweenItemsMsRange[1],
+            );
+            const declined: ExplainBackOfferLogRecord = {
+              schemaVersion: 5,
+              kind: 'explain-back-declined',
+              eventId: nextEventId(),
+              timestamp: isoWithOffset(cursorMs, offsetMinutes),
+              conceptIds: [concept.conceptId],
+              trigger: 'repeated-failure',
+              instrumentId: concept.explainBackInstrumentId,
+              answers: offerEventId,
+              // Today's only honest value (contracts' `explainBackDeclineManner`
+              // doc): the banner offers one action and simply clears itself.
+              manner: 'not-taken',
+            };
+            pendingEntries.push(declined);
+            explainBackDeclinedConceptIds.add(concept.conceptId);
+          } else {
+            const explainMs = Math.round(
+              durationRng.int(minMs, maxMs) * DURATION_SCALE['explain-back'],
+            );
+            // The explain-back is routed by this same concept's repeated
+            // failures, so the value belongs to the concept the record names.
+            // Re-keyed, not re-derived: it is the mastery at the moment the
+            // routing happened, which is what `masteryAtTime` means.
+            const explainBackMastery = perConceptMastery(concept.conceptId, masteryAtTime);
+            const explainBack: ReviewLogRecord = {
+              schemaVersion: 5,
+              kind: 'review',
+              eventId: nextEventId(),
+              timestamp: isoWithOffset(cursorMs, offsetMinutes),
+              instrumentId: concept.explainBackInstrumentId,
+              instrumentType: 'explain-back',
+              conceptIds: [concept.conceptId],
+              // Explain-back produces no rating at all (F2.16).
+              rating: null,
+              wasUnsure: false,
+              durationMs: explainMs,
+              selectionContext: {
+                // Explain-back is never FSRS-scheduled (contracts' `instrumentType`
+                // doc: on-demand, routed on repeated failure, evidence into mastery
+                // rather than a scheduled item). It therefore has no due date and no
+                // honest answer to "was it due" — `'new'` is the only value in the
+                // frozen enum that means "this item was not previously scheduled".
+                // Flagged in the SYN-1 report rather than papered over.
+                dueState: 'new',
+                examProximity: proximity,
+                yieldRank: null,
+                instrumentTypesOffered: offered,
+                planVersion: null,
+              },
+              ...(explainBackMastery === undefined ? {} : { masteryAtTime: explainBackMastery }),
+            };
+            pendingEntries.push(explainBack);
+            explainBackConceptIds.add(concept.conceptId);
+            cursorMs += explainMs + 30_000;
+          }
+          // F2.14a: declining changes nothing about her mastery state, but the
+          // routing trigger itself is consumed either way — the same reset
+          // that already happened when she took the offer, now shared by both
+          // branches so a subsequent run of `again`s can route her again.
           consecutiveAgainByConcept.set(instrument.conceptId, 0);
         }
       }
@@ -644,6 +712,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       suspendedInstrumentIds: [...suspendedInstrumentIds].sort(),
       unsuspendedInstrumentIds: [...unsuspendedInstrumentIds].sort(),
       explainBackConceptIds: [...explainBackConceptIds].sort(),
+      explainBackDeclinedConceptIds: [...explainBackDeclinedConceptIds].sort(),
     },
   };
 }

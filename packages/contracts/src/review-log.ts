@@ -1176,6 +1176,118 @@ export const retrospectiveOfferLogRecordV5 = z.object({
 export type RetrospectiveOfferLogRecordV5 = z.infer<typeof retrospectiveOfferLogRecordV5>;
 
 /**
+ * Which of F2.12/F2.14a's on-demand routes produced an explain-back offer
+ * (`explainBackOfferLogRecordV5`'s own doc). Stored on the record rather than
+ * derived, because the question this data exists to answer is *which trigger
+ * goes untaken* — a proposal she never asked for (`strong-recall-proposal`,
+ * F2.14a) and a routing after repeated failure (`repeated-failure`, F2.12)
+ * are not the same offer, and `on-demand` is her own request.
+ */
+export const explainBackOfferTrigger = z.enum([
+  'repeated-failure',
+  'strong-recall-proposal',
+  'on-demand',
+]);
+export type ExplainBackOfferTrigger = z.infer<typeof explainBackOfferTrigger>;
+
+/**
+ * How a declined explain-back offer went untaken. `not-taken` is today's only
+ * honest value — F2.12's banner offers one action and simply clears itself
+ * when she moves past the item, whether or not she touched it
+ * (`packages/plugin/src/review/view.ts:682-719`); nothing here builds a
+ * `dismissed` control. `dismissed` is reserved so that if one is ever ruled,
+ * the two are distinguishable in the data rather than silently merged.
+ */
+export const explainBackDeclineManner = z.enum(['dismissed', 'not-taken']);
+export type ExplainBackDeclineManner = z.infer<typeof explainBackDeclineManner>;
+
+/**
+ * The two explain-back-offer events (`[D-178 / LOG-3]` item 2,
+ * `ol-3ux7.5.6`, `ol-0r92.13`) — additive to the discriminated union the same
+ * way `retrospectiveOfferLogRecordV5` is: one record shape spanning two
+ * `kind` literals rather than two near-identical shapes, because "offered"
+ * and "declined" carry the same fields and differ only in which happened
+ * (plus the pairing fields a decline alone carries).
+ *
+ * **What is recorded, and what deliberately is not.** That an explain-back
+ * was offered, and — separately — that the offer left the surface unaccepted.
+ * F2.14a rules plainly that declining changes nothing and is not itself a
+ * state; this event does not contradict that ruling, because an append-only
+ * log record is a record of something that *happened* (an offer went
+ * untaken), never a state she is in. **There is no `accepted` kind and no
+ * decision to add a dismiss control is implied by this shape** — an accepted
+ * offer is evidenced by the `explain-back` review record it produces, and the
+ * banner's one-action design is unchanged.
+ *
+ * **The pairing rule, modelled on `disputeLogRecordV5`'s `resolves`/
+ * `outcome`.** An `explain-back-offered` record carries neither `answers` nor
+ * `manner`; an `explain-back-declined` record carries both — `answers` names
+ * the offer event it answers, `manner` says how it went untaken. Half of
+ * either pair would leave a decline pointing at nothing.
+ *
+ * **No content, per D-005.** Two opaque ids (the concept and, where present,
+ * the instrument that routed to it), two enums, and an event-id pointer.
+ * Never a reason she gave, and never her wording — no reason field exists at
+ * all, the same restraint `disputeLogRecordV5` states for its own claim.
+ */
+function refineExplainBackOfferPairing(
+  value: {
+    readonly kind: 'explain-back-offered' | 'explain-back-declined';
+    readonly answers?: string | undefined;
+    readonly manner?: 'dismissed' | 'not-taken' | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const isDecline = value.kind === 'explain-back-declined';
+  const hasAnswers = value.answers !== undefined;
+  const hasManner = value.manner !== undefined;
+  if (hasAnswers !== isDecline) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['answers'],
+      message:
+        'a declined offer carries `answers` (the offer event it answers); an offered record ' +
+        'carries neither',
+    });
+  }
+  if (hasManner !== isDecline) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['manner'],
+      message: 'a declined offer carries `manner`; an offered record carries neither',
+    });
+  }
+}
+
+export const explainBackOfferEventKind = z.enum(['explain-back-offered', 'explain-back-declined']);
+export type ExplainBackOfferEventKind = z.infer<typeof explainBackOfferEventKind>;
+
+export const explainBackOfferLogRecordV5 = z
+  .object({
+    schemaVersion: z.literal(5),
+    kind: explainBackOfferEventKind,
+    /** Stable unique id; makes two-device merges idempotent, and is what a decline's `answers` names. */
+    eventId: z.string().min(1),
+    /** ISO-8601 with offset. The offset matters: "when did she pass on it" is local. */
+    timestamp: z.string().datetime({ offset: true }),
+    /**
+     * Every concept the offer concerned. Non-empty for the same reason
+     * `verdictLogRecordV5.conceptIds` is: an offer naming no concept is
+     * invisible to every later question.
+     */
+    conceptIds: z.array(z.string().min(1)).min(1),
+    trigger: explainBackOfferTrigger,
+    /** Present for F2.12 routing off a specific instrument; absent otherwise. */
+    instrumentId: z.string().min(1).optional(),
+    /** The offer event this record answers. Present exactly on a decline. */
+    answers: z.string().min(1).optional(),
+    /** How the offer went untaken. Present exactly on a decline. */
+    manner: explainBackDeclineManner.optional(),
+  })
+  .superRefine(refineExplainBackOfferPairing);
+export type ExplainBackOfferLogRecordV5 = z.infer<typeof explainBackOfferLogRecordV5>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v5 lines against.
  *
@@ -1190,6 +1302,7 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   successionLogRecordV5,
   disputeLogRecordV5,
   retrospectiveOfferLogRecordV5,
+  explainBackOfferLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
@@ -1212,6 +1325,8 @@ export const disputeLogRecord = disputeLogRecordV5;
 export type DisputeLogRecord = z.infer<typeof disputeLogRecordV5>;
 export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV5;
 export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV5>;
+export const explainBackOfferLogRecord = explainBackOfferLogRecordV5;
+export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;
