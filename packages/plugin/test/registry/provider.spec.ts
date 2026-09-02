@@ -121,6 +121,107 @@ describe('createLocalRegistryProvider — rename (F8.4)', () => {
   });
 });
 
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-183] —
+// A later-arriving higher-ranked source proposes a rename rather than
+// silently overwriting it", tagged `@auto:plugin/registry/provider.spec`.
+//
+// `gateRenameProposal`'s own decision logic (does a candidate outrank the
+// current tier? does the wording differ? has this exact source+wording
+// already been declined?) is exhaustively covered, case by case, at
+// `packages/core/src/registry/rename-proposal.spec.ts` — this provider's
+// copy is a documented function-for-function mirror of that tested version
+// (see `provider.ts`'s own module doc for why it is a copy rather than an
+// import). What is genuinely THIS file's own behaviour to prove is the
+// WIRING: that `load()` never fabricates a proposal for an ordinary
+// concept, and that accept/decline round-trip correctly through the
+// existing override store and the session-scoped decline memory.
+//
+// A real end-to-end trigger — the SAME concept key re-extracted at a
+// HIGHER tier with genuinely DIFFERENT wording — has no vault fixture that
+// can produce it: `../concept/extract.ts`'s tier-1/tier-3 binding is
+// always an EXACT title match against the name already in hand (see that
+// file's own doc), so nothing in today's real extraction pipeline ever
+// hands the SAME key a NEW name at a NEW tier. That is a second, deeper
+// reachability gap this bead's report names alongside the session-only
+// persistence one — closing it needs the still-provisional stable-key
+// work (`../concept/types.ts`'s own doc on `ConceptRecord.key`), not
+// anything in this bead's `owns`. These tests therefore exercise
+// accept/decline directly, with a hand-built `RenameProposal` value of the
+// same shape a real detection would produce, rather than through a vault
+// fixture that cannot exist yet.
+describe('createLocalRegistryProvider — rename proposal ([D-183])', () => {
+  it('load() proposes nothing for an ordinary concept with no rank-outranking candidate', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const model = await modelFrom(await provider.load());
+    expect(model.concepts[0]?.renameProposal ?? null).toBeNull();
+  });
+
+  it('acceptRenameProposal demotes the frozen wording to an alias and persists across a reload', async () => {
+    const host = new FakeDataHost();
+    const seen: unknown[] = [];
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      onOverridesChanged: (overrides) => {
+        seen.push(overrides);
+      },
+    });
+    const before = await modelFrom(await provider.load());
+    const entry = before.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+
+    const proposal = {
+      key: entry.key,
+      currentDisplayName: entry.originalName,
+      currentTier: entry.tier,
+      candidate: { tier: 1 as const, wording: 'Her own wording for it' },
+    };
+    await provider.acceptRenameProposal(entry, proposal);
+    expect(seen).toHaveLength(1);
+
+    const after = await modelFrom(await provider.load());
+    const row = after.concepts[0];
+    expect(row?.key).toBe(entry.key);
+    expect(row?.displayName).toBe('Her own wording for it');
+    expect(row?.aliases).toEqual([entry.originalName]);
+  });
+
+  it('declineRenameProposal never writes to the override store — it is session memory only', async () => {
+    const host = new FakeDataHost();
+    const seen: unknown[] = [];
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      onOverridesChanged: (overrides) => {
+        seen.push(overrides);
+      },
+    });
+    const before = await modelFrom(await provider.load());
+    const entry = before.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+
+    const proposal = {
+      key: entry.key,
+      currentDisplayName: entry.originalName,
+      currentTier: entry.tier,
+      candidate: { tier: 1 as const, wording: 'Her own wording for it' },
+    };
+    await expect(provider.declineRenameProposal(entry, proposal)).resolves.toBeUndefined();
+    expect(seen).toHaveLength(0);
+    expect(host.blob).toBeNull();
+
+    // Declining left the concept's own name untouched — nothing was accepted.
+    const after = await modelFrom(await provider.load());
+    expect(after.concepts[0]?.displayName).toBe(entry.originalName);
+  });
+});
+
 describe('createLocalRegistryProvider — withdraw/restore concept (F8.5)', () => {
   it('withdraws and restores, never deleting the row', async () => {
     const host = new FakeDataHost();

@@ -46,7 +46,51 @@
  * `./rename.spec.ts` for the end-to-end proof. Neither current production caller of `retrieve()`
  * assembles that field yet (`ol-l5og.11`'s report names the two, and the one-line addition each
  * needs), so a real generative call does not exercise this today.
+ *
+ * ## Rank-gated rename PROPOSALS (`[D-183]`, knowledge model §3, `ol-2zfj.58`)
+ *
+ * `RenameProposalCandidate`/`RenameProposal` below are the second half of the naming rule: a
+ * later-arriving source whose provenance tier outranks the tier that set a concept's current
+ * display name never overwrites it silently — it surfaces as a proposal, through the same
+ * accept/decline shape `noteOffer` already established one field up. See `./rename-proposal.ts`'s
+ * module doc for the whole mechanism, what it reuses from `./overrides.ts`'s existing
+ * `renameConcept` (accept needs no new persisted shape at all), and the one Class C question this
+ * bead's tripwire stopped on rather than answering unilaterally: making the "declined proposals
+ * don't re-fire" promise and the "which tier set the current name" memory survive a restart, not
+ * just a session, needs a genuinely new persisted field on `RegistryOverrides`/
+ * `RegistryRenameOverride` — named, not added, in that file's doc.
  */
+
+/**
+ * `[D-183]`'s rename-proposal evidence — which source proposed new wording, at what tier
+ * (knowledge model §3's ordering: 1, her concept note, outranks 2, her `topic` property, outranks
+ * 3, extracted-only — lower number is higher rank). Carries a `RegistrySourceLocation` so a
+ * proposal can cite "which source, which passage" in the ruling's own words, reusing the same
+ * citation shape `RegistryConceptEntry.sourceLocations` already carries rather than inventing a
+ * second one. `sourceLocation` is optional and absent exactly when the concept the candidate names
+ * has no known location yet — never guessed, matching this module's own honesty convention for
+ * every other optional location field.
+ */
+export interface RenameProposalCandidate {
+  readonly tier: ConceptTier;
+  readonly wording: string;
+  readonly sourceLocation?: RegistrySourceLocation;
+}
+
+/**
+ * `[D-183]`'s rank-gated rename proposal, pending her accept/decline. `currentDisplayName`/
+ * `currentTier` describe the wording still being shown — frozen there, per the ruling, until she
+ * acts — so accepting can hand `currentDisplayName` straight to `./overrides.ts`'s existing
+ * `renameConcept` as the wording to demote to an alias, and nothing here needs a second field for
+ * "what was it called before". See `./rename-proposal.ts` for the pure decision function that
+ * builds one of these and for `acceptRenameProposal`'s exact reuse of `renameConcept`.
+ */
+export interface RenameProposal {
+  readonly key: string;
+  readonly currentDisplayName: string;
+  readonly currentTier: ConceptTier;
+  readonly candidate: RenameProposalCandidate;
+}
 
 import type { MasteryState, ReviewLogEntry, SoloLevel } from 'olea-contracts';
 import type { ConceptRecord, ConceptTier } from '../concept/types.js';
@@ -252,6 +296,24 @@ export interface RegistryConceptEntry {
    * `./build.ts`'s `noteOfferFor` for the multi-course rule.
    */
   readonly noteOffer: { readonly eligible: boolean };
+  /**
+   * `[D-183]`'s rank-gated rename proposal — present exactly when a
+   * higher-ranked source's wording is pending her accept/decline, `null`/
+   * absent otherwise (matching `disputes`/`courseRankings`'s own "absent is
+   * a real, non-error state" convention on `BuildRegistryModelInput`).
+   *
+   * **Optional, and deliberately not populated by `./build.ts` today.**
+   * That file sits outside `ol-2zfj.58`'s `owns`, so this bead cannot wire
+   * the detection `./rename-proposal.ts` provides into the pure model build
+   * itself. `packages/plugin/src/registry/provider.ts`'s `load()` overlays
+   * it instead, the same "post-process what `buildRegistryModel` returned"
+   * shape that file's own `withPassageAnchors` already uses on the way IN —
+   * this is the mirror on the way OUT. See that file's module doc for the
+   * session-scoped memory this needs and the one Class C gap it names
+   * rather than closes (surviving an Obsidian restart needs a genuinely new
+   * persisted field this bead's tripwire stopped it from adding).
+   */
+  readonly renameProposal?: RenameProposal | null;
 }
 
 /** The whole browsable inventory (F8.4). Concepts in no course are included (F1.3: a statement, not a failure) — filtering by course is a view concern, not a model concern. */

@@ -70,12 +70,64 @@
  * rather than taking the whole registry down with it. F7.8's degrade-not-
  * half-work posture, same as `readRankWeights`/`readPlanPolicy` elsewhere in
  * this package.
+ *
+ * ## `[D-183]`'s rank-gated rename proposal — the overlay `load()` applies AFTER `buildRegistryModel`
+ *
+ * `withPassageAnchors` above overlays fresher data onto the vault walk's
+ * concepts on the way IN to `buildRegistryModel`; `gateRenameProposals`
+ * below is the mirror on the way OUT — it maps over `RegistryModel.concepts`
+ * once `buildRegistryModel` has returned, because that function's own file
+ * (`../../core/registry/build.ts`) sits outside `ol-2zfj.58`'s `owns` and
+ * cannot be edited by this bead to compute `RegistryConceptEntry.renameProposal`
+ * itself. See `../../core/registry/rename-proposal.ts`'s module doc for the
+ * full rule this implements (knowledge model §3, `[D-183]`): a later source
+ * whose provenance tier outranks the tier that set a concept's current
+ * display name never overwrites it silently — it freezes the old wording
+ * and raises a proposal instead, until she accepts or declines it.
+ *
+ * **This provider's memory of "what tier/wording is currently frozen" and
+ * "which (tier, wording) pairs she has declined" is SESSION-SCOPED
+ * (`renameProposalMemory`/`declinedRenameSignatures` below) — it lives only
+ * as long as this provider instance does, i.e. until the plugin reloads or
+ * Obsidian restarts.** Making either durable needs a genuinely new
+ * persisted field on `RegistryOverrides`/`RegistryRenameOverride` — a
+ * persisted-schema change, Class C by the run charter's ladder — and
+ * `ol-2zfj.58`'s own brief says to stop and report that rather than add it;
+ * `../../core/registry/rename-proposal.ts`'s module doc names the exact
+ * field. Within one session this is fully correct: a proposal keeps
+ * re-deriving identically on every `load()` until she acts, and a decline
+ * genuinely does not fire again for the same source and wording, for as
+ * long as the plugin stays loaded.
+ *
+ * **`gateRenameProposal`/`renameProposalOutranks`/`renameProposalDeclineSignature`/
+ * `RenameProposalMemory` below mirror `../../core/registry/rename-proposal.ts`'s
+ * `gateRenameCandidate`/`outranksCurrent`/`declineSignature`/
+ * `RenameProposalMemory` function-for-function, rather than importing them.**
+ * `packages/core/src/index.ts` — `olea-core`'s only public surface — sits
+ * outside this bead's `owns` (a shared file another lane may be live on;
+ * see this repo's own concurrent-lanes rule), so the new core module cannot
+ * be exported there by this bead and cannot be imported cross-package
+ * today. `./copy.ts`'s own doc already documents the identical situation
+ * for a TYPE it could not import for the same reason
+ * (`RegistryExplainBackHistoryRow`) — this is that same gap on the function
+ * side. Collapse this duplication into a real import the moment whoever
+ * next touches `index.ts` adds the two-line export; `rename-proposal.ts` is
+ * the tested, canonical version meanwhile (`rename-proposal.spec.ts`).
+ *
+ * **Accept needs no session memory of its own** — `acceptRenameProposal`
+ * below writes through the exact same `renameConceptOverride`/
+ * `overridesStore.save()` path `rename()` already uses, with the proposal's
+ * frozen `currentDisplayName` as the wording to demote to an alias. That
+ * write IS durable (it is `RegistryOverrides.renames`, unchanged shape), so
+ * accepting a proposal survives a restart even though detecting one, and
+ * remembering a decline, do not yet.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildRegistryModel,
   type ConceptRecord,
+  type ConceptTier,
   type CourseOracleRanking,
   calendarDaysEndingOn,
   composeOracleRanking,
@@ -85,6 +137,7 @@ import {
   pruneConcept as pruneConceptOverride,
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
+  type RegistryModel,
   type RegistryOverrides,
   type RegistrySourceLocation,
   readReviewLogFile,
@@ -115,6 +168,94 @@ import type { RegistryViewDeps, RegistryViewState } from './view.js';
  * own doc); until then this is a plain-English default, not a derivation.
  */
 const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
+
+/** `RegistryConceptEntry['renameProposal']`'s non-null shape, derived by indexed access rather than a direct import — `RenameProposal`/`RenameProposalCandidate` (`../../core/registry/types.ts`) are not exported from `olea-core`'s index (out of `ol-2zfj.58`'s `owns`; see `./copy.ts`'s doc for the same technique used for the identical reason). */
+type RenameProposal = NonNullable<RegistryConceptEntry['renameProposal']>;
+type RenameProposalCandidate = RenameProposal['candidate'];
+
+/** See this file's module doc, "[D-183]'s rank-gated rename proposal" — this session's memory of what is currently frozen for a concept with no manual override yet. */
+interface RenameProposalMemory {
+  readonly tier: ConceptTier;
+  readonly displayName: string;
+}
+
+/** Mirrors `../../core/registry/rename-proposal.ts`'s `outranksCurrent` — see this file's module doc for why this is a copy rather than an import. */
+function renameProposalOutranks(candidateTier: ConceptTier, currentTier: ConceptTier): boolean {
+  return candidateTier < currentTier;
+}
+
+/** Mirrors `../../core/registry/rename-proposal.ts`'s `declineSignature`. */
+function renameProposalDeclineSignature(
+  candidate: Pick<RenameProposalCandidate, 'tier' | 'wording'>,
+): string {
+  return `${candidate.tier}:${candidate.wording}`;
+}
+
+/**
+ * Mirrors `../../core/registry/rename-proposal.ts`'s `gateRenameCandidate` —
+ * see that file's own doc for the full rule and its own spec for the tested
+ * behaviour this copy must keep matching. Takes a whole `RegistryConceptEntry`
+ * (rather than that function's narrower input shape) since this is the one
+ * production call site and has the entry on hand already.
+ */
+function gateRenameProposal(
+  entry: RegistryConceptEntry,
+  priorMemory: RenameProposalMemory | undefined,
+  declinedSignatures: ReadonlySet<string>,
+): {
+  readonly displayName: string;
+  readonly renameProposal: RenameProposal | null;
+  readonly memory: RenameProposalMemory;
+} {
+  const hasManualOverride = entry.displayName !== entry.originalName;
+  if (hasManualOverride) {
+    return {
+      displayName: entry.displayName,
+      renameProposal: null,
+      memory: { tier: entry.tier, displayName: entry.originalName },
+    };
+  }
+
+  const noImprovement =
+    priorMemory === undefined ||
+    !renameProposalOutranks(entry.tier, priorMemory.tier) ||
+    entry.originalName === priorMemory.displayName;
+  if (noImprovement) {
+    return {
+      displayName: entry.originalName,
+      renameProposal: null,
+      memory: { tier: entry.tier, displayName: entry.originalName },
+    };
+  }
+
+  const candidate: RenameProposalCandidate = {
+    tier: entry.tier,
+    wording: entry.originalName,
+    ...(entry.sourceLocations[0] !== undefined ? { sourceLocation: entry.sourceLocations[0] } : {}),
+  };
+
+  if (declinedSignatures.has(renameProposalDeclineSignature(candidate))) {
+    return { displayName: priorMemory.displayName, renameProposal: null, memory: priorMemory };
+  }
+
+  const proposal: RenameProposal = {
+    key: entry.key,
+    currentDisplayName: priorMemory.displayName,
+    currentTier: priorMemory.tier,
+    candidate,
+  };
+  return { displayName: priorMemory.displayName, renameProposal: proposal, memory: priorMemory };
+}
+
+/** Mirrors `../../core/registry/rename-proposal.ts`'s `recordDeclinedRenameProposal`. */
+function recordDeclinedRenameProposal(
+  declined: ReadonlySet<string>,
+  proposal: RenameProposal,
+): ReadonlySet<string> {
+  const signature = renameProposalDeclineSignature(proposal.candidate);
+  if (declined.has(signature)) return declined;
+  return new Set([...declined, signature]);
+}
 
 export interface EditInstrumentPort {
   edit(instrument: RegistryInstrumentSummary): Promise<void>;
@@ -328,6 +469,13 @@ export function createLocalRegistryProvider(
     },
   };
 
+  // `[D-183]`'s rank-gated rename proposal — session-scoped only; see this
+  // file's module doc, "the overlay `load()` applies AFTER `buildRegistryModel`",
+  // for exactly what would need to become a persisted field to survive a
+  // restart, and why this bead stops short of adding it.
+  const renameProposalMemory = new Map<string, RenameProposalMemory>();
+  let declinedRenameSignatures: ReadonlySet<string> = new Set();
+
   return {
     async load(): Promise<RegistryViewState> {
       try {
@@ -365,7 +513,18 @@ export function createLocalRegistryProvider(
           courseRankings,
         });
 
-        return { kind: 'model', model };
+        const gatedConcepts: RegistryConceptEntry[] = model.concepts.map((entry) => {
+          const gated = gateRenameProposal(
+            entry,
+            renameProposalMemory.get(entry.key),
+            declinedRenameSignatures,
+          );
+          renameProposalMemory.set(entry.key, gated.memory);
+          return { ...entry, displayName: gated.displayName, renameProposal: gated.renameProposal };
+        });
+        const gatedModel: RegistryModel = { ...model, concepts: gatedConcepts };
+
+        return { kind: 'model', model: gatedModel };
       } catch (error) {
         console.error('Olea: could not compose the registry', error);
         return { kind: 'unavailable' };
@@ -411,6 +570,42 @@ export function createLocalRegistryProvider(
 
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
       await acceptNoteOfferPort.accept(entry);
+    },
+
+    async acceptRenameProposal(
+      entry: RegistryConceptEntry,
+      proposal: RenameProposal,
+    ): Promise<void> {
+      // Reuses `renameConcept` exactly as `rename()` above does — accepting
+      // is a durable write through the SAME, unchanged `RegistryOverrides`
+      // shape. `proposal.currentDisplayName` (the frozen old wording, not
+      // `entry.originalName`) is what must be passed as `renameConcept`'s
+      // `originalName` parameter — see `../../core/registry/rename-proposal.ts`'s
+      // `acceptRenameProposal` doc for exactly why the other order silently
+      // no-ops and drops the alias.
+      const overrides = await overridesStore.load();
+      const next = renameConceptOverride(
+        overrides,
+        proposal.key,
+        proposal.currentDisplayName,
+        proposal.candidate.wording,
+      );
+      await overridesStore.save(next);
+      deps.onOverridesChanged?.(next);
+      // The concept now has a manual override (`displayName !== originalName`
+      // next load), which `gateRenameProposal` already suppresses on its own
+      // — clearing the memory here is tidiness, not correctness-bearing.
+      renameProposalMemory.delete(entry.key);
+    },
+
+    async declineRenameProposal(
+      _entry: RegistryConceptEntry,
+      proposal: RenameProposal,
+    ): Promise<void> {
+      // Session-scoped only — see this file's module doc. Correctly does
+      // not re-fire for this exact (tier, wording) pair for as long as the
+      // plugin stays loaded; does not yet survive a restart.
+      declinedRenameSignatures = recordDeclinedRenameProposal(declinedRenameSignatures, proposal);
     },
   };
 }

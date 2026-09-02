@@ -31,6 +31,20 @@
  * that method's own doc. No scoreboard: no total, no streak, and a
  * contested attempt shows its `[D-095]` re-review state in place rather
  * than being hidden or dropped.
+ *
+ * **`[D-183]` adds one more standing affordance: `renderRenameProposal`**,
+ * a rank-gated rename proposal shown right where `renderNoteOffer` already
+ * sits — the same accept/decline shape, reused rather than reinvented (this
+ * bead's brief names that surface as the closest sibling). Present only
+ * when `entry.renameProposal` is non-null; see
+ * `../../core/registry/rename-proposal.ts` and `./provider.ts`'s own docs
+ * for how that field is computed and the one thing (surviving a plugin
+ * restart) it does not yet do. Its copy strings are declared LOCALLY in
+ * this file rather than added to `./copy.ts` — that file sits outside
+ * `ol-2zfj.58`'s `owns`, so this is a deliberate, flagged deviation from
+ * "every sentence comes from `./copy.ts`" above, not a design choice; move
+ * them there the moment that file's owner is free (Class A/B, self-ratified,
+ * logged here for retroactive review).
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -73,6 +87,29 @@ import {
 
 export const VIEW_TYPE_OLEA_REGISTRY = 'olea-registry';
 
+/** `RegistryConceptEntry['renameProposal']`'s non-null shape — indexed access rather than a direct import, matching `./provider.ts`'s identical technique and doc for the identical reason (`RenameProposal`/`RenameProposalCandidate` are not exported from `olea-core`'s index, out of `ol-2zfj.58`'s `owns`). */
+type RenameProposal = NonNullable<RegistryConceptEntry['renameProposal']>;
+
+/**
+ * `[D-183]`'s rename-proposal copy — LOCAL to this file, not `./copy.ts`
+ * (see this file's module doc for why). States the fact and the evidence,
+ * never a nudge — matching `NOTE_OFFER_LINE`'s own "never a claim about
+ * why it changed" register one section up, and never printing the
+ * `ConceptTier` number itself (R2: the internal ordering is never displayed
+ * to her, only her own wording is).
+ */
+const RENAME_PROPOSAL_ACCEPT_ACTION = 'Use this wording';
+const RENAME_PROPOSAL_DECLINE_ACTION = 'Keep the current wording';
+
+/** States which source proposed the wording and, when known, where — never why the tiers are ordered the way they are (that is the contract's business, not a sentence she reads). */
+function renameProposalLine(proposal: RenameProposal): string {
+  const location = proposal.candidate.sourceLocation;
+  const citation = location === undefined ? null : sourceLocationLabel(location);
+  return citation === null
+    ? `"${proposal.candidate.wording}" — a wording Olea found that may fit this concept better than "${proposal.currentDisplayName}".`
+    : `"${proposal.candidate.wording}" — a wording Olea found in ${citation} that may fit this concept better than "${proposal.currentDisplayName}".`;
+}
+
 /**
  * `ol-l5og.14`: every interactive control the registry renders — every
  * button and every input — mirroring `review/view.ts`'s own
@@ -106,6 +143,16 @@ export interface RegistryViewDeps {
   readonly openSourceLocation: (location: RegistrySourceLocation) => Promise<void>;
   /** F8.4a's `[D-176]` accept half — creates the new Zettelkasten note the offer promised. */
   readonly acceptNoteOffer: (entry: RegistryConceptEntry) => Promise<void>;
+  /** `[D-183]`'s accept half — adopts the candidate wording, demoting the frozen current one to an alias via the existing rename mechanism (`./provider.ts`'s `acceptRenameProposal`). */
+  readonly acceptRenameProposal: (
+    entry: RegistryConceptEntry,
+    proposal: RenameProposal,
+  ) => Promise<void>;
+  /** `[D-183]`'s decline half — records that this exact source-and-wording pair should not propose again (session-scoped today; see `./provider.ts`'s module doc). */
+  readonly declineRenameProposal: (
+    entry: RegistryConceptEntry,
+    proposal: RenameProposal,
+  ) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
@@ -275,10 +322,46 @@ export class RegistryView extends ItemView {
       row.createDiv({ cls: 'olea-registry-withdrawn-note', text: WITHDRAWN_NOTE });
     }
 
+    this.renderRenameProposal(row, entry);
     this.renderNoteOffer(row, entry);
     this.renderActions(row, entry);
     this.renderSourceLocations(row, entry.sourceLocations);
     this.renderInstruments(row, entry);
+  }
+
+  /**
+   * `[D-183]`'s rank-gated rename proposal — never a silent rewrite. Present
+   * only when `entry.renameProposal` is non-null (`./provider.ts` computes
+   * it; `../../core/registry/rename-proposal.ts` is the tested decision
+   * function it mirrors). Routed through the same accept/decline shape as
+   * `renderNoteOffer` right below, per this bead's brief naming that surface
+   * as the closest sibling — one line stating the fact and its evidence, one
+   * accept, one decline, no urgency language.
+   *
+   * **Decline is NOT purely local here, unlike `renderNoteOffer`'s.**
+   * `[D-176]`'s note-offer states no re-offer condition, so that decline
+   * only ever removes the section from THIS render. `[D-183]`'s own ruling
+   * is explicit that "a declined proposal does not fire again for the same
+   * source and wording" — so declining here also calls
+   * `deps.declineRenameProposal` (session-scoped memory in `./provider.ts`)
+   * before removing the section, rather than only removing it.
+   */
+  private renderRenameProposal(root: HTMLElement, entry: RegistryConceptEntry): void {
+    const proposal = entry.renameProposal;
+    if (proposal === null || proposal === undefined) return;
+
+    const section = root.createDiv({ cls: 'olea-registry-rename-proposal' });
+    section.createEl('p', { text: renameProposalLine(proposal) });
+
+    const acceptButton = section.createEl('button', { text: RENAME_PROPOSAL_ACCEPT_ACTION });
+    acceptButton.addEventListener('click', () => {
+      void this.deps.acceptRenameProposal(entry, proposal).then(() => this.refresh());
+    });
+
+    const declineButton = section.createEl('button', { text: RENAME_PROPOSAL_DECLINE_ACTION });
+    declineButton.addEventListener('click', () => {
+      void this.deps.declineRenameProposal(entry, proposal).then(() => section.remove());
+    });
   }
 
   /**
