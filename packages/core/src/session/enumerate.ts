@@ -68,6 +68,16 @@
  * (instrument, concept) pair. The same `instrumentId` would then appear twice
  * in one session and be offered to her twice. One instrument, one candidate,
  * several concepts.
+ *
+ * ## `[D-181]`'s citation sidecar (`ol-2zfj.52`)
+ *
+ * Still a read, not a write, in the same sense the cloze-id lookup above is: once an
+ * instrument's `[D-177]`-frozen id is derived, this walk asks `../instrument/citation-store.js`
+ * whether a generation-time passage citation was minted for it, and copies it onto
+ * `sourceProvenance` when one exists. Absent for every hand-authored instrument (nothing mints a
+ * sidecar for those) and for a generated one no writer has cited yet — `undefined`, never
+ * guessed. See `citationToSourceProvenance`'s own doc for the one field (`charRange`) this can't
+ * carry over honestly from the sidecar's smaller grain.
  */
 
 import { parseDocument } from '../block/parse.js';
@@ -75,9 +85,11 @@ import type { HeadingBlock } from '../block/types.js';
 import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord, ExtractConceptsOptions } from '../concept/types.js';
 import { noteTitle } from '../concept/zettelkasten.js';
+import type { CharRange, Provenance } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
 import { parseCards } from '../instrument/card-format.js';
+import { type InstrumentCitation, readInstrumentCitation } from '../instrument/citation-store.js';
 import { readClozeId } from '../instrument/cloze-identity.js';
 import { parseMcqBlocks } from '../instrument/mcq-format.js';
 import type { CardInstrument, McqInstrument, SourceSpan } from '../instrument/types.js';
@@ -194,6 +206,43 @@ function uidOf(source: string): string | null {
   if (first?.kind !== 'frontmatter') return null;
   const uid = readScalar(parseFrontmatter(first.inner), OLEA_UID_KEY).scalar;
   return uid === '' ? null : uid;
+}
+
+/**
+ * `[D-181]`'s citation grain (`sourcePath`/`page?`/`section?` — `../instrument/citation-store.js`)
+ * carries no character-level precision: the sidecar is written long after the extraction pass
+ * that produced a real `charRange` is over, and this walk never re-reads the original PDF/PPTX to
+ * recover one. `VaultInstrumentRecord.sourceProvenance` is nonetheless typed `Provenance`
+ * (`../extract/types.js`, reused verbatim per `[D-085]`/`ol-2zfj.48`), whose `SourceLocation`
+ * requires `location.charRange`. This sentinel stands in for "no span" — deliberately never a
+ * guessed one — and is safe today because `../registry/build.ts`'s `passageGrain()`, the only
+ * reader of this field, reads only `.page`/`.section` and ignores `.charRange` entirely.
+ *
+ * This is a named, Class B compromise (CLAUDE.md's run-charter decision ladder: non-persisted,
+ * in-memory, reversible), flagged for retroactive review rather than resolved here: the honest
+ * fix is widening `SourceLocation.charRange` to optional in `../extract/types.js`, which ripples
+ * into `../tier3-evidence/build.ts`'s sort comparator (`a.provenance.location.charRange.start`) —
+ * out of `ol-2zfj.52`'s owned files (this module and `../instrument/citation-store.ts` only).
+ */
+const NO_CHAR_RANGE: CharRange = { start: 0, end: 0 };
+
+/**
+ * `InstrumentCitation` -> `VaultInstrumentRecord.sourceProvenance`. `SourceLocation.page` is
+ * mandatory, so a citation with no `page` (never produced by a real generation-time caller today
+ * — `InstrumentCitation`'s own type doesn't rule it out) is treated the same as no citation at
+ * all: omitted, never guessed. See `NO_CHAR_RANGE`'s doc for the one field this can't honestly
+ * build from the sidecar's own grain.
+ */
+function citationToSourceProvenance(citation: InstrumentCitation): Provenance | undefined {
+  if (citation.page === undefined) return undefined;
+  return {
+    sourcePath: citation.sourcePath,
+    location: {
+      page: citation.page,
+      charRange: NO_CHAR_RANGE,
+      ...(citation.section !== undefined ? { section: citation.section } : {}),
+    },
+  };
 }
 
 /**
@@ -327,6 +376,15 @@ export async function enumerateVaultInstruments(
         stampedClozeId,
       });
 
+      // `[D-181]`'s passage-citation sidecar (`ol-2zfj.52`): a targeted read by the
+      // `[D-177]`-frozen id, never a scan — `citation-store.ts`'s own addressing
+      // discipline. `undefined` (no sidecar, or one page couldn't honestly convert —
+      // see `citationToSourceProvenance`) leaves `sourceProvenance` absent, exactly
+      // like every record `enumerate.ts` produced before this citation existed.
+      const citation = await readInstrumentCitation(vault, instrumentId);
+      const sourceProvenance =
+        citation === undefined ? undefined : citationToSourceProvenance(citation);
+
       const common = {
         instrumentId,
         conceptIds,
@@ -337,6 +395,7 @@ export async function enumerateVaultInstruments(
         blockId: instrument.blockId,
         heading,
         ordinal,
+        ...(sourceProvenance !== undefined ? { sourceProvenance } : {}),
       };
 
       if (instrument.mcq !== undefined) {

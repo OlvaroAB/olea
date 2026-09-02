@@ -612,6 +612,20 @@ export {
   SR_DEFAULT_DECK_TAG,
   stampQaCardBlockId,
 } from './instrument/card-format.js';
+// `[D-181 / CITE-2]`'s passage-citation sidecar (`ol-2zfj.52`) — a generated instrument's
+// PDF/PPTX page/section citation, kept under `.olea/citations/` and keyed by the `[D-177]`-frozen
+// instrument id, never written into her notes. `./session/enumerate.js` reads it into
+// `VaultInstrumentRecord.sourceProvenance`; the write side (draft-time, `generation/materialize-mcq.ts`
+// in the plugin repo) is not yet wired — see that module's own doc for the exact insertion point.
+export type { CitationRecord, InstrumentCitation } from './instrument/citation-store.js';
+export {
+  CITATION_RECORD_SCHEMA_VERSION,
+  CITATION_STORE_FOLDER,
+  citationStorePath,
+  isCitationRecord,
+  readInstrumentCitation,
+  writeInstrumentCitation,
+} from './instrument/citation-store.js';
 // Cloze identity (D-030, D-107, `ol-k7eg`) — the frontmatter-map stamping
 // path for the one instrument type that cannot carry a visible marker.
 export type { ClozeIdAnchor } from './instrument/cloze-identity.js';

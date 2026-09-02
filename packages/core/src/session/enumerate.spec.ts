@@ -1,10 +1,17 @@
 // Scenarios: features/F2-review.md, "F2.14 — Instruments are enumerated from
 // her vault, not fabricated" — @auto:core/session/enumerate.spec
+//
+// The `[D-181]` citation-sidecar suite below is `@auto:core/session/enumerate.spec` too, pending
+// a scenario in features/F8-concepts-scope.md ("Instrument passage-citation sidecar: mint once at
+// draft time, read back into sourceProvenance ([D-181 / CITE-2], ol-2zfj.52)") — that file is
+// owned by another lane; see ol-2zfj.52's close notes for the exact text.
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
 import { extractConcepts } from '../concept/extract.js';
+import { writeInstrumentCitation } from '../instrument/citation-store.js';
 import { enumerateVaultInstruments } from './enumerate.js';
+import type { InstrumentIdSource } from './instrument-id.js';
 
 /**
  * `ol-63e1`: `VaultInstrumentRecord.conceptIds` now carries the opaque key
@@ -280,5 +287,77 @@ describe("the walk's own extractConcepts pass is returned, not just used interna
 
     expect(found.concepts).toEqual(direct);
     expect(found.concepts.map((c) => c.name).sort()).toEqual(['Alpha', 'Beta']);
+  });
+});
+
+describe('[D-181] citation sidecar: sourceProvenance is read from .olea/citations, never fabricated', () => {
+  const fixedId: InstrumentIdSource = () => 'fixed-instrument-id';
+
+  it('populates sourceProvenance from an existing citation record', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Alpha]'), MCQ_BLOCK, ''].join('\n'),
+    });
+    await writeInstrumentCitation(vault, 'fixed-instrument-id', {
+      sourcePath: 'Sources/Lecture 3.pdf',
+      page: 4,
+      section: 'Bedform stratification',
+    });
+
+    const [mcq] = await enumerateVaultInstruments(vault, { instrumentId: fixedId }).then(
+      (f) => f.records,
+    );
+    expect(mcq?.sourceProvenance).toEqual({
+      sourcePath: 'Sources/Lecture 3.pdf',
+      location: {
+        page: 4,
+        charRange: { start: 0, end: 0 },
+        section: 'Bedform stratification',
+      },
+    });
+  });
+
+  it('leaves sourceProvenance absent when no sidecar exists for the instrument', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Alpha]'), MCQ_BLOCK, ''].join('\n'),
+    });
+
+    const [mcq] = await enumerateVaultInstruments(vault, { instrumentId: fixedId }).then(
+      (f) => f.records,
+    );
+    expect(mcq?.sourceProvenance).toBeUndefined();
+    expect(mcq && 'sourceProvenance' in mcq).toBe(false);
+  });
+
+  it('leaves sourceProvenance absent when the sidecar carries no page (cannot honestly build a SourceLocation)', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Alpha]'), MCQ_BLOCK, ''].join('\n'),
+    });
+    await writeInstrumentCitation(vault, 'fixed-instrument-id', {
+      sourcePath: 'Sources/Lecture 3.pdf',
+    });
+
+    const [mcq] = await enumerateVaultInstruments(vault, { instrumentId: fixedId }).then(
+      (f) => f.records,
+    );
+    expect(mcq?.sourceProvenance).toBeUndefined();
+  });
+
+  it('omits section when the citation did not have one', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Alpha]'), MCQ_BLOCK, ''].join('\n'),
+    });
+    await writeInstrumentCitation(vault, 'fixed-instrument-id', {
+      sourcePath: 'Sources/Deck.pptx',
+      page: 2,
+    });
+
+    const [mcq] = await enumerateVaultInstruments(vault, { instrumentId: fixedId }).then(
+      (f) => f.records,
+    );
+    expect(mcq?.sourceProvenance).toEqual({
+      sourcePath: 'Sources/Deck.pptx',
+      location: { page: 2, charRange: { start: 0, end: 0 } },
+    });
+    expect(mcq?.sourceProvenance && 'section' in mcq.sourceProvenance.location).toBe(false);
   });
 });
