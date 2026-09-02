@@ -42,8 +42,9 @@
  *
  * A block with fewer than `MIN_DISTRACTOR_POOL` distractors **fails to parse**
  * and is reported as invalid. It is not accepted-with-a-warning and not
- * silently padded. See `types.ts`'s note on the constant for why three is not
- * "nearly four" but a different instrument.
+ * silently padded. See `types.ts`'s note on the constant — lowered from 4 to
+ * 2 by `[D-195]` — for why one distractor short of the floor is not "nearly
+ * enough" but a different instrument.
  *
  * ## Reading is not rewriting
  *

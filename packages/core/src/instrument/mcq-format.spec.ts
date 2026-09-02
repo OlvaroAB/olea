@@ -30,6 +30,8 @@ function block(lines: readonly string[]): string {
 }
 
 const POOL = ['distractor A', 'distractor B', 'distractor C', 'distractor D'];
+/** A pool of exactly `MIN_DISTRACTOR_POOL` — `[D-195]` lowered the floor to 2, so `POOL` above (4) is comfortably above it and no longer doubles as the floor-sized pool. */
+const POOL_AT_FLOOR = POOL.slice(0, MIN_DISTRACTOR_POOL);
 const validLines = [
   'stem: which one is it?',
   'answer: the right one',
@@ -113,24 +115,34 @@ describe('parseMcqBlocks — a hand-typed block', () => {
 });
 
 describe('parseMcqBlocks — what is not a valid MCQ', () => {
-  it('fewer than four distractors is rejected, with the floor named', () => {
+  it('fewer than the floor is rejected, with the floor named (`[D-195]`: floor is 2)', () => {
     const short = block([
       'stem: which one is it?',
       'answer: the right one',
-      ...POOL.slice(0, 3).map((d) => `distractor: ${d}`),
+      ...POOL.slice(0, MIN_DISTRACTOR_POOL - 1).map((d) => `distractor: ${d}`),
     ]);
     const { instruments, invalid } = parseMcqBlocks(short);
     // Never returned as schedulable. This is the whole point of F2.15's floor:
-    // sampling three from three shows her the same options every time.
+    // below it, an MCQ is a different instrument wearing the same name.
     expect(instruments).toHaveLength(0);
     expect(invalid).toHaveLength(1);
     expect(invalid[0]?.reason).toBe('insufficient-distractors');
     expect(invalid[0]?.detail).toContain(String(MIN_DISTRACTOR_POOL));
   });
 
-  it('exactly four is accepted — the floor is a floor, not a threshold to exceed', () => {
+  it('exactly the floor (two) is accepted — the floor is a floor, not a threshold to exceed', () => {
+    const atFloor = block([
+      'stem: which one is it?',
+      'answer: the right one',
+      ...POOL_AT_FLOOR.map((d) => `distractor: ${d}`),
+    ]);
+    expect(parseMcqBlocks(atFloor).instruments).toHaveLength(1);
+    expect(POOL_AT_FLOOR).toHaveLength(MIN_DISTRACTOR_POOL);
+  });
+
+  it('a pool comfortably above the floor is also accepted', () => {
     expect(parseMcqBlocks(block(validLines)).instruments).toHaveLength(1);
-    expect(POOL).toHaveLength(MIN_DISTRACTOR_POOL);
+    expect(POOL.length).toBeGreaterThan(MIN_DISTRACTOR_POOL);
   });
 
   it.each([
@@ -154,7 +166,12 @@ describe('parseMcqBlocks — what is not a valid MCQ', () => {
   });
 
   it('reports an invalid block alongside the valid ones, with its location', () => {
-    const source = `${block(validLines)}\nsome prose between them\n\n${block(validLines.slice(0, -1))}`;
+    const shortLines = [
+      'stem: which one is it?',
+      'answer: the right one',
+      ...POOL.slice(0, MIN_DISTRACTOR_POOL - 1).map((d) => `distractor: ${d}`),
+    ];
+    const source = `${block(validLines)}\nsome prose between them\n\n${block(shortLines)}`;
     const { instruments, invalid } = parseMcqBlocks(source);
     expect(instruments).toHaveLength(1);
     expect(invalid).toHaveLength(1);
@@ -216,9 +233,9 @@ describe('serializeMcq — the canonical form', () => {
 
   it('refuses to emit anything its own parser would reject', () => {
     const base = { stem: 'q', answer: 'a', distractors: POOL };
-    expect(() => serializeMcq({ ...base, distractors: POOL.slice(0, 3) })).toThrowError(
-      /at least 4/,
-    );
+    expect(() =>
+      serializeMcq({ ...base, distractors: POOL.slice(0, MIN_DISTRACTOR_POOL - 1) }),
+    ).toThrowError(new RegExp(`at least ${MIN_DISTRACTOR_POOL}`));
     expect(() => serializeMcq({ ...base, distractors: [...POOL, POOL[0] ?? ''] })).toThrowError(
       /duplicate option/,
     );
@@ -291,9 +308,9 @@ describe('insertMcqBlock — the write path an accept step uses', () => {
       insertMcqBlock({
         source: 'her own line\n',
         afterBlockIndex: 0,
-        fields: { stem: 'q', answer: 'a', distractors: POOL.slice(0, 3) },
+        fields: { stem: 'q', answer: 'a', distractors: POOL.slice(0, MIN_DISTRACTOR_POOL - 1) },
       }),
-    ).toThrowError(/at least 4/);
+    ).toThrowError(new RegExp(`at least ${MIN_DISTRACTOR_POOL}`));
   });
 });
 

@@ -81,16 +81,58 @@ describe('presentMcq — one presentation', () => {
         { ...ITEM, distractors: POOL_OF_FIVE.slice(0, MIN_DISTRACTOR_POOL - 1) },
         seeded(1),
       ),
-    ).toThrowError(/at least 4/);
+    ).toThrowError(new RegExp(`at least ${MIN_DISTRACTOR_POOL}`));
   });
 
-  it('works at the floor: a pool of exactly four still samples three', () => {
-    const presentation = presentMcq(
-      { ...ITEM, distractors: POOL_OF_FIVE.slice(0, MIN_DISTRACTOR_POOL) },
-      seeded(3),
-    );
+  // `[D-195]` / `ol-2zfj.57`: the pool floor dropped from 4 to 2, and below
+  // `PRESENTED_DISTRACTORS`'s own pool size the presenter shows the whole
+  // pool rather than throwing or padding — see `mcq-present.ts`'s module doc,
+  // "THE SHORT-POOL DEGRADE".
+  it('a pool of exactly the floor (two) presents without throwing, showing both distractors', () => {
+    const shortPool = POOL_OF_FIVE.slice(0, MIN_DISTRACTOR_POOL);
+    expect(shortPool).toHaveLength(2);
+    const presentation = presentMcq({ ...ITEM, distractors: shortPool }, seeded(3));
+
+    expect(presentation.options).toHaveLength(shortPool.length + 1);
+    const correct = presentation.options.filter((o) => o.correct);
+    expect(correct).toHaveLength(1);
+    expect(correct[0]?.text).toBe(ITEM.answer);
+    const shown = presentation.options.filter((o) => !o.correct).map((o) => o.text);
+    expect([...shown].sort()).toEqual([...shortPool].sort());
+  });
+
+  it('a pool of three (below PRESENTED_DISTRACTORS, above the floor) shows all three, never four', () => {
+    const threePool = POOL_OF_FIVE.slice(0, 3);
+    const presentation = presentMcq({ ...ITEM, distractors: threePool }, seeded(5));
+    expect(presentation.options).toHaveLength(4); // 3 distractors + the answer
+    const shown = presentation.options.filter((o) => !o.correct).map((o) => o.text);
+    expect([...shown].sort()).toEqual([...threePool].sort());
+  });
+
+  it('works at the old floor: a pool of exactly four still samples three', () => {
+    const presentation = presentMcq({ ...ITEM, distractors: POOL_OF_FIVE.slice(0, 4) }, seeded(3));
     expect(presentation.options).toHaveLength(PRESENTED_OPTIONS);
     expect(presentation.options.filter((o) => o.correct)).toHaveLength(1);
+  });
+});
+
+describe('presentMcq — short-pool rotation (`[D-195]`)', () => {
+  it('a pool at the floor never rotates its CONTENT across repeat presentations — there is nothing to rotate — but positions still shuffle', () => {
+    const shortPool = POOL_OF_FIVE.slice(0, MIN_DISTRACTOR_POOL);
+    const presentations = Array.from({ length: 50 }, () =>
+      presentMcq({ ...ITEM, distractors: shortPool }, mathRandomSource),
+    );
+    // Content: every presentation shows exactly the same two distractors — the
+    // whole pool — because there are only two to show. This is the accepted
+    // degrade F2.15's amendment names, not a defect.
+    for (const p of presentations) {
+      const shown = p.options.filter((o) => !o.correct).map((o) => o.text);
+      expect([...shown].sort()).toEqual([...shortPool].sort());
+    }
+    // Position still rotates: the answer is not pinned to one slot merely
+    // because the content can't move.
+    const positions = new Set(presentations.map((p) => p.options.findIndex((o) => o.correct)));
+    expect(positions.size).toBeGreaterThan(1);
   });
 });
 

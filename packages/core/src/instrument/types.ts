@@ -90,26 +90,60 @@ export type CardInstrument = QaCardInstrument | ClozeCardInstrument;
 /**
  * **F2.15's floor, enforced at the parse/serialize boundary.**
  *
- * The pool is distractors only; the correct answer is not one of them. Four is
- * not a round number picked for tidiness: `PRESENTED_DISTRACTORS` of them are
- * sampled per presentation, so a pool of exactly three cannot rotate — sampling
- * three from three shows her the same options every time, and a repeated item
- * degrades into remembering which option was right last time, which is the
- * exact degradation F2.15 exists to prevent. A block below this floor is not a
- * slightly-worse MCQ; it is a different instrument wearing the same name, and
- * it fails to parse rather than being accepted and quietly under-rotating.
+ * The pool is distractors only; the correct answer is not one of them.
  *
- * The generation schema enforces the same floor on the way in (amendment §5.2,
- * `ol-fyc`). Two boundaries, one number, deliberately: generation is not the
- * only way an MCQ can reach the vault — she can type one — and the parse
- * boundary is the one every MCQ crosses.
+ * **Lowered from 4 to 2 by `[D-195]` / `ol-2zfj.57`.** Before this ruling the
+ * number here and `quiz.generate.v1`'s own `MIN_DISTRACTOR_POOL`
+ * (`olea-service/src/tasks/quizGenerate.ts`) meant the same thing: a floor of
+ * four *grounded* distractors, required on both the way in and the way out.
+ * `[D-195]` found that coupling was itself the padding pressure it exists to
+ * prevent — a model held to four grounded misconceptions manufactures a
+ * fourth belief when only two or three genuinely exist for a concept — and
+ * split the two numbers on purpose. The service's floor is now a
+ * GENERATION-TIME minimum (2, unchanged by this bead); this one is the
+ * PERSISTED/PRESENTATION floor, below which a block fails to parse and
+ * `presentMcq` refuses outright — lowered to match, so the client can accept
+ * and present exactly what a short-but-honest grounded pool actually
+ * contains rather than reject or pad it. `scripts/check-instrument-floor.mjs`
+ * (`olea-service`) documents the split and no longer asserts the two numbers
+ * equal.
+ *
+ * **What this floor no longer guarantees on its own: rotation.**
+ * `PRESENTED_DISTRACTORS` (below) draws up to that many from the pool, and at
+ * the old floor of 4 that meant a genuine sample (`C(4,3) = 4` distinct
+ * option sets). At this floor, a pool of exactly 2 or 3 cannot be sampled
+ * down to 3 — `mcq-present.ts`'s `presentMcq` presents `min(
+ * PRESENTED_DISTRACTORS, pool.length)` of them instead, shuffled, and never
+ * pads with an invented option. F2.15's amendment names this "shuffle-only"
+ * path as the ratified degrade: a short pool presents everything it has,
+ * rather than being padded to hit a count or withheld outright. A block
+ * below THIS floor (2) is still not a slightly-worse MCQ; it is a different
+ * instrument wearing the same name, and it still fails to parse rather than
+ * being accepted and quietly under-rotating.
+ *
+ * The generation schema enforces its own floor on the way in (amendment §5.2,
+ * `ol-fyc`; renumbered to 2 by `[D-195]`). Two boundaries, two numbers now,
+ * deliberately: generation is not the only way an MCQ can reach the vault —
+ * she can type one — and the parse boundary is the one every MCQ crosses,
+ * regardless of how honest the pool that reaches it is.
  */
-export const MIN_DISTRACTOR_POOL = 4;
+export const MIN_DISTRACTOR_POOL = 2;
 
-/** How many distractors a single presentation samples from the pool (F2.15). */
+/**
+ * How many distractors a single presentation samples from the pool (F2.15),
+ * **when the pool is at least this large.** Below it — a pool of exactly
+ * `MIN_DISTRACTOR_POOL` or anywhere between the two — `presentMcq` shows
+ * `min(PRESENTED_DISTRACTORS, pool.length)` instead; see `mcq-present.ts`.
+ */
 export const PRESENTED_DISTRACTORS = 3;
 
-/** Options shown per presentation: the sampled distractors plus the answer. */
+/**
+ * Options shown per presentation **at or above `PRESENTED_DISTRACTORS`'s own
+ * pool size**: the sampled distractors plus the answer. A short pool (`[D-195]`)
+ * presents `min(PRESENTED_DISTRACTORS, pool.length) + 1` instead — this
+ * constant is the ceiling, not a guarantee, once `MIN_DISTRACTOR_POOL` no
+ * longer equals `PRESENTED_DISTRACTORS + 1`'s own precondition.
+ */
 export const PRESENTED_OPTIONS = PRESENTED_DISTRACTORS + 1;
 
 export interface McqInstrument {

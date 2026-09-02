@@ -20,12 +20,53 @@
 
 import type { InstrumentCitation } from 'olea-core';
 
-/** Mirrors `QuizGenerateResponsePayload['questions'][number]` (`draft-quiz-cards.ts`, olea repo) — the one question shape `draftQuizCardsForConcept` can currently produce. */
+/**
+ * `[D-195]` (`ol-0r92.40`): a grounded distractor's provenance — the wrong
+ * belief it encodes and the source material that corrects it, mirroring
+ * `quizGenerateResponse`'s `distractorSchema` field-for-field
+ * (`olea-service/src/tasks/quizGenerate.ts`, private; read for shape only).
+ * Carried on `DraftQuestion` **in memory only** — see that field's own doc.
+ */
+export interface DraftDistractorGrounding {
+  readonly believes: string;
+  readonly source_says: string;
+}
+
+/**
+ * Mirrors `QuizGenerateResponsePayload['questions'][number]` (`draft-quiz-cards.ts`, olea repo) —
+ * the one question shape `draftQuizCardsForConcept` can currently produce.
+ */
 export interface DraftQuestion {
   readonly stem: string;
   readonly correctAnswer: string;
+  /**
+   * The option text only — what `materialize-mcq.ts` writes into the vault's
+   * MCQ block (`olea-core`'s `McqFields.distractors`). Populated from either
+   * the pre-`[D-195]` bare-string generation shape or the `text` field of the
+   * `[D-195]` object shape — `response.ts`'s `extractDraftedQuestions`
+   * normalises both to this.
+   */
   readonly distractors: readonly string[];
   readonly feedback: string;
+  /**
+   * `[D-195]`'s per-distractor grounding, aligned by index with `distractors`
+   * above — `distractorGrounding[i]` describes `distractors[i]`. `undefined`
+   * for the whole array when the generation response used the pre-`[D-195]`
+   * bare-string shape (nothing to carry); `null` at one index if that
+   * position's own entry didn't parse as the object shape while its siblings
+   * did (defensive — a single response is not expected to mix shapes, but
+   * this is not assumed).
+   *
+   * **In-memory / cache-scoped, not a persisted-block field.** The vault's
+   * MCQ instrument (`olea-core`'s `McqInstrument.distractors: readonly
+   * string[]`) has no place for `believes`/`source_says` yet — that is
+   * `[D-202]` (`ol-egov.92`), explicitly HELD. `materialize-mcq.ts` /
+   * `acceptGeneratedMcq` must keep reading only `distractors` above; this
+   * field exists so the richer data survives from generation through to
+   * whatever eventually consumes it (a review-view affordance, or `[D-202]`
+   * itself), without forcing a persisted-schema decision to land first.
+   */
+  readonly distractorGrounding?: readonly (DraftDistractorGrounding | null)[];
 }
 
 /**
@@ -144,6 +185,20 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
     typeof q.feedback !== 'string'
   ) {
     return false;
+  }
+  // `[D-195]`'s optional per-distractor grounding (`DraftDistractorGrounding`) — absent entirely
+  // for a draft cached before this bead, or for one built from the pre-`[D-195]` bare-string
+  // generation shape. When present, each entry is either `null` or a fully-populated grounding
+  // object; nothing partial is accepted, matching the "no believer behind it" defect F2.15
+  // forbids typed rather than left to prose.
+  if (q.distractorGrounding !== undefined) {
+    if (!Array.isArray(q.distractorGrounding)) return false;
+    for (const entry of q.distractorGrounding) {
+      if (entry === null) continue;
+      if (typeof entry !== 'object') return false;
+      const g = entry as Record<string, unknown>;
+      if (typeof g.believes !== 'string' || typeof g.source_says !== 'string') return false;
+    }
   }
   const p = v.provenance as Record<string, unknown> | undefined;
   if (

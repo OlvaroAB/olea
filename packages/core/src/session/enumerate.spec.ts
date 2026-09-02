@@ -148,8 +148,6 @@ describe('notes the walk has nothing to say about, and notes it has to complain 
         'stem: Too few options?',
         'answer: yes',
         'distractor: d1',
-        'distractor: d2',
-        'distractor: d3',
         '```',
         '',
         MCQ_BLOCK,
