@@ -97,6 +97,7 @@ import {
   enumerateVaultInstruments,
   extractTier3Evidence,
   type GroveCourseModel,
+  loadCachedStudyPlan,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
   type RhythmCourseInput,
@@ -104,6 +105,7 @@ import {
   resolveTermBoundary,
   reviewLogPath,
   type Scheduler,
+  type StudyPlanStore,
   type TermWindow,
   type TodayPanelInput,
   type TodayViewModel,
@@ -429,14 +431,17 @@ export interface TodayTrendsSource {
   /**
    * The plan's per-course windowed floor shares (component 3.5,
    * `[D-081]`/`[D-092]`). `[]` is a real and common answer — no cached plan
-   * yet — and the effort detector reports `not-enough-history` on it, which
-   * is the true statement. **Re-specified from raw assessment weight by
-   * `ol-v7r5.33`; no client-side producer of a real floor share exists yet**
-   * (component 3.5 is `boundary: service` — `docs/Olea_component_register.md`
-   * row 3.5 — so a floor cannot be honestly recomputed here). `createVaultTrendsSource`
-   * below returns `[]` unconditionally until this is wired to the cached
-   * study-plan artifact — the honest state named rather than papered over
-   * with a stand-in number, matching `effort.ts`'s own "Reachability note".
+   * yet, an unreadable or expired one, or one predating the `allocation`
+   * field (`ol-v7r5.17` [ALLOC-2]) — and the effort detector reports
+   * `not-enough-history` on it, which is the true statement in every one of
+   * those cases. **Read, never recomputed** (`ol-v7r5.38`, boundary
+   * document §1): component 3.5 is `boundary: service`
+   * (`docs/Olea_component_register.md` row 3.5), so this is a read of the
+   * cached `StudyPlanEnvelope`'s `body.allocation[].contributions` entry
+   * named `'floor'` (`packages/contracts/src/study-plan.ts`), never a
+   * client-side derivation of one. `createVaultTrendsSource` below reads it
+   * through `deps.studyPlanStore` when supplied — see that deps field's own
+   * doc for the production-wiring gap this change does not close.
    */
   listCourseFloorShares(): Promise<readonly CourseFloorShare[]>;
 }
@@ -455,12 +460,36 @@ export interface VaultTrendsSourceDeps {
    * floor-share source is built.
    */
   readonly assessmentsBasePath?: VaultPath;
+  /**
+   * The client's cached study-plan artifact port (`packages/core/src/plan
+   * /cache.ts`'s `StudyPlanStore`), the one honest source
+   * `listCourseFloorShares` has for a real per-course floor share — the
+   * client reads a service-computed number rather than recomputing the
+   * allocation itself (component 3.5 is `boundary: service`, boundary
+   * document §1). Read through `loadCachedStudyPlan`, so every one of
+   * "never cached", "unreadable blob" and "expired envelope" collapses to
+   * the same `plan: null` this method treats as `[]` — see that function's
+   * own doc.
+   *
+   * **Optional, and not yet supplied by production** (`ol-v7r5.38`): both of
+   * `main.ts`'s `createVaultTrendsSource` call sites (`packages/plugin/src/
+   * main.ts:774` and `:807`) already construct an `ObsidianStudyPlanStore`
+   * earlier in `onload` (`main.ts:503`, bound to the local `studyPlanStore`)
+   * but do not pass it here yet — that one-line follow-up at each call site
+   * is outside this file's owned paths. Until it lands,
+   * `listCourseFloorShares` keeps returning `[]` in the shipped app, the
+   * same honest-absence answer it already gave.
+   */
+  readonly studyPlanStore?: StudyPlanStore;
+  /** Clock for `loadCachedStudyPlan`'s freshness check. Defaults to `() => new Date()`; overridable for tests. */
+  readonly now?: () => Date;
 }
 
 /**
- * The real trends source: walk her vault for concepts; the floor-share half
- * is not yet backed by a real producer — see `TodayTrendsSource
- * .listCourseFloorShares`'s doc.
+ * The real trends source: walk her vault for concepts; read the plan's
+ * per-course floor shares from `deps.studyPlanStore` when one is supplied —
+ * see `TodayTrendsSource.listCourseFloorShares`'s doc for the production-
+ * wiring gap this leaves.
  *
  * Both halves swallow their own failures into the honest value —
  * `null` concepts, `[]` floor shares — for the reason `createVaultInstrumentSource`
@@ -488,12 +517,36 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
       }
     },
     async listCourseFloorShares() {
-      // No client-side producer of a real windowed floor share exists yet
-      // (component 3.5 is server-only) — see this method's doc on
-      // `TodayTrendsSource`. `[]` reads as "the plan has nothing to say about
-      // any course's floor right now", the same honest-absence convention
-      // `listConceptCourses`'s own `null` uses for a different failure mode.
-      return [];
+      // No store supplied — see `VaultTrendsSourceDeps.studyPlanStore`'s doc
+      // for why production does not pass one yet. `[]` reads as "the plan
+      // has nothing to say about any course's floor right now", the same
+      // honest-absence convention `listConceptCourses`'s own `null` uses for
+      // a different failure mode.
+      if (!deps.studyPlanStore) return [];
+      try {
+        const now = deps.now ?? (() => new Date());
+        const { plan } = await loadCachedStudyPlan(deps.studyPlanStore, now());
+        // `plan` is `null` for every one of "never cached", "unreadable
+        // blob" (including a malformed one — schema rejection, never a
+        // throw, per `loadCachedStudyPlan`'s own doc) and "expired
+        // envelope". `allocation` is additionally `undefined` on a plan
+        // cached before `ol-v7r5.17` [ALLOC-2] added the field. All four
+        // collapse to the same `[]` here — component 3.5 is `boundary:
+        // service`, so there is no honest way to fill the gap client-side.
+        const allocation = plan?.body.allocation;
+        if (!allocation) return [];
+        return allocation.map((entry) => ({
+          course: entry.courseId,
+          floorShare: entry.contributions.find((contribution) => contribution.name === 'floor')
+            ?.value,
+        }));
+      } catch {
+        // A store whose `load()` itself throws (a host-level failure, not a
+        // schema one — `loadCachedStudyPlan` already never throws on a bad
+        // blob) is the same "could not read" case `listConceptCourses`'s own
+        // `catch` treats identically.
+        return [];
+      }
     },
   };
 }

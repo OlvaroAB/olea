@@ -26,13 +26,16 @@
  * listing failed to surface" from "there is nothing to surface".
  */
 
-import type { ConceptRelation, VaultSource } from 'olea-core';
+import type { StudyPlanEnvelope } from 'olea-contracts';
+import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
+import type { ConceptRelation, StudyPlanStore, VaultSource } from 'olea-core';
 import { createFsrsScheduler } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
   createVaultScopeSource,
+  createVaultTrendsSource,
   DEFAULT_STREAK_WINDOW_DAYS,
   endOfLocalDay,
   loadTodayPanel,
@@ -1088,5 +1091,155 @@ describe('createVaultScopeSource — the real F6.2 scope source (ol-4qvc)', () =
       now: () => NOW,
     });
     expect(await source.listCourseGroveModels()).toBeNull();
+  });
+});
+
+/**
+ * `createVaultTrendsSource().listCourseFloorShares` (`ol-v7r5.38`, F6.5(b)).
+ *
+ * Read-only over `deps.studyPlanStore`: the fixtures below build a
+ * `StudyPlanEnvelope` and hand it to a fake `StudyPlanStore` (same shape as
+ * `packages/core/src/plan/cache.spec.ts`'s own `memoryStore`, restated here
+ * rather than imported — that file lives outside this package's tsconfig).
+ * Course codes are coined, never anything from a real vault (INV-3).
+ */
+describe('createVaultTrendsSource#listCourseFloorShares', () => {
+  const COMPUTED_AT = '2026-08-16T09:00:00.000Z';
+  const NOW = new Date(COMPUTED_AT);
+
+  function memoryStudyPlanStore(initial: unknown = null): StudyPlanStore {
+    let value: unknown = initial;
+    return {
+      async load() {
+        return value;
+      },
+      async save(plan) {
+        value = plan;
+      },
+    };
+  }
+
+  function planFixture(overrides: Partial<StudyPlanEnvelope['body']> = {}): StudyPlanEnvelope {
+    return {
+      envelopeVersion: 1,
+      kind: 'study-plan',
+      bodyVersion: 1,
+      policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
+      computedAt: COMPUTED_AT,
+      freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+      governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
+      body: {
+        asOf: '2026-08-16',
+        courses: [],
+        ...overrides,
+      },
+    };
+  }
+
+  it("reads real per-course floor shares from the cached plan's allocation contributions", async () => {
+    const store = memoryStudyPlanStore(
+      planFixture({
+        allocation: [
+          {
+            courseId: 'COGS214',
+            share: 0.6,
+            minBlockSeconds: 600,
+            contributions: [
+              { name: 'floor', value: 0.35 },
+              { name: 'rawDesire', value: 0.5 },
+            ],
+            reason: 'COGS214 has the nearer assessment.',
+          },
+          {
+            courseId: 'STAT221',
+            share: 0.4,
+            minBlockSeconds: 600,
+            contributions: [{ name: 'floor', value: 0.2 }],
+            reason: 'STAT221 keeps its minimum share.',
+          },
+        ],
+      }),
+    );
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: store,
+      now: () => NOW,
+    });
+    expect(await source.listCourseFloorShares()).toEqual([
+      { course: 'COGS214', floorShare: 0.35 },
+      { course: 'STAT221', floorShare: 0.2 },
+    ]);
+  });
+
+  it('returns [] when no cached plan exists — the honest not-enough-history path', async () => {
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: memoryStudyPlanStore(null),
+      now: () => NOW,
+    });
+    expect(await source.listCourseFloorShares()).toEqual([]);
+  });
+
+  it('returns [] when no studyPlanStore dependency is supplied at all', async () => {
+    const source = createVaultTrendsSource({ vault: memoryVault({}) });
+    expect(await source.listCourseFloorShares()).toEqual([]);
+  });
+
+  it('returns [] on a malformed cached blob, without throwing', async () => {
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: memoryStudyPlanStore({ envelopeVersion: 99, garbage: true }),
+      now: () => NOW,
+    });
+    await expect(source.listCourseFloorShares()).resolves.toEqual([]);
+  });
+
+  it('returns [] when the store itself throws, without throwing', async () => {
+    const throwingStore: StudyPlanStore = {
+      async load() {
+        throw new Error('disk read failed');
+      },
+      async save() {},
+    };
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: throwingStore,
+      now: () => NOW,
+    });
+    await expect(source.listCourseFloorShares()).resolves.toEqual([]);
+  });
+
+  it('returns [] for a plan cached before the allocation field existed (ol-v7r5.17 [ALLOC-2])', async () => {
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: memoryStudyPlanStore(planFixture()),
+      now: () => NOW,
+    });
+    expect(await source.listCourseFloorShares()).toEqual([]);
+  });
+
+  it('returns [] for an expired plan — a governing artifact past its horizon is not evidence', async () => {
+    const pastHorizon = new Date(
+      new Date(COMPUTED_AT).getTime() + (GOVERNING_GOVERNS_FOR_SECONDS + 1) * 1000,
+    );
+    const store = memoryStudyPlanStore(
+      planFixture({
+        allocation: [
+          {
+            courseId: 'COGS214',
+            share: 1,
+            minBlockSeconds: 600,
+            contributions: [{ name: 'floor', value: 0.5 }],
+            reason: 'only course.',
+          },
+        ],
+      }),
+    );
+    const source = createVaultTrendsSource({
+      vault: memoryVault({}),
+      studyPlanStore: store,
+      now: () => pastHorizon,
+    });
+    expect(await source.listCourseFloorShares()).toEqual([]);
   });
 });

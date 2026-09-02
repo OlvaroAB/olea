@@ -771,7 +771,14 @@ export default class OleaPlugin extends Plugin {
             // Today panel's insights. Absent path means "not configured",
             // which `createVaultTrendsSource` already reads as "no weights"
             // rather than a guessed folder.
-            trends: createVaultTrendsSource({ vault, assessmentsBasePath: assignmentsBasePath }),
+            trends: createVaultTrendsSource({
+              vault,
+              assessmentsBasePath: assignmentsBasePath,
+              // F6.5(b) (ol-v7r5.38): floor shares come from the cached plan
+              // artifact, never recomputed client-side.
+              studyPlanStore,
+              now: () => new Date(),
+            }),
             // F6.2's cross-course scope reading (`ol-4qvc`): one grove model
             // per running course, placed side by side — counts never summed
             // or ranked (F8.3/C5.7).
