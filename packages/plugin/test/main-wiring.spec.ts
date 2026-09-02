@@ -92,6 +92,10 @@ describe('every port the session needs is the real one', () => {
   it.each([
     ['reviewLog', /reviewLog:\s*createVaultReviewLogPort\(vault, deviceId\)/],
     ['suspendPort', /suspendPort:\s*createVaultSuspendPort\(vault, deviceId\)/],
+    [
+      'explainBackOfferLog',
+      /explainBackOfferLog:\s*createVaultExplainBackOfferLogPort\(vault, deviceId\)/,
+    ],
     ['editPort', /editPort:\s*createObsidianEditPort\(this\.app\)/],
     ['noteExists', /noteExists:\s*createVaultNoteExistsPort\(vault\)/],
     ['clock', /clock:\s*systemClock/],

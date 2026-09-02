@@ -149,6 +149,7 @@ import {
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
 import {
+  createVaultExplainBackOfferLogPort,
   createVaultNoteExistsPort,
   createVaultReviewLogPort,
   createVaultSuspendPort,
@@ -552,6 +553,11 @@ export default class OleaPlugin extends Plugin {
         // survives past this session instead of a `Notice` being the only
         // trace it ever happened.
         suspendPort: createVaultSuspendPort(vault, deviceId),
+        // F2.12's offer/decline write (`ol-0r92.28`, `ol-nqtz`): without this
+        // the banner's `recordExplainBackOfferShown`/`recordExplainBackOfferDeclined`
+        // calls have nothing to write through, and the offer renders but
+        // leaves no trace.
+        explainBackOfferLog: createVaultExplainBackOfferLogPort(vault, deviceId),
         editPort: createObsidianEditPort(this.app),
         // Note the absence of an `App` here: `createVaultNoteExistsPort` asks
         // the `VaultSource` (`ol-t5lj`), which is why the workbench can mount
