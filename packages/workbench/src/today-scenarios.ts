@@ -31,7 +31,7 @@
  */
 
 import type { Rating } from 'olea-contracts';
-import type { Scheduler, VaultSource } from 'olea-core';
+import type { GroveCourseModel, RhythmCourseInput, Scheduler, VaultSource } from 'olea-core';
 import { appendReviewLogRecord, buildTodayPanel } from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
@@ -115,6 +115,36 @@ export const TODAY_STATES: readonly TodayWorkbenchState[] = [
       'are different claims, and only one of them is true here. The "Start review" button stays ' +
       'absent — showsStartReviewAction is not extended to this case (see copy.ts).',
   },
+  {
+    id: 'today-scope-not-declared',
+    label: 'Scope — no source registered (F1.5/F8.1)',
+    group: 'today',
+    note:
+      'F6.2/F8.1 — courseScopeModels wired with one course whose GroveCourseModel status is ' +
+      "'no-registered-source'. The panel's compact scope section states plainly that no " +
+      'objectives document or past paper has been registered yet — the same fact ' +
+      "grove/copy.ts's GROVE_NO_SOURCE_BODY states at its own screen. No prior today-* state " +
+      'wired this field at all, so the section rendered nothing until this one.',
+  },
+  {
+    id: 'today-rhythm-quiet',
+    label: 'Rhythm — a genuinely quiet course (F6.9)',
+    group: 'today',
+    note:
+      'F6.9 — courseMaterialArrivals wired with one course whose last observed arrival is well ' +
+      "past QUIET_DAYS_THRESHOLD. detectRhythm is pure; the panel's rhythm section names the " +
+      'course and states the measured day count plainly. No prior today-* state wired this field ' +
+      'either, so the rhythm section rendered nothing until this one.',
+  },
+  {
+    id: 'today-rhythm-fresh',
+    label: 'Rhythm — material arrived recently (silence, F6.9)',
+    group: 'today',
+    note:
+      'F6.9 — the identical course, with its last observed arrival inside the quiet window. ' +
+      'Nothing crosses the threshold, so the rhythm section renders nothing at all: silence is ' +
+      'the honest reading here, never a stale quiet-course line left over from another state.',
+  },
 ];
 
 export function findTodayState(id: string): TodayWorkbenchState | undefined {
@@ -144,6 +174,19 @@ export interface BuildTodayScenarioOptions {
 }
 
 const RATE_GOOD: Rating = 'good';
+
+/** Coined course code (INV-3) shared by `today-scope-not-declared` and both `today-rhythm-*` states. */
+const WB_SCOPE_COURSE = 'syn:course:vantrel';
+
+/**
+ * `WORKBENCH_NOW` is `2027-01-15T09:15:00.000Z`, so `localToday` resolves to
+ * `'2027-01-15'`. 31 days back clears `QUIET_DAYS_THRESHOLD` (21, the flat
+ * default this fixture's un-set `tempoWeight` uses) with margin.
+ */
+const WB_RHYTHM_QUIET_ARRIVAL_DAY = '2026-12-15';
+
+/** 3 days back — well inside the 21-day quiet threshold, so nothing fires. */
+const WB_RHYTHM_FRESH_ARRIVAL_DAY = '2027-01-12';
 
 export function buildTodayScenario(options: BuildTodayScenarioOptions): TodayScenario {
   const { vault, scheduler, queue, stateId } = options;
@@ -284,6 +327,76 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
         },
         refreshedAfterWrite: false,
       };
+
+    case 'today-scope-not-declared': {
+      const model: GroveCourseModel = { status: 'no-registered-source', course: WB_SCOPE_COURSE };
+      return {
+        deps: {
+          load: () =>
+            Promise.resolve(
+              buildTodayPanel({
+                entries: [],
+                instruments: [],
+                today,
+                dueThrough,
+                windowDays: DEFAULT_STREAK_WINDOW_DAYS,
+                courseScopeModels: [model],
+              }),
+            ),
+          startReview,
+        },
+        logged,
+        refreshedAfterWrite: false,
+      };
+    }
+
+    case 'today-rhythm-quiet': {
+      const arrivals: RhythmCourseInput[] = [
+        { course: WB_SCOPE_COURSE, lastMaterialArrivalDay: WB_RHYTHM_QUIET_ARRIVAL_DAY },
+      ];
+      return {
+        deps: {
+          load: () =>
+            Promise.resolve(
+              buildTodayPanel({
+                entries: [],
+                instruments: [],
+                today,
+                dueThrough,
+                windowDays: DEFAULT_STREAK_WINDOW_DAYS,
+                courseMaterialArrivals: arrivals,
+              }),
+            ),
+          startReview,
+        },
+        logged,
+        refreshedAfterWrite: false,
+      };
+    }
+
+    case 'today-rhythm-fresh': {
+      const arrivals: RhythmCourseInput[] = [
+        { course: WB_SCOPE_COURSE, lastMaterialArrivalDay: WB_RHYTHM_FRESH_ARRIVAL_DAY },
+      ];
+      return {
+        deps: {
+          load: () =>
+            Promise.resolve(
+              buildTodayPanel({
+                entries: [],
+                instruments: [],
+                today,
+                dueThrough,
+                windowDays: DEFAULT_STREAK_WINDOW_DAYS,
+                courseMaterialArrivals: arrivals,
+              }),
+            ),
+          startReview,
+        },
+        logged,
+        refreshedAfterWrite: false,
+      };
+    }
 
     default:
       throw new Error(`workbench: unknown today state ${JSON.stringify(stateId)}`);

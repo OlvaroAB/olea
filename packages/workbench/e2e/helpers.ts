@@ -36,6 +36,9 @@ export const TODAY_STATES = [
   'today-after-writing',
   'today-stale',
   'today-unavailable',
+  'today-scope-not-declared',
+  'today-rhythm-quiet',
+  'today-rhythm-fresh',
 ] as const;
 
 // `ol-opmb.1` [TB-1] — see `oracle-scenarios.ts` for the source of truth.
@@ -121,6 +124,9 @@ export const PLUGIN_SURFACE_STATES = [
   'plugin-surface-connected',
 ] as const;
 
+// F1.5/F8.1's grove (`ol-z6x2`) — see `grove-scenarios.ts` for the source of truth.
+export const GROVE_STATES = ['grove-no-source', 'grove-declared'] as const;
+
 export const VARIABLE_SETS = [
   'obsidian-dark',
   'obsidian-light',
@@ -143,6 +149,7 @@ export type RhythmStateId = (typeof RHYTHM_STATES)[number];
 export type BulkReviewStateId = (typeof BULK_REVIEW_STATES)[number];
 export type RegistryStateId = (typeof REGISTRY_STATES)[number];
 export type PluginSurfaceStateId = (typeof PLUGIN_SURFACE_STATES)[number];
+export type GroveStateId = (typeof GROVE_STATES)[number];
 export type VariableSetId = (typeof VARIABLE_SETS)[number];
 export type Surface =
   | 'review'
@@ -157,7 +164,8 @@ export type Surface =
   | 'rhythm'
   | 'bulk-review'
   | 'registry'
-  | 'plugin-surface';
+  | 'plugin-surface'
+  | 'grove';
 
 /**
  * WBF-4 (`ol-opjq`) — per-STATE viewport overrides for the golden suite.
@@ -276,6 +284,7 @@ export interface DiscoveredMatrix {
   readonly bulkReviewStates: readonly string[];
   readonly registryStates: readonly string[];
   readonly pluginSurfaceStates: readonly string[];
+  readonly groveStates: readonly string[];
   readonly variableSets: readonly string[];
 }
 
@@ -322,6 +331,9 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     .evaluateAll((els) =>
       els.map((el) => el.getAttribute('data-wb-plugin-surface-state-link') ?? ''),
     );
+  const groveStates = await page
+    .locator('[data-wb-grove-state-link]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-grove-state-link') ?? ''));
   const variableSets = await page
     .locator('[data-wb-set-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-set-link') ?? ''));
@@ -339,6 +351,7 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     bulkReviewStates,
     registryStates,
     pluginSurfaceStates,
+    groveStates,
     variableSets,
   };
 }

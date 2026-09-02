@@ -14,6 +14,7 @@ import {
   discoverMatrix,
   EXPLAIN_STATES,
   GENERATE_STATES,
+  GROVE_STATES,
   ORACLE_STATES,
   PLUGIN_SURFACE_STATES,
   REGISTRY_STATES,
@@ -27,7 +28,7 @@ import {
   VARIABLE_SETS,
 } from './helpers.js';
 
-test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/bulk-review/registry/plugin-surface/variable-set lists match the live app', async ({
+test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/bulk-review/registry/plugin-surface/grove/variable-set lists match the live app', async ({
   page,
 }) => {
   await page.goto('/');
@@ -86,6 +87,9 @@ test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/sessi
     new Set(live.pluginSurfaceStates),
     'plugin-surface states — see plugin-surface-scenarios.ts PLUGIN_SURFACE_STATES',
   ).toEqual(new Set(PLUGIN_SURFACE_STATES));
+  expect(new Set(live.groveStates), 'grove states — see grove-scenarios.ts GROVE_STATES').toEqual(
+    new Set(GROVE_STATES),
+  );
   expect(new Set(live.variableSets), 'variable sets — see themes/index.ts VARIABLE_SETS').toEqual(
     new Set(VARIABLE_SETS),
   );

@@ -75,6 +75,7 @@ import {
   BULK_REVIEW_STATES,
   EXPLAIN_STATES,
   GENERATE_STATES,
+  GROVE_STATES,
   gotoState,
   hostFrameElement,
   ORACLE_STATES,
@@ -222,6 +223,18 @@ for (const stateId of REGISTRY_STATES) {
       await applyTallViewportIfAny(page, stateId);
       await gotoState(page, 'registry', stateId, setId);
       await expect(hostFrameElement(page)).toHaveScreenshot(`registry-${stateId}--${setId}.png`);
+    });
+  }
+}
+
+// F1.5/F8.1's grove screen (`ol-z6x2` F1 tranche) — 2 states across the same
+// 6 variable sets, 12 more screenshots.
+for (const stateId of GROVE_STATES) {
+  for (const setId of VARIABLE_SETS) {
+    test(`grove/${stateId} @ ${setId}`, async ({ page }) => {
+      await applyTallViewportIfAny(page, stateId);
+      await gotoState(page, 'grove', stateId, setId);
+      await expect(hostFrameElement(page)).toHaveScreenshot(`grove-${stateId}--${setId}.png`);
     });
   }
 }

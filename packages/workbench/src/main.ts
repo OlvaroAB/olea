@@ -63,6 +63,8 @@ import {
   GENERATE_STATES,
   type GenerateScenario,
 } from './generate-scenarios.js';
+import { GroveView } from './grove-bridge.js';
+import { buildGroveScenario, findGroveState, GROVE_STATES } from './grove-scenarios.js';
 import { createHostFrame, type HostFrame } from './host-frame.js';
 import { installObsidianDomHelpers } from './obsidian-shim/dom.js';
 import { Notice, type WorkspaceLeaf } from './obsidian-shim/index.js';
@@ -173,6 +175,7 @@ type RouteSurface =
   | 'bulk-review'
   | 'registry'
   | 'plugin-surface'
+  | 'grove'
   | 'walk';
 
 const DEFAULT_STATE = 'qa-front';
@@ -189,6 +192,7 @@ const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
 const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
 const DEFAULT_REGISTRY_STATE = 'registry-populated';
 const DEFAULT_PLUGIN_SURFACE_STATE = 'plugin-surface-fresh';
+const DEFAULT_GROVE_STATE = 'grove-declared';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -298,6 +302,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_REGISTRY_STATE;
     case 'plugin-surface':
       return DEFAULT_PLUGIN_SURFACE_STATE;
+    case 'grove':
+      return DEFAULT_GROVE_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -336,6 +342,8 @@ function findStateFor(
       return findRegistryState(stateId);
     case 'plugin-surface':
       return findPluginSurfaceState(stateId);
+    case 'grove':
+      return findGroveState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -383,9 +391,11 @@ function readRoute(): Route {
                             ? 'registry'
                             : segments[0] === 'plugin-surface'
                               ? 'plugin-surface'
-                              : segments[0] === 'walk'
-                                ? 'walk'
-                                : 'review';
+                              : segments[0] === 'grove'
+                                ? 'grove'
+                                : segments[0] === 'walk'
+                                  ? 'walk'
+                                  : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -451,6 +461,7 @@ async function main(): Promise<void> {
   const bulkReviewStateList = requireEl('[data-wb-bulk-review-states]');
   const registryStateList = requireEl('[data-wb-registry-states]');
   const pluginSurfaceStateList = requireEl('[data-wb-plugin-surface-states]');
+  const groveStateList = requireEl('[data-wb-grove-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -656,6 +667,18 @@ async function main(): Promise<void> {
     pluginSurfaceStateList.appendChild(button);
   }
 
+  for (const state of GROVE_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbGroveStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'grove', stateId: state.id });
+    });
+    groveStateList.appendChild(button);
+  }
+
   // The walkthrough's own step list (rule: "collapses the six state lists to
   // a single ordered step list with a live/partial/gap dot per step"). Status
   // classes are set here once (status never changes at runtime) and
@@ -732,7 +755,14 @@ async function main(): Promise<void> {
   }
 
   let mounted: {
-    view: ReviewView | TodayView | GapView | SessionBuilderView | BulkReviewView | RegistryView;
+    view:
+      | ReviewView
+      | TodayView
+      | GapView
+      | SessionBuilderView
+      | BulkReviewView
+      | RegistryView
+      | GroveView;
   } | null = null;
   /**
    * `ExplainBackModal` (`ol-z6x2` F5 tranche) is a `Modal`, not an `ItemView`
@@ -982,6 +1012,14 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'plugin-surface' && button.dataset.wbPluginSurfaceStateLink === state.id,
+      );
+    }
+    for (const button of groveStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-grove-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'grove' && button.dataset.wbGroveStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1471,6 +1509,34 @@ async function main(): Promise<void> {
     }
 
     /**
+     * F1.5/F8.1's grove screen (`ol-z6x2` [WB-2] F1 tranche) — the REAL
+     * `GroveView` over a hand-built `GroveCourseModel`
+     * (`grove-scenarios.ts`'s own module doc explains why: `buildGroveModel`
+     * itself takes plain records, the same posture `registry-scenarios.ts`
+     * takes toward `buildRegistryModel`). Renders synthetic-provisional
+     * because every mastery/coverage reading on this fixture is invented,
+     * matching `mountRegistry`'s own badge convention.
+     */
+    async function mountGrove(stateId: string): Promise<void> {
+      const scenario = buildGroveScenario(stateId);
+      if (run !== generation) return;
+
+      const view = new GroveView(makeLeaf(), scenario.deps);
+      host.appendChild(view.containerEl);
+      mounted = { view };
+
+      inspector.empty();
+      inspector.createDiv({ cls: 'wb-inspector-note', text: activeSet.note });
+      renderSyntheticProvisionalBadge(inspector);
+
+      void view.onOpen();
+      await settle();
+      if (run !== generation) return;
+
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
+    /**
      * F5.1's "Explain it back" surface (`ol-z6x2` F5 tranche, `[D-163]`) —
      * the REAL `ExplainBackModal` over CANNED `grade`/`acceptWithObservation`
      * results (`explain-back-scenarios.ts`'s own module doc explains why:
@@ -1722,6 +1788,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'plugin-surface') {
       await mountPluginSurface(route.stateId);
+      return;
+    }
+    if (route.surface === 'grove') {
+      await mountGrove(route.stateId);
       return;
     }
     if (route.surface === 'today') {

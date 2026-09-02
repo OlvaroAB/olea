@@ -49,7 +49,7 @@ Review states: `loading`, `empty`, `qa-front`, `qa-reveal`, `cloze-front`, `cloz
 `note-missing`, `session-complete`.
 
 Today states: `today-nothing-due`, `today-due`, `today-after-writing`, `today-stale`,
-`today-unavailable`.
+`today-unavailable`, `today-scope-not-declared`, `today-rhythm-quiet`, `today-rhythm-fresh`.
 
 Variable sets: `obsidian-dark`, `obsidian-light`, `things-dark`, `things-light`,
 `things-dark-no-baseline`, `things-light-no-baseline`. The last two deliberately do **not**
@@ -66,8 +66,14 @@ keystrokes** to the mounted view, resolved by the real `keymap.ts`. Nothing poke
 `ReviewSession`'s internals and no view model is hand-built, so a state that cannot be
 reached by a binding the resolver accepts cannot be reached here either.
 
-**Also mounts, since run 11:** `TodayView` (F6.1, `[P2-T09]`, DONE) — five addressable
-states, built by `src/today-scenarios.ts`. `today-due` calls the product's own
+**Also mounts, since run 11:** `TodayView` (F6.1, `[P2-T09]`, DONE) — eight addressable
+states, built by `src/today-scenarios.ts`. Three of them (`ol-z6x2` [WB-2] F1/C3 tranche)
+wire `buildTodayPanel`'s `courseScopeModels`/`courseMaterialArrivals` fields for the first
+time — `today-scope-not-declared` (F6.2/F8.1's cross-course scope section, stating the same
+"no source registered" fact `grove/copy.ts` states at its own screen), `today-rhythm-quiet`
+and `today-rhythm-fresh` (F6.9's rhythm reading: an honest quiet-course line, and its honest
+silence when nothing crosses the threshold). No earlier state wired either field, so both
+sections rendered nothing until these three existed. `today-due` calls the product's own
 `loadTodayPanel` over the same in-memory vault the review states use — a real walk of the
 vault's instruments and a real replay of `.olea/reviews/`, not a hand-built view model.
 `today-nothing-due` and `today-unavailable` call core's `buildTodayPanel` directly at a

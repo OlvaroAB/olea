@@ -73,13 +73,16 @@ function fakeTodayView(): TodayView & { readonly refresh: ReturnType<typeof vi.f
 }
 
 describe('today-scenarios — every advertised Today state is reachable', () => {
-  it('has exactly the five states the README documents', () => {
+  it('has exactly the eight states the README documents', () => {
     expect(TODAY_STATES.map((s) => s.id)).toEqual([
       'today-nothing-due',
       'today-due',
       'today-after-writing',
       'today-stale',
       'today-unavailable',
+      'today-scope-not-declared',
+      'today-rhythm-quiet',
+      'today-rhythm-fresh',
     ]);
   });
 
