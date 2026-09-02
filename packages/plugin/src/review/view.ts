@@ -88,6 +88,7 @@ import {
   HEADING_OFFER_DISMISS_LABEL,
   HEADING_OFFER_PROMPT_TEXT,
 } from './heading-offer.js';
+import type { HeadingOfferBannerState, HeadingOfferBannerTracker } from './heading-offer-wiring.js';
 import type { RatingPreview } from './interval.js';
 import {
   hasGlobalBindings,
@@ -167,21 +168,23 @@ const FOCUSABLE_ATTR = 'data-olea-focusable';
 export type ReviewSessionProvider = () => ReviewSession | null | Promise<ReviewSession | null>;
 
 // ---------------------------------------------------------------------------
-// F2.10 heading-offer banner — THE MOUNT ONLY (`[D-170]`/`[GEN-2]`, `ol-0r92.27`).
+// F2.10 heading-offer banner — THE MOUNT (`[D-170]`/`[GEN-2]`, `ol-0r92.27`;
+// wired by `ol-i19f`).
 //
 // A free function rather than a `ReviewView` method, deliberately: F2.10's
 // offer belongs to a heading in whichever note she has open, not to "the
-// currently reviewed instrument" `this.session` tracks — it is not scoped to
-// a review session at all and may never appear inside one. Matching a live,
-// open note's headings to a `HeadingOfferCandidate` (`olea-core`'s
-// `detectHeadingOffers`) and deciding *where and when* to mount this banner
-// is `ol-0r92`'s surface-wiring bead (`ol-i19f`, still open, blocked on this
-// one) — this function is the reachable, addressable unit it wires against,
-// matching `ol-0r92.23`'s "the destination exists behind the surface `ol-i19f`
-// wires." It is not called from `render()` below and does not touch
-// `this.session`, `this.confusionBanner` or any other review-loop state, so
-// it cannot regress anything on that path while the live surface is still
-// unbuilt.
+// currently reviewed instrument" `this.session` tracks in general — see
+// `heading-offer-wiring.ts`'s own module doc for the narrower, concretely
+// reachable case `ol-i19f` actually wires (the current review item's own
+// source note) and why that is a deliberate first step rather than the
+// full-generality trigger this paragraph once described as open. Matching a
+// live note's headings to a `HeadingOfferCandidate` (`olea-core`'s
+// `detectHeadingOffers`), resolving its concept, and deciding *when* to
+// mount this banner all live in `heading-offer-wiring.ts`, never here —
+// `render()` below calls `this.headingOffer?.bannerFor(...)` (a
+// `HeadingOfferBannerTracker`) and gets back a ready `HeadingOfferBannerState`
+// or `null`; this function still knows nothing about candidates, concepts or
+// the port.
 //
 // Copy comes from `heading-offer.ts` (F2.10's own wording, `[D-170]`'s two
 // verbs) rather than being hand-typed a second time here — the same
@@ -191,14 +194,15 @@ export type ReviewSessionProvider = () => ReviewSession | null | Promise<ReviewS
 //
 // Click wiring is left to the caller (returned as plain `HTMLButtonElement`s)
 // rather than bound here with `addEventListener`/`registerDomEvent`: this
-// function has no `Component` of its own to scope a listener's lifecycle to,
-// and `ol-i19f`'s eventual caller — whichever view or editor extension that
-// turns out to be — is the one positioned to call `registerDomEvent` against
-// ITS OWN component and to call `dismiss`/`accept` against a real
-// `HeadingOfferPort`. Untested here for the same reason every other DOM
-// builder in this file is untested (module doc, above): `createDiv`/
-// `createEl` are Obsidian's own `HTMLElement` extensions and only exist
-// inside a real Obsidian host.
+// function has no `Component` of its own to scope a listener's lifecycle to;
+// `render()` below is the caller that owns that lifecycle and calls
+// `registerDomEvent` against itself, then calls the bound
+// `HeadingOfferBannerState.accept`/`dismiss` `heading-offer-wiring.ts` handed
+// it — never a `HeadingOfferPort` directly. Untested here for the same
+// reason every other DOM builder in this file is untested (module doc,
+// above): `createDiv`/`createEl` are Obsidian's own `HTMLElement` extensions
+// and only exist inside a real Obsidian host; `heading-offer-wiring.spec.ts`
+// covers everything about *what* gets offered and *when* without a DOM.
 export interface HeadingOfferBannerHandles {
   readonly container: HTMLElement;
   readonly acceptButton: HTMLButtonElement;
@@ -236,6 +240,8 @@ export class ReviewView extends ItemView {
   private readonly openExplainBack: ((instrument: ReviewInstrument) => void) | undefined;
   /** `[D-171]`'s one-step affordance target — see `constructor`'s own param doc. */
   private readonly openRegistryEntry: ((instrumentId: string) => void) | undefined;
+  /** F2.10's surface wiring (`ol-i19f`) — see `constructor`'s own param doc and `heading-offer-wiring.ts`. */
+  private readonly headingOffer: HeadingOfferBannerTracker | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -279,6 +285,16 @@ export class ReviewView extends ItemView {
      * already governs `openExplainBack` above.
      */
     openRegistryEntry?: (instrumentId: string) => void,
+    /**
+     * F2.10's surface wiring (`ol-i19f`): checked against the current
+     * review item's own source note on every render, via
+     * `heading-offer-wiring.ts`'s `HeadingOfferBannerTracker` —
+     * `main.ts` wires this to `createHeadingOfferBannerTracker` over the
+     * real `HeadingOfferPort`, vault and folded `ConceptRecord[]`. Absent
+     * means no offer is ever checked for, same grey-out-by-omission posture
+     * `retrieveSourceChunks`/`openRegistryEntry` above already use.
+     */
+    headingOffer?: HeadingOfferBannerTracker,
   ) {
     super(leaf);
     this.openSession = openSession;
@@ -286,6 +302,7 @@ export class ReviewView extends ItemView {
     this.retrieveSourceChunks = retrieveSourceChunks;
     this.openExplainBack = openExplainBack;
     this.openRegistryEntry = openRegistryEntry;
+    this.headingOffer = headingOffer;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -490,6 +507,7 @@ export class ReviewView extends ItemView {
     }
     this.syncConfusionRoutingOffer(this.session);
     this.renderConfusionRoutingBanner();
+    this.renderHeadingOfferBannerIfAny(this.session);
     const vm = this.session.getViewModel();
     // Every path that changes the queue ends in a `render()`, so this is the one
     // place that sees every phase transition. The notifier fires only on the
@@ -834,6 +852,62 @@ export class ReviewView extends ItemView {
     session.resolveConfusionRoutingOffer();
     this.confusionBanner = null;
     this.openExplainBack?.(pending.instrument);
+    this.render();
+  }
+
+  // ---- F2.10 heading offer (`ol-i19f`) ----
+
+  /**
+   * Checks the CURRENT review item's own source note, via
+   * `this.headingOffer` (`HeadingOfferBannerTracker`, `heading-offer-
+   * wiring.ts`) — never the previously-current item, and never a note she
+   * merely has open elsewhere (see this file's own "THE MOUNT" comment,
+   * above `renderHeadingOfferBanner`, for why that wider trigger is a
+   * different bead). `bannerFor` is synchronous and cheap to call on every
+   * render: it returns `null` immediately while its own background check is
+   * in flight or found nothing, and re-renders itself (`onUpdate`) the
+   * moment a check for the CURRENT item's path resolves — same "later state
+   * wins outright, and a re-render just happens" shape `handleExplainWhy`
+   * above already uses for its own async panel.
+   */
+  private renderHeadingOfferBannerIfAny(session: ReviewSession): void {
+    if (!this.headingOffer) return;
+    const item = session.currentItem;
+    const state = this.headingOffer.bannerFor(
+      item === null
+        ? null
+        : { sourcePath: item.instrument.sourcePath, courseCode: item.instrument.courseCode },
+      () => this.render(),
+    );
+    if (state === null) return;
+
+    const handles = renderHeadingOfferBanner(this.contentEl, state.promptText);
+    this.registerDomEvent(
+      handles.acceptButton,
+      'click',
+      () => void this.handleAcceptHeadingOffer(state),
+    );
+    this.registerDomEvent(handles.dismissButton, 'click', () => {
+      state.dismiss();
+      this.render();
+    });
+  }
+
+  /**
+   * `[D-170]`'s accept verb: creates the pending draft through the real
+   * `HeadingOfferPort` (`heading-offer-wiring.ts`'s bound closure — this
+   * class never touches the port or a `ConceptRecord` directly). The
+   * outcome (`drafted`/`refused`/`unparseable`/`not-configured`) is not
+   * rendered here: F2.10's own contract wording is the fixed offer prompt
+   * and the two verbs, nothing about a per-outcome result screen, and the
+   * drafted case is exactly `[D-097]`'s ordinary "new" badge once it is
+   * served in review — the same discovery path a sweep-drafted card already
+   * has. Re-rendering afterwards is what makes the banner disappear either
+   * way (`HeadingOfferBannerTracker.bannerFor`'s own doc: resolved either
+   * way, it does not linger).
+   */
+  private async handleAcceptHeadingOffer(state: HeadingOfferBannerState): Promise<void> {
+    await state.accept();
     this.render();
   }
 

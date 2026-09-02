@@ -140,6 +140,11 @@ import { RetrospectiveView, VIEW_TYPE_OLEA_RETROSPECTIVE } from './retrospective
 import { createVaultGradeContestPort } from './review/contest.js';
 import { retrieveExplainWhySourceChunks, WorkerExplainWhyGenerator } from './review/explainWhy.js';
 import { createHeadingOfferPort, type HeadingOfferPort } from './review/heading-offer.js';
+import {
+  createHeadingOfferBannerTracker,
+  createHeadingOfferForItem,
+  type HeadingOfferBannerTracker,
+} from './review/heading-offer-wiring.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
 import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
 import {
@@ -258,14 +263,23 @@ export default class OleaPlugin extends Plugin {
    * actual draft call does, and that reads `draftQuizCardsDeps()` fresh per
    * call (F7.8), never a value captured here.
    *
-   * **Not yet called from any production surface.** `ol-i19f` (open, blocked
-   * on this bead) matches a live, open note's headings to `ConceptRecord`s
-   * and mounts `review/view.ts`'s `renderHeadingOfferBanner` against this
-   * port; until it lands, this field is constructed and correct but has no
-   * caller — the reachability gap is tracked there, not silently assumed
-   * closed here.
+   * **Reachability.** `ol-i19f` matches the current review item's own
+   * source note to a `HeadingOfferCandidate`/`ConceptRecord` and mounts
+   * `review/view.ts`'s `renderHeadingOfferBanner` against this port —
+   * `this.headingOfferForItem`, built alongside this field, is the real
+   * production caller; see that field's own doc.
    */
   private headingOffer: HeadingOfferPort | null = null;
+  /**
+   * `ol-i19f`'s surface wiring: a `HeadingOfferBannerTracker`
+   * (`heading-offer-wiring.ts`) closing over `this.headingOffer` above, this
+   * plugin's `vault`, and `this.conceptRecords` (read through the same
+   * "current thunk, never a value captured once" shape `registry/provider.ts`'s
+   * `conceptRecords` param already uses — see that field's own doc). Passed
+   * to `ReviewView`'s constructor below; `null` before `onload` builds it,
+   * same posture as every other wiring field here.
+   */
+  private headingOfferForItem: HeadingOfferBannerTracker | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
   private rankWeights: RankWeightsWiring | null = null;
   /**
@@ -483,6 +497,23 @@ export default class OleaPlugin extends Plugin {
       cache: generationWiring.cache,
       draftDeps: () => this.draftQuizCardsDeps(),
     });
+    // `ol-i19f`: the surface-wiring layer over the port above — reads
+    // `vault` (already in scope) and `this.conceptRecords` fresh on every
+    // check (F7.8-shaped "never captured once", same as `draftDeps` just
+    // above). No settings field exists yet for F2.10's own "toggleable in
+    // settings" clause (`settings/settings-tab.ts` is not owned by this
+    // bead) — `enabled` is omitted here rather than hardcoded to a
+    // `() => true` that would misleadingly look load-bearing; the port's own
+    // `createHeadingOfferForItem` already treats an omitted `enabled` as
+    // "on," which is the correct default-on behaviour until a real toggle
+    // lands.
+    this.headingOfferForItem = createHeadingOfferBannerTracker(
+      createHeadingOfferForItem({
+        vault,
+        port: this.headingOffer,
+        conceptRecords: () => this.conceptRecords,
+      }),
+    );
 
     this.review = {
       vault,
@@ -559,6 +590,9 @@ export default class OleaPlugin extends Plugin {
           // an instrument's registry entry — see `ReviewView`'s own param
           // doc for why this is a callback rather than an `App` import.
           (instrumentId) => void openRegistryEntryFor(this.app, { instrumentId }),
+          // `ol-i19f`: F2.10's surface wiring — see `ReviewView`'s own param
+          // doc and `heading-offer-wiring.ts`.
+          this.headingOfferForItem ?? undefined,
         ),
     );
 
