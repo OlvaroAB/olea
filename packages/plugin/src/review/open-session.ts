@@ -64,12 +64,16 @@ import type {
   QueueFilter,
   RandomSource,
   Scheduler,
+  SittingScopeSnapshot,
+  SittingStalenessInput,
   VaultPath,
   VaultSource,
 } from 'olea-core';
 import {
   buildReviewSession,
   calendarDaysEndingOn,
+  diffSittingScopeSnapshots,
+  EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlan,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
@@ -92,8 +96,14 @@ import type {
   ReviewLogPort,
   SuspendPort,
 } from './ports.js';
-import { adaptExecutedReviewQueue, buildSupportLevelHistoryLookup } from './queue-adapter.js';
+import {
+  adaptExecutedReviewQueue,
+  buildSupportLevelHistoryLookup,
+  createFrozenReviewQueue,
+  type FrozenReviewQueue,
+} from './queue-adapter.js';
 import { ReviewSession } from './session.js';
+import type { ReviewQueueItem } from './types.js';
 
 /** The five side-effecting seams plus the clock, exactly as `ReviewSessionDeps` names them. */
 export interface ReviewSessionPorts {
@@ -187,6 +197,27 @@ export interface OpenReviewSessionInput {
    * `relations`.
    */
   readonly assessments?: readonly AssessmentRecord[];
+  /**
+   * C5.8's freeze seam (`ol-v7r5.35`, `[D-193]`): when supplied, the queue's
+   * already-executed items route through this queue's `open`/`extend` verb
+   * (per {@link OpenReviewSessionInput.frozenQueueMode}) instead of a bare,
+   * always-recomposing `adaptExecutedReviewQueue` call — see
+   * `queue-adapter.ts`'s `createFrozenReviewQueue`. Omitted (every test in
+   * `open-session.spec.ts`, and the workbench) keeps today's per-call
+   * recompose; only a caller that constructs ONE instance per opened tab
+   * ({@link createReviewSessionOpener} below) and threads it through every
+   * call for that tab actually holds a session still.
+   */
+  readonly frozenQueue?: FrozenReviewQueue;
+  /** `'open'` (the default) or `'extend'` — which {@link frozenQueue} verb this call routes through. Ignored when `frozenQueue` is omitted. */
+  readonly frozenQueueMode?: 'open' | 'extend';
+  /**
+   * `'open'`-mode-only: the frozen sitting's own material-change facts,
+   * computed by the caller ({@link createReviewSessionOpener}) from data this
+   * module has no way to remember between calls. See `queue-adapter.ts`'s
+   * `OpenFrozenReviewQueueInput.staleness` doc.
+   */
+  readonly frozenQueueStaleness?: SittingStalenessInput;
 }
 
 export type OpenReviewSessionOutcome =
@@ -195,6 +226,14 @@ export type OpenReviewSessionOutcome =
       readonly session: ReviewSession;
       /** What she will actually be shown, for a caller that wants to say so. */
       readonly itemCount: number;
+      /**
+       * The frozen-eligible portion of the session's queue — `scheduled`
+       * below, BEFORE any pending drafts are prepended. {@link
+       * createReviewSessionOpener} reads this to track what the freeze
+       * already holds (`extend`'s diff base) and to build the next
+       * material-arrival watermark. Never rendered directly by a view.
+       */
+      readonly scheduledQueue: readonly ReviewQueueItem[];
       /** F2.17's deferrals — a second instrument on a concept already represented. */
       readonly deferredCount: number;
     }
@@ -264,12 +303,28 @@ export async function openReviewSession(
     // plan is the Phase A shape, not a branch — see the module doc.
     const executed = executeStudyPlan({ queue: composed.queue, plan: input.plan ?? null });
 
-    const scheduled = adaptExecutedReviewQueue({
+    const adapterInput = {
       items: executed.items,
       recordsById: composed.recordsById,
       supportHistory: buildSupportLevelHistoryLookup(composed.entries),
       ...(input.random !== undefined ? { random: input.random } : {}),
-    });
+    };
+    // `ol-v7r5.35` (`[D-193]`): a caller-supplied `frozenQueue` routes this
+    // call through C5.8's freeze instead of a bare, always-recomposing
+    // `adaptExecutedReviewQueue` — see `OpenReviewSessionInput.frozenQueue`'s
+    // doc. Every existing caller (this suite, the workbench) omits it and
+    // gets today's unfrozen behaviour, unchanged.
+    const scheduled =
+      input.frozenQueue === undefined
+        ? adaptExecutedReviewQueue(adapterInput)
+        : input.frozenQueueMode === 'extend'
+          ? input.frozenQueue.extend(adapterInput)
+          : input.frozenQueue.open({
+              ...adapterInput,
+              ...(input.frozenQueueStaleness !== undefined
+                ? { staleness: input.frozenQueueStaleness }
+                : {}),
+            });
 
     // F5.3a / R7's third trigger (`ol-0r92.11`, `[D-083]`/`[D-087]`): read
     // once per opened session, off the SAME `composed.entries` this module
@@ -336,6 +391,7 @@ export async function openReviewSession(
       ok: true,
       session,
       itemCount: queue.length,
+      scheduledQueue: scheduled,
       deferredCount: executed.deferred.length,
     };
   } catch (error) {
@@ -367,4 +423,153 @@ function earliestFutureDue(
     if (earliest === null || due < earliest) earliest = due;
   }
   return earliest === null ? null : new Date(earliest);
+}
+
+// ---------------------------------------------------------------------------
+// `ol-v7r5.35` (`[D-193]`) — the reachable wiring `queue-adapter.ts`'s own
+// `createFrozenReviewQueue` doc names as owed here: ONE frozen queue per
+// opened review tab, composing through its three verbs across the tab's own
+// lifecycle. `main.ts` constructs one `ReviewSessionOpener` per leaf, inside
+// its `registerView` factory; `view.ts` routes `onOpen` through `open`, the
+// "Keep going" continue path through `extend`, and `onClose` through
+// `close` — see each of those call sites for the wiring itself.
+// ---------------------------------------------------------------------------
+
+/** One opened review tab's frozen-queue lifecycle — see this section's module doc. */
+export interface ReviewSessionOpener {
+  /** `view.ts`'s `onOpen` — the tab's own `ReviewSessionProvider`. */
+  readonly open: (input: OpenReviewSessionInput) => Promise<OpenReviewSessionOutcome>;
+  /**
+   * `view.ts`'s "Keep going" continue path (`ReviewView.continueSessionAfterComplete`):
+   * composes a fresh candidate list under the SAME frozen sitting and
+   * returns only what is genuinely new — never the whole merged list, which
+   * is what `queue-adapter.ts`'s `FrozenReviewQueue.extend` itself returns.
+   * A caller handing `FrozenReviewQueue.extend`'s raw return straight to
+   * `ReviewSession.continueWith` would re-append everything the session
+   * already holds; this diffs against what THIS opener already handed out
+   * (`knownCount` below) so the caller never has to.
+   */
+  readonly extend: (input: OpenReviewSessionInput) => Promise<readonly ReviewQueueItem[]>;
+  /** `view.ts`'s `onClose` — releases the freeze; the next `open` recomposes unconditionally. */
+  readonly close: () => void;
+}
+
+export interface CreateReviewSessionOpenerDeps {
+  /** Same posture as every other production `now` in this package (`session-builder/provider.ts`'s own `deps.now`): `() => new Date()`. Injected for deterministic tests. */
+  readonly now: () => Date;
+  /** Overridable for tests; production leaves it at `createFrozenReviewQueue`'s own default. */
+  readonly idleThresholdMs?: number;
+}
+
+/** The frozen sitting's own material-arrival scope — see {@link buildReviewScopeSnapshot}. */
+interface FrozenReviewScope {
+  readonly vault: VaultSource;
+  readonly notePaths: readonly VaultPath[];
+}
+
+/**
+ * A `SittingScopeSnapshot` carrying only the material-arrival-watermark half
+ * of `[D-162]`'s three facts — `dueConceptKeys`/`assessmentProximityBands`
+ * stay at `EMPTY_SITTING_SCOPE_SNAPSHOT`'s empty values, since this module
+ * has no obligation-classifier or assessment join of its own (those live in
+ * `session-builder/provider.ts`, over a different candidate shape; wiring
+ * them here is a follow-up, not this bead). Reuses `session-builder/
+ * provider.ts`'s own `Math.min(vault.firstSeen(...))` reading rather than
+ * inventing a second one, over the frozen scope's own note paths —
+ * `firstSeen` absent (a host that cannot say) reads as "no arrival signal",
+ * never a fabricated day, same as that module.
+ */
+async function buildReviewScopeSnapshot(scope: FrozenReviewScope): Promise<SittingScopeSnapshot> {
+  const firstSeen = scope.vault.firstSeen?.bind(scope.vault);
+  if (firstSeen === undefined) return EMPTY_SITTING_SCOPE_SNAPSHOT;
+
+  const stats = await Promise.all(scope.notePaths.map((path) => firstSeen(path)));
+  const known = stats.filter((ms): ms is number => ms !== null);
+  if (known.length === 0) return EMPTY_SITTING_SCOPE_SNAPSHOT;
+
+  return {
+    ...EMPTY_SITTING_SCOPE_SNAPSHOT,
+    materialArrivalWatermark: localToday(new Date(Math.min(...known))),
+  };
+}
+
+/**
+ * `main.ts` constructs ONE of these per opened review tab, inside its
+ * `registerView` leaf factory — the same "one per surface across
+ * renders/opens, not just per call" scope `ol-e228`'s acceptance criteria
+ * already state for `createLocalSessionBuilderProvider`. Everything below is
+ * held in THIS closure, never on the plugin instance, which is shared
+ * across every open tab — the same "held per instance" scope
+ * `createFrozenReviewQueue`'s own doc requires of it.
+ */
+export function createReviewSessionOpener(
+  deps: CreateReviewSessionOpenerDeps,
+): ReviewSessionOpener {
+  const frozenQueue: FrozenReviewQueue = createFrozenReviewQueue({
+    now: deps.now,
+    ...(deps.idleThresholdMs !== undefined ? { idleThresholdMs: deps.idleThresholdMs } : {}),
+  });
+  // The frozen sitting's own material-arrival scope and its freeze-time
+  // snapshot — `undefined` exactly when nothing has been composed yet (or
+  // since the last `close()`). Refreshed after every successful `open`/
+  // `extend`, over that call's OWN `scheduledQueue` — never a second,
+  // independent vault walk.
+  let scope: FrozenReviewScope | undefined;
+  let snapshot: SittingScopeSnapshot | undefined;
+  // How many of `scheduledQueue`'s items were already frozen as of the last
+  // `open`/`extend` — `extend`'s own diff base, so ITS caller is handed only
+  // what is genuinely new (see `ReviewSessionOpener.extend`'s own doc).
+  let knownCount = 0;
+
+  /** `undefined` exactly when there is nothing yet to compare against — an honest "nothing changed" the same way an omitted `staleness` already reads to `queue-adapter.ts`. */
+  async function stalenessSinceLastCall(): Promise<SittingStalenessInput | undefined> {
+    if (scope === undefined || snapshot === undefined) return undefined;
+    const current = await buildReviewScopeSnapshot(scope);
+    return diffSittingScopeSnapshots(snapshot, current);
+  }
+
+  async function rememberScope(
+    scheduledQueue: readonly ReviewQueueItem[],
+    vault: VaultSource,
+  ): Promise<void> {
+    const notePaths = [...new Set(scheduledQueue.map((item) => item.instrument.sourcePath))];
+    scope = { vault, notePaths };
+    snapshot = await buildReviewScopeSnapshot(scope);
+  }
+
+  return {
+    async open(input) {
+      const staleness = await stalenessSinceLastCall();
+      const outcome = await openReviewSession({
+        ...input,
+        frozenQueue,
+        frozenQueueMode: 'open',
+        ...(staleness !== undefined ? { frozenQueueStaleness: staleness } : {}),
+      });
+      if (outcome.ok) {
+        knownCount = outcome.scheduledQueue.length;
+        await rememberScope(outcome.scheduledQueue, input.vault);
+      }
+      return outcome;
+    },
+    async extend(input) {
+      const outcome = await openReviewSession({
+        ...input,
+        frozenQueue,
+        frozenQueueMode: 'extend',
+      });
+      if (!outcome.ok) return [];
+      const merged = outcome.scheduledQueue;
+      const additions = merged.slice(knownCount);
+      knownCount = merged.length;
+      await rememberScope(merged, input.vault);
+      return additions;
+    },
+    close() {
+      frozenQueue.close();
+      scope = undefined;
+      snapshot = undefined;
+      knownCount = 0;
+    },
+  };
 }

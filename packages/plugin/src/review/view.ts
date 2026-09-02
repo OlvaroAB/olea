@@ -251,6 +251,10 @@ export class ReviewView extends ItemView {
   private readonly openRegistryEntry: ((instrumentId: string) => void) | undefined;
   /** F2.10's surface wiring (`ol-i19f`) — see `constructor`'s own param doc and `heading-offer-wiring.ts`. */
   private readonly headingOffer: HeadingOfferBannerTracker | undefined;
+  /** `ol-v7r5.35` (`[D-193]`) — see `constructor`'s own param doc and `continueSessionAfterComplete`'s. */
+  private readonly extendSession: (() => Promise<readonly ReviewQueueItem[]>) | undefined;
+  /** `ol-v7r5.35` (`[D-193]`) — see `constructor`'s own param doc and `onClose`'s. */
+  private readonly releaseSession: (() => void) | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -304,6 +308,25 @@ export class ReviewView extends ItemView {
      * `retrieveSourceChunks`/`openRegistryEntry` above already use.
      */
     headingOffer?: HeadingOfferBannerTracker,
+    /**
+     * `ol-v7r5.35` (`[D-193]`): the "Keep going" continue path's real
+     * extend seam — `main.ts` wires this to the SAME `ReviewSessionOpener`
+     * (`open-session.ts`, `createReviewSessionOpener`) that `openSession`
+     * above routes `onOpen` through, one instance per opened tab, so
+     * `continueSessionAfterComplete` grows the SAME frozen sitting rather
+     * than a second, unfrozen one. Absent (the workbench's canned
+     * single-session fixture, which has no opener at all) falls back to
+     * this view's pre-freeze behaviour — see that method's own doc.
+     */
+    extendSession?: () => Promise<readonly ReviewQueueItem[]>,
+    /**
+     * `ol-v7r5.35` (`[D-193]`): releases the same opener's freeze when this
+     * tab closes, so the NEXT time she opens review it recomposes
+     * unconditionally rather than holding a stale sitting from a closed
+     * tab. `main.ts` wires this to the same opener's `close()`. Absent is
+     * the same no-op posture as `extendSession` above.
+     */
+    releaseSession?: () => void,
   ) {
     super(leaf);
     this.openSession = openSession;
@@ -312,6 +335,8 @@ export class ReviewView extends ItemView {
     this.openExplainBack = openExplainBack;
     this.openRegistryEntry = openRegistryEntry;
     this.headingOffer = headingOffer;
+    this.extendSession = extendSession;
+    this.releaseSession = releaseSession;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -348,6 +373,10 @@ export class ReviewView extends ItemView {
   override async onClose(): Promise<void> {
     this.contentEl.empty();
     this.activity.observeClose();
+    // `ol-v7r5.35` (`[D-193]`): she finished or left — releases this tab's
+    // own frozen sitting so the next open recomposes unconditionally,
+    // rather than holding a sitting from a tab that no longer exists.
+    this.releaseSession?.();
   }
 
   // ---- keyboard ----
@@ -1250,21 +1279,42 @@ export class ReviewView extends ItemView {
   }
 
   /**
-   * "Keep going"'s click handler (`renderComplete`, `ol-0r92.32`). Opens a
-   * fresh session through the SAME `this.openSession` provider `onOpen`
-   * itself uses — whatever plan is cached this instant, read fresh, never a
-   * copy captured earlier (see `main.ts`'s `composeReviewSession` doc) — and
-   * hands its queue to the CURRENT session's `continueWith`, so `complete`'s
-   * own counters (items reviewed, courses touched) keep accumulating across
-   * the extension instead of a second session restarting them at zero.
+   * "Keep going"'s click handler (`renderComplete`, `ol-0r92.32`).
    *
-   * When there is nothing to continue into (the fresh compose's queue is
-   * empty — nothing more is due right now), `continueWith` is a no-op and
-   * this falls back to showing that fresh session's own state directly
-   * (ordinarily `empty`'s "You're caught up.", never a second `complete`
-   * screen) — the honest read, not a silently inert button.
+   * **`ol-v7r5.35` (`[D-193]`): routes through `this.extendSession` — the
+   * SAME opener's `FrozenReviewQueue.extend` verb `open-session.ts`'s
+   * `ReviewSessionOpener` wraps — rather than a second, unfrozen
+   * `this.openSession()` call.** Before this, "Keep going" recomposed the
+   * whole queue from scratch and handed the fresh compose's ENTIRE
+   * `queueSnapshot` to `continueWith`, which is exactly the "the tool
+   * re-reads and re-ranks a session that is supposed to be holding still"
+   * bug this bead fixes (C5.8, `ol-egov.81`) — it happened to look safe only
+   * because a genuinely fresh compose naturally excludes anything already
+   * rated (the scheduler moved its due date). `extendSession` gives back
+   * only what is genuinely new relative to what THIS tab's sitting already
+   * holds, composed under the same plan's shares (C5.5), so `continueWith`
+   * appends real growth rather than a second read of the whole due set.
+   *
+   * `continueWith` is already a safe no-op when there is nothing to
+   * continue into (nothing more is due right now) — see its own doc in
+   * `session.ts` — so this never needs a fallback session of its own: the
+   * `complete` screen simply stays up, honestly, rather than being swapped
+   * for a second "nothing to continue into" screen.
+   *
+   * **Fallback, when no opener is wired** (`this.extendSession` absent —
+   * today only the workbench's canned single-session fixture): the
+   * pre-freeze behaviour, unchanged — a fresh, unfrozen `this.openSession()`
+   * call, its `queueSnapshot` handed to `continueWith`, and a swap to that
+   * fresh session directly when there was nothing to continue into.
    */
   private async continueSessionAfterComplete(): Promise<void> {
+    if (this.extendSession) {
+      const additions = await this.extendSession();
+      await this.session?.continueWith(additions);
+      this.render();
+      return;
+    }
+
     const fresh = await this.openSession();
     const more = fresh?.queueSnapshot ?? [];
     const extended = (await this.session?.continueWith(more)) ?? false;

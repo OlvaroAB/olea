@@ -31,7 +31,9 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  createReviewSessionOpener,
   nextDueLabel,
+  type OpenReviewSessionInput,
   openReviewSession,
   type ReviewSessionPorts,
 } from '../../src/review/open-session.js';
@@ -164,12 +166,13 @@ function todaysLogPath(): string {
 /** Deterministic MCQ sampling, so an assertion about options is stable. */
 const fixedRandom: RandomSource = { next: () => 0.42 };
 
-async function open(
+/** The plain `OpenReviewSessionInput` shape both `open()` below and the freeze suite share — never carries `frozenQueue` itself, so a `ReviewSessionOpener` can inject its own without a caller's help. */
+function sessionInput(
   vault: ReturnType<typeof memoryVault>,
   clock: Clock = fixedClock(),
   plan?: StudyPlanEnvelope | null,
-) {
-  return openReviewSession({
+): OpenReviewSessionInput {
+  return {
     vault,
     scheduler: createFsrsScheduler(),
     deviceId: DEVICE,
@@ -177,7 +180,15 @@ async function open(
     random: fixedRandom,
     probeDays: 30,
     ...(plan !== undefined ? { plan } : {}),
-  });
+  };
+}
+
+async function open(
+  vault: ReturnType<typeof memoryVault>,
+  clock: Clock = fixedClock(),
+  plan?: StudyPlanEnvelope | null,
+) {
+  return openReviewSession(sessionInput(vault, clock, plan));
 }
 
 /** Drives past the current item regardless of its type, so a plan test never has to hard-code which instrument dedupe or the plan chose. */
@@ -890,5 +901,126 @@ describe("F5.3a / R7 — the scheduling observation's third trigger reaches the 
     expect(withOutcome.session.currentItem?.instrument.conceptIds).toEqual(
       withoutOutcome.session.currentItem?.instrument.conceptIds,
     );
+  });
+});
+
+// Scenarios: features/F2-review.md — C5.8's freeze (`ol-v7r5.35`, `[D-193]`):
+// `createReviewSessionOpener`'s `open`/`extend`/`close` are the reachable
+// wiring `queue-adapter.ts`'s own `createFrozenReviewQueue` doc names as
+// owed — one opener per opened tab, composing through those three verbs.
+describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (C5.8, [D-193])", () => {
+  /** A third concept, absent from `studyVault()` — written mid-test to simulate material arriving while a tab is open. */
+  async function addGammaConcept(vault: ReturnType<typeof memoryVault>): Promise<void> {
+    await vault.write('Concepts/Gamma.md', CONCEPT_NOTE.replace('title: Alpha', 'title: Gamma'));
+    await vault.write(
+      'Courses/TEST101/Week three.md',
+      [
+        FRONTMATTER('[Gamma]'),
+        '## A third question?',
+        '',
+        'The gamma front::The gamma back ^blk3',
+        '',
+      ].join('\n'),
+    );
+  }
+
+  it('re-render does not recompose: a second open() while the sitting is active ignores material that arrived since', async () => {
+    const vault = studyVault();
+    const opener = createReviewSessionOpener({ now: () => NOW });
+
+    const first = await opener.open(sessionInput(vault));
+    if (!first.ok) throw new Error('expected a composed session');
+    expect(first.itemCount).toBe(2);
+
+    // Material arrives, but the sitting is still open and nowhere near the
+    // idle threshold (the clock never moves) — `open()`'s hold branch must
+    // return the SAME frozen list, not one that has picked Gamma up.
+    await addGammaConcept(vault);
+    const second = await opener.open(sessionInput(vault));
+    if (!second.ok) throw new Error('expected a composed session');
+
+    expect(second.itemCount).toBe(first.itemCount);
+    expect(second.scheduledQueue.map((item) => item.instrument.instrumentId)).toEqual(
+      first.scheduledQueue.map((item) => item.instrument.instrumentId),
+    );
+    expect(
+      second.scheduledQueue.some((item) =>
+        item.instrument.conceptIds.includes(unboundKey('Gamma')),
+      ),
+    ).toBe(false);
+  });
+
+  it('continue extends: the "keep going" path grows the SAME frozen sitting with only what is genuinely new', async () => {
+    const vault = studyVault();
+    const opener = createReviewSessionOpener({ now: () => NOW });
+
+    const opened = await opener.open(sessionInput(vault));
+    if (!opened.ok) throw new Error('expected a composed session');
+    await opened.session.start();
+
+    // Finish today's frozen queue (F2.17's two offered items) so the session
+    // reaches `complete`, the state "Keep going" fires from.
+    await advancePastCurrentItem(opened.session);
+    await advancePastCurrentItem(opened.session);
+    expect(opened.session.getViewModel().phase).toBe('complete');
+
+    // A brand-new concept — never anything `open()` above could have seen —
+    // is exactly what `[D-193]`'s "outrunning the target" extension is for.
+    // (Rating Beta's cloze above also pushes its own due date out, which can
+    // legitimately free the second, previously-deferred Beta instrument to
+    // be offered too — this asserts on genuine growth and Gamma's presence,
+    // never a hard-coded count that a scheduling detail could shift.)
+    await addGammaConcept(vault);
+    const additions = await opener.extend(sessionInput(vault));
+
+    expect(additions.length).toBeGreaterThanOrEqual(1);
+    const gammaAddition = additions.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Gamma')),
+    );
+    expect(gammaAddition).toBeDefined();
+
+    // Never the whole merged list — only genuinely new growth, so a caller
+    // hands this straight to `continueWith` without re-appending anything
+    // the session already holds.
+    const alreadyShown = new Set(
+      opened.session.queueSnapshot.map((item) => item.instrument.instrumentId),
+    );
+    for (const item of additions) {
+      expect(alreadyShown.has(item.instrument.instrumentId)).toBe(false);
+    }
+
+    const extended = await opened.session.continueWith(additions);
+    expect(extended).toBe(true);
+    expect(opened.session.getViewModel().phase).not.toBe('complete');
+    expect(
+      opened.session.queueSnapshot.some((item) =>
+        item.instrument.conceptIds.includes(unboundKey('Gamma')),
+      ),
+    ).toBe(true);
+  });
+
+  it('close then reopen recomposes: closing releases the freeze so the next open composes fresh, unconditionally', async () => {
+    const vault = studyVault();
+    const opener = createReviewSessionOpener({ now: () => NOW });
+
+    const first = await opener.open(sessionInput(vault));
+    if (!first.ok) throw new Error('expected a composed session');
+    expect(first.itemCount).toBe(2);
+
+    opener.close();
+    await addGammaConcept(vault);
+
+    // Same opener instance, same never-moved clock — the ONLY thing that
+    // changed is the explicit `close()` in between, which is what must make
+    // the difference here, not elapsed time or a new opener.
+    const reopened = await opener.open(sessionInput(vault));
+    if (!reopened.ok) throw new Error('expected a composed session');
+
+    expect(reopened.itemCount).toBe(3);
+    expect(
+      reopened.scheduledQueue.some((item) =>
+        item.instrument.conceptIds.includes(unboundKey('Gamma')),
+      ),
+    ).toBe(true);
   });
 });

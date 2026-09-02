@@ -147,7 +147,12 @@ import {
   type HeadingOfferBannerTracker,
 } from './review/heading-offer-wiring.js';
 import { createObsidianEditPort } from './review/obsidian-ports.js';
-import { openReviewSession, type ReviewSessionPorts } from './review/open-session.js';
+import {
+  createReviewSessionOpener,
+  type OpenReviewSessionInput,
+  type ReviewSessionOpener,
+  type ReviewSessionPorts,
+} from './review/open-session.js';
 import {
   createVaultExplainBackOfferLogPort,
   createVaultNoteExistsPort,
@@ -157,7 +162,7 @@ import {
   systemClock,
 } from './review/ports.js';
 import type { ReviewSession } from './review/session.js';
-import type { ReviewInstrument } from './review/types.js';
+import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { createLocalSessionBuilderProvider } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
@@ -587,42 +592,52 @@ export default class OleaPlugin extends Plugin {
     // "may refresh," never "must, before anything else works."
     void this.refreshCachedStudyPlan(vault, deviceId, studyPlanStore);
 
-    this.registerView(
-      VIEW_TYPE_OLEA_REVIEW,
-      (leaf) =>
-        new ReviewView(
-          leaf,
-          () => this.composeReviewSession(),
-          // ol-h3wy: the Today panel used to keep showing whatever it
-          // computed when it was opened, because nothing called
-          // `TodayView.refresh` after a session. Whatever closing the tab
-          // meant — queue finished, closed early, or never composed — is
-          // exactly when her due counts may have changed underneath it.
-          //
-          // Run 11: this now also fires when the queue RUNS OUT with the tab
-          // still open, which is the ordinary case rather than an edge one —
-          // `revealTodayView` below puts Today in the right sidebar, so it sits
-          // visible beside review, and nothing obliges her to close review when
-          // she finishes. `review/activity.ts` owns which moments fire.
-          () => {
-            void this.refreshTodayViews();
-          },
-          // `ol-sn1q`: F2.7's grounding half, composed against whatever the
-          // real keyword index and embedding cache currently hold.
-          (instrument) => this.composeExplainWhySourceChunks(instrument),
-          // F2.12, `[D-163]` (`ol-12gs`): the confusion banner's "Explain it
-          // back" accept action opens `ExplainBackModal` for the offered
-          // instrument — see `openExplainBackModal`'s own doc.
-          (instrument) => this.openExplainBackModal({ kind: 'instrument', instrument }),
-          // `[D-171]`/`ol-2zfj.47`: the review view's one-step affordance to
-          // an instrument's registry entry — see `ReviewView`'s own param
-          // doc for why this is a callback rather than an `App` import.
-          (instrumentId) => void openRegistryEntryFor(this.app, { instrumentId }),
-          // `ol-i19f`: F2.10's surface wiring — see `ReviewView`'s own param
-          // doc and `heading-offer-wiring.ts`.
-          this.headingOfferForItem ?? undefined,
-        ),
-    );
+    this.registerView(VIEW_TYPE_OLEA_REVIEW, (leaf) => {
+      // `ol-v7r5.35` (`[D-193]`): ONE frozen queue per opened review tab —
+      // held in THIS closure (one per leaf, this factory's own scope),
+      // never on `this`, which is shared across every open tab. Same "per
+      // surface, not per call" scope `session-builder/provider.ts` already
+      // gives its own sitting inside this identical `registerView` pattern.
+      const reviewSessionOpener = createReviewSessionOpener({ now: () => new Date() });
+      return new ReviewView(
+        leaf,
+        () => this.composeReviewSession(reviewSessionOpener),
+        // ol-h3wy: the Today panel used to keep showing whatever it
+        // computed when it was opened, because nothing called
+        // `TodayView.refresh` after a session. Whatever closing the tab
+        // meant — queue finished, closed early, or never composed — is
+        // exactly when her due counts may have changed underneath it.
+        //
+        // Run 11: this now also fires when the queue RUNS OUT with the tab
+        // still open, which is the ordinary case rather than an edge one —
+        // `revealTodayView` below puts Today in the right sidebar, so it sits
+        // visible beside review, and nothing obliges her to close review when
+        // she finishes. `review/activity.ts` owns which moments fire.
+        () => {
+          void this.refreshTodayViews();
+        },
+        // `ol-sn1q`: F2.7's grounding half, composed against whatever the
+        // real keyword index and embedding cache currently hold.
+        (instrument) => this.composeExplainWhySourceChunks(instrument),
+        // F2.12, `[D-163]` (`ol-12gs`): the confusion banner's "Explain it
+        // back" accept action opens `ExplainBackModal` for the offered
+        // instrument — see `openExplainBackModal`'s own doc.
+        (instrument) => this.openExplainBackModal({ kind: 'instrument', instrument }),
+        // `[D-171]`/`ol-2zfj.47`: the review view's one-step affordance to
+        // an instrument's registry entry — see `ReviewView`'s own param
+        // doc for why this is a callback rather than an `App` import.
+        (instrumentId) => void openRegistryEntryFor(this.app, { instrumentId }),
+        // `ol-i19f`: F2.10's surface wiring — see `ReviewView`'s own param
+        // doc and `heading-offer-wiring.ts`.
+        this.headingOfferForItem ?? undefined,
+        // `ol-v7r5.35`: the "Keep going" continue path extends the SAME
+        // opener's frozen sitting — see `ReviewView`'s own param doc and
+        // `extendReviewSession` below.
+        () => this.extendReviewSession(reviewSessionOpener),
+        // `ol-v7r5.35`: releases this tab's own sitting on close.
+        () => reviewSessionOpener.close(),
+      );
+    });
 
     // Registered *after* `this.review` is built, not before. `ensureDeviceId`
     // is awaited above, and a command registered ahead of it has a window —
@@ -1882,22 +1897,18 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * Composes today's session, or `null` if the vault could not be read.
-   *
-   * Called by `ReviewView` on open — including when Obsidian restores the tab
-   * at startup with no command behind it, which is why the composition is
-   * deferred to here rather than done once and stashed.
-   *
-   * The `Notice` and the view's own unavailable screen are both raised on
-   * failure, deliberately: the screen explains why the tab is empty and the
-   * Notice is visible even if she is not looking at the tab. Neither says a
-   * feature is missing, because none is — the read failed.
+   * Everything `openReviewSession` needs, read fresh at composition time —
+   * shared between the ordinary open (`composeReviewSession`) and the C5.8
+   * extend path (`extendReviewSession`, `ol-v7r5.35`), which otherwise would
+   * either duplicate this join or risk drifting from it. `null` means the
+   * vault wiring is not up yet — same "not composed at all" posture both
+   * callers already gave a `null`/`[]` reading for before this bead.
    */
-  private async composeReviewSession(): Promise<ReviewSession | null> {
+  private async buildReviewSessionInput(): Promise<OpenReviewSessionInput | null> {
     const wiring = this.review;
     if (wiring === null) return null;
 
-    // `ol-sn1q`/`ol-h2bx`: composed fresh on every open, same "read the
+    // `ol-sn1q`/`ol-h2bx`: composed fresh on every call, same "read the
     // current wiring, never a copy captured earlier" posture the plan and
     // draft cache below already follow. `explainWhyPort` is `null` on the
     // same F7.8 unconfigured-Worker condition as `this.retrieval` itself;
@@ -1912,7 +1923,7 @@ export default class OleaPlugin extends Plugin {
       ? (await readAssessments(wiring.vault, assignmentsConfig.assignmentsBasePath)).records
       : [];
 
-    const outcome = await openReviewSession({
+    return {
       vault: wiring.vault,
       scheduler: wiring.scheduler,
       deviceId: wiring.deviceId,
@@ -1936,13 +1947,54 @@ export default class OleaPlugin extends Plugin {
       // F2.19 (`ol-vr8z`): resolved into `assessmentContext` inside
       // `buildReviewSession`, alongside `relations` above.
       assessments,
-    });
+    };
+  }
+
+  /**
+   * Composes today's session, or `null` if the vault could not be read.
+   *
+   * Called by `ReviewView` on open — including when Obsidian restores the tab
+   * at startup with no command behind it, which is why the composition is
+   * deferred to here rather than done once and stashed.
+   *
+   * The `Notice` and the view's own unavailable screen are both raised on
+   * failure, deliberately: the screen explains why the tab is empty and the
+   * Notice is visible even if she is not looking at the tab. Neither says a
+   * feature is missing, because none is — the read failed.
+   *
+   * `ol-v7r5.35` (`[D-193]`): `opener` is the ONE `ReviewSessionOpener` the
+   * `registerView` factory built for this open tab (`main.ts`'s own
+   * `registerView` call) — `opener.open` routes composition through C5.8's
+   * freeze rather than a bare, always-recomposing `openReviewSession` call,
+   * so a re-render of an already-open, non-stale sitting holds its list
+   * still instead of picking up whatever came due in the meantime.
+   */
+  private async composeReviewSession(opener: ReviewSessionOpener): Promise<ReviewSession | null> {
+    const input = await this.buildReviewSessionInput();
+    if (input === null) return null;
+
+    const outcome = await opener.open(input);
     if (!outcome.ok) {
       console.error('Olea: could not compose a review session', outcome.error);
       new Notice(REVIEW_UNAVAILABLE_NOTICE);
       return null;
     }
     return outcome.session;
+  }
+
+  /**
+   * `ol-v7r5.35` (`[D-193]`): the "Keep going" continue path
+   * (`ReviewView.continueSessionAfterComplete`) — extends the SAME opener's
+   * frozen sitting rather than a second, unfrozen `composeReviewSession`
+   * call. `[]` when the vault wiring is not up, matching
+   * `ReviewSession.continueWith`'s own no-op-on-empty reading.
+   */
+  private async extendReviewSession(
+    opener: ReviewSessionOpener,
+  ): Promise<readonly ReviewQueueItem[]> {
+    const input = await this.buildReviewSessionInput();
+    if (input === null) return [];
+    return opener.extend(input);
   }
 
   /**

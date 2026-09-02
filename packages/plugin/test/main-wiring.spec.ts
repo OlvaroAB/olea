@@ -52,11 +52,17 @@ describe('the review view is registered, not merely written', () => {
   });
 
   it('constructs a real ReviewView against a session provider', () => {
-    expect(main).toMatch(/new ReviewView\(\s*leaf,\s*\(\) => this\.composeReviewSession\(\),/);
+    expect(main).toMatch(
+      /new ReviewView\(\s*leaf,\s*\(\) => this\.composeReviewSession\(reviewSessionOpener\),/,
+    );
   });
 
   it('composes that session through the tested composer, not inline here', () => {
-    expect(main).toMatch(/openReviewSession\(\{/);
+    // `ol-v7r5.35` (`[D-193]`): `composeReviewSession` no longer calls
+    // `openReviewSession` inline — it routes through `ReviewSessionOpener.open`
+    // (`open-session.ts`, `open-session.spec.ts`'s own suite), which is the
+    // one real caller of `openReviewSession` now, one closure per opened tab.
+    expect(main).toMatch(/const outcome = await opener\.open\(input\);/);
   });
 });
 
@@ -71,7 +77,7 @@ describe('the Today panel refreshes after a review session closes — ol-h3wy', 
 
   it('ReviewView is given a close callback, not just the session provider', () => {
     expect(main).toMatch(
-      /new ReviewView\(\s*leaf,\s*\(\) => this\.composeReviewSession\(\),\s*\(\) => \{\s*void this\.refreshTodayViews\(\);/,
+      /new ReviewView\(\s*leaf,\s*\(\) => this\.composeReviewSession\(reviewSessionOpener\),\s*\(\) => \{\s*void this\.refreshTodayViews\(\);/,
     );
   });
 
@@ -530,11 +536,13 @@ describe('C7.9 containment relations reach both session-composition call sites (
     );
   });
 
-  it('composeReviewSession (the review command) threads it into openReviewSession', () => {
+  it('buildReviewSessionInput (shared by composeReviewSession and extendReviewSession) threads it into the session input', () => {
     // F2.19 (`ol-vr8z`): `assessments` rides immediately after `relations` in
-    // the same `openReviewSession` call — both signal inputs, one call site.
+    // the same `OpenReviewSessionInput` object — both signal inputs, one
+    // build site (`ol-v7r5.35`'s `buildReviewSessionInput`, shared by the
+    // ordinary open and the C5.8 extend path rather than duplicated).
     expect(main).toMatch(
-      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,\s*\}\);/,
+      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,\s*\};/,
     );
   });
 
