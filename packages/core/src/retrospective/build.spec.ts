@@ -171,3 +171,91 @@ describe('buildRetrospective', () => {
     expect(buildRetrospective(input)).toEqual(buildRetrospective(input));
   });
 });
+
+/**
+ * Register row 4.6's own health check (`docs/Olea_component_register.md`,
+ * olea-service): "the partition property, tested directly — `held.length +
+ * faded.length + tooEarlyCount` always equals `scopeCount`... never a fourth
+ * bucket." The `it` above at line ~90 already asserts the sum for ONE
+ * hand-built 3-concept scope; `ol-3ux7.41` asks for the property over a
+ * GENERATED set of scopes so the guarantee is not resting on one fixture
+ * happening to be well-formed. `build.ts`'s own `for` loop over `input.scope`
+ * makes this structurally true today (every concept lands in `tooEarlyCount`
+ * via `continue`, or in exactly one of `held`/`faded`) — this test exists to
+ * catch a FUTURE edit that adds a filter, an early `return`, or a fourth
+ * bucket and silently breaks that guarantee, not because the property is in
+ * doubt today.
+ */
+describe('buildRetrospective — partition property over a generated set of scopes (register row 4.6)', () => {
+  /** Deterministic PRNG (mulberry32) — "generated" means reproducible across runs, never `Math.random()`. */
+  function mulberry32(seed: number): () => number {
+    let a = seed;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  type Bucket = 'held' | 'faded' | 'early';
+
+  /** Builds one scope of `size` concepts, each independently assigned held/faded/early via `rng`, and the entries/scheduler config needed to force that vitality reading. */
+  function generatedScope(
+    size: number,
+    rng: () => number,
+  ): {
+    readonly scope: RetrospectiveInput['scope'];
+    readonly entries: ReviewLogRecord[];
+    readonly recallByInstrument: Record<string, number>;
+    readonly bucketByConceptId: ReadonlyMap<string, Bucket>;
+  } {
+    const scope: { conceptId: string; conceptName: string }[] = [];
+    const entries: ReviewLogRecord[] = [];
+    const recallByInstrument: Record<string, number> = {};
+    const bucketByConceptId = new Map<string, Bucket>();
+
+    for (let i = 0; i < size; i += 1) {
+      const conceptId = `gen-c${i}`;
+      scope.push({ conceptId, conceptName: `Generated concept ${i}` });
+      const roll = rng();
+      const bucket: Bucket = roll < 1 / 3 ? 'held' : roll < 2 / 3 ? 'faded' : 'early';
+      bucketByConceptId.set(conceptId, bucket);
+      if (bucket === 'early') continue; // no review evidence at all -> readVitality's 'early' path
+      entries.push(review(conceptId, '2026-08-30', `e-${conceptId}`));
+      recallByInstrument[`qa:${conceptId}:1`] = bucket === 'held' ? 0.95 : 0.3; // vs. HOLDING_CUT = 0.7
+    }
+
+    return { scope, entries, recallByInstrument, bucketByConceptId };
+  }
+
+  const GENERATED_SCOPE_SIZES = [0, 1, 2, 3, 7, 12, 25, 40];
+
+  it.each(GENERATED_SCOPE_SIZES)(
+    'held + faded + tooEarly == scopeCount, no double-count or omission, for a generated %i-concept scope',
+    (size) => {
+      const rng = mulberry32(size + 1);
+      const { scope, entries, recallByInstrument, bucketByConceptId } = generatedScope(size, rng);
+      const result = buildRetrospective(
+        baseInput({ scope, entries, scheduler: stubScheduler(recallByInstrument) }),
+      );
+
+      expect(result.scopeCount).toBe(size);
+      expect(result.held.length + result.faded.length + result.tooEarlyCount).toBe(
+        result.scopeCount,
+      );
+
+      const heldIds = new Set(result.held.map((c) => c.conceptId));
+      const fadedIds = new Set(result.faded.map((c) => c.conceptId));
+      // No double-count: nothing appears in both lists, and neither list has an internal duplicate.
+      expect(heldIds.size).toBe(result.held.length);
+      expect(fadedIds.size).toBe(result.faded.length);
+      for (const id of heldIds) expect(fadedIds.has(id)).toBe(false);
+      // No omission: every generated concept lands in exactly the bucket it was generated for.
+      for (const [conceptId, bucket] of bucketByConceptId) {
+        expect(heldIds.has(conceptId)).toBe(bucket === 'held');
+        expect(fadedIds.has(conceptId)).toBe(bucket === 'faded');
+      }
+    },
+  );
+});
