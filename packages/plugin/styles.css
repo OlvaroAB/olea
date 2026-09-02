@@ -984,16 +984,28 @@ button.olea-review-mcq-option:hover {
    streak; ol-ej59.7.)
 
    NO NEW OWNED COLOUR. Everything below reads `--olea-host-brand`,
-   `--olea-host-line` or `--olea-host-muted`, all already declared on
-   `.olea-today-root`; `test/today/styles.spec.ts` asserts this section
-   declares exactly two hex values and this block adds none.
+   `--olea-host-line`, `--olea-host-muted` or `--olea-host-attention`, all
+   already declared on `.olea-today-root`; `test/today/styles.spec.ts`
+   asserts this section's only `--olea-host-attention`/`--olea-host-brand`
+   hex declarations are the ones on that root.
 
-   THE STRIP IS DECORATIVE, AND THAT IS WHY IT MAY FADE. `view.ts` marks it
-   `aria-hidden` and states every count as text in `.olea-today-mastery-counts`
-   directly beneath, so no meaning rides on a segment's colour and the
-   per-`data-leaves` opacity below carries no contrast obligation. A version
-   that put the number inside the segment would owe 4.5:1 at every opacity, and
-   could not have had one. */
+   THE LADDER (F2.11, D-116; `[VIT-2]`, `ol-a3hv`) REPLACES THE OLD
+   DECORATIVE STRIP. The old strip (`.olea-today-mastery-strip`/`-seg`,
+   `.olea-today-mastery-counts`/`-count`) showed growth stage with no
+   vitality reading at all, which D-116's co-presence clause forbids
+   (`ol-l5og.16`'s finding) — removed along with the view code that drew it,
+   never left as dead CSS.
+
+   THE DOTS ARE DECORATIVE, AND THAT IS WHY THEY MAY BE `aria-hidden`.
+   `view.ts` states every non-zero vitality bucket as text in
+   `.olea-today-mastery-ladder-vitality` directly beneath the dots, so no
+   meaning rides on a dot's mark alone. Exactly two marks exist (vocabulary
+   registry §1): `.is-tending` (honey — reuses `--olea-host-attention`,
+   already owned by this root) and `.is-early` (a dashed outline — reuses
+   `--olea-host-muted`, already read elsewhere on this pane). The unmarked,
+   default dot is `holding` — safe to leave unmarked only because the other
+   two ARE marked; see `view.ts`'s own doc on why silence stopped being the
+   bug once both marks exist. */
 
 .olea-today-mastery {
   padding-top: 18px;
@@ -1034,53 +1046,65 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
-.olea-today-mastery-strip {
+.olea-today-mastery-ladder {
   display: flex;
-  gap: 2px;
-  height: 6px;
-  margin-bottom: 6px;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.olea-today-mastery-seg {
-  flex-basis: 0;
-  min-width: 3px;
-  border-radius: 2px;
-  background: var(--olea-host-brand);
-}
-
-/* Keyed on ordinal stage position (`data-stage-index`, `MASTERY_ORDER.indexOf(state)`), not on
-   leaf count (D-049; `VOC-1`/`ol-7efk`): the ratified sprig geometry gives `sapling` and `tree`
-   the same three leaves, so leaf count stopped being monotonic with stage the moment the second
-   axis (vitality, carried as fruit rather than a leaf) was pulled out of a single five-leaf scale.
-   `seed` is "no practice recorded yet" (F2.11) and reads as the absence of evidence rather than as
-   a weak grade, so it takes the neutral line colour and not a faded brand — a pale green still
-   says "a little bit grown", which is a claim the state does not make. The top stage (`tree`) is
-   the default, unstyled full-opacity brand fill — no rule needed. */
-.olea-today-mastery-seg[data-stage-index="0"] {
-  background: var(--olea-host-line);
-}
-
-.olea-today-mastery-seg[data-stage-index="1"] {
-  opacity: 0.35;
-}
-
-.olea-today-mastery-seg[data-stage-index="2"] {
-  opacity: 0.55;
-}
-
-.olea-today-mastery-counts {
+.olea-today-mastery-ladder-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.olea-today-mastery-ladder-head {
   font-size: 11.5px;
   color: var(--olea-host-muted);
 }
 
-.olea-today-mastery-count {
-  display: inline-flex;
-  align-items: center;
+.olea-today-mastery-ladder-dots {
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  white-space: nowrap;
+}
+
+.olea-today-mastery-ladder-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--olea-host-brand);
+}
+
+/* Honey — the ONE mark for `needs tending` (vocabulary registry §1's "exactly two marks"). */
+.olea-today-mastery-ladder-dot.is-tending {
+  background: var(--olea-host-attention);
+}
+
+/* A dashed outline — the ONE mark for `too early to say`. Never the sprig's own outlined-leaf
+   mark (that draws a stage not yet reached, a different axis entirely — see the sprig section's
+   hard clamp against reusing it for vitality). */
+.olea-today-mastery-ladder-dot.is-early {
+  background: transparent;
+  border: 1px dashed var(--olea-host-muted);
+}
+
+.olea-today-mastery-ladder-vitality {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--olea-host-muted);
+}
+
+/* The tending line beneath the ladder (vocabulary registry §1: "a tending
+   line naming the concepts explicitly"). Absent, not blank, when nothing
+   needs tending — `view.ts` never creates this element in that case. */
+.olea-today-mastery-tending {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
 }
 
 .olea-today-insights {

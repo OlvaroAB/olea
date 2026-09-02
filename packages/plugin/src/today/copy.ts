@@ -75,6 +75,7 @@ import {
   MASTERY_DISPLAY,
   MASTERY_ORDER,
   type StudySessionItem,
+  type Vitality,
 } from 'olea-core';
 import type { TermDatesAskState } from './term-window-store.js';
 
@@ -189,16 +190,24 @@ export function courseCountLabel(count: number): string {
  *   measures a retest. It is not made.
  * - **The effort line puts two shares side by side and stops there.** The
  *   consequence is the juxtaposition. A stronger clause was drafted and cut:
- *   any explicit form of it ("more of your grade rests on what you have
- *   practised least") is either a verdict about her or an unmeasured claim
- *   about her results. **Flagged for David's review** — if he wants an explicit
- *   consequence clause, this is the sentence it attaches to.
+ *   any explicit form of it ("you should give this course more time") is
+ *   either a verdict about her or an unmeasured claim about her results.
+ *   **Flagged for David's review** — if he wants an explicit consequence
+ *   clause, this is the sentence it attaches to.
+ * - **Re-specified against window accounting, not raw grade weight
+ *   (`ol-v7r5.33`, `[D-081]`/`[D-092]`).** The second share used to be a
+ *   course's raw assessment-weight share; it is now the plan's own windowed
+ *   floor share for that course — see `olea-core`'s `effort.ts` module doc
+ *   for the full argument and `docs/Olea_semester_narrative.md` §9 (seam S1)
+ *   for why: a course sitting above its floor while another dominates is
+ *   correct concentration, and only a course actually below its floor is the
+ *   pattern worth naming.
  * - **Nothing here fires in the negative direction.** There is no sentence for
  *   "you are over-studying X", because `detectEffortImbalance` cannot report
  *   one; see its module doc.
  * - **The effort line's truth depends on where its course sits in its term
- *   (`ol-7j54` / ARC-1), so it is never emitted unscoped.** "Carries 57% of the
- *   grade and 14% of the time" reads as ordinary early in a course and as a
+ *   (`ol-7j54` / ARC-1), so it is never emitted unscoped.** "Below its 25%
+ *   floor at 14% of the time" reads as ordinary early in a course and as a
  *   real problem late in one — same sentence, opposite reading — and two of
  *   her courses can be in different phases of the term at once. No phase is
  *   computed here; the course is named instead, so she can judge it against a
@@ -224,6 +233,90 @@ export function masteryCountLabel(state: MasteryState, count: number): string {
 /** `8 concepts` · `1 concept`. A count, flat, with nothing said about it. */
 export function conceptCountLabel(count: number): string {
   return count === 1 ? '1 concept' : `${count} concepts`;
+}
+
+// ---------------------------------------------------------------------------
+// F2.11's vitality axis, on the ladder D-116's co-presence clause requires
+// (`[D-087]`; `[VIT-2]`, `ol-a3hv`). `olea-core`'s `CourseMastery.vitality`
+// is `null` whenever no scheduler/clock/cut was wired upstream — see that
+// field's own doc for the current gap — and `view.ts` renders NOTHING for a
+// course in that state, per D-116's own fallback ("where a surface genuinely
+// cannot carry both, it shows neither"). Everything below exists for the
+// case `vitality` is NOT null.
+// ---------------------------------------------------------------------------
+
+/**
+ * F2.11 axis 2's three words, verbatim. **Duplicated from `../registry/
+ * copy.ts`'s own `vitalityLabel`**, not imported — the two copy modules are
+ * owned by different beads' `owns` sets, the same reasoning `scopeSummaryLine`
+ * above states for its own duplication one layer down. One vocabulary
+ * (`docs/Olea_vocabulary_registry.md` §1 axis 2), two call sites that agree
+ * on it verbatim.
+ */
+export function vitalityLabel(vitality: Vitality): string {
+  switch (vitality) {
+    case 'holding':
+      return 'holding';
+    case 'tending':
+      return 'needs tending';
+    case 'early':
+      return 'too early to say';
+  }
+}
+
+/**
+ * One vitality segment of a ladder row's breakdown: `1 needs tending`. Same
+ * shape `masteryCountLabel` gives the growth-stage axis — the co-presence
+ * clause's textual half, so a screen reader gets the vitality word beside
+ * every stage's count, never the dot marks alone.
+ */
+export function vitalityCountLabel(vitality: Vitality, count: number): string {
+  return `${count} ${vitalityLabel(vitality)}`;
+}
+
+/**
+ * One concept currently reading `needs tending`, as the tending line needs to
+ * see it (F2.11, D-116, `[D-087]`).
+ *
+ * **Known limitation, flagged rather than hidden.** Neither a concept display
+ * name nor a human-readable instrument label reaches this surface today —
+ * `olea-core`'s `ConceptCourses` (what `TodayPanelInput.concepts` carries)
+ * has only `conceptId`, and the vitality fold's own named reason
+ * (`readVitality`'s `weakest`) has only `instrumentId`. This line names them
+ * by their raw ids until a display-name field is threaded onto
+ * `ConceptCourses` or an instrument-title lookup is wired in — both outside
+ * this bead's `owns`.
+ */
+export interface TendingLineConcept {
+  readonly conceptId: string;
+  readonly weakestInstrumentId: string;
+}
+
+/**
+ * The ladder's tending line (vocabulary registry §1: "a tending line naming
+ * the concepts explicitly"). Names every concept currently reading `needs
+ * tending`, and, for each, the single instrument whose retrievability set
+ * that reading — min was chosen over a blend precisely so this sentence can
+ * name ONE instrument rather than blur several across a concept's
+ * instruments (`[D-087]`, R3; F6.2's own scenario, "the tending line names
+ * the instrument the reading came from").
+ *
+ * `null` when nothing needs tending — the same "absent rather than a
+ * rendered zero" rule `newCountSentence` already holds on this panel.
+ *
+ * **No retrievability number appears here, or anywhere else this module can
+ * produce** (F6.2's own scenario, "no retrievability number reaches the
+ * panel"): the three vitality words are the position a copy layer may state,
+ * and a number beside them is the score principle 12's second part forbids —
+ * this function's signature cannot even accept one.
+ */
+export function tendingLine(concepts: readonly TendingLineConcept[]): string | null {
+  if (concepts.length === 0) return null;
+  const label = vitalityLabel('tending');
+  const named = concepts
+    .map((concept) => `${concept.conceptId} (${concept.weakestInstrumentId})`)
+    .join('; ');
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}: ${named}.`;
 }
 
 /**
@@ -359,9 +452,17 @@ export function earlyPullSentence(earlyShare: number): string | null {
  * `effortInsightLine` below is the enforced form of the pairing; call this
  * function directly only where the caller already, separately, guarantees the
  * course is rendered alongside it.
+ *
+ * **`floorShare`, not a grade-weight share (`ol-v7r5.33`, `[D-081]`/
+ * `[D-092]`).** The plan's own windowed floor is the guaranteed minimum this
+ * course is owed over the current window — `olea-core`'s `CourseEffort
+ * .floorShare`, sourced from the cached study-plan artifact, never a raw
+ * assessment weight. Naming it "minimum share" rather than "floor" in the
+ * sentence itself: the reader has never seen the word "floor" used this way,
+ * and "minimum share" says what it means without requiring the vocabulary.
  */
-export function effortShareClause(weightShare: number, timeShare: number): string {
-  return `carries ${percent(weightShare)} of the assessment weight and ${percent(timeShare)} of the time logged.`;
+export function effortShareClause(floorShare: number, timeShare: number): string {
+  return `has logged ${percent(timeShare)} of the time against a minimum share of ${percent(floorShare)} for this window.`;
 }
 
 /** `effortInsightLine`'s return shape: the course a claim is about, paired with the claim. */
@@ -390,7 +491,7 @@ export interface EffortInsightLine {
  * argument to give.
  */
 export function effortInsightLine(course: CourseEffort): EffortInsightLine {
-  return { course: course.course, text: effortShareClause(course.weightShare, course.timeShare) };
+  return { course: course.course, text: effortShareClause(course.floorShare, course.timeShare) };
 }
 
 /**
@@ -727,6 +828,23 @@ export function allTodayStrings(): readonly string[] {
     conceptCountLabel(0),
     conceptCountLabel(1),
     conceptCountLabel(8),
+    // --- F2.11's vitality axis, the ladder's co-presence half (`[VIT-2]`, `ol-a3hv`) ---
+    vitalityLabel('holding'),
+    vitalityLabel('tending'),
+    vitalityLabel('early'),
+    vitalityCountLabel('holding', 1),
+    vitalityCountLabel('holding', 3),
+    vitalityCountLabel('tending', 1),
+    vitalityCountLabel('tending', 2),
+    vitalityCountLabel('early', 1),
+    vitalityCountLabel('early', 4),
+    // `null` at zero concepts is not a string; the non-null forms are every
+    // wording this function has (one concept, and more than one).
+    tendingLine([{ conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' }]) ?? '',
+    tendingLine([
+      { conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' },
+      { conceptId: 'concept-b', weakestInstrumentId: 'cloze:concept-b:2' },
+    ]) ?? '',
     // --- F6.2's cross-course scope reading (`[D-076]` round 2, `ol-4qvc`) ---
     SCOPE_LABEL,
     SCOPE_NOT_YET_DECLARED,

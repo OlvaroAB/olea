@@ -58,13 +58,34 @@
 import type { ReviewLogEntry } from 'olea-contracts';
 import type { ConceptCourses } from '../insights/types.js';
 import type { MasteryRollupOptions } from '../mastery/rollup.js';
-import { type MasteryDistribution, masteryDistribution } from '../mastery/sprig.js';
+import {
+  type MasteryDistribution,
+  type MasteryVitality,
+  type MasteryVitalityInputs,
+  masteryDistribution,
+  masteryVitalityByStage,
+} from '../mastery/sprig.js';
 
 export interface CourseMastery {
   /** Her course code, verbatim from `ConceptCourses.courses` (R1/R2 — never normalised). */
   readonly course: string;
   /** How many concepts sit in each of F2.11's five named states. Never a blended score. */
   readonly distribution: MasteryDistribution;
+  /**
+   * F2.11's vitality axis, tallied per stage (`[D-087]`, `[D-116]`; `[VIT-2]`,
+   * `ol-a3hv`) — `null` exactly when `MasteryOverviewInput.vitality` was not
+   * supplied.
+   *
+   * **This is the data-side half of D-116's co-presence rule, and its `null`
+   * is the fallback the clause itself names**: *"where a surface genuinely
+   * cannot carry both, it shows neither."* `null` here means the renderer
+   * cannot carry vitality alongside the distribution above, so `view.ts`
+   * must show neither — never fall back to the growth-stage-only strip
+   * `ol-l5og.16` found in violation. `null` today is the ordinary case: no
+   * production caller supplies `vitality` yet — see that field's own doc for
+   * the reachability gap and why closing it is outside this bead's `owns`.
+   */
+  readonly vitality: MasteryVitality | null;
 }
 
 export interface MasteryOverview {
@@ -80,6 +101,34 @@ export interface MasteryOverviewInput {
   readonly entries: readonly ReviewLogEntry[];
   readonly concepts: readonly ConceptCourses[];
   readonly options?: MasteryRollupOptions;
+  /**
+   * F2.11/D-116's vitality axis (`[D-087]`; `[VIT-2]`, `ol-a3hv`) — a
+   * scheduler, an instant and the derived holding cut (`[D-115]`), the same
+   * three things `registry/provider.ts`'s `createLocalRegistryProvider`
+   * already assembles (`createFsrsScheduler()`, `deps.now()`, a locally
+   * declared `holdingCut` fallback) for the identical reason: growth stage
+   * is pure and vitality is not (`../mastery/rollup.ts`'s module doc).
+   *
+   * **Omitted by every production caller today.** `today/panel.ts`'s
+   * `buildTodayPanel` — this function's one caller — calls
+   * `buildMasteryOverview({ entries, concepts })` with no third field, and
+   * `panel.ts` sits outside this bead's `owns`
+   * (`packages/core/src/today/mastery-overview.ts`,
+   * `packages/core/src/mastery/sprig.ts`, `packages/plugin/src/today/
+   * view.ts`, `packages/plugin/src/today/copy.ts`,
+   * `packages/plugin/styles.css`). Wiring `panel.ts` (and, above it,
+   * `packages/plugin/src/today/data-source.ts`'s real provider) to supply a
+   * scheduler/clock/cut is the follow-up this bead's own report names —
+   * the exact shape `openSourceLocationPort`/`acceptNoteOfferPort` already
+   * take in `registry/provider.ts` for the same "one bead's `owns` stops one
+   * line short of the caller" reason.
+   *
+   * Until that lands, every `CourseMastery.vitality` is `null` and the
+   * Today panel's mastery section renders nothing — D-116's own fallback,
+   * and the correct interim state: never the growth-stage-only strip this
+   * bead replaces.
+   */
+  readonly vitality?: MasteryVitalityInputs;
 }
 
 /** Pure. Reads no clock (the rollup's `asOf` belongs to `MasteryRollupOptions`) and writes nothing. */
@@ -106,11 +155,16 @@ export function buildMasteryOverview(input: MasteryOverviewInput): MasteryOvervi
     }
   }
 
+  const vitalityInputs = input.vitality;
   const courses = [...idsByCourse.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
     .map(([course, conceptIds]) => ({
       course,
       distribution: masteryDistribution(input.entries, conceptIds, input.options),
+      vitality:
+        vitalityInputs === undefined
+          ? null
+          : masteryVitalityByStage(input.entries, conceptIds, vitalityInputs, input.options),
     }));
 
   return { courses, unassignedConceptCount, conceptCount: seenConceptIds.size };

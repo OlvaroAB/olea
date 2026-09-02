@@ -36,15 +36,16 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import type { MasteryState } from 'olea-contracts';
 import type {
   CourseDueCount,
   CourseMastery,
   CourseScopeReading,
   InsightsSummary,
   TodayViewModel,
+  Vitality,
 } from 'olea-core';
 import { CONTEST_GESTURE_LABEL, MASTERY_ORDER, type TodayClaim } from 'olea-core';
-import { renderSprig } from '../sprig/render-sprig.js';
 import type { DisputeSheet, TodayContestSupport } from './contest.js';
 import {
   conceptCountLabel,
@@ -75,8 +76,19 @@ import {
   TERM_DATES_POINTER_TEXT,
   TODAY_HEADER_LABEL,
   TODAY_VIEW_TITLE,
+  tendingLine,
+  vitalityCountLabel,
 } from './copy.js';
 import type { TermDatesAskState } from './term-window-store.js';
+
+/**
+ * `holding` first — the "silent", unmarked value (F2.11: "holding is the
+ * value that carries no mark") — then the two marked values, in the order
+ * the vocabulary registry states them (§1: "exactly two marks — honey =
+ * needs tending, dashed outline = too early to say"). Fixed here rather than
+ * derived, matching `MASTERY_ORDER`'s own precedent one file over.
+ */
+const VITALITY_ORDER: readonly Vitality[] = ['holding', 'tending', 'early'];
 
 export const VIEW_TYPE_OLEA_TODAY = 'olea-today';
 
@@ -183,7 +195,8 @@ export class TodayView extends ItemView {
   }
 
   /**
-   * F6.2 (`ol-lohq`) — one distribution strip per course.
+   * F6.2 (`ol-lohq`) — one ladder per course (F2.11, D-116; `[VIT-2]`,
+   * `ol-a3hv`).
    *
    * **`mastery === null` renders nothing at all**, and that is a decision
    * rather than a shortcut: `null` means the panel was never handed a concept
@@ -196,47 +209,61 @@ export class TodayView extends ItemView {
    * showing that. It is a fact about a course she has not opened, not an
    * empty state.
    *
-   * **This block predates D-049/F2.11's ratified display and does not
-   * currently comply with it (`ol-l5og.16`).** Read in two sentences: F2.11
-   * ratifies exactly two forms of a mastery distribution — a *field* at
-   * ≥860px and a *ladder* (rows named by stage, one dot per concept, a
-   * tending line beneath naming affected concepts) below that — chosen by
-   * width, and the co-presence clause D-116 adds (`ol-hgtb`,
-   * `findings/VIT-1-holding-cut.md` §6, binding "the review view, the Today
-   * panel, the gap view and the sprig chip" by name) makes both forms show a
-   * growth stage only alongside its vitality reading, "worded, marked, or
-   * drawn as the sprig's wilt," with an explicit fallback: "where a surface
-   * genuinely cannot carry both, it shows neither." This sidebar sits in the
-   * vocabulary registry's "Mastery side pane, 280–460px" width bucket (§1's
-   * own table), which resolves to the **ladder**, not this decorative strip.
+   * **This is the ladder form, not the decorative strip `ol-l5og.16` found
+   * out of compliance.** F2.11 ratifies exactly two forms of a mastery
+   * distribution — a *field* at ≥860px and a *ladder* (rows named by stage,
+   * one dot per concept, a tending line beneath naming affected concepts)
+   * below that — chosen by width, and the co-presence clause D-116 adds
+   * (`ol-hgtb`, `findings/VIT-1-holding-cut.md` §6, binding "the review view,
+   * the Today panel, the gap view and the sprig chip" by name) makes both
+   * forms show a growth stage only alongside its vitality reading, "worded,
+   * marked, or drawn as the sprig's wilt," with an explicit fallback: "where
+   * a surface genuinely cannot carry both, it shows neither." This sidebar
+   * sits in the vocabulary registry's "Mastery side pane, 280–460px" width
+   * bucket (§1's own table), which resolves to the ladder — `renderMasteryCourse`
+   * below draws exactly that.
    *
-   * It is not reconciled here, and this is not a deliberate ruled-compatible
-   * variant — it is a genuine gap this bead found but could not close within
-   * its own `owns`. `CourseMastery`/`MasteryDistribution`
+   * **`[VIT-2]`'s own reachability gap, unclosed by this bead on purpose:**
+   * no production caller wires a scheduler/clock/cut into
+   * `MasteryOverviewInput.vitality` yet — `today/panel.ts` and
+   * `today/data-source.ts` sit outside this bead's `owns`
    * (`packages/core/src/today/mastery-overview.ts`,
-   * `packages/core/src/mastery/sprig.ts`) carry growth-stage counts only; no
-   * vitality field reaches this course-level aggregate anywhere, even though
-   * per-concept vitality is already computed (`packages/core/src/mastery/
-   * vitality.ts`'s `readVitality`, wired by `ol-95vv.1`). Building the ladder
-   * and its tending line needs that core-side wiring plus new rules in the
-   * shared `styles.css`, both outside `today/view.ts` and `today/copy.ts`.
-   * Filed as `[VIT-2]` (`ol-a3hv`, `discovered-from` this bead); its
-   * scenarios already exist, pre-written, in `features/F6-today.md`'s "F6.2
-   * — What the overview may show for vitality" block.
+   * `packages/core/src/mastery/sprig.ts`, `packages/plugin/src/today/
+   * view.ts`, `packages/plugin/src/today/copy.ts`,
+   * `packages/plugin/styles.css`) — so `course.vitality` is `null` for every
+   * course today. `renderMasteryCourse` below applies D-116's own fallback to
+   * that: it draws NOTHING for a course whose vitality is `null`, rather than
+   * the growth-stage-only strip this bead replaces. The follow-up (wiring
+   * `panel.ts`/`data-source.ts` to supply `createFsrsScheduler()`, `now`, and
+   * a declared holding-cut fallback — the exact shape
+   * `registry/provider.ts`'s `createLocalRegistryProvider` already uses) is
+   * this bead's own report, the same "one line short of the caller" gap
+   * `openSourceLocationPort`/`acceptNoteOfferPort` document in that file.
    */
   private renderMastery(parent: HTMLElement, vm: TodayViewModel): void {
     const overview = vm.mastery;
     if (overview === null || overview.courses.length === 0) return;
+    // Every course shares one `MasteryOverviewInput.vitality`, so either all
+    // of them carry a reading or none do — checked once, rather than
+    // building an empty "Mastery" header over a body that draws nothing.
+    if (overview.courses.every((course) => course.vitality === null)) return;
 
     const section = parent.createDiv({ cls: 'olea-today-mastery' });
     section.createDiv({ cls: 'olea-today-mastery-label', text: MASTERY_LABEL });
     for (const course of overview.courses) {
+      if (course.vitality === null) continue;
       this.renderMasteryCourse(section, course);
       this.renderContestGesture(section, `mastery:${course.course}`);
     }
   }
 
   private renderMasteryCourse(parent: HTMLElement, course: CourseMastery): void {
+    const vitality = course.vitality;
+    // D-116's own fallback, per course: "where a surface genuinely cannot
+    // carry both, it shows neither." `renderMastery` already screens out the
+    // all-`null` case; this is the defensive per-course mirror of that rule.
+    if (vitality === null) return;
+
     const row = parent.createDiv({ cls: 'olea-today-mastery-course' });
 
     const head = row.createDiv({ cls: 'olea-today-mastery-head' });
@@ -247,41 +274,69 @@ export class TodayView extends ItemView {
       text: conceptCountLabel(course.distribution.total),
     });
 
-    // The strip is decorative and says so. Everything it encodes is stated as
-    // text in the counts row below it, so a screen reader gets the numbers and
-    // the four words rather than a row of unlabelled boxes — and the bar is
-    // free to fade its segments without a contrast question, because no
-    // meaning rides on the colour alone.
-    //
-    // Not the ratified ladder, and no vitality reading anywhere in this
-    // block — see `renderMastery`'s doc comment for the F2.11/D-116 reading
-    // and `[VIT-2]` (`ol-a3hv`), the follow-up this gap is filed on.
-    const strip = row.createDiv({ cls: 'olea-today-mastery-strip' });
-    strip.setAttr('aria-hidden', 'true');
-    const counts = row.createDiv({ cls: 'olea-today-mastery-counts' });
-
+    // Four rows, one per stage, always — the vocabulary registry's own
+    // description of the ladder — never skipped at zero, matching
+    // `MasteryDistribution.counts`'s own "never a sparse map" rule.
+    const ladder = row.createDiv({ cls: 'olea-today-mastery-ladder' });
     for (const state of MASTERY_ORDER) {
-      const count = course.distribution.counts[state];
-      if (count === 0) continue;
-      const segment = strip.createDiv({ cls: 'olea-today-mastery-seg' });
-      // `data-stage-index` (ordinal position in `MASTERY_ORDER`) rather than an
-      // `is-<state>` class or leaf count: `sapling` and `tree` share the same
-      // three-leaf geometry (D-049), so leaf count stopped being monotonic with
-      // stage the moment vitality moved off the leaf scale onto fruit. Ordinal
-      // position is still exactly one attribute carrying the whole ordering,
-      // and the stylesheet still needs no branch that could drift from
-      // `MASTERY_ORDER`.
-      segment.setAttr('data-stage-index', String(MASTERY_ORDER.indexOf(state)));
-      segment.setAttr('style', `flex-grow:${count}`);
+      this.renderLadderRow(
+        ladder,
+        state,
+        course.distribution.counts[state],
+        vitality.byStage[state],
+      );
+    }
 
-      // The sprig here is one representative icon per occupied state bucket, not
-      // one per concept — `course.distribution` is a count, not a set of concept
-      // ids (see `olea-core`'s `MasteryDistribution`), so there is no per-concept
-      // evidence for a growth transition to react to at this surface. `renderRow`
-      // in `gap/view.ts` is where a sprig stands for one concept's own state.
-      const countEl = counts.createSpan({ cls: 'olea-today-mastery-count' });
-      countEl.appendChild(renderSprig({ state, size: 12, container: countEl }));
-      countEl.createSpan({ text: masteryCountLabel(state, count) });
+    const tending = tendingLine(vitality.tending);
+    if (tending !== null) {
+      row.createDiv({ cls: 'olea-today-mastery-tending', text: tending });
+    }
+  }
+
+  /**
+   * One ladder row (vocabulary registry §1: "Ladder — four rows, one per
+   * stage, with one dot per concept and a count").
+   *
+   * **The co-presence rule, satisfied per row.** Every dot carries its
+   * vitality as a mark — honey for `needs tending`, a dashed outline for
+   * `too early to say`, and no mark at all for `holding` (F2.11: "holding is
+   * the value that carries no mark" — safe here BECAUSE the other two marks
+   * exist; the old strip's failure was omitting all three, which made an
+   * unmarked stage indistinguishable from an intentionally-unmarked
+   * `holding` one). The dots are `aria-hidden`, same posture the old strip
+   * took, because the breakdown row beneath restates every non-zero bucket
+   * as text (`vitalityCountLabel`) — and because every occupied stage's
+   * buckets sum to its count, a non-empty stage always states at least one
+   * vitality word, so a stage with concepts in it never reads as
+   * vitality-silent.
+   */
+  private renderLadderRow(
+    parent: HTMLElement,
+    state: MasteryState,
+    count: number,
+    byVitality: Readonly<Record<Vitality, number>>,
+  ): void {
+    const row = parent.createDiv({ cls: 'olea-today-mastery-ladder-row' });
+    row.createDiv({
+      cls: 'olea-today-mastery-ladder-head',
+      text: masteryCountLabel(state, count),
+    });
+
+    const dots = row.createDiv({ cls: 'olea-today-mastery-ladder-dots' });
+    dots.setAttr('aria-hidden', 'true');
+    for (const vitality of VITALITY_ORDER) {
+      for (let i = 0; i < byVitality[vitality]; i += 1) {
+        const dot = dots.createDiv({ cls: 'olea-today-mastery-ladder-dot' });
+        if (vitality === 'tending') dot.addClass('is-tending');
+        else if (vitality === 'early') dot.addClass('is-early');
+      }
+    }
+
+    const breakdown = row.createDiv({ cls: 'olea-today-mastery-ladder-vitality' });
+    for (const vitality of VITALITY_ORDER) {
+      const vitalityCount = byVitality[vitality];
+      if (vitalityCount === 0) continue;
+      breakdown.createSpan({ text: vitalityCountLabel(vitality, vitalityCount) });
     }
   }
 
@@ -488,7 +543,7 @@ export class TodayView extends ItemView {
       if (course !== undefined) {
         lines.push({
           course: course.course,
-          text: effortShareClause(course.weightShare, course.timeShare),
+          text: effortShareClause(course.floorShare, course.timeShare),
         });
       }
     }

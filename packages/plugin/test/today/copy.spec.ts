@@ -36,6 +36,9 @@ import {
   spacingRateSentence,
   TERM_DATES_POINTER_BUTTON_LABEL,
   TERM_DATES_POINTER_TEXT,
+  tendingLine,
+  vitalityCountLabel,
+  vitalityLabel,
 } from '../../src/today/copy.js';
 
 const strings = allTodayStrings();
@@ -258,7 +261,9 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
 
   it('the effort clause names no course — the code comes from her vault (ol-p2t08)', () => {
     const clause = effortShareClause(0.57, 0.14);
-    expect(clause).toBe('carries 57% of the assessment weight and 14% of the time logged.');
+    expect(clause).toBe(
+      'has logged 14% of the time against a minimum share of 57% for this window.',
+    );
     expect(clause).not.toMatch(/[A-Z]/);
   });
 
@@ -282,9 +287,118 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
   });
 });
 
+describe('F2.11’s vitality axis on the ladder (`[VIT-2]`, `ol-a3hv`) — features/F6-today.md, "F6.2 — What the overview may show for vitality"', () => {
+  it('vitalityLabel produces exactly F2.11’s three words, matching registry/copy.ts’s own mapping', () => {
+    expect(vitalityLabel('holding')).toBe('holding');
+    expect(vitalityLabel('tending')).toBe('needs tending');
+    expect(vitalityLabel('early')).toBe('too early to say');
+  });
+
+  it('vitalityCountLabel reads correctly at one and at several, same shape as masteryCountLabel', () => {
+    expect(vitalityCountLabel('holding', 1)).toBe('1 holding');
+    expect(vitalityCountLabel('tending', 3)).toBe('3 needs tending');
+    expect(vitalityCountLabel('early', 2)).toBe('2 too early to say');
+  });
+
+  it('the three vitality words are the only vitality vocabulary on the surface — no synonym, no fourth value', () => {
+    // Scenario: "the three vitality words are the only vitality vocabulary on
+    // the surface".
+    const vitalityStrings = [
+      vitalityLabel('holding'),
+      vitalityLabel('tending'),
+      vitalityLabel('early'),
+      vitalityCountLabel('holding', 1),
+      vitalityCountLabel('tending', 1),
+      vitalityCountLabel('early', 1),
+    ].join(' ');
+    for (const synonym of [
+      'fresh',
+      'faded',
+      'fading',
+      'stale',
+      'weak',
+      'strong',
+      'fragile',
+      'wilting',
+      'decayed',
+      'forgotten',
+    ]) {
+      expect(
+        vitalityStrings.toLowerCase(),
+        `"${synonym}" is not a ratified vitality word`,
+      ).not.toContain(synonym);
+    }
+  });
+
+  it('the tending line names the concept and the single instrument the reading came from', () => {
+    // Scenario: "the tending line names the instrument the reading came
+    // from" — min was chosen over a blend precisely so this sentence can
+    // name one instrument rather than blur several.
+    const line = tendingLine([{ conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' }]);
+    expect(line).not.toBeNull();
+    expect(line).toContain('concept-a');
+    expect(line).toContain('qa:concept-a:1');
+    expect(line?.toLowerCase()).toContain(vitalityLabel('tending'));
+  });
+
+  it('names every concept currently reading needs tending, not only the first', () => {
+    const line = tendingLine([
+      { conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' },
+      { conceptId: 'concept-b', weakestInstrumentId: 'cloze:concept-b:2' },
+    ]);
+    expect(line).toContain('concept-a');
+    expect(line).toContain('qa:concept-a:1');
+    expect(line).toContain('concept-b');
+    expect(line).toContain('cloze:concept-b:2');
+  });
+
+  it('is absent, never a rendered "0 needs tending" line, when nothing needs tending', () => {
+    expect(tendingLine([])).toBeNull();
+  });
+
+  it('no retrievability number, percentage or scalar reaches the panel', () => {
+    // Scenario: "no retrievability number reaches the panel" — every vitality
+    // string this module can produce carries no percentage sign and no
+    // decimal figure standing in for a probability. Counts (integers naming
+    // how many concepts) are the one permitted digit shape, same as
+    // `masteryCountLabel`'s own counts.
+    const strings = [
+      vitalityLabel('holding'),
+      vitalityLabel('tending'),
+      vitalityLabel('early'),
+      vitalityCountLabel('holding', 3),
+      vitalityCountLabel('tending', 1),
+      tendingLine([{ conceptId: 'concept-a', weakestInstrumentId: 'qa:concept-a:1' }]) ?? '',
+    ];
+    for (const text of strings) {
+      expect(text, `"${text}" must carry no percentage`).not.toMatch(/%/);
+      expect(text, `"${text}" must carry no decimal figure`).not.toMatch(/\d+\.\d+/);
+    }
+    // Structural: neither function's signature can even accept a probability
+    // — `vitalityLabel`/`vitalityCountLabel` take a `Vitality` value, never a
+    // `number` in [0, 1], and `tendingLine`'s `TendingLineConcept` carries
+    // only ids.
+    expect(vitalityCountLabel.length).toBe(2);
+  });
+
+  it('is part of the corpus the panel-wide rules are checked against', () => {
+    const corpusStrings = allTodayStrings();
+    for (const text of [
+      vitalityLabel('holding'),
+      vitalityLabel('tending'),
+      vitalityLabel('early'),
+      vitalityCountLabel('holding', 1),
+      vitalityCountLabel('tending', 1),
+      vitalityCountLabel('early', 1),
+    ]) {
+      expect(corpusStrings, `"${text}" is rendered but not sampled`).toContain(text);
+    }
+  });
+});
+
 describe('effortInsightLine names the course it is about (ol-7j54 / ARC-1)', () => {
   // The three phases of a course are per-course, not per-student: the same
-  // weight/time gap is ordinary early in a course and a real problem late in
+  // floor/time gap is ordinary early in a course and a real problem late in
   // it, and two of her courses can be in different phases at once. The copy
   // rule is that a claim like this must name the course rather than be
   // presented as an unscoped fact — see olea-core's insights/index.ts.
@@ -292,19 +406,18 @@ describe('effortInsightLine names the course it is about (ol-7j54 / ARC-1)', () 
     course: 'FIXTURE101',
     timeMs: 1_000,
     timeShare: 0.14,
-    weight: 50,
-    weightShare: 0.57,
+    floorShare: 0.57,
     gap: 0.43,
   };
 
   it('bundles the course from the record with the same text effortShareClause produces', () => {
     const line = effortInsightLine(course);
     expect(line.course).toBe('FIXTURE101');
-    expect(line.text).toBe(effortShareClause(course.weightShare, course.timeShare));
+    expect(line.text).toBe(effortShareClause(course.floorShare, course.timeShare));
   });
 
   it('takes the course identity from the record it was measured from, not by construction here', () => {
-    const other = { ...course, course: 'OTHER202', weightShare: 0.4, timeShare: 0.1 };
+    const other = { ...course, course: 'OTHER202', floorShare: 0.4, timeShare: 0.1 };
     expect(effortInsightLine(other).course).toBe('OTHER202');
     expect(effortInsightLine(other).text).toBe(effortShareClause(0.4, 0.1));
   });
