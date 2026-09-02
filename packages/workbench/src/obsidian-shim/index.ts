@@ -308,3 +308,233 @@ export class Modal {
     return this;
   }
 }
+
+/**
+ * `Setting`/`PluginSettingTab`/`Plugin`/`TextComponent`/`ButtonComponent`
+ * (`ol-z6x2` [WB-2] F7 tranche). `OleaSettingTab`
+ * (`packages/plugin/src/settings/settings-tab.ts`) is F7's real settings
+ * pane; mounting it for real needs Obsidian's own form-building API, which
+ * is chrome by the WB-1 rule at the top of this file: `Setting` lays out a
+ * name/description/control row and nothing more, `TextComponent`/
+ * `ButtonComponent` wrap a plain `<input>`/`<button>`, and none of them know
+ * what a token, a term date or a usage figure is — every piece of THAT
+ * logic already lives in `settings-tab.ts`'s own DOM-free sibling modules
+ * (`token-field-copy.ts`, `usage/aggregate.ts`, etc.), which is the whole
+ * argument that file's own module doc makes for why it itself is "kept
+ * thin on purpose."
+ *
+ * Reduced to exactly what `settings-tab.ts`, `usage/settings-section.ts`
+ * and `privacy/settings-section.ts` call — verified by grep before writing
+ * this (see the package README's shim ledger, row 7): `setName`, `setDesc`,
+ * `setHeading`, `setDisabled` on `Setting`; `addText`/`addButton`;
+ * `setPlaceholder`, `getValue`/`setValue`, `onChange`, `inputEl`,
+ * `setDisabled` on `TextComponent`; `setButtonText`, `onClick`,
+ * `setDisabled` on `ButtonComponent`. No `addToggle`, `addDropdown`,
+ * `setTooltip`, `setCta` or anything else Obsidian's real `Setting` offers —
+ * none of the F7 surfaces this bead mounts use them.
+ */
+export class TextComponent {
+  readonly inputEl: HTMLInputElement;
+  private changeHandler: ((value: string) => unknown) | null = null;
+
+  constructor(containerEl: HTMLElement) {
+    this.inputEl = containerEl.createEl('input', { attr: { type: 'text' } });
+    this.inputEl.addEventListener('input', () => {
+      this.changeHandler?.(this.inputEl.value);
+    });
+  }
+
+  setPlaceholder(placeholder: string): this {
+    this.inputEl.placeholder = placeholder;
+    return this;
+  }
+
+  getValue(): string {
+    return this.inputEl.value;
+  }
+
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.inputEl.disabled = disabled;
+    return this;
+  }
+
+  onChange(callback: (value: string) => unknown): this {
+    this.changeHandler = callback;
+    return this;
+  }
+}
+
+export class ButtonComponent {
+  readonly buttonEl: HTMLButtonElement;
+  private clickHandler: ((evt: MouseEvent) => unknown) | null = null;
+
+  constructor(containerEl: HTMLElement) {
+    this.buttonEl = containerEl.createEl('button', { attr: { type: 'button' } });
+    this.buttonEl.addEventListener('click', (evt) => {
+      if (!this.buttonEl.disabled) this.clickHandler?.(evt);
+    });
+  }
+
+  setButtonText(text: string): this {
+    this.buttonEl.textContent = text;
+    return this;
+  }
+
+  onClick(callback: (evt: MouseEvent) => unknown): this {
+    this.clickHandler = callback;
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.buttonEl.disabled = disabled;
+    this.buttonEl.toggleClass('is-disabled', disabled);
+    return this;
+  }
+}
+
+/**
+ * Obsidian's settings-row builder, reduced per this class's own doc above.
+ * `settingEl`/`infoEl`/`nameEl`/`descEl`/`controlEl` mirror the real class's
+ * field names exactly, because `settings-tab.ts` never reads them directly
+ * — only `Setting`'s own methods are called — but keeping the names aligned
+ * is what makes a future grep against the real `obsidian.d.ts` trustworthy.
+ */
+export class Setting {
+  readonly settingEl: HTMLElement;
+  readonly infoEl: HTMLElement;
+  readonly nameEl: HTMLElement;
+  readonly descEl: HTMLElement;
+  readonly controlEl: HTMLElement;
+
+  constructor(containerEl: HTMLElement) {
+    this.settingEl = containerEl.createDiv({ cls: 'setting-item' });
+    this.infoEl = this.settingEl.createDiv({ cls: 'setting-item-info' });
+    this.nameEl = this.infoEl.createDiv({ cls: 'setting-item-name' });
+    this.descEl = this.infoEl.createDiv({ cls: 'setting-item-description' });
+    this.controlEl = this.settingEl.createDiv({ cls: 'setting-item-control' });
+  }
+
+  setName(name: string): this {
+    this.nameEl.setText(name);
+    return this;
+  }
+
+  setDesc(desc: string): this {
+    this.descEl.setText(desc);
+    return this;
+  }
+
+  setHeading(): this {
+    this.settingEl.addClass('setting-item-heading');
+    return this;
+  }
+
+  setDisabled(disabled: boolean): this {
+    this.settingEl.toggleClass('is-disabled', disabled);
+    return this;
+  }
+
+  addText(cb: (component: TextComponent) => unknown): this {
+    cb(new TextComponent(this.controlEl));
+    return this;
+  }
+
+  addButton(cb: (component: ButtonComponent) => unknown): this {
+    cb(new ButtonComponent(this.controlEl));
+    return this;
+  }
+}
+
+/**
+ * Obsidian's `PluginSettingTab` (via `SettingTab`), reduced to `app` and
+ * `containerEl` — the two fields `OleaSettingTab`'s constructor and
+ * `display()` override actually touch — plus the `display()`/`hide()`
+ * methods real Obsidian declares as concrete (never abstract) on the base
+ * class, which is what lets `OleaSettingTab` write `override display()`.
+ */
+export class PluginSettingTab {
+  readonly app: App;
+  readonly containerEl: HTMLElement;
+
+  constructor(app: App, _plugin: Plugin) {
+    this.app = app;
+    this.containerEl = document.createElement('div');
+    this.containerEl.className = 'vertical-tab-content';
+  }
+
+  display(): void {}
+
+  hide(): void {}
+}
+
+/**
+ * Obsidian's `Plugin` (via `Component`), reduced to the one field
+ * `OleaSettingTab`'s constructor signature carries a `Plugin` for: nothing
+ * in this bead's fixtures reads anything off it beyond `app`, so the
+ * manifest/`onload`/`onunload` surface real `Plugin` declares is absent —
+ * the WB-1 rule again, grown only as far as a real call site needs.
+ */
+export class Plugin extends Component {
+  readonly app: App;
+
+  constructor(app: App) {
+    super();
+    this.app = app;
+  }
+}
+
+/** Obsidian's `requestUrl` param/response shapes, reduced to the fields `privacy/obsidian-adapters.ts`'s `obsidianDeleteHttpRequest` reads or sets. */
+export interface RequestUrlParam {
+  readonly url: string;
+  readonly method?: string;
+  readonly contentType?: string;
+  readonly body?: string | ArrayBuffer;
+  readonly headers?: Record<string, string>;
+  readonly throw?: boolean;
+}
+
+export interface RequestUrlResponse {
+  readonly status: number;
+  readonly headers: Record<string, string>;
+  readonly arrayBuffer: ArrayBuffer;
+  readonly json: unknown;
+  readonly text: string;
+}
+
+/**
+ * Obsidian's `requestUrl` (`ol-z6x2` [WB-2] F7 tranche) — real chrome (an
+ * HTTP call that bypasses the renderer's own CORS restrictions), reduced to
+ * the type shape `privacy/obsidian-adapters.ts`'s `obsidianDeleteHttpRequest`
+ * needs. That adapter is pulled in transitively by `OleaSettingTab.display()`
+ * rendering its F7.4 privacy section, even though this bead's own fixture
+ * states never press "Delete everything" — see
+ * `plugin-surface-scenarios.ts`'s module doc for why. Backed by a real
+ * `fetch()` rather than a throw, so the type seam is honest rather than a
+ * landmine for whichever later tranche's fixture does click that button.
+ */
+export async function requestUrl(request: RequestUrlParam | string): Promise<RequestUrlResponse> {
+  const params: RequestUrlParam = typeof request === 'string' ? { url: request } : request;
+  const response = await fetch(params.url, {
+    method: params.method ?? 'GET',
+    headers: params.headers ?? {},
+    body: params.body ?? null,
+  });
+  const buffer = await response.arrayBuffer();
+  const text = new TextDecoder().decode(buffer);
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = undefined;
+  }
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  return { status: response.status, headers, arrayBuffer: buffer, json, text };
+}

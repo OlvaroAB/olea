@@ -255,9 +255,18 @@ rather than by inspection.
 | 5 | Presentation logic living in `view.ts` — `formatCourseList`, the session-complete paragraph's pluralisation and conditional clauses, the MCQ feedback sentence, the `again/hard/good/easy` label map and the `1..4` keycap digits (already in `keymap.ts`'s `RATING_KEYS`). | **Move core-ward.** None of it forced the shim to grow, but all of it is untested-by-design copy assembly in the DOM layer — including sentences that assert a schedule. | `ol-09kf` |
 
 | 6 | Isolating the host pane in an iframe (`ol-mioe`) needed the Obsidian DOM helpers in the frame's realm, since prototypes are per-realm. | **Chrome, and the shim doing its job.** `installObsidianDomHelpers` takes a window and `createEl` creates through `this.ownerDocument` instead of the ambient global. No new *member* was added — the surface is the same list of Obsidian APIs. Obsidian's own helpers work this way for the same reason: it pops tabs into separate windows. |  |
+| 7 | `OleaSettingTab` (F7's real settings pane, `ol-z6x2` F7 tranche) needs `Setting`/`PluginSettingTab`/`Plugin`/`TextComponent`/`ButtonComponent`/`requestUrl` to render whole — form-row layout, a name/description/control API, and the type shape of the one adapter (`privacy/obsidian-adapters.ts`) F7.4's privacy section pulls in transitively. | **Chrome, grown per the WB-1 rule.** Verified by grep first (only `setName`/`setDesc`/`setHeading`/`setDisabled`/`addText`/`addButton` on `Setting`; no `addToggle`/`addDropdown`/`setTooltip`/`setCta`). `requestUrl` is a real `fetch()`, never a throw, since a later tranche's fixture may exercise the delete path this one's states never click. | `ol-z6x2` |
 
-**Nothing was added to the shim to make a view render.** The shim's surface today is
-exactly what it was when the first view mounted.
+**Two additions predate this ledger row and are recorded here rather than left silent:**
+`Modal`/`App`/`Workspace` (`ol-z6x2`'s F5 tranche, for `ExplainBackModal`'s `[D-171]`
+"See in registry" hand-off) landed with their own module doc in `obsidian-shim/index.ts`
+but no ledger row — see that file's doc for the argument. **The sentence this replaces —
+"nothing was added to the shim to make a view render, the shim's surface today is exactly
+what it was when the first view mounted" — stopped being true at that tranche and is
+corrected here (Class A) rather than left standing as stale-but-present authority** (the
+project's own rule on that: a live document that is not archive must be current, never
+backwards-looking). The shim has grown three times since WB-1 landed, every time logged
+either here or in the module doc it grew, and every time chrome by the same test.
 
 ## Findings the workbench produced by running
 

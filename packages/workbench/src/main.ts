@@ -92,6 +92,11 @@ import {
 } from './persona/history.js';
 import { ReviewSession, ReviewView, TodayView } from './plugin-bridge.js';
 import {
+  buildPluginSurfaceScenario,
+  findPluginSurfaceState,
+  PLUGIN_SURFACE_STATES,
+} from './plugin-surface-scenarios.js';
+import {
   deriveWorkbenchQueue,
   describeWorkbenchQueue,
   type WorkbenchQueue,
@@ -167,6 +172,7 @@ type RouteSurface =
   | 'rhythm'
   | 'bulk-review'
   | 'registry'
+  | 'plugin-surface'
   | 'walk';
 
 const DEFAULT_STATE = 'qa-front';
@@ -182,6 +188,7 @@ const DEFAULT_TRENDS_STATE = 'trends-cramming';
 const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
 const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
 const DEFAULT_REGISTRY_STATE = 'registry-populated';
+const DEFAULT_PLUGIN_SURFACE_STATE = 'plugin-surface-fresh';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -289,6 +296,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_BULK_REVIEW_STATE;
     case 'registry':
       return DEFAULT_REGISTRY_STATE;
+    case 'plugin-surface':
+      return DEFAULT_PLUGIN_SURFACE_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -325,6 +334,8 @@ function findStateFor(
       return findBulkReviewState(stateId);
     case 'registry':
       return findRegistryState(stateId);
+    case 'plugin-surface':
+      return findPluginSurfaceState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -370,9 +381,11 @@ function readRoute(): Route {
                           ? 'bulk-review'
                           : segments[0] === 'registry'
                             ? 'registry'
-                            : segments[0] === 'walk'
-                              ? 'walk'
-                              : 'review';
+                            : segments[0] === 'plugin-surface'
+                              ? 'plugin-surface'
+                              : segments[0] === 'walk'
+                                ? 'walk'
+                                : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -437,6 +450,7 @@ async function main(): Promise<void> {
   const rhythmStateList = requireEl('[data-wb-rhythm-states]');
   const bulkReviewStateList = requireEl('[data-wb-bulk-review-states]');
   const registryStateList = requireEl('[data-wb-registry-states]');
+  const pluginSurfaceStateList = requireEl('[data-wb-plugin-surface-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -628,6 +642,18 @@ async function main(): Promise<void> {
       writeRoute({ ...readRoute(), surface: 'registry', stateId: state.id });
     });
     registryStateList.appendChild(button);
+  }
+
+  for (const state of PLUGIN_SURFACE_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbPluginSurfaceStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'plugin-surface', stateId: state.id });
+    });
+    pluginSurfaceStateList.appendChild(button);
   }
 
   // The walkthrough's own step list (rule: "collapses the six state lists to
@@ -948,6 +974,14 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'registry' && button.dataset.wbRegistryStateLink === state.id,
+      );
+    }
+    for (const button of pluginSurfaceStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-plugin-surface-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'plugin-surface' && button.dataset.wbPluginSurfaceStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1402,6 +1436,41 @@ async function main(): Promise<void> {
     }
 
     /**
+     * F7's plugin surface (`ol-z6x2` [WB-2], `olea-service`'s
+     * `features/F7-plugin-surface.md`) — the REAL `OleaSettingTab`
+     * (`packages/plugin/src/settings/settings-tab.ts`) mounted whole, over a
+     * fixture data host and a canned Worker transport
+     * (`plugin-surface-scenarios.ts`'s own module doc explains the scope:
+     * rendered copy, a section's conditional presence, and the "Test
+     * connection" status line — never a real vault walk or a real HTTP
+     * call). Not an `ItemView`: `OleaSettingTab` is Obsidian's
+     * `PluginSettingTab`, which owns its own `containerEl` rather than
+     * taking a `WorkspaceLeaf`, so this mounter never joins `mounted` — same
+     * posture `mountRetrieve`/`mountRhythm` take for a surface with no
+     * leaf-based lifecycle.
+     */
+    async function mountPluginSurface(stateId: string): Promise<void> {
+      const scenario = buildPluginSurfaceScenario(stateId);
+      if (run !== generation) return;
+
+      host.appendChild(scenario.tab.containerEl);
+      scenario.tab.display();
+      // `display()` kicks off several `void this.render*Fields(...)` calls
+      // (`settings-tab.ts`'s own doc) that each await at least one
+      // `dataHost.loadData()` — two ticks lets every one of them settle
+      // before the pane is read.
+      await settle();
+      await settle();
+      if (run !== generation) return;
+
+      inspector.empty();
+      inspector.createDiv({ cls: 'wb-inspector-note', text: activeSet.note });
+      inspector.createDiv({ cls: 'wb-inspector-note', text: scenario.state.note });
+
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
+    /**
      * F5.1's "Explain it back" surface (`ol-z6x2` F5 tranche, `[D-163]`) —
      * the REAL `ExplainBackModal` over CANNED `grade`/`acceptWithObservation`
      * results (`explain-back-scenarios.ts`'s own module doc explains why:
@@ -1649,6 +1718,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'registry') {
       await mountRegistry(route.stateId);
+      return;
+    }
+    if (route.surface === 'plugin-surface') {
+      await mountPluginSurface(route.stateId);
       return;
     }
     if (route.surface === 'today') {
