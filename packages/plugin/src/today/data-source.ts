@@ -89,6 +89,7 @@ import {
   computeAllConceptMastery,
   computeScheduleFreshness,
   courseFromPath,
+  createFsrsScheduler,
   DEFAULT_COURSES_FOLDER,
   type DisputeLogRecord,
   type DueInstrument,
@@ -125,6 +126,19 @@ import type { ObsidianTermWindowStore } from './term-window-store.js';
  * instead of silently truncating. Class B: a reversible default.
  */
 export const DEFAULT_STREAK_WINDOW_DAYS = 120;
+
+/**
+ * F2.11/D-116's vitality axis needs a scheduler, a clock and a holding cut
+ * (`[D-115]`) it cannot compute itself — `../mastery/rollup.ts`'s own doc
+ * says why growth stage is pure and vitality is not. `registry/provider.ts`
+ * and `retrospective/provider.ts` each already declare this identical
+ * fallback independently rather than share one module (that file's own doc:
+ * "no shared `holdingCut` constant exists anywhere else in
+ * `packages/plugin`") — this is a third, for the Today panel, same reason:
+ * ratifying a real value needs a semester of her review log, so until then
+ * this is a plain-English default (Class B), not a derivation.
+ */
+const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 export interface ReviewHistory {
   readonly entries: readonly ReviewLogEntry[];
@@ -765,7 +779,26 @@ export interface TodayPanelDeps {
   readonly rhythm?: TodayRhythmSource;
   /** Absent means no F6.2 cross-course scope reading — see `TodayScopeSource`. */
   readonly scope?: TodayScopeSource;
+  /**
+   * Overrides `DECLARED_FALLBACK_HOLDING_CUT` for F2.11/D-116's vitality
+   * axis (`[D-115]`) — injected for determinism under test, the same
+   * `?? DECLARED_FALLBACK_HOLDING_CUT` pattern `registry/provider.ts`'s
+   * `CreateLocalRegistryProviderDeps.holdingCut` already uses.
+   */
+  readonly holdingCut?: number;
 }
+
+/**
+ * `olea-core`'s index does not export `MasteryVitalityInputs` on its own
+ * (`../mastery/sprig.ts` sits behind `today/panel.ts`'s public
+ * `TodayPanelInput`) — the same "mirror via indexed access, not a second
+ * export" technique `registry/provider.ts`'s module doc uses for
+ * `RegistryConceptEntry['renameProposal']`, for the identical reason: the
+ * type this needs is a nested field of an already-exported type, and
+ * widening `packages/core/src/index.ts` to export it directly is a change
+ * to a shared file outside this bead's `owns`.
+ */
+type TodayPanelVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
 
 /**
  * Loads both halves and folds them through core's one entry point. This is the
@@ -796,12 +829,25 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   });
   const instruments = await deps.instruments.listDueCandidates();
 
+  // F2.11/D-116's vitality axis (`[VIT-2]`, `ol-a3hv`; wired here by
+  // `ol-95vv.5`) — supplied unconditionally, the same posture `now` above
+  // already takes. Whether it is USED depends only on `concepts` being
+  // supplied too (`buildTodayPanel`'s own doc); a caller with no trends
+  // source simply carries an unused `vitality` field, never a reason to
+  // make this conditional on `deps.trends`.
+  const vitality: TodayPanelVitalityInputs = {
+    scheduler: createFsrsScheduler(),
+    now,
+    holdingCut: deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT,
+  };
+
   const base: TodayPanelInput = {
     entries: history.entries,
     instruments,
     today,
     dueThrough: endOfLocalDay(now),
     windowDays: history.windowDays,
+    vitality,
   };
 
   // Each half resolves independently and spreads in only when it is a real

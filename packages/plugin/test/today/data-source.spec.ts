@@ -29,7 +29,7 @@
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
 import type { ConceptRelation, StudyPlanStore, VaultSource } from 'olea-core';
-import { createFsrsScheduler } from 'olea-core';
+import { createFsrsScheduler, provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   createRhythmSource,
@@ -711,6 +711,102 @@ describe('loadTodayPanel', () => {
       windowDays: 30,
     });
     expect(vm.due).toEqual({ total: 0, newCount: 0, courses: [] });
+  });
+
+  /**
+   * `ol-95vv.5`: `panel.ts`/`data-source.ts` now supply `MasteryVitalityInputs`
+   * (a real `createFsrsScheduler()`, `now`, and the declared holding-cut
+   * fallback) the same way `registry/provider.ts`'s
+   * `createLocalRegistryProvider` already does, so `CourseMastery.vitality`
+   * is no longer `null` in production (D-116's fallback — see
+   * `mastery-overview.ts`'s own doc for the gap this closes).
+   *
+   * Deliberately **no stubbed scheduler** here, unlike `mastery-overview.
+   * spec.ts`'s own vitality suite: the point of this test is that
+   * `loadTodayPanel` — the real production path (`main.ts:751`) — wires a
+   * real one, not that the vitality fold's arithmetic is correct (that is
+   * `sprig.spec.ts`'s job, re-asserted at the `buildMasteryOverview` layer by
+   * `mastery-overview.spec.ts`). An MCQ-only concept is the fixture because
+   * its answer is independent of whatever the real scheduler says (R3's
+   * filter excludes recognition-tier instruments from the fold entirely
+   * before retrievability is ever asked), so the assertion holds however
+   * `createFsrsScheduler()` happens to score it. INV-3: every course code and
+   * concept name below is invented.
+   */
+  describe('F6.2 mastery vitality reaches production (ol-95vv.5)', () => {
+    it('an MCQ-only concept reads "too early to say" through the real panel path', async () => {
+      const conceptId = provisionalConceptKey({ name: 'Coined Concept', boundNotePath: null });
+      const mcqReviewLine = (day: string, eventId: string) =>
+        JSON.stringify({
+          schemaVersion: 3,
+          kind: 'review',
+          eventId,
+          timestamp: `${day}T20:00:00-04:00`,
+          instrumentId: `mcq:${conceptId}:1`,
+          instrumentType: 'mcq',
+          rating: 'good',
+          wasUnsure: false,
+          durationMs: 1200,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            masteryAtTime: null,
+            instrumentTypesOffered: ['mcq'],
+            planVersion: null,
+          },
+          conceptIds: [conceptId],
+        });
+
+      const vault = memoryVault({
+        'Notes/coined-one.md': [
+          '---',
+          'topic: [Coined Concept]',
+          'course: TESTC303',
+          '---',
+          '',
+          '```olea-mcq',
+          'stem: Which one is it?',
+          'answer: The right one',
+          'distractor: d1',
+          'distractor: d2',
+          'distractor: d3',
+          'distractor: d4',
+          'feedback: Because of the thing.',
+          '```',
+          '',
+        ].join('\n'),
+        [logPath('2026-08-20', DEVICE)]: `${mcqReviewLine('2026-08-20', 'e1')}\n`,
+        [logPath('2026-08-24', DEVICE)]: `${mcqReviewLine('2026-08-24', 'e2')}\n`,
+        [logPath('2026-08-28', DEVICE)]: `${mcqReviewLine('2026-08-28', 'e3')}\n`,
+      });
+
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now: () => new Date(2026, 8, 1, 9, 0),
+        windowDays: 30,
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      expect(vm.mastery).not.toBeNull();
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC303');
+      if (course === undefined) throw new Error('expected TESTC303 in the mastery overview');
+
+      // D-116's fallback (`null`) would mean the wiring is still missing;
+      // a real reading is the thing `ol-95vv.5` is proving reaches production.
+      expect(course.vitality).not.toBeNull();
+
+      const totals = { holding: 0, tending: 0, early: 0 };
+      for (const stage of Object.values(course.vitality?.byStage ?? {})) {
+        totals.holding += stage.holding;
+        totals.tending += stage.tending;
+        totals.early += stage.early;
+      }
+      expect(totals).toEqual({ holding: 0, tending: 0, early: 1 });
+      expect(course.vitality?.tending).toEqual([]);
+    });
   });
 
   describe('F6.9 rhythm reading (ol-v7r5.6)', () => {

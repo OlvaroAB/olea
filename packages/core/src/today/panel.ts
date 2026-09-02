@@ -39,6 +39,7 @@ import {
 import type { CourseFloorShare } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
+import type { MasteryVitalityInputs } from '../mastery/sprig.js';
 import type { CourseFreshnessReading } from '../schedule/freshness.js';
 import type { GroveCourseModel } from '../scope/grove.js';
 import type { CalendarDay } from './calendar-day.js';
@@ -86,6 +87,23 @@ export interface TodayPanelInput {
    * nothing or read an empty vault is making a claim it cannot support.
    */
   readonly concepts?: readonly ConceptCourses[];
+  /**
+   * `mastery-overview.ts`'s `MasteryOverviewInput.vitality` (F2.11/D-116's
+   * vitality axis, `[D-087]`; `[VIT-2]`, `ol-a3hv`) — a scheduler, an
+   * instant and the derived holding cut (`[D-115]`), forwarded verbatim to
+   * `buildMasteryOverview` below. That field's own doc names this exact
+   * omission as the reachability gap `ol-a3hv`'s bead left open ("`panel.ts`
+   * sits outside this bead's `owns`... wiring `panel.ts`... is the follow-up
+   * this bead's own report names") — `ol-95vv.5` closes it here.
+   *
+   * **Not a third state like `concepts`/`courseMaterialArrivals` above.**
+   * Whether `vitality` is supplied is independent of whether `concepts` is:
+   * a caller with concepts but no vitality inputs gets a real
+   * `MasteryOverview` whose every `CourseMastery.vitality` is `null` (D-116's
+   * own fallback — see that field's doc), never a missing mastery section.
+   * Only `concepts === undefined` suppresses the mastery section entirely.
+   */
+  readonly vitality?: MasteryVitalityInputs;
   /**
    * The plan's per-course windowed floor shares (component 3.5,
    * `[D-081]`/`[D-092]`), for F6.5's effort-imbalance half. Absent behaves as
@@ -247,8 +265,15 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
   // supplied. Both fields resolve together so the renderer never has to decide
   // whether half a section is worth drawing.
   const concepts = input.concepts;
+  const vitality = input.vitality;
   const mastery =
-    concepts === undefined ? null : buildMasteryOverview({ entries: input.entries, concepts });
+    concepts === undefined
+      ? null
+      : buildMasteryOverview({
+          entries: input.entries,
+          concepts,
+          ...(vitality !== undefined ? { vitality } : {}),
+        });
   const insights =
     concepts === undefined
       ? null
