@@ -5,17 +5,30 @@
  * `[D-083]` names the reciprocal prompt: her demonstrated use of a neighbour
  * concept Y while explaining subject concept X is recorded as a scheduling
  * observation, never scoring evidence, "marking the reciprocal prompt as
- * likely to succeed and worth surfacing soon." R7, amended `[D-087]`
+ * likely to succeed and worth surfacing soon." **`[D-185]` (`ol-0r92.34`)
+ * widens the SOURCE side of that fact from explain-back only to any graded
+ * instrument kind whose scoring subject is X with a neighbour Y as context**
+ * — an MCQ, Q&A or cloze review can produce the same observation now, not
+ * only an explain-back one. This module's own decision does not change
+ * shape for that: it already took `conceptIds` and a `liveObservations` map
+ * with no `instrumentType` anywhere in either, so widening the source is
+ * invisible here at the type level. What DOES change is
+ * {@link schedulingObservationPromptLine}'s wording below, which used to
+ * assert "while explaining something else" — no longer honest when the
+ * observation's source review was an MCQ, Q&A or cloze item, so the line is
+ * kind-neutral now. R7, amended `[D-087]`
  * (docs/Olea_knowledge_model.md:623-625), authorises exactly the reader this
  * module is: "the scheduler reads the field, and the mastery fold never
  * looks at it." That authorises the READ. What the read DRIVES is F2.21's
  * existing offer (docs/Olea_alpha_functional_scope.md:1247-1280) — "explain
  * X, including how it relates to Y" — through the same on-demand channel
  * F2.7/F2.12 already use, alongside F2.12's trouble trigger and F2.21's own
- * strong-recall trigger. No new surface, no new copy discipline: this
- * module decides WHETHER a THIRD condition proposes that same offer, and
- * what its own reason line says — never WHERE it is shown, and never a
- * fourth thing to persist.
+ * strong-recall trigger. **The offer itself stays explain-back-shaped
+ * regardless of source kind** — F2.21's reciprocal prompt was never widened,
+ * only the set of instrument kinds that can produce the observation FEEDING
+ * it. No new surface, no new copy discipline: this module decides WHETHER a
+ * THIRD condition proposes that same offer, and what its own reason line
+ * says — never WHERE it is shown, and never a fourth thing to persist.
  *
  * **Follows `./confusion-routing.ts`'s F2.12 pattern deliberately** (same
  * shape this repo's CLAUDE.md build spec names): a pure, synchronous
@@ -83,18 +96,31 @@ const NO_OFFER: SchedulingObservationNoOffer = { shouldOffer: false };
  * This trigger's own reason line — distinct from F2.12's lapse framing
  * ("You've missed this N times…") and F2.21's strong-recall framing, per
  * the build spec's requirement, under the same V3 fact / evidence-grounded
- * reinterpretation / one available action shape: fact ("you used this while
- * explaining something else"), reinterpretation ("that's usually a sign
- * it's ready"), one action ("want to explain it back?"). Deliberately names
- * no concept: `ReviewInstrumentCommon` carries no human-readable concept
- * name (only opaque `conceptIds`, a course code and a note title — see
- * `packages/plugin/src/review/types.ts`), so — same discipline `confusion-
- * routing.ts`'s prompt line already keeps content-free — this stays generic
- * rather than fabricating a display name to interpolate.
+ * reinterpretation / one available action shape: fact ("you used this
+ * correctly elsewhere"), reinterpretation ("that's usually a sign it's
+ * ready"), one action ("want to explain it back?").
+ *
+ * **Kind-neutral wording, `[D-185]`.** The line used to say "while
+ * explaining something else" — true only when the source review that
+ * produced the observation was itself an explain-back. Now that any
+ * instrument kind can produce one (`ol-0r92.34`), that phrasing would be a
+ * false claim on an MCQ, Q&A or cloze source review — she was never
+ * "explaining" anything in an MCQ. "Elsewhere" is honest regardless of
+ * which kind the source review was, without this module needing to know
+ * or carry that kind at all (see the module doc: `SchedulingObservation`
+ * has no `instrumentType`, so there is nothing to interpolate even if the
+ * line wanted to name it).
+ *
+ * Deliberately names no concept: `ReviewInstrumentCommon` carries no
+ * human-readable concept name (only opaque `conceptIds`, a course code and
+ * a note title — see `packages/plugin/src/review/types.ts`), so — same
+ * discipline `confusion-routing.ts`'s prompt line already keeps
+ * content-free — this stays generic rather than fabricating a display name
+ * to interpolate.
  */
 export function schedulingObservationPromptLine(): string {
   return (
-    "While explaining something else, you used this correctly. That's usually a sign " +
+    "You used this correctly elsewhere. That's usually a sign " +
     "it's ready — want to explain it back?"
   );
 }

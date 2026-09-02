@@ -754,6 +754,17 @@ export { EMPTY_KEYWORD_INDEX } from './keyword-index/types.js';
 // from here; there is deliberately no second copy of these five words.
 export type { MasteryDisplay } from './mastery/display.js';
 export { MASTERY_DISPLAY, MASTERY_ORDER, masteryTitle } from './mastery/display.js';
+// F5.3a's scheduling observation, widened `[D-185]` (`ol-0r92.34`) from
+// explain-back-only to any instrument kind — `buildSchedulingObservationField`
+// is the one kind-general producer every instrument's grade-write path
+// shares (`../grading/explainBackSolo.js`'s own `buildExplainBackGradeReviewFields`
+// is now just its first caller). Barrel-exported so a future MCQ/QA/cloze
+// grade-write path can call it without a deep import into `mastery/`.
+export type {
+  BuildSchedulingObservationFieldInput,
+  SchedulingObservation,
+} from './mastery/gradingInputContract.js';
+export { buildSchedulingObservationField } from './mastery/gradingInputContract.js';
 // `ConceptMasteryResult`/`computeAllConceptMastery` (`ol-4qvc`): the same
 // per-concept mastery fold `today/mastery-overview.js#buildMasteryOverview`
 // already builds on via `../mastery/sprig.js`, exported here so a caller
@@ -1484,6 +1495,12 @@ export type {
   QuestionBlock,
 } from './source/segment-past-paper.js';
 export { segmentPastPaper } from './source/segment-past-paper.js';
+export type {
+  FindUnreadableFilesOptions,
+  UnreadableFile,
+  UnreadableReason,
+} from './source/unreadable.js';
+export { findUnreadableFiles, reasonForExtractionOutcome } from './source/unreadable.js';
 export type {
   RegisterSourcesOptions,
   Source,

@@ -59,10 +59,12 @@
  * 5. **The degradation: where no provenance exists, omissions are undefined and the rubric says
  *    so** (F5.3's one bounded, named exception): `omissionDenominator` is `null`, never `[]` — see
  *    that field's own doc for why the distinction is load-bearing.
- * 6. **Two outputs that are not scoring evidence** (F5.3a, C5.11, `[D-087]`): `CandidateEdgeNomination`
- *    (emitted by `buildGradingSourceMaterial` itself, in the `no-edge` case) and
- *    `SchedulingObservation` (constructed downstream, once a response exists, from a fact this
- *    module cannot know in advance — see that type's own doc for why it is declared here anyway).
+ * 6. **Two outputs that are not scoring evidence** (F5.3a, C5.11, `[D-087]`, widened kind-general
+ *    by `[D-185]`): `CandidateEdgeNomination` (emitted by `buildGradingSourceMaterial` itself, in
+ *    the `no-edge` case) and `SchedulingObservation` (constructed downstream, once a response
+ *    exists, from a fact this module cannot know in advance for every kind — see
+ *    {@link buildSchedulingObservationField} for the one kind-general producer every instrument's
+ *    grade-write path now shares).
  *
  * ## What is deliberately NOT here
  *
@@ -71,10 +73,13 @@
  * - **Support level** (`[D-094]`, R7's discount arithmetic). A different ruling, answering a
  *   different question (how much a supported success counts, not what the grader is handed) —
  *   folding it in here would be scope creep past what `[D-083]` decided.
- * - **The persisted field for `SchedulingObservation`.** D-087 rules the *shape* (a non-scoring
- *   field on the review event that produced it) and this module gives that shape a concrete type,
- *   but the actual `contracts/review-log.ts` field addition is `ol-tka5`'s migration — open,
- *   Class C, and not this task's to pre-empt.
+ * - **Widening the persisted field itself.** `ol-tka5` already landed `schedulingObservation` on
+ *   the frozen v5 schema (`packages/contracts/src/review-log.ts`), but its
+ *   `refineExplainBackGradeInstrumentType` refinement still restricts presence to
+ *   `instrumentType === 'explain-back'` — a leftover of the pre-`[D-185]` ruling this module's own
+ *   `SchedulingObservation` doc now flags as the actual remaining blocker. Loosening that refinement
+ *   is a FROZEN-schema edit, Class C on its own, and deliberately not made by this task alongside
+ *   the type/producer widening.
  * - **Reading the vault to build `ConceptDefiningPassages`/`RelationProvenance` in the first
  *   place.** That is retrieval-port wiring for whichever caller builds the SOLO rubric request;
  *   this module receives already-resolved passages and decides what to do with them.
@@ -318,31 +323,93 @@ export function buildGradingSourceMaterial(input: GradingRetrievalInput): Gradin
 // ---------------------------------------------------------------------------
 
 /**
- * F5.3a / C5.11 / `[D-087]`: her demonstrated use of the neighbour, while explaining the subject,
- * is kept as a **scheduling observation, never scoring evidence** — it marks the reciprocal prompt
- * (explaining the neighbour, with the subject as its context) as likely to succeed and worth
- * surfacing soon. It never moves the neighbour's stage, vitality or review state.
+ * F5.3a / C5.11 / `[D-087]`, **widened `[D-185]` (`ol-0r92.34`) from explain-back-only to any
+ * instrument kind**: wherever a graded item's scoring subject is X and a neighbour concept Y
+ * appeared only as context, her demonstrated correct use of Y is kept as a **scheduling
+ * observation, never scoring evidence** — it marks the reciprocal prompt (explaining Y, with X as
+ * its context) as likely to succeed and worth surfacing soon. It never moves Y's stage, vitality
+ * or review state, and it is never scored against `neighbourConceptId` — C5.11's exception-free
+ * rule, unchanged by the widening, is what a second event scoring the neighbour would violate.
  *
- * **Declared here even though nothing in this module constructs one.** Whether her answer actually
- * demonstrated correct use of the neighbour is a property of the *response* — the grading core this
- * task does not build — so this module cannot produce the fact, only name where it goes once
- * something else does:
+ * **Kind-general, structurally.** This type carries no `instrumentType`, no discriminant, and no
+ * field describing what kind of item produced it — deliberately, because C5.11's rule and F5.3a's
+ * consequence are the same fact regardless of whether the graded item was `explain-back`, `mcq`,
+ * `qa` or `cloze`. `neighbourConceptId` is the whole shape; a caller grading any instrument kind
+ * that can name a subject-plus-context pair (the sibling generator-refusal ruling, `[D-185]`/
+ * `ol-0r92.33`) constructs the same value the same way, via {@link buildSchedulingObservationField}
+ * below — there is no per-kind variant to keep in sync.
+ *
+ * **Declared here even though nothing in this module constructs one from a live grading response.**
+ * Whether an answer actually demonstrated correct use of the neighbour is a property of the
+ * *response* — the grading core for each instrument kind, most of which this module does not
+ * build — so this module cannot produce the fact, only the one place every kind turns it into this
+ * shape:
  *
  * - **It rides the SAME review event as the subject's own verdict** (D-087: "one review stays one
- *   event"). It is never a second event about the neighbour, and it is never scored against
- *   `neighbourConceptId` — C5.11's exception-free rule is what a second event scoring the
- *   neighbour would violate.
+ *   event"). It is never a second event about the neighbour.
  * - **The mastery fold never reads it.** `./rollup.ts` and `./vitality.ts` compute their readings
- *   from `ReviewLogEntry` today, before this field exists on the schema at all; when `ol-tka5`'s
- *   migration adds it, the field's exclusion is what knowledge-model §8 test 5 (strip-invariance)
- *   exists to keep true — stripping it from a log must never change a scoring output.
- * - **The persisted field itself is `ol-tka5`'s to add**, not this module's: that bead is open,
- *   Class C, and carries five other pending review-log additions alongside it. This type is the
- *   shape a caller assembling that migration's payload has to match; it is deliberately not a zod
- *   schema, because the frozen contract (`packages/contracts/src/review-log.ts`) is the one place a
- *   persisted shape is allowed to live, and this is not that.
+ *   from `ReviewLogEntry` without ever importing this field — the same exclusion knowledge-model
+ *   §8 test 5 (strip-invariance) holds as a contract test: stripping every `schedulingObservation`
+ *   from a log must never change a scoring output, for a log built from any mix of instrument
+ *   kinds.
+ * - **The persisted field (`packages/contracts/src/review-log.ts`'s `schedulingObservation`) still
+ *   gates its own presence to `instrumentType === 'explain-back'`** (`refineExplainBackGradeInstrumentType`).
+ *   That gate has not moved yet — widening the FROZEN persisted schema is its own Class C change
+ *   (persisted-schema edits stop for a decision, this file's own CLAUDE.md), named here rather than
+ *   made silently, and is the actual remaining blocker before a non-explain-back producer can
+ *   persist an observation end to end. This module and its producer are ready for that day: nothing
+ *   here assumes explain-back, so the schema widening is the only remaining step.
  */
 export interface SchedulingObservation {
   /** The concept her demonstrated use was evidence about — never the subject being scored. */
   readonly neighbourConceptId: string;
+}
+
+// ---------------------------------------------------------------------------
+// 6c. The scheduling-observation producer — one function, every instrument kind
+// ---------------------------------------------------------------------------
+
+/**
+ * The single kind-general producer for {@link SchedulingObservation} (`[D-185]`, `ol-0r92.34`).
+ * Every instrument kind's grade-write path (explain-back's `../grading/explainBackSolo.js`
+ * today; a future MCQ/QA/cloze grade-write path tomorrow) calls this SAME function rather than
+ * re-deriving the invariant below per kind — "one fold over one log" for the observation itself:
+ * there is exactly one place that decides whether a `{ neighbourConceptId }` value exists, and it
+ * takes no `instrumentType` because the decision does not depend on one.
+ *
+ * Pure, synchronous, no I/O — mirrors every other export in this module.
+ */
+export interface BuildSchedulingObservationFieldInput {
+  /**
+   * Whether the graded response demonstrated correct use of the neighbour concept — `undefined`
+   * when the instrument kind carries no such judgement at all (e.g. an MCQ scored purely on the
+   * chosen option, with no context concept in play), which is honestly "no observation" rather
+   * than "observation of non-use".
+   */
+  readonly neighbourUseDemonstrated: boolean | undefined;
+  /**
+   * The context concept Y, fixed when the item was authored/prompted (C5.11) — never read off the
+   * grading response, which carries no field a neighbour could be identified by. Required exactly
+   * when `neighbourUseDemonstrated` is `true`; checked below, not assumed.
+   */
+  readonly neighbourConceptId?: string | undefined;
+}
+
+/**
+ * `undefined` (absent), never `null`, when there is no observation to record — matches
+ * `reviewLogRecordV5.schedulingObservation`'s `.optional()` discipline (see that field's own
+ * doc for why absence, not a placeholder, is the deliberate shape).
+ */
+export function buildSchedulingObservationField(
+  input: BuildSchedulingObservationFieldInput,
+): SchedulingObservation | undefined {
+  if (!input.neighbourUseDemonstrated) return undefined;
+  if (!input.neighbourConceptId) {
+    throw new Error(
+      'buildSchedulingObservationField: neighbourUseDemonstrated is true but no neighbourConceptId ' +
+        'was supplied — the caller must know this from its own subject-plus-context pair (C5.11), ' +
+        'never derive it from the grading response',
+    );
+  }
+  return { neighbourConceptId: input.neighbourConceptId };
 }

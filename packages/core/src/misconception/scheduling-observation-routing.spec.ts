@@ -69,6 +69,27 @@ describe('evaluateSchedulingObservationRouting — F5.3a / R7', () => {
     expect(decision.shouldOffer).toBe(true);
     if (decision.shouldOffer) expect(decision.neighbourConceptId).toBe('concept-b');
   });
+
+  // `[D-185]` / `ol-0r92.34`: the just-graded instrument that matches a live
+  // observation is no longer necessarily an explain-back — this input shape
+  // (`conceptIds` alone, no `instrumentType`) already had no way to tell the
+  // difference, which is exactly what makes the widening a no-op here. These
+  // four cases are the same assertion as the first test above, run once per
+  // kind named in `[D-185]`'s ruling, to make "this function does not care"
+  // an explicit, per-kind fact rather than an inference from one MCQ-shaped
+  // example.
+  it.each(['mcq', 'qa', 'cloze', 'explain-back'] as const)(
+    'offers identically when the just-graded instrument is a %s (the observation itself carries no instrumentType)',
+    (_kind) => {
+      const live = new Map([['concept-y', observation('concept-y')]]);
+      const decision = evaluateSchedulingObservationRouting({
+        conceptIds: ['concept-y'],
+        liveObservations: live,
+      });
+      expect(decision.shouldOffer).toBe(true);
+      if (decision.shouldOffer) expect(decision.neighbourConceptId).toBe('concept-y');
+    },
+  );
 });
 
 describe('schedulingObservationPromptLine — V3 fact / reinterpretation / one action, its own reason line', () => {
@@ -93,5 +114,10 @@ describe('schedulingObservationPromptLine — V3 fact / reinterpretation / one a
     // doc). Deliberately weak (a length check, not a content assertion)
     // because the point is "stays short and generic", not a fixed string.
     expect(schedulingObservationPromptLine().length).toBeLessThan(160);
+  });
+
+  it('never claims she was "explaining" — [D-185] widened the source to any instrument kind, so that framing would be false on an MCQ/Q&A/cloze source review', () => {
+    const line = schedulingObservationPromptLine().toLowerCase();
+    expect(line).not.toContain('explaining');
   });
 });

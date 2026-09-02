@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { SourceBlockRef } from '../grading/gradingPipeline.js';
 import {
   buildGradingSourceMaterial,
+  buildSchedulingObservationField,
   type ConceptDefiningPassages,
   type GradingRetrievalInput,
 } from './gradingInputContract.js';
@@ -163,5 +164,56 @@ describe('buildGradingSourceMaterial', () => {
     };
 
     expect(buildGradingSourceMaterial(input)).toEqual(buildGradingSourceMaterial(input));
+  });
+});
+
+// `[D-185]` (`ol-0r92.34`): F5.3a's scheduling observation widened from
+// explain-back-only to any instrument kind that can name a subject-plus-
+// context pair (the sibling generator-refusal ruling, `ol-0r92.33`).
+// `buildSchedulingObservationField` is the one producer every instrument
+// kind's grade-write path shares — it takes no `instrumentType` at all, so
+// these cases are run once per kind named in the ruling to make "the
+// function does not distinguish kinds" an explicit, per-kind fact rather
+// than an inference from a single example.
+describe('buildSchedulingObservationField — kind-general producer, [D-185]', () => {
+  it.each(['mcq', 'qa', 'cloze', 'explain-back'] as const)(
+    'builds { neighbourConceptId } when neighbourUseDemonstrated is true for a %s-shaped caller',
+    (_kind) => {
+      const field = buildSchedulingObservationField({
+        neighbourUseDemonstrated: true,
+        neighbourConceptId: 'concept-y',
+      });
+      expect(field).toEqual({ neighbourConceptId: 'concept-y' });
+    },
+  );
+
+  it.each(['mcq', 'qa', 'cloze', 'explain-back'] as const)(
+    'returns undefined (never null) when neighbourUseDemonstrated is false for a %s-shaped caller',
+    (_kind) => {
+      const field = buildSchedulingObservationField({
+        neighbourUseDemonstrated: false,
+        neighbourConceptId: 'concept-y',
+      });
+      expect(field).toBeUndefined();
+    },
+  );
+
+  it('returns undefined when neighbourUseDemonstrated is undefined — an instrument kind with no such judgement at all (e.g. a plain MCQ)', () => {
+    const field = buildSchedulingObservationField({ neighbourUseDemonstrated: undefined });
+    expect(field).toBeUndefined();
+  });
+
+  it('throws when neighbourUseDemonstrated is true but no neighbourConceptId was supplied, regardless of kind', () => {
+    expect(() => buildSchedulingObservationField({ neighbourUseDemonstrated: true })).toThrow(
+      /neighbourConceptId/,
+    );
+  });
+
+  it('never scores: the only field on the result is neighbourConceptId — no mastery estimate, no numeric shape a fold could read', () => {
+    const field = buildSchedulingObservationField({
+      neighbourUseDemonstrated: true,
+      neighbourConceptId: 'concept-y',
+    });
+    expect(Object.keys(field as object)).toEqual(['neighbourConceptId']);
   });
 });

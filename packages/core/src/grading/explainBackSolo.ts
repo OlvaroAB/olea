@@ -92,9 +92,10 @@
  */
 
 import type { SoloLevel } from 'olea-contracts';
-import type {
-  CandidateEdgeNomination,
-  GradingSourceMaterial,
+import {
+  buildSchedulingObservationField,
+  type CandidateEdgeNomination,
+  type GradingSourceMaterial,
 } from '../mastery/gradingInputContract.js';
 import { type WriteContentOptions, writeContentRecord } from '../review-log/content-store.js';
 import type { VaultSource } from '../vault/types.js';
@@ -376,12 +377,14 @@ export interface ExplainBackGradeReviewFields {
 export function buildExplainBackGradeReviewFields(
   input: BuildExplainBackGradeReviewFieldsInput,
 ): ExplainBackGradeReviewFields {
-  if (input.accepted.neighbourUseDemonstrated && !input.neighbourConceptId) {
-    throw new Error(
-      'buildExplainBackGradeReviewFields: accepted.neighbourUseDemonstrated is true but no ' +
-        'neighbourConceptId was supplied — the caller must know this from GradingRelationContext',
-    );
-  }
+  // `[D-185]` (`ol-0r92.34`): explain-back is now just one caller of the same
+  // kind-general producer every instrument's grade-write path shares — see
+  // `../mastery/gradingInputContract.js`'s own doc for why this function
+  // takes no `instrumentType` at all.
+  const schedulingObservation = buildSchedulingObservationField({
+    neighbourUseDemonstrated: input.accepted.neighbourUseDemonstrated,
+    neighbourConceptId: input.neighbourConceptId,
+  });
   return {
     explainBackGrade: {
       soloLevel: input.accepted.soloLevel,
@@ -389,9 +392,7 @@ export function buildExplainBackGradeReviewFields(
       revisionOf: input.revisionOf,
       artifactProvenance: input.artifactProvenance,
     },
-    schedulingObservation: input.accepted.neighbourUseDemonstrated
-      ? { neighbourConceptId: input.neighbourConceptId as string }
-      : undefined,
+    schedulingObservation,
   };
 }
 
