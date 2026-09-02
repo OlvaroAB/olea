@@ -858,15 +858,46 @@ describe("[D-171]'s open-source-location hand-off has a real production caller (
   });
 
   it('imports the real port composer, not a stub', () => {
-    expect(main).toMatch(
-      /import\s*\{\s*createObsidianEditInstrumentPort,\s*createObsidianOpenSourceLocationPort,\s*openRegistryEntryFor,\s*\}\s*from\s*'\.\/registry\/obsidian-ports\.js'/,
-    );
+    // Names, not order: `ol-r1by`'s `createObsidianAcceptNoteOfferPort` sorts
+    // alphabetically ahead of `createObsidianEditInstrumentPort` (biome's
+    // `organizeImports`), which the previous exact-sequence regex could not
+    // survive — this asserts the same three names, and the new fourth, are
+    // all imported from the real port module, independent of their order.
+    expect(main).toMatch(/import\s*\{[^}]*\}\s*from\s*'\.\/registry\/obsidian-ports\.js'/);
+    const importBlock = main.match(
+      /import\s*\{([^}]*)\}\s*from\s*'\.\/registry\/obsidian-ports\.js'/,
+    )?.[1];
+    expect(importBlock).toBeDefined();
+    for (const name of [
+      'createObsidianAcceptNoteOfferPort',
+      'createObsidianEditInstrumentPort',
+      'createObsidianOpenSourceLocationPort',
+      'openRegistryEntryFor',
+    ]) {
+      expect(importBlock).toContain(name);
+    }
   });
 
   it("wires the review view's one-step affordance to the real openRegistryEntryFor, not a no-op", () => {
     expect(main).toMatch(
       /\(instrumentId\)\s*=>\s*void openRegistryEntryFor\(this\.app,\s*\{ instrumentId \}\),/,
     );
+  });
+});
+
+describe("F8.4a's note-offer accept hand-off has a real production caller ([D-176], ol-r1by)", () => {
+  // Same defect shape the `[D-171]` describe block above already proved:
+  // `createObsidianAcceptNoteOfferPort` and `createLocalRegistryProvider`'s
+  // `acceptNoteOfferPort` dependency are complete and wired to the port's own
+  // fallback (`registry/provider.ts`'s "logs and does nothing" default), but
+  // that default is exactly what a caller that forgot the one-line addition
+  // would silently ship with — this asserts `main.ts` actually crosses that
+  // seam with the real Obsidian-backed port, not the logging fallback.
+  // `createObsidianAcceptNoteOfferPort` takes `vault` (a `VaultSource`), not
+  // `this.app` — see `obsidian-ports.ts`'s own doc on why the write goes
+  // through `VaultSource` rather than `app.vault`.
+  it('passes the real Obsidian-backed acceptNoteOfferPort into createLocalRegistryProvider', () => {
+    expect(main).toMatch(/acceptNoteOfferPort:\s*createObsidianAcceptNoteOfferPort\(vault\),/);
   });
 });
 

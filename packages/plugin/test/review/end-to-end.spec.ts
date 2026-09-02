@@ -59,6 +59,7 @@ import {
   createVaultNoteExistsPort,
   createVaultReviewLogPort,
   type EditPort,
+  type ReviewLogPort,
   type SuspendPort,
 } from '../../src/review/ports.js';
 import type { ReviewSession } from '../../src/review/session.js';
@@ -159,12 +160,44 @@ function todayPanel() {
   });
 }
 
-/** The real ports, over the real vault. Only `suspend`/`edit` are recorders —
- * this session neither suspends nor edits, and a throwing stub would hide it if
- * it did. */
-function ports(): { readonly ports: ReviewSessionPorts; readonly touched: string[] } {
+/** One D7.1 write, captured in call order — see `ports()`'s `logged`. */
+interface LoggedReview {
+  readonly instrumentId: string;
+  readonly rating: Rating;
+  readonly sourcePath: VaultPath;
+}
+
+/**
+ * The real ports, over the real vault. `suspend`/`edit` are recorders —
+ * this session neither suspends nor edits, and a throwing stub would hide it
+ * if it did. `reviewLog` wraps the real, vault-writing port to ALSO capture
+ * exactly what was passed to `recordReview`, in call order — `ol-2zfj.53`'s
+ * first-sight stamping trigger means the id a session held while she was
+ * looking at an item (what `driveToCompletion` reads off `getViewModel()`,
+ * before `rate`/`mcqNext` runs) and the id that write actually persists
+ * under can now differ, for exactly the item that got stamped THIS review.
+ * `logged` is the ground truth for "what actually reached the log," rather
+ * than re-deriving it from the pre-stamp view.
+ */
+function ports(): {
+  readonly ports: ReviewSessionPorts;
+  readonly touched: string[];
+  readonly logged: LoggedReview[];
+} {
   const touched: string[] = [];
+  const logged: LoggedReview[] = [];
   const source = vault();
+  const realReviewLog = createVaultReviewLogPort(source, DEVICE);
+  const reviewLog: ReviewLogPort = {
+    async recordReview(input) {
+      logged.push({
+        instrumentId: input.instrument.instrumentId,
+        rating: input.rating,
+        sourcePath: input.instrument.sourcePath,
+      });
+      await realReviewLog.recordReview(input);
+    },
+  };
   const suspendPort: SuspendPort = {
     async suspend(id) {
       touched.push(`suspend:${id}`);
@@ -177,8 +210,9 @@ function ports(): { readonly ports: ReviewSessionPorts; readonly touched: string
   };
   return {
     touched,
+    logged,
     ports: {
-      reviewLog: createVaultReviewLogPort(source, DEVICE),
+      reviewLog,
       suspendPort,
       editPort,
       noteExists: createVaultNoteExistsPort(source),
@@ -206,6 +240,28 @@ function compose() {
     ports: ports().ports,
     random: seeded(20260814),
   });
+}
+
+/**
+ * Like `compose()`, but also hands back the `logged` array `driveToCompletion`
+ * will fill as it drives the returned session — the only caller that needs
+ * to see what was actually written, not just whether the session opened.
+ */
+function composeCapturingLog(): {
+  readonly outcome: ReturnType<typeof openReviewSession>;
+  readonly logged: readonly LoggedReview[];
+} {
+  const { ports: wired, logged } = ports();
+  return {
+    outcome: openReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: wired,
+      random: seeded(20260814),
+    }),
+    logged,
+  };
 }
 
 interface RatedItem {
@@ -315,11 +371,15 @@ interface Sitting {
   readonly composedCount: number;
   readonly deferredCount: number;
   readonly rated: readonly RatedItem[];
+  /** What actually reached the vault this sitting — see `ports()`'s `logged` doc. */
+  readonly logged: readonly LoggedReview[];
 }
 
 let firstPanel: Awaited<ReturnType<typeof todayPanel>>;
 let sittings: Sitting[];
 let rated: RatedItem[];
+/** Every D7.1 write across every sitting, in order — the durable ids, unlike `rated`'s pre-stamp view snapshot. */
+let logged: LoggedReview[];
 
 beforeAll(async () => {
   firstPanel = await todayPanel();
@@ -328,16 +388,19 @@ beforeAll(async () => {
   // Bounded: 13 instruments and at least one per sitting, so anything past this
   // is a queue that stopped draining, which must fail rather than spin.
   for (let round = 1; round <= 15; round += 1) {
-    const opened = await compose();
+    const { outcome, logged: sittingLog } = composeCapturingLog();
+    const opened = await outcome;
     if (!opened.ok) throw opened.error;
     if (opened.itemCount === 0) break;
     sittings.push({
       composedCount: opened.itemCount,
       deferredCount: opened.deferredCount,
       rated: await driveToCompletion(opened.session, round),
+      logged: sittingLog,
     });
   }
   rated = sittings.flatMap((sitting) => [...sitting.rated]);
+  logged = sittings.flatMap((sitting) => [...sitting.logged]);
 });
 
 describe('the fixture vault, on disk, produces a real Today panel', () => {
@@ -438,11 +501,16 @@ describe('every rating reached the vault as a D7.1 record (INV-4)', () => {
 
     const reviews = parsed.records.filter((record) => record.kind === 'review');
     expect(reviews).toHaveLength(rated.length);
-    // Same instruments, same order, same ratings as the session actually gave.
+    // Same instruments, same order, same ratings as the session actually
+    // wrote — compared against `logged` (captured at the `recordReview`
+    // call itself), never `rated` (the pre-`rate()`/`mcqNext()` view
+    // snapshot): `ol-2zfj.53`'s first-sight stamping trigger means an
+    // unstamped instrument's presented id and its logged id can now differ
+    // for the one review that stamps it.
     expect(reviews.map((record) => record.instrumentId)).toEqual(
-      rated.map((item) => item.instrumentId),
+      logged.map((item) => item.instrumentId),
     );
-    expect(reviews.map((record) => record.rating)).toEqual(rated.map((item) => item.rating));
+    expect(reviews.map((record) => record.rating)).toEqual(logged.map((item) => item.rating));
   });
 
   it('carries the instrument type and the selection context on every record', async () => {
@@ -528,8 +596,29 @@ describe('re-reading the same vault shows the session that happened', () => {
   });
 });
 
-describe('INV-2 — the review loop wrote nothing to her notes', () => {
-  it('leaves every pre-existing file byte-identical', async () => {
+/**
+ * `old` survives, byte-for-byte and in order, somewhere inside `updated` —
+ * i.e. every change from `old` to `updated` is an INSERTION, never a
+ * deletion or a rewrite of a byte that was already there. This is the
+ * generic form of the proof `stampMcqId`/`stampQaCardBlockId`/`stampClozeId`
+ * each already carry precisely (`removeSpans` on the exact `insertedSpan`,
+ * unit-tested in `packages/plugin/test/instrument-stamping/port.spec.ts`
+ * and in `olea-core`'s own format specs); this end-to-end suite does not
+ * know each file's exact inserted span, only that whatever changed must
+ * still contain the original text intact, so a subsequence check is the
+ * right-weight tool here — the byte-exact version is already proven at the
+ * unit level.
+ */
+function isPureInsertion(old: string, updated: string): boolean {
+  let i = 0;
+  for (let j = 0; j < updated.length && i < old.length; j += 1) {
+    if (updated[j] === old[i]) i += 1;
+  }
+  return i === old.length;
+}
+
+describe('INV-2 — every write to her notes is an addition, never a mutation (D-030/D-177)', () => {
+  it('no file was removed, and every CHANGED file corresponds to a review this run actually logged against it', async () => {
     const after = await digestVault(vaultRoot);
     const changed: string[] = [];
     const removed: string[] = [];
@@ -539,19 +628,33 @@ describe('INV-2 — the review loop wrote nothing to her notes', () => {
       else if (now !== digest) changed.push(path);
     }
     expect(removed).toEqual([]);
-    expect(changed).toEqual([]);
+
+    // `ol-2zfj.53`'s first-sight stamping trigger is expected to touch her
+    // notes now — the narrower, more legible claim this test replaces
+    // ("stamped no instrument ids into her markdown (D-030)") pre-dates that
+    // decision. What still must hold: nothing changes a file she has no
+    // logged review against.
+    const reviewedPaths = new Set(logged.map((item) => item.sourcePath));
+    for (const path of changed) {
+      expect(reviewedPaths.has(path)).toBe(true);
+    }
+    // The mechanism actually fired against this fixture vault — otherwise
+    // this test would trivially pass on an empty `changed` list.
+    expect(changed.length).toBeGreaterThan(0);
   });
 
-  it('stamped no instrument ids into her markdown (D-030)', async () => {
-    // The narrower, more legible half of the same claim: provisional ids are
-    // derived at read time, so no note may have gained an `id:` line. If
-    // identity is ever stabilised by writing to the vault, that is a decision
-    // with a bead, and this is the test that must be updated deliberately.
+  it('every changed note still contains her original text, untouched and in order — the change is a durable-id insertion, nothing else', async () => {
     const after = await digestVault(vaultRoot);
-    const markdown = [...before.keys()].filter((path) => path.endsWith('.md'));
-    expect(markdown.length).toBeGreaterThanOrEqual(30);
-    for (const path of markdown) {
-      expect(after.get(path)).toBe(before.get(path));
+    const changed = [...before.keys()].filter((path) => after.get(path) !== before.get(path));
+    expect(changed.length).toBeGreaterThan(0);
+
+    for (const path of changed) {
+      // `FIXTURE_VAULT` is never written to (only `vaultRoot`, the copy) —
+      // it is still the pristine original to compare against.
+      const original = await readFile(join(FIXTURE_VAULT, path), 'utf8');
+      const updated = await readFile(join(vaultRoot, path), 'utf8');
+      expect(updated.length).toBeGreaterThan(original.length);
+      expect(isPureInsertion(original, updated)).toBe(true);
     }
   });
 });

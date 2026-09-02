@@ -24,6 +24,7 @@ import type {
 } from 'olea-core';
 import { mapMcqRating } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
+import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
 import { CONTEST_GESTURE_LABEL, CONTEST_QUARANTINE_BADGE } from './copy.js';
 import {
@@ -160,6 +161,21 @@ export interface ReviewSessionDeps {
    * record".
    */
   readonly gradeContestPort?: GradeContestPort;
+  /**
+   * `ol-2zfj.53`'s first-sight stamping trigger for a vault-AUTHORED
+   * instrument (`instrument-stamping/port.ts`): consulted at the top of
+   * `logAndAdvance`, before either the review-log write or the scheduler
+   * call, so a marker written this exact moment is what both of them key
+   * on rather than a provisional, position-derived stand-in. Optional and
+   * absent by default, same "simply cannot offer it" posture every other
+   * optional port here has — but degrades to "stay provisional" rather
+   * than "never offer", since this is not a feature she is offered at all,
+   * only a durability upgrade to an id she already has. `open-session.ts`'s
+   * `createStampOnFirstSightPort` is the only production composer, closing
+   * over the SAME `VaultInstrumentEnumeration` this session's queue was
+   * built from — no second vault walk.
+   */
+  readonly stampOnFirstSight?: StampOnFirstSightPort;
 }
 
 /**
@@ -665,30 +681,57 @@ export class ReviewSession {
     this.phase = item.instrument.type === 'mcq' ? 'mcq-open' : 'front';
   }
 
+  /**
+   * `ol-2zfj.53`'s first-sight stamping trigger. A no-op, returning `item`
+   * unchanged, when `deps.stampOnFirstSight` is not wired (a test, or a
+   * caller that has not composed the vault write yet) or when the port
+   * reports the id unchanged (already durable, or nothing could be located
+   * to stamp). Otherwise replaces `item` — both the copy this method
+   * returns and `this.items[this.index]` in place — with one carrying the
+   * durable id, the same "resolve in place before anything downstream reads
+   * the id" shape `resolveDraftAt` already uses for a materialized draft.
+   */
+  private async stampOnFirstSight(item: ReviewQueueItem): Promise<ReviewQueueItem> {
+    if (this.deps.stampOnFirstSight === undefined) return item;
+    const { instrumentId } = await this.deps.stampOnFirstSight(item.instrument.instrumentId);
+    if (instrumentId === item.instrument.instrumentId) return item;
+    const resolved: ReviewQueueItem = {
+      ...item,
+      instrument: { ...item.instrument, instrumentId },
+    };
+    this.items[this.index] = resolved;
+    return resolved;
+  }
+
   private async logAndAdvance(
     item: ReviewQueueItem,
     rating: Rating,
     wasUnsure: boolean,
   ): Promise<void> {
+    // Stamped BEFORE the review-log write or the scheduler call below, so a
+    // marker minted this exact moment is what both of them key on — never
+    // the provisional, position-derived id it replaces.
+    const stamped = await this.stampOnFirstSight(item);
+
     const now = this.deps.clock.now();
     const durationMs =
       this.presentedAtMs !== null ? Math.max(0, now.getTime() - this.presentedAtMs) : null;
 
     await this.deps.reviewLog.recordReview({
-      instrument: item.instrument,
+      instrument: stamped.instrument,
       rating,
       wasUnsure,
       durationMs,
-      selectionContext: item.selectionContext,
-      // Row 3.9's write seam ([SUPP-3], `ol-lpl4`): `item.instrument.supportLevel`
+      selectionContext: stamped.selectionContext,
+      // Row 3.9's write seam ([SUPP-3], `ol-lpl4`): `stamped.instrument.supportLevel`
       // is the chooser decision `queue-adapter.ts` computed at adaptation time
       // (`undefined` for an `'mcq'` item or a caller with no `supportHistory`
-      // wired) — conditional spread, not `supportLevel: item.instrument.supportLevel`,
+      // wired) — conditional spread, not `supportLevel: stamped.instrument.supportLevel`,
       // because `RecordReviewInput.supportLevel` is optional under
       // `exactOptionalPropertyTypes` and an explicit `undefined` value is not
       // the same as an absent key there.
-      ...(item.instrument.supportLevel !== undefined
-        ? { supportLevel: item.instrument.supportLevel }
+      ...(stamped.instrument.supportLevel !== undefined
+        ? { supportLevel: stamped.instrument.supportLevel }
         : {}),
     });
 
@@ -696,13 +739,13 @@ export class ReviewSession {
     // F2.12 needs the resulting `SchedulerState.lapses` this same call
     // produces — one `Scheduler.schedule` call, never two, for one rating.
     const scheduled = this.deps.scheduler.schedule({
-      instrumentId: item.instrument.instrumentId,
-      state: item.priorState,
+      instrumentId: stamped.instrument.instrumentId,
+      state: stamped.priorState,
       rating,
       now,
     });
     this.reviewedCount += 1;
-    this.courseCodesSeen.add(item.instrument.courseCode);
+    this.courseCodesSeen.add(stamped.instrument.courseCode);
     if (scheduled.intervalDays <= 1) this.dueSoonCount += 1;
 
     // F2.12 (`ol-h2bx`): evaluated after every graded review, for the
@@ -714,7 +757,7 @@ export class ReviewSession {
       lapses: scheduled.state.lapses,
     });
     this.pendingConfusionOffer = decision?.shouldOffer
-      ? { instrument: item.instrument, promptText: decision.promptText }
+      ? { instrument: stamped.instrument, promptText: decision.promptText }
       : null;
 
     // F5.3a / R7's third trigger (`ol-0r92.11`): evaluated after every
@@ -725,11 +768,11 @@ export class ReviewSession {
     // proposes, it does not schedule). An absent evaluator never offers,
     // same posture as every other optional port.
     const schedulingObservationDecision = this.deps.evaluateSchedulingObservationRouting?.({
-      conceptIds: item.instrument.conceptIds,
+      conceptIds: stamped.instrument.conceptIds,
     });
     this.pendingSchedulingObservationOffer = schedulingObservationDecision?.shouldOffer
       ? {
-          instrument: item.instrument,
+          instrument: stamped.instrument,
           neighbourConceptId: schedulingObservationDecision.neighbourConceptId,
           promptText: schedulingObservationDecision.promptText,
         }

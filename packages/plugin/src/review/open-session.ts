@@ -79,6 +79,7 @@ import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { evaluateSchedulingObservationRouting } from '../grading/wiring.js';
+import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
@@ -300,6 +301,14 @@ export async function openReviewSession(
           conceptIds: routingInput.conceptIds,
           liveObservations: liveSchedulingObservations,
         }),
+      // `ol-2zfj.53`'s first-sight stamping trigger: closes over the SAME
+      // `composed.recordsById` this module already built for
+      // `adaptExecutedReviewQueue` above — no second vault walk just to make
+      // stamping possible. Always wired, unconditionally, same posture as
+      // `evaluateSchedulingObservationRouting` just above: this is not an AI
+      // feature with an "un-greyed" gate, only a durability upgrade to an id
+      // a real vault write already exists for.
+      stampOnFirstSight: createStampOnFirstSightPort(input.vault, composed.recordsById),
     });
 
     return {
