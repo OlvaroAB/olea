@@ -2,19 +2,36 @@
  * `runGenerationSweep` — F3.3's "generate instruments automatically when
  * material lands," the client-side trigger (`ol-p3t07a`).
  *
- * **What "material lands" means here, and what it deliberately does not
- * (yet) cover.** The ingestion queue (`packages/core/src/ingestion/`) only
- * ever produces `ExtractedUnit`s for non-markdown documents (PDF/PPTX/DOCX/
- * image, C3) — a markdown note's own prose is never routed through it. Of
- * those units, only ones carrying `provenance.embeddedIn` (F1.6: a source
- * embedded in one of her notes via `![[...]]`) have a real markdown note to
- * insert a generated MCQ into (`materialize-mcq.ts` writes through
- * `insertMcqBlock`, which needs a note's own text). A source dropped
- * directly into the vault with no embedding note (F3.1's other case) has
- * nowhere for `accept.ts` to write an accepted instrument, so this sweep
- * skips it — a disclosed, scoped-out case rather than a silent gap; see the
- * `ol-p3t07a` close evidence for the follow-up this implies if standalone
- * drops turn out to be common.
+ * **What "material lands" means here, and the two shapes it can take.** The
+ * ingestion queue (`packages/core/src/ingestion/`) only ever produces
+ * `ExtractedUnit`s for non-markdown documents (PDF/PPTX/DOCX/image, C3) — a
+ * markdown note's own prose is never routed through it. Every unit needs a
+ * real markdown note to insert a generated MCQ into
+ * (`materialize-mcq.ts` writes through `insertMcqBlock`, which needs a
+ * note's own text), and there are two ways one gets resolved:
+ *
+ *  - `provenance.embeddedIn` set (F1.6: a source embedded in one of her
+ *    notes via `![[...]]`) — that note IS the target, unchanged since this
+ *    module's first version.
+ *  - `provenance.embeddedIn` absent — a bare drop with no embedding note
+ *    anywhere (F3.1's other case). **Before `[D-179]` this sweep silently
+ *    skipped it**, a disclosed, scoped-out gap (`ol-p3t07a`'s close
+ *    evidence). `[D-179]` (`ol-ho93`, `[SRC-2]`) ruled the fix: Olea creates
+ *    her own home note beside the source (`home-note.ts`,
+ *    `ensureHomeNoteForConcept`) — never prompting first, since the note is
+ *    Olea's own layer (INV-6, D-097) — and that note is the target instead.
+ *    The course for a bare drop comes from the SOURCE's own folder
+ *    (`courseFromPath`), never the home note's content, matching F3.1/F3.3
+ *    as amended.
+ *
+ * **The home note is created lazily, only when a concept for its course is
+ * actually about to be cached as a pending draft** — not eagerly for every
+ * bare drop this sweep sees. A source that never grounds anything (every
+ * candidate concept refuses, or the course has none yet) gets no note at
+ * all: an empty placeholder note for material that produced nothing would be
+ * clutter, not a home. `ensureHomeNoteForConcept` is itself idempotent
+ * (`vault.exists` gates creation), so calling it once per successful draft,
+ * across many sweeps, reuses the same note rather than recreating it.
  *
  * **One concept per drafting call, one drafting call per (course, concept)
  * pair, ever (until the cache says otherwise).** `draftQuizCardsForConcept`
@@ -72,6 +89,7 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
+import { ensureHomeNoteForConcept } from './home-note.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
 import type { GenerationRoutingDeps } from './routing.js';
 import {
@@ -145,12 +163,25 @@ function defaultGenerateDraftId(
   return deriveDraftId(courseCode, conceptName, sequence);
 }
 
-/** Every distinct note path that embedded at least one of `units` (F1.6) — the only units this sweep can act on, per the module doc. */
+/** Every distinct note path that embedded at least one of `units` (F1.6). */
 function embeddingNotePaths(units: readonly ExtractedUnit[]): readonly string[] {
   const seen = new Set<string>();
   for (const unit of units) {
     const notePath = unit.provenance.embeddedIn?.notePath;
     if (notePath !== undefined) seen.add(notePath);
+  }
+  return [...seen].sort();
+}
+
+/**
+ * Every distinct source path among `units` that landed with no embedding
+ * note (F3.1's bare-drop case, `[D-179]`) — each is a candidate for its own
+ * Olea-owned home note, created or reused by `ensureHomeNoteForConcept`.
+ */
+function standaloneSourcePaths(units: readonly ExtractedUnit[]): readonly string[] {
+  const seen = new Set<string>();
+  for (const unit of units) {
+    if (unit.provenance.embeddedIn === undefined) seen.add(unit.provenance.sourcePath);
   }
   return [...seen].sort();
 }
@@ -168,12 +199,17 @@ export async function runGenerationSweep(
   deps: GenerationPipelineDeps,
 ): Promise<GenerationSweepReport> {
   const notePaths = embeddingNotePaths(units);
-  if (notePaths.length === 0) return ZERO_REPORT;
+  const sourcePaths = standaloneSourcePaths(units);
+  if (notePaths.length === 0 && sourcePaths.length === 0) return ZERO_REPORT;
 
   const coursesFolder = deps.coursesFolder ?? DEFAULT_COURSES_FOLDER;
   const courseCodes = new Set<string>();
   for (const notePath of notePaths) {
     const course = courseFromPath(notePath, coursesFolder);
+    if (course !== undefined) courseCodes.add(course);
+  }
+  for (const sourcePath of sourcePaths) {
+    const course = courseFromPath(sourcePath, coursesFolder);
     if (course !== undefined) courseCodes.add(course);
   }
   if (courseCodes.size === 0) return ZERO_REPORT;
@@ -256,8 +292,21 @@ export async function runGenerationSweep(
       const provenance = extractDraftedProvenance(result.response);
       if (questions === null || provenance === null) continue; // unparseable — nothing content-bearing to cache; revisited next sweep
 
-      const notePath = notePaths.find((path) => courseFromPath(path, coursesFolder) === courseCode);
-      if (notePath === undefined) continue; // unreachable given how courseCodes was built, guarded rather than assumed
+      let notePath = notePaths.find((path) => courseFromPath(path, coursesFolder) === courseCode);
+      if (notePath === undefined) {
+        // No embedding note named this course among this sweep's units —
+        // the bare-drop case (`[D-179]`, F3.1/F3.3's amendment). A
+        // standalone source in this course gets (or already has) its own
+        // Olea-owned home note beside it, created lazily right here, only
+        // now that a draft for it is actually about to be cached.
+        const sourcePath = sourcePaths.find(
+          (path) => courseFromPath(path, coursesFolder) === courseCode,
+        );
+        if (sourcePath === undefined) continue; // unreachable given how courseCodes was built, guarded rather than assumed
+        const homeNote = await ensureHomeNoteForConcept(deps.vault, sourcePath, candidate.name);
+        if (homeNote === null) continue; // a non-Olea file already sits at that path (INV-6) — nothing safe to write into this sweep
+        notePath = homeNote;
+      }
 
       const createdAt = now().toISOString();
       let sequence = 0;

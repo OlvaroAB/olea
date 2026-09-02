@@ -16,8 +16,9 @@
  * end to end); this suite stays as the direct, unit-level proof of the
  * stamping/append mechanics themselves.
  */
-import { parseMcqBlocks, reviewLogPath } from 'olea-core';
+import { enumerateVaultInstruments, parseMcqBlocks, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { ensureHomeNoteForConcept } from '../../src/generation/home-note.js';
 import { materializeAcceptedDraft } from '../../src/generation/materialize-mcq.js';
 import { MemoryVaultSource } from './fakes.js';
 
@@ -102,6 +103,37 @@ describe('materializeAcceptedDraft', () => {
     expect(invalid).toEqual([]);
     expect(instruments).toHaveLength(1);
     expect(instruments[0]?.id).toBe(result.instrumentId);
+  });
+
+  it("materializes into a bare-drop's home note (`[D-179]` / `[SRC-2]`) as a real, schedulable instrument — the existing path reused unmodified", async () => {
+    // `pipeline.ts` and `home-note.spec.ts` cover creation/idempotency/the
+    // INV-6 collision guard directly; this proves the OTHER half — that
+    // once `ensureHomeNoteForConcept` hands back a note path, this file's
+    // existing insert-and-stamp path needs no changes to write into it, and
+    // the result actually binds through `enumerateVaultInstruments` (via
+    // the `topic:` `ensureHomeNoteForConcept` grew) rather than landing
+    // invisible to the queue.
+    const sourcePath = '01 Courses/GEOL204/Lecture 4.pdf';
+    const vault = new MemoryVaultSource();
+    const notePath = await ensureHomeNoteForConcept(vault, sourcePath, 'Stratigraphy');
+    if (notePath === null) throw new Error('test setup: expected a home note path');
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 'Which structure preserves the storm record?',
+        correctAnswer: 'Hummocky stratification',
+        distractors: ['Ripple lamination', 'Cementation', 'Bioturbation', 'Paraconformity'],
+        feedback: 'See the lecture notes.',
+      },
+    });
+
+    const enumeration = await enumerateVaultInstruments(vault);
+    expect(enumeration.unbound).toEqual([]); // bound, not silently lost — see ol-p3t07b's failure mode
+    const record = enumeration.records.find((r) => r.instrumentId === result.instrumentId);
+    expect(record).toBeDefined();
+    // Course is folder-derived (F3.1/F3.3), never read from the home note's own content.
+    expect(record?.courses).toEqual(['GEOL204']);
   });
 
   it('no predecessor supplied: the block carries none, and no succession record is appended', async () => {

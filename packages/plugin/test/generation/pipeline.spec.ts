@@ -1,13 +1,18 @@
 /**
- * `runGenerationSweep` tests (F3.3, `ol-p3t07a`).
+ * `runGenerationSweep` tests (F3.3, `ol-p3t07a`; bare-drop home note
+ * `[D-179]` / `[SRC-2]`, `ol-ho93`).
  *
- * Proves: only embedded-source units trigger anything; dedupe against an
- * existing cache record of any status; the per-sweep cap bounds a burst;
- * a refusal caches nothing (retry-eligible next sweep); a drafted response
- * becomes a pending cache record keyed on (course, concept), with
- * `conceptIds` carrying the opaque `ConceptRecord.key` (`ol-63e1`'s
- * coordinated flip — `session/enumerate.ts` keys the same field the same
- * way), never the display name.
+ * Proves: dedupe against an existing cache record of any status; the
+ * per-sweep cap bounds a burst; a refusal caches nothing (retry-eligible
+ * next sweep); a drafted response becomes a pending cache record keyed on
+ * (course, concept), with `conceptIds` carrying the opaque
+ * `ConceptRecord.key` (`ol-63e1`'s coordinated flip — `session/enumerate.ts`
+ * keys the same field the same way), never the display name.
+ *
+ * The `describe('a bare drop with no embedding note …')` block covers
+ * `[D-179]`: course derivation from the source's own folder, home-note
+ * creation and reuse across sweeps (idempotency), and the INV-6 naming-
+ * collision guard.
  *
  * The `describe('routing consultation …')` block at the bottom is `ol-tz7v`
  * / `[WIRE-7]`'s own suite: component 2.2's routing, opted into via
@@ -23,6 +28,7 @@ import { provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
+import { HOME_NOTE_MARKER_KEY, homeNotePathForSource } from '../../src/generation/home-note.js';
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
@@ -44,6 +50,17 @@ function embeddedUnit(notePath: string): ExtractedUnit {
   };
 }
 
+/** A bare drop (F3.1's other case): no `embeddedIn` at all. */
+function standaloneUnit(sourcePath: string): ExtractedUnit {
+  return {
+    text: 'irrelevant to this suite — the pipeline never reads unit text directly',
+    provenance: {
+      sourcePath,
+      location: { page: 1, charRange: { start: 0, end: 1 } },
+    },
+  };
+}
+
 const groundedResponse = (stem: string): DraftQuizCardsResult => ({
   status: 'drafted',
   request: { courseCode: 'COGS214', conceptName: stem, sourceChunks: ['chunk'] },
@@ -59,7 +76,7 @@ const groundedResponse = (stem: string): DraftQuizCardsResult => ({
 const refusedResponse: DraftQuizCardsResult = { status: 'refused', reason: 'no-hits' };
 
 describe('runGenerationSweep', () => {
-  it("does nothing for units with no embedding note (F3.1's bare-drop case, disclosed scope limit)", async () => {
+  it('does nothing for a bare drop outside every course folder — no course is derivable from the source path either', async () => {
     const vault = new MemoryVaultSource();
     const cache = createVaultDraftCacheStore(vault);
     const unit: ExtractedUnit = {
@@ -86,6 +103,8 @@ describe('runGenerationSweep', () => {
       skippedDuplicate: 0,
       skippedRouting: 0,
     });
+    // Nothing was created — the folder-less path never reaches the home-note step.
+    expect(await vault.list()).toEqual([]);
   });
 
   it('drafts a new concept, caching one pending record keyed on the opaque concept key', async () => {
@@ -272,6 +291,126 @@ describe('runGenerationSweep', () => {
       skippedDuplicate: 0,
       skippedRouting: 0,
     });
+  });
+});
+
+describe("a bare drop with no embedding note — Olea's own home note (`[D-179]` / `[SRC-2]`)", () => {
+  const SOURCE_PATH = '01 Courses/COGS214/Lecture 4.pdf';
+  const HOME_NOTE_PATH = homeNotePathForSource(SOURCE_PATH);
+
+  it('derives the course from the source path itself and materializes into a created home note beside it', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    const report = await runGenerationSweep([standaloneUnit(SOURCE_PATH)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async (courseCode) => {
+        // F3.1/F3.3 as amended by `[D-179]`: course from the file's folder,
+        // never from the (not-yet-existing) home note's content.
+        expect(courseCode).toBe('COGS214');
+        return [concept('Working memory', 'concept-key-1')];
+      },
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    expect(report).toEqual({
+      attempted: 1,
+      drafted: 1,
+      refused: 0,
+      skippedDuplicate: 0,
+      skippedRouting: 0,
+    });
+
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.sourcePath).toBe(HOME_NOTE_PATH);
+
+    const noteContent = vault.raw(HOME_NOTE_PATH);
+    expect(noteContent).toBeDefined();
+    expect(noteContent).toContain(`${HOME_NOTE_MARKER_KEY}: true`);
+    expect(noteContent).toContain('- Working memory');
+  });
+
+  it('is idempotent: a later sweep drafting a second concept reuses the same note and grows its topic list', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([standaloneUnit(SOURCE_PATH)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+    const firstWrite = vault.raw(HOME_NOTE_PATH);
+
+    await runGenerationSweep([standaloneUnit(SOURCE_PATH)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        concept('Working memory', 'concept-key-1'),
+        concept('Long-term potentiation', 'concept-key-2'),
+      ],
+      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+    });
+
+    // Still exactly one file at that path — the second sweep reused it.
+    const allPaths = await vault.list();
+    expect(allPaths.filter((p) => p === HOME_NOTE_PATH)).toHaveLength(1);
+
+    const secondWrite = vault.raw(HOME_NOTE_PATH);
+    expect(secondWrite).toContain('- Working memory');
+    expect(secondWrite).toContain('- Long-term potentiation');
+    expect(secondWrite).not.toBe(firstWrite); // grown, but the same note
+
+    const pending = await cache.listPending();
+    expect(pending.map((p) => p.sourcePath)).toEqual([HOME_NOTE_PATH, HOME_NOTE_PATH]);
+  });
+
+  it('INV-6: a file already at the derived path with no Olea marker is never written into (naming collision, not a guess)', async () => {
+    const herNote = '# Lecture 4\n\nHer own typed-up notes, unrelated to anything Olea does.\n';
+    const vault = new MemoryVaultSource({ [HOME_NOTE_PATH]: herNote });
+    const cache = createVaultDraftCacheStore(vault);
+
+    const report = await runGenerationSweep([standaloneUnit(SOURCE_PATH)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    // The drafting call still happened (attempted), but there was nowhere
+    // safe to land it, so nothing was cached and her note is untouched.
+    expect(report.attempted).toBe(1);
+    expect(report.drafted).toBe(0);
+    expect(await cache.list()).toEqual([]);
+    expect(vault.raw(HOME_NOTE_PATH)).toBe(herNote);
+  });
+
+  it('an existing embedding note for the course wins — no home note is created alongside it', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const extraSourcePath = '01 Courses/COGS214/Extra reading.pdf';
+
+    const report = await runGenerationSweep(
+      [embeddedUnit(COURSE_FOLDER_NOTE), standaloneUnit(extraSourcePath)],
+      {
+        vault,
+        cache,
+        draftDeps: {} as never,
+        listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+        draftForConcept: async () => groundedResponse('Working memory'),
+      },
+    );
+
+    expect(report.drafted).toBe(1);
+    const pending = await cache.listPending();
+    expect(pending[0]?.sourcePath).toBe(COURSE_FOLDER_NOTE);
+    expect(await vault.exists(homeNotePathForSource(extraSourcePath))).toBe(false);
   });
 });
 
