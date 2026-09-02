@@ -161,7 +161,49 @@ describe('WorkerExplainWhyGenerator — the response it reads', () => {
       refused: false,
       text: 'Because the passage says so.',
       citedChunkIndex: 1,
+      provenance: { taskId: EXPLAIN_WHY_GENERATE_TASK_ID, promptVersion: '1.0.0', modelId: 'm' },
     });
+  });
+
+  it("D7.3 (ol-3ux7.45): the response header's stamp is read and exposed on the outcome, so a future persister has it even though nothing persists it today", async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ explanations: [{ text: 'Because the passage says so.', citedChunkIndex: 1 }] }),
+    );
+    const generator = new WorkerExplainWhyGenerator({ transport });
+
+    const outcome = await generator.explainWhy({
+      courseCode: 'C',
+      question: 'q',
+      studentAnswer: '',
+      correctAnswer: 'a',
+      sourceChunks: ['x'],
+    });
+
+    if (outcome.refused) throw new Error('expected a non-refused outcome');
+    expect(outcome.provenance).toEqual({
+      taskId: EXPLAIN_WHY_GENERATE_TASK_ID,
+      promptVersion: '1.0.0',
+      modelId: 'm',
+    });
+  });
+
+  it('a response with no valid stamp reads provenance as null rather than throwing', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: { explanations: [{ text: 'Because the passage says so.', citedChunkIndex: 1 }] },
+    }));
+    const generator = new WorkerExplainWhyGenerator({ transport });
+
+    const outcome = await generator.explainWhy({
+      courseCode: 'C',
+      question: 'q',
+      studentAnswer: '',
+      correctAnswer: 'a',
+      sourceChunks: ['x'],
+    });
+
+    if (outcome.refused) throw new Error('expected a non-refused outcome');
+    expect(outcome.provenance).toBeNull();
   });
 });
 
@@ -440,7 +482,12 @@ describe('ReviewSession.requestExplainWhy — F2.7 (ol-p3t08)', () => {
     const explainWhyPort = {
       explainWhy: async (request: unknown) => {
         calls.push(request);
-        return { refused: false as const, text: 'Because...', citedChunkIndex: 1 };
+        return {
+          refused: false as const,
+          text: 'Because...',
+          citedChunkIndex: 1,
+          provenance: null,
+        };
       },
     };
     const session = new ReviewSession(
@@ -450,7 +497,12 @@ describe('ReviewSession.requestExplainWhy — F2.7 (ol-p3t08)', () => {
 
     const outcome = await session.requestExplainWhy('her answer', ['a source passage']);
 
-    expect(outcome).toEqual({ refused: false, text: 'Because...', citedChunkIndex: 1 });
+    expect(outcome).toEqual({
+      refused: false,
+      text: 'Because...',
+      citedChunkIndex: 1,
+      provenance: null,
+    });
     expect(calls).toEqual([
       {
         courseCode: qaFixture().courseCode,

@@ -744,7 +744,12 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
   it('a wired explainWhyPort is genuinely reachable through the composed session', async () => {
     const vault = studyVault();
     const explainWhyPort = {
-      explainWhy: async () => ({ refused: false as const, text: 'Because...', citedChunkIndex: 1 }),
+      explainWhy: async () => ({
+        refused: false as const,
+        text: 'Because...',
+        citedChunkIndex: 1,
+        provenance: null,
+      }),
     };
     const outcome = await openReviewSession({
       vault,
@@ -761,6 +766,7 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
       refused: false,
       text: 'Because...',
       citedChunkIndex: 1,
+      provenance: null,
     });
   });
 

@@ -45,6 +45,27 @@
  * refusal" idiom the Worker task's own doc establishes. `ExplainWhyOutcome`
  * makes that a checked union rather than an empty-array convention leaking
  * into every caller.
+ *
+ * **D7.3 provenance verdict (`ol-3ux7.45`): this explanation is transient
+ * display, not a persisted artifact, so D7.3's "stamp every response, client
+ * persists it onto the artifact" obligation is satisfied by the Worker
+ * header alone — there is no artifact-side to thread it onto.** Traced end
+ * to end: `review/view.ts`'s `handleExplainWhy` calls
+ * `ReviewSession.requestExplainWhy`, whose only consumer is
+ * `renderExplainWhyPanelIfPending`, which writes `state.outcome.text`
+ * straight into a DOM node and nothing else — no cache write
+ * (`generation/cache-store.ts` never sees an `ExplainWhyOutcome`), no vault
+ * write, and `ReviewSession.logAndAdvance`'s `recordReview` call (the one
+ * D7.1 write this session makes) carries `instrument`/`rating`/`wasUnsure`/
+ * `durationMs`/`selectionContext`/`supportLevel` — no explanation text and no
+ * provenance field. D7.1's own definition (`docs/Olea_alpha_functional_scope.md`
+ * §7, amended `[D-087]`) lists what the review log's kinds are, and an
+ * explain-why exchange is not one of them, so this is not a D7.1 gap either.
+ * Because "transient" is a reading of the whole call graph rather than a
+ * property of this file alone, `extractExplainWhyProvenance` below still
+ * reads the stamp and exposes it on the non-refused outcome — cheap now,
+ * and the seam a future persister (an explain-why history, a cache) needs
+ * without a second change to this port.
  */
 
 import { type RetrieveDeps, retrieve, type WorkerTaskTransport } from 'olea-core';
@@ -70,10 +91,28 @@ export interface ExplainWhyRequest {
   readonly sourceChunks: readonly string[];
 }
 
+/**
+ * D7.3's provenance pair, field-for-field the same shape
+ * `generation/types.ts`'s `DraftProvenance` uses for the same purpose —
+ * exposed here even though nothing persists it yet (see this file's module
+ * doc's D7.3 verdict).
+ */
+export interface ExplainWhyProvenance {
+  readonly taskId: string;
+  readonly promptVersion: string;
+  readonly modelId: string;
+}
+
 /** F2.7: at most one explanation. `refused` is the array-length-zero case, named rather than left implicit. */
 export type ExplainWhyOutcome =
   | { readonly refused: true }
-  | { readonly refused: false; readonly text: string; readonly citedChunkIndex: number };
+  | {
+      readonly refused: false;
+      readonly text: string;
+      readonly citedChunkIndex: number;
+      /** `null` when the Worker response carried no valid `stamp` — see `extractExplainWhyProvenance`. */
+      readonly provenance: ExplainWhyProvenance | null;
+    };
 
 export interface ExplainWhyPort {
   explainWhy(request: ExplainWhyRequest): Promise<ExplainWhyOutcome>;
@@ -129,28 +168,27 @@ function readOutcome(body: unknown): ExplainWhyOutcome {
   }
   const response = body as Record<string, unknown>;
 
-  if (response['ok'] === false) {
-    const code = typeof response['code'] === 'string' ? response['code'] : undefined;
-    const message =
-      typeof response['message'] === 'string' ? response['message'] : 'no message supplied';
+  if (response.ok === false) {
+    const code = typeof response.code === 'string' ? response.code : undefined;
+    const message = typeof response.message === 'string' ? response.message : 'no message supplied';
     throw new WorkerExplainWhyError(
       `WorkerExplainWhyGenerator: the Worker refused the request (${code ?? 'no code'}): ${message}`,
       code,
     );
   }
-  if (response['ok'] !== true) {
+  if (response.ok !== true) {
     throw new WorkerExplainWhyError(
       'WorkerExplainWhyGenerator: the Worker response carried no `ok` discriminant.',
     );
   }
 
-  const result = response['result'];
+  const result = response.result;
   if (typeof result !== 'object' || result === null) {
     throw new WorkerExplainWhyError(
       'WorkerExplainWhyGenerator: the Worker response carried no `result` object.',
     );
   }
-  const explanations = (result as Record<string, unknown>)['explanations'];
+  const explanations = (result as Record<string, unknown>).explanations;
   if (!Array.isArray(explanations)) {
     throw new WorkerExplainWhyError(
       'WorkerExplainWhyGenerator: the Worker response carried no `explanations` array.',
@@ -161,8 +199,8 @@ function readOutcome(body: unknown): ExplainWhyOutcome {
   }
 
   const first = explanations[0] as Record<string, unknown>;
-  const text = first['text'];
-  const citedChunkIndex = first['citedChunkIndex'];
+  const text = first.text;
+  const citedChunkIndex = first.citedChunkIndex;
   if (typeof text !== 'string' || text.length === 0) {
     throw new WorkerExplainWhyError(
       'WorkerExplainWhyGenerator: the Worker response carried no non-empty `text`.',
@@ -178,7 +216,32 @@ function readOutcome(body: unknown): ExplainWhyOutcome {
     );
   }
 
-  return { refused: false, text, citedChunkIndex };
+  return { refused: false, text, citedChunkIndex, provenance: extractExplainWhyProvenance(body) };
+}
+
+/**
+ * D7.3's provenance pair off the response envelope's `stamp` — the same
+ * field `generation/response.ts`'s `extractDraftedProvenance` reads for the
+ * generation pipeline, read here on the same terms (`stamp.promptVersion`/
+ * `stamp.modelId`, both required non-empty strings). `null` when `stamp` is
+ * missing or malformed: same "cannot prove provenance" posture as the
+ * generation pipeline's version, though here there is nothing to skip
+ * caching FOR — see this file's module doc for why nothing persists this
+ * yet.
+ */
+export function extractExplainWhyProvenance(body: unknown): ExplainWhyProvenance | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const envelope = body as Record<string, unknown>;
+  const stamp = envelope.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return {
+    taskId: EXPLAIN_WHY_GENERATE_TASK_ID,
+    promptVersion: s.promptVersion,
+    modelId: s.modelId,
+  };
 }
 
 /**
