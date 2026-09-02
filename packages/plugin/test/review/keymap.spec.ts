@@ -6,6 +6,16 @@
  * key binding, and every hint `hintsFor` renders is one `resolveReviewKey`
  * actually accepts — the two cannot drift because `hintsFor`'s labels and
  * `resolveReviewKey`'s cases are read from the same key literals below.
+ *
+ * **ol-l5og.13 (Space/Enter on a focused button firing the screen-wide
+ * action instead of activating the button) is deliberately NOT a case in
+ * this file.** `resolveReviewKey` takes `{ key, screen }` only — it never
+ * sees `event.target` — so it cannot express "unless a button already owns
+ * this key", and it should not gain a wider signature to try. That decision
+ * lives in `view.ts`'s `handleKeydown`, next to the guard already exempting
+ * real text fields the same way before calling this resolver at all. See
+ * `resolveReviewKey`'s own doc in `keymap.ts` for the argument, and the bead
+ * for the exact patch.
  */
 import { PRESENTED_OPTIONS } from 'olea-core';
 import { describe, expect, it } from 'vitest';

@@ -141,6 +141,23 @@ function isNewDraftScreen(screen: ReviewScreen): boolean {
   }
 }
 
+/**
+ * Deliberately blind to focus. This resolves `{ key, screen }` to an action
+ * and nothing else — it never sees `event.target`, because that is real DOM
+ * and this module's own doc reserves real `KeyboardEvent`s to `view.ts`
+ * alone. That means this function must never be the place that decides "a
+ * focused button already owns this key" — it structurally cannot, since it
+ * has no target to check.
+ *
+ * ol-l5og.13 (bare Space/Enter firing the screen-wide action instead of
+ * activating a focused `<button>`) is exactly that decision, and it belongs
+ * in `view.ts`'s `handleKeydown`, next to the existing INPUT/TEXTAREA/
+ * `isContentEditable` guard that already exempts real text fields the same
+ * way before ever calling `resolveReviewKey`. Every review control is a real
+ * `<button>` wired to its own click handler (`renderHeader`, rating rows,
+ * MCQ options, …), so extending that guard to BUTTON/anchor/`role="button"`
+ * for Space and Enter is sufficient — nothing here needs a wider signature.
+ */
 export function resolveReviewKey(
   event: { readonly key: string },
   screen: ReviewScreen,
