@@ -30,17 +30,53 @@ import type { RandomSource } from './types.js';
 /** At or below this headroom fraction, the queue treats the day's budget as exhausted and stops cleanly (D-002). */
 export const EXHAUSTED_HEADROOM_THRESHOLD = 0.05;
 
-/** Above `EXHAUSTED_HEADROOM_THRESHOLD` but at or below this, the queue paces itself rather than draining back-to-back. */
+/**
+ * Above `EXHAUSTED_HEADROOM_THRESHOLD` but at or below this, the queue paces
+ * itself rather than draining back-to-back. **Unclassified** (`ol-3ux7.56`)
+ * — the role is stated but `0.25` itself is not argued or measured. The
+ * pacer's own headroom semantics rule out a measurement too: per
+ * `docs/Olea_component_register.md` 3.10, every production response site
+ * still emits a stateless headroom of `1`, so this band has never yet been
+ * exercised against a real reading to derive a number from.
+ */
 export const PACING_HEADROOM_THRESHOLD = 0.25;
 
-/** Pacing delay floor: even barely-low headroom buys some breathing room. */
+/**
+ * Pacing delay floor: even barely-low headroom buys some breathing room.
+ * **Unclassified** (`ol-3ux7.56`) — no reason is given for 5 seconds over
+ * another floor. Real call round trips against staging run 40-90s
+ * (`ol-0dyo`), so this floor is far smaller than an actual call anyway; that
+ * bounds its practical effect but is not an argument for 5,000 specifically.
+ */
 export const MIN_PACING_DELAY_MS = 5_000;
-/** Pacing delay ceiling: headroom right at the exhaustion edge paces this hard before either recovering or tipping into `'exhausted'`. */
+/**
+ * Pacing delay ceiling: headroom right at the exhaustion edge paces this
+ * hard before either recovering or tipping into `'exhausted'`. **Declared**
+ * (`ol-3ux7.56`) — 90 seconds matches the slowest real call latency observed
+ * against staging (`ol-0dyo`: 40-90s round trips), so the hardest pacing the
+ * queue imposes waits about as long as one worst-case call actually takes,
+ * not an arbitrary round number.
+ */
 export const MAX_PACING_DELAY_MS = 90_000;
 
-/** Retry backoff floor for a transient job failure. */
+/**
+ * Retry backoff floor for a transient job failure. **Unclassified**
+ * (`ol-3ux7.56`) — no reason is given for 30 seconds over another floor. If
+ * anything, `ol-0dyo`'s retry-tax finding cuts the other way: real round
+ * trips against staging ran 40-90s, longer than this floor, so a first retry
+ * can still land while whatever the prior attempt stalled on may still be in
+ * flight. Flagged, not resolved — not a case for the current value.
+ */
 export const MIN_BACKOFF_MS = 30_000;
-/** Retry backoff ceiling — never wait longer than this for a retryable failure, so a bad run doesn't strand a job until the next session. */
+/**
+ * Retry backoff ceiling — never wait longer than this for a retryable
+ * failure, so a bad run doesn't strand a job until the next session.
+ * **Unclassified** (`ol-3ux7.56`) — the purpose is stated, not the
+ * magnitude. `[D-057]`'s accepted paid ceiling rules out a budget argument
+ * for keeping this small (automatic generation isn't economizing against a
+ * hard daily wall), which leaves only "within a session" — and no
+ * session-length figure pins 30 minutes over another span short of one.
+ */
 export const MAX_BACKOFF_MS = 30 * 60_000;
 
 export type HeadroomBand = 'ample' | 'low' | 'exhausted';
