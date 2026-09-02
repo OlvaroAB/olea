@@ -5,11 +5,20 @@
  * needs a planted ground truth, and is asserted in
  * `packages/workbench/test/trends-scenarios.spec.ts` against
  * `olea-synthetic`'s `lopsided-effort` persona.
+ *
+ * **Fixtures re-specified against window accounting (`ol-v7r5.33`).** The
+ * comparison target used to be a raw assessment-weight share (`weight: 50`,
+ * normalised to `weightShare`); it is now the plan's own windowed floor share
+ * (`floorShare`, `[D-081]`/`[D-092]`), taken as given and never renormalised —
+ * see `effort.ts`'s module doc. `EVEN_FLOORS` below uses `0.3` per course
+ * rather than the old `50`, a magnitude in the range a real two-course window
+ * floor plausibly takes (`windowWidthSittings`'s own declared constants,
+ * `olea-service`'s `src/plan/allocation.ts`), not a re-derivation of them.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
-import { detectEffortImbalance, MIN_GAP, type WeightedAssessment } from './effort.js';
+import { type CourseFloorShare, detectEffortImbalance, MIN_GAP } from './effort.js';
 
 const MINUTE = 60_000;
 
@@ -44,9 +53,9 @@ const CONCEPTS = [
   { conceptId: 'stat-1', courses: ['STAT110'] },
 ];
 
-const EVEN_WEIGHTS: readonly WeightedAssessment[] = [
-  { course: 'BIOL204', weight: 50 },
-  { course: 'STAT110', weight: 50 },
+const EVEN_FLOORS: readonly CourseFloorShare[] = [
+  { course: 'BIOL204', floorShare: 0.3 },
+  { course: 'STAT110', floorShare: 0.3 },
 ];
 
 /** `n` reviews of `conceptId`, a minute each. */
@@ -55,32 +64,32 @@ function minutes(conceptId: string, n: number, from: number): ReviewLogEntry[] {
 }
 
 describe('detectEffortImbalance — abstention is not a negative result', () => {
-  it('declines when fewer than two courses state a weight', () => {
+  it('declines when fewer than two courses have a known floor share', () => {
     const result = detectEffortImbalance({
       entries: minutes('bio-1', 60, 0),
       concepts: CONCEPTS,
-      assessments: [{ course: 'BIOL204', weight: 50 }],
+      floorShares: [{ course: 'BIOL204', floorShare: 0.3 }],
     });
     expect(result.status).toBe('not-enough-history');
     expect(result.measured).toBeNull();
   });
 
-  it('declines when almost no review time is attributed to a weighted course', () => {
+  it('declines when almost no review time is attributed to a floor-share course', () => {
     const result = detectEffortImbalance({
       entries: minutes('bio-1', 5, 0),
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(result.status).toBe('not-enough-history');
   });
 
-  it('ignores an assessment whose weight her note does not state', () => {
+  it('ignores a course whose floor share the plan does not state', () => {
     const result = detectEffortImbalance({
       entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
       concepts: CONCEPTS,
-      assessments: [
-        { course: 'BIOL204', weight: 50 },
-        { course: 'STAT110', weight: undefined },
+      floorShares: [
+        { course: 'BIOL204', floorShare: 0.3 },
+        { course: 'STAT110', floorShare: undefined },
       ],
     });
     expect(result.status).toBe('not-enough-history');
@@ -88,52 +97,51 @@ describe('detectEffortImbalance — abstention is not a negative result', () => 
 });
 
 describe('detectEffortImbalance — what it measures', () => {
-  it('an even split against even weights is measured and not observed', () => {
+  it('an even split against even floor shares is measured and not observed', () => {
     const result = detectEffortImbalance({
       entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(result.status).toBe('not-observed');
     expect(result.measured?.widestGap).toBe(0);
     expect(result.measured?.widestGapCourse).toBeNull();
   });
 
-  it('fires on the course carrying more of the grade than of the hours, and names it', () => {
+  it('fires on the course logging less time than its own floor share, and names it', () => {
     const result = detectEffortImbalance({
       entries: [...minutes('bio-1', 5, 0), ...minutes('stat-1', 75, 100)],
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(result.status).toBe('observed');
     expect(result.measured?.widestGapCourse).toBe('BIOL204');
     expect(result.measured?.widestGap).toBeGreaterThan(MIN_GAP);
   });
 
-  it('a weighted course with no time at all is included at time share zero, not dropped', () => {
+  it('a floor-share course with no time at all is included at time share zero, not dropped', () => {
     // The loudest finding available must not be the one thing the shape cannot
     // express.
     const result = detectEffortImbalance({
       entries: minutes('stat-1', 80, 0),
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(result.status).toBe('observed');
     expect(result.measured?.courses.find((c) => c.course === 'BIOL204')?.timeMs).toBe(0);
-    expect(result.measured?.widestGap).toBeCloseTo(0.5, 10);
+    // gap = floorShare (0.3) - timeShare (0) — never renormalised, unlike the
+    // old weight share.
+    expect(result.measured?.widestGap).toBeCloseTo(0.3, 10);
   });
 
   it('never reports the negative direction as a finding', () => {
-    // STAT110 is heavily over-studied relative to its weight, and BIOL204's own
-    // gap is what fires. "You are over-studying X" is a verdict and there is no
+    // STAT110 logs far more time than its floor share, and BIOL204's own gap
+    // is what fires. "You are over-studying X" is a verdict and there is no
     // path to it in this shape: `widestGap` is clamped at zero from below.
     const result = detectEffortImbalance({
       entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
       concepts: CONCEPTS,
-      assessments: [
-        { course: 'BIOL204', weight: 50 },
-        { course: 'STAT110', weight: 50 },
-      ],
+      floorShares: EVEN_FLOORS,
     });
     expect(result.measured?.widestGap).toBeGreaterThanOrEqual(0);
   });
@@ -153,7 +161,7 @@ describe('detectEffortImbalance — what it measures', () => {
         ...minutes('stat-1', 60, 1000),
       ],
       concepts,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     const biol = result.measured?.courses.find((c) => c.course === 'BIOL204');
     expect(biol?.timeMs).toBe(60 * MINUTE);
@@ -168,12 +176,12 @@ describe('detectEffortImbalance — what it measures', () => {
         review(['bio-1'], 999, null),
       ],
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(result.measured?.timedReviewCount).toBe(80);
   });
 
-  it('reports the courses it left out for stating no weight, rather than narrowing silently', () => {
+  it('reports the courses it left out for having no known floor share, rather than narrowing silently', () => {
     const result = detectEffortImbalance({
       entries: [
         ...minutes('bio-1', 40, 0),
@@ -181,9 +189,9 @@ describe('detectEffortImbalance — what it measures', () => {
         ...minutes('hist-1', 40, 200),
       ],
       concepts: [...CONCEPTS, { conceptId: 'hist-1', courses: ['HIST101'] }],
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
-    expect(result.measured?.coursesWithoutWeight).toEqual(['HIST101']);
+    expect(result.measured?.coursesWithoutFloorShare).toEqual(['HIST101']);
   });
 
   it('never reports "observed" without naming the course (ol-7j54 / ARC-1)', () => {
@@ -195,23 +203,23 @@ describe('detectEffortImbalance — what it measures', () => {
       detectEffortImbalance({
         entries: [...minutes('bio-1', 5, 0), ...minutes('stat-1', 75, 100)],
         concepts: CONCEPTS,
-        assessments: EVEN_WEIGHTS,
+        floorShares: EVEN_FLOORS,
       }),
       detectEffortImbalance({
         entries: minutes('stat-1', 80, 0),
         concepts: CONCEPTS,
-        assessments: EVEN_WEIGHTS,
+        floorShares: EVEN_FLOORS,
       }),
       detectEffortImbalance({
-        // Same imbalance as the first case, plus a third, unweighted course
-        // mixed in — the invariant must hold with a course left out too.
+        // Same imbalance as the first case, plus a third, floor-share-less
+        // course mixed in — the invariant must hold with a course left out too.
         entries: [
           ...minutes('bio-1', 5, 0),
           ...minutes('stat-1', 75, 100),
           ...minutes('hist-1', 40, 200),
         ],
         concepts: [...CONCEPTS, { conceptId: 'hist-1', courses: ['HIST101'] }],
-        assessments: EVEN_WEIGHTS,
+        floorShares: EVEN_FLOORS,
       }),
     ];
     for (const result of observedCases) {
@@ -230,7 +238,7 @@ describe('detectEffortImbalance — what it measures', () => {
     const notObserved = detectEffortImbalance({
       entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(notObserved.status).toBe('not-observed');
     expect(notObserved.measured?.widestGapCourse).toBeNull();
@@ -238,7 +246,7 @@ describe('detectEffortImbalance — what it measures', () => {
     const tooEarly = detectEffortImbalance({
       entries: minutes('bio-1', 60, 0),
       concepts: CONCEPTS,
-      assessments: [{ course: 'BIOL204', weight: 50 }],
+      floorShares: [{ course: 'BIOL204', floorShare: 0.3 }],
     });
     expect(tooEarly.status).toBe('not-enough-history');
     expect(tooEarly.measured).toBeNull();
@@ -250,12 +258,12 @@ describe('detectEffortImbalance — what it measures', () => {
     const first = detectEffortImbalance({
       entries,
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     const second = detectEffortImbalance({
       entries,
       concepts: CONCEPTS,
-      assessments: EVEN_WEIGHTS,
+      floorShares: EVEN_FLOORS,
     });
     expect(second).toEqual(first);
     expect(JSON.stringify(entries)).toBe(snapshot);

@@ -52,7 +52,12 @@
  * against it.
  */
 
-import { buildTodayPanel, type ConceptCourses, type TodayViewModel } from 'olea-core';
+import {
+  buildTodayPanel,
+  type ConceptCourses,
+  type CourseFloorShare,
+  type TodayViewModel,
+} from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
 import type { TodayViewDeps } from './plugin-bridge.js';
@@ -206,15 +211,36 @@ export const TRENDS_CONCEPTS: readonly ConceptCourses[] = CONCEPTS.map((concept)
   courses: [courseDisplayName(concept.courseId)],
 }));
 
-/** Her assessment weights, from the synthetic curriculum (`syn:assessment:…`) — `course` display-named, see `TRENDS_CONCEPTS`'s doc. */
-export const TRENDS_ASSESSMENTS = buildCurriculum().assessments.map((assessment) => ({
-  // `AssessmentRecord.course` is typed optional even though this corpus
-  // always sets it (`buildCurriculum`'s three literal assessments) — `??`
-  // preserves "no course stated" as a real, distinct input rather than
-  // asserting a value `courseDisplayName` would just throw on anyway.
-  course: assessment.course === undefined ? undefined : courseDisplayName(assessment.course),
-  weight: assessment.weight,
-}));
+/**
+ * A stand-in windowed floor share per course (`[D-081]`/`[D-092]`,
+ * `ol-v7r5.33`), for the effort insight's re-specified input.
+ *
+ * **Placeholder, not a real `computeAttentionShares` output** — component 3.5
+ * is `boundary: service` (`docs/Olea_component_register.md` row 3.5), and this
+ * workbench has no server call to make. So this reuses the synthetic
+ * curriculum's assessment weights (`syn:assessment:…`) as the numbers behind
+ * the floor share, exactly the normalisation `detectEffortImbalance` itself
+ * used to perform internally before the re-spec moved that step out to the
+ * caller: summed per course, then divided by the total across courses that
+ * state one. That keeps every number this surface has always shown (57%/43%,
+ * the 40/40 and 0/40 firing counts) byte-identical — this is a field rename,
+ * not a new measurement — while being honest in its own doc that it is not
+ * the real windowed floor D-092 describes. Revalidating these fixtures
+ * against a real floor computation is follow-up work, not done here.
+ */
+export const TRENDS_ASSESSMENTS: readonly CourseFloorShare[] = (() => {
+  const totalByCourse = new Map<string, number>();
+  for (const assessment of buildCurriculum().assessments) {
+    if (assessment.course === undefined || assessment.weight === undefined) continue;
+    const course = courseDisplayName(assessment.course);
+    totalByCourse.set(course, (totalByCourse.get(course) ?? 0) + assessment.weight);
+  }
+  const total = [...totalByCourse.values()].reduce((sum, weight) => sum + weight, 0);
+  return [...totalByCourse.entries()].map(([course, weight]) => ({
+    course,
+    floorShare: total > 0 ? weight / total : undefined,
+  }));
+})();
 
 function streamFor(state: TrendsWorkbenchState): SyntheticStream {
   const base = {
@@ -258,7 +284,7 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     dueThrough: WORKBENCH_NOW,
     windowDays: state.days,
     concepts: TRENDS_CONCEPTS,
-    assessments: TRENDS_ASSESSMENTS,
+    floorShares: TRENDS_ASSESSMENTS,
   });
 
   viewModelCache.set(stateId, vm);

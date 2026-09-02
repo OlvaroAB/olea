@@ -36,7 +36,7 @@ import {
   buildCrossCourseScopeOverview,
   type CrossCourseScopeOverview,
 } from '../gap/scope-overview.js';
-import type { WeightedAssessment } from '../insights/effort.js';
+import type { CourseFloorShare } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
 import type { CourseFreshnessReading } from '../schedule/freshness.js';
@@ -87,11 +87,15 @@ export interface TodayPanelInput {
    */
   readonly concepts?: readonly ConceptCourses[];
   /**
-   * Her assignment notes' weights (F1.1), for F6.5's effort-imbalance half.
-   * Absent behaves as empty: the effort detector then reports
-   * `not-enough-history`, which is the true statement.
+   * The plan's per-course windowed floor shares (component 3.5,
+   * `[D-081]`/`[D-092]`), for F6.5's effort-imbalance half. Absent behaves as
+   * empty: the effort detector then reports `not-enough-history`, which is
+   * the true statement. **No production caller supplies this today** —
+   * `packages/core/src/insights/effort.ts`'s module doc, "Reachability
+   * note" (`ol-v7r5.33`); re-specified from raw assessment-weight shares by
+   * the same bead.
    */
-  readonly assessments?: readonly WeightedAssessment[];
+  readonly floorShares?: readonly CourseFloorShare[];
   /**
    * F6.9's rhythm reading: one entry per course a material arrival has ever
    * been observed for (`ol-v7r5.6`).
@@ -251,7 +255,7 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
       : buildInsights({
           entries: input.entries,
           concepts,
-          assessments: input.assessments ?? EMPTY_ASSESSMENTS,
+          floorShares: input.floorShares ?? EMPTY_FLOOR_SHARES,
         });
 
   // F6.9 (`ol-v7r5.6`): the same "absent means never asked" third state as
@@ -301,5 +305,5 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
 /** Shared because it is immutable and read-only — no caller can add to it. */
 const EMPTY_SUSPENDED: ReadonlySet<string> = new Set<string>();
 
-/** Same reasoning: frozen, so "no assessments supplied" cannot become a caller's scratch array. */
-const EMPTY_ASSESSMENTS: readonly WeightedAssessment[] = Object.freeze([]);
+/** Same reasoning: frozen, so "no floor shares supplied" cannot become a caller's scratch array. */
+const EMPTY_FLOOR_SHARES: readonly CourseFloorShare[] = Object.freeze([]);

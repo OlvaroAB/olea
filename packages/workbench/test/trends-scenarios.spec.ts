@@ -111,7 +111,7 @@ describe('the states show what their notes claim', () => {
     // The course carrying more of the grade than of the hours — stated as the
     // two shares the panel actually renders.
     const row = measured?.courses.find((c) => c.course === 'Vantrel');
-    expect(row?.weightShare).toBeGreaterThan(0.5);
+    expect(row?.floorShare).toBeGreaterThan(0.5);
     expect(row?.timeShare).toBeLessThan(0.25);
   });
 
@@ -185,7 +185,7 @@ function firingCounts(
     const effortResult = detectEffortImbalance({
       entries: stream.entries,
       concepts: TRENDS_CONCEPTS,
-      assessments: TRENDS_ASSESSMENTS,
+      floorShares: TRENDS_ASSESSMENTS,
     });
     if (effortResult.status === 'observed') effort += 1;
   }
@@ -259,7 +259,7 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
         const result = detectEffortImbalance({
           entries: stream.entries,
           concepts: TRENDS_CONCEPTS,
-          assessments: TRENDS_ASSESSMENTS,
+          floorShares: TRENDS_ASSESSMENTS,
         });
         return result.measured?.widestGap ?? 0;
       });
@@ -285,7 +285,7 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     const result = detectEffortImbalance({
       entries: stream.entries,
       concepts: TRENDS_CONCEPTS,
-      assessments: TRENDS_ASSESSMENTS,
+      floorShares: TRENDS_ASSESSMENTS,
     });
     // Display-named, same reason as the assertion above.
     expect(result.measured?.widestGapCourse).toBe('Quorbin');

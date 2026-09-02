@@ -583,6 +583,7 @@ export type {
 export type {
   ConceptCourses,
   CourseEffort,
+  CourseFloorShare,
   EffortInput,
   EffortInsight,
   EffortMeasured,
@@ -593,7 +594,6 @@ export type {
   InsightsSummary,
   SpacingInsight,
   SpacingMeasured,
-  WeightedAssessment,
 } from './insights/index.js';
 export {
   ATTENDANCE_RATIO,
@@ -602,11 +602,11 @@ export {
   detectEffortImbalance,
   detectSpacing,
   impliedAssessmentDays,
+  MIN_COURSES_WITH_FLOOR_SHARE,
   MIN_GAP,
   MIN_REVIEWS,
   MIN_SPAN_DAYS,
   MIN_TIMED_REVIEWS,
-  MIN_WEIGHTED_COURSES,
   PRE_ASSESSMENT_WINDOW_DAYS,
 } from './insights/index.js';
 // Instrument formats in the vault (F2.1, F2.15, C5.3). Q&A/cloze target an

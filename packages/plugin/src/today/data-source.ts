@@ -82,6 +82,7 @@ import {
   type CalendarDay,
   type ConceptCourses,
   type ConceptRelation,
+  type CourseFloorShare,
   type CourseFreshnessReading,
   calendarDayFromLocalDate,
   calendarDaysEndingOn,
@@ -99,7 +100,6 @@ import {
   parseReviewLog,
   REVIEW_LOG_FOLDER,
   type RhythmCourseInput,
-  readAssessments,
   readReviewLogHistory,
   resolveTermBoundary,
   reviewLogPath,
@@ -110,7 +110,6 @@ import {
   toDueInstruments,
   type VaultPath,
   type VaultSource,
-  type WeightedAssessment,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
@@ -410,7 +409,7 @@ export function localToday(now: Date): CalendarDay {
 /**
  * Where the trends half (F6.2's mastery overview, F6.5's insights) gets the two
  * things a review log cannot supply: which course a concept belongs to, and
- * what her assessments are worth.
+ * what the plan's own windowed floor share says each course is owed.
  *
  * **Optional on `TodayPanelDeps` — a panel built without one renders no trends
  * section at all.** `buildTodayPanel` leaves `mastery`/`insights` null and
@@ -428,11 +427,18 @@ export interface TodayTrendsSource {
    */
   listConceptCourses(): Promise<readonly ConceptCourses[] | null>;
   /**
-   * Weighted assessments (F1.1). `[]` is a real and common answer — a vault
-   * with no assignments table — and the effort detector reports
-   * `not-enough-history` on it, which is the true statement.
+   * The plan's per-course windowed floor shares (component 3.5,
+   * `[D-081]`/`[D-092]`). `[]` is a real and common answer — no cached plan
+   * yet — and the effort detector reports `not-enough-history` on it, which
+   * is the true statement. **Re-specified from raw assessment weight by
+   * `ol-v7r5.33`; no client-side producer of a real floor share exists yet**
+   * (component 3.5 is `boundary: service` — `docs/Olea_component_register.md`
+   * row 3.5 — so a floor cannot be honestly recomputed here). `createVaultTrendsSource`
+   * below returns `[]` unconditionally until this is wired to the cached
+   * study-plan artifact — the honest state named rather than papered over
+   * with a stand-in number, matching `effort.ts`'s own "Reachability note".
    */
-  listAssessmentWeights(): Promise<readonly WeightedAssessment[]>;
+  listCourseFloorShares(): Promise<readonly CourseFloorShare[]>;
 }
 
 export interface VaultTrendsSourceDeps {
@@ -441,18 +447,23 @@ export interface VaultTrendsSourceDeps {
   readonly conceptOptions?: ExtractConceptsOptions;
   /**
    * Vault path of the `.base` file `readAssessments` scans, from her settings
-   * (`plan/settings-store.ts`). Blank or absent means "not configured", and
-   * yields no weights rather than a guessed folder.
+   * (`plan/settings-store.ts`). **Currently unused by `createVaultTrendsSource`
+   * below** — the effort insight it used to feed now reads the plan's floor
+   * share instead of raw assessment weight (`ol-v7r5.33`), and no client-side
+   * producer of that exists yet. Left on this interface, rather than removed,
+   * so `main.ts`'s existing wiring is not a compile break while the real
+   * floor-share source is built.
    */
   readonly assessmentsBasePath?: VaultPath;
 }
 
 /**
- * The real trends source: walk her vault for concepts, read her assignments
- * table for weights.
+ * The real trends source: walk her vault for concepts; the floor-share half
+ * is not yet backed by a real producer — see `TodayTrendsSource
+ * .listCourseFloorShares`'s doc.
  *
  * Both halves swallow their own failures into the honest value —
- * `null` concepts, `[]` weights — for the reason `createVaultInstrumentSource`
+ * `null` concepts, `[]` floor shares — for the reason `createVaultInstrumentSource`
  * already gives: a vault that throws mid-walk is not a vault with nothing in
  * it, and the panel is the wrong place to surface a read error at her.
  *
@@ -476,18 +487,13 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
         return null;
       }
     },
-    async listAssessmentWeights() {
-      const basePath = deps.assessmentsBasePath;
-      if (basePath === undefined || basePath.trim() === '') return [];
-      try {
-        const report = await readAssessments(deps.vault, basePath);
-        return report.records.map((record) => ({
-          course: record.course,
-          weight: record.weight,
-        }));
-      } catch {
-        return [];
-      }
+    async listCourseFloorShares() {
+      // No client-side producer of a real windowed floor share exists yet
+      // (component 3.5 is server-only) — see this method's doc on
+      // `TodayTrendsSource`. `[]` reads as "the plan has nothing to say about
+      // any course's floor right now", the same honest-absence convention
+      // `listConceptCourses`'s own `null` uses for a different failure mode.
+      return [];
     },
   };
 }
@@ -775,12 +781,12 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
 /** F6.2/F6.5's half of `TodayPanelInput` — `{}` when `trends` is absent or could not enumerate. */
 async function resolveTrendsFields(
   trends: TodayTrendsSource | undefined,
-): Promise<Pick<TodayPanelInput, 'concepts' | 'assessments'> | Record<string, never>> {
+): Promise<Pick<TodayPanelInput, 'concepts' | 'floorShares'> | Record<string, never>> {
   if (trends === undefined) return {};
   const concepts = await trends.listConceptCourses();
   if (concepts === null) return {};
-  const assessments = await trends.listAssessmentWeights();
-  return { concepts, assessments };
+  const floorShares = await trends.listCourseFloorShares();
+  return { concepts, floorShares };
 }
 
 /** F6.9's half of `TodayPanelInput` — `{}` when `rhythm` is absent or could not enumerate. */
