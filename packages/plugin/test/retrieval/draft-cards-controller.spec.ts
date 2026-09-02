@@ -121,7 +121,7 @@ async function makeRetrieveDeps(
   return { keywordIndex, embeddingCache, embeddingProvider: provider };
 }
 
-const REQUEST = { courseCode: 'PSYCH305', conceptName: QUERY_TEXT };
+const REQUEST = { courseCode: 'COGS214', conceptName: QUERY_TEXT };
 
 describe('runDraftCards', () => {
   it('an empty vault comes back as a refused outcome with non-transient copy', async () => {

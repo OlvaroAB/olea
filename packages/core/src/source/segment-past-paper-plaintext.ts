@@ -156,7 +156,7 @@ const NUMBER_BARE_RE = /^(\d{1,4})\s+(?=[A-Za-z])/;
 /**
  * A single **capital** letter followed by `.`/`)` and visible prose on the
  * same paragraph — `"A. Using examples, outline…"` (findings §3,
- * "capital-letter top-level items, no number at all"; observed as PSYCH305's
+ * "capital-letter top-level items, no number at all"; observed as COGS214's
  * unnumbered Section 2 essay alternatives, findings §5.11). Capital-only is
  * the load-bearing choice, not an arbitrary restriction: every lettered
  * sub-part and MCQ-option form the censused corpus actually uses — `a.`,

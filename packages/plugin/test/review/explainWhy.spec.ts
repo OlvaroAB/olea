@@ -89,7 +89,7 @@ describe('WorkerExplainWhyGenerator — the request it builds', () => {
     const generator = new WorkerExplainWhyGenerator({ transport });
 
     await generator.explainWhy({
-      courseCode: 'PSYCH305',
+      courseCode: 'COGS214',
       question: 'What does a P300 index?',
       studentAnswer: 'Memory',
       correctAnswer: 'Attention allocation',
@@ -101,7 +101,7 @@ describe('WorkerExplainWhyGenerator — the request it builds', () => {
     expect(request?.taskId).toBe('explain-why.generate.v1');
     expect(request?.contractVersion).toBe(2);
     expect(request?.payload).toEqual({
-      courseCode: 'PSYCH305',
+      courseCode: 'COGS214',
       question: 'What does a P300 index?',
       studentAnswer: 'Memory',
       correctAnswer: 'Attention allocation',

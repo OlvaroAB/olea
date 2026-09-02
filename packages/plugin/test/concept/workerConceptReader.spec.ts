@@ -34,18 +34,18 @@ const passages = [
   {
     text: 'Event-related potentials are voltage deflections time-locked to an event.',
     anchor: {
-      sourcePath: 'Courses/PSYCH305/lecture-3.md',
+      sourcePath: 'Courses/COGS214/lecture-3.md',
       location: { page: 1, charRange: { start: 0, end: 10 } },
     },
-    course: 'PSYCH305',
+    course: 'COGS214',
   },
   {
     text: 'The P300 component is one well-studied ERP.',
     anchor: {
-      sourcePath: 'Courses/PSYCH305/lecture-4.md',
+      sourcePath: 'Courses/COGS214/lecture-4.md',
       location: { page: 1, charRange: { start: 0, end: 10 } },
     },
-    course: 'PSYCH305',
+    course: 'COGS214',
   },
 ];
 

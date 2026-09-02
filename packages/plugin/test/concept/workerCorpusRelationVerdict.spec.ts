@@ -37,7 +37,7 @@ const request: CorpusVerdictRequest = {
         name: 'Type I error',
         aliases: [],
         anchor: {
-          sourcePath: 'Courses/PSYCH305/lecture-3.md',
+          sourcePath: 'Courses/COGS214/lecture-3.md',
           location: { page: 1, charRange: { start: 0, end: 10 } },
         },
         passageText: 'A Type I error is a false positive: rejecting a true null hypothesis.',
@@ -46,7 +46,7 @@ const request: CorpusVerdictRequest = {
         name: 'Type II error',
         aliases: [],
         anchor: {
-          sourcePath: 'Courses/PSYCH305/lecture-4.md',
+          sourcePath: 'Courses/COGS214/lecture-4.md',
           location: { page: 1, charRange: { start: 0, end: 10 } },
         },
         passageText:
@@ -95,7 +95,7 @@ describe('WorkerCorpusRelationVerdict — the request it builds', () => {
         },
       ],
     });
-    expect(JSON.stringify(sent?.payload)).not.toContain('Courses/PSYCH305');
+    expect(JSON.stringify(sent?.payload)).not.toContain('Courses/COGS214');
   });
 
   it('never calls the transport for an empty candidate batch', async () => {
