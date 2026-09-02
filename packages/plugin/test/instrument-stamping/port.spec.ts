@@ -304,29 +304,20 @@ describe('stampOnFirstSight — two unstamped instruments sharing one note and o
   });
 
   /**
-   * A genuine, PRE-EXISTING gap in `olea-core`'s shipped id scheme
-   * (`session/enumerate.ts` + `session/instrument-id.ts`), reproduced at the
-   * core level and confirmed independent of this port (see this bead's
-   * report): when two instruments share a HEADING anchor (neither has its
-   * own block id yet), stamping one changes ITS anchor key from
-   * `h:<heading>` to `^<its new block id>` — which would silently reassign
-   * the *other* instrument's ordinal-within-`h:<heading>`, and therefore its
-   * derived id, if nothing guarded against it. This pre-dates `ol-2zfj.53`;
-   * it was merely unreachable in production until something (this trigger)
-   * actually wrote a block id into a hand-authored card sharing a heading
-   * with an unstamped sibling. A real fix means changing `enumerate.ts`'s/
-   * `instrument-id.ts`'s anchor-and-ordinal rule, a different bead's `owns`
-   * and a persisted-identity (Class C-shaped) change — filed as `ol-8ae9`
-   * (`discovered-from: ol-2zfj.53`) rather than attempted here.
-   *
-   * This port's own, narrower fix: only stamp the CURRENTLY-last occupant of
-   * a shared heading anchor (`located.anchorOccupancy === record.ordinal`).
-   * Removing the last occupant shifts nobody, because nothing comes after
-   * it. The two cases below are the same fixture, driven in the two
-   * possible review orders, proving neither ever corrupts a sibling and
-   * both eventually get every card stamped.
+   * `ol-8ae9`, now fixed upstream (`session/enumerate.ts`): when two
+   * instruments share a HEADING anchor (neither has its own block id yet),
+   * stamping one used to change ITS anchor key from `h:<heading>` to
+   * `^<its new block id>`, silently reassigning the *other* instrument's
+   * ordinal-within-`h:<heading>` — and therefore its derived id — on the
+   * next fresh enumeration. `enumerate.ts` now counts a heading's ordinal
+   * over every occupant it has ever had, stamped or not, so that can no
+   * longer happen; this port no longer needs (and no longer carries) a
+   * "only stamp the last occupant" gate. The two cases below are the same
+   * fixture, driven in the two possible review orders, proving both cards
+   * stamp on their own first review regardless of order — no deferral, no
+   * retry needed.
    */
-  it('reviewing the NON-last sibling first: declines safely, then succeeds once it becomes last', async () => {
+  it('reviewing the NON-last sibling first: it stamps immediately, and the sibling is unaffected', async () => {
     const v = memoryVault({
       'Courses/TEST101/siblings.md': [
         FRONTMATTER('[Alpha]'),
@@ -345,39 +336,34 @@ describe('stampOnFirstSight — two unstamped instruments sharing one note and o
     const second = qas.find((r) => r.card.raw.startsWith('Second'));
     if (!first || !second) throw new Error('fixture has two qa records');
     expect(first.ordinal).toBe(1);
-    expect(second.ordinal).toBe(2); // second is currently "last"
+    expect(second.ordinal).toBe(2);
 
     // "First" is reviewed first (composeQueue's order need not match source
-    // order) but is NOT last under the shared heading — declined, safely.
-    const firstAttempt = await stampOnFirstSight(v, first, {
+    // order) even though it is NOT last under the shared heading — it
+    // stamps immediately, since nothing about its own anchor move can
+    // reassign "Second" any more.
+    const firstResult = await stampOnFirstSight(v, first, {
       generateBlockId: () => 'durablefirst',
     });
-    expect(firstAttempt.instrumentId).toBe(first.instrumentId);
-    let content = v.contentOf('Courses/TEST101/siblings.md') ?? '';
-    expect(content).toContain('First front::First back\n'); // untouched
-    expect(content).not.toContain('durablefirst');
+    expect(firstResult.instrumentId).toContain('^durablefirst');
+    const content = v.contentOf('Courses/TEST101/siblings.md') ?? '';
+    expect(content).toContain('First front::First back ^durablefirst');
 
-    // "Second" IS currently last — stamps.
-    const secondResult = await stampOnFirstSight(v, second, {
+    // "Second"'s provisional id, re-derived from a fresh enumeration after
+    // "First" moved to its own block-id anchor, is exactly what it was
+    // before — the ol-8ae9 regression this port used to have to guard
+    // against on its own.
+    const { records: after } = await recordsFor(v);
+    const secondAfter = after.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('Second'),
+    );
+    expect(secondAfter?.instrumentId).toBe(second.instrumentId);
+
+    // "Second" now stamps too, on its own next review.
+    const secondResult = await stampOnFirstSight(v, secondAfter as VaultInstrumentRecord, {
       generateBlockId: () => 'durablesecond',
     });
     expect(secondResult.instrumentId).toContain('^durablesecond');
-    content = v.contentOf('Courses/TEST101/siblings.md') ?? '';
-    expect(content).toContain('Second front::Second back ^durablesecond');
-
-    // "First" is now the sole (and therefore last) occupant of the heading
-    // — a later review of it succeeds, converging to both cards stamped.
-    const { records: after } = await recordsFor(v);
-    const firstStillUnstamped = after.find(
-      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('First'),
-    );
-    if (!firstStillUnstamped) throw new Error('fixture still has a first qa record');
-    const retryResult = await stampOnFirstSight(v, firstStillUnstamped, {
-      generateBlockId: () => 'durablefirst-retry',
-    });
-    expect(retryResult.instrumentId).toContain('^durablefirst-retry');
-    content = v.contentOf('Courses/TEST101/siblings.md') ?? '';
-    expect(content).toContain('First front::First back ^durablefirst-retry');
   });
 
   it('reviewing the LAST sibling first: both stamp on their own first review, in either order', async () => {
@@ -407,7 +393,7 @@ describe('stampOnFirstSight — two unstamped instruments sharing one note and o
     const firstResult = await stampOnFirstSight(v, first, {
       generateBlockId: () => 'durablefirst',
     });
-    expect(firstResult.instrumentId).toContain('^durablefirst'); // now last, stamps immediately
+    expect(firstResult.instrumentId).toContain('^durablefirst'); // stamps immediately, same as before
   });
 });
 

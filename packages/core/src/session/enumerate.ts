@@ -69,6 +69,35 @@
  * in one session and be offered to her twice. One instrument, one candidate,
  * several concepts.
  *
+ * ## `ol-8ae9`: a heading's ordinal counts every occupant, stamped or not
+ *
+ * A Q&A card's block id is both its identity carrier (rule 4 in `instrument-id.ts`) and, before
+ * this fix, this walk's own ordinal-counting key — the same string doing two jobs. Two cards
+ * sharing a heading anchor (neither block-id'd yet) get heading-ordinal ids 1 and 2; stamp the
+ * first and it moves to its own, globally-unique `^blockId` anchor. If the heading's ordinal
+ * count only tallied instruments STILL anchored there, the second card would silently recompute
+ * to ordinal 1 on the next walk — a different derived id, orphaning whatever scheduling history
+ * it already has, which is the exact class of failure D-030 stamped identity exists to prevent.
+ * Reproduced and confirmed independent of any plugin code; `packages/plugin/src/
+ * instrument-stamping/port.ts` carried a narrower, conservative mitigation (only ever stamp the
+ * currently-last occupant) until this landed.
+ *
+ * The fix: a heading-anchored ordinal is the instrument's 1-based POSITION among every
+ * instrument under that heading, in source order — regardless of whether a sibling has already
+ * moved to its own block-id anchor. A stamped sibling still occupies its original slot for this
+ * count, so nobody after it shifts. A block-id-anchored instrument's own ordinal is counted
+ * separately, keyed on the block id itself: since a block id is unique by construction, that
+ * count is always `1`, exactly as it was before this fix — stamping never changes a card's own
+ * id, only what it does (or no longer does) to a sibling's.
+ *
+ * What this does not fix, because nothing can without abandoning position entirely: inserting a
+ * genuinely new card under a heading before its other occupants are stamped still shifts the
+ * unstamped ones' ordinals — the same position-based tradeoff `instrument-id.ts` names in its
+ * rule 5, and the same shape as `[D-177]`'s named-open-question cloze heading-rename gap. Once
+ * every occupant of a heading is stamped (each on its own block-id anchor), the heading's own
+ * ordinal count no longer matters to any of them — insertion, deletion or reordering under that
+ * heading from then on touches nobody's id.
+ *
  * ## `[D-181]`'s citation sidecar (`ol-2zfj.52`)
  *
  * Still a read, not a write, in the same sense the cloze-id lookup above is: once an
@@ -76,8 +105,10 @@
  * whether a generation-time passage citation was minted for it, and copies it onto
  * `sourceProvenance` when one exists. Absent for every hand-authored instrument (nothing mints a
  * sidecar for those) and for a generated one no writer has cited yet — `undefined`, never
- * guessed. See `citationToSourceProvenance`'s own doc for the one field (`charRange`) this can't
- * carry over honestly from the sidecar's smaller grain.
+ * guessed. `SourceLocation.charRange` (`../extract/types.js`) is optional precisely so this
+ * conversion can be honest about the sidecar's smaller grain: `citationToSourceProvenance`
+ * below builds a `location` with `page`/`section` only, `charRange` simply absent, rather than
+ * inventing a range the sidecar never had.
  */
 
 import { parseDocument } from '../block/parse.js';
@@ -85,7 +116,7 @@ import type { HeadingBlock } from '../block/types.js';
 import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord, ExtractConceptsOptions } from '../concept/types.js';
 import { noteTitle } from '../concept/zettelkasten.js';
-import type { CharRange, Provenance } from '../extract/types.js';
+import type { Provenance } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
 import { parseCards } from '../instrument/card-format.js';
@@ -209,29 +240,19 @@ function uidOf(source: string): string | null {
 }
 
 /**
- * `[D-181]`'s citation grain (`sourcePath`/`page?`/`section?` — `../instrument/citation-store.js`)
- * carries no character-level precision: the sidecar is written long after the extraction pass
- * that produced a real `charRange` is over, and this walk never re-reads the original PDF/PPTX to
- * recover one. `VaultInstrumentRecord.sourceProvenance` is nonetheless typed `Provenance`
- * (`../extract/types.js`, reused verbatim per `[D-085]`/`ol-2zfj.48`), whose `SourceLocation`
- * requires `location.charRange`. This sentinel stands in for "no span" — deliberately never a
- * guessed one — and is safe today because `../registry/build.ts`'s `passageGrain()`, the only
- * reader of this field, reads only `.page`/`.section` and ignores `.charRange` entirely.
- *
- * This is a named, Class B compromise (CLAUDE.md's run-charter decision ladder: non-persisted,
- * in-memory, reversible), flagged for retroactive review rather than resolved here: the honest
- * fix is widening `SourceLocation.charRange` to optional in `../extract/types.js`, which ripples
- * into `../tier3-evidence/build.ts`'s sort comparator (`a.provenance.location.charRange.start`) —
- * out of `ol-2zfj.52`'s owned files (this module and `../instrument/citation-store.ts` only).
- */
-const NO_CHAR_RANGE: CharRange = { start: 0, end: 0 };
-
-/**
  * `InstrumentCitation` -> `VaultInstrumentRecord.sourceProvenance`. `SourceLocation.page` is
  * mandatory, so a citation with no `page` (never produced by a real generation-time caller today
  * — `InstrumentCitation`'s own type doesn't rule it out) is treated the same as no citation at
- * all: omitted, never guessed. See `NO_CHAR_RANGE`'s doc for the one field this can't honestly
- * build from the sidecar's own grain.
+ * all: omitted, never guessed.
+ *
+ * `[D-181]`'s citation grain (`sourcePath`/`page?`/`section?` — `../instrument/citation-store.js`)
+ * carries no character-level precision: the sidecar is written long after the extraction pass
+ * that produced a real `charRange` is over, and this walk never re-reads the original PDF/PPTX to
+ * recover one. `SourceLocation.charRange` (`../extract/types.js`) is optional for exactly this
+ * case, so the `location` built below simply omits it rather than fabricating a zero-length
+ * placeholder — the same "absent, never guessed" posture `section` already had. This used to be a
+ * `{ start: 0, end: 0 }` sentinel (a named, flagged Class B compromise); `ol-2zfj.54` widened the
+ * field and this is the honest fix landing.
  */
 function citationToSourceProvenance(citation: InstrumentCitation): Provenance | undefined {
   if (citation.page === undefined) return undefined;
@@ -239,7 +260,6 @@ function citationToSourceProvenance(citation: InstrumentCitation): Provenance | 
     sourcePath: citation.sourcePath,
     location: {
       page: citation.page,
-      charRange: NO_CHAR_RANGE,
       ...(citation.section !== undefined ? { section: citation.section } : {}),
     },
   };
@@ -339,15 +359,29 @@ export async function enumerateVaultInstruments(
     // and identical to the single concept's own list when there is one.
     const courses = [...new Set(ordered.flatMap((concept) => concept.courses))].sort();
 
-    /** anchor key -> how many instruments have already been seen under it. */
-    const ordinals = new Map<string, number>();
+    // `ol-8ae9`: two independent counters, not one shared by anchor key — see this module's
+    // doc for the failure this fixes. `headingOrdinals` counts every instrument under a
+    // heading regardless of whether it has since moved to its own block-id anchor, so a
+    // sibling's stamp never vacates another instrument's slot. `blockOrdinals` counts each
+    // block id on its own; a block id is unique by construction, so this is always `1`.
+    /** heading text (or '' for none) -> how many instruments, of any anchor, seen under it. */
+    const headingOrdinals = new Map<string, number>();
+    /** block id -> how many instruments seen anchored on it (always 1 in practice). */
+    const blockOrdinals = new Map<string, number>();
 
     for (const instrument of instruments) {
       const heading = headingAbove(headings, instrument.span.start);
-      const anchorKey =
-        instrument.blockId !== null ? `^${instrument.blockId}` : `h:${heading ?? ''}`;
-      const ordinal = (ordinals.get(anchorKey) ?? 0) + 1;
-      ordinals.set(anchorKey, ordinal);
+      const headingKey = heading ?? '';
+      const headingPosition = (headingOrdinals.get(headingKey) ?? 0) + 1;
+      headingOrdinals.set(headingKey, headingPosition);
+
+      let ordinal: number;
+      if (instrument.blockId !== null) {
+        ordinal = (blockOrdinals.get(instrument.blockId) ?? 0) + 1;
+        blockOrdinals.set(instrument.blockId, ordinal);
+      } else {
+        ordinal = headingPosition;
+      }
 
       // `[D-177]`'s cloze branch: this walk already holds everything
       // `cloze-identity.ts`'s `ClozeIdAnchor` needs (the same root/anchor/

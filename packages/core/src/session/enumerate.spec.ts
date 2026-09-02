@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
 import { extractConcepts } from '../concept/extract.js';
+import { parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
 import { writeInstrumentCitation } from '../instrument/citation-store.js';
 import { enumerateVaultInstruments } from './enumerate.js';
 import type { InstrumentIdSource } from './instrument-id.js';
@@ -310,10 +311,13 @@ describe('[D-181] citation sidecar: sourceProvenance is read from .olea/citation
       sourcePath: 'Sources/Lecture 3.pdf',
       location: {
         page: 4,
-        charRange: { start: 0, end: 0 },
         section: 'Bedform stratification',
       },
     });
+    // `charRange` is honestly absent, never a fabricated `{ start: 0, end: 0 }` — the sidecar
+    // never had one to carry over (`../extract/types.js`'s `SourceLocation.charRange` is
+    // optional for exactly this case, `ol-2zfj.54`).
+    expect(mcq?.sourceProvenance && 'charRange' in mcq.sourceProvenance.location).toBe(false);
   });
 
   it('leaves sourceProvenance absent when no sidecar exists for the instrument', async () => {
@@ -356,8 +360,134 @@ describe('[D-181] citation sidecar: sourceProvenance is read from .olea/citation
     );
     expect(mcq?.sourceProvenance).toEqual({
       sourcePath: 'Sources/Deck.pptx',
-      location: { page: 2, charRange: { start: 0, end: 0 } },
+      location: { page: 2 },
     });
     expect(mcq?.sourceProvenance && 'section' in mcq.sourceProvenance.location).toBe(false);
+    expect(mcq?.sourceProvenance && 'charRange' in mcq.sourceProvenance.location).toBe(false);
+  });
+});
+
+// Scenarios: features/F2-review.md, "F2.14b — Stamping one heading-sharing Q&A
+// sibling does not reassign the other's ordinal" — @auto:core/session/enumerate.spec
+describe('ol-8ae9: stamping one heading-sharing Q&A sibling must not reassign the other', () => {
+  const twoUnstamped = [
+    '---',
+    'topic: [Alpha]',
+    'course: TEST101',
+    '---',
+    '',
+    '## Shared heading',
+    '',
+    'First front::First back',
+    '',
+    'Second front::Second back',
+    '',
+  ].join('\n');
+
+  function stampByPrefix(source: string, prefix: string, blockId: string): string {
+    const span = parseCards(source).find((c) => c.raw.startsWith(prefix))?.span;
+    if (!span) throw new Error(`fixture has no card starting with ${prefix}`);
+    return stampQaCardBlockId(source, span, { generateBlockId: () => blockId }).content;
+  }
+
+  function bySecond(records: Awaited<ReturnType<typeof enumerateVaultInstruments>>['records']) {
+    const record = records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('Second'),
+    );
+    if (!record) throw new Error('fixture has no Second qa record');
+    return record;
+  }
+
+  it("stamping the first sibling leaves the second's provisional id unchanged", async () => {
+    const vault = memoryVault({ 'Notes/one.md': twoUnstamped });
+    const before = await enumerateVaultInstruments(vault);
+    const secondBefore = bySecond(before.records);
+    expect(secondBefore.instrumentId.endsWith(':2')).toBe(true);
+
+    await vault.write('Notes/one.md', stampByPrefix(twoUnstamped, 'First', 'firststamp'));
+
+    const after = await enumerateVaultInstruments(vault);
+    const secondAfter = bySecond(after.records);
+    expect(secondAfter.instrumentId).toBe(secondBefore.instrumentId);
+  });
+
+  it('stamping both siblings leaves both stable across further enumerations', async () => {
+    const vault = memoryVault({ 'Notes/one.md': twoUnstamped });
+
+    const firstStamp = stampByPrefix(twoUnstamped, 'First', 'firststamp');
+    await vault.write('Notes/one.md', firstStamp);
+    const secondStamp = stampByPrefix(firstStamp, 'Second', 'secondstamp');
+    await vault.write('Notes/one.md', secondStamp);
+
+    const found = await enumerateVaultInstruments(vault);
+    const first = found.records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('First'),
+    );
+    const second = bySecond(found.records);
+    expect(first?.instrumentId).toContain('^firststamp');
+    expect(second.instrumentId).toContain('^secondstamp');
+
+    // A second, independent walk over the same (unchanged) content derives
+    // the identical ids — both are durable now, not just coincidentally equal.
+    const foundAgain = await enumerateVaultInstruments(vault);
+    expect(bySecond(foundAgain.records).instrumentId).toBe(second.instrumentId);
+    expect(
+      foundAgain.records.find((r) => r.instrumentType === 'qa' && r.card.raw.startsWith('First'))
+        ?.instrumentId,
+    ).toBe(first?.instrumentId);
+  });
+
+  it('inserting a third card between two already-stamped siblings only mints an id for the new card', async () => {
+    const vault = memoryVault({ 'Notes/one.md': twoUnstamped });
+    const firstStamp = stampByPrefix(twoUnstamped, 'First', 'firststamp');
+    const bothStamped = stampByPrefix(firstStamp, 'Second', 'secondstamp');
+    await vault.write('Notes/one.md', bothStamped);
+
+    const before = await enumerateVaultInstruments(vault);
+    const firstBefore = before.records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('First'),
+    );
+    const secondBefore = bySecond(before.records);
+
+    const withThird = bothStamped.replace(
+      'First front::First back ^firststamp',
+      'First front::First back ^firststamp\n\nThird front::Third back',
+    );
+    await vault.write('Notes/one.md', withThird);
+
+    const after = await enumerateVaultInstruments(vault);
+    const firstAfter = after.records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('First'),
+    );
+    const secondAfter = bySecond(after.records);
+    const third = after.records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('Third'),
+    );
+
+    expect(firstAfter?.instrumentId).toBe(firstBefore?.instrumentId);
+    expect(secondAfter.instrumentId).toBe(secondBefore.instrumentId);
+    expect(third?.instrumentId).toBeDefined();
+    expect(third?.instrumentId).not.toBe(firstBefore?.instrumentId);
+    expect(third?.instrumentId).not.toBe(secondBefore.instrumentId);
+  });
+
+  it('by contrast, inserting a card between two UNSTAMPED siblings still shifts the second — the accepted, position-based tradeoff `instrument-id.ts` rule 5 already names, unrelated to this fix', async () => {
+    const vault = memoryVault({ 'Notes/one.md': twoUnstamped });
+    const before = await enumerateVaultInstruments(vault);
+    const secondBefore = bySecond(before.records);
+
+    const withThird = twoUnstamped.replace(
+      'First front::First back',
+      'First front::First back\n\nThird front::Third back',
+    );
+    await vault.write('Notes/one.md', withThird);
+
+    const after = await enumerateVaultInstruments(vault);
+    const secondAfter = bySecond(after.records);
+    // 'Second' was ordinal 2, is now ordinal 3 — a real, named, pre-existing gap
+    // in the position-based fallback (only stamping closes it), not the bug
+    // ol-8ae9 fixes.
+    expect(secondAfter.instrumentId).not.toBe(secondBefore.instrumentId);
+    expect(secondAfter.instrumentId.endsWith(':3')).toBe(true);
   });
 });

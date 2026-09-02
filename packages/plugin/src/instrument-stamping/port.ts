@@ -44,36 +44,43 @@
  * ownership boundary" call `cloze-identity.ts` already made for
  * `escapeComponent`.
  *
- * Heading text and per-anchor ordinal are unaffected by splicing an inline
- * marker into a *different* instrument's OWN line — with one discovered
- * exception, handled below rather than silently mis-locating: stamping a
- * Q&A card's block id changes THAT card's ordinal-counting anchor key from
- * `h:<heading>` to `^<blockId>`, which can shift a heading-sharing sibling's
- * ordinal. See "A discovered gap" below.
+ * Heading text and per-heading ordinal are unaffected by splicing an inline
+ * marker into a *different* instrument's OWN line: `ol-8ae9`'s core-level fix
+ * (`session/enumerate.ts`) made a heading's ordinal count every occupant it
+ * has ever had, stamped or not, so a sibling moving to its own block-id
+ * anchor no longer vacates the slot this module's re-derivation depends on.
+ * `locateCurrentSpan` below mirrors that same counting rule. See "`ol-8ae9`,
+ * fixed upstream" below for what this module used to have to guard against
+ * on its own.
  *
  * A cloze needs no relocation at all: `stampClozeId` addresses its target by
  * `(noteUid, notePath, heading, ordinal)` against the frontmatter map, never
  * by a body span, so the record's own fields are handed straight through.
  *
- * ## A discovered gap, and this module's conservative fix
+ * ## `ol-8ae9`, fixed upstream — what this module used to guard against
  *
- * `stampOnFirstSight`'s own doc comment on the `'qa'` branch has the full
- * argument; the summary: a Q&A card's block id doubles as BOTH its identity
- * carrier AND `enumerate.ts`'s ordinal-counting anchor key, so stamping one
- * silently reassigns a heading-sharing sibling's ordinal (and therefore its
- * derived id) on the next fresh enumeration — a genuine, PRE-EXISTING gap
- * in `olea-core`'s shipped scheme, reproduced and confirmed independent of
- * this port, merely unreachable in production before something (this
- * trigger) actually wrote a Q&A block id. Filed as `ol-8ae9`
- * (`discovered-from: ol-2zfj.53`). Fixing the scheme itself is a different
- * bead's `owns` (`session/enumerate.ts` / `session/instrument-id.ts`) and a
- * persisted-identity change. This module's own, narrower fix stays inside
- * its `owns`: only stamp a Q&A card that is CURRENTLY the highest-ordinal
- * occupant of its heading anchor — removing the last occupant shifts
- * nothing, because nothing comes after it. A card that is not (yet) last is
- * left provisional this review rather than risk corrupting a sibling's
- * identity; see the `'qa'` branch below for why this still converges to
- * every card eventually getting stamped.
+ * A Q&A card's block id doubles as BOTH its identity carrier AND
+ * `enumerate.ts`'s ordinal-counting anchor key. Before `ol-8ae9`'s core-level
+ * fix landed, stamping one card silently reassigned a heading-sharing
+ * sibling's ordinal (and therefore its derived id) on the next fresh
+ * enumeration — a genuine, then-PRE-EXISTING gap in `olea-core`'s shipped
+ * scheme, reproduced and confirmed independent of this port, merely
+ * unreachable in production before something (this trigger) actually wrote a
+ * Q&A block id. Filed as `ol-8ae9` (`discovered-from: ol-2zfj.53`) and fixed
+ * in `session/enumerate.ts`/`session/instrument-id.ts` (a different bead's
+ * `owns`, and a persisted-identity change): a heading's ordinal now counts
+ * the instrument's position among every occupant that heading has ever had,
+ * whether or not one of them has since moved to its own block-id anchor —
+ * see that module's own doc for the full argument.
+ *
+ * This module previously carried a narrower, conservative mitigation for the
+ * gap, inside its own `owns`: only stamp a Q&A card that was CURRENTLY the
+ * highest-ordinal occupant of its heading anchor, deferring every other card
+ * to a later review (removing the last occupant shifts nobody, because
+ * nothing comes after it). With the upstream fix in place that mitigation is
+ * no longer needed — stamping any occupant, in any order, can no longer
+ * reassign a sibling — so the `'qa'` branch below stamps unconditionally,
+ * the same as the `'mcq'` branch always has.
  *
  * ## Deciding what still needs a marker
  *
@@ -184,30 +191,24 @@ function headingAbove(headings: readonly HeadingBlock[], offset: number): string
   return found;
 }
 
-function anchorKeyOf(blockId: string | null, heading: string | null): string {
-  return blockId !== null ? `^${blockId}` : `h:${heading ?? ''}`;
-}
-
 interface LocatedInstrument {
   readonly span: SourceSpan;
-  /** How many instruments (of any type) this note's anchor key had in total, at this fresh read. */
-  readonly anchorOccupancy: number;
 }
 
 /**
  * Re-derives the CURRENT span of the instrument `record` names, by
- * recomputing the same anchor-plus-ordinal `session/enumerate.ts` computed
- * when this record was built, against a fresh read. `undefined` when the
- * note has changed enough that the anchor/ordinal no longer resolves to
- * exactly one instrument of the right type (she deleted or restructured the
- * content between enumeration and this review) — the caller treats that as
- * "nothing to stamp yet," never as an error, since a stale, unstampable
- * record is exactly the read-only-fallback case `provisionalInstrumentId`
- * already exists to cover.
- *
- * Also reports `anchorOccupancy` — the TOTAL count of instruments sharing
- * the target's anchor key in this same fresh read, used by the Q&A branch's
- * "safe to stamp" check below.
+ * recomputing the same heading-ordinal `session/enumerate.ts` computes when
+ * this record was built, against a fresh read — mirroring that module's
+ * `ol-8ae9` counting rule exactly: a heading's ordinal counts every
+ * instrument it has ever had, whether or not one has since moved to its own
+ * block-id anchor. `undefined` when the note has changed enough that the
+ * heading/ordinal no longer resolves to exactly one still-unstamped
+ * instrument of the right type (she deleted or restructured the content
+ * between enumeration and this review, or a concurrent stamp in this same
+ * session already gave it a block id) — the caller treats that as "nothing
+ * to stamp yet," never as an error, since a stale, unstampable record is
+ * exactly the read-only-fallback case `provisionalInstrumentId` already
+ * exists to cover.
  */
 function locateCurrentSpan(
   source: string,
@@ -216,27 +217,36 @@ function locateCurrentSpan(
   const headings = parseDocument(source).blocks.filter(
     (block): block is HeadingBlock => block.kind === 'heading',
   );
-  const recordAnchorKey = anchorKeyOf(record.blockId, record.heading);
 
-  const ordinals = new Map<string, number>();
+  const headingOrdinals = new Map<string, number>();
+  const blockOrdinals = new Map<string, number>();
   let match: SourceSpan | undefined;
+
   for (const instrument of locatableInstrumentsOf(source)) {
     const heading = headingAbove(headings, instrument.span.start);
-    const anchorKey = anchorKeyOf(instrument.blockId, heading);
-    const ordinal = (ordinals.get(anchorKey) ?? 0) + 1;
-    ordinals.set(anchorKey, ordinal);
+    const headingKey = heading ?? '';
+    const headingPosition = (headingOrdinals.get(headingKey) ?? 0) + 1;
+    headingOrdinals.set(headingKey, headingPosition);
+
+    let ordinal: number;
+    if (instrument.blockId !== null) {
+      ordinal = (blockOrdinals.get(instrument.blockId) ?? 0) + 1;
+      blockOrdinals.set(instrument.blockId, ordinal);
+    } else {
+      ordinal = headingPosition;
+    }
 
     if (
       match === undefined &&
       instrument.type === record.instrumentType &&
-      anchorKey === recordAnchorKey &&
+      instrument.blockId === record.blockId &&
+      heading === record.heading &&
       ordinal === record.ordinal
     ) {
       match = instrument.span;
     }
   }
-  if (match === undefined) return undefined;
-  return { span: match, anchorOccupancy: ordinals.get(recordAnchorKey) ?? 0 };
+  return match === undefined ? undefined : { span: match };
 }
 
 /**
@@ -317,35 +327,19 @@ export async function stampOnFirstSight(
 
   // 'qa'.
   //
-  // A DISCOVERED, PRE-EXISTING gap in `olea-core`'s shipped id scheme
-  // (`session/enumerate.ts` + `session/instrument-id.ts`), independent of
-  // this port (reproduced with core functions alone; filed as `ol-8ae9`,
-  // `discovered-from: ol-2zfj.53`): a Q&A card's block id IS its
-  // ordinal-counting anchor key once stamped, so writing one moves this
-  // card from the shared `h:<heading>` anchor to its own, globally-unique
-  // `^<blockId>` anchor — vacating its slot in the heading's ordinal
-  // sequence. Every OTHER instrument (of any type) still anchored on that
-  // same heading with a HIGHER ordinal then silently shifts down by one on
-  // the next fresh enumeration, changing ITS derived id and orphaning
-  // whatever scheduling history it already has — the exact class of
-  // failure D-030 stamping exists to prevent, now reachable because this is
-  // the first thing that ever writes a Q&A block id into a hand-authored
-  // card sharing a heading with an unstamped sibling.
-  //
-  // The safe, conservative fix that stays inside this port's `owns`: only
-  // stamp when this card is CURRENTLY the highest-ordinal occupant of its
-  // heading anchor (`located.anchorOccupancy === record.ordinal`) — removing
-  // the last occupant shifts nothing, because nothing comes after it. A
-  // card that is not (yet) last is left provisional this review; as
-  // higher-ordinal siblings are themselves stamped away over subsequent
-  // reviews, every card eventually becomes last and gets its turn, just not
-  // always on its own literal first review. Declining is indistinguishable
-  // from "nothing to stamp yet" to every caller — never a corruption, only
-  // a deferral.
-  if (located.anchorOccupancy !== record.ordinal) {
-    return { instrumentId: record.instrumentId };
-  }
-
+  // Once a genuine, then-PRE-EXISTING gap in `olea-core`'s shipped id scheme
+  // (`session/enumerate.ts` + `session/instrument-id.ts`): a Q&A card's
+  // block id IS its ordinal-counting anchor key once stamped, so writing one
+  // used to move this card from the shared `h:<heading>` anchor to its own,
+  // globally-unique `^<blockId>` anchor — vacating its slot in the heading's
+  // ordinal sequence and silently reassigning every higher-ordinal sibling's
+  // derived id on the next fresh enumeration, orphaning whatever scheduling
+  // history it already had. Filed as `ol-8ae9` and fixed upstream (see this
+  // module's own doc, "`ol-8ae9`, fixed upstream"): `enumerate.ts`'s heading
+  // ordinal now counts every occupant a heading has ever had, so nothing
+  // this card does to its own anchor can reassign a sibling any more. No
+  // sibling-safety check is needed here — stamp unconditionally, the same
+  // as the `'mcq'` branch above always has.
   const stamped = stampQaCardBlockId(
     source,
     located.span,

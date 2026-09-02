@@ -86,7 +86,12 @@
  *      the scheduling history of the card that used to sit in its slot. An
  *      ordinal scoped to the anchor moves only when cards are inserted under
  *      *that* anchor, which is a far smaller blast radius and is what
- *      `instrument-id.spec.ts` pins.
+ *      `instrument-id.spec.ts` pins. **`ol-8ae9`:** the caller (`enumerate.ts`) computes this
+ *      count as the instrument's position among every instrument under the heading, whether or
+ *      not a given one has already moved to its own block-id anchor — a sibling's stamp must
+ *      never vacate the slot it held for this counting purpose, or every higher-ordinal
+ *      instrument under that heading silently shifts and gets a different id on the next walk.
+ *      This module still just receives the resulting `ordinal`; it does not compute it.
  *
  * ## The hard constraint: this file itself writes nothing
  *
