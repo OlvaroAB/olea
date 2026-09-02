@@ -51,8 +51,9 @@ export const BULK_REVIEW_STATES: readonly BulkReviewWorkbenchState[] = [
     group: 'bulk-review',
     note:
       'Two source notes, three pending drafts between them (one document carries two — its ' +
-      '"Accept remainder" button is the F3.3/ol-p3t07a batch action, resolving every still-' +
-      'pending item in that group through the identical accept() a single click already uses). ' +
+      '"Accept the rest" button is the F3.3/ol-p3t07a batch action, resolving every still-' +
+      'pending item in that group through the identical accept() a single click already uses, ' +
+      'named with no count per F6.7). ' +
       'Every draft, edit and reject below runs through the REAL DraftAcceptPort — an accept ' +
       'genuinely materializes an MCQ block into the synthetic vault and appends a real verdict ' +
       'record; nothing here is a rendered mock.',

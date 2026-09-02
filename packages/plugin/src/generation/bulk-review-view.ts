@@ -14,9 +14,20 @@
  * row offers exactly Accept / Edit before saving / Reject, the same three
  * outcomes `review/view.ts`'s new-badge header offers at first presentation,
  * reached through the identical `BulkReviewController` methods that call the
- * identical `DraftAcceptPort` — plus one batch action per group, "Accept
- * remainder", named directly by `ol-p3t07a`'s own acceptance bar ("clearing
- * 40 drafts from one deck must take minutes").
+ * identical `DraftAcceptPort` — plus one batch action per group, resolving
+ * the whole group through the same `accept()` a single click already uses
+ * (`ol-p3t07a`'s own acceptance bar: "clearing 40 drafts from one deck must
+ * take minutes").
+ *
+ * **The batch action and the empty state name no count (F6.7, F3.3;
+ * `ol-0r92.30` / `ol-l5og.15`).** F6.7 forbids a standalone number of
+ * material she has not yet met, and F3.3 calls bulk review "the same action
+ * at a second density, never a second mental model" — so nothing here may
+ * read as a queue with a debt to clear. The batch button is labelled "Accept
+ * the rest", naming the action without counting what it resolves; the empty
+ * state states what is here (nothing) rather than what is "waiting for
+ * review". Neither the group header nor the empty state may reintroduce a
+ * remaining-items count.
  *
  * **Click-only this round, disclosed (`ol-uxk9`).** No keyboard binding
  * exists for any control here yet. `keymap.ts`'s Q6.5 promise ("every
@@ -121,7 +132,7 @@ export class BulkReviewView extends ItemView {
     if (vm.groups.length === 0) {
       root.createEl('p', {
         cls: 'olea-bulk-review-empty',
-        text: 'No drafts waiting for review.',
+        text: 'Nothing here to review right now.',
       });
       return;
     }
@@ -150,7 +161,7 @@ export class BulkReviewView extends ItemView {
 
     const remainderBtn = header.createEl('button', {
       cls: 'olea-bulk-review-remainder',
-      text: `Accept remainder (${items.length})`,
+      text: 'Accept the rest',
     });
     this.registerDomEvent(remainderBtn, 'click', () => {
       void this.run((controller) => controller.acceptRemainder(sourcePath).then(() => undefined));

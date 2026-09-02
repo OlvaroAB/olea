@@ -77,14 +77,14 @@ test('bulk-review-two-groups: "Edit before saving" hand-off is recorded (F3.3\'s
   await expect(page.locator('[data-wb-inspector]')).toContainText('Edit hand-off recorded for');
 });
 
-test("bulk-review-two-groups: Accept remainder resolves every still-pending item in one group (ol-p3t07a's batch action)", async ({
+test("bulk-review-two-groups: Accept the rest resolves every still-pending item in one group (ol-p3t07a's batch action, no count named — F6.7)", async ({
   page,
 }) => {
   await gotoState(page, 'bulk-review', 'bulk-review-two-groups', 'obsidian-dark');
   const first = groups(page).nth(0);
   await expect(itemsIn(first)).toHaveCount(2);
 
-  await first.getByRole('button', { name: /Accept remainder/ }).click();
+  await first.getByRole('button', { name: 'Accept the rest' }).click();
 
   // The whole group is gone; the other group, untouched.
   await expect(groups(page)).toHaveCount(1);
@@ -96,6 +96,6 @@ test('bulk-review-empty: the honest empty state, never a bare unexplained blank 
   await gotoState(page, 'bulk-review', 'bulk-review-empty', 'obsidian-dark');
   await expect(groups(page)).toHaveCount(0);
   await expect(frame(page).locator('.olea-bulk-review-empty')).toContainText(
-    'No drafts waiting for review.',
+    'Nothing here to review right now.',
   );
 });
