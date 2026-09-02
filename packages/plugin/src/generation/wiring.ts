@@ -24,6 +24,17 @@
  * fresh on every tick — the same "read whatever is current, not a value
  * captured at construction" posture `composeReviewSession` already uses for
  * `this.review.plan` and the draft cache.
+ *
+ * **`sweep`'s `formatMatch` parameter (`ol-v7r5.37`, F4.8/`[D-188]`), taken
+ * at call time for the identical reason `routing` above is.** `pipeline.ts`'s
+ * own `GenerationPipelineDeps.formatMatch` doc names `main.ts` as the
+ * composition root for this ("assembling this from her actual assignments
+ * table plus classified past-paper/instructor material"), and `main.ts`'s
+ * only path into `runGenerationSweep`'s deps is this `sweep` call — so
+ * without threading it through here, `generation/format-match.ts`'s
+ * `buildFormatMatch` producer has no way to reach production regardless of
+ * what `main.ts` composes. Omitted or `undefined` preserves the pre-
+ * `ol-v7r5.37` behaviour exactly, the same as `routing` above.
  */
 
 import type { ConceptRecord, ExtractedUnit, VaultSource } from 'olea-core';
@@ -33,6 +44,7 @@ import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
 import { createDraftAcceptPort } from './accept.js';
 import { createVaultDraftCacheStore, type DraftCacheStore } from './cache-store.js';
+import type { FormatMatchDecision } from './pipeline.js';
 import { type GenerationSweepReport, runGenerationSweep } from './pipeline.js';
 import type { GenerationRoutingDeps } from './routing.js';
 
@@ -63,6 +75,7 @@ export interface GenerationWiring {
     units: readonly ExtractedUnit[],
     draftDeps: DraftQuizCardsDeps | null,
     routing?: GenerationRoutingDeps,
+    formatMatch?: (courseCode: string) => FormatMatchDecision | undefined,
   ): Promise<GenerationSweepReport | null>;
 }
 
@@ -83,7 +96,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
   return {
     cache,
     acceptPort,
-    async sweep(units, draftDeps, routing) {
+    async sweep(units, draftDeps, routing, formatMatch) {
       if (draftDeps === null) return null;
       if (units.length === 0) return null;
       return runGenerationSweep(units, {
@@ -93,6 +106,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
         listConceptsForCourse,
         coursesFolder,
         ...(routing !== undefined ? { routing } : {}),
+        ...(formatMatch !== undefined ? { formatMatch } : {}),
       });
     },
   };

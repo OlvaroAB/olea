@@ -68,6 +68,7 @@ import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
 import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
+import { buildFormatMatch, type FormatMatchDecision } from './generation/format-match.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
   type AcceptExplainBackGradingWithObservationContext,
@@ -1783,12 +1784,41 @@ export default class OleaPlugin extends Plugin {
   private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
     if (this.generation === null) return;
     try {
-      await this.generation.sweep(units, this.draftQuizCardsDeps(), {
-        classifier: this.knowledgeKind?.classifier ?? null,
-      });
+      const formatMatch = await this.buildFormatMatchProducer();
+      await this.generation.sweep(
+        units,
+        this.draftQuizCardsDeps(),
+        { classifier: this.knowledgeKind?.classifier ?? null },
+        formatMatch,
+      );
     } catch (error) {
       console.error('Olea: generation sweep failed', error);
     }
+  }
+
+  /**
+   * `ol-v7r5.37`'s production `deps.formatMatch` (F4.8, `[D-188]`):
+   * `generation/format-match.ts`'s `buildFormatMatch`, given a fresh
+   * `ObsidianSource` and whatever her assignments table currently holds — the
+   * same `ObsidianStudyPlanSettingsStore`/`isStudyPlanConfigured`/
+   * `readAssessments` join `buildReviewSessionInput` already uses for F2.19,
+   * read fresh here for the identical reason `draftQuizCardsDeps` and the
+   * routing classifier below are read fresh per tick rather than once at
+   * `onload`. Returns `() => undefined` for every course — never `null` —
+   * when study-plan settings are not configured yet, so an unconfigured
+   * assignments Base degrades to exactly the pre-`ol-v7r5.37` behaviour
+   * (`purpose`/`registerHint` both absent) rather than throwing into
+   * `onUnitsLanded`'s own `try`.
+   */
+  private async buildFormatMatchProducer(): Promise<
+    (courseCode: string) => FormatMatchDecision | undefined
+  > {
+    const vault = new ObsidianSource(this.app);
+    const assignmentsConfig = await new ObsidianStudyPlanSettingsStore(this).load();
+    if (!isStudyPlanConfigured(assignmentsConfig)) return () => undefined;
+    const assessments = (await readAssessments(vault, assignmentsConfig.assignmentsBasePath))
+      .records;
+    return buildFormatMatch({ vault, assessments, now: () => new Date() });
   }
 
   /**
