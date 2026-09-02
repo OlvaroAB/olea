@@ -6,7 +6,7 @@
  * real, Obsidian-backed implementations.
  */
 
-import type { Rating, SelectionContextV4 } from 'olea-contracts';
+import type { ExplainBackOfferTrigger, Rating, SelectionContextV4 } from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
 // `masteryAtTimeForConceptIds` (C5.4's rollup) had no consumer outside core
 // and `packages/workbench` until this bead (`ol-rpr4`), so nothing had ever
@@ -17,6 +17,7 @@ import type { VaultSource } from 'olea-core';
 // this was the only one of the plugin's 43 core imports reaching past the
 // barrel. A deep import here would also let the module be bundled twice.
 import {
+  appendExplainBackOfferRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
   masteryAtTimeForConceptIds,
@@ -221,6 +222,97 @@ export function createVaultSuspendPort(vault: VaultSource, deviceId: string): Su
         },
         { deviceId },
       );
+    },
+  };
+}
+
+/**
+ * The offer/decline half of an F2.12 (or a future F5.3a) explain-back offer
+ * (`[D-178 / LOG-3]` item 2, `ol-0r92.28`) — a caller supplies which concepts
+ * and trigger the offer concerned, and, present exactly on `instrumentId`,
+ * which instrument routed to it.
+ */
+export interface ExplainBackOfferWriteInput {
+  readonly conceptIds: readonly string[];
+  readonly trigger: ExplainBackOfferTrigger;
+  readonly instrumentId?: string;
+}
+
+/**
+ * Records that an explain-back was offered, and — separately — that the
+ * offer left the surface unaccepted (`[D-178 / LOG-3]` item 2). Both methods
+ * are synchronous and fire the vault write in the background rather than
+ * returning a `Promise` a caller must await: `view.ts`'s
+ * `syncConfusionRoutingOffer` runs inside the synchronous `render()` path
+ * (`ol-0r92.28`), and cannot block a re-render on a log write no screen ever
+ * shows her the result of.
+ *
+ * **Why `recordOffered` returns the event id rather than nothing.** A
+ * decline that goes untaken has to name the offer it answers
+ * (`ExplainBackOfferLogRecordV5`'s pairing rule) — the id has to be on hand
+ * the instant the offer is recorded, well before the (or if the) vault write
+ * actually lands, so the caller can hold it and pass it back to
+ * `recordDeclined` if the offer is later left unaccepted.
+ */
+export interface ExplainBackOfferLogPort {
+  /** Fires the `explain-back-offered` write; returns its event id synchronously. */
+  recordOffered(input: ExplainBackOfferWriteInput): string;
+  /**
+   * Fires the paired `explain-back-declined` write. `manner` is always
+   * `'not-taken'` here — F2.12's banner offers one action and simply clears
+   * itself (`view.ts`'s `syncConfusionRoutingOffer` doc); there is no
+   * dismiss control to produce `'dismissed'` from (F2.14a).
+   */
+  recordDeclined(input: ExplainBackOfferWriteInput & { readonly answers: string }): void;
+}
+
+/**
+ * The real `ExplainBackOfferLogPort`: `olea-core`'s `appendExplainBackOfferRecord`
+ * over a `VaultSource`, mirroring `createVaultReviewLogPort`/
+ * `createVaultSuspendPort` above except for the fire-and-forget shape their
+ * doc explains. A write failure is reported, never thrown into `render()` —
+ * same "best-effort, log and move on" posture `main.ts`'s
+ * `registryOverridesCache` load already takes for a background failure
+ * nothing else can act on.
+ */
+export function createVaultExplainBackOfferLogPort(
+  vault: VaultSource,
+  deviceId: string,
+): ExplainBackOfferLogPort {
+  function report(error: unknown): void {
+    console.error('Olea: could not record explain-back offer', error);
+  }
+
+  return {
+    recordOffered(input) {
+      const eventId = globalThis.crypto.randomUUID();
+      void appendExplainBackOfferRecord(
+        vault,
+        {
+          kind: 'explain-back-offered',
+          timestamp: isoWithLocalOffset(new Date()),
+          conceptIds: [...input.conceptIds],
+          trigger: input.trigger,
+          ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),
+        },
+        { deviceId, generateEventId: () => eventId },
+      ).catch(report);
+      return eventId;
+    },
+    recordDeclined(input) {
+      void appendExplainBackOfferRecord(
+        vault,
+        {
+          kind: 'explain-back-declined',
+          timestamp: isoWithLocalOffset(new Date()),
+          conceptIds: [...input.conceptIds],
+          trigger: input.trigger,
+          ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),
+          answers: input.answers,
+          manner: 'not-taken',
+        },
+        { deviceId },
+      ).catch(report);
     },
   };
 }

@@ -132,6 +132,14 @@ interface ConfusionBannerState {
   readonly instrument: ReviewInstrument;
   readonly promptText: string;
   readonly presentedWithInstrumentId: string | null;
+  /**
+   * The event id `ReviewSession.recordExplainBackOfferShown` returned when
+   * this offer arrived (`[D-178 / LOG-3]` item 2, `ol-0r92.28`) — held so a
+   * later decline can name it via `answers`. `null` when no
+   * `explainBackOfferLog` port is wired; the paired decline write is then
+   * skipped rather than naming nothing.
+   */
+  readonly offerEventId: string | null;
 }
 
 /**
@@ -793,6 +801,19 @@ export class ReviewView extends ItemView {
    * and advancing to the next — the banner clears on its own, whether or not
    * she ever touched it. That is what "declining changes nothing and does
    * not nag" means operationally: nothing to undo, and nothing that lingers.
+   *
+   * **The D7.1 pair this now writes (`[D-178 / LOG-3]` item 2, `ol-0r92.28`).**
+   * The offer-arrives branch below calls
+   * `session.recordExplainBackOfferShown` the moment a fresh offer is
+   * accepted onto `this.confusionBanner`, and holds the event id it returns.
+   * The clears-unaccepted branch calls `session.recordExplainBackOfferDeclined`
+   * with that same id, immediately before clearing the banner — never when
+   * `handleAcceptConfusionOffer` clears it instead, since accepting is not a
+   * decline (an accepted offer is evidenced by the `explain-back` review
+   * record it produces, not by this pair). Both calls go through the session,
+   * never `this` reaching for a vault port directly — the same "thread it
+   * through session deps" seam `recordReview` already uses — and neither is
+   * awaited: a log write must not block this synchronous `render()` path.
    */
   private syncConfusionRoutingOffer(session: ReviewSession): void {
     const offer: PendingConfusionRoutingOffer | null = session.getConfusionRoutingOffer();
@@ -806,6 +827,7 @@ export class ReviewView extends ItemView {
         instrument: offer.instrument,
         promptText: offer.promptText,
         presentedWithInstrumentId: currentInstrumentId,
+        offerEventId: session.recordExplainBackOfferShown(offer.instrument),
       };
       return;
     }
@@ -813,6 +835,10 @@ export class ReviewView extends ItemView {
       this.confusionBanner !== null &&
       this.confusionBanner.presentedWithInstrumentId !== currentInstrumentId
     ) {
+      session.recordExplainBackOfferDeclined(
+        this.confusionBanner.instrument,
+        this.confusionBanner.offerEventId,
+      );
       this.confusionBanner = null;
     }
   }
@@ -844,6 +870,12 @@ export class ReviewView extends ItemView {
    * for (hand-off, never a second inline copy — `[D-163]`'s own wording).
    * `session.resolveConfusionRoutingOffer` only clears session-side state; it
    * performs no port call, unlike the method it replaces.
+   *
+   * **Sets `this.confusionBanner = null` directly, never through
+   * `session.recordExplainBackOfferDeclined`** (`[D-178 / LOG-3]` item 2):
+   * accepting is not a decline. By the time `syncConfusionRoutingOffer` next
+   * runs, `this.confusionBanner` is already `null`, so its clears-unaccepted
+   * branch — the only call site for that write — never fires for this path.
    */
   private handleAcceptConfusionOffer(): void {
     const session = this.session;

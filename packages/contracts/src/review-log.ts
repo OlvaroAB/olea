@@ -179,7 +179,23 @@ export type MasteryState = z.infer<typeof masteryState>;
  * and the Phase B comparison the same shape.
  */
 export const selectionContext = z.object({
-  /** Whether the instrument was actually due, or drawn early/late. */
+  /**
+   * Whether the instrument was actually due, or drawn early/late.
+   *
+   * **The `explain-back` borrowed-value convention (`[D-178 / LOG-3]` item
+   * 3).** An explain-back attempt is never FSRS-scheduled (F2.14 rules it
+   * out of the schedule outright; F2.14a re-confirms it as a *trigger*, not
+   * a queue item), so none of the four honest values applies to one. A
+   * writer that must still supply this field borrows `'new'`, meaning only
+   * *this item was not previously scheduled* — never a claim that it was
+   * ever due, and never scheduling evidence a reader may draw an inference
+   * from. This is a stated convention, not something the value's ordinary
+   * meaning implies on its own, and it is provisional: the honest
+   * representation is settled when the allocation/session-scheduling design
+   * lands, or when F2.12 routing writes its first production record,
+   * whichever comes first (the proposal's own hold, unchanged by this
+   * comment).
+   */
   dueState: z.enum(['due', 'overdue', 'early', 'new']),
   /** Days to the nearest relevant assessment; null when unknown or none. */
   examProximity: z.number().int().nullable(),

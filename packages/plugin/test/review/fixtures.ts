@@ -10,6 +10,8 @@ import { vi } from 'vitest';
 import type { DraftAcceptPort } from '../../src/generation/accept.js';
 import type {
   EditPort,
+  ExplainBackOfferLogPort,
+  ExplainBackOfferWriteInput,
   NoteExistsPort,
   RecordReviewInput,
   ReviewLogPort,
@@ -167,6 +169,36 @@ export function fakeSuspendPort(): SuspendPort & { readonly calls: FakeSuspendCa
     calls,
     suspend: vi.fn(async (instrumentId: string, conceptIds: readonly string[]) => {
       calls.push({ instrumentId, conceptIds });
+    }),
+  };
+}
+
+/**
+ * Fake `ExplainBackOfferLogPort` (`[D-178 / LOG-3]` item 2, `ol-0r92.28`).
+ * `recordOffered` mints a deterministic, incrementing event id — same
+ * "distinct so tests can assert on which one fired" reasoning
+ * `fakeScheduler`'s per-rating intervals use — so a test can assert a
+ * decline's `answers` names the SAME id its paired offer produced, without
+ * either call being awaited (the real port's whole point, per its own doc).
+ */
+export function fakeExplainBackOfferLog(): ExplainBackOfferLogPort & {
+  readonly offered: (ExplainBackOfferWriteInput & { readonly eventId: string })[];
+  readonly declined: (ExplainBackOfferWriteInput & { readonly answers: string })[];
+} {
+  const offered: (ExplainBackOfferWriteInput & { readonly eventId: string })[] = [];
+  const declined: (ExplainBackOfferWriteInput & { readonly answers: string })[] = [];
+  let nextEventId = 0;
+  return {
+    offered,
+    declined,
+    recordOffered: vi.fn((input: ExplainBackOfferWriteInput) => {
+      nextEventId += 1;
+      const eventId = `explain-back-offer-event-${nextEventId}`;
+      offered.push({ ...input, eventId });
+      return eventId;
+    }),
+    recordDeclined: vi.fn((input: ExplainBackOfferWriteInput & { readonly answers: string }) => {
+      declined.push({ ...input });
     }),
   };
 }

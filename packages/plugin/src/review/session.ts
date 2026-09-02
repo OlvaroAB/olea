@@ -33,7 +33,14 @@ import {
   type ExplainWhyPort,
 } from './explainWhy.js';
 import { previewQaClozeIntervals, previewSingleInterval, type RatingPreview } from './interval.js';
-import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
+import type {
+  Clock,
+  EditPort,
+  ExplainBackOfferLogPort,
+  NoteExistsPort,
+  ReviewLogPort,
+  SuspendPort,
+} from './ports.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
 
 export interface ReviewProgress {
@@ -176,6 +183,18 @@ export interface ReviewSessionDeps {
    * built from — no second vault walk.
    */
   readonly stampOnFirstSight?: StampOnFirstSightPort;
+  /**
+   * The D7.1 write path for F2.12's explain-back offer and its paired
+   * decline (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). Optional and absent by
+   * default, same "simply cannot offer it" posture every other optional
+   * port here has — but degrades to "the banner still renders and just
+   * writes nothing," the same shape `stampOnFirstSight`'s absence takes,
+   * never to "never offer": a session with no writer wired can still show
+   * her the offer, exactly as it always could before this bead.
+   * `open-session.ts`'s `createVaultExplainBackOfferLogPort` (`ports.ts`) is
+   * the only production composer.
+   */
+  readonly explainBackOfferLog?: ExplainBackOfferLogPort;
 }
 
 /**
@@ -523,6 +542,48 @@ export class ReviewSession {
     if (offer === null) return null;
     this.pendingConfusionOffer = null;
     return offer;
+  }
+
+  /**
+   * The D7.1 write for an F2.12 offer the instant it reaches the surface
+   * (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). `view.ts`'s
+   * `syncConfusionRoutingOffer` calls this from its offer-arrives branch and
+   * holds the returned event id, so a later decline (below) can name it —
+   * never the caller reaching for `deps.explainBackOfferLog` directly, the
+   * same "thread it through session deps" seam `recordReview` already uses.
+   *
+   * `null` when no `explainBackOfferLog` port is wired: the banner still
+   * renders (this method has no bearing on `pendingConfusionOffer`), and a
+   * `null` return here is exactly what the paired `recordExplainBackOfferDeclined`
+   * treats as "nothing to pair" and skips.
+   */
+  recordExplainBackOfferShown(instrument: ReviewInstrument): string | null {
+    if (this.deps.explainBackOfferLog === undefined) return null;
+    return this.deps.explainBackOfferLog.recordOffered({
+      conceptIds: instrument.conceptIds,
+      trigger: 'repeated-failure',
+      instrumentId: instrument.instrumentId,
+    });
+  }
+
+  /**
+   * The paired write for an F2.12 offer that left the surface unaccepted
+   * (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). `offerEventId` is whatever
+   * `recordExplainBackOfferShown` returned for the SAME offer — `null` means
+   * there was nothing to pair (no port wired, or the offered write never
+   * happened), so this is a no-op rather than a decline naming nothing.
+   * `view.ts`'s `syncConfusionRoutingOffer` calls this from its
+   * clears-unaccepted branch, the same "one call site each" split its own
+   * doc describes for the offer/decline pair.
+   */
+  recordExplainBackOfferDeclined(instrument: ReviewInstrument, offerEventId: string | null): void {
+    if (this.deps.explainBackOfferLog === undefined || offerEventId === null) return;
+    this.deps.explainBackOfferLog.recordDeclined({
+      conceptIds: instrument.conceptIds,
+      trigger: 'repeated-failure',
+      instrumentId: instrument.instrumentId,
+      answers: offerEventId,
+    });
   }
 
   /**

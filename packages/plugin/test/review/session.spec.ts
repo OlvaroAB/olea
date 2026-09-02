@@ -13,6 +13,7 @@ import {
   clozeFixture,
   fakeDraftAcceptPort,
   fakeEditPort,
+  fakeExplainBackOfferLog,
   fakeNoteExists,
   fakeReviewLog,
   fakeScheduler,
@@ -613,6 +614,80 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
 
     expect(session.resolveConfusionRoutingOffer()).not.toBeNull();
     expect(session.resolveConfusionRoutingOffer()).toBeNull();
+  });
+});
+
+describe('D-178 / LOG-3 item 2 — the F2.12 explain-back-offer write, threaded through session deps (ol-0r92.28)', () => {
+  it('recordExplainBackOfferShown writes trigger repeated-failure with the instrument’s own conceptIds and instrumentId, and returns the port’s event id', async () => {
+    const instrument = qaFixture({
+      instrumentId: 'inst-qa-9',
+      conceptIds: ['concept-a', 'concept-b'],
+    });
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const eventId = session.recordExplainBackOfferShown(instrument);
+
+    expect(eventId).toBe(explainBackOfferLog.offered[0]?.eventId);
+    expect(explainBackOfferLog.offered).toEqual([
+      {
+        conceptIds: ['concept-a', 'concept-b'],
+        trigger: 'repeated-failure',
+        instrumentId: 'inst-qa-9',
+        eventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined).toEqual([]);
+  });
+
+  it('recordExplainBackOfferDeclined pairs with the SAME event id via `answers`, manner is always not-taken (F2.12 has no dismiss control)', async () => {
+    const instrument = qaFixture({ instrumentId: 'inst-qa-9', conceptIds: ['concept-a'] });
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offerEventId = session.recordExplainBackOfferShown(instrument);
+    session.recordExplainBackOfferDeclined(instrument, offerEventId);
+
+    expect(explainBackOfferLog.declined).toEqual([
+      {
+        conceptIds: ['concept-a'],
+        trigger: 'repeated-failure',
+        instrumentId: 'inst-qa-9',
+        answers: offerEventId,
+      },
+    ]);
+    // Naming the offer's own id, never a fresh or empty one.
+    expect(explainBackOfferLog.declined[0]?.answers).toBe(explainBackOfferLog.offered[0]?.eventId);
+  });
+
+  it('with no explainBackOfferLog port wired, recordExplainBackOfferShown returns null and writes nothing — the offer can still render (same posture stampOnFirstSight’s absence takes)', async () => {
+    const session = new ReviewSession(baseDeps());
+    await session.start();
+
+    expect(session.recordExplainBackOfferShown(qaFixture())).toBeNull();
+  });
+
+  it('recordExplainBackOfferDeclined is a no-op when offerEventId is null — never a decline naming nothing', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    session.recordExplainBackOfferDeclined(qaFixture(), null);
+
+    expect(explainBackOfferLog.declined).toEqual([]);
+  });
+
+  it('recordExplainBackOfferDeclined is a no-op with no port wired, even given a non-null id', async () => {
+    const session = new ReviewSession(baseDeps());
+    await session.start();
+
+    // Nothing to assert on but that this does not throw — there is no port
+    // to have recorded a call in the first place.
+    expect(() =>
+      session.recordExplainBackOfferDeclined(qaFixture(), 'some-event-id'),
+    ).not.toThrow();
   });
 });
 

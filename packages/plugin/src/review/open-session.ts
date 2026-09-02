@@ -84,7 +84,14 @@ import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.
 import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
-import type { Clock, EditPort, NoteExistsPort, ReviewLogPort, SuspendPort } from './ports.js';
+import type {
+  Clock,
+  EditPort,
+  ExplainBackOfferLogPort,
+  NoteExistsPort,
+  ReviewLogPort,
+  SuspendPort,
+} from './ports.js';
 import { adaptExecutedReviewQueue, buildSupportLevelHistoryLookup } from './queue-adapter.js';
 import { ReviewSession } from './session.js';
 
@@ -117,6 +124,17 @@ export interface ReviewSessionPorts {
    * ports above.
    */
   readonly gradeContestPort?: GradeContestPort;
+  /**
+   * The D7.1 write path for F2.12's explain-back offer and its paired
+   * decline (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). Optional; absent means
+   * the offer still renders and simply writes nothing — same posture
+   * `ReviewSessionDeps.explainBackOfferLog` documents, threaded straight
+   * through. `ports.ts`'s `createVaultExplainBackOfferLogPort(vault,
+   * deviceId)` is the real implementation; wiring it into this field is the
+   * caller's job (`main.ts`, alongside `reviewLog`/`suspendPort` a few lines
+   * above it), not this module's.
+   */
+  readonly explainBackOfferLog?: ExplainBackOfferLogPort;
 }
 
 export interface OpenReviewSessionInput {
@@ -291,6 +309,9 @@ export async function openReviewSession(
         ? { evaluateConfusionRouting: input.ports.evaluateConfusionRouting }
         : {}),
       ...(input.ports.gradeContestPort ? { gradeContestPort: input.ports.gradeContestPort } : {}),
+      ...(input.ports.explainBackOfferLog
+        ? { explainBackOfferLog: input.ports.explainBackOfferLog }
+        : {}),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
