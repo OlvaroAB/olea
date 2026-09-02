@@ -578,6 +578,10 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
       noteOfferAccepts.push(entry);
     },
+    // [D-183] (ol-2zfj.58): no workbench state raises a rename proposal yet, so
+    // both halves are inert here; a future registry tranche adds the state.
+    async acceptRenameProposal(): Promise<void> {},
+    async declineRenameProposal(): Promise<void> {},
   };
 
   return { stateId, deps, editHandoffs, sourceOpens, noteOfferAccepts };
