@@ -436,16 +436,29 @@ export class ReviewSession {
   }
 
   /**
-   * `[D-097]`'s "answering it is accepting it" for an MCQ new-badge item: a
-   * still-pending draft is materialized into the vault (real `instrumentId`
-   * minted) BEFORE anything else below runs, so the interval preview and the
-   * eventual `logAndAdvance` both operate on the real instrument, never the
-   * transient draft-id stand-in (`generation/review-adapter.ts`'s doc).
-   * A no-op resolution (same item back) for an ordinary instrument.
+   * Picking an option does NOT resolve a still-pending draft — mirroring
+   * how `rate()` defers Q&A/cloze's resolution all the way to the tap that
+   * actually leaves the reveal. `draftId` stays set on the item straight
+   * through `mcq-answered`, so the header's reveal-gated draft pair (edit-
+   * before-saving, reject — `view.ts`, `screen.kind === 'mcq-answered'`)
+   * renders instead of the ordinary edit/suspend pair (`ol-0r92.42`,
+   * `[D-189]`). Resolving here instead nulled `draftId` before that
+   * viewmodel was built, which is exactly the bug this method used to have:
+   * the reveal showed edit-and-suspend, and neither `acceptEditDraft` nor
+   * `rejectDraft` could do anything because both no-op once `draftId` is
+   * null.
+   *
+   * The interval preview below runs against the transient draft-id
+   * stand-in (`generation/review-adapter.ts`'s doc) when the item is still
+   * a draft — harmless, because `scheduler.schedule` is pure over
+   * `{ instrumentId, state, rating, now }` and never looks the id up
+   * anywhere; the label is identical either way. `mcqNext` is what
+   * actually materializes an accepted draft, exactly once, right before
+   * `logAndAdvance` needs the real id for the write.
    */
   async mcqAnswer(optionIndex: number): Promise<void> {
     if (this.phase !== 'mcq-open') return;
-    const item = await this.resolveDraftAt(this.index, 'accepted');
+    const item = this.requireCurrent();
     const instrument = this.requireMcq(item);
     if (optionIndex < 0 || optionIndex >= instrument.options.length) return;
     this.mcqSelectedIndex = optionIndex;
@@ -538,9 +551,21 @@ export class ReviewSession {
     this.contestedGrades.add(instrument.instrumentId);
   }
 
+  /**
+   * The MCQ side of `[D-097]`'s "answering it is accepting it": a still-
+   * pending draft is materialized here — real `instrumentId` minted, same
+   * `resolveDraftAt` call `rate()` makes for Q&A/cloze — before
+   * `logAndAdvance` writes anything, so the review log and scheduler both
+   * key on the real instrument, never the transient draft-id stand-in.
+   * A no-op resolution (same item back) for an ordinary instrument.
+   * `acceptEditDraft`/`rejectDraft` already carried their own verdicts by
+   * the time this can run, since both remove or resolve the draft (and, for
+   * reject, splice the item out of the queue) before she ever reaches
+   * `mcq-next` — this is reached only on passive accept.
+   */
   async mcqNext(): Promise<void> {
     if (this.phase !== 'mcq-answered') return;
-    const item = this.requireCurrent();
+    const item = await this.resolveDraftAt(this.index, 'accepted');
     const instrument = this.requireMcq(item);
     const rating = this.mcqRating(instrument, this.mcqSelectedIndex);
     await this.logAndAdvance(item, rating, this.wasUnsure);

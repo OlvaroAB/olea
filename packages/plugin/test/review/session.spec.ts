@@ -1064,6 +1064,15 @@ describe('[D-189] (ol-0r92.36) — editing a draft is authorship, never scored',
     await session.start();
     expect(session.getViewModel().phase).toBe('mcq-open');
 
+    // Genuinely mid-answer (`ol-0r92.42`, `[D-189]`): she has already picked
+    // an option and is looking at the reveal, not the un-tapped mcq-open
+    // screen. Before that bug's fix, `mcqAnswer` resolved the draft eagerly,
+    // so `draftId` was already null here and this assertion would have
+    // passed for the wrong reason — `acceptEditDraft`'s own guard no-opping
+    // rather than it doing the work the title claims.
+    await session.mcqAnswer(0);
+    expect(session.getViewModel().phase).toBe('mcq-answered');
+
     await session.acceptEditDraft();
 
     expect(draftAcceptPort.calls).toEqual([
@@ -1086,5 +1095,87 @@ describe('[D-189] (ol-0r92.36) — editing a draft is authorship, never scored',
     await session.rate('good');
 
     expect(reviewLog.calls).toHaveLength(1);
+  });
+});
+
+describe('[D-189] (ol-0r92.42) — MCQ passive-accept resolution defers to mcqNext, mirroring rate()', () => {
+  // The bug: `mcqAnswer` used to resolve a still-pending draft the instant
+  // she picked an option, nulling `draftId` before the `mcq-answered`
+  // viewmodel was built. That made the reveal-gated draft pair (edit-
+  // before-saving, reject) invisible — she saw the ordinary edit/suspend
+  // pair instead, for the one instrument kind that actually had a draft to
+  // act on. The fix mirrors how Q&A/cloze already defer `resolveDraftAt` to
+  // `rate()`: `mcqAnswer` leaves the draft alone, and `mcqNext` — reached
+  // only on passive accept, since reject and edit-before-saving resolve the
+  // draft with their own verdicts first and never reach `mcqNext` for that
+  // item — is where accept happens.
+
+  it('draftId is still set at mcq-answered — picking an option does not resolve the draft', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const session = new ReviewSession(baseDeps({ queue: [item], draftAcceptPort }));
+    await session.start();
+
+    await session.mcqAnswer(0);
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('mcq-answered');
+    if (vm.phase === 'mcq-answered') expect(vm.instrument.draftId).toBe('draft-mcq-1');
+    expect(draftAcceptPort.calls).toEqual([]);
+  });
+
+  it('mcqNext resolves the draft as accepted, and the review log carries the materialized instrument', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort((draftId) => `resolved:${draftId}`);
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], draftAcceptPort, reviewLog }));
+    await session.start();
+    await session.mcqAnswer(0); // the fixture's correct option
+
+    await session.mcqNext();
+
+    expect(draftAcceptPort.calls).toEqual([
+      { kind: 'accept', draftId: 'draft-mcq-1', verdict: 'accepted' },
+    ]);
+    expect(reviewLog.calls).toHaveLength(1);
+    expect(reviewLog.calls[0]?.instrument.instrumentId).toBe('resolved:draft-mcq-1');
+    expect(reviewLog.calls[0]?.rating).toBe('good');
+  });
+
+  it('reject at the reveal rejects the draft and does not accept it — mcqNext is never reached for this item', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], draftAcceptPort, reviewLog }));
+    await session.start();
+    await session.mcqAnswer(0);
+    expect(session.getViewModel().phase).toBe('mcq-answered');
+
+    await session.rejectDraft();
+
+    expect(draftAcceptPort.calls).toEqual([{ kind: 'reject', draftId: 'draft-mcq-1' }]);
+    expect(reviewLog.calls).toEqual([]);
+    expect(session.getViewModel().phase).toBe('complete');
+  });
+
+  it('edit-before-saving at the reveal resolves the draft as edited and writes no rating', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const editPort = fakeEditPort();
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], draftAcceptPort, editPort, reviewLog }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    expect(session.getViewModel().phase).toBe('mcq-answered');
+
+    await session.acceptEditDraft();
+
+    expect(draftAcceptPort.calls).toEqual([
+      { kind: 'accept', draftId: 'draft-mcq-1', verdict: 'edited' },
+    ]);
+    expect(editPort.calls).toHaveLength(1);
+    expect(reviewLog.calls).toEqual([]);
   });
 });
