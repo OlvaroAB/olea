@@ -28,6 +28,35 @@
  * kind of write `ol-h3wy`'s bug report describes finishing a session as — and
  * differ in exactly one line: whether `view.refresh()` runs afterward. That
  * is the whole bug, and the whole fix, in one boolean.
+ *
+ * ## Three more states, `ol-z6x2` [WB-2]
+ *
+ * `today-after-reentry` (F6.6), `today-encouragement-off` (F6.8) and
+ * `today-term-dates-pointer` (F6.9) follow the same two postures already
+ * established above rather than adding a third: `today-after-reentry` is a
+ * real-vault write-back, same family as `today-after-writing`, just a
+ * smaller one; `today-encouragement-off` and `today-term-dates-pointer`
+ * share one hand-built rhythm-quiet composition (same technique
+ * `today-rhythm-quiet` already uses) and differ in exactly one field —
+ * whether `deps.termDatesAsk` is supplied — the same one-boolean contrast
+ * `today-after-writing`/`today-stale` draw for `refresh()`.
+ *
+ * **`today-encouragement-off` is honest about what it does not reach.**
+ * F6.8 binds two named surfaces, re-entry composition (F6.6) and
+ * observed-pattern insights (F6.5). Neither is reachable through this
+ * pane's own `#/today/*` route today: `olea-core`'s
+ * `study-session/reentry.ts` has no production caller anywhere in
+ * `packages/plugin` yet (its own module doc says so), and F6.5's insights
+ * section is a separate, synthetic-persona-backed surface on purpose
+ * (`trends-scenarios.ts`'s module doc — "duplicating it here would mean
+ * maintaining a second fiction about what is due"). This state sweeps what
+ * the Today route CAN show — the due count, the streak and the rhythm
+ * reading — for encouragement phrasing, over the real fixture vault; it is
+ * not a demonstration that F6.8's setting exists and is wired to off,
+ * because no such setting exists yet anywhere in this codebase (verified:
+ * no `encouragement` field on `TodayPanelInput`/`TodayViewModel`, no
+ * encouragement string in `today/copy.ts`). "Off" is simply the only state
+ * this pane can currently exhibit.
  */
 
 import type { Rating } from 'olea-contracts';
@@ -44,6 +73,7 @@ import {
   loadTodayPanel,
   localToday,
   type ReviewQueueItem,
+  readReviewHistory,
   type TodayView,
   type TodayViewDeps,
 } from './plugin-bridge.js';
@@ -145,6 +175,43 @@ export const TODAY_STATES: readonly TodayWorkbenchState[] = [
       'Nothing crosses the threshold, so the rhythm section renders nothing at all: silence is ' +
       'the honest reading here, never a stale quiet-course line left over from another state.',
   },
+  {
+    id: 'today-after-reentry',
+    label: 'After a smaller, re-entry-sized session (F6.6)',
+    group: 'today',
+    note:
+      "F6.6 — 'what accumulated remains available and is never described as lost or expired' " +
+      "(features/F6-today.md, `@manual`). `olea-core`'s `composeReentrySession` has no " +
+      'production caller yet (its own module doc), so this state does not fabricate a ' +
+      'ReentryStudySessionView; it reproduces the fact the manual scenario is actually about — ' +
+      'she looks at Today afterward. One real review-log record is written (not both offered ' +
+      'items, the way `today-after-writing` writes) and `view.refresh()` runs, standing in for a ' +
+      'small re-entry session against a larger backlog. The due count on screen is the honest ' +
+      'remainder, plainly counted, never zeroed out and never worded as expired or discarded.',
+  },
+  {
+    id: 'today-encouragement-off',
+    label: 'Encouragement — nothing to turn off yet (F6.8)',
+    group: 'today',
+    note:
+      'F6.8 — "turning encouragement off removes it everywhere it could appear" (`@manual`). ' +
+      'Real due count and streak from the fixture vault, plus the same rhythm-quiet reading ' +
+      "today-rhythm-quiet uses, with no `termDatesAsk` supplied. See this file's own module doc " +
+      "for why F6.8's two named surfaces (re-entry composition, F6.5 insights) are not reachable " +
+      "through this route today, and why 'off' is this pane's only reachable state right now.",
+  },
+  {
+    id: 'today-term-dates-pointer',
+    label: 'Rhythm quiet, term dates unasked (F6.9/F7.2, `[D-147]`)',
+    group: 'today',
+    note:
+      "F6.9/F7.2's quiet pointer (`[D-147]`) — the identical rhythm-quiet reading " +
+      "'today-encouragement-off' renders, plus `deps.termDatesAsk` resolving to 'unanswered'. " +
+      '`showsTermDatesPointer` (`copy.ts`) is then true (no term window was ever supplied to ' +
+      'this composition, and the ask state is unanswered), so the pointer draws beside the ' +
+      'quiet finding. Its button is wired to a Notice standing in for opening the real settings ' +
+      'tab — this workbench mounts TodayView directly, with no settings surface to navigate to.',
+  },
 ];
 
 export function findTodayState(id: string): TodayWorkbenchState | undefined {
@@ -160,7 +227,11 @@ export interface TodayScenario {
    * vault and decides whether to call `view.refresh()` — see the module doc.
    */
   readonly afterOpen?: (view: TodayView) => Promise<void>;
-  /** True only for `today-after-writing`: whether `afterOpen` calls `view.refresh()`. */
+  /**
+   * Whether `afterOpen` calls `view.refresh()` — true for `today-after-writing`
+   * and `today-after-reentry`, false for `today-stale` (deliberately, per
+   * `ol-h3wy`) and every state with no write at all.
+   */
   readonly refreshedAfterWrite: boolean;
 }
 
@@ -175,7 +246,11 @@ export interface BuildTodayScenarioOptions {
 
 const RATE_GOOD: Rating = 'good';
 
-/** Coined course code (INV-3) shared by `today-scope-not-declared` and both `today-rhythm-*` states. */
+/**
+ * Coined course code (INV-3) shared by `today-scope-not-declared`, both
+ * `today-rhythm-*` states, and the two states built over
+ * `loadWithQuietRhythm` (`today-encouragement-off`, `today-term-dates-pointer`).
+ */
 const WB_SCOPE_COURSE = 'syn:course:vantrel';
 
 /**
@@ -222,16 +297,13 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
     });
 
   /**
-   * Writes one real review-log record for each of two instruments the
-   * composer actually offered, exactly the way a finished session writes one
-   * (`scenarios.ts`'s own `recordReview`, same shape). This is what "a review
-   * just happened" means to both write-back states; only what happens *after*
-   * the write differs between them.
+   * Writes one real review-log record per item, exactly the way a finished
+   * session writes one (`scenarios.ts`'s own `recordReview`, same shape).
+   * Shared by `writeCompletedReview` (both write-back states) and
+   * `writeReentryReview` (`today-after-reentry`, F6.6) — they differ only in
+   * how many of the composer's offered items they pass.
    */
-  async function writeCompletedReview(): Promise<void> {
-    const items = [queue.qa[0], queue.cloze[0]].filter(
-      (item): item is ReviewQueueItem => item !== undefined,
-    );
+  async function writeReviewRecords(items: readonly ReviewQueueItem[]): Promise<void> {
     for (const item of items) {
       const result = await appendReviewLogRecord(
         vault,
@@ -256,6 +328,60 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       logged.push({ path: result.path, json: JSON.stringify(result.record) });
     }
   }
+
+  /** "A review just happened" for `today-after-writing`/`today-stale`: both offered items. */
+  async function writeCompletedReview(): Promise<void> {
+    await writeReviewRecords(
+      [queue.qa[0], queue.cloze[0]].filter((item): item is ReviewQueueItem => item !== undefined),
+    );
+  }
+
+  /**
+   * F6.6 — "a small session, not a backlog": one item only, standing in for
+   * the reduced slot count a real re-entry composition would offer. See
+   * `today-after-reentry`'s state note for why this writes a real record
+   * rather than calling `composeReentrySession` (no production caller yet).
+   */
+  async function writeReentryReview(): Promise<void> {
+    await writeReviewRecords(
+      [queue.qa[0]].filter((item): item is ReviewQueueItem => item !== undefined),
+    );
+  }
+
+  /**
+   * Shared by `today-encouragement-off` and `today-term-dates-pointer`: real
+   * due/streak from the fixture vault (same read `realLoad` performs) plus
+   * one hand-built rhythm-quiet course (same technique `today-rhythm-quiet`
+   * uses, and the identical arrival day, so the two states' rhythm readings
+   * are directly comparable). No `concepts` — see this module's doc for why
+   * F6.5's insights section is out of this file's scope.
+   */
+  const loadWithQuietRhythm: TodayViewDeps['load'] = async () => {
+    const now = WORKBENCH_NOW;
+    const historyToday = localToday(now);
+    const history = await readReviewHistory(vault, WORKBENCH_DEVICE_ID, {
+      today: historyToday,
+      windowDays: DEFAULT_STREAK_WINDOW_DAYS,
+    });
+    const instruments = await createVaultInstrumentSource({
+      vault,
+      scheduler,
+      deviceId: WORKBENCH_DEVICE_ID,
+      now: () => now,
+      excludePaths: ['README.md'],
+    }).listDueCandidates();
+    const arrivals: RhythmCourseInput[] = [
+      { course: WB_SCOPE_COURSE, lastMaterialArrivalDay: WB_RHYTHM_QUIET_ARRIVAL_DAY },
+    ];
+    return buildTodayPanel({
+      entries: history.entries,
+      instruments,
+      today: historyToday,
+      dueThrough: endOfLocalDay(now),
+      windowDays: history.windowDays,
+      courseMaterialArrivals: arrivals,
+    });
+  };
 
   switch (stateId) {
     case 'today-nothing-due':
@@ -397,6 +523,43 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
         refreshedAfterWrite: false,
       };
     }
+
+    case 'today-after-reentry':
+      return {
+        deps: { load: realLoad, startReview },
+        logged,
+        afterOpen: async (view) => {
+          await writeReentryReview();
+          await view.refresh();
+        },
+        refreshedAfterWrite: true,
+      };
+
+    case 'today-encouragement-off':
+      return {
+        deps: { load: loadWithQuietRhythm, startReview },
+        logged,
+        refreshedAfterWrite: false,
+      };
+
+    case 'today-term-dates-pointer':
+      return {
+        deps: {
+          load: loadWithQuietRhythm,
+          startReview,
+          termDatesAsk: {
+            state: () => Promise.resolve('unanswered'),
+            openSettings: () => {
+              new Notice(
+                "Workbench: pressing this button would open Olea's settings tab, scrolled " +
+                  'to the "Term dates" section, in the real product. This pane does not navigate.',
+              );
+            },
+          },
+        },
+        logged,
+        refreshedAfterWrite: false,
+      };
 
     default:
       throw new Error(`workbench: unknown today state ${JSON.stringify(stateId)}`);

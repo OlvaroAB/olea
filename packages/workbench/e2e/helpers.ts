@@ -40,6 +40,9 @@ export const TODAY_STATES = [
   'today-scope-not-declared',
   'today-rhythm-quiet',
   'today-rhythm-fresh',
+  'today-after-reentry',
+  'today-encouragement-off',
+  'today-term-dates-pointer',
 ] as const;
 
 // `ol-opmb.1` [TB-1] — see `oracle-scenarios.ts` for the source of truth.
