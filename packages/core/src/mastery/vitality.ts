@@ -35,22 +35,25 @@
  * **Left open by R3, and therefore a REQUIRED PARAMETER here with no
  * default:** the retrievability level at which the reading turns over from
  * `holding` to `tending`. R3 fixes the aggregation and the three values and
- * the floor; it never fixes the cut. The component register (row 3.1) calls
- * that level a **derived** constant — the one mastery constant answerable
- * from a review corpus rather than defensible in plain English — and puts the
- * thresholds on the service side of the boundary while the fold over the local
- * event log stays client-side. This file is the fold. It therefore holds no
- * cut, exports no cut, and has no default cut: `holdingCut` arrives as a
- * handed parameter (component register 3.2's phrase for the same arrangement
- * on the scheduler), and passing a nonsensical one throws rather than quietly
+ * the floor; it never fixes the cut. `VIT-1` / `ol-1bjz` closed 2026-08-25:
+ * `[D-115]` ratified 0.90, provisional, as identity with the scheduler's own
+ * request_retention, and the component register (row 3.1) reclassified that
+ * level from derived to **declared** in the amending commit. Declaring the
+ * exported constant and wiring it into this module's caller is MAT-2's
+ * (`ol-95vv`) to do, not this file's: this module still holds no cut, exports
+ * no cut, and has no default cut — `holdingCut` arrives as a handed parameter
+ * (component register 3.2's phrase for the same arrangement on the
+ * scheduler), and passing a nonsensical one throws rather than quietly
  * producing a reading.
  *
  * **Why no default is worth a throw.** A default would be the fastest way to
  * harden an undecided number: every call site would inherit it, every
  * downstream figure would quote it, and the value would acquire the authority
- * of ubiquity without ever having been decided. The cut is open on `ol-1bjz`
- * and the proposal for it — with what is and is not measurable about it before
- * a real term of review history exists — is in the private repo at
+ * of ubiquity without ever having been decided. That risk is now historical —
+ * `[D-115]` settled the value — but the shape it protected against is why this
+ * module still takes the cut as a required parameter rather than a default.
+ * The ratification and what is and is not measurable about the cut before a
+ * real term of review history exists are in the private repo at
  * `findings/VIT-1-holding-cut.md`.
  *
  * **This module holds no display strings.** `./display.ts` is the one place

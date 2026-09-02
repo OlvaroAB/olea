@@ -128,8 +128,10 @@ export interface ComposeRetrievabilityInput {
 
 /**
  * `readVitality`'s fold (`../mastery/vitality.ts`) is gated on a `holdingCut`
- * that decides `holding` vs `tending` — an open, undecided derived constant
- * (`VIT-1` / `ol-1bjz`; no default on purpose, see that module's doc). This
+ * that decides `holding` vs `tending`. `VIT-1` / `ol-1bjz` closed 2026-08-25:
+ * `[D-115]` ratified 0.90, provisional, as the ADOPTED VALUE, but this module
+ * still takes it as a handed parameter with no default (see that module's
+ * doc) — the ratification settled the number, not this call site's shape. This
  * composition never reads a vitality READING (the `holding`/`tending`/`early`
  * classification) — it only reads `VitalityReading.weakest.recallProbability`,
  * the raw number the classification is computed FROM, which does not depend
