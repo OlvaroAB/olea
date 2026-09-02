@@ -80,6 +80,18 @@
  * already carries, so the live caller has this data in hand without a second
  * vault read. Wiring `open-session.ts` to actually pass it is outside this
  * lane's ownership — see that file's hand-back note in the lane report.
+ *
+ * ## `createFrozenReviewQueue` — C5.8's freeze (`ol-v7r5.35`, `[D-193]`)
+ *
+ * Both adapters above are pure `input -> ReviewQueueItem[]` maps with no
+ * memory of a prior call — correct for a one-shot read, but C5.8's "the
+ * session holds still" cannot be discharged by a stateless function; it
+ * needs something that remembers what a session already showed her and
+ * refuses to let a fresh read move it. `createFrozenReviewQueue`, near the
+ * bottom of this file, is that something — see its own section doc for the
+ * three verbs (`open`/`extend`/`close`) and how it reuses `rebuild-
+ * controller.ts`'s `SittingState`/`decideRebuild` rather than a second freeze
+ * mechanism invented here.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -93,11 +105,23 @@ import type {
   SchedulableInstrumentType,
   SelfAssessmentFeeling,
   SessionSupportOutcome,
+  SittingStalenessInput,
+  SittingState,
   SupportLadderTier,
   SupportLevelPresentation,
   VaultInstrumentRecord,
 } from 'olea-core';
-import { chooseSupportLevel, deriveFailureShape, mathRandomSource, presentMcq } from 'olea-core';
+import {
+  chooseSupportLevel,
+  decideRebuild,
+  deriveFailureShape,
+  enterSitting,
+  exitSitting,
+  IDLE_SITTING,
+  mathRandomSource,
+  presentMcq,
+} from 'olea-core';
+import { localToday } from '../today/data-source.js';
 import type { McqOption, ReviewInstrument, ReviewQueueItem, SelectionContextV4 } from './types.js';
 
 /** Option keys in presentation order — the same letters `keymap.ts` binds. */
@@ -421,4 +445,176 @@ export function adaptExecutedReviewQueue(
   }
 
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// `ol-v7r5.35` — C5.8's freeze, held here rather than assumed of the caller.
+//
+// Before this, both adapters above were pure `input -> ReviewQueueItem[]`
+// maps with no memory: every call recomposed from whatever `input` carried,
+// which is honest and correct for a ONE-SHOT read but leaves C5.8's "the
+// session holds still" resting entirely on `open-session.ts`/`view.ts` never
+// calling this twice for the same sitting — a discipline this file could not
+// see, let alone enforce. `ol-egov.81`'s close note names exactly that gap.
+//
+// `createFrozenReviewQueue` is the seam `rebuild-controller.ts`'s own module
+// doc already names as owed here ("still composes the review queue with no
+// freeze at all ... filed as a follow-up"): it wraps `adaptExecutedReviewQueue`
+// in the SAME `SittingState`/`decideRebuild` controller `session-builder/
+// provider.ts` already proves out for the study-session builder, rather than
+// inventing a second freeze mechanism for this queue.
+//
+// Three verbs, matching C5.8's three "changes only by her own action" cases:
+//
+//  - `open` — session entry, or an idempotent re-render of one already open.
+//    A sitting that is active and not stale returns the SAME frozen array by
+//    reference, no recompute, regardless of what a fresh `input` would now
+//    produce (a new due item mid-session is exactly what this refuses to
+//    surface). A sitting that has gone stale (`decideRebuild`'s
+//    `'sitting-stale'`) ENDS per `[D-162]` — never a recompose of the
+//    unreviewed tail — and this composes a fresh sitting in its place, same
+//    as an idle one.
+//  - `extend` — C5.5's "she outran the target": always composes a fresh
+//    candidate list and APPENDS whatever it offers that is not already in
+//    the frozen list, onto the end, never reordering or dropping what is
+//    already there. It does not re-derive "the same plan's shares" itself —
+//    that redistribution is `composeQueue`/`executeStudyPlan`'s job (C5.5's
+//    own text: "the extension is composed under the same plan's shares"),
+//    already done by the time an `input` reaches this adapter; `extend`'s
+//    contract is only "grow, never replace, never reorder, never duplicate".
+//  - `close` — she finished or left. Releases the freeze; the next `open`
+//    recomposes unconditionally, which is C5.8's "between sessions it
+//    recomputes on anything that changes the answer" read at this component's
+//    scope: an ended sitting has nothing left to hold.
+//
+// Held per instance, the same "one `SittingState` per surface across
+// renders/opens, not just per call" scope `ol-e228`'s acceptance criteria
+// state for the study-session builder — a caller (`open-session.ts`/
+// `main.ts`, outside this lane's owned paths) constructs one
+// `FrozenReviewQueue` per opened review tab and calls `open`/`extend`/`close`
+// through its own lifecycle, exactly the shape `createLocalSessionBuilderProvider`
+// already demonstrates for `SessionBuilderState`. Wiring that caller is
+// tracked as a follow-up rather than done here, across this lane's file
+// ownership boundary (`packages/plugin/src/review/queue-adapter.ts` and its
+// spec only) — see this bead's close notes.
+// ---------------------------------------------------------------------------
+
+export interface FrozenReviewQueueDeps {
+  /** The caller's own clock reading — never read internally (INV-1). */
+  readonly now: () => Date;
+  /**
+   * Gates when a frozen sitting's staleness may even be evaluated — defaults
+   * to {@link DEFAULT_SITTING_IDLE_THRESHOLD_MS} (`rebuild-controller.ts`).
+   * Overridable for tests; production leaves it at the default.
+   */
+  readonly idleThresholdMs?: number;
+}
+
+export interface OpenFrozenReviewQueueInput extends AdaptExecutedReviewQueueInput {
+  /**
+   * The frozen sitting's own material-change facts
+   * (`rebuild-controller.ts`'s `SittingStalenessInput`), scoped to its
+   * composition — the caller resolves these (a `SittingScopeSnapshot` diff,
+   * same shape `session-builder/provider.ts` builds), never this module,
+   * which has no vault or review-log access of its own (INV-1). Omitted
+   * reads as "nothing changed" — honest whenever the caller has not (yet)
+   * wired scope-tracking, and `decideRebuild` never consults it before the
+   * idle threshold has elapsed regardless.
+   */
+  readonly staleness?: SittingStalenessInput;
+}
+
+const NOT_STALE: SittingStalenessInput = Object.freeze({
+  itemsDueInScope: false,
+  materialArrivedInScope: false,
+  assessmentProximityBandCrossedInScope: false,
+});
+
+export interface FrozenReviewQueue {
+  /**
+   * Session entry, or an idempotent re-render of the sitting already open —
+   * see this section's module doc for the three cases (hold / stale-so-end
+   * / idle-so-compose).
+   */
+  readonly open: (input: OpenFrozenReviewQueueInput) => readonly ReviewQueueItem[];
+  /**
+   * C5.5's "she outran the target": composes `input` fresh and appends every
+   * item it offers that the frozen list does not already carry (matched by
+   * `instrument.instrumentId`), in the order the fresh composition offered
+   * them. A no-op sitting-wise if every candidate is already present.
+   * Extending an idle holder (no sitting open) is the same as `open` with no
+   * staleness input — there is nothing to append onto.
+   */
+  readonly extend: (input: AdaptExecutedReviewQueueInput) => readonly ReviewQueueItem[];
+  /** She finished or left. Releases the freeze; the next `open` recomposes unconditionally. */
+  readonly close: () => void;
+}
+
+/**
+ * C5.8's freeze, made real: one `SittingState<readonly ReviewQueueItem[]>`
+ * per instance, driven by `rebuild-controller.ts`'s own `decideRebuild` —
+ * see this section's module doc for why this exists and what each verb does.
+ */
+export function createFrozenReviewQueue(deps: FrozenReviewQueueDeps): FrozenReviewQueue {
+  let sitting: SittingState<readonly ReviewQueueItem[]> = IDLE_SITTING;
+
+  function open(input: OpenFrozenReviewQueueInput): readonly ReviewQueueItem[] {
+    const now = deps.now();
+
+    if (sitting.status === 'active') {
+      const today = localToday(now);
+      const decision = decideRebuild(sitting, {
+        now,
+        ...(deps.idleThresholdMs !== undefined ? { idleThresholdMs: deps.idleThresholdMs } : {}),
+        // `decideRebuild` never reads `trigger` while a sitting is active
+        // (rebuild-controller.ts's own doc) — this satisfies the required
+        // field honestly (today's own date, both sides, every named fact
+        // `false`) rather than fabricating a between-sittings fact this
+        // adapter has no way to observe, the same posture `session-builder/
+        // provider.ts`'s `load()` takes for the identical shape of call.
+        trigger: {
+          lastRebuiltDay: today,
+          today,
+          materialLandedSinceLastRebuild: false,
+          assessmentDatePassedSinceLastRebuild: false,
+        },
+        staleness: input.staleness ?? NOT_STALE,
+      });
+      if (decision.action === 'hold') return sitting.items;
+      // `'sitting-stale'`: `[D-162]` rules the sitting ENDS — never a
+      // recompose of the unreviewed tail — so this falls through to the
+      // fresh composition below exactly as the idle case does.
+      sitting = exitSitting();
+    }
+
+    const items = adaptExecutedReviewQueue(input);
+    sitting = enterSitting(now, items);
+    return items;
+  }
+
+  function extend(input: AdaptExecutedReviewQueueInput): readonly ReviewQueueItem[] {
+    const now = deps.now();
+    const candidates = adaptExecutedReviewQueue(input);
+
+    if (sitting.status !== 'active') {
+      sitting = enterSitting(now, candidates);
+      return candidates;
+    }
+
+    const known = new Set(sitting.items.map((item) => item.instrument.instrumentId));
+    const additions = candidates.filter((item) => !known.has(item.instrument.instrumentId));
+    const extended = additions.length === 0 ? sitting.items : [...sitting.items, ...additions];
+    // The freeze clock does not restart on an extension — `enteredAt` still
+    // marks when SHE opened this sitting, which is what the idle threshold
+    // (C5.8's "long enough that coming back is a return") must keep
+    // measuring against, not when it was last topped up.
+    sitting = enterSitting(sitting.enteredAt, extended);
+    return extended;
+  }
+
+  function close(): void {
+    sitting = exitSitting();
+  }
+
+  return { open, extend, close };
 }

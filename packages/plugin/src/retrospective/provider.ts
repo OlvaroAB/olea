@@ -180,8 +180,13 @@ export interface RetrospectiveProvider {
   markOpened(assessmentPath: VaultPath): Promise<void>;
   /** Records a dismissal without opening — the offer-card's other ending (D-134 Q1). Exposed for a future Home/grove host; see `offer-card.ts`. */
   markDismissed(assessmentPath: VaultPath): Promise<void>;
-  /** D-134 Q7: writes the accepted retrospective into her vault as an Olea-owned note. */
-  acceptToVault(reading: RetrospectiveReading): Promise<VaultPath>;
+  /**
+   * D-134 Q7: writes the accepted retrospective into her vault as an
+   * Olea-owned note. `ownWords`, when she supplied one at the keep gesture
+   * (`[D-190]`), is passed straight through to `note-writer.ts` and nowhere
+   * else — never logged, never retained by this provider itself.
+   */
+  acceptToVault(reading: RetrospectiveReading, ownWords?: string): Promise<VaultPath>;
 }
 
 export function createLocalRetrospectiveProvider(
@@ -265,8 +270,8 @@ export function createLocalRetrospectiveProvider(
       });
     },
 
-    async acceptToVault(reading) {
-      return writeRetrospectiveNote(deps.vault, reading, deps.now);
+    async acceptToVault(reading, ownWords) {
+      return writeRetrospectiveNote(deps.vault, reading, deps.now, ownWords);
     },
   };
 }

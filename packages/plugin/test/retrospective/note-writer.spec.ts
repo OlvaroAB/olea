@@ -83,3 +83,91 @@ describe('writeRetrospectiveNote', () => {
     expect(written.get(path)).toContain('What held');
   });
 });
+
+// F8.8 free text (Sep 2026, `[D-190]`): "on acceptance she may add an
+// optional line of her own ... written beneath a heading of her own in the
+// same note — read by nothing ... the note stays immutable after acceptance
+// exactly as now."
+describe('the optional own-words line (`[D-190]`)', () => {
+  it('accepting with a line adds it under its own heading, in the same note', () => {
+    const content = buildRetrospectiveNoteContent(
+      reading(),
+      '2026-09-02T10:00:00.000Z',
+      'I rushed the last section and it showed.',
+    );
+    expect(content).toContain('## In your own words');
+    expect(content).toContain('I rushed the last section and it showed.');
+    // Same note, not a second file — the computed sections are still present.
+    expect(content).toContain('What held');
+  });
+
+  it('accepting without a line adds nothing — no heading, no empty section', () => {
+    const content = buildRetrospectiveNoteContent(reading(), '2026-09-02T10:00:00.000Z');
+    expect(content).not.toContain('In your own words');
+  });
+
+  it('a whitespace-only line is treated the same as no line at all', () => {
+    const content = buildRetrospectiveNoteContent(reading(), '2026-09-02T10:00:00.000Z', '   ');
+    expect(content).not.toContain('In your own words');
+  });
+
+  it('writeRetrospectiveNote passes the line through end to end', async () => {
+    const { vault, written } = fakeVault();
+    const path = await writeRetrospectiveNote(
+      vault,
+      reading(),
+      () => new Date('2026-09-02T10:00:00.000Z'),
+      'This one is mine.',
+    );
+    expect(written.get(path)).toContain('This one is mine.');
+  });
+
+  it('writeRetrospectiveNote with no line supplied writes no heading for it', async () => {
+    const { vault, written } = fakeVault();
+    const path = await writeRetrospectiveNote(
+      vault,
+      reading(),
+      () => new Date('2026-09-02T10:00:00.000Z'),
+    );
+    expect(written.get(path)).not.toContain('In your own words');
+  });
+
+  it('the note stays immutable after acceptance — this module exports no way to update or rewrite an existing note', async () => {
+    const module = await import('../../src/retrospective/note-writer.js');
+    const exportNames = Object.keys(module);
+    expect(exportNames).toEqual(
+      expect.arrayContaining([
+        'RETROSPECTIVE_NOTES_FOLDER',
+        'retrospectiveNotePath',
+        'buildRetrospectiveNoteContent',
+        'writeRetrospectiveNote',
+      ]),
+    );
+    // No `update*`/`rewrite*`/`append*` export exists — the only way to add
+    // words to a kept retrospective is a fresh `writeRetrospectiveNote` call,
+    // which `retrospectiveNotePath`'s per-acceptance timestamp always turns
+    // into a NEW file (asserted above, "never collides").
+    expect(exportNames.some((name) => /^(update|rewrite|append|edit)/i.test(name))).toBe(false);
+  });
+
+  it('accepting the SAME reading twice with different lines never overwrites the earlier note', async () => {
+    const { vault, written } = fakeVault();
+    const first = await writeRetrospectiveNote(
+      vault,
+      reading(),
+      () => new Date('2026-09-02T10:00:00.000Z'),
+      'First pass.',
+    );
+    const second = await writeRetrospectiveNote(
+      vault,
+      reading(),
+      () => new Date('2026-09-05T10:00:00.000Z'),
+      'Second pass.',
+    );
+    expect(first).not.toBe(second);
+    expect(written.get(first)).toContain('First pass.');
+    expect(written.get(first)).not.toContain('Second pass.');
+    expect(written.get(second)).toContain('Second pass.');
+    expect(written.get(second)).not.toContain('First pass.');
+  });
+});

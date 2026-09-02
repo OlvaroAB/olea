@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   carriesLine,
   conceptLine,
+  OWN_WORDS_PROMPT,
+  OWN_WORDS_SECTION_HEADING,
   offerCardLine,
   scopeFactLine,
   scopeOriginLine,
@@ -95,5 +97,22 @@ describe('retrospective copy — no score, no percentage, no verdict', () => {
     expect(offerCardLine('opened', 'C1')).toBeNull();
     expect(offerCardLine('dismissed', 'C1')).toBeNull();
     expect(offerCardLine('offered', 'C1')).toContain('C1');
+  });
+});
+
+// F8.8 free text (`[D-190]`): the copy offered at the keep gesture states,
+// plainly, that the line is optional and that nothing reads it back.
+describe('the own-words prompt and heading (`[D-190]`)', () => {
+  it('the prompt states the line is optional and names the "nothing reads it" guarantee', () => {
+    expect(OWN_WORDS_PROMPT).toMatch(/\boptional\b|\bif you want\b/i);
+    expect(OWN_WORDS_PROMPT).toMatch(/\bnothing\b.*\breads\b/i);
+  });
+
+  it('the prompt carries none of the banned score/verdict language either', () => {
+    expect(OWN_WORDS_PROMPT).not.toMatch(NO_SCORE_PATTERN);
+  });
+
+  it('the section heading is a plain heading, not a registry-controlled term', () => {
+    expect(OWN_WORDS_SECTION_HEADING).toBe('In your own words');
   });
 });

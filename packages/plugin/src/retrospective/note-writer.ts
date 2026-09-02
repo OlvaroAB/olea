@@ -22,7 +22,23 @@
  * once and accepted is a record of what she saw then, not a live view that
  * could silently change under her (`C6.2a`'s "immutable" argument for
  * generated content, applied here without importing that module's own
- * write-once enforcement, which is scoped to its own record shape).
+ * write-once enforcement, which is scoped to its own record shape). There is
+ * no update/append export in this module — the only way to add words to a
+ * kept retrospective is a fresh acceptance, which is a new file.
+ *
+ * **F8.8 free text (Sep 2026, `[D-190]`).** `ownWords`, when supplied and
+ * non-blank, is written verbatim into this SAME note beneath its own
+ * heading (`OWN_WORDS_SECTION_HEADING`) — not a second file, not a separate
+ * record. `undefined` or blank means nothing is added; this module never
+ * invents a placeholder section for an empty line. Nothing downstream reads
+ * this section back: it is dead text to every reader in this codebase by
+ * construction (grep `RETROSPECTIVE_NOTES_FOLDER`/`OWN_WORDS_SECTION_HEADING`
+ * — `note-writer.ts` is the only writer, and no module parses the notes this
+ * writes). It is likewise never passed to `../review-log` or any event —
+ * `retrospective/offer-events.ts`'s appended records carry only `kind`,
+ * `assessmentPath` and `timestamp` (D-005: counts, never content), and this
+ * module's own caller (`provider.ts`'s `acceptToVault`) hands `ownWords`
+ * only to this file, never to a log.
  */
 
 import type { RetrospectiveReading, VaultPath, VaultSource } from 'olea-core';
@@ -33,6 +49,7 @@ import {
   FADED_SECTION_HEADING,
   HELD_SECTION_HEADING,
   HONESTY_DISCLAIMER,
+  OWN_WORDS_SECTION_HEADING,
   RETROSPECTIVE_VIEW_TITLE,
   scopeFactLine,
   scopeOriginLine,
@@ -65,6 +82,7 @@ export function retrospectiveNotePath(assessmentPath: VaultPath, acceptedAt: str
 export function buildRetrospectiveNoteContent(
   reading: RetrospectiveReading,
   acceptedAt: string,
+  ownWords?: string,
 ): string {
   const lines: string[] = [];
   lines.push(`# ${RETROSPECTIVE_VIEW_TITLE}: ${reading.course}`);
@@ -103,6 +121,17 @@ export function buildRetrospectiveNoteContent(
     lines.push('');
   }
 
+  // `[D-190]`: her own line, if she added one, under its own heading — never
+  // invented for a blank/undefined value, and always the last content before
+  // the immutability footer, so it reads as an addition to the reading
+  // rather than a fourth grouping among the computed ones above.
+  const trimmedOwnWords = ownWords?.trim();
+  if (trimmedOwnWords !== undefined && trimmedOwnWords !== '') {
+    lines.push(`## ${OWN_WORDS_SECTION_HEADING}`);
+    lines.push(trimmedOwnWords);
+    lines.push('');
+  }
+
   lines.push(`*Accepted ${acceptedAt}. This note is Olea-generated and is never edited in place.*`);
   lines.push('');
   return lines.join('\n');
@@ -119,9 +148,10 @@ export async function writeRetrospectiveNote(
   vault: VaultSource,
   reading: RetrospectiveReading,
   now: () => Date = () => new Date(),
+  ownWords?: string,
 ): Promise<VaultPath> {
   const acceptedAt = now().toISOString();
   const path = retrospectiveNotePath(reading.assessmentPath, acceptedAt);
-  await vault.write(path, buildRetrospectiveNoteContent(reading, acceptedAt));
+  await vault.write(path, buildRetrospectiveNoteContent(reading, acceptedAt, ownWords));
   return path;
 }

@@ -19,6 +19,7 @@ import {
   adaptExecutedReviewQueue,
   adaptReviewQueue,
   buildSupportLevelHistoryLookup,
+  createFrozenReviewQueue,
 } from '../../src/review/queue-adapter.js';
 
 /** `ol-63e1`: `conceptIds` now carries the opaque key, never the display name — 'Alpha' here is unbound (no matching Zettelkasten note). */
@@ -631,5 +632,152 @@ describe('supportLevel threads through both adapters ([SUPP-3])', () => {
     for (const item of items) {
       expect(Object.hasOwn(item.instrument, 'supportLevel')).toBe(false);
     }
+  });
+});
+
+// `ol-v7r5.35` / C5.8 (as amended by `[D-193]`): the freeze itself. Scenarios:
+// features/F2-review.md, "C5.8 — The session holds still while it is open" —
+// @auto:plugin/review/queue-adapter.spec
+describe('createFrozenReviewQueue — C5.8’s freeze, held across calls', () => {
+  function twoNoteVault(): VaultSource {
+    return memoryVault({ 'Notes/qa.md': QA_NOTE, 'Notes/cloze.md': CLOZE_NOTE });
+  }
+
+  /** Adds a third, `MUS101` instrument — the "something comes due meanwhile" fixture. */
+  function threeNoteVault(): VaultSource {
+    return memoryVault({
+      'Notes/qa.md': QA_NOTE,
+      'Notes/cloze.md': CLOZE_NOTE,
+      'Notes/mcq.md': MCQ_NOTE,
+    });
+  }
+
+  async function buildExecuted(source: VaultSource) {
+    const session = await buildReviewSession({
+      vault: source,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const executed = executeStudyPlan({ queue: session.queue, plan: null });
+    return { items: executed.items, recordsById: session.recordsById };
+  }
+
+  it('composing the same session twice returns the identical list, never a fresh recompute', async () => {
+    const composed = await buildExecuted(twoNoteVault());
+    const queue = createFrozenReviewQueue({ now: () => NOW });
+
+    const first = queue.open(composed);
+    const second = queue.open(composed);
+
+    expect(second).toBe(first);
+  });
+
+  it('an item that comes due after the session opens does not appear in it', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    const laterState = await buildExecuted(threeNoteVault());
+    const queue = createFrozenReviewQueue({ now: () => NOW });
+
+    const opened = queue.open(opening);
+    expect(opened.map((i) => i.instrument.type)).not.toContain('mcq');
+
+    // Re-offered mid-session with the mcq now due — the freeze refuses it,
+    // and hands back the exact list she opened with.
+    const reoffered = queue.open(laterState);
+    expect(reoffered).toBe(opened);
+    expect(reoffered.map((i) => i.instrument.type)).not.toContain('mcq');
+  });
+
+  it('outrunning the target appends fresh items, never reordering or duplicating what is already there', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    const more = await buildExecuted(threeNoteVault());
+    const queue = createFrozenReviewQueue({ now: () => NOW });
+
+    const opened = queue.open(opening);
+    const extended = queue.extend(more);
+
+    // What she already had is still there, in the same order, untouched.
+    expect(extended.slice(0, opened.length)).toEqual(opened);
+    // Exactly the one genuinely new instrument (the mcq) was appended.
+    expect(extended.length).toBe(opened.length + 1);
+    expect(extended.map((i) => i.instrument.type)).toContain('mcq');
+
+    // Extending again with the identical candidates adds nothing further —
+    // every one of them is already in the list.
+    const extendedAgain = queue.extend(more);
+    expect(extendedAgain).toEqual(extended);
+  });
+
+  it('extending an unopened holder behaves like opening — nothing to append onto yet', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    const queue = createFrozenReviewQueue({ now: () => NOW });
+
+    const extended = queue.extend(opening);
+    expect(extended.map((i) => i.instrument.type)).toEqual(['cloze', 'qa']);
+  });
+
+  it('holds unconditionally before the idle threshold, even when the caller reports a material change', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    let now = NOW;
+    const queue = createFrozenReviewQueue({ now: () => now, idleThresholdMs: 60_000 });
+
+    const opened = queue.open(opening);
+    now = new Date(NOW.getTime() + 1_000); // well under the threshold
+
+    const held = queue.open({
+      ...opening,
+      staleness: {
+        itemsDueInScope: true,
+        materialArrivedInScope: false,
+        assessmentProximityBandCrossedInScope: false,
+      },
+    });
+    expect(held).toBe(opened);
+  });
+
+  it('holds past the idle threshold when its own composition has not materially changed', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    let now = NOW;
+    const queue = createFrozenReviewQueue({ now: () => now, idleThresholdMs: 1_000 });
+
+    const opened = queue.open(opening);
+    now = new Date(NOW.getTime() + 2_000); // past the threshold
+
+    const held = queue.open(opening);
+    expect(held).toBe(opened);
+  });
+
+  it('a session gone stale past the idle threshold, with a material change, ends rather than holding — the next open recomposes', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    const laterState = await buildExecuted(threeNoteVault());
+    let now = NOW;
+    const queue = createFrozenReviewQueue({ now: () => now, idleThresholdMs: 1_000 });
+
+    queue.open(opening);
+    now = new Date(NOW.getTime() + 2_000); // past the threshold
+
+    const result = queue.open({
+      ...laterState,
+      staleness: {
+        itemsDueInScope: true,
+        materialArrivedInScope: false,
+        assessmentProximityBandCrossedInScope: false,
+      },
+    });
+
+    // The stale session ended and a fresh one took its place — the item that
+    // came due while it sat idle is now honestly part of a NEW session.
+    expect(result.map((i) => i.instrument.type)).toContain('mcq');
+  });
+
+  it('close releases the freeze — the next open recomposes unconditionally', async () => {
+    const opening = await buildExecuted(twoNoteVault());
+    const laterState = await buildExecuted(threeNoteVault());
+    const queue = createFrozenReviewQueue({ now: () => NOW });
+
+    queue.open(opening);
+    queue.close();
+    const reopened = queue.open(laterState);
+
+    expect(reopened.map((i) => i.instrument.type)).toContain('mcq');
   });
 });

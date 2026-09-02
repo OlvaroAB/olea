@@ -134,6 +134,31 @@ export function emptyScopeLine(): string {
 }
 
 /**
+ * F8.8 free text (Sep 2026, `[D-190]`): "on acceptance she may add an
+ * optional line of her own, offered at the moment she keeps the note,
+ * written beneath a heading of her own in the same note — read by nothing".
+ * The heading her line lands under, once she supplies one. Echoes the
+ * registry's own "in your own words" phrasing (§1, the `tree` stage) —
+ * the same idea of her unassisted wording, applied here to a line about
+ * herself rather than a graded explanation of a concept — while remaining a
+ * plain heading, not a registry term.
+ */
+export const OWN_WORDS_SECTION_HEADING = 'In your own words';
+
+/**
+ * Offered ONLY at the keep gesture (`[D-190]`) — not a box on the reading
+ * itself, so this string is never rendered until she has already chosen to
+ * accept. States the guarantee plainly rather than leaving her to assume
+ * it: nothing reads the line back (D-190's structural "no reader" argument),
+ * and it is never logged (D-005 — counts only, never content).
+ */
+export const OWN_WORDS_PROMPT =
+  'Add a line of your own, if you want one. It is saved with this note, under its own heading — nothing in Olea reads it.';
+
+/** Placeholder text for the optional single-line input — never persisted itself. */
+export const OWN_WORDS_PLACEHOLDER = 'Optional, one line, yours alone';
+
+/**
  * The standing offer card's copy (D-134 Q1: "one standing card that stays
  * visible until opened or dismissed"). `null` means no card should be shown
  * at all — `view.ts`/whatever future Home-or-grove host renders this must

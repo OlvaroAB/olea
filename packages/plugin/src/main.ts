@@ -925,7 +925,7 @@ export default class OleaPlugin extends Plugin {
           }
         },
         markOpened: (assessmentPath) => provider.markOpened(assessmentPath),
-        acceptToVault: (reading) => provider.acceptToVault(reading),
+        acceptToVault: (reading, ownWords) => provider.acceptToVault(reading, ownWords),
       });
     });
 

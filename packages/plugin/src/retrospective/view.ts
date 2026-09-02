@@ -27,6 +27,8 @@ import {
   FADED_SECTION_HEADING,
   HELD_SECTION_HEADING,
   HONESTY_DISCLAIMER,
+  OWN_WORDS_PLACEHOLDER,
+  OWN_WORDS_PROMPT,
   RETROSPECTIVE_VIEW_TITLE,
   scopeFactLine,
   scopeOriginLine,
@@ -52,7 +54,13 @@ export type RetrospectiveViewState =
 export interface RetrospectiveViewDeps {
   readonly load: () => Promise<RetrospectiveViewState>;
   readonly markOpened: (assessmentPath: VaultPath) => Promise<void>;
-  readonly acceptToVault: (reading: RetrospectiveReading) => Promise<VaultPath>;
+  /**
+   * `ownWords` is the optional line she may add at THIS gesture (`[D-190]`)
+   * — `undefined` when the input was left blank. This view never inspects
+   * it beyond trimming and the empty check; it is handed straight to the
+   * provider and never logged (D-005).
+   */
+  readonly acceptToVault: (reading: RetrospectiveReading, ownWords?: string) => Promise<VaultPath>;
 }
 
 export class RetrospectiveView extends ItemView {
@@ -143,12 +151,27 @@ export class RetrospectiveView extends ItemView {
       this.renderSection(root, CARRIES_SECTION_HEADING, reading.carries, carriesLine);
     }
 
-    const acceptButton = root.createEl('button', {
+    // `[D-190]`: the optional line lives HERE, beside the keep gesture —
+    // never among the computed sections above, and never shown until she has
+    // already reached the point of deciding to keep the reading. This is the
+    // one place F8.8's "nothing to do" screen already has a decision to make.
+    const acceptArea = root.createDiv({ cls: 'olea-retrospective-accept-area' });
+    acceptArea.createDiv({
+      cls: 'olea-retrospective-own-words-prompt',
+      text: OWN_WORDS_PROMPT,
+    });
+    const ownWordsInput = acceptArea.createEl('input', {
+      cls: 'olea-retrospective-own-words-input',
+      type: 'text',
+      attr: { placeholder: OWN_WORDS_PLACEHOLDER },
+    });
+
+    const acceptButton = acceptArea.createEl('button', {
       cls: 'olea-retrospective-accept',
       text: 'Save this retrospective to my vault',
     });
     acceptButton.addEventListener('click', () => {
-      void this.handleAccept(reading, acceptButton);
+      void this.handleAccept(reading, acceptButton, ownWordsInput.value);
     });
   }
 
@@ -174,10 +197,15 @@ export class RetrospectiveView extends ItemView {
   private async handleAccept(
     reading: RetrospectiveReading,
     button: HTMLButtonElement,
+    ownWordsRaw: string,
   ): Promise<void> {
     button.disabled = true;
     try {
-      const path = await this.deps.acceptToVault(reading);
+      // Blank input means nothing is added (`[D-190]`) — `undefined`, never
+      // an empty-string section for `note-writer.ts` to have to special-case
+      // a second time.
+      const trimmed = ownWordsRaw.trim();
+      const path = await this.deps.acceptToVault(reading, trimmed === '' ? undefined : trimmed);
       new Notice(`Saved to ${path}`);
     } catch {
       new Notice('Olea could not save this to your vault just now.');
