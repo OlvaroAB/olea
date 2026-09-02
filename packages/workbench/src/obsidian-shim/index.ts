@@ -326,12 +326,14 @@ export class Modal {
  * Reduced to exactly what `settings-tab.ts`, `usage/settings-section.ts`
  * and `privacy/settings-section.ts` call — verified by grep before writing
  * this (see the package README's shim ledger, row 7): `setName`, `setDesc`,
- * `setHeading`, `setDisabled` on `Setting`; `addText`/`addButton`;
- * `setPlaceholder`, `getValue`/`setValue`, `onChange`, `inputEl`,
- * `setDisabled` on `TextComponent`; `setButtonText`, `onClick`,
- * `setDisabled` on `ButtonComponent`. No `addToggle`, `addDropdown`,
- * `setTooltip`, `setCta` or anything else Obsidian's real `Setting` offers —
- * none of the F7 surfaces this bead mounts use them.
+ * `setHeading`, `setDisabled` on `Setting`; `addText`/`addButton`/
+ * `addToggle`; `setPlaceholder`, `getValue`/`setValue`, `onChange`,
+ * `inputEl`, `setDisabled` on `TextComponent`; `setButtonText`, `onClick`,
+ * `setDisabled` on `ButtonComponent`; `getValue`/`setValue`, `onChange` on
+ * `ToggleComponent` (`ol-0r92.29`'s F2.10 toggle — the one boolean control
+ * `settings-tab.ts` renders). No `addDropdown`, `setTooltip`, `setCta` or
+ * anything else Obsidian's real `Setting` offers — none of the F7 surfaces
+ * this bead mounts use them.
  */
 export class TextComponent {
   readonly inputEl: HTMLInputElement;
@@ -364,6 +366,39 @@ export class TextComponent {
   }
 
   onChange(callback: (value: string) => unknown): this {
+    this.changeHandler = callback;
+    return this;
+  }
+}
+
+/**
+ * The one boolean control `settings-tab.ts` renders (`ol-0r92.29`'s F2.10
+ * toggle) — a checkbox `<input>`, same reduced shape `TextComponent` above
+ * takes for a text `<input>`: `setValue`/`getValue` and `onChange`, nothing
+ * Obsidian's real `ToggleComponent` offers beyond that (`setTooltip`,
+ * `setDisabled` included) because no F7 surface this shim mounts uses them.
+ */
+export class ToggleComponent {
+  readonly toggleEl: HTMLInputElement;
+  private changeHandler: ((value: boolean) => unknown) | null = null;
+
+  constructor(containerEl: HTMLElement) {
+    this.toggleEl = containerEl.createEl('input', { attr: { type: 'checkbox' } });
+    this.toggleEl.addEventListener('change', () => {
+      this.changeHandler?.(this.toggleEl.checked);
+    });
+  }
+
+  getValue(): boolean {
+    return this.toggleEl.checked;
+  }
+
+  setValue(value: boolean): this {
+    this.toggleEl.checked = value;
+    return this;
+  }
+
+  onChange(callback: (value: boolean) => unknown): this {
     this.changeHandler = callback;
     return this;
   }
@@ -446,6 +481,11 @@ export class Setting {
 
   addButton(cb: (component: ButtonComponent) => unknown): this {
     cb(new ButtonComponent(this.controlEl));
+    return this;
+  }
+
+  addToggle(cb: (component: ToggleComponent) => unknown): this {
+    cb(new ToggleComponent(this.controlEl));
     return this;
   }
 }

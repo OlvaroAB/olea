@@ -164,7 +164,7 @@ describe('the settings tab reaches a real Worker transport (ol-k57j)', () => {
 
   it('constructs the setting tab with itself as the data host and the real transport factory', () => {
     expect(main).toMatch(
-      /new OleaSettingTab\(this\.app,\s*this,\s*this,\s*createRecordingTransport,\s*\{ vault, deviceId \}\)/,
+      /new OleaSettingTab\(\s*this\.app,\s*this,\s*this,\s*createRecordingTransport,\s*\{ vault, deviceId \},\s*headingOfferSetting,?\s*\)/,
     );
   });
 

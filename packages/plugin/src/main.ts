@@ -160,6 +160,10 @@ import type { ReviewInstrument } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { createLocalSessionBuilderProvider } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
+import {
+  type HeadingOfferSettingSnapshot,
+  ObsidianHeadingOfferSettingStore,
+} from './settings/heading-offer-setting.js';
 import { OleaSettingTab } from './settings/settings-tab.js';
 import { createTodayContestSupport } from './today/contest.js';
 import {
@@ -458,10 +462,29 @@ export default class OleaPlugin extends Plugin {
     // already use. `createObsidianWorkerTransport` is injected rather than
     // built inside the tab so `settings-tab.ts` never has to import
     // `obsidian`'s `requestUrl` itself (ol-k57j; see `worker/obsidian-transport.ts`).
+    // F2.10's toggle (`ol-0r92.29`): one mutable object shared by reference
+    // with `OleaSettingTab` (which updates it live on every toggle) and the
+    // `enabled` thunk built below — see `settings/heading-offer-setting.ts`'s
+    // module doc for why a synchronous thunk needs this rather than the
+    // store's own `load()`. Default `true` (on) until the fire-and-forget
+    // load just below resolves, matching F2.10's own default-on framing;
+    // never blocks `onload`, same posture `cachedPlan`'s refresh takes.
+    const headingOfferSetting: HeadingOfferSettingSnapshot = { enabled: true };
+    void new ObsidianHeadingOfferSettingStore(this).load().then((persisted) => {
+      headingOfferSetting.enabled = persisted.enabled;
+    });
+
     // Constructed after `vault` and `deviceId` exist because F7.4's privacy
     // section (`ol-p6t01`) needs both.
     this.addSettingTab(
-      new OleaSettingTab(this.app, this, this, createRecordingTransport, { vault, deviceId }),
+      new OleaSettingTab(
+        this.app,
+        this,
+        this,
+        createRecordingTransport,
+        { vault, deviceId },
+        headingOfferSetting,
+      ),
     );
 
     // C5.5/A2.5 (P5-T07): the plan is a rebuildable cache (D-006), so the
@@ -501,18 +524,16 @@ export default class OleaPlugin extends Plugin {
     // `ol-i19f`: the surface-wiring layer over the port above — reads
     // `vault` (already in scope) and `this.conceptRecords` fresh on every
     // check (F7.8-shaped "never captured once", same as `draftDeps` just
-    // above). No settings field exists yet for F2.10's own "toggleable in
-    // settings" clause (`settings/settings-tab.ts` is not owned by this
-    // bead) — `enabled` is omitted here rather than hardcoded to a
-    // `() => true` that would misleadingly look load-bearing; the port's own
-    // `createHeadingOfferForItem` already treats an omitted `enabled` as
-    // "on," which is the correct default-on behaviour until a real toggle
-    // lands.
+    // above). `ol-0r92.29` adds the real settings field: `enabled` reads
+    // `headingOfferSetting` (built above, shared with `OleaSettingTab`),
+    // never a value captured once — same reasoning as `conceptRecords`
+    // here and `draftDeps` above.
     this.headingOfferForItem = createHeadingOfferBannerTracker(
       createHeadingOfferForItem({
         vault,
         port: this.headingOffer,
         conceptRecords: () => this.conceptRecords,
+        enabled: () => headingOfferSetting.enabled,
       }),
     );
 

@@ -67,6 +67,15 @@ import {
   ObsidianExplainBackAuditGateStore,
 } from './explain-back-audit-gate.js';
 import {
+  HEADING_OFFER_SETTING_DESCRIPTION,
+  HEADING_OFFER_SETTING_NAME,
+  HEADING_OFFER_SETTING_SECTION_HEADING,
+} from './heading-offer-field-copy.js';
+import {
+  type HeadingOfferSettingSnapshot,
+  ObsidianHeadingOfferSettingStore,
+} from './heading-offer-setting.js';
+import {
   REPORT_ISSUE_BUTTON_LABEL,
   REPORT_ISSUE_URL,
   SUPPORT_SECTION_HEADING,
@@ -94,6 +103,8 @@ export class OleaSettingTab extends PluginSettingTab {
   private readonly explainBackAuditGateStore: ObsidianExplainBackAuditGateStore;
   /** F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — same store `today/data-source.ts`'s rhythm reading reads; this class is `save`/`skip`'s production caller. */
   private readonly termWindowStore: ObsidianTermWindowStore;
+  /** F2.10's toggle (`ol-0r92.29`) — the persistence half; see `heading-offer-setting.ts`'s module doc for why the live half is a shared object rather than this store alone. */
+  private readonly headingOfferSettingStore: ObsidianHeadingOfferSettingStore;
   /** Kept for the F7.3 usage section (`ol-p3t09`), which reads its own `data.json` key through the same host. */
   private readonly dataHost: ObsidianDataHost;
 
@@ -105,6 +116,15 @@ export class OleaSettingTab extends PluginSettingTab {
     private readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport,
     /** F7.4's export/delete section (`ol-p6t01`) — vault + device id, minted after the tab would otherwise be constructed, so `main.ts` supplies them here. */
     private readonly privacy: { readonly vault: VaultSource; readonly deviceId: string },
+    /**
+     * F2.10's toggle (`ol-0r92.29`): the same mutable object `main.ts`
+     * seeds from `ObsidianHeadingOfferSettingStore.load()` at startup and
+     * reads from inside the `enabled` thunk it hands `heading-offer-
+     * wiring.ts` — shared by reference, not copied, so a toggle here takes
+     * effect immediately with no restart. See `heading-offer-setting.ts`'s
+     * module doc.
+     */
+    private readonly headingOfferSetting: HeadingOfferSettingSnapshot,
   ) {
     super(app, plugin);
     this.configStore = new ObsidianWorkerConfigStore(dataHost);
@@ -115,6 +135,7 @@ export class OleaSettingTab extends PluginSettingTab {
     this.studyPlanConfigStore = new ObsidianStudyPlanSettingsStore(dataHost);
     this.explainBackAuditGateStore = new ObsidianExplainBackAuditGateStore(dataHost);
     this.termWindowStore = new ObsidianTermWindowStore(dataHost);
+    this.headingOfferSettingStore = new ObsidianHeadingOfferSettingStore(dataHost);
     this.dataHost = dataHost;
   }
 
@@ -143,6 +164,12 @@ export class OleaSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName('AI').setHeading();
     void this.renderWorkerFields(containerEl);
+
+    // F2.10's toggle (`ol-0r92.29`): its own section, same footing "Study
+    // plan" and "Term dates" above get for a single-field concern, distinct
+    // from the Worker connection fields above.
+    new Setting(containerEl).setName(HEADING_OFFER_SETTING_SECTION_HEADING).setHeading();
+    void this.renderHeadingOfferSetting(containerEl);
 
     // F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — a SECOND, honestly
     // worded reason explaining back may be greyed, distinct from the
@@ -250,6 +277,30 @@ export class OleaSettingTab extends PluginSettingTab {
         void this.termWindowStore.skip();
       });
     });
+  }
+
+  /**
+   * F2.10's toggle (`ol-0r92.29`): re-reads the persisted value on every
+   * open (same async-render terms as every field renderer above) so this
+   * pane never shows a stale value, then keeps `this.headingOfferSetting`
+   * — the object `main.ts`'s `enabled` thunk reads — in sync with both the
+   * freshly-loaded value and every subsequent toggle, so the change is
+   * live in this same session with no restart.
+   */
+  private async renderHeadingOfferSetting(containerEl: HTMLElement): Promise<void> {
+    const persisted = await this.headingOfferSettingStore.load();
+    this.headingOfferSetting.enabled = persisted.enabled;
+
+    new Setting(containerEl)
+      .setName(HEADING_OFFER_SETTING_NAME)
+      .setDesc(HEADING_OFFER_SETTING_DESCRIPTION)
+      .addToggle((toggle) => {
+        toggle.setValue(this.headingOfferSetting.enabled);
+        toggle.onChange((value) => {
+          this.headingOfferSetting.enabled = value;
+          void this.headingOfferSettingStore.setEnabled(value);
+        });
+      });
   }
 
   /** F7.8's E2b kill-switch (`ol-g3a0.1`, `[D-127]`) — see this class's `display()` call site and `explain-back-audit-gate.ts`'s module doc. */

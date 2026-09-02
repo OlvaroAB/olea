@@ -213,9 +213,17 @@ export function buildPluginSurfaceScenario(stateId: string): PluginSurfaceScenar
   const plugin = new Plugin(app);
   const dataHost = new MemoryDataHost(seedFor(stateId));
   const vault: VaultSource = MemoryVaultSource.fromBytes(new Map());
-  const tab = new OleaSettingTab(app, plugin, dataHost, transportFor(stateId), {
-    vault,
-    deviceId: 'wb-fixture-device',
-  });
+  const tab = new OleaSettingTab(
+    app,
+    plugin,
+    dataHost,
+    transportFor(stateId),
+    { vault, deviceId: 'wb-fixture-device' },
+    // `ol-0r92.29`'s F2.10 toggle: this tranche does not add a scenario for
+    // it (same "renders along with everything else, uncovered" posture the
+    // module doc above states for study plan/term dates/Support), so a
+    // fixed default-on snapshot is enough to mount the real component whole.
+    { enabled: true },
+  );
   return { state, tab };
 }
