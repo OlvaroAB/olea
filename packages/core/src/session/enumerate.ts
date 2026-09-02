@@ -16,11 +16,19 @@
  * note does not have yet, it uses a position-based fallback rather than
  * minting one on the spot. D-030 (`ol-5qjz`) is ruled — option (b), stamped
  * identity — and the write half now exists (`mcq-format.ts`'s `stampMcqId`,
- * `card-format.ts`'s `stampQaCardBlockId`), but deliberately not *here*: this
- * walk stays read-only so enumerating the vault to render a panel or compose
- * a queue never itself writes to it. Whatever drives review decides when a
- * stamp actually happens (`ol-k7eg`'s notes: on first review, not on
- * enumeration).
+ * `card-format.ts`'s `stampQaCardBlockId`, and — `[D-177]` —
+ * `instrument/cloze-identity.ts`'s `stampClozeId`), but deliberately not
+ * *here*: this walk stays read-only so enumerating the vault to render a
+ * panel or compose a queue never itself writes to it. A cloze's stamp
+ * (unlike a block id or `id:` field) does not live in the note's parsed
+ * bytes at all — it is beside them, in the frontmatter map — so this walk
+ * reads it explicitly, with `cloze-identity.ts`'s own `readClozeId`, and
+ * hands it to `instrument-id.ts` on the input rather than that module
+ * reading the note itself (its own hard constraint). Still a read, not a
+ * write: no stamp means no entry to find, and `provisionalInstrumentId`
+ * falls through to the position-based rule exactly as before. Whatever
+ * drives review decides when a stamp actually happens (`ol-k7eg`'s notes:
+ * on first review, not on enumeration).
  *
  * ## Three things that are reported rather than dropped
  *
@@ -70,6 +78,7 @@ import { noteTitle } from '../concept/zettelkasten.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
 import { parseCards } from '../instrument/card-format.js';
+import { readClozeId } from '../instrument/cloze-identity.js';
 import { parseMcqBlocks } from '../instrument/mcq-format.js';
 import type { CardInstrument, McqInstrument, SourceSpan } from '../instrument/types.js';
 import { OLEA_UID_KEY } from '../uid/stamp.js';
@@ -291,6 +300,22 @@ export async function enumerateVaultInstruments(
       const ordinal = (ordinals.get(anchorKey) ?? 0) + 1;
       ordinals.set(anchorKey, ordinal);
 
+      // `[D-177]`'s cloze branch: this walk already holds everything
+      // `cloze-identity.ts`'s `ClozeIdAnchor` needs (the same root/anchor/
+      // ordinal `instrument-id.ts` computes for every other type), so the
+      // read happens here — `instrument-id.ts` itself never reads a note's
+      // bytes (its own module doc's hard constraint) — and only for a cloze,
+      // since a `readClozeId` call for a non-cloze instrument at this anchor
+      // would risk matching a cloze stamped at the same position by
+      // coincidence. This is a READ ONLY: `enumerateVaultInstruments`'s own
+      // module doc ("nothing here writes") is unchanged, and mints nothing
+      // when no stamp exists yet — `provisionalInstrumentId` falls through to
+      // the position-based rule exactly as it did before this field existed.
+      const stampedClozeId: string | null =
+        instrument.type === 'cloze'
+          ? (readClozeId(source, { noteUid, notePath, heading, ordinal }) ?? null)
+          : null;
+
       const instrumentId = deriveId({
         noteUid,
         notePath,
@@ -299,6 +324,7 @@ export async function enumerateVaultInstruments(
         ordinal,
         explicitId: instrument.explicitId,
         instrumentType: instrument.type,
+        stampedClozeId,
       });
 
       const common = {

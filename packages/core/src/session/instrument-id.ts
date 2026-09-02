@@ -32,21 +32,30 @@
  *     explicit id / block id into a durable one, once. Once either has run on
  *     an instrument, this module's rule below reads that stamp back verbatim
  *     forever (rule 1 and rule 4's block-id branch) — position never
- *     contributes again. **Cloze has no stamping path.** A cloze *is* her
- *     line, so a visible marker would sit inside the card text and break
- *     C5.3's stays-readable-and-editable property; a frontmatter-side id map
- *     was investigated as the candidate fix and found not to be the drop-in
- *     reuse of `uid/stamp.ts` it looked like (see `ol-k7eg`'s notes for what
- *     specifically doesn't hold). It remains open, ruled to be David's call
- *     rather than an implementer's, and a cloze's id is still purely derived
- *     — the weaker, position-based guarantee — until it is answered.
+ *     contributes again.
+ *   - **Cloze now has a stamping path too — `[D-177]`, ratifying `[D-107]`.**
+ *     A cloze *is* her line, so a visible marker would sit inside the card
+ *     text and break C5.3's stays-readable-and-editable property; the answer
+ *     ruled is the carrier-by-block-shape rule, not a per-type list — an
+ *     instrument with no block of its own carries its marker beside the note
+ *     instead, in the per-note frontmatter map (`../instrument/
+ *     cloze-identity.ts`'s `readClozeId`/`stampClozeId`, keyed
+ *     `<root>#<anchor>#<ordinal>`, the same three components this module
+ *     computes for every other type). Rule 4 below reads it back through
+ *     `InstrumentIdInput.stampedClozeId`, which the caller (not this module —
+ *     see the hard constraint) has already resolved by reading the note.
+ *     **What this does not fix:** the map's *key* is still position-derived,
+ *     so a heading rename or a second cloze inserted under the same heading
+ *     still orphans the old entry — ratified as a named open question by
+ *     `[D-177]`, not closed here, and not attempted here.
  *   - **The prefix still marks what it always marked.** Every id this
  *     function mints starts with `PROVISIONAL_ID_PREFIX` — not because the
  *     *rule* is provisional (it is ruled), but because the *id* is: it is
- *     what a caller sees for an instrument that has not been stamped yet
- *     (including every cloze, always, and an MCQ or Q&A card before its first
- *     review). "Which ids are still waiting on a stamp" stays answerable from
- *     one log line rather than by dating it.
+ *     what a caller sees for an instrument that has not been stamped yet — an
+ *     MCQ or Q&A card before its first stamping trigger fires, and now a
+ *     cloze before its own (`[D-177]`) does, rather than always, as it did
+ *     for every cloze before this bead. "Which ids are still waiting on a
+ *     stamp" stays answerable from one log line rather than by dating it.
  *
  * ## The rule, and why each part of it
  *
@@ -65,10 +74,11 @@
  *      question-headed, so the heading is a real anchor and not a fallback —
  *      but it is still a *position*, not a stamp, and only used when there is
  *      no block id yet. A Q&A card with no block id gets one from
- *      `stampQaCardBlockId`, the same way an MCQ block does from `stampMcqId`;
- *      a cloze has neither a stamping path nor a block id to fall back to, so
- *      it stays on the heading (or the note path) for good, until the open
- *      question above is answered.
+ *      `stampQaCardBlockId`, the same way an MCQ block does from `stampMcqId`.
+ *      A cloze has no block id to fall back to (it is checked first, above,
+ *      via `stampedClozeId` — its own carrier is the frontmatter map, not a
+ *      `^blockid`) and stays on the heading (or the note path) whenever the
+ *      caller has not yet stamped one.
  *   5. **Then an ordinal within that anchor** — never a note-wide ordinal.
  *      This is the part that is easy to get wrong and expensive to discover:
  *      with a note-wide ordinal, inserting a card at the top of a note shifts
@@ -81,15 +91,19 @@
  * ## The hard constraint: this file itself writes nothing
  *
  * There is no stamping *in this module*, and there must not be — it stays a
- * pure function of the note and the instrument's position in it, callable
- * before any stamp exists (that is what a transient, `PROVISIONAL_ID_PREFIX`
- * id is for) and after one does (that is what rules 1 and 4 short-circuit
- * into). The actual writes live beside the formats they stamp
- * (`mcq-format.ts`, `card-format.ts`), through `applyDocumentEdits`, and
- * *when* they run — on enumeration versus on first review of that specific
- * instrument — is a decision for whatever drives the review pipeline
- * (`ol-k7eg`'s notes recommend first-review, the smaller promise), not for
- * this module.
+ * pure function of its input, callable before any stamp exists (that is what
+ * a transient, `PROVISIONAL_ID_PREFIX` id is for) and after one does (that is
+ * what rule 1, rule 4's block-id branch, and the cloze branch above
+ * short-circuit into). This module also never *reads* the note itself, even
+ * for the cloze branch: `stampedClozeId` arrives pre-read on the input, the
+ * same way `explicitId` and `blockId` already do, so "reads nothing but its
+ * input" stays true for every branch, not just the pre-`[D-177]` ones. The
+ * actual writes live beside the formats they stamp (`mcq-format.ts`,
+ * `card-format.ts`, `../instrument/cloze-identity.ts`), through
+ * `applyDocumentEdits`/`appendFrontmatterMapEntry`, and *when* they run — on
+ * enumeration versus on first review of that specific instrument — is a
+ * decision for whatever drives the review pipeline (`ol-k7eg`'s notes
+ * recommend first-review, the smaller promise), not for this module.
  *
  * ## What a replacement has to preserve
  *
@@ -130,6 +144,19 @@ export interface InstrumentIdInput {
   /** An id the instrument already carries in her vault (MCQ `id:`), or `null`. */
   readonly explicitId: string | null;
   readonly instrumentType: SchedulableInstrumentType;
+  /**
+   * A cloze's stamped id, already read from the note's frontmatter map
+   * (`../instrument/cloze-identity.ts`'s `readClozeId`) by the caller —
+   * `[D-177]`'s carrier-by-block-shape rule: a cloze has no block of its own
+   * to carry a marker in, so its stamp lives beside the note rather than in
+   * it, and this module never reads a note's bytes itself (the hard
+   * constraint below), so the caller hands the already-read value across
+   * exactly the way `explicitId` is already handed across for MCQ.
+   * `undefined`/`null` for every non-cloze instrument, and for a cloze with
+   * no stamp yet — both read as "derive from position," same as `explicitId`
+   * being `null` does for rule 1.
+   */
+  readonly stampedClozeId?: string | null;
 }
 
 /**
@@ -166,6 +193,19 @@ function anchorComponent(input: InstrumentIdInput): string {
  */
 export const provisionalInstrumentId: InstrumentIdSource = (input) => {
   if (input.explicitId !== null && input.explicitId !== '') return input.explicitId;
+  // `[D-177]`'s cloze branch: a stamped frontmatter-map value, once the
+  // caller has read one, wins exactly as an explicit MCQ `id:` does above —
+  // read, never recomputed, even though the anchor/ordinal below would still
+  // compute *some* value. See `InstrumentIdInput.stampedClozeId`'s own doc
+  // for why this module takes the value rather than reading it itself.
+  if (
+    input.instrumentType === 'cloze' &&
+    input.stampedClozeId !== undefined &&
+    input.stampedClozeId !== null &&
+    input.stampedClozeId !== ''
+  ) {
+    return input.stampedClozeId;
+  }
 
   const root = escapeComponent(
     input.noteUid !== null && input.noteUid !== '' ? input.noteUid : input.notePath,

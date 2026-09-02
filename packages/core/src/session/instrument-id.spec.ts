@@ -9,7 +9,8 @@
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
 import { parseDocument } from '../block/parse.js';
-import { parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
+import { createQaCard, parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
+import { stampClozeId } from '../instrument/cloze-identity.js';
 import { parseMcqBlocks, stampMcqId } from '../instrument/mcq-format.js';
 import { FolderSource } from '../vault/folder-source.js';
 import { enumerateVaultInstruments } from './enumerate.js';
@@ -70,6 +71,45 @@ describe('the provisional derivation', () => {
     expect(provisionalInstrumentId(input({ heading: 'h' }))).toBe(
       provisionalInstrumentId(input({ heading: 'h' })),
     );
+  });
+
+  describe('[D-177]: the cloze branch — a stamped frontmatter-map id, caller-resolved', () => {
+    it('a stamped cloze id wins outright, and nothing about position contributes', () => {
+      const a = provisionalInstrumentId(
+        input({ instrumentType: 'cloze', stampedClozeId: 'cloze-one', heading: 'H', ordinal: 1 }),
+      );
+      const b = provisionalInstrumentId(
+        input({
+          instrumentType: 'cloze',
+          stampedClozeId: 'cloze-one',
+          ordinal: 9,
+          heading: 'elsewhere',
+          notePath: 'Other.md',
+        }),
+      );
+      expect(a).toBe('cloze-one');
+      expect(b).toBe('cloze-one');
+    });
+
+    it('is type-gated: a stampedClozeId on a non-cloze instrument is ignored', () => {
+      const ignored = provisionalInstrumentId(
+        input({ instrumentType: 'qa', stampedClozeId: 'cloze-one', heading: 'H', ordinal: 1 }),
+      );
+      expect(ignored).not.toBe('cloze-one');
+    });
+
+    it('an absent, null or empty stampedClozeId falls through to the position-based rule, same as explicitId does', () => {
+      const omitted = provisionalInstrumentId(input({ instrumentType: 'cloze', heading: 'H' }));
+      const withNull = provisionalInstrumentId(
+        input({ instrumentType: 'cloze', stampedClozeId: null, heading: 'H' }),
+      );
+      const withEmpty = provisionalInstrumentId(
+        input({ instrumentType: 'cloze', stampedClozeId: '', heading: 'H' }),
+      );
+      expect(omitted).toContain('hH');
+      expect(withNull).toBe(omitted);
+      expect(withEmpty).toBe(omitted);
+    });
   });
 });
 
@@ -310,5 +350,152 @@ describe('D-030, end to end: a stamped instrument survives what an unstamped one
     await vault.write('Notes/one.md', before.replace('Original heading', 'A totally new title'));
     const afterRename = await enumerateVaultInstruments(vault);
     expect(afterRename.records[0]?.instrumentId).not.toBe(idBefore);
+  });
+});
+
+describe('[D-177] end to end: a stamped cloze, wired through enumeration', () => {
+  const clozeNote = [
+    '---',
+    'topic: [Alpha]',
+    'course: TEST101',
+    '---',
+    '',
+    '## Original heading',
+    '',
+    'A ==blank== in a sentence.',
+    '',
+  ].join('\n');
+
+  it('a stamped cloze is read back verbatim — not a fresh provisional id — proving the write-side and read-side anchors agree', async () => {
+    const stamped = stampClozeId(
+      clozeNote,
+      { noteUid: null, notePath: 'Notes/one.md', heading: 'Original heading', ordinal: 1 },
+      () => 'cloze-durable',
+    ).content;
+
+    const vault = memoryVault({ 'Notes/one.md': stamped });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toHaveLength(1);
+    expect(found.records[0]?.instrumentId).toBe('cloze-durable');
+    expect(found.records[0]?.instrumentId).not.toContain(PROVISIONAL_ID_PREFIX);
+  });
+
+  it('an unstamped cloze, by contrast, still derives a provisional, position-based id — the branch is a no-op with no stamp present', async () => {
+    const vault = memoryVault({ 'Notes/one.md': clozeNote });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records[0]?.instrumentId).toContain(PROVISIONAL_ID_PREFIX);
+    expect(found.records[0]?.instrumentId).toContain('Original heading');
+  });
+
+  it('does not write: enumerating a note with a stamped cloze leaves it byte-identical', async () => {
+    const stamped = stampClozeId(
+      clozeNote,
+      { noteUid: null, notePath: 'Notes/one.md', heading: 'Original heading', ordinal: 1 },
+      () => 'cloze-durable',
+    ).content;
+    const vault = memoryVault({ 'Notes/one.md': stamped });
+    await enumerateVaultInstruments(vault);
+    expect(vault.writes).toEqual([]);
+    expect(await vault.read('Notes/one.md')).toBe(stamped);
+  });
+
+  it("[D-177]'s named open question, made concrete: a heading rename still orphans a stamped cloze's map key — ratified, not fixed, here", async () => {
+    const stamped = stampClozeId(
+      clozeNote,
+      { noteUid: null, notePath: 'Notes/one.md', heading: 'Original heading', ordinal: 1 },
+      () => 'cloze-durable',
+    ).content;
+
+    const vault = memoryVault({ 'Notes/one.md': stamped });
+    const beforeRename = await enumerateVaultInstruments(vault);
+    expect(beforeRename.records[0]?.instrumentId).toBe('cloze-durable');
+
+    // The exact edit the MCQ/Q&A block-id stamp survives (see the describe
+    // block above) — but the cloze map's key is still `<root>#h:<heading>#
+    // <ordinal>`, so renaming the heading changes the key the read side
+    // looks up under. The stamped entry is not found at the new key, and the
+    // derivation falls back to a fresh, provisional id — the asymmetry
+    // `[D-177]` ratifies as a named open question rather than closes.
+    await vault.write('Notes/one.md', stamped.replace('Original heading', 'A totally new title'));
+    const afterRename = await enumerateVaultInstruments(vault);
+    expect(afterRename.records[0]?.instrumentId).not.toBe('cloze-durable');
+    expect(afterRename.records[0]?.instrumentId).toContain(PROVISIONAL_ID_PREFIX);
+  });
+});
+
+// `ol-2zfj.46`'s flagged observation, confirmed and fixed: an accept path
+// that materializes a Q&A card via `createQaCard` and stops there stamps a
+// block id onto the ANCHOR line (the block she ran the command on), never
+// onto the card's own line — `card-format.ts`'s `CardAnchor` doc now names
+// this explicitly. `../session/instrument-id.ts`'s identity derivation only
+// ever reads a block id off the CARD's own last line (`card.blockId`, via
+// `parseCards`), so a card materialized this way still enumerates as
+// heading-anchored, exactly as if `createQaCard` had never run. The fix is
+// procedural, not a code change to `createQaCard` (whose anchor-stamping is
+// a real, separate feature — where a repeat command attaches the next
+// card): a materialization path must ALSO call `stampQaCardBlockId` on the
+// card's own re-parsed span, the same second call `materializeAcceptedDraft`
+// already makes for MCQ (`insertMcqBlock` + `stampMcqId`).
+describe("ol-2zfj.46: createQaCard's own anchor stamp is not identity", () => {
+  const materializedNote = [
+    '---',
+    'topic: [Alpha]',
+    'course: TEST101',
+    '---',
+    '',
+    '## A heading',
+    '',
+    'Some prose she already wrote.',
+    '',
+  ].join('\n');
+
+  it("a card materialized by createQaCard ALONE still enumerates heading-anchored — the anchor stamp is not the card's own identity", async () => {
+    const created = createQaCard({
+      source: materializedNote,
+      anchorBlockIndex: 4, // the "Some prose she already wrote." paragraph
+      front: 'a freshly generated question',
+      back: 'a freshly generated answer',
+      generateBlockId: () => 'anchor-only',
+    });
+    // The anchor DID get a block id — just not the card.
+    expect(created.anchor).toEqual({ kind: 'block-id', id: 'anchor-only', created: true });
+    const card = parseCards(created.content).find((c) => c.type === 'qa');
+    expect(card?.blockId).toBeNull();
+
+    const vault = memoryVault({ 'Notes/one.md': created.content });
+    const found = await enumerateVaultInstruments(vault);
+    const record = found.records.find((r) => r.instrumentType === 'qa');
+    // Heading-anchored, not `^anchor-only` — confirming the flagged gap.
+    expect(record?.instrumentId).toContain('A heading');
+    expect(record?.instrumentId).not.toContain('anchor-only');
+  });
+
+  it("the fix: also stamping the card's own re-parsed span (the MCQ accept path's pattern) gives it a durable identity independent of the heading", async () => {
+    const created = createQaCard({
+      source: materializedNote,
+      anchorBlockIndex: 4,
+      front: 'a freshly generated question',
+      back: 'a freshly generated answer',
+      generateBlockId: () => 'anchor-only',
+    });
+    // Re-locate the card's own span after insertion — same "stamp's span is
+    // stale once content has grown" discipline `materialize-mcq.ts` follows.
+    const cardSpan = parseCards(created.content).find((c) => c.type === 'qa')?.span;
+    if (!cardSpan) throw new Error('test setup: no Q&A card found after createQaCard');
+    const stamped = stampQaCardBlockId(created.content, cardSpan, {
+      generateBlockId: () => 'card-own-id',
+    });
+
+    const vault = memoryVault({ 'Notes/one.md': stamped.content });
+    const found = await enumerateVaultInstruments(vault);
+    const record = found.records.find((r) => r.instrumentType === 'qa');
+    expect(record?.instrumentId).toContain('^card-own-id');
+
+    // And now it survives the exact edit the heading-anchored version above
+    // could not: renaming the heading.
+    await vault.write('Notes/one.md', stamped.content.replace('A heading', 'A renamed heading'));
+    const afterRename = await enumerateVaultInstruments(vault);
+    const renamedRecord = afterRename.records.find((r) => r.instrumentType === 'qa');
+    expect(renamedRecord?.instrumentId).toBe(record?.instrumentId);
   });
 });

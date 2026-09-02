@@ -369,7 +369,24 @@ function cardsOnLine(line: LineSlice): CardInstrument[] {
 // single-write-path requirement a property of the code rather than a promise in
 // a comment.
 
-/** Where a created card is anchored back to her note (C1.4). */
+/**
+ * Where a created card is anchored back to her note (C1.4) — i.e. where a
+ * REPEAT run of this same command should attach the next card. **This is
+ * not the card's own D-030 identity anchor, and `id`/`created` here must
+ * never be read as "the card is now identity-stamped."** The block id this
+ * type names lives on the block *before* the card (the one she ran the
+ * command on); `../session/instrument-id.ts`'s identity derivation reads
+ * `card.blockId` from the CARD'S OWN last line via `parseCards`, which is a
+ * different line entirely and is `null` until `stampQaCardBlockId` runs on
+ * the card's own span — the same second call `materializeAcceptedDraft`
+ * (`packages/plugin/src/generation/materialize-mcq.ts`) already makes for
+ * MCQ, as `insertMcqBlock` + `stampMcqId`, and no Q&A materialization path
+ * skips. A caller that stops after `createQaCard` and treats this field as
+ * identity gets a card the enumerator falls back to identifying by the
+ * nearest heading — the exact "accept-path anchor stamping" gap named on
+ * `ol-2zfj.46`, pinned by `instrument-id.spec.ts`'s
+ * "createQaCard's own anchor stamp is not identity" case.
+ */
 export type CardAnchor =
   | {
       readonly kind: 'block-id';
@@ -588,16 +605,23 @@ export function createClozeCard(input: CreateClozeCardInput): CreateClozeCardRes
 // ---- identity stamping (D-030, option (b)) ---------------------------------
 //
 // A hand-typed Q&A card's own line may carry no block id at all — she never
-// ran a command, she just typed `Front::Back`. Once the pipeline needs a
-// stable `instrumentId` for it, that gap has to close by *writing* the id,
-// once, the same way `stampMcqId` does for MCQ blocks: a trailing `^id`
-// appended to the card's own last line, in exactly the shape
-// `card-format.ts` already reads back (`TRAILING_BLOCK_ID_RE`) and the shape
-// `createQaCard` already writes for the anchor line of a *generated* card.
-// Nothing changes for cloze here — a cloze *is* her line, so a trailing
-// marker would sit inside the card text, which is the C5.3 failure this
-// module's header already explains; that case is not solved by this
-// function and is not attempted here.
+// ran a command, she just typed `Front::Back`. A CREATED card (via
+// `createQaCard`, above) is no different: that function's own block id goes
+// on the ANCHOR line — the block she ran the command on — never the card's
+// own line (see `CardAnchor`'s doc for why, and for the "accept-path anchor
+// stamping" mistake this distinction exists to prevent). Either way, once
+// the pipeline needs a stable `instrumentId`, that gap closes by *writing*
+// the id, once, the same way `stampMcqId` does for MCQ blocks: a trailing
+// `^id` appended to the CARD's OWN last line, in exactly the shape
+// `card-format.ts` already reads back (`TRAILING_BLOCK_ID_RE`). A caller
+// materializing a freshly created card must call this function too, on the
+// card's own re-parsed span, exactly as `materializeAcceptedDraft`
+// (`packages/plugin/src/generation/materialize-mcq.ts`) calls `stampMcqId`
+// after `insertMcqBlock` — `createQaCard` alone does not stamp the card's
+// own identity. Nothing changes for cloze here — a cloze *is* her line, so a
+// trailing marker would sit inside the card text, which is the C5.3 failure
+// this module's header already explains; that case is not solved by this
+// function (see `cloze-identity.ts` for cloze's own, different carrier).
 
 export interface StampQaCardBlockIdOptions {
   /** Injectable for deterministic tests; defaults to a random id in Obsidian's charset. */

@@ -26,6 +26,8 @@ import { parseDocument } from '../block/parse.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import type { EntryNode } from '../frontmatter/types.js';
 import { createQaCard, parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
+import type { ClozeIdAnchor } from '../instrument/cloze-identity.js';
+import { stampClozeId } from '../instrument/cloze-identity.js';
 import {
   insertMcqBlock,
   MCQ_FENCE_INFO,
@@ -157,6 +159,29 @@ const QA_BASE = [
   'Some coined prose after.',
   '',
 ].join('\n');
+
+const CLOZE_BASE = [
+  '---',
+  'olea-uid: coined-uid-1',
+  'course: coined-course',
+  '---',
+  '',
+  '# Practice',
+  '',
+  'Some coined prose before.',
+  '',
+  'A coined ==cloze answer== sits in this sentence.',
+  '',
+  'Some coined prose after.',
+  '',
+].join('\n');
+
+const CLOZE_ANCHOR: ClozeIdAnchor = {
+  noteUid: 'coined-uid-1',
+  notePath: 'coined/note.md',
+  heading: 'Practice',
+  ordinal: 1,
+};
 
 // ---- stampUid (uid/stamp.ts) ----------------------------------------------
 
@@ -382,6 +407,40 @@ describe('createQaCard (instrument/card-format.ts) — round-trip audit', () => 
         ? [result.insertedSpan, result.blockIdSpan]
         : [result.insertedSpan];
       expect(removeSpans(result.content, spans)).toBe(before);
+    });
+  }
+});
+
+// ---- stampClozeId (instrument/cloze-identity.ts) — round-trip audit ------
+//
+// `[D-177]`/`ol-2zfj.46`: the first appearance of the cloze write path in
+// this audit — every other writer here already ran the full four-variant
+// sweep, and `stampClozeId` had none. Named explicitly by the bead rather
+// than left to be discovered later: CRLF and a leading BOM are the two
+// classes most likely to break a frontmatter-map append (`frontmatter/
+// map.ts`'s own terminator detection reads the *last* frontmatter entry's
+// raw bytes), so both run here alongside the other two variants every other
+// writer already gets, for the same "no writer's spec is the only place a
+// byte-shape gets checked" reason the module doc above states.
+describe('stampClozeId (instrument/cloze-identity.ts) — round-trip audit', () => {
+  for (const { label, build } of VARIANTS) {
+    const before = build(CLOZE_BASE);
+
+    it(`stamps a cloze id under the frontmatter map and touches nothing outside it — ${label}`, () => {
+      const result = stampClozeId(before, CLOZE_ANCHOR, () => 'cloze-audit-1');
+      expect(result.changed).toBe(true);
+      assertPureInsertion(before, result.content);
+      if (result.insertedSpan) {
+        expect(removeSpans(result.content, [result.insertedSpan])).toBe(before);
+      }
+    });
+
+    it(`is idempotent on the already-stamped note — ${label}`, () => {
+      const first = stampClozeId(before, CLOZE_ANCHOR, () => 'cloze-audit-1');
+      const second = stampClozeId(first.content, CLOZE_ANCHOR, () => 'should-not-be-used');
+      expect(second.changed).toBe(false);
+      expect(second.content).toBe(first.content);
+      expect(second.value).toBe('cloze-audit-1');
     });
   }
 });
