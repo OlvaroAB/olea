@@ -42,7 +42,10 @@ to the deployable directory at all.
 #/<surface>/<state-id>?set=<variable-set-id>&persona=<persona-id>
 ```
 
-`surface` is `review` (default if the segment is anything else) or `today`.
+`surface` is one of the sixteen route surfaces named in "What mounts, and what does not" below
+(`review` is the default if the segment is anything else). Each surface's own file
+(`*-scenarios.ts`) is the source of truth for its addressable states; the two lists below are
+the two original surfaces, kept here because nothing since has needed a second worked example.
 
 Review states: `loading`, `empty`, `qa-front`, `qa-reveal`, `cloze-front`, `cloze-reveal`,
 `mcq-open`, `mcq-answered-correct`, `mcq-answered-wrong`, `mcq-answered-guessed`,
@@ -59,6 +62,14 @@ Personas: `none` (default), `steady-reviewer`, `crammer`, `instrument-skipper`,
 `lapsed-returner`, `struggler`, `empty-history`, `single-session`.
 
 ## What mounts, and what does not
+
+Sixteen route surfaces today (`main.ts`'s `RouteSurface`): `review`, `today`, `oracle`,
+`retrieve`, `generate`, `timeline`, `explain`, `explain-back`, `session`, `trends`, `rhythm`,
+`bulk-review`, `registry`, `plugin-surface`, `grove`, and `walk` (a linear mode over the other
+six original surfaces' scenario builders — see `walkthrough.ts`'s module doc). Every one mounts
+either a real `packages/plugin` view/modal against real `deps`, or — where no product view exists
+yet for the underlying mechanism — reports through the inspector and says so on screen, never a
+hand-built view model standing in for one.
 
 **Mounts:** `ReviewView` — all seven screens it can render, plus the three MCQ answer
 variants, twelve addressable states in total. Every one is reached by sending **real
@@ -135,17 +146,77 @@ lane's ownership this run.
   otherwise-identical seed) so the two detectors' claims are checkable on screen rather than
   only asserted in a test.
 
-**Does not mount, because it does not exist yet:**
+**Also mounts — the oracle/retrieve/generate/timeline tranche (`ol-opmb`'s TB-1..TB-4):**
 
-- **Triage** — no triage view exists in `packages/plugin`.
+- **`oracle`** mounts the real `GapView` (`../../plugin/src/gap/view.js`) against a
+  `SyntheticWorld`'s `mastery → rank → plan → gap` chain, via `oracle-scenarios.ts` — never a
+  hand-built `GapViewModel`. Ten states, including three genuinely different `refreshStudyPlan`
+  code paths (fresh, stale-but-governing, expired-and-discarded) and one struggling-course
+  control. Carries `FIXTURE_ORACLE_ILLUSTRATIVE_LABEL` (D-041) on screen.
+- **`retrieve`** and **`generate`** are **inspector-only**, the same "no product view exists"
+  shape `explain` uses, for the same reason: there is no screen for a bare grounding or
+  generation result yet. Both run the real `oracle/retrieve.ts` / `oracle/generate.ts` drivers
+  against the same real, once-embedded `EmbeddingCassette` (and, for `generate`, a real
+  `GenerationCassette`) — `retrieve-scenarios.ts` and `generate-scenarios.ts`'s module docs name
+  which labelled query demonstrates which state and why that is empirical, not tuning.
+  `generation-pending-accept` and `generation-accepted` run the identical chain and differ only
+  in whether `acceptCandidates` was called, mirroring the live "Accept" button exactly.
+- **`timeline`** mounts the same real `GapView` as `oracle`, but pinned to a whole simulated
+  semester with the viewed day as a second URL parameter (`day=<n>`) rather than a state per
+  day — `timeline-scenarios.ts`, over `oracle/timeline.ts`'s `deriveOracleTimeline`.
 
-**Does not mount, deliberately:** `OleaSettingTab`. Shimming it means reimplementing
-Obsidian's `Setting` builder — `setName`/`setDesc`/`setHeading`/`addText`/`addToggle`/… —
-which is a settings-widget library, not a shallow chrome shim. There is also no clean
-core-ward move: the settings *rows* really are Obsidian chrome. The two things in it worth
-asserting (the F7.8 degradation statement and the token field's copy) are already pure data
-with their own unit tests. So it is left out and said so, rather than growing the shim
-sideways to reach it.
+**Also mounts — the F5/F7/F8/F1 tranches (`ol-z6x2` [WB-2]):**
+
+- **`explain-back`** mounts the real `ExplainBackModal` (`packages/plugin`) — a `Modal`, not an
+  `ItemView`, the one surface in this package that is not a workspace tab. `main.ts`'s
+  `mountExplainBack` opens it as an overlay above the host pane and settles it the same way
+  every other surface settles. It never runs the real grading pipeline
+  (`gradeExplainBackAttempt`/`acceptExplainBackGradingWithObservation`) — that pipeline's own
+  behaviour is covered by `packages/core`'s and `olea-service`'s spec files; every state instead
+  injects a canned grade/observation result to exercise the modal's own phase-rendering state
+  machine (topic → answering → grading → graded/refused → accepted) and its `[D-171]` "See in
+  registry" hand-off, recorded live in the inspector. See "Two additions predate this ledger
+  row" below for the `Modal`/`App`/`Workspace` shim this needed.
+- **`bulk-review`** mounts the real `BulkReviewController`/`BulkReviewView` (F3.3's triage path
+  after generation) over a `MemoryVaultSource` seeded with synthetic pending drafts, via
+  `bulk-review-scenarios.ts` — the real `createVaultDraftCacheStore` and `createDraftAcceptPort`
+  from `packages/plugin/src/generation/`, the identical recipe `bulk-review.spec.ts` already
+  uses. Only the edit port is workbench-local.
+- **`registry`** mounts the real `RegistryView` (F8.4) driven by the real
+  `buildRegistryModel` (`olea-core`), via `registry-scenarios.ts`. Fed hand-built
+  `ConceptRecord`/`VaultInstrumentRecord`/log-entry arrays rather than a walked vault (the same
+  posture `trends-scenarios.ts` takes for its own synthetic history), because
+  `buildRegistryModel` takes those directly. Rename/withdraw/restore run through the real pure
+  `overrides.ts` transforms, held in an in-memory `RegistryOverrides` per scenario instance.
+- **`plugin-surface`** mounts the real `OleaSettingTab` (F7) over an in-memory
+  `ObsidianDataHost` and a canned `WorkerTaskTransport`, via `plugin-surface-scenarios.ts`.
+  Scope is deliberately narrow — only the F7 risk that does not live in the Obsidian runtime
+  (rendered copy, a settings section's conditional presence, the "Test connection" status
+  line's live text); F7.7's commands/hotkeys/palette entries stay `@manual`. Because the real
+  component mounts whole, its other sections (study plan, term dates, base URL/token fields,
+  Support) render too, without a scenario asserting them individually.
+- **`grove`** mounts the real `GroveView` (F1.5/F8.1) over a hand-built `GroveCourseModel`
+  (never a vault walk), via `grove-scenarios.ts` — the three-way source-registration status,
+  F8.3's count-and-denominator summary, and F4.10's material gap named in plain language.
+- **`rhythm`** is the one surface with **no product view to mount**, and says so on screen
+  (`RHYTHM_NO_PRODUCT_VIEW_NOTICE`): it draws RHY-3's multicourse composition rule directly
+  against `olea-core`'s real, unmodified `discoverScheduleEvents` → `associateScheduleEvents` →
+  `computeScheduleFreshness` chain, over the fixture vault plus one synthetic calendar note.
+  Presentational-only workbench code, not a product renderer — `[D-072]`'s reachability clause
+  is explicitly not discharged by this pane.
+- **`walk`** is not a seventh product surface but a linear re-presentation of the other six
+  original surfaces' own scenario builders, plus two pseudo-surfaces of its own (`'note'`,
+  rendering her fixture note's own markdown with no plugin code involved, and
+  `'oracle-fixture'`, the same real `GapView` `oracle` mounts, over the real fixture vault
+  instead of the synthetic corpus, per D-041). `walkthrough.ts` is data and derivation only —
+  `main.ts` is still the one place that mounts a screen.
+
+**Nothing is left in a "does not exist yet" or "deliberately not shimmed" state today.** Two
+things this README used to say don't mount — a triage view, and `OleaSettingTab` — both now do:
+`bulk-review` (F3.3) is that triage path, and `plugin-surface` (F7) is the settings tab, once
+the ledger's row 7 (below) worked out what shim it actually needed. Left here as a Class A
+correction (a live document must be current, never backwards-looking) rather than silently
+dropped, since both statements were cited as design constraints while they held.
 
 ## Persona history (SYN-1, `ol-6vyi`)
 
