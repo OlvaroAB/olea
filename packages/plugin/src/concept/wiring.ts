@@ -72,6 +72,7 @@ import {
   deriveRelationSet,
   type ExtractConceptsOptions,
   extractConcepts,
+  foldReadAnchors,
   type KnowledgeKindClassifierPort,
   type Provenance,
   type ReadConcept,
@@ -237,6 +238,40 @@ export async function extractConceptsFromVault(
   options: ExtractConceptsOptions = {},
 ): Promise<readonly ConceptRecord[]> {
   return extractConcepts(vault, { stampConceptKeys: true, ...options });
+}
+
+/**
+ * `extractConceptsFromVault` plus `[D-082]`'s passage-grain fold
+ * (`foldReadAnchors`, `olea-core`) in one call — the production caller
+ * `foldReadAnchors`'s own doc names as still missing (`ol-2zfj.49`, second
+ * half): "a caller that has both a fresh `extractConcepts` result and a
+ * completed `readConcepts` result... applies this afterwards."
+ *
+ * **Where this is actually called from, and why that is enough.**
+ * `main.ts`'s `tickIngestionAndMaybeRunCorpusRelations` already holds a
+ * completed `ConceptsRead.concepts` (`pass.read.concepts`, from
+ * `readConceptsAndRelations`) on every corpus-relation-batch tick — a real
+ * read, over the real Worker, that already happened for the relation stage.
+ * This function's `readConcepts` argument is exactly that value: no new
+ * network call is made here, only a fresh, cheap, purely-local vault walk
+ * (`extractConceptsFromVault`, i.e. `extractConcepts` — no transport) plus
+ * the in-memory fold.
+ *
+ * **Reaches the registry now (`ol-2zfj.49` closing step).** `main.ts` holds
+ * the folded `ConceptRecord[]` this function returns on `this.conceptRecords`
+ * and hands the registry view a thunk over it (`conceptRecords: () =>
+ * this.conceptRecords`); `registry/provider.ts`'s `load()` overlays
+ * `anchor`/`alsoIn` from it onto its own `enumerateVaultInstruments` walk, by
+ * key, so the click-through shows passage grain once a read has completed
+ * and falls back to note-grain-only (unchanged) before that.
+ */
+export async function extractConceptsWithAnchors(
+  vault: VaultSource,
+  readConcepts: readonly ReadConcept[],
+  options: ExtractConceptsOptions = {},
+): Promise<readonly ConceptRecord[]> {
+  const records = await extractConceptsFromVault(vault, options);
+  return foldReadAnchors(records, readConcepts);
 }
 
 // =============================================================================

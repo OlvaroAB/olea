@@ -3,6 +3,7 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
+  type ConceptRecord,
   type ConceptRelation,
   type ConfusionPairingVerdict,
   type ConfusionRoutingDecision,
@@ -48,6 +49,7 @@ import {
   type CorpusRelationWiring,
   classifyConceptKnowledgeKind,
   EMBEDDING_PROXIMITY_THRESHOLD,
+  extractConceptsWithAnchors,
   type KnowledgeKindWiring,
   type ReadConceptsFromVaultOptions,
   readConceptsAndRelations,
@@ -362,6 +364,25 @@ export default class OleaPlugin extends Plugin {
    * a gap — a future consumer bead is what would give it one.
    */
   private confusionPairingVerdicts: readonly ConfusionPairingVerdict[] = [];
+  /**
+   * The most recent tick's `ConceptRecord[]`, folded with that same tick's
+   * completed read's passage anchors (`ol-2zfj.49` second half,
+   * `extractConceptsWithAnchors`) — held in memory for the process lifetime,
+   * same posture as `this.relations`, and never persisted.
+   *
+   * **Reachability.** This IS a real production caller of `foldReadAnchors`:
+   * every corpus-relation-batch tick below re-walks the vault
+   * (`extractConceptsWithAnchors`, no new network call — only the local walk
+   * plus the in-memory fold) and folds that walk's `ConceptRecord`s against
+   * this same tick's already-completed `pass.read.concepts`. The registry
+   * view's wiring below reads this field through a thunk
+   * (`conceptRecords: () => this.conceptRecords`) so `registry/provider.ts`'s
+   * `load()` can overlay `anchor`/`alsoIn` onto the vault walk's own
+   * concepts — F8.4's `[D-171]` click-through shows passage grain once a
+   * read has completed, note-grain-only before that (`ol-2zfj.49` closing
+   * step).
+   */
+  private conceptRecords: readonly ConceptRecord[] | null = null;
   /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
   private lastIngestionSnapshot: QueueSnapshot | null = null;
 
@@ -897,6 +918,14 @@ export default class OleaPlugin extends Plugin {
             onOverridesChanged: (overrides) => {
               this.registryOverridesCache = overrides;
             },
+            // `ol-2zfj.49` (second half): threads `this.conceptRecords` in —
+            // a thunk (matching the grove view's `relations` thunk above) so
+            // a corpus-relation tick that completes after this view was
+            // constructed still reaches the next `load()`. `null` before the
+            // first such tick; `provider.ts`'s `load()` falls back to the
+            // plain vault walk's concepts in that case, identical to before
+            // this field existed.
+            conceptRecords: () => this.conceptRecords,
           }),
         ),
     );
@@ -1465,6 +1494,13 @@ export default class OleaPlugin extends Plugin {
       );
       if (pass === null) return;
       this.relations = pass.relations;
+
+      // `ol-2zfj.49` (second half): fold this tick's already-completed read
+      // (`pass.read.concepts`) onto a fresh, purely-local vault walk's
+      // `ConceptRecord`s — see `extractConceptsWithAnchors`'s own doc for why
+      // this makes no new network call, and `this.conceptRecords`'s own doc
+      // for what still has no consumer.
+      this.conceptRecords = await extractConceptsWithAnchors(vault, pass.read.concepts);
 
       // `ol-2zfj.32` (`[D-130]`): the confusion-pairing corroboration
       // reader's first production caller — makes `relation-reader-check.mjs`'s

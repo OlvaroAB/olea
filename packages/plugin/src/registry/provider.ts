@@ -36,10 +36,28 @@
  * `restoreConcept` below write a new blob. This provider's own `load()`
  * above is untouched by it and still reads fresh every time, exactly as
  * before.
+ *
+ * **`deps.conceptRecords` (`ol-2zfj.49` second half) threads `main.ts`'s
+ * `this.conceptRecords` in — the most recent corpus-relation tick's
+ * `ConceptRecord[]`, already folded with that tick's completed read's
+ * passage anchors (`extractConceptsWithAnchors`, `[D-082]`). A thunk, same
+ * shape as `grove/provider.ts`'s `relations`, so a later tick's fresher fold
+ * reaches a view built before that tick ran, not just the one at hand when
+ * the view was first opened. `load()` still does its own full vault walk via
+ * `enumerateVaultInstruments` for concept existence, instrument binding and
+ * every other field — this only OVERLAYS `anchor`/`alsoIn` onto matching
+ * concept keys, so a concept the walk just found that the (possibly stale,
+ * possibly `null` before any read has completed) fold does not yet know
+ * about still appears, note-grain-only, exactly as it does today. Nothing
+ * changes when `deps.conceptRecords` is omitted or returns `null`, or before
+ * the first corpus-relation tick completes: `enumeration.concepts` passes
+ * through unchanged, so the no-read-yet fallback is identical to before this
+ * field existed.
  */
 
 import {
   buildRegistryModel,
+  type ConceptRecord,
   calendarDaysEndingOn,
   createFsrsScheduler,
   enumerateVaultInstruments,
@@ -123,6 +141,45 @@ export interface CreateLocalRegistryProviderDeps {
    * make a rename/prune/restore itself look like it failed.
    */
   readonly onOverridesChanged?: (overrides: RegistryOverrides) => void;
+  /**
+   * `ol-2zfj.49` (second half): the most recent corpus-relation tick's
+   * folded `ConceptRecord[]` (`main.ts`'s `this.conceptRecords`) — a thunk,
+   * read fresh on every `load()` so a later tick's fold reaches a view built
+   * earlier, matching `grove/provider.ts`'s `relations` thunk. **Optional,
+   * and `null` is a first-class value**, not just "field omitted": before
+   * the first corpus-relation-batch tick completes this returns `null`
+   * (`main.ts`'s field starts `null`), and `load()` below falls back to the
+   * plain vault walk's concepts, unchanged from before this field existed.
+   * See this file's own module doc for what it overlays and what it never
+   * touches.
+   */
+  readonly conceptRecords?: () => readonly ConceptRecord[] | null;
+}
+
+/**
+ * Overlays `anchor`/`alsoIn` (`[D-082]` passage-grain provenance) from a
+ * fresher, already-folded `ConceptRecord[]` onto the vault walk's own
+ * concepts, matched by `key`. Everything else about each concept — its
+ * `sourcePaths`, `courses`, `tier`, whatever the walk just found — comes
+ * from `enumeration.concepts`, never from the (possibly stale) fold: a
+ * concept the walk just minted that the fold has not caught up to yet still
+ * appears, note-grain-only, rather than being dropped or duplicated.
+ */
+function withPassageAnchors(
+  concepts: readonly ConceptRecord[],
+  folded: readonly ConceptRecord[] | null,
+): readonly ConceptRecord[] {
+  if (folded === null || folded.length === 0) return concepts;
+  const byKey = new Map(folded.map((concept) => [concept.key, concept]));
+  return concepts.map((concept) => {
+    const match = byKey.get(concept.key);
+    if (match === undefined) return concept;
+    return {
+      ...concept,
+      ...(match.anchor !== undefined ? { anchor: match.anchor } : {}),
+      ...(match.alsoIn !== undefined ? { alsoIn: match.alsoIn } : {}),
+    };
+  });
 }
 
 async function additionalReviewLogPaths(
@@ -168,7 +225,7 @@ export function createLocalRegistryProvider(
         ]);
 
         const model = buildRegistryModel({
-          concepts: enumeration.concepts,
+          concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
           instrumentRecords: enumeration.records,
           entries,
           scheduler,

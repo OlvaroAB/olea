@@ -9,7 +9,7 @@
  * round trip through `data.json`, and the prune/restore round trip through
  * the review log.
  */
-import type { RegistryInstrumentSummary, RegistrySourceLocation } from 'olea-core';
+import type { ConceptRecord, RegistryInstrumentSummary, RegistrySourceLocation } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
 import type { EditInstrumentPort, OpenSourceLocationPort } from '../../src/registry/provider.js';
@@ -241,5 +241,150 @@ describe('createLocalRegistryProvider — openSourceLocation ([D-171])', () => {
     const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
     const location: RegistrySourceLocation = { sourcePath: 'Notes/one.md' };
     await expect(provider.openSourceLocation(location)).resolves.toBeUndefined();
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 — the
+// registry's Sources list shows passage grain once a read has completed",
+// tagged `@auto:plugin/registry/provider.spec`.
+describe('createLocalRegistryProvider — conceptRecords thunk (ol-2zfj.49 closing step)', () => {
+  it('overlays anchor/alsoIn from the folded ConceptRecord onto the matching concept, by key', async () => {
+    const vault = fixtureVault();
+    const plainProvider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const plain = await modelFrom(await plainProvider.load());
+    const entry = plain.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+    // Before any fold: note-grain-only, exactly what F8.4 shipped with.
+    expect(entry.sourceLocations).toEqual([{ sourcePath: 'Notes/one.md' }]);
+
+    const folded: readonly ConceptRecord[] = [
+      {
+        key: entry.key,
+        name: entry.originalName,
+        tier: 2,
+        courses: entry.courses,
+        sourcePaths: ['Notes/one.md'],
+        anchor: {
+          sourcePath: 'Notes/one.md',
+          location: {
+            page: 3,
+            charRange: { start: 0, end: 10 },
+            section: 'Invented section title',
+          },
+        },
+      },
+    ];
+
+    const withFold = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      conceptRecords: () => folded,
+    });
+    const model = await modelFrom(await withFold.load());
+    const row = model.concepts[0];
+    expect(row?.key).toBe(entry.key);
+    expect(row?.sourceLocations).toEqual([
+      { sourcePath: 'Notes/one.md', page: 3, section: 'Invented section title' },
+    ]);
+  });
+
+  it('is read fresh on every load() — a later thunk value reaches the next load, not just the first', async () => {
+    const vault = fixtureVault();
+    let folded: readonly ConceptRecord[] | null = null;
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      conceptRecords: () => folded,
+    });
+
+    const before = await modelFrom(await provider.load());
+    const entry = before.concepts[0];
+    if (entry === undefined) throw new Error('missing entry');
+    expect(entry.sourceLocations).toEqual([{ sourcePath: 'Notes/one.md' }]);
+
+    folded = [
+      {
+        key: entry.key,
+        name: entry.originalName,
+        tier: 2,
+        courses: entry.courses,
+        sourcePaths: ['Notes/one.md'],
+        anchor: {
+          sourcePath: 'Notes/one.md',
+          location: { page: 7, charRange: { start: 0, end: 10 } },
+        },
+      },
+    ];
+
+    const after = await modelFrom(await provider.load());
+    expect(after.concepts[0]?.sourceLocations).toEqual([{ sourcePath: 'Notes/one.md', page: 7 }]);
+  });
+
+  it('falls back to the plain vault walk, unchanged, when the thunk returns null (no read has completed yet)', async () => {
+    const vault = fixtureVault();
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      conceptRecords: () => null,
+    });
+    const model = await modelFrom(await provider.load());
+    expect(model.concepts[0]?.sourceLocations).toEqual([{ sourcePath: 'Notes/one.md' }]);
+  });
+
+  it('is optional — omitting it entirely changes nothing about load()', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const model = await modelFrom(await provider.load());
+    expect(model.concepts[0]?.sourceLocations).toEqual([{ sourcePath: 'Notes/one.md' }]);
+  });
+
+  it('never drops a concept the walk just found but the (stale) fold does not know about yet', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      'Notes/two.md': [
+        '---',
+        'topic: [Concept B]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front two::Back two',
+        '',
+      ].join('\n'),
+    });
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      // Stale fold: only knows about a key that matches nothing in this walk.
+      conceptRecords: () => [
+        {
+          key: 'stale-key-not-in-this-walk',
+          name: 'Some other concept',
+          tier: 2,
+          courses: [],
+          sourcePaths: [],
+        },
+      ],
+    });
+    const model = await modelFrom(await provider.load());
+    expect(model.concepts.map((c) => c.displayName).sort()).toEqual(['Concept A', 'Concept B']);
   });
 });
