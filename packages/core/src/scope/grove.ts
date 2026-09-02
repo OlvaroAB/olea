@@ -16,6 +16,23 @@
  * "compose once, read here" discipline `../gap/build.ts` and
  * `../evidence-edge/build.ts` already follow for the same tier-3 pass.
  *
+ * ## The count never moves without a named cause, in either direction (F1.5(c)/F8.1, `[D-184]`, `ol-v7r5.29`)
+ *
+ * This module holds no memory of a previous read — every call recomputes
+ * `declaredNames` fresh from whatever `sources`/`citations` the caller hands
+ * in, which is what makes "a document arrived" and "she reclassified one"
+ * the SAME code path rather than two. **There is no separate shrink
+ * branch.** Correcting a document's role away from `'objectives'`/
+ * `'past-paper'` (`../source/register.js`) means its citations stop
+ * qualifying under `DECLARED_CITATION_KINDS` below on the very next call —
+ * `declaredNames` is smaller, `summary.denominatorCount` is smaller, and
+ * that fall reads through `classifyDeclaredConcept`/`containerNamesToFold`
+ * exactly as a rise from a newly-registered source does. A caller that
+ * wants the receipt copy F8.1's "same honesty runs in reverse" sentence
+ * promises (`../../../plugin/src/grove/copy.ts`) supplies the prior and next
+ * `GroveCourseSummary.denominatorCount` itself — this module's job stops at
+ * making that next count honest, not at narrating the change.
+ *
  * ## Three course states, not one (F8.1 scenarios 1–3)
  *
  * A course with no registered objectives/past-paper source cannot honestly

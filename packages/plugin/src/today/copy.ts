@@ -263,6 +263,20 @@ export function scopeSummaryLine(
   return `${builtCount} of ${denominatorCount} built, from ${sourceCount} registered ${sourceNoun}.`;
 }
 
+// `ol-v7r5.29`: checked, per the no-surface-without-a-clause rule, and
+// deliberately NOT added here. F8.1's shrink-receipt sentence ("the change
+// is surfaced ONCE, where the count is shown, as a receipt naming the
+// document and the count it replaces") reads as singular, and this panel's
+// own F1.5(b) amendment already draws the same "the overview states the
+// bare fact, the detail lives at the grove" line for the sibling ask
+// affordance one clause earlier: the overview is explicitly "one step from
+// the grove," never the place a document-level detail is named.
+// `scopeSummaryLine` above stays a bare two-number statement, exactly like
+// a growth (F1.5(c) treats a growing denominator as ordinary, needing no
+// narration) — the receipt naming WHICH document was reclassified belongs
+// at `../grove/copy.ts#groveScopeCorrectionReceiptLine`, the one place F8.1
+// names.
+
 /**
  * The insights section's eyebrow (F6.5).
  *

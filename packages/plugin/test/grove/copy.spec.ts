@@ -5,13 +5,14 @@
  * convention of sweeping a TEMPLATED function's output across representative
  * fixtures, since `allGroveStrings()` alone cannot enumerate one.
  */
-import type { GroveCourseSummary } from 'olea-core';
+import type { GroveCourseSummary, VaultPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   allGroveStrings,
   GROVE_INFERRED_DISCLAIMER,
   GROVE_MATERIAL_GAP_LABEL,
   GROVE_VIEW_TITLE,
+  groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
 } from '../../src/grove/copy.js';
@@ -30,9 +31,14 @@ const SUMMARIES: readonly GroveCourseSummary[] = [
   },
 ];
 
+const SHRINK_RECEIPTS: readonly string[] = [
+  groveScopeCorrectionReceiptLine('03 Research/Past Paper 2024.md' as VaultPath, 7, 5),
+  groveScopeCorrectionReceiptLine('03 Research/Objectives.md' as VaultPath, 1, 0),
+];
+
 /** Every string this module can put in front of her, across representative summaries — the sweep target for F8.3's ban, matching `gap/copy.ts`'s own convention. */
 function everyProducibleString(): readonly string[] {
-  return [...allGroveStrings(), ...SUMMARIES.map(groveSummaryLine)];
+  return [...allGroveStrings(), ...SUMMARIES.map(groveSummaryLine), ...SHRINK_RECEIPTS];
 }
 
 describe('grove copy — F8.3 no scalar', () => {
@@ -62,6 +68,18 @@ describe('grove copy — F8.3 no scalar', () => {
     const line = groveSummaryLine(SUMMARIES[2] as GroveCourseSummary);
     expect(line).toContain('3 of 7 built');
     expect(line).toContain('2 registered sources');
+  });
+
+  it('the shrink receipt (`[D-184]`) names the reclassified document and both counts, once', () => {
+    const line = groveScopeCorrectionReceiptLine(
+      '03 Research/Past Paper 2024.md' as VaultPath,
+      7,
+      5,
+    );
+    expect(line).toContain('03 Research/Past Paper 2024.md');
+    expect(line).toContain('7');
+    expect(line).toContain('5');
+    expect(line.toLowerCase()).not.toMatch(/\bwrong\b|\bmistake\b|\bfault\b/);
   });
 });
 

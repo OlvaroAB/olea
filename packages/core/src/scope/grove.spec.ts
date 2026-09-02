@@ -63,6 +63,11 @@ function pastPaperSource(path: VaultPath): Source {
   return { path, role: 'past-paper', course: COURSE, kind: 'registered-file', format: null };
 }
 
+/** A document reclassified AWAY from either declared role — `[D-184]`'s correction case. */
+function courseMaterialSource(path: VaultPath): Source {
+  return { path, role: 'course-material', course: COURSE, kind: 'registered-file', format: null };
+}
+
 function passage(sourcePath: string): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
 }
@@ -202,6 +207,62 @@ describe('buildGroveModel — F8.1 denominator, read from registered sources', (
     expect(after.cells.find((c) => c.conceptName === 'Invented Concept A')).toEqual(
       before.cells.find((c) => c.conceptName === 'Invented Concept A'),
     );
+  });
+
+  it('correcting a document’s classification away from a declared role re-reads scope and shrinks the denominator — the same path an addition uses, never a second one (F1.5(c), F8.1, `[D-184]`)', () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const pastPaperPath = '03 Research/past-paper-2.md' as VaultPath;
+    const conceptA = concept('key-a', 'Invented Concept A');
+    const conceptB = concept('key-b', 'Invented Concept B');
+    const materialPresence = new Map([
+      ['key-a', presence(conceptA.sourcePaths, 1)],
+      ['key-b', presence(conceptB.sourcePaths, 1)],
+    ]);
+    const masteryMap = new Map([
+      ['key-a', mastery('key-a', 'seed')],
+      ['key-b', mastery('key-b', 'seed')],
+    ]);
+
+    const before = buildGroveModel({
+      course: COURSE,
+      concepts: [conceptA, conceptB],
+      sources: [objectivesSource(objectivesPath), pastPaperSource(pastPaperPath)],
+      citations: [
+        citation('Invented Concept A', 'objectives', objectivesPath),
+        citation('Invented Concept B', 'past-paper', pastPaperPath),
+      ],
+      materialPresence,
+      mastery: masteryMap,
+    }).model;
+    if (before.status !== 'declared') throw new Error('expected declared');
+    expect(before.summary.denominatorCount).toBe(2);
+
+    // She corrects the past paper's classification — it was actually a
+    // course handout, not an examiner document. `buildGroveModel` is called
+    // again with nothing else changed: no special "correction" input, no
+    // separate function. The correction is entirely upstream, in what
+    // `sources`/`citations` the caller now hands in.
+    const after = buildGroveModel({
+      course: COURSE,
+      concepts: [conceptA, conceptB],
+      sources: [objectivesSource(objectivesPath), courseMaterialSource(pastPaperPath)],
+      citations: [citation('Invented Concept A', 'objectives', objectivesPath)],
+      materialPresence,
+      mastery: masteryMap,
+    }).model;
+    if (after.status !== 'declared') throw new Error('expected declared');
+    expect(after.summary.denominatorCount).toBe(1);
+    expect(after.summary.denominatorSourcePaths).toEqual([objectivesPath]);
+    // The surviving concept's own reading is unchanged — a shrink elsewhere
+    // never disturbs a still-declared concept's cell, symmetric with the
+    // growth test above.
+    expect(after.cells.find((c) => c.conceptName === 'Invented Concept A')).toEqual(
+      before.cells.find((c) => c.conceptName === 'Invented Concept A'),
+    );
+    // Concept B is not silently dropped — it survives as a volunteer
+    // (she still has the material; only the examiner's claim on it was
+    // withdrawn), never vanishing without a trace.
+    expect(after.volunteers.map((v) => v.conceptName)).toContain('Invented Concept B');
   });
 });
 

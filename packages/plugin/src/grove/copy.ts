@@ -28,9 +28,26 @@
  * title, the command and `VIEW_TYPE_OLEA_GROVE` are unchanged — only the
  * copy a `'declared'` vs. `'inferred'` vs. `'no-registered-source'` course
  * now renders differs, per `./provider.ts`'s real `GroveCourseModel`.
+ *
+ * **The shrink receipt (`[D-184]`, F1.5(c)/F8.1/F8.3, `ol-v7r5.29`).**
+ * `groveScopeCorrectionReceiptLine` is the one additional line F8.1's "the
+ * same honesty runs in reverse" sentence promises: shown once, beside
+ * `groveSummaryLine`'s own count, only on the read immediately after a
+ * document's classification was corrected AWAY from a declared role and the
+ * denominator fell as a result (`../../../core/src/scope/grove.ts`'s module
+ * doc — the shrink is the SAME `buildGroveModel` path an addition already
+ * uses, never a second one). It is never shown for a growth — F1.5(c)
+ * already treats a growing denominator as "the system working," and
+ * `groveSummaryLine`'s own updated numbers say that without ceremony.
+ * **Not yet wired to a production caller**: the call site needs a durable
+ * "prior `denominatorCount` per course" store, the same `data.json`
+ * read-modify-write shape `./ground-streak-store.ts` already uses for its
+ * own per-install state — `./provider.ts` and `./view.ts` are outside this
+ * module's own `owns` set, so that wiring is follow-up work, named here so
+ * it is not lost (see this bead's close notes).
  */
 
-import type { GroveCourseSummary, GroveDeclaredState } from 'olea-core';
+import type { GroveCourseSummary, GroveDeclaredState, VaultPath } from 'olea-core';
 import { MASTERY_DISPLAY } from 'olea-core';
 
 export const GROVE_VIEW_TITLE = 'Grove';
@@ -92,6 +109,33 @@ export function groveSummaryLine(summary: GroveCourseSummary): string {
   return (
     `${summary.builtCount} of ${summary.denominatorCount} built, ` +
     `from ${summary.denominatorSourcePaths.length} registered ${sourceNoun}.`
+  );
+}
+
+/**
+ * F8.1's "same honesty runs in reverse" receipt (`[D-184]`, `ol-v7r5.29`):
+ * shown ONCE, beside `groveSummaryLine`'s own count, on the read
+ * immediately after a correction to a document's classification has
+ * shrunk the denominator — never on a growth (F1.5(c) already treats that
+ * as unremarkable; `groveSummaryLine`'s new numbers alone are the honest
+ * statement of it). States two facts and nothing else — the document
+ * that was reclassified, and the count it replaces — never a percentage
+ * or a judgement about the correction ("this document was reclassified" is
+ * a fact, not a fault).
+ *
+ * The caller is responsible for calling this ONLY when a shrink actually
+ * happened (`newDenominatorCount < priorDenominatorCount`) — this function
+ * states whatever numbers it is given rather than re-deciding direction,
+ * matching `groveSummaryLine`'s own "never re-derive, only render" posture.
+ */
+export function groveScopeCorrectionReceiptLine(
+  reclassifiedDocumentPath: VaultPath,
+  priorDenominatorCount: number,
+  newDenominatorCount: number,
+): string {
+  return (
+    `${reclassifiedDocumentPath} was reclassified — this course's scope count ` +
+    `updated from ${priorDenominatorCount} to ${newDenominatorCount}.`
   );
 }
 

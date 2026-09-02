@@ -91,6 +91,13 @@ export {
   type ScheduleFreshnessTwinCase,
 } from './schedule-freshness-neutralised-twin.js';
 export {
+  checkScopeCountCauseAttribution,
+  SCOPE_COUNT_CAUSE_MIN_STEPS,
+  type ScopeCountCauseEventKind,
+  type ScopeCountCauseMeasured,
+  type ScopeCountCauseStep,
+} from './scope-count-cause.js';
+export {
   checkSizeDenominatorFold,
   type SizeDenominatorMeasured,
   type SizeDenominatorScopeCase,
