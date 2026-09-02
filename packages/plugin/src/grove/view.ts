@@ -37,7 +37,7 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type { GroveCourseModel, VaultPath } from 'olea-core';
+import type { GroveCourseModel, UnreadableFile, VaultPath } from 'olea-core';
 import type { RetrospectiveOfferCard } from '../retrospective/offer-card.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
@@ -49,11 +49,13 @@ import {
   GROVE_NO_SOURCE_BODY,
   GROVE_NO_SOURCE_HEADING,
   GROVE_UNAVAILABLE,
+  GROVE_UNREADABLE_HEADING,
   GROVE_VIEW_TITLE,
   GROVE_VOLUNTEER_SECTION_HEADING,
   GROVE_VOLUNTEER_SECTION_NOTE,
   groveStateLabel,
   groveSummaryLine,
+  groveUnreadableReasonLabel,
   OPEN_RETROSPECTIVE_ACTION,
 } from './copy.js';
 
@@ -65,6 +67,17 @@ export interface GroveCourseSection {
   readonly model: GroveCourseModel;
   /** This course's own standing offer card(s), D-134 Q1's "filter to its own course" half. */
   readonly offerCards: readonly RetrospectiveOfferCard[];
+  /**
+   * `[D-196]`, F1.5(b), F8.1: files in this course's F7.9 source location
+   * the pipeline reached but could not read — path and one of exactly three
+   * structural reasons, computed by `./provider.ts`
+   * (`olea-core#findUnreadableFiles`, `ol-2zfj.56`). Rendered beside the
+   * no-registered-source designed state and the `'declared'` readiness
+   * reading (`renderCourse`/`renderDeclared` below) — never on the
+   * `'inferred'` branch, matching F8.1's amendment naming exactly those two
+   * surfaces.
+   */
+  readonly unreadableFiles: readonly UnreadableFile[];
 }
 
 export type GroveViewState =
@@ -135,6 +148,9 @@ export class GroveView extends ItemView {
       case 'no-registered-source':
         box.createDiv({ cls: 'olea-grove-course-heading', text: GROVE_NO_SOURCE_HEADING });
         box.createDiv({ cls: 'olea-grove-no-source-body', text: GROVE_NO_SOURCE_BODY });
+        // F1.5(b): the same evidenced ask also lists unreadable files —
+        // this IS the "grove unable to answer its own question" surface.
+        this.renderUnreadableFiles(box, section.unreadableFiles);
         break;
       case 'inferred':
         // F8.1 scenario 3: the `grove` label and its denominator claim are
@@ -152,7 +168,7 @@ export class GroveView extends ItemView {
         }
         break;
       case 'declared':
-        this.renderDeclared(box, section.model);
+        this.renderDeclared(box, section.model, section.unreadableFiles);
         break;
     }
 
@@ -162,6 +178,7 @@ export class GroveView extends ItemView {
   private renderDeclared(
     parent: HTMLElement,
     model: Extract<GroveCourseModel, { readonly status: 'declared' }>,
+    unreadableFiles: readonly UnreadableFile[],
   ): void {
     // F8.3: the count and the denominator's source, shown separately — never
     // their ratio, and no percentage anywhere on this line.
@@ -170,6 +187,9 @@ export class GroveView extends ItemView {
       cls: 'olea-grove-summary-line',
       text: groveSummaryLine(model.summary),
     });
+    // F8.1: "the readiness view" — the same list F1.5(b)'s designed-state
+    // ask carries, shown here beside the count and its source.
+    this.renderUnreadableFiles(parent, unreadableFiles);
 
     if (model.cells.length === 0 && model.materialGaps.length === 0) {
       parent.createDiv({ cls: 'olea-grove-empty', text: GROVE_EMPTY_COURSE });
@@ -210,6 +230,27 @@ export class GroveView extends ItemView {
           text: volunteer.conceptName,
         });
       }
+    }
+  }
+
+  /**
+   * `[D-196]`, F1.5(b), F8.1: the unreadable-file list, shown beside the
+   * designed-state ask and the readiness reading — never on its own
+   * surface (the ruling explicitly rejects a standing page). Renders
+   * nothing when there is nothing to say, matching this view's own
+   * convention of never drawing an empty section header.
+   */
+  private renderUnreadableFiles(parent: HTMLElement, files: readonly UnreadableFile[]): void {
+    if (files.length === 0) return;
+    const box = parent.createDiv({ cls: 'olea-grove-unreadable' });
+    box.createDiv({ cls: 'olea-grove-unreadable-heading', text: GROVE_UNREADABLE_HEADING });
+    for (const file of files) {
+      const row = box.createDiv({ cls: 'olea-grove-unreadable-row' });
+      row.createSpan({ cls: 'olea-grove-unreadable-path', text: file.path });
+      row.createSpan({
+        cls: 'olea-grove-unreadable-reason',
+        text: groveUnreadableReasonLabel(file.reason),
+      });
     }
   }
 

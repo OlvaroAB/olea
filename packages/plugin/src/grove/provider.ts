@@ -124,13 +124,16 @@ import {
   type ConceptRelation,
   calendarDaysEndingOn,
   createFsrsScheduler,
+  discoverEmbeddedSources,
   enumerateVaultInstruments,
   extractTier3Evidence,
+  findUnreadableFiles,
   type GroveCourseModel,
   readAssessments,
   readReviewLogHistory,
   reviewLogPath,
   suspendedInstrumentIds,
+  type UnreadableFile,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -195,6 +198,90 @@ function instrumentCountsByNotePath(
     counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * `[D-196]`, F1.5(b), F8.1: which F7.9 files, per course, the pipeline
+ * reached but could not read.
+ *
+ * `sourcesReport.sources` (registered — F1.5/F3.1) already carries `course`
+ * explicitly and is always reachable by definition, so every one of its
+ * non-markdown members is a candidate for `'image-only-no-text'` only.
+ * `sourcesReport.skippedNonMarkdown` is F7.9's other half: a binary file
+ * register.ts's folder scan found and could not classify (no frontmatter to
+ * read), which is exactly the population `'no-reader-for-format'` and
+ * `'not-linked'` come from.
+ *
+ * **Course attribution for a skipped file.** F7.9's folder is flat and
+ * carries no course structure (`../../../core/src/source/register.ts`'s own
+ * module doc), and a binary carries no `course:` frontmatter, so there is no
+ * derivation available as principled as `../../../core/src/concept/
+ * course.ts#courseFromPath`. The one non-inventive signal left is her own
+ * demonstrated naming habit: every registered research file in the fixture
+ * and the real vault alike is named `"<COURSE> <kind> <year>.md"`
+ * (`../../../core/src/source/register.spec.ts`). Matching a skipped file's
+ * basename against `courseNames` — every course ALREADY known from her
+ * concepts, registered sources or assessments, never a name invented here —
+ * can only recognise a course, never invent one. **Class B, non-persisted,
+ * reversible** (`docs/Olea_v09_implementation_plan.md` §2.7's decision
+ * ladder) — flagged for retroactive review rather than escalated, since a
+ * wrong match only ever misfiles a file under an existing course's grove,
+ * never surfaces a course that doesn't exist. A skipped file matching no
+ * known course is a named, deliberate gap: `[D-196]`'s own ruling reasons
+ * that a file has "no question to stand beside until a course exists to ask
+ * it," and a course this pipeline cannot yet name is exactly that case —
+ * follow-up work (most naturally F1.5's still-unbuilt registration UI,
+ * which would supply path AND course together) closes it, not a guess here.
+ *
+ * **Linkage.** A skipped file is not necessarily unlinked: some note may
+ * embed it despite it never being registered. `embeddedPaths` below is the
+ * same reachability `olea-service/scripts/census-concepts.mjs
+ * #findUnembeddedFiles` already computes for the harness census this bead
+ * moves into product code (`ol-2zfj.56`) — ported here rather than imported,
+ * since that script lives in the other repo and is harness-only.
+ */
+async function unreadableFilesByCourse(
+  vault: VaultSource,
+  sourcesReport: Awaited<ReturnType<typeof extractTier3Evidence>>['sourcesReport'],
+  courseNames: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, readonly UnreadableFile[]>> {
+  const [allPaths, notePaths] = await Promise.all([
+    vault.list(),
+    vault.list({ extensions: ['md'] }),
+  ]);
+  const embeddedPaths = new Set<VaultPath>();
+  for (const notePath of notePaths) {
+    const { resolved } = await discoverEmbeddedSources(vault, notePath, allPaths);
+    for (const r of resolved) embeddedPaths.add(r.path);
+  }
+
+  const linkedPaths = new Set<VaultPath>([
+    ...sourcesReport.sources.map((s) => s.path),
+    ...embeddedPaths,
+  ]);
+
+  const skippedByCourse = new Map<string, VaultPath[]>();
+  for (const path of sourcesReport.skippedNonMarkdown) {
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    const course = [...courseNames].find((name) => base.startsWith(name));
+    if (course !== undefined) {
+      const list = skippedByCourse.get(course) ?? [];
+      list.push(path);
+      skippedByCourse.set(course, list);
+    }
+  }
+
+  const entries = await Promise.all(
+    [...courseNames].map(async (course) => {
+      const files = [
+        ...sourcesReport.sources.filter((s) => s.course === course).map((s) => s.path),
+        ...(skippedByCourse.get(course) ?? []),
+      ];
+      const unreadable = await findUnreadableFiles(vault, { files, linkedPaths });
+      return [course, unreadable] as const;
+    }),
+  );
+  return new Map(entries);
 }
 
 async function safeAssessmentRecords(
@@ -319,6 +406,16 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // assessment record is handed in unfiltered.
         const allCards = resolveOfferCards(assessmentRecords, offerEvents, now);
 
+        // [D-196], F1.5(b), F8.1: computed once per course, alongside the
+        // scope reading rather than inside the render, so a course whose
+        // grove never renders (no concepts, no offer cards) still gets a
+        // real answer rather than an unattempted one.
+        const unreadableByCourse = await unreadableFilesByCourse(
+          deps.vault,
+          tier3.sourcesReport,
+          courseNames,
+        );
+
         // Only `'declared'` courses contribute a real ground-streak reading
         // back — see module doc for why the other two statuses' echoed
         // `nextGroundStreaks` must NOT be merged in here.
@@ -347,6 +444,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             course,
             model,
             offerCards: allCards.filter((card) => card.course === course),
+            unreadableFiles: unreadableByCourse.get(course) ?? [],
           };
         });
 

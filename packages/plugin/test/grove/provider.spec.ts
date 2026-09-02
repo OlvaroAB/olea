@@ -181,6 +181,61 @@ function fixtureVaultWithContainerAndPart() {
   });
 }
 
+/**
+ * A course with three F7.9 files the pipeline could not read, one per
+ * `[D-196]` reason: an unsupported spreadsheet extension, a `.pptx` embedded
+ * by a note but structurally invalid, and an unregistered, unembedded image.
+ * All three sit in `03 Research` unregistered — register.ts's folder scan
+ * has no frontmatter to read off a binary, so every one lands in
+ * `skippedNonMarkdown` and is matched to `TESTC101` by `./provider.ts`'s own
+ * filename heuristic (its course names always prefix-match a real,
+ * already-known course — see that module's doc).
+ */
+function fixtureVaultWithUnreadableFiles() {
+  return memoryVault({
+    [BASE_PATH]: [
+      'filters:',
+      '  and:',
+      '    - file.inFolder("02 Assignments")',
+      '    - file.ext == "md"',
+      'properties:',
+      '  class:',
+      '  type:',
+      '  weight:',
+      '  due:',
+      '  status:',
+    ].join('\n'),
+    '03 Research/Objectives.md': [
+      '---',
+      'role: objectives',
+      'course: TESTC101',
+      '---',
+      '',
+      'The course covers Concept A in depth.',
+      '',
+    ].join('\n'),
+    'Notes/one.md': [
+      '---',
+      'topic: [Concept A]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+      '![[TESTC101 Field Trip Slides.pptx]]',
+      '',
+    ].join('\n'),
+    // `no-reader-for-format`: no `Extractor` claims `.xlsx` at all.
+    '03 Research/TESTC101 Grading Weights.xlsx': 'not a real spreadsheet, never parsed',
+    // `image-only-no-text`: embedded above, so it IS linked — but the bytes
+    // are not a real .pptx, so the structural parse fails.
+    '03 Research/TESTC101 Field Trip Slides.pptx': 'not a real pptx, garbage bytes',
+    // `not-linked`: a supported format (image), sitting in the folder,
+    // registered by nobody and embedded by no note.
+    '03 Research/TESTC101 Scanned Handout.png': 'irrelevant — imageExtractor never reads content',
+  });
+}
+
 function relationPassage(sourcePath: string): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
 }
@@ -445,6 +500,37 @@ describe('createLocalGroveProvider — relations (ol-kghd, C7.9 part-of fold)', 
     if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
     expect(model.cells.map((cell) => cell.conceptName)).toEqual(['Concept Narrow']);
     expect(model.summary.denominatorCount).toBe(1);
+  });
+});
+
+describe('createLocalGroveProvider — unreadable files ([D-196], F1.5(b), F8.1, ol-2zfj.56)', () => {
+  it('classifies each of the three structural reasons and attaches them to the course section', async () => {
+    const provider = createLocalGroveProvider({
+      vault: fixtureVaultWithUnreadableFiles(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const courses = await sectionsFrom(await provider.load());
+    const c101 = courses.find((c) => c.course === 'TESTC101');
+    if (c101 === undefined) throw new Error('expected TESTC101');
+
+    const byPath = new Map(c101.unreadableFiles.map((f) => [f.path, f.reason]));
+    expect(byPath.get('03 Research/TESTC101 Grading Weights.xlsx')).toBe('no-reader-for-format');
+    expect(byPath.get('03 Research/TESTC101 Field Trip Slides.pptx')).toBe('image-only-no-text');
+    expect(byPath.get('03 Research/TESTC101 Scanned Handout.png')).toBe('not-linked');
+    expect(c101.unreadableFiles).toHaveLength(3);
+  });
+
+  it('a course with none of these files gets an empty, not absent, list', async () => {
+    const provider = createLocalGroveProvider({
+      vault: fixtureVaultWithRegisteredSource(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const courses = await sectionsFrom(await provider.load());
+    for (const course of courses) expect(course.unreadableFiles).toEqual([]);
   });
 });
 

@@ -1496,17 +1496,17 @@ export type {
 } from './source/segment-past-paper.js';
 export { segmentPastPaper } from './source/segment-past-paper.js';
 export type {
-  FindUnreadableFilesOptions,
-  UnreadableFile,
-  UnreadableReason,
-} from './source/unreadable.js';
-export { findUnreadableFiles, reasonForExtractionOutcome } from './source/unreadable.js';
-export type {
   RegisterSourcesOptions,
   Source,
   SourceRegistrationReport,
   SourceRole,
 } from './source/types.js';
+export type {
+  FindUnreadableFilesOptions,
+  UnreadableFile,
+  UnreadableReason,
+} from './source/unreadable.js';
+export { findUnreadableFiles, reasonForExtractionOutcome } from './source/unreadable.js';
 // The absence signal register row 3.8 names (F6.6; `ol-v7r5.18`): "days since
 // her last review", derived from the review log's own timestamps.
 export { daysSinceLastReview } from './study-session/absence.js';

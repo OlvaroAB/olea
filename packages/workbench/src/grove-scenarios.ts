@@ -105,6 +105,10 @@ export function buildGroveScenario(stateId: string): GroveScenario {
         course: COURSE,
         model: modelFor(stateId),
         offerCards: [],
+        // `[D-196]` is not this workbench pane's scenario — no synthetic
+        // unreadable-file fixture exists here, so this is honestly empty
+        // rather than invented.
+        unreadableFiles: [],
       };
       return { kind: 'model', courses: [section] };
     },

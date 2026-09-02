@@ -47,7 +47,12 @@
  * it is not lost (see this bead's close notes).
  */
 
-import type { GroveCourseSummary, GroveDeclaredState, VaultPath } from 'olea-core';
+import type {
+  GroveCourseSummary,
+  GroveDeclaredState,
+  UnreadableReason,
+  VaultPath,
+} from 'olea-core';
 import { MASTERY_DISPLAY } from 'olea-core';
 
 export const GROVE_VIEW_TITLE = 'Grove';
@@ -74,6 +79,31 @@ export const GROVE_EMPTY_COURSE = 'No concepts found here yet.';
 
 /** Plain-language label for a material gap (F4.10) — never a fourth olive noun (registry §6). */
 export const GROVE_MATERIAL_GAP_LABEL = 'No material yet';
+
+/**
+ * `[D-196]`, F1.5(b), F8.1: heading over the unreadable-file list, shown
+ * beside the designed-state ask and the readiness reading — never a
+ * standing page of its own (the ruling explicitly rejects one).
+ */
+export const GROVE_UNREADABLE_HEADING = "Files Olea couldn't read here";
+
+/**
+ * The three `UnreadableReason` labels, verbatim from `[D-196]`'s own
+ * wording — "a reason describes the reader, never the file." Each names the
+ * lever available to her, per brief 36's lever test: convert the format,
+ * re-save with real text, or register the file (F1.5) — the third is why
+ * the ask and this list share one surface.
+ */
+const GROVE_UNREADABLE_REASON_LABEL: Readonly<Record<UnreadableReason, string>> = {
+  'no-reader-for-format': 'No reader for this format yet — try converting it.',
+  'image-only-no-text': 'Image only — no text found. Re-saving with a text layer may help.',
+  'not-linked': 'Nothing here links to it yet — register it (F1.5) to include it.',
+};
+
+/** The label for one `UnreadableReason` — see `GROVE_UNREADABLE_REASON_LABEL`. */
+export function groveUnreadableReasonLabel(reason: UnreadableReason): string {
+  return GROVE_UNREADABLE_REASON_LABEL[reason];
+}
 
 /** Section heading over `volunteer` concepts — outside the declared count, never hidden (F8.2). */
 export const GROVE_VOLUNTEER_SECTION_HEADING = 'Also growing here';
@@ -149,6 +179,7 @@ export function allGroveStrings(): readonly string[] {
     GROVE_INFERRED_DISCLAIMER,
     GROVE_EMPTY_COURSE,
     GROVE_MATERIAL_GAP_LABEL,
+    GROVE_UNREADABLE_HEADING,
     GROVE_VOLUNTEER_SECTION_HEADING,
     GROVE_VOLUNTEER_SECTION_NOTE,
     GROVE_GROUND_STALL_NOTE,
@@ -156,5 +187,8 @@ export function allGroveStrings(): readonly string[] {
     DISMISS_OFFER_ACTION,
     GROUND_LABEL,
     ...(['seed', 'sprout', 'sapling', 'tree'] as const).map((s) => MASTERY_DISPLAY[s].label),
+    ...(['no-reader-for-format', 'image-only-no-text', 'not-linked'] as const).map(
+      groveUnreadableReasonLabel,
+    ),
   ];
 }
