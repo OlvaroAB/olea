@@ -427,6 +427,80 @@ body {
   word-break: break-all;
 }
 
+/* ---- explain-back modal overlay (ol-z6x2 F5 tranche) ---- */
+
+/* Empty when no modal is open — `[data-wb-modal-open]` is set/cleared by
+   `obsidian-shim`'s own `Modal.open()`/`close()`. Fixed and centered so the
+   overlay reads as a real app-wide modal rather than inline page content. */
+.wb-modal-host {
+  align-items: flex-start;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  pointer-events: none;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 40;
+}
+
+.wb-modal-host[data-wb-modal-open] {
+  background: rgba(10, 11, 13, 0.55);
+  pointer-events: auto;
+}
+
+.wb-modal-host .modal-container {
+  margin-top: 64px;
+  max-height: calc(100vh - 128px);
+  overflow-y: auto;
+  width: min(560px, calc(100vw - 48px));
+}
+
+.wb-modal-host .modal {
+  background: var(--wb-panel);
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  padding: 20px;
+}
+
+.wb-modal-host .modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.wb-modal-host .modal-content textarea,
+.wb-modal-host .modal-content input[type="text"] {
+  background: var(--wb-bg);
+  border: 1px solid var(--wb-line);
+  border-radius: 4px;
+  color: var(--wb-text);
+  font: inherit;
+  padding: 8px;
+  width: 100%;
+}
+
+.wb-modal-host .modal-content textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.wb-modal-host .modal-content button {
+  background: var(--wb-panel);
+  border: 1px solid var(--wb-line);
+  border-radius: 4px;
+  color: var(--wb-text);
+  cursor: pointer;
+  margin-top: 10px;
+  padding: 6px 12px;
+}
+
+.wb-modal-host .modal-content ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
 /* ---- notices ---- */
 
 .wb-notices {

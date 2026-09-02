@@ -47,6 +47,11 @@ import {
   seedBulkReviewScenario,
 } from './bulk-review-scenarios.js';
 import {
+  buildExplainBackScenario,
+  EXPLAIN_BACK_STATES,
+  findExplainBackState,
+} from './explain-back-scenarios.js';
+import {
   buildExplainScenario,
   EXPLAIN_STATES,
   type ExplainScenario,
@@ -156,6 +161,7 @@ type RouteSurface =
   | 'generate'
   | 'timeline'
   | 'explain'
+  | 'explain-back'
   | 'session'
   | 'trends'
   | 'rhythm'
@@ -170,6 +176,7 @@ const DEFAULT_RETRIEVE_STATE = 'grounded-with-citations';
 const DEFAULT_GENERATE_STATE = 'generation-pending-accept';
 const DEFAULT_TIMELINE_STATE = 'timeline-steady';
 const DEFAULT_EXPLAIN_STATE = 'explanation-grounded';
+const DEFAULT_EXPLAIN_BACK_STATE = 'explain-back-fresh-prompt';
 const DEFAULT_SESSION_STATE = 'session-exam-eve-90';
 const DEFAULT_TRENDS_STATE = 'trends-cramming';
 const DEFAULT_RHYTHM_STATE = 'rhythm-two-flagged';
@@ -270,6 +277,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_TIMELINE_STATE;
     case 'explain':
       return DEFAULT_EXPLAIN_STATE;
+    case 'explain-back':
+      return DEFAULT_EXPLAIN_BACK_STATE;
     case 'session':
       return DEFAULT_SESSION_STATE;
     case 'trends':
@@ -304,6 +313,8 @@ function findStateFor(
       return findTimelineState(stateId);
     case 'explain':
       return findExplainState(stateId);
+    case 'explain-back':
+      return findExplainBackState(stateId);
     case 'session':
       return findSessionState(stateId);
     case 'trends':
@@ -347,19 +358,21 @@ function readRoute(): Route {
               ? 'timeline'
               : segments[0] === 'explain'
                 ? 'explain'
-                : segments[0] === 'session'
-                  ? 'session'
-                  : segments[0] === 'trends'
-                    ? 'trends'
-                    : segments[0] === 'rhythm'
-                      ? 'rhythm'
-                      : segments[0] === 'bulk-review'
-                        ? 'bulk-review'
-                        : segments[0] === 'registry'
-                          ? 'registry'
-                          : segments[0] === 'walk'
-                            ? 'walk'
-                            : 'review';
+                : segments[0] === 'explain-back'
+                  ? 'explain-back'
+                  : segments[0] === 'session'
+                    ? 'session'
+                    : segments[0] === 'trends'
+                      ? 'trends'
+                      : segments[0] === 'rhythm'
+                        ? 'rhythm'
+                        : segments[0] === 'bulk-review'
+                          ? 'bulk-review'
+                          : segments[0] === 'registry'
+                            ? 'registry'
+                            : segments[0] === 'walk'
+                              ? 'walk'
+                              : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -418,6 +431,7 @@ async function main(): Promise<void> {
   const generateStateList = requireEl('[data-wb-generate-states]');
   const timelineStateList = requireEl('[data-wb-timeline-states]');
   const explainStateList = requireEl('[data-wb-explain-states]');
+  const explainBackStateList = requireEl('[data-wb-explain-back-states]');
   const sessionStateList = requireEl('[data-wb-session-states]');
   const trendsStateList = requireEl('[data-wb-trends-states]');
   const rhythmStateList = requireEl('[data-wb-rhythm-states]');
@@ -537,6 +551,18 @@ async function main(): Promise<void> {
       writeRoute({ ...readRoute(), surface: 'explain', stateId: state.id });
     });
     explainStateList.appendChild(button);
+  }
+
+  for (const state of EXPLAIN_BACK_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbExplainBackStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'explain-back', stateId: state.id });
+    });
+    explainBackStateList.appendChild(button);
   }
 
   for (const state of SESSION_STATES) {
@@ -682,6 +708,15 @@ async function main(): Promise<void> {
   let mounted: {
     view: ReviewView | TodayView | GapView | SessionBuilderView | BulkReviewView | RegistryView;
   } | null = null;
+  /**
+   * `ExplainBackModal` (`ol-z6x2` F5 tranche) is a `Modal`, not an `ItemView`
+   * — it never joins the `mounted.view` union above, which is
+   * `onClose`/`unloadComponent`'s ItemView-shaped contract. Tracked
+   * separately so switching surfaces (or reloading the same one) closes any
+   * still-open modal from a prior render, same lifecycle discipline as
+   * `mounted` for every flat-surface view.
+   */
+  let mountedModal: { close(): void } | null = null;
   let generation = 0;
   /**
    * The persona history currently loaded into the vault, and where it went.
@@ -803,6 +838,10 @@ async function main(): Promise<void> {
       mounted.view.unloadComponent();
       mounted = null;
     }
+    if (mountedModal !== null) {
+      mountedModal.close();
+      mountedModal = null;
+    }
     host.empty();
     host.removeAttribute('data-wb-detached');
     noticeHost.empty();
@@ -863,6 +902,14 @@ async function main(): Promise<void> {
         route.surface === 'explain' && button.dataset.wbExplainStateLink === state.id,
       );
     }
+    for (const button of explainBackStateList.querySelectorAll<HTMLElement>(
+      '[data-wb-explain-back-state-link]',
+    )) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'explain-back' && button.dataset.wbExplainBackStateLink === state.id,
+      );
+    }
     for (const button of sessionStateList.querySelectorAll<HTMLElement>(
       '[data-wb-session-state-link]',
     )) {
@@ -917,6 +964,14 @@ async function main(): Promise<void> {
     // navigation continues.
     function makeLeaf(): WorkspaceLeaf {
       return {
+        // `ol-z6x2` [WB-2] F5 tranche: `WorkspaceLeaf` gained `view`/
+        // `setViewState` for the explain-back → registry hand-off's OWN
+        // `Workspace` shim leaves (`obsidian-shim/index.ts`'s module doc).
+        // Every flat-surface `ItemView` mount still only ever calls
+        // `detach()` on the leaf it is given, so these two are harmless
+        // stubs here — never read by anything a flat-surface view does.
+        view: null,
+        async setViewState() {},
         detach() {
           host.empty();
           host.createDiv({
@@ -1346,6 +1401,63 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
+    /**
+     * F5.1's "Explain it back" surface (`ol-z6x2` F5 tranche, `[D-163]`) —
+     * the REAL `ExplainBackModal` over CANNED `grade`/`acceptWithObservation`
+     * results (`explain-back-scenarios.ts`'s own module doc explains why:
+     * this surface's own risk is the modal's phase-rendering state machine,
+     * never the grading pipeline itself, which is already covered by
+     * `packages/core`'s own spec files).
+     *
+     * A `Modal`, not an `ItemView` (`obsidian-shim`'s own `Modal` doc): it
+     * renders as an app-wide overlay into `[data-wb-modal-host]`, never into
+     * `host` — so, like `mountRetrieve`/`mountGenerate`/`mountExplain`, the
+     * host pane gets an honest placeholder and the real screen is the
+     * overlay below the stage.
+     */
+    async function mountExplainBack(stateId: string): Promise<void> {
+      host.createDiv({
+        cls: 'wb-detached',
+        text:
+          "F5.1's ExplainBackModal (`[D-163]`) is an app-wide Modal overlay, never a workspace " +
+          'tab — see the overlay below the stage for the real screen, and the inspector for the ' +
+          '[D-171] "See in registry" hand-off this state has recorded, if any.',
+      });
+
+      const scenario = buildExplainBackScenario(stateId);
+      if (run !== generation) return;
+
+      mountedModal = scenario.modal;
+      scenario.modal.open();
+      await settle();
+      if (run !== generation) return;
+
+      const state = findExplainBackState(stateId);
+      inspector.empty();
+      inspector.createDiv({ cls: 'wb-inspector-note', text: activeSet.note });
+      inspector.createDiv({ cls: 'wb-inspector-note', text: state?.note ?? '' });
+      const handoffNoteEl = inspector.createDiv({ cls: 'wb-inspector-note' });
+      handoffNoteEl.setText(
+        scenario.registryHandoffCount() === 0
+          ? 'No "See in registry" click yet this state.'
+          : `Registry hand-off recorded: ${String(scenario.registryHandoffCount())} time(s).`,
+      );
+      // Re-rendered on demand rather than once: a "See in registry" click
+      // inside the overlay mutates `scenario`'s own `app.workspace`, which
+      // this closure re-reads each time it runs.
+      scenario.modal.contentEl.addEventListener('click', () => {
+        window.setTimeout(() => {
+          handoffNoteEl.setText(
+            scenario.registryHandoffCount() === 0
+              ? 'No "See in registry" click yet this state.'
+              : `Registry hand-off recorded: ${String(scenario.registryHandoffCount())} time(s).`,
+          );
+        }, 0);
+      });
+
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
     // Walkthrough-only mounters. Neither draws a new PRODUCT screen (rule 1 —
     // see `walkthrough.ts`'s module doc for the argument in full): `mountNote`
     // shows her fixture note's own markdown, the same thing Obsidian's stock
@@ -1513,6 +1625,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'explain') {
       await mountExplain(route.stateId);
+      return;
+    }
+    if (route.surface === 'explain-back') {
+      await mountExplainBack(route.stateId);
       return;
     }
     if (route.surface === 'session') {

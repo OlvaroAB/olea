@@ -141,6 +141,15 @@
           </p>
           <nav class="wb-nav" data-wb-explain-states></nav>
 
+          <h2 class="wb-nav-heading">Explain-back states</h2>
+          <p class="wb-nav-note">
+            F5.1's Feynman-mode destination (ol-12gs, D-163): the real ExplainBackModal, an
+            app-wide overlay rather than a workspace tab — see below the stage, not inside it.
+            Grading is canned per state; this surface's own risk is the modal's phase rendering
+            and copy, not the grading pipeline (covered elsewhere).
+          </p>
+          <nav class="wb-nav" data-wb-explain-back-states></nav>
+
           <h2 class="wb-nav-heading">Session states</h2>
           <p class="wb-nav-note">
             A time-bounded study session assembled from the highest-priority gaps, with the exam
@@ -230,6 +239,12 @@
         </div>
         <section class="wb-inspector" data-wb-inspector></section>
       </main>
+
+      <!-- `ol-z6x2` F5 tranche: Obsidian's `Modal` overlays the WHOLE app
+           window, never one workspace tab (obsidian-shim's own `Modal` doc)
+           — so `ExplainBackModal` renders here, a sibling of `.wb-stage`,
+           rather than inside the host iframe. -->
+      <div class="wb-modal-host" data-wb-modal-host></div>
 
       <div class="wb-notices" data-wb-notices></div>
     </div>
