@@ -8,9 +8,9 @@ Shipping a new version is therefore just **cutting a tag** — `release.yml` bui
 and publishes the release from there.
 
 > **Status:** these steps are checked against BRAT's source, the built artifacts and
-> `release.yml`, but have not been walked through in a real vault, and `release.yml` has not
-> yet fired for a real tag. Bead `ol-bratverify` is that verification, assigned to David;
-> corrections land here.
+> `release.yml`. `release.yml` has fired for real tags (`0.9.0-alpha.2` on 2026-08-15, see
+> "For maintainers" below), but the install has not been walked through in a real vault.
+> Bead `ol-bratverify` is that verification, assigned to David; corrections land here.
 
 ---
 

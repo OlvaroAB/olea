@@ -33,7 +33,7 @@ them. This repo's `docs/` holds only developer-facing material with no real cont
    (`[D-072]`): a task delivering a capability names its production caller by `file:line`, or
    records why there deliberately is not one yet and which bead adds it. Its **§3 "Phases" is
    retired** — see the task protocol below.
-3a. `../olea-service/docs/foundation/` — **the foundation epic, and the target state.** Where a
+3a. `../olea-service/docs/archive/foundation/` — **the foundation rounds, archived 2026-08-28 (`ol-egov.6`); the target state they ratified lives in the contract documents via `[D-076]`.** Where a
    contract document still describes the pre-foundation world, that gap is tracked work: file it,
    do not report it as a defect, and never treat it as a constraint on what may now be designed.
 4. **Decision beads** (`bd list --type decision`) — the durable record of every call and its
