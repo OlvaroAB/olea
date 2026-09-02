@@ -1,6 +1,9 @@
 import type { AssessmentRecord, RetrospectiveOfferEvent } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { resolveOfferCards } from '../../src/retrospective/offer-card.js';
+import {
+  resolveOfferCards,
+  unrecordedOfferedAssessmentPaths,
+} from '../../src/retrospective/offer-card.js';
 
 const NOW = new Date('2026-09-01T09:00:00.000Z');
 
@@ -59,5 +62,37 @@ describe('resolveOfferCards', () => {
     );
     expect(cards).toHaveLength(2);
     expect(new Set(cards.map((c) => c.assessmentPath)).size).toBe(2);
+  });
+});
+
+describe('unrecordedOfferedAssessmentPaths (`ol-0r92.26`, D7.1 as amended by `[D-178]`)', () => {
+  it('names a showing card that has never had a retrospective-offered event logged', () => {
+    const cards = resolveOfferCards([assessment()], [], NOW);
+    expect(unrecordedOfferedAssessmentPaths(cards, [])).toEqual(['Courses/C1/Final.md']);
+  });
+
+  it('drops an assessment that already has a retrospective-offered event', () => {
+    const cards = resolveOfferCards([assessment()], [], NOW);
+    const events: readonly RetrospectiveOfferEvent[] = [
+      {
+        kind: 'retrospective-offered',
+        assessmentPath: 'Courses/C1/Final.md',
+        timestamp: '2026-08-21T00:00:00Z',
+      },
+    ];
+    expect(unrecordedOfferedAssessmentPaths(cards, events)).toEqual([]);
+  });
+
+  it('never names an assessment with no showing card at all (opened, so excluded upstream)', () => {
+    const events: readonly RetrospectiveOfferEvent[] = [
+      {
+        kind: 'retrospective-opened',
+        assessmentPath: 'Courses/C1/Final.md',
+        timestamp: '2026-08-21T00:00:00Z',
+      },
+    ];
+    const cards = resolveOfferCards([assessment()], events, NOW);
+    expect(cards).toEqual([]);
+    expect(unrecordedOfferedAssessmentPaths(cards, events)).toEqual([]);
   });
 });

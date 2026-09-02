@@ -13,6 +13,7 @@ import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
+import { createRetrospectiveOfferEventLog } from '../../src/retrospective/offer-events.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -100,6 +101,44 @@ describe('createLocalHomeProvider — load', () => {
     for (const card of cards) {
       expect(card.line).not.toMatch(/%/);
     }
+  });
+});
+
+describe('createLocalHomeProvider — retrospective-offered logging (D7.1, `[D-178]`, `ol-0r92.26`)', () => {
+  it('records a retrospective-offered event the first time a standing card renders', async () => {
+    const vault = fixtureVault();
+    const provider = createLocalHomeProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const cards = await offersFrom(await provider.load());
+    expect(cards).toHaveLength(1);
+
+    const log = createRetrospectiveOfferEventLog({ vault, deviceId: DEVICE, now: () => NOW });
+    const offered = (await log.load()).filter((event) => event.kind === 'retrospective-offered');
+    expect(offered).toHaveLength(1);
+    expect(offered[0]?.assessmentPath).toBe('02 Assignments/Quiz 1.md');
+  });
+
+  it('never re-logs an assessment already recorded as offered — one render, one record', async () => {
+    const vault = fixtureVault();
+    const provider = createLocalHomeProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    await provider.load();
+    await provider.load();
+    await provider.load();
+
+    const log = createRetrospectiveOfferEventLog({ vault, deviceId: DEVICE, now: () => NOW });
+    const offered = (await log.load()).filter((event) => event.kind === 'retrospective-offered');
+    expect(offered).toHaveLength(1);
   });
 });
 

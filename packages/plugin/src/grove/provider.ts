@@ -102,6 +102,14 @@
  * delegated to `createLocalRetrospectiveProvider`'s own `markDismissed` —
  * this module does not re-implement the `data.json` append.
  *
+ * **`load()` also writes now (`ol-0r92.26`).** D7.1, as amended by
+ * `[D-178]`, authorises the `retrospective-offered` review-log kind, which
+ * had no production writer before this bead — only tests exercised it.
+ * `retrospective/offer-card.ts`'s `unrecordedOfferedAssessmentPaths` names
+ * which currently-showing cards are unlogged; `retrospective/offer-events.ts`'s
+ * `recordOfferedEvents` does the write, guarded by its own `try`/`catch` so a
+ * logging failure never turns a real read into `'unavailable'`.
+ *
  * ## The C7.9 part-of fold, wired (`ol-kghd`)
  *
  * `buildGroveModel`'s `relations` input (`ol-5phn`) was built and tested
@@ -167,8 +175,14 @@ import {
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
-import { resolveOfferCards } from '../retrospective/offer-card.js';
-import { createRetrospectiveOfferEventLog } from '../retrospective/offer-events.js';
+import {
+  resolveOfferCards,
+  unrecordedOfferedAssessmentPaths,
+} from '../retrospective/offer-card.js';
+import {
+  createRetrospectiveOfferEventLog,
+  recordOfferedEvents,
+} from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import { ObsidianGroveGroundStreakStore } from './ground-streak-store.js';
@@ -480,6 +494,20 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // already opened/dismissed (see its own module doc) — every
         // assessment record is handed in unfiltered.
         const allCards = resolveOfferCards(assessmentRecords, offerEvents, now);
+        // D7.1 (`[D-178]`-authorised kind, `ol-0r92.26`): logging "she was
+        // shown this" must never cost her the grove read, so a write
+        // failure here is swallowed rather than turning the whole read into
+        // `'unavailable'` (the outer catch below is for the READ, not this
+        // side effect).
+        try {
+          await recordOfferedEvents(
+            offerStore,
+            unrecordedOfferedAssessmentPaths(allCards, offerEvents),
+            deps.now,
+          );
+        } catch (error) {
+          console.error('Olea: could not record retrospective-offered event', error);
+        }
 
         // [D-196], F1.5(b), F8.1: computed once per course, alongside the
         // scope reading rather than inside the render, so a course whose

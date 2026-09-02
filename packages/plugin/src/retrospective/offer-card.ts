@@ -33,6 +33,17 @@
  * command (`commands/ids.ts`'s `OLEA_COMMAND_RETROSPECTIVE_OPEN`), which
  * `main.ts` wires to a real, working view regardless of where the standing
  * card eventually lives.
+ *
+ * **`resolveOfferCards` stays read-only; `unrecordedOfferedAssessmentPaths`
+ * below is its write-side counterpart (`ol-0r92.26`).** D7.1, as amended by
+ * `[D-178]`, authorises the `retrospective-offered` review-log kind, which
+ * had no production writer before this bead — a gap `ol-0r92.26` found
+ * because only tests appended it. `../home/provider.ts` and
+ * `../grove/provider.ts` both call this function at render time to learn
+ * which currently-showing cards are still unlogged, then hand the result to
+ * `./offer-events.ts`'s `recordOfferedEvents` to do the actual write —
+ * keeping this module pure, the same discipline `resolveOfferCards` itself
+ * already holds to.
  */
 
 import {
@@ -71,4 +82,28 @@ export function resolveOfferCards(
     if (line !== null) cards.push({ assessmentPath: assessment.path, course, line });
   }
   return cards;
+}
+
+/**
+ * Which of `cards` have never had a `retrospective-offered` event recorded
+ * (`ol-0r92.26`; D7.1, kind authorised by `[D-178]`). `cards` already IS
+ * "currently showing, status `'offered'`" — `resolveOfferCards`' own doc,
+ * `offerCardLine`'s `status !== 'offered'` guard — so this needs no second
+ * status computation; it only asks which of those already-showing
+ * assessments' offers are still unlogged, from the same `offerEvents` array
+ * `resolveOfferCards` read. Pure, like that function: a host calls this at
+ * render time and hands the result to `./offer-events.ts`'s
+ * `recordOfferedEvents` to do the actual write, exactly once per
+ * assessment rather than once per render.
+ */
+export function unrecordedOfferedAssessmentPaths(
+  cards: readonly RetrospectiveOfferCard[],
+  offerEvents: readonly RetrospectiveOfferEvent[],
+): readonly RetrospectiveOfferCard['assessmentPath'][] {
+  const alreadyRecorded = new Set(
+    offerEvents
+      .filter((event) => event.kind === 'retrospective-offered')
+      .map((event) => event.assessmentPath),
+  );
+  return cards.map((card) => card.assessmentPath).filter((path) => !alreadyRecorded.has(path));
 }

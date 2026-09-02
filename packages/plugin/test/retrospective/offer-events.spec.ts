@@ -9,7 +9,10 @@
 
 import { REVIEW_LOG_FOLDER } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { createRetrospectiveOfferEventLog } from '../../src/retrospective/offer-events.js';
+import {
+  createRetrospectiveOfferEventLog,
+  recordOfferedEvents,
+} from '../../src/retrospective/offer-events.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -110,5 +113,31 @@ describe('createRetrospectiveOfferEventLog', () => {
     const events = await log.load();
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('retrospective-opened');
+  });
+});
+
+describe('recordOfferedEvents (`ol-0r92.26`, D7.1 as amended by `[D-178]`)', () => {
+  it('appends a retrospective-offered event for each assessment path handed to it', async () => {
+    const vault = memoryVault();
+    const log = createRetrospectiveOfferEventLog({ vault, deviceId: DEVICE, now: () => NOW });
+
+    await recordOfferedEvents(log, [ASSESSMENT_A, ASSESSMENT_B], () => NOW);
+
+    const events = await log.load();
+    expect(
+      events
+        .filter((e) => e.kind === 'retrospective-offered')
+        .map((e) => e.assessmentPath)
+        .sort(),
+    ).toEqual([ASSESSMENT_A, ASSESSMENT_B].sort());
+  });
+
+  it('writes nothing when handed no paths', async () => {
+    const vault = memoryVault();
+    const log = createRetrospectiveOfferEventLog({ vault, deviceId: DEVICE, now: () => NOW });
+
+    await recordOfferedEvents(log, [], () => NOW);
+
+    expect(await log.load()).toEqual([]);
   });
 });
