@@ -25,6 +25,14 @@
  * (nothing here reads a PRIOR review event's id — `recordSoloGradeAndReview`
  * writes a fresh one).
  *
+ * `ol-yj0k` UPDATE: `durationMs` on that same review-log write is now real,
+ * not a hardcoded `null` — this view is the only place that can observe
+ * both endpoints of "presentation to answer" for explain-back (they are UI
+ * state transitions, not anything `solo-review.ts` resolves), so it times
+ * itself (`presentedAtMs`/`now`, both above `render()`) and passes the
+ * result through `acceptGrading` into `recordSoloGradeAndReview`. See
+ * `submitAnswer`'s own doc for exactly which two moments are measured.
+ *
  * It does NOT:
  * - Support relation-context prompts (F5.2a's neighbour-concept retrieval) —
  *   see `./request.ts`'s module doc for why this view is concept-only.
@@ -122,11 +130,25 @@ export interface ExplainBackModalDeps {
     readonly subjectConceptId: string | null;
     readonly context: ExplainBackPromptContext;
     readonly answer: string;
+    /** See this file's `now`/`presentedAtMs` doc just below for the definition. */
+    readonly durationMs: number | null;
   }) => Promise<void>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
+  /**
+   * `ol-yj0k`: the clock this view times an attempt's `durationMs` against —
+   * same INV-1 discipline `review/session.ts`'s injected `Clock` and
+   * `solo-review.ts`'s own `now` already use, never `Date.now()`/`new Date()`
+   * called inline at a measurement site. Optional because `main.ts`'s
+   * existing `openExplainBackModal` construction call (outside this bead's
+   * `owns`) does not wire one yet; the constructor falls back to the real
+   * wall clock so production behaviour is unchanged, and a test can still
+   * inject a fake. Wiring a real clock through from `main.ts` is a Class A
+   * follow-up, not required for correctness.
+   */
+  readonly now?: () => Date;
 }
 
 interface ResolvedPrompt {
@@ -140,18 +162,26 @@ type ModalState =
   | { readonly phase: 'topic'; readonly topic: string }
   | { readonly phase: 'loading' }
   | { readonly phase: 'answering'; readonly prompt: ResolvedPrompt; readonly answer: string }
-  | { readonly phase: 'grading'; readonly prompt: ResolvedPrompt; readonly answer: string }
+  | {
+      readonly phase: 'grading';
+      readonly prompt: ResolvedPrompt;
+      readonly answer: string;
+      /** `ol-yj0k`: computed once at submission, carried through to `acceptGrading` — see `submitAnswer`'s doc. */
+      readonly durationMs: number | null;
+    }
   | {
       readonly phase: 'graded';
       readonly prompt: ResolvedPrompt;
       readonly answer: string;
       readonly pending: PendingExplainBackGrading;
+      readonly durationMs: number | null;
     }
   | {
       readonly phase: 'refused';
       readonly prompt: ResolvedPrompt;
       readonly answer: string;
       readonly reason: 'unavailable' | 'check-failed' | 'insufficient-notes';
+      readonly durationMs: number | null;
     }
   | { readonly phase: 'accepted'; readonly message: string | null };
 
@@ -159,11 +189,24 @@ export class ExplainBackModal extends Modal {
   private readonly deps: ExplainBackModalDeps;
   private readonly seed: ExplainBackSeed;
   private state: ModalState;
+  private readonly now: () => Date;
+  /**
+   * `ol-yj0k`: the moment the current prompt became visible to her, in the
+   * SAME sense `review/session.ts`'s own `presentedAtMs` field uses for
+   * QA/cloze/MCQ — set whenever a prompt enters the `'answering'` phase
+   * (first resolution, or re-entry after discarding a grading to retry), and
+   * read once, at the top of `submitAnswer`, to produce `durationMs`. An
+   * instance field rather than part of `ModalState.answering` for the same
+   * reason `session.ts` keeps it off `ReviewQueueItem`: it is timing
+   * bookkeeping for the CURRENT attempt, not state the render tree needs.
+   */
+  private presentedAtMs: number | null = null;
 
   constructor(app: App, deps: ExplainBackModalDeps, seed: ExplainBackSeed) {
     super(app);
     this.deps = deps;
     this.seed = seed;
+    this.now = deps.now ?? (() => new Date());
     this.state = seed.kind === 'freeform' ? { phase: 'topic', topic: '' } : { phase: 'loading' };
   }
 
@@ -190,6 +233,7 @@ export class ExplainBackModal extends Modal {
       originInstrumentId: instrument.instrumentId,
       sourceBlocks,
     };
+    this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
@@ -206,7 +250,15 @@ export class ExplainBackModal extends Modal {
         originInstrumentId: this.deps.generateInstrumentId(),
         sourceBlocks,
       };
-      this.state = { phase: 'refused', prompt, answer: '', reason: 'insufficient-notes' };
+      // Never shown an answer box — insufficient-notes is a refusal before
+      // any prompt existed to present, so no `presentedAtMs` is set here.
+      this.state = {
+        phase: 'refused',
+        prompt,
+        answer: '',
+        reason: 'insufficient-notes',
+        durationMs: null,
+      };
       this.render();
       return;
     }
@@ -216,23 +268,36 @@ export class ExplainBackModal extends Modal {
       originInstrumentId: this.deps.generateInstrumentId(),
       sourceBlocks,
     };
+    this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
 
+  /**
+   * `ol-yj0k`: `durationMs` is computed HERE, at the moment she submits —
+   * matching `contracts/review-log.ts`'s own field doc for every other
+   * instrument type, "milliseconds from presentation to answer" — never at
+   * write time (`acceptGrading`/`solo-review.ts`), which can run long after
+   * this, following the Worker's grading round-trip and however long she
+   * takes to read the verdict before clicking Accept. `Math.max(0, …)`
+   * mirrors `review/session.ts`'s own `logAndAdvance` guard against a clock
+   * that runs backwards between the two reads.
+   */
   private async submitAnswer(prompt: ResolvedPrompt, answer: string): Promise<void> {
-    this.state = { phase: 'grading', prompt, answer };
+    const durationMs =
+      this.presentedAtMs !== null ? Math.max(0, this.now().getTime() - this.presentedAtMs) : null;
+    this.state = { phase: 'grading', prompt, answer, durationMs };
     this.render();
 
     const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
     try {
       const pending = await this.deps.grade(input);
       if (pending === null) {
-        this.state = { phase: 'refused', prompt, answer, reason: 'unavailable' };
+        this.state = { phase: 'refused', prompt, answer, reason: 'unavailable', durationMs };
         this.render();
         return;
       }
-      this.state = { phase: 'graded', prompt, answer, pending };
+      this.state = { phase: 'graded', prompt, answer, pending, durationMs };
       this.render();
     } catch (error) {
       // `UnusableGradingInputError` (empty referenceAnswer) reads as
@@ -245,6 +310,7 @@ export class ExplainBackModal extends Modal {
         prompt,
         answer,
         reason: isUnusableInput ? 'insufficient-notes' : 'check-failed',
+        durationMs,
       };
       this.render();
     }
@@ -254,6 +320,7 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    durationMs: number | null,
   ): Promise<void> {
     const context = await this.deps.buildObservationContext({
       subjectConceptId: prompt.subjectConceptId,
@@ -268,6 +335,7 @@ export class ExplainBackModal extends Modal {
           subjectConceptId: prompt.subjectConceptId,
           context: prompt.context,
           answer,
+          durationMs,
         });
       } catch (error) {
         // Mirrors `acceptWithObservation`'s own isolation
@@ -291,6 +359,11 @@ export class ExplainBackModal extends Modal {
     pending: PendingExplainBackGrading,
   ): void {
     discardExplainBackGrading(pending);
+    // `ol-yj0k`: a fresh presentation for a fresh attempt — she is looking at
+    // the question again, about to compose (or edit) another answer to it,
+    // so the clock for THIS attempt's `durationMs` restarts here rather than
+    // accumulating time already spent on the discarded one.
+    this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer };
     this.render();
   }
@@ -315,7 +388,13 @@ export class ExplainBackModal extends Modal {
         root.createDiv({ cls: 'olea-explain-back-loading', text: EXPLAIN_BACK_GRADING_LABEL });
         return;
       case 'graded':
-        this.renderGradedPhase(root, this.state.prompt, this.state.answer, this.state.pending);
+        this.renderGradedPhase(
+          root,
+          this.state.prompt,
+          this.state.answer,
+          this.state.pending,
+          this.state.durationMs,
+        );
         return;
       case 'refused':
         this.renderRefusedPhase(root, this.state.prompt, this.state.answer, this.state.reason);
@@ -361,6 +440,7 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    durationMs: number | null,
   ): void {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
@@ -408,7 +488,10 @@ export class ExplainBackModal extends Modal {
 
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
-    accept.addEventListener('click', () => void this.acceptGrading(prompt, answer, pending));
+    accept.addEventListener(
+      'click',
+      () => void this.acceptGrading(prompt, answer, pending, durationMs),
+    );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
   }

@@ -77,7 +77,8 @@
  * OTHER FIELDS THIS MODULE FIXES, AND WHY (Class B — flagged, not guessed)
  * ===========================================================================
  * `GradedExplainBackReviewSubject` needs `wasUnsure`, `durationMs` and a full
- * `selectionContext`, none of which this view currently tracks:
+ * `selectionContext`; `wasUnsure` and `selectionContext` are not tracked by
+ * this view, `durationMs` now is (`ol-yj0k`):
  *
  * - `wasUnsure: false`, always. `review/session.ts`'s `wasUnsure` is a
  *   self-report guess-toggle the review UI renders for rated instruments;
@@ -85,9 +86,26 @@
  *   affordance with no citing clause. Structurally `false` mirrors
  *   `explain-back-grade-write.ts`'s own hardcoded `rating: null` — an
  *   explanation is free production, never a flagged guess.
- * - `durationMs: null` — no timing capture is wired for this attempt yet.
- *   Honest absence, matching `RecordReviewInput`'s own optional-and-honest
- *   discipline for the case nothing measured it.
+ * - `durationMs: params.durationMs ?? null` — **wired, `ol-yj0k`.** Defined
+ *   the same way `review/session.ts` defines it for QA/cloze/MCQ: the
+ *   milliseconds from the moment the prompt became visible to the moment
+ *   she submitted an answer to it. `modal.ts` is the only place that can
+ *   observe both those moments (they are UI state transitions, not
+ *   anything this module resolves), so `modal.ts` computes the value
+ *   through its own injected clock and passes it in on
+ *   `RecordSoloGradeAndReviewParams.durationMs`; this module only relays it
+ *   into the field, same "true absence, not a placeholder" discipline as
+ *   before when the caller has no clock wired (falls back to `null`, never
+ *   a guessed number). Optional on the params type — not because the value
+ *   is optional in principle, but because `main.ts`'s existing inline
+ *   `recordExplainBackSoloGradeAndReview` params type
+ *   (`packages/plugin/src/main.ts`, outside this bead's `owns`) does not
+ *   declare it; TypeScript's structural typing lets the extra field ride
+ *   through main.ts's untouched forwarding call unchanged (same object
+ *   reference start to finish, nothing reconstructs it), so the real value
+ *   modal.ts computes still reaches this function at runtime. Tightening
+ *   main.ts's inline type to name `durationMs` explicitly is a Class A
+ *   follow-up, not required for correctness.
  * - `selectionContext.dueState: 'new'` — explain-back is never queue-selected
  *   (F2.14/`[D-126]`, "priced, never selected"), so none of the four
  *   `dueState` values is literally true of a self-initiated or routed
@@ -164,6 +182,15 @@ export interface RecordSoloGradeAndReviewParams {
   readonly subjectConceptId: string | null;
   readonly context: ExplainBackPromptContext;
   readonly answer: string;
+  /**
+   * Milliseconds from the prompt being shown to the answer being submitted
+   * (`modal.ts`'s definition, matching `review/session.ts`'s
+   * presented-to-rated window for QA/cloze/MCQ) — `null` when nothing timed
+   * it. Optional so a caller with no clock wired (or an older inline type
+   * that doesn't yet name this field — see this module's doc) still
+   * type-checks; always relayed as `null`, never inferred, when absent.
+   */
+  readonly durationMs?: number | null;
 }
 
 /**
@@ -195,7 +222,7 @@ export async function recordSoloGradeAndReview(
     conceptIds: [params.subjectConceptId],
     timestamp,
     wasUnsure: false,
-    durationMs: null,
+    durationMs: params.durationMs ?? null,
     selectionContext: {
       dueState: 'new',
       examProximity: null,

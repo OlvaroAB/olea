@@ -153,3 +153,42 @@ describe('recordSoloGradeAndReview — the real write, one review event', () => 
     }
   });
 });
+
+describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
+  it('persists the caller-supplied durationMs (modal.ts times presentation-to-submit; this module only relays it)', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const result = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+        durationMs: 41_500,
+      },
+    );
+
+    if (!result) throw new Error('expected a written review-log record');
+    expect(result.record.durationMs).toBe(41_500);
+  });
+
+  it('relays null, never a guessed number, when the caller supplies no durationMs', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const result = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+      },
+    );
+
+    if (!result) throw new Error('expected a written review-log record');
+    expect(result.record.durationMs).toBeNull();
+  });
+});
