@@ -956,3 +956,69 @@ describe('F5.3a / R7 — the scheduling observation’s third trigger wired into
     expect(session.getSchedulingObservationOffer()?.promptText).toBe('reciprocal offer text');
   });
 });
+
+describe('[D-189] (ol-0r92.36) — editing a draft is authorship, never scored', () => {
+  // F3.3's own rationale for a rejected attempt ("not evidence about her,
+  // never scores into mastery") applies here for the same reason: an edit
+  // is her own correction, not a graded response to the draft as written,
+  // so `acceptEditDraft` must resolve the draft (F3.3/`[D-097]`'s passive
+  // accept, materializing it with verdict `'edited'`) and open it for her to
+  // change, but never call `reviewLog.recordReview` — the write that is
+  // ALSO what feeds the scheduler (`logAndAdvance`, exercised by `rate`/
+  // `mcqNext` elsewhere in this file). No rating means no scheduler credit.
+
+  it('a Q&A draft: acceptEditDraft resolves the draft and opens it, but records no review-log rating', async () => {
+    const item = queueItem(qaFixture({ draftId: 'draft-qa-1' }));
+    const reviewLog = fakeReviewLog();
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const editPort = fakeEditPort();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], reviewLog, draftAcceptPort, editPort }),
+    );
+    await session.start();
+    expect(session.getViewModel().phase).toBe('front');
+
+    await session.acceptEditDraft();
+
+    expect(draftAcceptPort.calls).toEqual([
+      { kind: 'accept', draftId: 'draft-qa-1', verdict: 'edited' },
+    ]);
+    expect(editPort.calls).toHaveLength(1);
+    expect(reviewLog.calls).toEqual([]);
+  });
+
+  it('an MCQ draft: acceptEditDraft records no review-log rating either, even mid-answer', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-mcq-1' }));
+    const reviewLog = fakeReviewLog();
+    const draftAcceptPort = fakeDraftAcceptPort();
+    const editPort = fakeEditPort();
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], reviewLog, draftAcceptPort, editPort }),
+    );
+    await session.start();
+    expect(session.getViewModel().phase).toBe('mcq-open');
+
+    await session.acceptEditDraft();
+
+    expect(draftAcceptPort.calls).toEqual([
+      { kind: 'accept', draftId: 'draft-mcq-1', verdict: 'edited' },
+    ]);
+    expect(editPort.calls).toHaveLength(1);
+    expect(reviewLog.calls).toEqual([]);
+  });
+
+  it('contrasts with rate/mcqAnswer+mcqNext, which DO write a review-log rating for an ordinary answer', async () => {
+    // Not a regression guard on the edit path itself — it exists so a future
+    // reader can see, in one file, that `reviewLog.calls` being empty above
+    // is a meaningful assertion and not an artifact of the fake never being
+    // called from this test file at all.
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(reviewLog.calls).toHaveLength(1);
+  });
+});

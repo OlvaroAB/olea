@@ -19,6 +19,14 @@
  * the one place that decides "is this screen a draft" for both
  * `resolveReviewKey` and `hintsFor`, so the resolver and the hint row can
  * never disagree about which pair of actions E/S currently mean.
+ *
+ * **And `[D-189]` (ol-0r92.36) narrows WHEN that pair is reachable at all.**
+ * The edit affordance lives at the reveal, never before it: on a draft's
+ * pre-reveal screen (`card-front`/`mcq-unanswered`) E and S are bound to
+ * nothing, and the hint row shows neither — not the draft pair (she hasn't
+ * seen the draft's own answer yet to weigh an edit against) and not the
+ * ordinary pair either (nothing has landed to edit or suspend). `isRevealScreen`
+ * below is the second predicate this needs, alongside `isNewDraftScreen`.
  */
 
 import type { Rating } from 'olea-contracts';
@@ -142,6 +150,20 @@ function isNewDraftScreen(screen: ReviewScreen): boolean {
 }
 
 /**
+ * The two screens where "reveal" has happened — she has seen the draft's own
+ * answer (Q&A/cloze) or the correct option (MCQ) — versus the two "front"
+ * screens where she has been asked for hers but not yet shown the draft's
+ * (`card-front`, `mcq-unanswered`). `[D-189]` (ol-0r92.36) is what this
+ * predicate exists for: the edit/reject pair on a draft item is reachable
+ * only where this returns `true` — see `resolveReviewKey` and `hintsFor`
+ * below, and `view.ts`'s `renderHeader`, which gates the same pair on the
+ * same two screen kinds.
+ */
+function isRevealScreen(screen: ReviewScreen): boolean {
+  return screen.kind === 'card-reveal' || screen.kind === 'mcq-answered';
+}
+
+/**
  * Deliberately blind to focus. This resolves `{ key, screen }` to an action
  * and nothing else — it never sees `event.target`, because that is real DOM
  * and this module's own doc reserves real `KeyboardEvent`s to `view.ts`
@@ -166,11 +188,20 @@ export function resolveReviewKey(
 
   if (hasGlobalBindings(screen)) {
     const isDraft = isNewDraftScreen(screen);
-    if (key === 'e' || key === 'E') {
-      return isDraft ? { kind: 'accept-edit-draft' } : { kind: 'edit' };
-    }
-    if (key === 's' || key === 'S') {
-      return isDraft ? { kind: 'reject-draft' } : { kind: 'suspend' };
+    // `[D-189]` (ol-0r92.36): the edit/reject pair — draft or ordinary —
+    // lives at the reveal, never before it. A draft's pre-reveal screen
+    // (`card-front`/`mcq-unanswered`) has nothing to bind E/S to: not the
+    // draft pair (too early — see `view.ts`'s `renderHeader` doc) and not
+    // the ordinary pair either (nothing has landed to edit or suspend yet).
+    // Escape and the arrow keys below are untouched by this — ending the
+    // session or moving focus means the same thing on every screen.
+    if (isDraft ? isRevealScreen(screen) : true) {
+      if (key === 'e' || key === 'E') {
+        return isDraft ? { kind: 'accept-edit-draft' } : { kind: 'edit' };
+      }
+      if (key === 's' || key === 'S') {
+        return isDraft ? { kind: 'reject-draft' } : { kind: 'suspend' };
+      }
     }
     if (key === 'Escape') return { kind: 'end-session' };
     if (key === 'ArrowUp') return { kind: 'focus-move', direction: 'up' };
@@ -228,12 +259,21 @@ export interface HintEntry {
 /** The exact hint rows each screen renders (`PluginHintRow` in the mocks), generated from the same bindings `resolveReviewKey` accepts — see this module's doc. */
 export function hintsFor(screen: ReviewScreen): readonly HintEntry[] {
   const isDraft = isNewDraftScreen(screen);
+  // `[D-189]`: no E/S hint at all on a draft's pre-reveal screen — a hint
+  // promising a key `resolveReviewKey` now refuses there would itself
+  // violate Q6.5 ("every hint shown on screen must be a real binding").
+  // `Esc` (end session) is unaffected and still shown.
+  const editSuspendHints: HintEntry[] =
+    isDraft && !isRevealScreen(screen)
+      ? []
+      : [
+          isDraft
+            ? { key: 'E', label: 'edit before saving' }
+            : { key: 'E', label: 'edit the note' },
+          isDraft ? { key: 'S', label: 'reject' } : { key: 'S', label: 'suspend' },
+        ];
   const global: HintEntry[] = hasGlobalBindings(screen)
-    ? [
-        isDraft ? { key: 'E', label: 'edit before saving' } : { key: 'E', label: 'edit the note' },
-        isDraft ? { key: 'S', label: 'reject' } : { key: 'S', label: 'suspend' },
-        { key: 'Esc', label: 'end session' },
-      ]
+    ? [...editSuspendHints, { key: 'Esc', label: 'end session' }]
     : [];
 
   switch (screen.kind) {

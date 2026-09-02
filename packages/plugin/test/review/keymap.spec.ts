@@ -145,33 +145,46 @@ describe('resolveReviewKey — MCQ answered', () => {
   });
 });
 
-describe('resolveReviewKey — a still-pending draft item (ol-uxk9, Q6.5 completeness)', () => {
+describe('resolveReviewKey — a still-pending draft item, gated to the reveal ([D-189], ol-0r92.36)', () => {
   // The three item screens a draft can actually be showing when unresolved
   // (`view.ts`'s `currentScreen` computes `isNewDraft` from
   // `instrument.draftId !== null` on exactly these three — `mcqAnswer`/`rate`
   // resolve any pending draft before `mcq-answered` can render again, and
-  // `note-missing` has no draft path at all).
-  const draftScreens: readonly ReviewScreen[] = [
+  // `note-missing` has no draft path at all). Only `card-reveal` is a reveal
+  // screen among them — `[D-189]` is what makes the pre-reveal two behave
+  // differently from it below.
+  const preRevealDraftScreens: readonly ReviewScreen[] = [
     { kind: 'card-front', isNewDraft: true },
-    { kind: 'card-reveal', isNewDraft: true },
     { kind: 'mcq-unanswered', optionCount: PRESENTED_OPTIONS, isNewDraft: true },
   ];
+  const revealDraftScreen: ReviewScreen = { kind: 'card-reveal', isNewDraft: true };
 
-  it.each(draftScreens)(
-    '%j: E accepts-and-edits the draft instead of editing the note',
+  it.each(preRevealDraftScreens)(
+    '%j: E and S do nothing before the reveal — not the draft pair, not the ordinary one',
     (screen) => {
-      expect(resolveReviewKey({ key: 'e' }, screen)).toEqual({ kind: 'accept-edit-draft' });
-      expect(resolveReviewKey({ key: 'E' }, screen)).toEqual({ kind: 'accept-edit-draft' });
+      expect(resolveReviewKey({ key: 'e' }, screen)).toBeNull();
+      expect(resolveReviewKey({ key: 'E' }, screen)).toBeNull();
+      expect(resolveReviewKey({ key: 's' }, screen)).toBeNull();
+      expect(resolveReviewKey({ key: 'S' }, screen)).toBeNull();
     },
   );
 
-  it.each(draftScreens)('%j: S rejects the draft instead of suspending', (screen) => {
-    expect(resolveReviewKey({ key: 's' }, screen)).toEqual({ kind: 'reject-draft' });
-    expect(resolveReviewKey({ key: 'S' }, screen)).toEqual({ kind: 'reject-draft' });
+  it('E accepts-and-edits the draft at the reveal', () => {
+    expect(resolveReviewKey({ key: 'e' }, revealDraftScreen)).toEqual({
+      kind: 'accept-edit-draft',
+    });
+    expect(resolveReviewKey({ key: 'E' }, revealDraftScreen)).toEqual({
+      kind: 'accept-edit-draft',
+    });
   });
 
-  it.each(draftScreens)(
-    '%j: Escape and the arrow keys are unaffected by draft status',
+  it('S rejects the draft at the reveal', () => {
+    expect(resolveReviewKey({ key: 's' }, revealDraftScreen)).toEqual({ kind: 'reject-draft' });
+    expect(resolveReviewKey({ key: 'S' }, revealDraftScreen)).toEqual({ kind: 'reject-draft' });
+  });
+
+  it.each([...preRevealDraftScreens, revealDraftScreen])(
+    '%j: Escape and the arrow keys are unaffected by draft status or reveal gating',
     (screen) => {
       expect(resolveReviewKey({ key: 'Escape' }, screen)).toEqual({ kind: 'end-session' });
       expect(resolveReviewKey({ key: 'ArrowUp' }, screen)).toEqual({
@@ -181,7 +194,7 @@ describe('resolveReviewKey — a still-pending draft item (ol-uxk9, Q6.5 complet
     },
   );
 
-  it('isNewDraft: false behaves identically to an ordinary (unmarked) screen', () => {
+  it('isNewDraft: false behaves identically to an ordinary (unmarked) screen, on every screen kind', () => {
     const marked: ReviewScreen = { kind: 'card-front', isNewDraft: false };
     const unmarked: ReviewScreen = { kind: 'card-front' };
     expect(resolveReviewKey({ key: 'e' }, marked)).toEqual({ kind: 'edit' });
@@ -198,16 +211,36 @@ describe('resolveReviewKey — a still-pending draft item (ol-uxk9, Q6.5 complet
   });
 });
 
-describe('hintsFor — a still-pending draft item swaps the E/S hint labels (ol-uxk9)', () => {
-  it('card-front names "edit before saving" / "reject" instead of the ordinary pair', () => {
+describe('hintsFor — a still-pending draft item swaps the E/S hint labels only at the reveal ([D-189], ol-0r92.36)', () => {
+  it('card-front (pre-reveal) shows neither the draft pair nor the ordinary one', () => {
     const hints = hintsFor({ kind: 'card-front', isNewDraft: true });
+    expect(hints).not.toContainEqual({ key: 'E', label: 'edit before saving' });
+    expect(hints).not.toContainEqual({ key: 'S', label: 'reject' });
+    expect(hints).not.toContainEqual({ key: 'E', label: 'edit the note' });
+    expect(hints).not.toContainEqual({ key: 'S', label: 'suspend' });
+    // Esc is unaffected — ending the session is still one keypress away.
+    expect(hints).toContainEqual({ key: 'Esc', label: 'end session' });
+  });
+
+  it('mcq-unanswered (pre-reveal) shows neither pair either', () => {
+    const hints = hintsFor({
+      kind: 'mcq-unanswered',
+      optionCount: PRESENTED_OPTIONS,
+      isNewDraft: true,
+    });
+    expect(hints).not.toContainEqual({ key: 'E', label: 'edit before saving' });
+    expect(hints).not.toContainEqual({ key: 'S', label: 'reject' });
+  });
+
+  it('card-reveal (the reveal) names "edit before saving" / "reject" instead of the ordinary pair', () => {
+    const hints = hintsFor({ kind: 'card-reveal', isNewDraft: true });
     expect(hints).toContainEqual({ key: 'E', label: 'edit before saving' });
     expect(hints).toContainEqual({ key: 'S', label: 'reject' });
     expect(hints).not.toContainEqual({ key: 'E', label: 'edit the note' });
     expect(hints).not.toContainEqual({ key: 'S', label: 'suspend' });
   });
 
-  it('an ordinary (non-draft) card-front keeps the ordinary pair', () => {
+  it('an ordinary (non-draft) card-front keeps the ordinary pair — unaffected by the reveal gate', () => {
     const hints = hintsFor({ kind: 'card-front' });
     expect(hints).toContainEqual({ key: 'E', label: 'edit the note' });
     expect(hints).toContainEqual({ key: 'S', label: 'suspend' });

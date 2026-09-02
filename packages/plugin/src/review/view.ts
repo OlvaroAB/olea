@@ -104,7 +104,7 @@ import type {
   ReviewViewModel,
   SessionCompleteSummary,
 } from './session.js';
-import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from './types.js';
+import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
 
 /**
  * F2.7's on-demand panel state, keyed by which instrument the last request
@@ -587,20 +587,28 @@ export class ReviewView extends ItemView {
    * through so this can tell a still-pending draft (`instrument.draftId !==
    * null`, F3.3, `[D-097]`, `ol-p3t07a`) from an ordinary instrument.
    *
-   * **The "new" badge and its edit/reject controls (F3.3/`[D-097]`, keyboard
-   * bindings ol-uxk9).** A draft item replaces "Edit note"/"Suspend" with
-   * "Edit before saving" and "Reject" — the ordinary pair means nothing for
-   * something not yet in the vault (there is no note-anchored edit target,
-   * and nothing scheduled yet to suspend). Both are one click away, matching
-   * `[D-097]`'s "edit and reject one tap away", **and now also one keypress
-   * away, on the same E/S keys the ordinary "Edit note"/"Suspend" pair
-   * already used** — `keymap.ts`'s `resolveReviewKey`/`hintsFor` swap what
-   * E/S mean based on `screen.isNewDraft` (computed in `currentScreen`
-   * above), rather than this view growing a second pair of keys. That keeps
-   * `Q6.5`'s promise intact two ways at once: no hint row ever claims a key
-   * this resolver doesn't accept, and every action — including these two —
-   * now has a keyboard path. `dispatch` (below) is the single place either
-   * button's click or the matching keypress ends up, so the two can't drift.
+   * **The "new" badge and its edit/reject controls now render ONLY at the
+   * reveal (F3.3/`[D-097]`, amended `[D-189]`, `ol-0r92.36`).** `[D-189]`
+   * adds one clause to F3.3 and principle 7: the first serve asks for her
+   * answer before it shows the draft's own, and the edit affordance — beside
+   * `Reject` — sits at the reveal, alongside that comparison, never before
+   * it. So this method draws NEITHER pair on a draft's pre-reveal screen
+   * (`card-front` / `mcq-unanswered`): not the draft pair (too early — she
+   * hasn't seen the draft's answer to weigh an edit against yet) and not the
+   * ordinary "Edit note"/"Suspend" pair either (nothing has landed in a note
+   * yet to edit, and nothing is scheduled yet to suspend). Only once
+   * `screen.kind` is `card-reveal` or `mcq-answered` does the draft pair
+   * appear — "Edit before saving" and "Reject" replace "Edit note"/"Suspend",
+   * which means nothing for something not yet in the vault. Both are one
+   * click away, matching `[D-097]`'s "edit and reject one tap away", **and
+   * one keypress away, on the same E/S keys the ordinary "Edit note"/
+   * "Suspend" pair already used** — `keymap.ts`'s `resolveReviewKey`/
+   * `hintsFor` swap what E/S mean based on `screen.isNewDraft`, and now also
+   * suppress E/S entirely on a draft's pre-reveal screen the same way this
+   * method suppresses the buttons, so the pointer path and the keyboard path
+   * can never disagree about when the pair is reachable. `dispatch` (below)
+   * is the single place either button's click or the matching keypress ends
+   * up, so the two can't drift.
    */
   private renderHeader(
     progress: { readonly position: number; readonly total: number },
@@ -645,18 +653,25 @@ export class ReviewView extends ItemView {
     }
 
     if (instrument !== null && instrument.draftId !== null) {
-      this.actionButton(
-        header,
-        'Edit before saving',
-        verifiedKeycap(screen, 'e', 'E', 'accept-edit-draft'),
-        () => void this.dispatch({ kind: 'accept-edit-draft' }),
-      );
-      this.actionButton(
-        header,
-        'Reject',
-        verifiedKeycap(screen, 's', 'S', 'reject-draft'),
-        () => void this.dispatch({ kind: 'reject-draft' }),
-      );
+      // [D-189] (ol-0r92.36): the draft pair renders only at the reveal —
+      // `card-reveal` (Q&A/cloze) or `mcq-answered` (MCQ) — never on the
+      // pre-reveal `card-front`/`mcq-unanswered` screens. A pre-reveal draft
+      // screen falls through this whole block with neither pair drawn: see
+      // this method's own doc, above.
+      if (screen.kind === 'card-reveal' || screen.kind === 'mcq-answered') {
+        this.actionButton(
+          header,
+          'Edit before saving',
+          verifiedKeycap(screen, 'e', 'E', 'accept-edit-draft'),
+          () => void this.dispatch({ kind: 'accept-edit-draft' }),
+        );
+        this.actionButton(
+          header,
+          'Reject',
+          verifiedKeycap(screen, 's', 'S', 'reject-draft'),
+          () => void this.dispatch({ kind: 'reject-draft' }),
+        );
+      }
       return;
     }
 
