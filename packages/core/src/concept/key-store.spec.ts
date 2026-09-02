@@ -257,4 +257,89 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
     // Still exactly one record — the second run matched, it did not mint again.
     expect(await listConceptKeyRecords(source)).toHaveLength(1);
   });
+
+  // The two orphaning cases `ol-zfty` names as the gap `[D-174]` was meant to close. Case (a)
+  // (bound-note rename) is closed by the sidecar's `noteUid` anchor. Case (b) (a topic-only
+  // concept's display string edited) is NOT closed by anything in this module today — see the
+  // test's own comment for why the wiring never reaches the alias-match path `resolveConceptKey`
+  // already implements and this file's own tests above already exercise in isolation.
+
+  it('CASE (a), CLOSED: a bound Zettelkasten note renamed on disk keeps its key ([D-174] via noteUid)', async () => {
+    await write(
+      '05 Zettelkasten/Quartz cleavage.md',
+      '---\ntype: concept\nolea-uid: uid-quartz\n---\n\n# Quartz cleavage\n\nDefinition, hers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ncourse: COURSEA\n---\n\nBody links to [[Quartz cleavage]].\n',
+    );
+
+    const before = await extractConcepts(source, { stampConceptKeys: true });
+    const keyBefore = before.find((c) => c.name === 'Quartz cleavage')?.key;
+    expect(keyBefore).toBeDefined();
+
+    // She renames the note in Obsidian. `olea-uid` rides the file (it is frontmatter, not a
+    // path), and Obsidian's own rename behaviour rewrites the wikilinks that point at it — both
+    // simulated here by deleting the old path and writing the new one, and updating the one
+    // note that links to it.
+    await rm(join(root, '05 Zettelkasten', 'Quartz cleavage.md'));
+    await write(
+      '05 Zettelkasten/Quartz cleavage renamed.md',
+      '---\ntype: concept\nolea-uid: uid-quartz\n---\n\n# Quartz cleavage renamed\n\nDefinition, hers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ncourse: COURSEA\n---\n\nBody links to [[Quartz cleavage renamed]].\n',
+    );
+
+    const after = await extractConcepts(source, { stampConceptKeys: true });
+    const renamed = after.find((c) => c.name === 'Quartz cleavage renamed');
+    expect(renamed).toBeDefined();
+    // The display name moved (expected — it is a mutable attribute); the opaque key did not.
+    expect(renamed?.key).toBe(keyBefore);
+
+    // Exactly one sidecar record throughout — the rename refreshed `anchor.notePath` on the
+    // existing record rather than minting a second one.
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.anchor).toEqual({
+      kind: 'note',
+      noteUid: 'uid-quartz',
+      notePath: '05 Zettelkasten/Quartz cleavage renamed.md',
+    });
+  });
+
+  it('CASE (b), STILL OPEN: a topic-only concept whose display string is edited mints a NEW key', async () => {
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ntopic: [Basalt weathering]\ncourse: COURSEA\n---\n\n# Note\n',
+    );
+    const before = await extractConcepts(source, { stampConceptKeys: true });
+    const keyBefore = before.find((c) => c.name === 'Basalt weathering')?.key;
+    expect(keyBefore).toBeDefined();
+
+    // She retitles the topic — same real-world concept, new wording, nothing else about the
+    // note changes. There is no `noteUid` for a topic-only (no bound note) concept to anchor on.
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ntopic: [Basalt weathering process]\ncourse: COURSEA\n---\n\n# Note\n',
+    );
+    const after = await extractConcepts(source, { stampConceptKeys: true });
+    const renamed = after.find((c) => c.name === 'Basalt weathering process');
+    expect(renamed).toBeDefined();
+
+    // THIS IS THE GAP: `resolveConceptKey`'s own alias-match path (exercised directly, in
+    // isolation, by "a topic-only concept is matched by the existing wording/alias precedence"
+    // above) is never reached from here, because `extract.ts`'s `keyFor` always calls
+    // `resolveConceptKey` with `aliases: []` — `ConceptRecord` carries no `aliases` field today
+    // (`./types.ts`'s own doc: "aliases ... are not yet fields here"), so there is nothing for
+    // the extraction pass to thread into the candidate anchor that would let the lookup recognise
+    // "Basalt weathering process" as the same concept as "Basalt weathering". A new key is
+    // minted, orphaning every review-log record and mastery rollup keyed on the old one — exactly
+    // the failure `ol-zfty` names as case (b), and `[D-174]` does not close it.
+    expect(renamed?.key).not.toBe(keyBefore);
+
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(2);
+  });
 });
