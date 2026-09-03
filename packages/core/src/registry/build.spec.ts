@@ -288,6 +288,81 @@ describe('buildRegistryModel — duplicate-title state (F8.4 / [D-203])', () => 
   });
 });
 
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-214] —
+// a thin-note structural-reason state on the concept row (ol-2zfj.61)",
+// tagged `@auto:core/registry/build.spec`.
+describe('buildRegistryModel — thin-note state (F8.4 / [D-214])', () => {
+  it('a concept bound to a note whose captured body is under the declared word floor carries state thin-note with the measured word count', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          boundNotePath: '05 Zettelkasten/Concept A.md',
+          definition: 'A short thought, not yet finished.',
+        }),
+      ],
+    });
+    expect(model.concepts[0]?.thinNote).toEqual({ wordCount: 6 });
+  });
+
+  it('a concept bound to a note with no captured body at all (empty once her heading is set aside) carries state thin-note with wordCount 0', () => {
+    // No `definition` key at all — `exactOptionalPropertyTypes` treats an
+    // explicit `definition: undefined` as a type error on this optional
+    // field, matching this file's own `disputes`/`courseRankings` convention
+    // in `buildFor` above.
+    const model = buildFor({
+      concepts: [concept({ boundNotePath: '05 Zettelkasten/Concept A.md' })],
+    });
+    expect(model.concepts[0]?.thinNote).toEqual({ wordCount: 0 });
+  });
+
+  it('a concept bound to a note whose captured body clears the declared word floor carries no thinNote field at all', () => {
+    const longEnough = Array.from({ length: 25 }, (_, i) => `word${i}`).join(' ');
+    const model = buildFor({
+      concepts: [
+        concept({ boundNotePath: '05 Zettelkasten/Concept A.md', definition: longEnough }),
+      ],
+    });
+    expect(model.concepts[0]?.thinNote).toBeUndefined();
+  });
+
+  it('an unbound concept (no note of hers to be thin) carries no thinNote field, regardless of definition', () => {
+    const model = buildFor({ concepts: [concept()] });
+    expect(model.concepts[0]?.thinNote).toBeUndefined();
+  });
+
+  it('a duplicate-title concept never also carries thinNote — the two states are mutually exclusive by construction', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          ambiguousNotePaths: [
+            '05 Zettelkasten/Concept A.md',
+            '05 Zettelkasten/Outcrop/Concept A.md',
+          ],
+        }),
+      ],
+    });
+    expect(model.concepts[0]?.duplicateTitle).toBeDefined();
+    expect(model.concepts[0]?.thinNote).toBeUndefined();
+  });
+
+  it('writing more into the note clears the state: the next build reflects the fresher, longer captured body', () => {
+    const thin = buildFor({
+      concepts: [
+        concept({ boundNotePath: '05 Zettelkasten/Concept A.md', definition: 'One short line.' }),
+      ],
+    });
+    expect(thin.concepts[0]?.thinNote).toBeDefined();
+
+    const longEnough = Array.from({ length: 25 }, (_, i) => `word${i}`).join(' ');
+    const grown = buildFor({
+      concepts: [
+        concept({ boundNotePath: '05 Zettelkasten/Concept A.md', definition: longEnough }),
+      ],
+    });
+    expect(grown.concepts[0]?.thinNote).toBeUndefined();
+  });
+});
+
 // Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-171] —
 // The registry carries source provenance", tagged `@auto:core/registry/build.spec`.
 describe('buildRegistryModel — source provenance (F8.4 / [D-171])', () => {

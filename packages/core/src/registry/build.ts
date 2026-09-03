@@ -71,6 +71,18 @@
  * decided the concept has no bound note, and this is only the fold that
  * makes that decision visible on F8.4's browse surface instead of reading
  * as an ordinary unbound tier-2 concept.
+ *
+ * ## `[D-214]` — the thin-note structural-reason state
+ *
+ * Unlike `duplicateTitleFor`, `thinNoteFor` below is genuinely NEW judgement:
+ * no upstream module has yet decided "this note is too thin to draft from" —
+ * the authored-note drafting pipeline that will consume that decision
+ * (`ol-0r92.45`/`.46`) is a separate, unbuilt bead outside this file's
+ * `owns`. So `MIN_DRAFTABLE_WORD_COUNT` below is this bead's own declared
+ * floor, read against fields `../concept/extract.js` already captures
+ * (`boundNotePath`, `definition`) — no new vault I/O, no new `ConceptRecord`
+ * field, and no attempt to pre-empt what that later bead's own gate ends up
+ * using this fact for.
  */
 
 import { noteOfferEligible } from '../concept/note-offer.js';
@@ -356,6 +368,52 @@ function duplicateTitleFor(
     : { notePaths: concept.ambiguousNotePaths };
 }
 
+/**
+ * DECLARED (not derived — `docs/Olea_component_register.md`'s declared/
+ * derived rule), and this state's one number. A drafted card needs a front
+ * worth asking and a back worth answering — two distinguishable pieces of
+ * material, not one continuous thought. A note whose captured body runs
+ * under a short paragraph's worth of words has never shown two such pieces;
+ * above this floor there is enough material that thinness stops being the
+ * honest explanation for producing nothing. Never tuned against the real
+ * vault or a synthetic corpus (`N-015`) — `build.spec.ts`'s tests fix this
+ * number's behaviour at and around the floor, they do not fit its value.
+ */
+export const MIN_DRAFTABLE_WORD_COUNT = 20;
+
+/**
+ * Trivial word split, matching `../generate/style-profile.ts`'s own local
+ * `wordCount` — duplicated rather than imported, since that module is a
+ * different concern (her own writing STYLE, for card generation to match)
+ * and exports no such helper.
+ */
+function wordCount(text: string): number {
+  const trimmed = text.trim();
+  return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+}
+
+/**
+ * `[D-214]`'s thin-note structural-reason state — present exactly when this
+ * concept is bound to a note she wrote (`boundNotePath` set) and that note's
+ * captured body (`definition`) falls under `MIN_DRAFTABLE_WORD_COUNT`,
+ * counting `0` when the body is empty entirely (`definition` absent, e.g.
+ * nothing but her own heading). Mutually exclusive with `duplicateTitleFor`
+ * above by construction: a duplicated title always carries an absent
+ * `boundNotePath`, so this function returns `undefined` for it without
+ * needing to check `ambiguousNotePaths` itself.
+ *
+ * A concept with no bound note at all (ordinary tier-2/3, no authored note
+ * to be thin) also returns `undefined` — there is nothing here for the
+ * thin-note state to be ABOUT.
+ */
+function thinNoteFor(
+  concept: BuildRegistryModelInput['concepts'][number],
+): RegistryConceptEntry['thinNote'] {
+  if (concept.boundNotePath === undefined) return undefined;
+  const count = concept.definition === undefined ? 0 : wordCount(concept.definition);
+  return count < MIN_DRAFTABLE_WORD_COUNT ? { wordCount: count } : undefined;
+}
+
 function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): number {
   if (a.displayName !== b.displayName) return a.displayName < b.displayName ? -1 : 1;
   return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
@@ -425,6 +483,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       );
     }
     const duplicateTitle = duplicateTitleFor(concept);
+    const thinNote = thinNoteFor(concept);
     return {
       key: concept.key,
       displayName,
@@ -445,6 +504,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       // `build.spec.ts`'s `buildFor`), so the key is omitted entirely for the
       // ordinary, non-duplicated case rather than set to `undefined`.
       ...(duplicateTitle === undefined ? {} : { duplicateTitle }),
+      ...(thinNote === undefined ? {} : { thinNote }),
     };
   });
 

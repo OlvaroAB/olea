@@ -42,6 +42,14 @@
  *     both notes and the structural reason, with no chooser anywhere in that section
  *   - the rest of the row (instrument mix, rename/withdraw actions) renders exactly as it
  *     would for any other concept — the binder's refusal stands, nothing else is suppressed
+ *
+ * `[D-214]`'s thin-note structural-reason state (F8.4, `ol-2zfj.61`), covering the `@auto-web`
+ * scenario "the state is shown on the row, not silence":
+ *   - a concept bound to a note whose captured body is under the declared word floor shows a
+ *     badge and one line stating the measured word count, worded as a fact about length, with
+ *     no affordance anywhere in that section that touches (opens or edits) her note
+ *   - the rest of the row renders exactly as it would for any other concept, and the state
+ *     reads distinctly from both an ordinary row and the duplicate-title row
  */
 import { expect, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -341,4 +349,46 @@ test('registry-duplicate-title: an ordinary concept in the same list shows no ba
   const first = rows(page).nth(0);
   await expect(first.locator('.olea-registry-duplicate-title-badge')).toHaveCount(0);
   await expect(first.locator('.olea-registry-duplicate-title')).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// `[D-214]` (`ol-2zfj.61`) — the thin-note structural-reason state on the
+// concept row. F8-concepts-scope.md, `@auto-web:e2e/registry.spec.ts`:
+// "the state is shown on the row, not silence."
+// ---------------------------------------------------------------------------
+
+test('registry-thin-note: the row renders the badge and the length fact in her terms, and offers no affordance that edits her note', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-thin-note', 'obsidian-dark');
+  const row = rows(page).filter({ hasText: 'syn:concept:tessane' });
+  await expect(row).toHaveCount(1);
+
+  // The badge and the length fact, in her terms — never a judgement.
+  await expect(row.locator('.olea-registry-thin-note-badge')).toHaveText('Too short to draft');
+  const reason = row.locator('.olea-registry-thin-note');
+  await expect(reason).toContainText('words so far');
+  await expect(reason).toContainText('Keep writing');
+
+  // No affordance that edits (or even opens) her note from this section, and
+  // the rest of the row (instrument mix, actions) renders exactly as it
+  // would for any other concept — nothing else on the row is suppressed
+  // because of this state.
+  await expect(reason.locator('button, input, select, [role="button"], a')).toHaveCount(0);
+  await expect(row.locator('.olea-registry-instruments li')).toHaveCount(1);
+  await expect(row.getByRole('button', { name: 'Rename' })).toBeVisible();
+});
+
+test('registry-thin-note: an ordinary concept in the same list shows no badge and no thin-note section, and reads distinctly from the duplicate-title row', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
+  const first = rows(page).nth(0);
+  await expect(first.locator('.olea-registry-thin-note-badge')).toHaveCount(0);
+  await expect(first.locator('.olea-registry-thin-note')).toHaveCount(0);
+
+  await gotoState(page, 'registry', 'registry-duplicate-title', 'obsidian-dark');
+  const duplicateRow = rows(page).filter({ hasText: 'syn:concept:corvale' });
+  await expect(duplicateRow.locator('.olea-registry-thin-note-badge')).toHaveCount(0);
+  await expect(duplicateRow.locator('.olea-registry-thin-note')).toHaveCount(0);
 });

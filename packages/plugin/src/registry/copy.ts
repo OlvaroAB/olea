@@ -225,6 +225,32 @@ export function duplicateTitleLine(notePaths: readonly string[]): string {
   return `Two of your notes share this title, so Olea cannot tell them apart: ${notePaths.join(', ')}. Nothing is bound until you rename one of them.`;
 }
 
+/**
+ * `[D-214]`'s thin-note structural-reason state (brief 43, part 5) —
+ * genuinely NEW copy, permitted for the same reason `DUPLICATE_TITLE_LABEL`'s
+ * is above: the ruling defines this surface. States a fact about the note's
+ * length and what would clear it — writing more into it herself, which Olea
+ * picks up on its own — never a judgement on what she wrote, and never a
+ * button or link that would touch the note from here (INV-6: nothing here
+ * writes into her note, and nothing here even opens it for editing).
+ * `THIN_NOTE_LABEL` mirrors `DUPLICATE_TITLE_LABEL`'s own badge shape one
+ * section up. Worded distinctly from `duplicateTitleLine` (a different
+ * structural reason) and from anything F4.5/F4.10's build-queue-deferral
+ * vocabulary says (a scheduling fact about what Olea has not generated yet,
+ * never a fact about a note's own length) — `[D-214]`'s own text: "so that a
+ * thin note and a deprioritised one never read alike."
+ */
+export const THIN_NOTE_LABEL = 'Too short to draft';
+
+/** `[D-214]`'s structural reason, plus the measured fact and what would clear it — one line, in her terms, on the row itself. */
+export function thinNoteLine(wordCount: number): string {
+  const lengthFact =
+    wordCount === 0
+      ? 'This note is empty so far'
+      : `This note is only ${wordCount} word${wordCount === 1 ? '' : 's'} so far`;
+  return `${lengthFact}, so there isn't enough here yet for Olea to draft practice from. Keep writing, and it will pick up the rest on its own.`;
+}
+
 export const INSTRUMENTS_SECTION_HEADING = 'Instruments';
 export const NO_INSTRUMENTS_LINE = 'No instruments yet for this concept.';
 

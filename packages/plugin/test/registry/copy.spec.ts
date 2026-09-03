@@ -17,6 +17,8 @@ import {
   NOTE_OFFER_LINE,
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
+  THIN_NOTE_LABEL,
+  thinNoteLine,
   vitalityLabel,
   WITHDRAW_CONCEPT_ACTION,
   WITHDRAW_INSTRUMENT_ACTION,
@@ -72,6 +74,10 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     NOTE_OFFER_DECLINE_ACTION,
     DUPLICATE_TITLE_LABEL,
     duplicateTitleLine(['05 Zettelkasten/Test note.md', '05 Zettelkasten/Other/Test note.md']),
+    THIN_NOTE_LABEL,
+    thinNoteLine(0),
+    thinNoteLine(1),
+    thinNoteLine(6),
   ];
 }
 
@@ -246,5 +252,40 @@ describe('duplicateTitleLine ([D-203])', () => {
     // No pick-one wording anywhere in the line — the clause's own "nothing is
     // chosen for her".
     expect(line.toLowerCase()).not.toMatch(/choose|pick|select/);
+  });
+});
+
+describe('thinNoteLine ([D-214])', () => {
+  it('states the measured word count as a fact about length', () => {
+    expect(thinNoteLine(6)).toContain('6 words');
+    expect(thinNoteLine(1)).toContain('1 word');
+    expect(thinNoteLine(1)).not.toContain('1 words');
+  });
+
+  it('states the empty case honestly rather than "0 words"', () => {
+    expect(thinNoteLine(0).toLowerCase()).toContain('empty');
+  });
+
+  it('states what clears it — writing more — and offers no affordance that edits the note from here', () => {
+    const line = thinNoteLine(4);
+    expect(line.toLowerCase()).toContain('keep writing');
+    // Never a link/button verb that would open or edit the note from this
+    // copy — the only edit is hers, in Obsidian, on her own time.
+    expect(line.toLowerCase()).not.toMatch(/\bopen\b|\bedit\b|\bclick\b/);
+  });
+
+  it('reads distinctly from duplicateTitleLine — a different structural reason, never the same wording', () => {
+    const thin = thinNoteLine(4);
+    const duplicate = duplicateTitleLine(['a.md', 'b.md']);
+    expect(thin).not.toBe(duplicate);
+    expect(thin.toLowerCase()).not.toContain('share this title');
+  });
+
+  it('never states a judgement on what she wrote — a fact about length only', () => {
+    for (const count of [0, 1, 6, 19]) {
+      expect(thinNoteLine(count).toLowerCase()).not.toMatch(
+        /should|must|forgot|behind|not enough effort/,
+      );
+    }
   });
 });

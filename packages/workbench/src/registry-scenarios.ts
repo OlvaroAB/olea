@@ -141,6 +141,20 @@ export const REGISTRY_STATES: readonly RegistryWorkbenchState[] = [
       'fresh build hands in a `ConceptRecord` with no `ambiguousNotePaths` at all, which is what ' +
       'renaming one of the two notes in Obsidian produces.',
   },
+  {
+    id: 'registry-thin-note',
+    label: 'A thin-note state — too little captured material to draft from',
+    group: 'registry',
+    note:
+      "`[D-214]`'s thin-note structural-reason state (F8.4, `ol-2zfj.61`). One concept is bound " +
+      'to a note she wrote (`ConceptRecord.boundNotePath`) whose captured body ' +
+      '(`ConceptRecord.definition`) falls under the declared word floor — the row shows a badge ' +
+      'and one line stating the measured word count, worded as a fact about length, with no ' +
+      'button or link that touches the note. The state is fed straight from ' +
+      '`buildRegistryModel` itself, not a session overlay: it clears the moment a fresh build ' +
+      'hands in a `ConceptRecord` whose captured body clears the floor, which is what her ' +
+      'writing more into the note in Obsidian produces.',
+  },
 ];
 
 export function findRegistryState(
@@ -566,6 +580,37 @@ const CORVALE_INSTRUMENT = instrument({
   blockId: 'syn-block-corvale-1',
 });
 
+// ---------------------------------------------------------------------------
+// `[D-214]` (`ol-2zfj.61`) — the thin-note structural-reason state on the
+// concept row.
+// ---------------------------------------------------------------------------
+
+/**
+ * A concept note of her own, invented (INV-3), whose captured body is five
+ * words — well under `../../core/src/registry/build.ts`'s
+ * `MIN_DRAFTABLE_WORD_COUNT` — matching the shape a real
+ * `ConceptRecord.definition` takes for a note that is a single unfinished
+ * thought (`boundNotePath` present, `tier: 1`).
+ */
+const TESSANE = concept({
+  key: 'syn:concept-key:tessane',
+  name: 'syn:concept:tessane',
+  tier: 1,
+  courses: ['syn:course:vantrel'],
+  sourcePaths: ['05 Zettelkasten/syn:concept:tessane.md'],
+  boundNotePath: '05 Zettelkasten/syn:concept:tessane.md',
+  definition: 'Still working out what this actually means.',
+});
+
+/** Proves the state coexists with an ordinary instrument mix, same as `CORVALE_INSTRUMENT` above. */
+const TESSANE_INSTRUMENT = instrument({
+  instrumentId: 'qa:syn:concept-key:tessane:1',
+  conceptIds: ['syn:concept-key:tessane'],
+  notePath: '05 Zettelkasten/syn:concept:tessane.md',
+  noteTitle: 'syn:concept:tessane',
+  blockId: 'syn-block-tessane-1',
+});
+
 function inputFor(stateId: string): BuildRegistryModelInput {
   if (stateId === 'registry-empty') {
     return {
@@ -621,6 +666,18 @@ function inputFor(stateId: string): BuildRegistryModelInput {
     return {
       concepts: [CORVALE],
       instrumentRecords: [CORVALE_INSTRUMENT],
+      entries: [],
+      scheduler,
+      now: NOW,
+      holdingCut: HOLDING_CUT,
+      overrides: EMPTY_REGISTRY_OVERRIDES,
+      suspendedInstrumentIds: new Set(),
+    };
+  }
+  if (stateId === 'registry-thin-note') {
+    return {
+      concepts: [TESSANE],
+      instrumentRecords: [TESSANE_INSTRUMENT],
       entries: [],
       scheduler,
       now: NOW,

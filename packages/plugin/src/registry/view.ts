@@ -56,6 +56,15 @@
  * is renaming one of the notes in Obsidian, which the NEXT build reflects.
  * Its copy lives properly in `./copy.ts` (this bead owns that file, unlike
  * `[D-183]`'s bead above).
+ *
+ * **`[D-214]` adds `renderThinNote`**, the same badge-plus-line shape as
+ * `renderDuplicateTitle` right above it, present whenever `entry.thinNote`
+ * is set: the note she wrote and bound this concept to has too little
+ * captured material to draft from yet (`../../core/registry/build.ts`'s
+ * `thinNoteFor`). Mutually exclusive with the duplicate-title state by
+ * construction. No affordance here touches the note — not even a link that
+ * opens it — because the only thing that clears this state is her own next
+ * edit, on her own time; its copy lives in `./copy.ts` too.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -92,6 +101,8 @@ import {
   SHOW_WITHDRAWN_LABEL,
   SOURCE_LOCATIONS_HEADING,
   sourceLocationLabel,
+  THIN_NOTE_LABEL,
+  thinNoteLine,
   WITHDRAW_CONCEPT_ACTION,
   WITHDRAW_INSTRUMENT_ACTION,
   WITHDRAWN_LABEL,
@@ -321,8 +332,15 @@ export class RegistryView extends ItemView {
         text: DUPLICATE_TITLE_LABEL,
       });
     }
+    if (entry.thinNote !== undefined) {
+      header.createEl('span', {
+        cls: 'olea-registry-thin-note-badge',
+        text: THIN_NOTE_LABEL,
+      });
+    }
 
     this.renderDuplicateTitle(row, entry);
+    this.renderThinNote(row, entry);
 
     row.createDiv({ cls: 'olea-registry-courses', text: coursesLine(entry.courses) });
 
@@ -369,6 +387,30 @@ export class RegistryView extends ItemView {
     root.createDiv({
       cls: 'olea-registry-duplicate-title',
       text: duplicateTitleLine(duplicateTitle.notePaths),
+    });
+  }
+
+  /**
+   * `[D-214]`'s thin-note structural-reason state (`ol-2zfj.61`) — the badge
+   * (in `renderConcept`'s header, mirroring `WITHDRAWN_LABEL`'s/
+   * `DUPLICATE_TITLE_LABEL`'s own badge shape) plus this one line stating the
+   * measured word count and what would clear it. **No affordance that edits
+   * her note anywhere here**: no button, no "open note" link, nothing that
+   * touches the note itself — the only thing that clears this state is her
+   * writing more into it in Obsidian, on her own, which the NEXT build
+   * reflects (`../../core/registry/build.ts`'s `thinNoteFor`). Mutually
+   * exclusive with `entry.duplicateTitle` by construction (see that field's
+   * own doc), so both never render for the same row. Renders right beside
+   * `renderDuplicateTitle` above, before the courses line, for the same
+   * reason: it is the most salient structural fact about a row in this
+   * state.
+   */
+  private renderThinNote(root: HTMLElement, entry: RegistryConceptEntry): void {
+    const thinNote = entry.thinNote;
+    if (thinNote === undefined) return;
+    root.createDiv({
+      cls: 'olea-registry-thin-note',
+      text: thinNoteLine(thinNote.wordCount),
     });
   }
 

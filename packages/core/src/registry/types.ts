@@ -119,6 +119,34 @@ export interface RegistryDuplicateTitleState {
   readonly notePaths: readonly VaultPath[];
 }
 
+/**
+ * `[D-214]`'s thin-note structural-reason state (part 5 of the ruling,
+ * `ol-2zfj.61`) — present when a concept is bound to a note she wrote
+ * (`ConceptRecord.boundNotePath` set) whose captured body
+ * (`ConceptRecord.definition`) has too little material for Olea to draft
+ * practice from. `wordCount` is the measured word count of that body — `0`
+ * when the body is empty entirely (`definition` absent) — carried the same
+ * way `RegistryDuplicateTitleState.notePaths` carries its own evidence: the
+ * fact, and nothing more.
+ *
+ * **Worded as a fact about length, on purpose (`[D-214]`'s own text).** This
+ * is a different silence from F4.5/F4.10's build-queue deferral (a concept
+ * Olea has simply not generated for yet) and must never read the same way —
+ * `./build.ts`'s `thinNoteFor` is the one place that judgement is made, and
+ * `packages/plugin/src/registry/copy.ts`'s `thinNoteLine` is the one place
+ * it is worded.
+ *
+ * **Mutually exclusive with `RegistryDuplicateTitleState` by construction**:
+ * a duplicated title means `boundNotePath` is absent (no note is bound to be
+ * thin), and a thin-note state requires `boundNotePath` present. Clears on
+ * the next build once she writes enough into the note that the freshly
+ * captured body clears the floor — nothing here persists between builds,
+ * matching `./build.ts`'s own "pure function of its input" doc.
+ */
+export interface RegistryThinNoteState {
+  readonly wordCount: number;
+}
+
 import type { MasteryState, ReviewLogEntry, SoloLevel } from 'olea-contracts';
 import type { ConceptRecord, ConceptTier } from '../concept/types.js';
 import type {
@@ -351,6 +379,16 @@ export interface RegistryConceptEntry {
    * this run's own vault walk.
    */
   readonly duplicateTitle?: RegistryDuplicateTitleState;
+  /**
+   * `[D-214]`'s thin-note structural-reason state — see
+   * `RegistryThinNoteState`'s own doc. Absent means this concept's bound
+   * note (if any) has enough material, or there is no bound note to be thin
+   * in the first place; present means the note she wrote there is too thin
+   * to draft from today. Populated directly by `./build.ts` from
+   * `ConceptRecord.boundNotePath`/`.definition` — no session-scoped overlay,
+   * since the fact is fully determined by this run's own vault walk.
+   */
+  readonly thinNote?: RegistryThinNoteState;
 }
 
 /** The whole browsable inventory (F8.4). Concepts in no course are included (F1.3: a statement, not a failure) — filtering by course is a view concern, not a model concern. */
