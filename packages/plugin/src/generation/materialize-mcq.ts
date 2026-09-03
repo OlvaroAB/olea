@@ -107,12 +107,28 @@
  * `DraftRecord.sourceCitation` here verbatim; omitted (never fabricated)
  * when the pipeline had none to record — see that field's own doc
  * (`generation/types.ts`) for why that can happen.
+ *
+ * ## The `[D-220 / DIST-3]` distractor-provenance sidecar (`ol-egov.109`, `ol-0r92.52`)
+ *
+ * Right beside the citation-sidecar write above (same spot, same "before either write branch"
+ * timing, same frozen id), this builds one `DistractorProvenanceEntry` per distractor that
+ * survived generation with grounding — pairing `input.question.distractors[i]` with
+ * `input.question.distractorGrounding[i]` wherever the latter is a non-null object — and writes
+ * them to `writeDistractorProvenance` (`olea-core`'s `instrument/distractor-provenance-store.ts`)
+ * keyed by `stamped.id`. **Skipped entirely (never written as an empty sidecar) when there is
+ * nothing grounded to record** — `distractorGrounding` absent (the pre-`[D-195]` bare-string
+ * generation shape) or every entry `null` — the same "no sidecar means no provenance, never a
+ * fabricated one" posture `[D-220]`'s ruling states, and the same shape as the citation sidecar's
+ * own `undefined`-means-skip. This never touches `stamped.content` and never lands in her note
+ * (INV-6) — the vault's `McqInstrument.distractors` stays the bare `string[]` `[D-202]` left it
+ * as; only `input.question.distractors`' TEXT reaches the block, exactly as before this bead.
  */
 
 import {
   acceptGeneratedMcq,
   appendSuccessionRecord,
   buildSuccessionEvent,
+  type DistractorProvenanceEntry,
   type InstrumentCitation,
   insertMcqBlock,
   parseDocument,
@@ -120,6 +136,7 @@ import {
   stampMcqId,
   type VaultPath,
   type VaultSource,
+  writeDistractorProvenance,
   writeInstrumentCitation,
 } from 'olea-core';
 import { stampPredecessorField } from '../instrument-blocks/predecessor.js';
@@ -162,6 +179,26 @@ export interface MaterializeAcceptedDraftDeps {
 
 export interface MaterializeAcceptedDraftResult {
   readonly instrumentId: string;
+}
+
+/**
+ * Pairs `question.distractors[i]` with `question.distractorGrounding[i]` wherever the latter is a
+ * non-null, populated grounding — see the module doc's `[D-220]` section for why an empty result
+ * here means "skip the write entirely", never "write an empty sidecar". Never includes
+ * `question.correctAnswer` (that option carries no `believes`/`source_says` — `McqOption`'s own
+ * doc, `packages/plugin/src/review/types.ts`).
+ */
+function groundedDistractorEntries(question: DraftQuestion): readonly DistractorProvenanceEntry[] {
+  const grounding = question.distractorGrounding;
+  if (grounding === undefined) return [];
+  const entries: DistractorProvenanceEntry[] = [];
+  for (let i = 0; i < question.distractors.length; i++) {
+    const text = question.distractors[i];
+    const g = grounding[i];
+    if (text === undefined || g === undefined || g === null) continue;
+    entries.push({ text, believes: g.believes, source_says: g.source_says });
+  }
+  return entries;
 }
 
 export async function materializeAcceptedDraft(
@@ -211,6 +248,13 @@ export async function materializeAcceptedDraft(
   // had no citation to record for this draft.
   if (input.sourceCitation !== undefined) {
     await writeInstrumentCitation(vault, stamped.id, input.sourceCitation);
+  }
+
+  // `[D-220 / DIST-3]`: the distractor-provenance sidecar — see the module doc's own section.
+  // Skipped (never an empty sidecar) when nothing survived generation with grounding.
+  const distractorProvenanceEntries = groundedDistractorEntries(input.question);
+  if (distractorProvenanceEntries.length > 0) {
+    await writeDistractorProvenance(vault, stamped.id, { entries: distractorProvenanceEntries });
   }
 
   if (input.predecessorInstrumentId === undefined) {

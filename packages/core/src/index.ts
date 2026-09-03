@@ -655,6 +655,23 @@ export {
   readClozeId,
   stampClozeId,
 } from './instrument/cloze-identity.js';
+// `[D-220 / DIST-3]`'s distractor-provenance sidecar (`ol-egov.109`, `ol-0r92.52`) — beside the
+// citation sidecar above, keyed the same way. Write side: `generation/materialize-mcq.ts` (plugin
+// repo) at accept time, from `DraftQuestion.distractorGrounding`. Read side: `review/queue-adapter.ts`
+// (plugin repo), matched by presented option text (F2.15 reshuffles positions every showing).
+export type {
+  DistractorProvenance,
+  DistractorProvenanceEntry,
+  DistractorProvenanceRecord,
+} from './instrument/distractor-provenance-store.js';
+export {
+  DISTRACTOR_PROVENANCE_RECORD_SCHEMA_VERSION,
+  DISTRACTOR_PROVENANCE_STORE_FOLDER,
+  distractorProvenanceStorePath,
+  isDistractorProvenanceRecord,
+  readDistractorProvenance,
+  writeDistractorProvenance,
+} from './instrument/distractor-provenance-store.js';
 export type {
   InsertMcqInput,
   InsertMcqResult,

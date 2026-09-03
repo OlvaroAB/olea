@@ -34,6 +34,27 @@
  * Sampling once per instrument and reusing it would satisfy the type and
  * defeat the requirement.
  *
+ * ## `[D-220 / DIST-3]` distractor provenance — read here, fetched by the caller
+ *
+ * `McqOption.believes`/`source_says` (`[D-202]`, `[D-220]`) are populated from
+ * `olea-core`'s distractor-provenance sidecar (`instrument/distractor-provenance-store.ts`),
+ * keyed by `instrumentId`, but that sidecar is vault I/O (`readDistractorProvenance` is `async`)
+ * and every function in this file is a pure, synchronous `input -> presentation` map — the same
+ * reason `recordsById` itself arrives pre-built rather than being walked here. So
+ * `distractorProvenanceById` is a third pre-fetched map, exactly the same shape and the same
+ * caller-supplies-it convention as `recordsById` and (below) `supportHistory`: whichever caller
+ * assembles the queue's input (`open-session.ts`, out of this lane's ownership — see this file's
+ * existing `supportHistory` doc for the identical precedent) reads the sidecar for every `mcq`
+ * record in the batch and hands the results in. Omitted entirely (today's every caller) means no
+ * option gets `believes`/`source_says` — the same "absent means not carried forward" the field's
+ * own doc already states, not a regression this file introduces.
+ *
+ * Matched by the presented option's own TEXT, never by index: `presentMcq` samples up to
+ * `PRESENTED_DISTRACTORS` from the pool and shuffles positions on every showing
+ * (`mcq-present.ts`'s own module doc), so a distractor's position in `McqInstrument.distractors`
+ * is not preserved into a presentation. The correct answer never gets a lookup — it is never a key
+ * in the sidecar (`distractor-provenance-store.ts`'s own doc) and this file does not try.
+ *
  * ## `adaptExecutedReviewQueue` — P5-T07's addition, `adaptReviewQueue` untouched
  *
  * `adaptReviewQueue`'s `toSelectionContext` states `planVersion: null` because
@@ -97,6 +118,7 @@
 import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   ComposedQueue,
+  DistractorProvenance,
   GradedReviewEvidence,
   McqInstrumentRecord,
   PlannedQueueItem,
@@ -257,6 +279,12 @@ export interface AdaptReviewQueueInput {
    * when {@link AdaptReviewQueueInput.supportHistory} is not supplied.
    */
   readonly supportSelfAssessment?: SelfAssessmentFeeling;
+  /**
+   * `[D-220 / DIST-3]`: `instrumentId` -> distractor-provenance sidecar, pre-fetched by the caller
+   * from the same walk that produced `recordsById` — see this file's module doc section. Omitted
+   * entirely (every caller today) means no `mcq` option gets `believes`/`source_says`.
+   */
+  readonly distractorProvenanceById?: ReadonlyMap<string, DistractorProvenance>;
 }
 
 /**
@@ -293,14 +321,38 @@ function common(record: VaultInstrumentRecord, supportLevel: SupportLevelPresent
   } as const;
 }
 
+/**
+ * `[D-220 / DIST-3]`: matches a presented, non-correct option's own text against the sidecar's
+ * entries — see this file's module doc section for why text, never position. `undefined` for the
+ * correct option always, and for any distractor the sidecar has no entry for.
+ */
+function distractorGroundingFor(
+  optionText: string,
+  correct: boolean,
+  provenance: DistractorProvenance | undefined,
+): { believes: string; source_says: string } | undefined {
+  if (correct || provenance === undefined) return undefined;
+  const entry = provenance.entries.find((e) => e.text === optionText);
+  if (entry === undefined) return undefined;
+  return { believes: entry.believes, source_says: entry.source_says };
+}
+
 /** One showing of an MCQ: sampled and shuffled now, not when the instrument was parsed. */
-function presentOptions(record: McqInstrumentRecord, random: RandomSource): readonly McqOption[] {
+function presentOptions(
+  record: McqInstrumentRecord,
+  random: RandomSource,
+  distractorProvenance?: DistractorProvenance,
+): readonly McqOption[] {
   const presentation = presentMcq(record.mcq, random);
-  return presentation.options.map((option, index) => ({
-    id: OPTION_IDS[index] ?? String(index),
-    label: option.text,
-    correct: option.correct,
-  }));
+  return presentation.options.map((option, index) => {
+    const grounding = distractorGroundingFor(option.text, option.correct, distractorProvenance);
+    return {
+      id: OPTION_IDS[index] ?? String(index),
+      label: option.text,
+      correct: option.correct,
+      ...(grounding !== undefined ? grounding : {}),
+    };
+  });
 }
 
 /**
@@ -311,11 +363,16 @@ function presentOptions(record: McqInstrumentRecord, random: RandomSource): read
  * `adaptExecutedReviewQueue` below, via {@link supportLevelForRecord}) and
  * passed in rather than derived here — this function stays a pure
  * `record -> instrument` mapping, unaware of history lookups or self-assessment.
+ *
+ * `distractorProvenance` is `[D-220]`'s sidecar entry for this one instrument (see this file's
+ * module doc section), similarly pre-fetched and passed in rather than read here — this function
+ * has no vault access (INV-1) and stays synchronous. Ignored for `qa`/`cloze` records.
  */
 export function toReviewInstrument(
   record: VaultInstrumentRecord,
   random: RandomSource = mathRandomSource,
   supportLevel?: SupportLevelPresentation,
+  distractorProvenance?: DistractorProvenance,
 ): ReviewInstrument {
   if (record.instrumentType === 'qa') {
     return {
@@ -342,7 +399,7 @@ export function toReviewInstrument(
     ...common(record, supportLevel),
     type: 'mcq',
     stem: record.mcq.stem,
-    options: presentOptions(record, random),
+    options: presentOptions(record, random, distractorProvenance),
     // `McqItem.feedback` is shown after she answers regardless of correctness.
     // The block's `feedback:` field is optional, and an absent one is an empty
     // string rather than a sentence this adapter wrote.
@@ -385,6 +442,7 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
         record,
         random,
         supportLevelForRecord(record, input.supportHistory, input.supportSelfAssessment),
+        input.distractorProvenanceById?.get(item.instrumentId),
       ),
       priorState: item.priorState,
       selectionContext: toSelectionContext(item),
@@ -412,6 +470,8 @@ export interface AdaptExecutedReviewQueueInput {
   readonly supportHistory?: SupportLevelHistoryLookup;
   /** See {@link AdaptReviewQueueInput.supportSelfAssessment}. */
   readonly supportSelfAssessment?: SelfAssessmentFeeling;
+  /** See {@link AdaptReviewQueueInput.distractorProvenanceById}. */
+  readonly distractorProvenanceById?: ReadonlyMap<string, DistractorProvenance>;
 }
 
 /**
@@ -438,6 +498,7 @@ export function adaptExecutedReviewQueue(
         record,
         random,
         supportLevelForRecord(record, input.supportHistory, input.supportSelfAssessment),
+        input.distractorProvenanceById?.get(item.instrumentId),
       ),
       priorState: item.priorState,
       selectionContext: item.selectionContext,

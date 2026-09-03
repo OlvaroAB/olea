@@ -23,10 +23,18 @@
  * through `enumerateVaultInstruments` — the same reader
  * `session/enumerate.spec.ts` unit-tests directly against a pre-written
  * sidecar record.
+ *
+ * The fourth `describe` below (`[D-220 / DIST-3]`, `ol-egov.109`,
+ * `ol-0r92.52`) covers the distractor-provenance sidecar beside it: one
+ * entry per distractor whose grounding survived generation, keyed by text
+ * (never position — `distractor-provenance-store.ts`'s own module doc
+ * explains why), no sidecar at all when nothing was grounded, and never an
+ * entry for the correct answer.
  */
 import {
   enumerateVaultInstruments,
   parseMcqBlocks,
+  readDistractorProvenance,
   readInstrumentCitation,
   reviewLogPath,
 } from 'olea-core';
@@ -244,6 +252,97 @@ describe('materializeAcceptedDraft — [D-181] citation sidecar', () => {
     expect(record?.sourceProvenance?.sourcePath).toBe(sourcePath);
     expect(record?.sourceProvenance?.location.page).toBe(4);
     expect(record?.sourceProvenance?.location.section).toBe('Storm deposits');
+  });
+});
+
+// `[D-220 / DIST-3]` (`ol-egov.109`, `ol-0r92.52`) — see this file's module doc.
+describe('materializeAcceptedDraft — [D-220] distractor-provenance sidecar', () => {
+  it('writes an entry per grounded distractor, keyed by the frozen instrument id', async () => {
+    const notePath = 'note-with-grounding.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 's',
+        correctAnswer: 'a',
+        distractors: ['w', 'x', 'y', 'z'],
+        feedback: 'f',
+        distractorGrounding: [
+          { believes: 'Believes W', source_says: 'Source says about W' },
+          { believes: 'Believes X', source_says: 'Source says about X' },
+          null,
+          { believes: 'Believes Z', source_says: 'Source says about Z' },
+        ],
+      },
+    });
+
+    expect(await readDistractorProvenance(vault, result.instrumentId)).toEqual({
+      entries: [
+        { text: 'w', believes: 'Believes W', source_says: 'Source says about W' },
+        { text: 'x', believes: 'Believes X', source_says: 'Source says about X' },
+        { text: 'z', believes: 'Believes Z', source_says: 'Source says about Z' },
+      ],
+    });
+  });
+
+  it('writes no sidecar file at all when distractorGrounding is absent — omitted, never fabricated', async () => {
+    const notePath = 'note-no-grounding.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 's',
+        correctAnswer: 'a',
+        distractors: ['w', 'x', 'y', 'z'],
+        feedback: 'f',
+      },
+    });
+
+    expect(await readDistractorProvenance(vault, result.instrumentId)).toBeUndefined();
+    expect(await vault.list({ under: '.olea/distractor-provenance' })).toEqual([]);
+  });
+
+  it('writes no sidecar file at all when every grounding entry is null — omitted, never an empty record', async () => {
+    const notePath = 'note-all-null-grounding.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 's',
+        correctAnswer: 'a',
+        distractors: ['w', 'x'],
+        feedback: 'f',
+        distractorGrounding: [null, null],
+      },
+    });
+
+    expect(await readDistractorProvenance(vault, result.instrumentId)).toBeUndefined();
+    expect(await vault.list({ under: '.olea/distractor-provenance' })).toEqual([]);
+  });
+
+  it('never writes an entry for the correct answer', async () => {
+    const notePath = 'note-correct-answer-check.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: {
+        stem: 's',
+        correctAnswer: 'Chunking',
+        distractors: ['w', 'x'],
+        feedback: 'f',
+        distractorGrounding: [
+          { believes: 'Believes W', source_says: 'Source says about W' },
+          { believes: 'Believes X', source_says: 'Source says about X' },
+        ],
+      },
+    });
+
+    const found = await readDistractorProvenance(vault, result.instrumentId);
+    expect(found?.entries.some((entry) => entry.text === 'Chunking')).toBe(false);
   });
 });
 

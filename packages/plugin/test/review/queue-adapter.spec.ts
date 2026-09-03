@@ -21,6 +21,7 @@ import {
   buildSupportLevelHistoryLookup,
   createFrozenReviewQueue,
 } from '../../src/review/queue-adapter.js';
+import type { McqItem, ReviewQueueItem } from '../../src/review/types.js';
 
 /** `ol-63e1`: `conceptIds` now carries the opaque key, never the display name — 'Alpha' here is unbound (no matching Zettelkasten note). */
 function unboundKey(name: string): string {
@@ -205,6 +206,166 @@ describe('an MCQ is sampled and shuffled at the moment it is adapted', () => {
     const a = await adapt({ random: fixed() });
     const b = await adapt({ random: fixed() });
     expect(b).toEqual(a);
+  });
+});
+
+// `[D-220 / DIST-3]` (`ol-egov.109`, `ol-0r92.52`) — see this file's module doc and
+// `queue-adapter.ts`'s own module-doc section for why the lookup is a pre-fetched map matched by
+// text, never by position.
+describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fabricated', () => {
+  async function session() {
+    return buildReviewSession({ vault: vault(), scheduler: createFsrsScheduler(), now: NOW });
+  }
+
+  function isMcqQueueItem(
+    item: ReviewQueueItem | undefined,
+  ): item is ReviewQueueItem & { instrument: McqItem } {
+    return item !== undefined && item.instrument.type === 'mcq';
+  }
+
+  function mcqItemOf(items: readonly ReviewQueueItem[]) {
+    const mcq = items.find((i) => i.instrument.type === 'mcq');
+    if (!isMcqQueueItem(mcq)) throw new Error('expected an mcq item');
+    return mcq;
+  }
+
+  it('populates believes/source_says only for the distractors named in the sidecar, matched by text', async () => {
+    const built = await session();
+    const baseline = mcqItemOf(
+      adaptReviewQueue({ queue: built.queue, recordsById: built.recordsById }),
+    );
+    const instrumentId = baseline.instrument.instrumentId;
+
+    const distractorProvenanceById = new Map([
+      [
+        instrumentId,
+        {
+          entries: [
+            {
+              text: 'd1',
+              believes: 'Coined belief about d1',
+              source_says: 'Coined source line about d1',
+            },
+            {
+              text: 'd3',
+              believes: 'Coined belief about d3',
+              source_says: 'Coined source line about d3',
+            },
+          ],
+        },
+      ],
+    ]);
+
+    // Sampled across many showings (F2.15 resamples/reshuffles every time) so this actually
+    // exercises the "only the named ones, whichever slot they land in" claim rather than one draw.
+    for (let i = 0; i < 60; i += 1) {
+      const item = mcqItemOf(
+        adaptReviewQueue({
+          queue: built.queue,
+          recordsById: built.recordsById,
+          distractorProvenanceById,
+        }),
+      );
+      for (const option of item.instrument.options) {
+        if (option.label === 'd1' || option.label === 'd3') {
+          expect(option.believes).toEqual(
+            expect.stringContaining(option.label === 'd1' ? 'd1' : 'd3'),
+          );
+          expect(option.source_says).toEqual(
+            expect.stringContaining(option.label === 'd1' ? 'd1' : 'd3'),
+          );
+        } else {
+          expect(option.believes).toBeUndefined();
+          expect(option.source_says).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  it('never attaches believes/source_says to the correct option, even if a (malformed) sidecar names its text', async () => {
+    const built = await session();
+    const baseline = mcqItemOf(
+      adaptReviewQueue({ queue: built.queue, recordsById: built.recordsById }),
+    );
+    const distractorProvenanceById = new Map([
+      [
+        baseline.instrument.instrumentId,
+        {
+          entries: [
+            {
+              text: 'The correct one',
+              believes: 'Should never surface',
+              source_says: 'Should never surface',
+            },
+          ],
+        },
+      ],
+    ]);
+
+    for (let i = 0; i < 20; i += 1) {
+      const item = mcqItemOf(
+        adaptReviewQueue({
+          queue: built.queue,
+          recordsById: built.recordsById,
+          distractorProvenanceById,
+        }),
+      );
+      const correct = item.instrument.options.find((o) => o.correct);
+      expect(correct?.believes).toBeUndefined();
+      expect(correct?.source_says).toBeUndefined();
+    }
+  });
+
+  it('omitting distractorProvenanceById leaves every option without believes/source_says (today’s every caller)', async () => {
+    const item = mcqItemOf(await adapt());
+    for (const option of item.instrument.options) {
+      expect(option.believes).toBeUndefined();
+      expect(option.source_says).toBeUndefined();
+    }
+  });
+
+  it('adaptExecutedReviewQueue threads the same lookup through, keyed the same way', async () => {
+    const built = await session();
+    const executed = executeStudyPlan({ queue: built.queue, plan: null });
+    const baseline = mcqItemOf(
+      adaptExecutedReviewQueue({ items: executed.items, recordsById: built.recordsById }),
+    );
+
+    const distractorProvenanceById = new Map([
+      [
+        baseline.instrument.instrumentId,
+        {
+          entries: [
+            {
+              text: 'd2',
+              believes: 'Coined belief about d2',
+              source_says: 'Coined source line about d2',
+            },
+          ],
+        },
+      ],
+    ]);
+
+    for (let i = 0; i < 60; i += 1) {
+      const items = adaptExecutedReviewQueue({
+        items: executed.items,
+        recordsById: built.recordsById,
+        distractorProvenanceById,
+      });
+      const item = items.find((i) => i.instrument.type === 'mcq');
+      if (item?.instrument.type !== 'mcq') throw new Error('expected an mcq item');
+      const d2 = item.instrument.options.find((o) => o.label === 'd2');
+      if (d2 !== undefined) {
+        expect(d2.believes).toBe('Coined belief about d2');
+        expect(d2.source_says).toBe('Coined source line about d2');
+      }
+      for (const option of item.instrument.options) {
+        if (option.label !== 'd2') {
+          expect(option.believes).toBeUndefined();
+          expect(option.source_says).toBeUndefined();
+        }
+      }
+    }
   });
 });
 
