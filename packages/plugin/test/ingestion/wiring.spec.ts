@@ -18,7 +18,9 @@
  */
 import type {
   ExtractedUnit,
+  JobStatus,
   ListOptions,
+  PersistedJob,
   PersistedQueue,
   QueueStore,
   Unsubscribe,
@@ -27,7 +29,11 @@ import type {
   VaultSource,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { buildIngestionRunner } from '../../src/ingestion/wiring.js';
+import {
+  buildFirstReadFolderViews,
+  buildIngestionRunner,
+  summarizeFirstReadByFolder,
+} from '../../src/ingestion/wiring.js';
 
 // ---- a tiny hand-built single-page PDF, same technique
 // `packages/core/src/ingestion/extraction-runner.spec.ts` uses (see its own
@@ -193,5 +199,115 @@ describe('buildIngestionRunner — a lecture enqueued drains and produces indexe
     const tick = await engine.tick();
     expect(tick).toEqual({ kind: 'blocked', reason: 'device-cannot-drain' });
     expect(sink.all()).toEqual([]);
+  });
+});
+
+// F1.4/`[D-213]`, `ol-0r92.47` — the first-read readout's data half:
+// per-folder honest counts, never merged into a vault-wide figure, and a
+// concept landing that is never gated on its folder's counts settling.
+
+/** A minimal `'source'`-kind job at a given status, for grouping tests only — never drained. */
+function sourceJob(sourcePath: VaultPath, status: JobStatus): PersistedJob {
+  return {
+    contentHash: `hash:${sourcePath}:${status}`,
+    label: sourcePath,
+    payload: { kind: 'source', sourcePath, format: 'pdf' },
+    enqueuedAt: 0,
+    status,
+    attempts: 0,
+  };
+}
+
+describe('summarizeFirstReadByFolder', () => {
+  it('gives each folder its own counts, never merged into one vault-wide figure', () => {
+    const jobs: readonly PersistedJob[] = [
+      sourceJob('COGS214/week1.pdf', 'done'),
+      sourceJob('COGS214/week2.pdf', 'queued'),
+      sourceJob('PSYC231/lecture1.pdf', 'failed'),
+    ];
+
+    const byFolder = summarizeFirstReadByFolder(jobs, ['COGS214', 'PSYC231']);
+
+    expect(byFolder).toEqual([
+      {
+        folder: 'COGS214',
+        counts: { queued: 1, 'in-flight': 0, done: 1, deferred: 0, failed: 0 },
+      },
+      {
+        folder: 'PSYC231',
+        counts: { queued: 0, 'in-flight': 0, done: 0, deferred: 0, failed: 1 },
+      },
+    ]);
+  });
+
+  it('five folders of very different sizes each keep their own line', () => {
+    const folders = ['A', 'B', 'C', 'D', 'E'];
+    const sizes = [1, 3, 0, 34, 12];
+    const jobs: PersistedJob[] = [];
+    folders.forEach((folder, i) => {
+      const size = sizes[i] ?? 0;
+      for (let n = 0; n < size; n++) jobs.push(sourceJob(`${folder}/doc${n}.pdf`, 'done'));
+    });
+
+    const byFolder = summarizeFirstReadByFolder(jobs, folders);
+
+    expect(byFolder).toHaveLength(5);
+    byFolder.forEach((entry, i) => {
+      expect(entry.folder).toBe(folders[i]);
+      expect(entry.counts.done).toBe(sizes[i]);
+    });
+  });
+
+  it('nested sub-folders (F1.3: PSYCH326-style WEEK 2/WEEK 3 structure) still count toward the course folder', () => {
+    const jobs: readonly PersistedJob[] = [sourceJob('PSYCH326/WEEK 2/slides.pdf', 'in-flight')];
+    const byFolder = summarizeFirstReadByFolder(jobs, ['PSYCH326']);
+    expect(byFolder[0]?.counts['in-flight']).toBe(1);
+  });
+
+  it('a job whose payload names no source (e.g. a future non-source job kind) matches no folder', () => {
+    const jobs: readonly PersistedJob[] = [
+      { ...sourceJob('COGS214/week1.pdf', 'done'), payload: { kind: 'instrument-revision' } },
+    ];
+    const byFolder = summarizeFirstReadByFolder(jobs, ['COGS214']);
+    expect(byFolder[0]?.counts.done).toBe(0);
+  });
+
+  it('never returns anything but the five plain counts — no derived percentage field to draw a bar from', () => {
+    const byFolder = summarizeFirstReadByFolder([sourceJob('COGS214/x.pdf', 'done')], ['COGS214']);
+    expect(Object.keys(byFolder[0]?.counts ?? {}).sort()).toEqual(
+      ['deferred', 'done', 'failed', 'in-flight', 'queued'].sort(),
+    );
+  });
+});
+
+describe('buildFirstReadFolderViews', () => {
+  it('a concept appears before its folder finishes — landed concepts are never gated on counts settling', () => {
+    const jobs: readonly PersistedJob[] = [
+      sourceJob('COGS214/week1.pdf', 'done'),
+      sourceJob('COGS214/week2.pdf', 'queued'),
+      sourceJob('COGS214/week3.pdf', 'queued'),
+    ];
+    const landed = new Map<VaultPath, readonly string[]>([
+      ['COGS214', ['Stratigraphic succession']],
+    ]);
+
+    const views = buildFirstReadFolderViews(jobs, ['COGS214'], landed);
+
+    expect(views).toHaveLength(1);
+    const cogs = views.at(0);
+    expect(cogs).toBeDefined();
+    if (cogs === undefined) return;
+    expect(cogs.counts.done).toBe(1);
+    expect(cogs.counts.queued).toBe(2); // this folder has not finished
+    expect(cogs.landedConcepts).toEqual(['Stratigraphic succession']); // yet the concept already shows
+  });
+
+  it('a folder with nothing landed yet gets an empty list, never a fabricated placeholder', () => {
+    const views = buildFirstReadFolderViews(
+      [sourceJob('PSYC231/lecture1.pdf', 'queued')],
+      ['PSYC231'],
+      new Map(),
+    );
+    expect(views[0]?.landedConcepts).toEqual([]);
   });
 });

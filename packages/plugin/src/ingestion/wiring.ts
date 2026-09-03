@@ -43,9 +43,12 @@ import {
   type ExtractedUnit,
   type ExtractedUnitSink,
   IngestionQueueEngine,
+  type PersistedJob,
   type QueueStore,
+  type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { type QueueStatusCounts, summarizeQueueStatusCounts } from '../commands/diagnostics.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
@@ -148,4 +151,105 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
   });
   enqueuer.bind(engine);
   return { engine, sink };
+}
+
+/**
+ * The first-read readout's data half (F1.4/`[D-213]`, `ol-0r92.47`): per
+ * folder, the same five honest counts `commands/diagnostics.ts` already
+ * computes for the whole queue, scoped to one course folder instead of the
+ * whole vault (`[D-213]` point 5 — "the readouts are per folder, because the
+ * folders are her filing", and no separate design for a later bulk read).
+ *
+ * **What this deliberately does not build.** The clause's OTHER truth — "the
+ * concepts as they land, one at a time" — has no incremental producer to
+ * read from yet: `concept/extract.ts`'s `extractConceptsWithAnchors` is a
+ * single whole-vault batch call `main.ts` makes once an ingestion session
+ * closes (`tickIngestionAndMaybeRunCorpusRelations`'s `readConceptsFromVault`
+ * caller), not a per-folder stream a landed extraction job could feed as it
+ * happens. Fabricating concept names out of `ExtractedUnit` text (the only
+ * thing `PendingIndexingSink` actually holds — raw extracted passages, not
+ * concept identities, see `extract/types.ts`) would misrepresent the very
+ * thing F1.4 is strict about naming precisely. So `FirstReadFolderView`
+ * below takes landed concepts as an opaque, caller-supplied
+ * `readonly string[]` per folder rather than deriving them here — the counts
+ * half is real and wired to `PersistedJob`; the concept half is a typed,
+ * tested slot ready to receive a real stream once one exists. Recorded as a
+ * reachability gap on this bead rather than papered over.
+ */
+export type FirstReadFolderCounts = QueueStatusCounts;
+
+/**
+ * Which of `folders` a `'source'`-kind job's `sourcePath` falls under, by
+ * path prefix — `sourcePath === folder` or `sourcePath.startsWith(folder +
+ * '/')`, so a course organised into sub-folders (PSYCH326's `WEEK 2/WEEK
+ * 3/...`, F1.3) still counts toward that course's one line. `null` when the
+ * job's payload isn't a recognised `'source'` job (no `sourcePath` at all —
+ * e.g. a future `'instrument-revision'` job) or matches none of `folders`;
+ * such jobs are silently excluded from every folder's count, the same way
+ * `commands/diagnostics.ts` reads `job.status` alone and nothing else.
+ */
+function firstReadFolderOf(payload: unknown, folders: readonly VaultPath[]): VaultPath | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const record = payload as Record<string, unknown>;
+  if (record.kind !== 'source' || typeof record.sourcePath !== 'string') return null;
+  const sourcePath = record.sourcePath as VaultPath;
+  for (const folder of folders) {
+    if (sourcePath === folder || sourcePath.startsWith(`${folder}/`)) return folder;
+  }
+  return null;
+}
+
+/**
+ * Per-folder queue counts for the first-read readout. `folders` are course
+ * root paths (`CourseSetupProposal.rootPath`); the result has exactly one
+ * entry per folder given, in the same order, whatever the jobs contain —
+ * five folders of very different sizes each keep their own line rather than
+ * being merged into one vault-wide figure (`[D-213]` point 2 and point 5).
+ */
+export function summarizeFirstReadByFolder(
+  jobs: readonly PersistedJob[],
+  folders: readonly VaultPath[],
+): readonly { readonly folder: VaultPath; readonly counts: FirstReadFolderCounts }[] {
+  return folders.map((folder) => {
+    const inFolder = jobs.filter((job) => firstReadFolderOf(job.payload, folders) === folder);
+    return {
+      folder,
+      counts: summarizeQueueStatusCounts({ version: 1, jobs: inFolder, headroom: null }),
+    };
+  });
+}
+
+/**
+ * One folder's whole first-read view: its live counts plus whichever
+ * concepts have already landed for it, in landing order. The two are
+ * computed independently and merged with no gating between them — nothing
+ * here waits for a folder's counts to settle (`done` reaching its total)
+ * before a concept it already produced is included, which is the whole of
+ * what "streaming rather than arriving at the end" (`[D-213]` point 2) means
+ * at this layer. See this module's doc for why `landedConcepts` is supplied
+ * by the caller rather than derived from the sink.
+ */
+export interface FirstReadFolderView {
+  readonly folder: VaultPath;
+  readonly counts: FirstReadFolderCounts;
+  readonly landedConcepts: readonly string[];
+}
+
+/**
+ * Merges `summarizeFirstReadByFolder`'s counts with whatever concepts have
+ * landed so far for each folder. `landedConceptsByFolder` omitting a folder
+ * (or naming one not in `folders`) is not an error — that folder simply
+ * renders with an empty `landedConcepts`, the honest "nothing has landed yet"
+ * state rather than a fabricated placeholder.
+ */
+export function buildFirstReadFolderViews(
+  jobs: readonly PersistedJob[],
+  folders: readonly VaultPath[],
+  landedConceptsByFolder: ReadonlyMap<VaultPath, readonly string[]>,
+): readonly FirstReadFolderView[] {
+  return summarizeFirstReadByFolder(jobs, folders).map(({ folder, counts }) => ({
+    folder,
+    counts,
+    landedConcepts: landedConceptsByFolder.get(folder) ?? [],
+  }));
 }

@@ -20,8 +20,8 @@
  * is also outside this bead's `owns` set, so mounting the card there is not
  * an option regardless.
  *
- * So `HomeView` is scoped to exactly what F8.8/`[D-134]` Q1 requires and no
- * further: it hosts the standing offer, and nothing else. This matches
+ * So `HomeView` was scoped to exactly what F8.8/`[D-134]` Q1 requires and no
+ * further: it hosted the standing offer, and nothing else. This matches
  * `retrospective/offer-card.ts`'s own module doc almost verbatim — "a
  * future Home view would render all of them [every card]; a future grove
  * view would filter to its own course" — this is that Home view, at
@@ -30,18 +30,43 @@
  * is recorded as a finding on `ol-0r92.17`'s close evidence rather than
  * decided here.
  *
+ * **Widened once, deliberately, by `[D-213]` (`ol-0r92.47`).** The
+ * first-read readout — per-folder honest counts plus streaming concepts,
+ * F1.4's amended clause — needs a host that survives past any one
+ * course-setup modal closing (`../course-setup/confirmation-view.ts`'s own
+ * module doc explains why the modal alone cannot carry a forty-second-plus
+ * moment). `[D-213]`'s own ruling names this "the F1.4 extraction pass made
+ * visible where the course-setup confirmation already lives", and the
+ * semester narrative's E2 ("she clicks into the Olea tab expecting something
+ * to have happened") describes exactly this surface, not the modal. This is
+ * therefore a second, decision-authorised addition to "and nothing else"
+ * above, not a lane relitigating `[D-033]`'s front-door ruling on its own
+ * initiative — `'first-read'` is one more `HomeViewState` variant beside
+ * `'offers'`/`'unavailable'`, not a new dashboard.
+ *
  * **Thin by design**, the same split every other view in this plugin draws.
  * No test file for this module and none is expected — see `today/view.ts`'s
  * module doc for why (`obsidian` has no runtime under Vitest); the honesty
- * properties are asserted against `./copy.ts` and `./provider.ts` instead.
+ * properties are asserted against `./copy.ts`, `./provider.ts` and
+ * `../course-setup/confirmation-copy.ts` instead.
  *
  * **Styles.** `packages/plugin/styles.css` is outside this bead's `owns`
  * set — this view's classes render on host defaults meanwhile, the same
  * honest gap `gap/view.ts` and `grove/view.ts` both name for themselves.
+ *
+ * **Reachability gap.** `HomeViewDeps.load`'s real, production implementation
+ * (`createLocalHomeProvider`, `./provider.ts`, not owned by `ol-0r92.47`) has
+ * no course-folder concept to ever return `{ kind: 'first-read' }` from —
+ * wiring that in is a `main.ts`/`provider.ts` change outside this bead's
+ * `owns` set. See `../course-setup/confirmation-view.ts`'s module doc for the
+ * matching gap on the modal side, and this bead's close evidence for the
+ * follow-up.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { VaultPath } from 'olea-core';
+import { renderFirstReadReadout } from '../course-setup/confirmation-view.js';
+import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import type { RetrospectiveOfferCard } from '../retrospective/offer-card.js';
 import {
   DISMISS_OFFER_ACTION,
@@ -55,6 +80,7 @@ export const VIEW_TYPE_OLEA_HOME = 'olea-home';
 
 export type HomeViewState =
   | { readonly kind: 'offers'; readonly cards: readonly RetrospectiveOfferCard[] }
+  | { readonly kind: 'first-read'; readonly folders: readonly FirstReadFolderView[] }
   | { readonly kind: 'unavailable' };
 
 export interface HomeViewDeps {
@@ -107,6 +133,11 @@ export class HomeView extends ItemView {
 
     if (state.kind === 'unavailable') {
       root.createDiv({ cls: 'olea-home-unavailable', text: HOME_UNAVAILABLE });
+      return;
+    }
+
+    if (state.kind === 'first-read') {
+      renderFirstReadReadout(root, state.folders);
       return;
     }
 

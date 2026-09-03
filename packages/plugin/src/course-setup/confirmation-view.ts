@@ -45,12 +45,38 @@
  * `./copy.ts` carry the corpus tests instead. Ships wholly unstyled — no
  * `styles.css` rule added — for the same theme-resilience reason
  * `bulk-review-view.ts` documents.
+ *
+ * ## The first-read readout (F1.4/`[D-213]`, `ol-0r92.47`)
+ *
+ * `renderFirstReadReadout` is exported separately from
+ * `renderCourseSetupConfirmation` rather than folded silently into it,
+ * because it has two hosts, not one: `renderCourseSetupConfirmation` below
+ * paints it for the ONE proposal a confirmation screen is open on (extraction
+ * already runs from the moment a file arrives in the vault, `ingestion/
+ * arrival-watch.ts`, independent of her confirming anything — so a folder
+ * already has a live queue state to show the instant she is looking at its
+ * proposal), and `../home/view.ts` paints the same function again for every
+ * folder confirmed so far, across the whole session, on the surface that
+ * outlives any one modal closing (`ol-0r92.47`'s `owns` lists both files for
+ * exactly this reason). `ingestion/wiring.ts`'s `buildFirstReadFolderViews`
+ * is what either host calls to build the `FirstReadFolderView[]` this
+ * function paints.
+ *
+ * **Reachability gap, named rather than papered over.** Nothing in `main.ts`
+ * yet threads `this.ingestion.engine`/`.sink` into either
+ * `CourseSetupConfirmationOptions.firstRead` or `HomeViewDeps.load`'s result
+ * — `openNextCourseSetupProposal`'s current `CourseSetupModal` call passes no
+ * `firstRead`, and `createLocalHomeProvider`'s `load()` has no course-folder
+ * concept to key a readout on. Wiring that is a `main.ts` change, outside
+ * this bead's `owns` set; see the bead's close evidence for the follow-up.
  */
 
+import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import {
   CONFIRM_BUTTON_LABEL,
   COURSE_NAME_FIELD_LABEL,
   COURSE_PROPOSAL_HEADING,
+  formatFirstReadCountsLine,
 } from './confirmation-copy.js';
 import type { RecognitionClaimCopy } from './copy.js';
 import { type KinshipAnswer, renderKinshipControl } from './kinship-view.js';
@@ -82,8 +108,81 @@ export interface CourseSetupConfirmationOptions {
   readonly kinshipCandidateCourse?: string;
   /** F8.7's recognition claims for this course, already built by `./copy.ts`'s `buildRecognitionClaimCopy`. */
   readonly recognitionClaims: readonly RecognitionClaimCopy[];
+  /**
+   * The first-read readout (F1.4/`[D-213]`, `ol-0r92.47`) for this proposal's
+   * folder — and any other folder already ticked this session, each keeping
+   * its own line (D-213 point 5). Omitted entirely renders no readout
+   * section, the same "caller supplies the fact" split every optional field
+   * on this interface already uses; see this module's doc for what still has
+   * no caller to supply it.
+   */
+  readonly firstRead?: readonly FirstReadFolderView[];
   /** Fires once, when she presses confirm. */
   readonly onConfirm: (result: CourseSetupConfirmationResult) => void;
+}
+
+/**
+ * Paints `folders`' honest counts and streamed concepts, per folder, into
+ * `container` — never a bar, never a derived percentage (D-213 point 2), and
+ * never a path/reason/affordance beside a folder's failed count (D-196 keeps
+ * those inside the course). Renders nothing at all when `folders` is empty,
+ * the same "no section for nothing to show" shape `renderRecognitionClaims`
+ * already uses one file over. Shared by `renderCourseSetupConfirmation`
+ * below and `../home/view.ts` — see this module's doc for why there are two
+ * callers.
+ */
+export function renderFirstReadReadout(
+  container: HTMLElement,
+  folders: readonly FirstReadFolderView[],
+): void {
+  if (folders.length === 0) return;
+  const doc = container.ownerDocument;
+
+  const root = doc.createElement('section');
+  root.className = 'olea-first-read-readout';
+
+  for (const folderView of folders) {
+    const folderSection = doc.createElement('article');
+    folderSection.className = 'olea-first-read-folder';
+
+    // Her own filing, rendered as she named it — a vault-local path she
+    // already sees in Obsidian's own file explorer, not content leaving the
+    // device (see this module's doc; distinct from D-005's diagnostics
+    // exclusion, which is about a report that CAN leave the device).
+    const folderName = doc.createElement('h4');
+    folderName.className = 'olea-first-read-folder-name';
+    folderName.textContent = folderView.folder;
+    folderSection.appendChild(folderName);
+
+    // The first truth: honest counts, plain text, never a bar or a percent
+    // (D-213 point 2). This one line already carries the failed count as a
+    // bare number — no separate path, reason or affordance attached to it
+    // (D-196 keeps those inside the course).
+    const countsLine = doc.createElement('p');
+    countsLine.className = 'olea-first-read-counts';
+    countsLine.textContent = formatFirstReadCountsLine(folderView.counts);
+    folderSection.appendChild(countsLine);
+
+    // The second truth: concepts streaming in, one at a time, never gated on
+    // this folder's counts having settled (`buildFirstReadFolderViews`'s own
+    // doc). An empty list renders no items — never a placeholder claiming a
+    // concept that has not landed.
+    if (folderView.landedConcepts.length > 0) {
+      const conceptList = doc.createElement('ul');
+      conceptList.className = 'olea-first-read-concepts';
+      for (const concept of folderView.landedConcepts) {
+        const item = doc.createElement('li');
+        item.className = 'olea-first-read-concept';
+        item.textContent = concept;
+        conceptList.appendChild(item);
+      }
+      folderSection.appendChild(conceptList);
+    }
+
+    root.appendChild(folderSection);
+  }
+
+  container.appendChild(root);
 }
 
 /** Renders the whole confirmation screen into `container`. */
@@ -91,7 +190,7 @@ export function renderCourseSetupConfirmation(
   container: HTMLElement,
   options: CourseSetupConfirmationOptions,
 ): void {
-  const { proposal, kinshipCandidateCourse, recognitionClaims, onConfirm } = options;
+  const { proposal, kinshipCandidateCourse, recognitionClaims, firstRead, onConfirm } = options;
   const doc = container.ownerDocument;
 
   const root = doc.createElement('section');
@@ -128,6 +227,10 @@ export function renderCourseSetupConfirmation(
   }
 
   renderRecognitionClaims(root, recognitionClaims);
+
+  if (firstRead !== undefined) {
+    renderFirstReadReadout(root, firstRead);
+  }
 
   const confirmButton = doc.createElement('button');
   confirmButton.type = 'button';
