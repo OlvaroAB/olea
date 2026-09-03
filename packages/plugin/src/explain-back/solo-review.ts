@@ -137,22 +137,23 @@
  * .recordSoloGradeAndReview` (`packages/plugin/src/explain-back/modal.ts`,
  * `acceptGrading`). That field is OPTIONAL and the call is best-effort
  * (mirrors `acceptExplainBackGradingWithObservation`'s own "an embedding
- * failure never fails the grade acceptance it rode on" posture) for exactly
- * one reason: nothing supplies a real instance of it in production yet.
- * Building one needs a `GradingWiring` (`../grading/wiring.js`, already
- * composed at `main.ts`'s `this.grading`) PLUS a `VaultSource` and device id
- * (`main.ts`'s `buildExplainBackObservationContextFor` already builds both,
- * a few lines above `openExplainBackModal` — same file, same pattern) — and
- * `main.ts` is outside `ol-cqz8`'s `owns` (`packages/plugin/src/
- * explain-back/`, `packages/plugin/src/grading/`, `packages/core/src/
- * index.ts`), so the actual `openExplainBackModal` construction call
- * (`packages/plugin/src/main.ts:1887-1901`) is not touched by this bead.
- * Filed as a follow-on: wire `openExplainBackModal`'s deps literal to pass
- * `recordSoloGradeAndReview: (params) => recordSoloGradeAndReview({
- * grading: this.grading, vault: new ObsidianSource(this.app), deviceId:
- * await ensureDeviceId(this), now: () => new Date() }, params)`.
+ * failure never fails the grade acceptance it rode on" posture), but IS
+ * supplied in production: `main.ts`'s `recordExplainBackSoloGradeAndReview`
+ * (`ol-38kp`) builds a real `RecordSoloGradeAndReviewDeps` from `this.grading`
+ * plus a fresh `ObsidianSource`/device id and is wired into
+ * `openExplainBackModal`'s deps literal
+ * (`packages/plugin/src/main.ts`, `recordSoloGradeAndReview: (params) =>
+ * this.recordExplainBackSoloGradeAndReview(params)`).
+ *
+ * **`ol-iti2` closes the one remaining gap.** `[D-217]`'s depth heading
+ * (`modal.ts`'s `renderAcceptedPhase`) needs the graded `SoloLevel` itself,
+ * not just a successful write — this module now returns it (see
+ * `RecordSoloGradeAndReviewOutcome` above), and `main.ts`'s wrapper forwards
+ * `.soloLevel` on rather than discarding it (its own return type widened
+ * from `Promise<void>` to `Promise<SoloLevel | void>` to match).
  */
 
+import type { SoloLevel } from 'olea-contracts';
 import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
@@ -193,6 +194,12 @@ export interface RecordSoloGradeAndReviewParams {
   readonly durationMs?: number | null;
 }
 
+/** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
+export interface RecordSoloGradeAndReviewOutcome {
+  readonly result: AppendReviewLogResult;
+  readonly soloLevel: SoloLevel;
+}
+
 /**
  * Runs the SOLO pipeline and appends the one review-log event this module's
  * header settles is the correct shape — `undefined` (nothing written) when:
@@ -200,14 +207,14 @@ export interface RecordSoloGradeAndReviewParams {
  * Worker isn't configured or the kill-switch has tripped (`gradeSoloAttempt`
  * returns `null`), or the Worker response carried no usable D7.3 stamp.
  * Every one of these is an honest skip, never a fabricated write. Returns the
- * real `AppendReviewLogResult` on a successful write — `modal.ts`'s caller
- * ignores it today, but a test (or a future caller) can inspect exactly what
- * landed.
+ * real write outcome on success (`ol-iti2`: `main.ts`'s wrapper forwards
+ * `.soloLevel` on to `modal.ts`'s `[D-217]` depth heading; a test can still
+ * reach the full `AppendReviewLogResult` at `.result`).
  */
 export async function recordSoloGradeAndReview(
   deps: RecordSoloGradeAndReviewDeps,
   params: RecordSoloGradeAndReviewParams,
-): Promise<AppendReviewLogResult | undefined> {
+): Promise<RecordSoloGradeAndReviewOutcome | undefined> {
   if (params.subjectConceptId === null) return undefined;
 
   const soloInput = buildGradeSoloInputFromTypedAnswer(params.answer, params.context);
@@ -234,7 +241,7 @@ export async function recordSoloGradeAndReview(
 
   const options: AppendReviewLogOptions & WriteContentOptions = { deviceId: deps.deviceId };
 
-  return recordGradedExplainBackReview(
+  const result = await recordGradedExplainBackReview(
     deps.vault,
     {
       subject,
@@ -245,4 +252,6 @@ export async function recordSoloGradeAndReview(
     },
     options,
   );
+
+  return { result, soloLevel: accepted.soloLevel };
 }

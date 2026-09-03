@@ -6,10 +6,13 @@
  * — no `obsidian` import anywhere in this file (INV-1).
  */
 
-import type { AppendReviewLogResult, ExplainBackPromptContext, WorkerTaskRequest } from 'olea-core';
+import type { ExplainBackPromptContext, WorkerTaskRequest } from 'olea-core';
 import { readContentRecord } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { recordSoloGradeAndReview } from '../../src/explain-back/solo-review.js';
+import {
+  type RecordSoloGradeAndReviewOutcome,
+  recordSoloGradeAndReview,
+} from '../../src/explain-back/solo-review.js';
 import type { GradingWiring } from '../../src/grading/wiring.js';
 import { memoryVault } from '../review/memory-vault.js';
 
@@ -113,7 +116,7 @@ describe('recordSoloGradeAndReview — the real write, one review event', () => 
     const vault = memoryVault();
     const wiring = wiringWithSoloReply();
 
-    const result: AppendReviewLogResult | undefined = await recordSoloGradeAndReview(
+    const outcome: RecordSoloGradeAndReviewOutcome | undefined = await recordSoloGradeAndReview(
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
@@ -123,7 +126,12 @@ describe('recordSoloGradeAndReview — the real write, one review event', () => 
       },
     );
 
-    if (!result) throw new Error('expected a written review-log record');
+    if (!outcome) throw new Error('expected a written review-log record');
+    const { result } = outcome;
+    // `ol-iti2`: the outcome surfaces the graded level directly, not just
+    // buried in `result.record.explainBackGrade` — this is what `main.ts`'s
+    // wrapper forwards on to `modal.ts`'s `[D-217]` depth heading.
+    expect(outcome.soloLevel).toBe('relational');
     expect(result.record.kind).toBe('review');
     expect(result.record.instrumentType).toBe('explain-back');
     expect(result.record.rating).toBeNull();
@@ -159,7 +167,7 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
     const vault = memoryVault();
     const wiring = wiringWithSoloReply();
 
-    const result = await recordSoloGradeAndReview(
+    const outcome = await recordSoloGradeAndReview(
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
@@ -170,15 +178,15 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
       },
     );
 
-    if (!result) throw new Error('expected a written review-log record');
-    expect(result.record.durationMs).toBe(41_500);
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.durationMs).toBe(41_500);
   });
 
   it('relays null, never a guessed number, when the caller supplies no durationMs', async () => {
     const vault = memoryVault();
     const wiring = wiringWithSoloReply();
 
-    const result = await recordSoloGradeAndReview(
+    const outcome = await recordSoloGradeAndReview(
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
@@ -188,7 +196,7 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
       },
     );
 
-    if (!result) throw new Error('expected a written review-log record');
-    expect(result.record.durationMs).toBeNull();
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.durationMs).toBeNull();
   });
 });

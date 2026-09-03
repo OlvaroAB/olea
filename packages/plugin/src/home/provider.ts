@@ -34,6 +34,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import {
@@ -53,6 +54,16 @@ export interface CreateLocalHomeProviderDeps {
   readonly settingsHost: ObsidianDataHost;
   /** Injected for determinism under test; production passes `() => new Date()`. */
   readonly now: () => Date;
+  /**
+   * `ol-ppa9` (F1.4/`[D-213]`): the first-read readout, for every course
+   * folder ticked so far this session — a thunk, read fresh on every
+   * `load()`, so a folder ticked or an ingestion tick that lands after this
+   * provider was constructed still reaches the next read. Omitted (the
+   * default in every test that predates `[D-213]`) or returning `[]` falls
+   * straight through to the ordinary offers read below — the honest "nothing
+   * ticked yet" case, not a special one.
+   */
+  readonly firstRead?: () => readonly FirstReadFolderView[];
 }
 
 /** The data half of `HomeViewDeps` — `main.ts` adds `openRetrospective` at the construction site. */
@@ -92,6 +103,17 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
 
   return {
     async load(): Promise<HomeViewState> {
+      // `ol-ppa9` (F1.4/`[D-213]`): a session with at least one ticked
+      // course folder shows its first-read readout instead of the ordinary
+      // offers read — "she clicks into the Olea tab expecting something to
+      // have happened" (the semester narrative's E2, cited by `./view.ts`'s
+      // own module doc). Read fresh every call, never cached, same posture
+      // every other field on this provider already holds.
+      const firstReadFolders = deps.firstRead?.() ?? [];
+      if (firstReadFolders.length > 0) {
+        return { kind: 'first-read', folders: firstReadFolders };
+      }
+
       try {
         const now = deps.now();
         const { assignmentsBasePath } = await settingsStore.load();

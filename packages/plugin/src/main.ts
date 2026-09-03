@@ -1,5 +1,5 @@
 import { Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
-import type { StudyPlanEnvelope } from 'olea-contracts';
+import type { SoloLevel, StudyPlanEnvelope } from 'olea-contracts';
 import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
@@ -109,7 +109,12 @@ import {
   processNowNotice,
 } from './ingestion/process-now.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
-import { buildIngestionRunner, type IngestionWiring } from './ingestion/wiring.js';
+import {
+  buildFirstReadFolderViews,
+  buildIngestionRunner,
+  type FirstReadFolderView,
+  type IngestionWiring,
+} from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
 import { createVaultMisconceptionStore } from './misconception/store.js';
@@ -375,6 +380,16 @@ export default class OleaPlugin extends Plugin {
   private courseSetupSeenCodes = new Set<string>();
   /** At most one course-setup modal open at a time — a second detected course waits for this one to resolve rather than stacking prompts. */
   private courseSetupModalOpen = false;
+  /**
+   * `ol-ppa9` (F1.4/`[D-213]`): course-folder root paths confirmed this
+   * session, in confirmation order — the "which folders were ticked this
+   * run" notion `ingestion/wiring.ts`'s `buildFirstReadFolderViews` and
+   * `home/view.ts`'s `'first-read'` state both need and neither owns. Never
+   * persisted, same in-memory-for-the-process-lifetime posture as
+   * `courseSetupSeenCodes` above (and the same acknowledged gap: empty again
+   * on every plugin restart). Read by `firstReadFolderViewsFor` below.
+   */
+  private tickedCourseFolders: VaultPath[] = [];
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -920,12 +935,20 @@ export default class OleaPlugin extends Plugin {
     this.registerView(
       VIEW_TYPE_OLEA_BULK_REVIEW,
       (leaf) =>
-        new BulkReviewView(leaf, () =>
-          createBulkReviewController({
-            cache: generationWiring.cache,
-            acceptPort: generationWiring.acceptPort,
-            editPort: createObsidianEditPort(this.app),
-          }),
+        new BulkReviewView(
+          leaf,
+          () =>
+            createBulkReviewController({
+              cache: generationWiring.cache,
+              acceptPort: generationWiring.acceptPort,
+              editPort: createObsidianEditPort(this.app),
+            }),
+          // `[D-216]`/`ol-mbh6`: the clearing row's source peek, mirroring
+          // `ReviewView`'s own `instrumentId`-keyed call to the identical
+          // `[D-171]` affordance a few hundred lines above — targeted by
+          // `conceptKey` here because a still-pending draft has no
+          // `instrumentId` yet (see `BulkReviewView`'s own `openSource` doc).
+          (conceptKey) => void openRegistryEntryFor(this.app, { conceptKey }),
         ),
     );
 
@@ -967,6 +990,12 @@ export default class OleaPlugin extends Plugin {
         deviceId,
         settingsHost: this,
         now: () => new Date(),
+        // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
+        // ingestion tick's fresh queue state and a later course-setup
+        // confirmation both reach a Home leaf built before either happened —
+        // same "read fresh" reasoning `servedRelationEdges`'s callers already
+        // give for their own thunked reads.
+        firstRead: () => this.firstReadFolderViewsFor(this.tickedCourseFolders),
       });
       return new HomeView(leaf, {
         load: () => provider.load(),
@@ -1523,16 +1552,45 @@ export default class OleaPlugin extends Plugin {
     new CourseSetupModal(this.app, {
       proposal: { suggestedName: next.code, rootPath: next.rootPath },
       recognitionClaims: [],
+      // `ol-ppa9` (F1.4/`[D-213]`): this proposal's own folder already has a
+      // live queue state the instant she is looking at it — extraction runs
+      // from file arrival, independent of confirming anything
+      // (`confirmation-view.ts`'s own module doc) — plus any folder already
+      // ticked earlier this session, each keeping its own line.
+      firstRead: this.firstReadFolderViewsFor(
+        this.tickedCourseFolders.includes(next.rootPath)
+          ? this.tickedCourseFolders
+          : [next.rootPath, ...this.tickedCourseFolders],
+      ),
       onConfirm: (result) => {
         this.courseSetupModalOpen = false;
         new Notice(`Olea: "${result.name}" confirmed as a course.`);
         void this.openNextCourseSetupProposal(vault);
+        if (!this.tickedCourseFolders.includes(next.rootPath)) {
+          this.tickedCourseFolders.push(next.rootPath);
+        }
       },
       onDismiss: () => {
         this.courseSetupModalOpen = false;
         void this.openNextCourseSetupProposal(vault);
       },
     }).open();
+  }
+
+  /**
+   * `ol-ppa9` (F1.4/`[D-213]`): the first-read readout's live data, scoped to
+   * `folders` — `[]` before `this.ingestion` exists (the brief window before
+   * `onload` reaches its construction, same guard `processNoteNow` takes for
+   * its own not-yet-constructed field) or when `folders` is empty (nothing
+   * ticked yet). `landedConcepts` is supplied as an empty map for every
+   * folder: no incremental per-folder concept producer exists in production
+   * yet (`ingestion/wiring.ts`'s own module doc; tracked separately on
+   * `ol-9c0k`), so this is the honest "nothing has landed yet" state rather
+   * than a fabricated one, not a gap this bead's build scope answers.
+   */
+  private firstReadFolderViewsFor(folders: readonly VaultPath[]): readonly FirstReadFolderView[] {
+    if (this.ingestion === null || folders.length === 0) return [];
+    return buildFirstReadFolderViews(this.ingestion.engine.list(), folders, new Map());
   }
 
   /**
@@ -1551,6 +1609,15 @@ export default class OleaPlugin extends Plugin {
     const current = this.ingestion?.engine.snapshot() ?? null;
     if (current === null) return;
     this.lastIngestionSnapshot = current;
+
+    // `ol-ppa9` (F1.4/`[D-213]`): an open Home leaf's first-read readout
+    // renders live counts off `this.ingestion.engine.list()` — refresh it on
+    // every tick, mirroring `lastIngestionSnapshot`'s own per-tick update,
+    // but only once a folder has actually been ticked this session (no point
+    // refreshing a leaf with nothing first-read to show).
+    if (this.tickedCourseFolders.length > 0) {
+      void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_HOME);
+    }
 
     if (!ingestionSessionJustClosed(previous, current)) return;
     if (this.corpusRelation === null || this.corpusRelationStateStore === null) return;
@@ -2147,15 +2214,24 @@ export default class OleaPlugin extends Plugin {
    * the same guard `gradeExplainBackAttempt`/
    * `acceptExplainBackGradingWithObservation` above already take, since
    * `GradingWiring` itself is optional at plugin level.
+   *
+   * `ol-iti2` (`[D-217]`): forwards the graded `SoloLevel` back out —
+   * `solo-review.ts`'s `recordSoloGradeAndReview` now resolves a
+   * `RecordSoloGradeAndReviewOutcome` (`{ result, soloLevel }`) rather than
+   * the bare `AppendReviewLogResult`, and this wrapper's own return type
+   * widens from `Promise<void>` to `Promise<SoloLevel | void>` to match
+   * `ExplainBackModalDeps.recordSoloGradeAndReview`'s declared shape
+   * (`modal.ts`), so `renderAcceptedPhase`'s depth heading has a real level
+   * to render instead of always taking the "no level" branch.
    */
   private async recordExplainBackSoloGradeAndReview(params: {
     readonly instrumentId: string;
     readonly subjectConceptId: string | null;
     readonly context: ExplainBackPromptContext;
     readonly answer: string;
-  }): Promise<void> {
+  }): Promise<SoloLevel | void> {
     if (this.grading === null) return;
-    await recordSoloGradeAndReview(
+    const outcome = await recordSoloGradeAndReview(
       {
         grading: this.grading,
         vault: new ObsidianSource(this.app),
@@ -2164,6 +2240,7 @@ export default class OleaPlugin extends Plugin {
       },
       params,
     );
+    return outcome?.soloLevel;
   }
 
   /**
