@@ -2863,7 +2863,18 @@ function renderTrendsInspector(inspector: HTMLElement, input: TrendsInspectorInp
     text:
       viewModel.mastery === null
         ? "can't count (null)"
-        : `${String(viewModel.mastery.courses.length)} course(s)`,
+        : // Count what `TodayView.renderMastery` actually draws, not the raw
+          // course list. F2.11's co-presence clause (D-116, `ol-hgtb`) and its
+          // component-register row 3.1 ("any surface rendering growth stage
+          // must render vitality alongside — never one axis without the
+          // other") make `view.ts` skip a course whose `vitality` is `null`
+          // (D-115's per-course fallback: "where a surface genuinely cannot
+          // carry both, it shows neither") — none of the workbench's trends
+          // fixtures wire vitality (`ol-a3hv` / VIT-2's own reachability gap),
+          // so every course here is currently skipped. Filtering here keeps
+          // this inspector's own module doc's promise true: it "re-states the
+          // same viewModel the pane rendered from," not a second computation.
+          `${String(viewModel.mastery.courses.filter((course) => course.vitality !== null).length)} course(s)`,
   });
 
   const spacingRow = inspector.createDiv({ cls: 'wb-inspector-row' });

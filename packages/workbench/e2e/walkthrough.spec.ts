@@ -103,6 +103,22 @@ test('SPRIG-1: the sprig actually reaches the screen on the gap view (step 8)', 
   await expect(sprigs.first().locator('ellipse')).toHaveCount(1);
 });
 
+// WB-7 (`ol-ppxj.30`) finding, left as a reported red rather than fixed here:
+// step 12 mounts `TodayView` (surface `trends`), and `TodayView`'s ladder form
+// (`renderLadderRow` in `packages/plugin/src/today/view.ts`) draws each
+// concept as a plain `.olea-today-mastery-ladder-dot` div, never a real
+// `renderSprig()` — `.olea-sprig` genuinely does not exist on this surface,
+// under any selector. That is a real gap against the vocabulary registry's
+// own normative invariant ("The two forms" §, "Invariant across both forms":
+// "identical sprig geometry, only the pixel size changes" — F2.11, amended by
+// `[D-049]`/`[D-116]`), which this assertion is correctly pinning: the ladder
+// form should draw sprig geometry per concept and currently draws a plain
+// mark instead. VIT-2 (`ol-a3hv`, closed) built the ladder with plain
+// tending/early marks rather than sprig geometry, so the gap is pre-existing,
+// not a WB-7 regression. Per this bead's own instruction ("if the affordance
+// is clause-backed but unbuilt, do NOT build it"), this e2e-only lane does
+// not touch `packages/plugin/src/today/view.ts` — the fix belongs to whoever
+// owns that file, as a follow-up to VIT-2 under F2.11. Left red on purpose.
 test('SPRIG-1: the sprig reaches the trends screen too (step 12)', async ({ page }) => {
   await gotoWalkStep(page, 12);
   await expect(frame(page).locator('.olea-sprig').first()).toBeVisible();
