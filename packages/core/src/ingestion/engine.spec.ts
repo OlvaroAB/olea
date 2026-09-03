@@ -731,4 +731,70 @@ describe('honest progress reporting', () => {
     await engine.tick();
     expect(engine.snapshot().headroom).toBeNull(); // still unknown — this outcome never reported one
   });
+
+  /**
+   * `ol-3ux7.64.12` (WBX-10): root-cause investigation for "only 3 of 7
+   * documents' first-read extraction calls fired inside the walk's drain
+   * window" (found by WBX-6, `ol-3ux7.64.7`). This test RULES OUT the
+   * hypothesis that `tick()` serializes or starves concurrent callers —
+   * `scripts/simulator-walk.mjs` fires one `processNoteNow()` per file with
+   * only a short settle wait between them, and each `processNoteNow()`
+   * (`packages/plugin/src/ingestion/process-now.ts`'s `runSource`) forces
+   * exactly one `tick()` call, so several `tick()` calls can be genuinely
+   * IN FLIGHT AT ONCE against the same shared engine while an earlier job's
+   * slow (real-network, `ol-0dyo`: 25s-6.4min observed) runner call is still
+   * pending.
+   *
+   * Result: three concurrent `tick()` calls against three queued jobs each
+   * pick a DISTINCT eligible job (the earlier ones are already `in-flight`
+   * and correctly skipped by `nextEligibleIndex`) and all three run their
+   * runner calls genuinely concurrently, resolving independently. The
+   * engine does not bottleneck multiple in-flight documents to one at a
+   * time — see `docs/dev/spend-account.md`'s WBX-10 row for where this
+   * finding points instead (the walk's own drain-timeout budget, sized for
+   * one slow call rather than for several run concurrently).
+   */
+  it('WBX-10: concurrent tick() calls against a real engine each advance a DIFFERENT eligible job, never serializing on a slow runner', async () => {
+    const started: string[] = [];
+    const gates = new Map<string, () => void>();
+    function waitFor(hash: string): Promise<void> {
+      return new Promise((resolve) => {
+        gates.set(hash, resolve);
+      });
+    }
+
+    const slowRunner: JobRunner = async (job) => {
+      started.push(job.contentHash);
+      await waitFor(job.contentHash);
+      return { ok: true };
+    };
+
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: slowRunner,
+    });
+    await engine.enqueue({ contentHash: 'doc-a', label: 'A', payload: {} });
+    await engine.enqueue({ contentHash: 'doc-b', label: 'B', payload: {} });
+    await engine.enqueue({ contentHash: 'doc-c', label: 'C', payload: {} });
+
+    // Three concurrent tick() calls, mirroring three back-to-back
+    // processNow() triggers whose own forced tick() promises are all still
+    // pending at once (none awaited before the next fires).
+    const tickPromises = [engine.tick(), engine.tick(), engine.tick()];
+
+    // Let each tick() call's synchronous prefix (pick eligible job, mark
+    // in-flight, persist) run before any runner resolves.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(started.sort()).toEqual(['doc-a', 'doc-b', 'doc-c']); // every job started, none skipped
+    expect(engine.snapshot()).toMatchObject({ queued: 0, inFlight: 3, done: 0 });
+
+    for (const release of gates.values()) release();
+    const results = await Promise.all(tickPromises);
+    expect(results.every((r) => r.kind === 'ran' && r.outcome === 'done')).toBe(true);
+    expect(engine.snapshot()).toMatchObject({ inFlight: 0, done: 3 });
+  });
 });
