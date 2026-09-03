@@ -9,6 +9,7 @@
 import type {
   ExplainBackOfferTrigger,
   McqCorrectness,
+  McqMisconceptionProvenance,
   Rating,
   SelectionContextV4,
 } from 'olea-contracts';
@@ -23,6 +24,7 @@ import type { VaultSource } from 'olea-core';
 // barrel. A deep import here would also let the module be bundled twice.
 import {
   appendExplainBackOfferRecord,
+  appendMisconceptionObservedRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
   type BuildSchedulingObservationFieldInput,
@@ -91,6 +93,22 @@ export interface RecordReviewInput {
    * `{ chosenIndex: -1, matchedKey: false }`.
    */
   readonly correctness?: McqCorrectness;
+  /**
+   * `[D-202]` (`ol-egov.92`, `ol-0r92.44`) — the wrong option's misconception
+   * provenance, present only when `session.ts`'s `mcqNext` found the pick
+   * incorrect AND the chosen `McqOption` carried `believes`/`source_says`
+   * (see that type's own doc for why every option carries neither today).
+   * Unlike `correctness` just above, this does NOT merge into the review
+   * record itself — `createVaultReviewLogPort` below appends a SEPARATE
+   * `misconception-observed` event for it, naming the review record's own
+   * `eventId` as `reviewEventId`, because `[D-202]`'s own words are that a
+   * wrong pick "appends" this event, not that the review record grows a
+   * field: a right pick appends nothing extra at all, which an always-
+   * present optional field on the one record already being written could
+   * not express. `undefined` for every non-MCQ review and for a correct MCQ
+   * pick — never a fabricated provenance object.
+   */
+  readonly misconceptionDistractor?: McqMisconceptionProvenance;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -177,7 +195,7 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
           ? undefined
           : buildSchedulingObservationField(input.schedulingObservationInput);
 
-      await appendReviewLogRecord(
+      const reviewResult = await appendReviewLogRecord(
         vault,
         {
           timestamp: isoWithLocalOffset(now),
@@ -209,6 +227,27 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
         },
         { deviceId },
       );
+
+      // `[D-202]` (`ol-egov.92`): a SEPARATE append, never a field on the
+      // record just written above — see `RecordReviewInput.misconceptionDistractor`'s
+      // own doc for why. Only when the caller supplied one (a wrong MCQ pick
+      // whose chosen option carried provenance); a correct pick, or one
+      // whose provenance never survived to review time, appends nothing
+      // here at all. `reviewEventId` names the record just written, by the
+      // `eventId` that append stamped — never a value this port invents.
+      if (input.misconceptionDistractor !== undefined) {
+        await appendMisconceptionObservedRecord(
+          vault,
+          {
+            timestamp: isoWithLocalOffset(now),
+            instrumentId: input.instrument.instrumentId,
+            conceptIds: [...conceptIds],
+            reviewEventId: reviewResult.record.eventId,
+            distractor: input.misconceptionDistractor,
+          },
+          { deviceId },
+        );
+      }
     },
   };
 }

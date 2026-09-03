@@ -403,3 +403,124 @@ describe('createVaultReviewLogPort — the [D-205 / SIG-2] correctness write sea
     expect(Object.hasOwn(record, 'correctness')).toBe(false);
   });
 });
+
+describe('createVaultReviewLogPort — the [D-202] misconception-observed write seam (ol-egov.92, ol-0r92.44)', () => {
+  const DEVICE = 'ports-spec-misconception-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-mcq-3',
+    conceptIds: ['concept-c'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'mcq',
+    stem: 'Which of these?',
+    options: [
+      { id: 'opt-1', label: 'Not this one', correct: false },
+      { id: 'opt-2', label: 'This one', correct: true },
+    ],
+    feedback: 'Correct — this one.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['mcq'],
+    planVersion: null,
+  };
+
+  const DISTRACTOR = {
+    text: 'Not this one',
+    believes: 'a wrong belief this distractor encodes',
+    source_says: 'what the source material actually says instead',
+  };
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  it('appends a SEPARATE misconception-observed event, never a field on the review record', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'again',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+      correctness: { chosenIndex: 0, matchedKey: false },
+      misconceptionDistractor: DISTRACTOR,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'misconception-observed']);
+
+    const [review, observed] = parsed.records;
+    if (review?.kind !== 'review') throw new Error('expected a review record first');
+    if (observed?.kind !== 'misconception-observed') {
+      throw new Error('expected a misconception-observed record second');
+    }
+    expect(Object.hasOwn(review, 'misconceptionDistractor')).toBe(false);
+    expect(observed.reviewEventId).toBe(review.eventId);
+    expect(observed.distractor).toEqual(DISTRACTOR);
+    expect(observed.conceptIds).toEqual(['concept-c']);
+    expect(observed.misconceptionId.length).toBeGreaterThan(0);
+  });
+
+  it('appends nothing extra when the caller passes no misconceptionDistractor — a right pick', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+      correctness: { chosenIndex: 1, matchedKey: true },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review']);
+  });
+
+  it('two wrong picks of the same distractor mint two DIFFERENT misconceptionIds — never matched at write time', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'again',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+      correctness: { chosenIndex: 0, matchedKey: false },
+      misconceptionDistractor: DISTRACTOR,
+    });
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'again',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+      correctness: { chosenIndex: 0, matchedKey: false },
+      misconceptionDistractor: DISTRACTOR,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    const observed = parsed.records.filter((r) => r.kind === 'misconception-observed');
+    expect(observed).toHaveLength(2);
+    if (
+      observed[0]?.kind !== 'misconception-observed' ||
+      observed[1]?.kind !== 'misconception-observed'
+    ) {
+      throw new Error('expected two misconception-observed records');
+    }
+    expect(observed[0].misconceptionId).not.toBe(observed[1].misconceptionId);
+  });
+});

@@ -14,7 +14,7 @@
  * call.
  */
 
-import type { McqCorrectness, Rating } from 'olea-contracts';
+import type { McqCorrectness, McqMisconceptionProvenance, Rating } from 'olea-contracts';
 import type {
   BuildSchedulingObservationFieldInput,
   ConfusionRoutingDecision,
@@ -594,7 +594,11 @@ export class ReviewSession {
     const instrument = this.requireMcq(item);
     const rating = this.mcqRating(instrument, this.mcqSelectedIndex);
     const correctness = this.mcqCorrectness(instrument, this.mcqSelectedIndex);
-    await this.logAndAdvance(item, rating, this.wasUnsure, correctness);
+    const misconceptionDistractor = this.mcqMisconceptionDistractor(
+      instrument,
+      this.mcqSelectedIndex,
+    );
+    await this.logAndAdvance(item, rating, this.wasUnsure, correctness, misconceptionDistractor);
   }
 
   async suspend(): Promise<void> {
@@ -838,6 +842,29 @@ export class ReviewSession {
     return { chosenIndex, matchedKey: option?.correct ?? false };
   }
 
+  /**
+   * `[D-202]` (`ol-egov.92`, `ol-0r92.44`) — the chosen distractor's
+   * misconception provenance, computed at the same spot `mcqCorrectness`
+   * just above reads the same option. `undefined` — never appended, per
+   * `ReviewLogPort.recordReview`'s doc — for a correct pick, for no
+   * selection, and for a wrong pick whose option carries no `believes`/
+   * `source_says` (every option today: see `McqOption`'s own doc for why
+   * nothing populates these two fields yet). `misconceptionId` is minted
+   * downstream, in `packages/core/src/review-log/write.ts`'s
+   * `appendMisconceptionObservedRecord` — never here, and never matched
+   * against prior occurrences first (`[D-202]`'s own words).
+   */
+  private mcqMisconceptionDistractor(
+    instrument: McqItem,
+    selectedIndex: number | null,
+  ): McqMisconceptionProvenance | undefined {
+    const chosenIndex = selectedIndex ?? -1;
+    const option = instrument.options[chosenIndex];
+    if (option === undefined || option.correct) return undefined;
+    if (option.believes === undefined || option.source_says === undefined) return undefined;
+    return { text: option.label, believes: option.believes, source_says: option.source_says };
+  }
+
   private previewMcqInterval(rating: Rating): string {
     const item = this.requireCurrent();
     return previewSingleInterval(
@@ -963,6 +990,7 @@ export class ReviewSession {
     rating: Rating,
     wasUnsure: boolean,
     correctness?: McqCorrectness,
+    misconceptionDistractor?: McqMisconceptionProvenance,
   ): Promise<void> {
     // Stamped BEFORE the review-log write or the scheduler call below, so a
     // marker minted this exact moment is what both of them key on — never
@@ -1011,6 +1039,12 @@ export class ReviewSession {
       // review) — `rate()`'s Q&A/cloze call never passes a fourth argument,
       // so this stays absent there, never a fabricated `false`/`-1` pair.
       ...(correctness !== undefined ? { correctness } : {}),
+      // `[D-202]`: present only when `mcqNext` computed it — a wrong pick
+      // whose chosen option carried provenance. `ports.ts`'s
+      // `createVaultReviewLogPort` is what turns this into a SEPARATE
+      // `misconception-observed` append, never a field merged onto this
+      // same record — see `RecordReviewInput.misconceptionDistractor`'s doc.
+      ...(misconceptionDistractor !== undefined ? { misconceptionDistractor } : {}),
     });
 
     // Called directly (rather than through `previewSingleInterval`) because

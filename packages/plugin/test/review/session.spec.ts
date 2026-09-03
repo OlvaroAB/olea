@@ -640,6 +640,97 @@ describe('[D-205 / SIG-2] MCQ correctness — the behavioural signal beside the 
   });
 });
 
+// F3.3 / `[D-202]` (`ol-egov.92`, `ol-0r92.44`) — a wrong MCQ pick carries the
+// chosen distractor's misconception provenance beside `[D-205]`'s
+// correctness, computed at the same spot `mcqNext` already reads the option.
+// Forwarded verbatim into `RecordReviewInput.misconceptionDistractor`;
+// `createVaultReviewLogPort` (`ports.spec.ts`) is what turns it into a
+// SEPARATE `misconception-observed` append, never this class — same
+// "caller decides, port writes" split `[D-205]`'s own describe block above
+// proves for `correctness`.
+describe('[D-202] misconception-observed distractor provenance — computed beside correctness (ol-egov.92, ol-0r92.44)', () => {
+  it('a wrong pick whose option carries provenance forwards it verbatim', async () => {
+    const item = queueItem(
+      mcqFixture({
+        options: [
+          { id: 'a', label: 'A letter written by a participant', correct: true },
+          {
+            id: 'b',
+            label: 'A textbook summarising the event',
+            correct: false,
+            believes: 'she believes a summary counts as a primary source',
+            source_says: 'the source material distinguishes primary from secondary explicitly',
+          },
+        ],
+      }),
+    );
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+
+    await session.mcqAnswer(1); // the provenance-carrying wrong option
+    await session.mcqNext();
+
+    expect(reviewLog.calls[0]?.misconceptionDistractor).toEqual({
+      text: 'A textbook summarising the event',
+      believes: 'she believes a summary counts as a primary source',
+      source_says: 'the source material distinguishes primary from secondary explicitly',
+    });
+    // The correctness signal this rides beside is unaffected.
+    expect(reviewLog.calls[0]?.correctness).toEqual({ chosenIndex: 1, matchedKey: false });
+  });
+
+  it('a correct pick writes no misconceptionDistractor at all — never a fabricated one', async () => {
+    const item = queueItem(
+      mcqFixture({
+        options: [
+          {
+            id: 'a',
+            label: 'A letter written by a participant',
+            correct: true,
+            believes: 'unreachable — this option is correct',
+            source_says: 'unreachable — this option is correct',
+          },
+        ],
+      }),
+    );
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+
+    await session.mcqAnswer(0); // the correct option, even though it carries fields
+    await session.mcqNext();
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'misconceptionDistractor')).toBe(false);
+  });
+
+  it('a wrong pick whose option carries no provenance writes no misconceptionDistractor — today’s default fixture shape', async () => {
+    const item = queueItem(mcqFixture()); // default fixture: no believes/source_says on any option
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+
+    await session.mcqAnswer(1); // wrong option, no provenance carried
+
+    await session.mcqNext();
+
+    expect(reviewLog.calls[0]?.correctness).toEqual({ chosenIndex: 1, matchedKey: false });
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'misconceptionDistractor')).toBe(false);
+  });
+
+  it('a Q&A review writes no misconceptionDistractor field at all — the signal only exists for mcq', async () => {
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'misconceptionDistractor')).toBe(false);
+  });
+});
+
 describe('F2.16 — the session maps through core, and holds no mapping of its own', () => {
   // Scenario: features/F2-review.md, "F2.16 — One rating mapping, not two".
   // The three cases below are also asserted individually above; what this adds

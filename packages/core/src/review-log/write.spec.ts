@@ -10,12 +10,14 @@ import { suspendedInstrumentIds } from './suspension.js';
 import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
   appendExplainBackOfferRecord,
+  appendMisconceptionObservedRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
   type ExplainBackOfferLogRecordInput,
+  type MisconceptionObservedLogRecordInput,
   type RetrospectiveOfferLogRecordInput,
   type ReviewLogRecordInput,
   type SuccessionLogRecordInput,
@@ -1006,5 +1008,168 @@ describe('appendExplainBackOfferRecord ([D-178 / LOG-3] item 2)', () => {
     expect(merged.records.map((r) => r.kind).sort()).toEqual(
       ['explain-back-declined', 'explain-back-offered', 'explain-back-offered'].sort(),
     );
+  });
+});
+
+describe('appendMisconceptionObservedRecord ([D-202], ol-egov.92)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-misconception-observed-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function observedInput(
+    overrides: Partial<MisconceptionObservedLogRecordInput> = {},
+  ): MisconceptionObservedLogRecordInput {
+    return {
+      timestamp: '2026-09-03T09:20:00-04:00',
+      instrumentId: 'mcq:imbrication:1',
+      conceptIds: ['imbrication'],
+      reviewEventId: 'review-1',
+      distractor: {
+        text: 'a plausible wrong option',
+        believes: 'she believes the wrong thing this option encodes',
+        source_says: 'what the source material actually says instead',
+      },
+      ...overrides,
+    };
+  }
+
+  it('appends a misconception-observed event into the same C5.2 daily file every other kind lives in', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'observed-1',
+      generateMisconceptionId: () => 'misconception-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('misconception-observed');
+    expect(result.record.eventId).toBe('observed-1');
+    expect(result.record.misconceptionId).toBe('misconception-1');
+    expect(result.record.reviewEventId).toBe('review-1');
+    expect(result.record.conceptIds).toEqual(['imbrication']);
+    expect(result.path).toBe(reviewLogPath('2026-09-03', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('always mints a FRESH misconceptionId at write time — no matching against prior occurrences', async () => {
+    const source = new FolderSource(tempRoot);
+    // Two picks of the exact same distractor, on two separate answers, with
+    // no generator override — `[D-202]`'s "a never-matched record stays as
+    // written... reconciles at read time, never by rewriting the event."
+    const first = await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'desktop',
+    });
+    const second = await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'desktop',
+    });
+
+    expect(first.record.misconceptionId).not.toBe(second.record.misconceptionId);
+  });
+
+  it('the Worker mints nothing into this event — the writer accepts no misconceptionId input at all', () => {
+    // Structural proof, not a runtime one: `MisconceptionObservedLogRecordInput`
+    // omits `misconceptionId` (see `write.ts`'s own doc), so there is no
+    // parameter through which a Worker response's id, real or invented,
+    // could reach this writer even if a caller tried to pass one.
+    const input = observedInput();
+    expect(Object.hasOwn(input, 'misconceptionId')).toBe(false);
+  });
+
+  it('uses crypto.randomUUID() by default for both eventId and misconceptionId when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'desktop',
+    });
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    expect(result.record.eventId).toMatch(uuidPattern);
+    expect(result.record.misconceptionId).toMatch(uuidPattern);
+  });
+
+  it('interleaves with the paired review record in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    const review = await appendReviewLogRecord(
+      source,
+      baseInput({
+        timestamp: '2026-09-03T09:00:00-04:00',
+        instrumentType: 'mcq',
+        correctness: { chosenIndex: 1, matchedKey: false },
+      }),
+      { deviceId: 'desktop', generateEventId: () => 'r1' },
+    );
+    const beforeObserved = await readFile(
+      join(tempRoot, reviewLogPath('2026-09-03', 'desktop')),
+      'utf8',
+    );
+    const observed = await appendMisconceptionObservedRecord(
+      source,
+      observedInput({ reviewEventId: review.record.eventId }),
+      { deviceId: 'desktop', generateEventId: () => 'observed-1' },
+    );
+    const after = await readFile(join(tempRoot, observed.path), 'utf8');
+
+    expect(after.startsWith(beforeObserved)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'misconception-observed']);
+    expect(observed.record.reviewEventId).toBe(review.record.eventId);
+  });
+
+  it('validates before writing: an empty conceptIds never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendMisconceptionObservedRecord(source, observedInput({ conceptIds: [] }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-03', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: an incomplete distractor never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const { source_says: _drop, ...incomplete } = observedInput().distractor;
+    await expect(
+      appendMisconceptionObservedRecord(
+        source,
+        // @ts-expect-error deliberately incomplete for this test
+        observedInput({ distractor: incomplete }),
+        { deviceId: 'desktop' },
+      ),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-03', 'desktop'))).toBe(false);
+  });
+
+  it('a second device converges on independent observations — merge-by-eventId, no bespoke sync', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'device-a',
+      generateEventId: () => 'observed-a',
+      generateMisconceptionId: () => 'misconception-a',
+    });
+    await appendMisconceptionObservedRecord(source, observedInput(), {
+      deviceId: 'device-b',
+      generateEventId: () => 'observed-b',
+      generateMisconceptionId: () => 'misconception-b',
+    });
+
+    const rawA = await readFile(join(tempRoot, reviewLogPath('2026-09-03', 'device-a')), 'utf8');
+    const rawB = await readFile(join(tempRoot, reviewLogPath('2026-09-03', 'device-b')), 'utf8');
+    const merged = mergeReviewLogRecords(
+      parseReviewLog(rawA).records,
+      parseReviewLog(rawB).records,
+    );
+
+    expect(merged.duplicateEventIds).toEqual([]);
+    expect(merged.records.map((r) => r.kind)).toEqual([
+      'misconception-observed',
+      'misconception-observed',
+    ]);
   });
 });

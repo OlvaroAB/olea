@@ -35,6 +35,8 @@ import {
   disputeLogRecord,
   type ExplainBackOfferLogRecord,
   explainBackOfferLogRecord,
+  type MisconceptionObservedLogRecord,
+  misconceptionObservedLogRecord,
   REVIEW_LOG_SCHEMA_VERSION,
   type RetrospectiveOfferLogRecord,
   type ReviewLogEntry,
@@ -174,6 +176,32 @@ export type ExplainBackOfferLogRecordInput = Omit<
 export interface AppendExplainBackOfferLogResult {
   /** The full, validated record actually written (schemaVersion and eventId included). */
   readonly record: ExplainBackOfferLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+/**
+ * Every `MisconceptionObservedLogRecord` field the caller supplies (`[D-202]`,
+ * `ol-egov.92`); the writer stamps the rest. `kind` is stamped, not asked
+ * for — this writer produces `misconception-observed` events and only those,
+ * the same reason `ReviewLogRecordInput`/`VerdictLogRecordInput`/
+ * `SuccessionLogRecordInput` stamp `kind` above. `misconceptionId` is ALSO
+ * stamped, not supplied — see this function's own doc for why the mint
+ * happens here rather than at the call site.
+ */
+export type MisconceptionObservedLogRecordInput = Omit<
+  MisconceptionObservedLogRecord,
+  'schemaVersion' | 'kind' | 'eventId' | 'misconceptionId'
+>;
+
+export interface AppendMisconceptionObservedOptions extends AppendReviewLogOptions {
+  /** Misconception id generator, injectable for deterministic tests. Defaults to `crypto.randomUUID()` — the same default `packages/core/src/misconception/events.ts`'s `buildObservationEvent` already uses for its own `generateMisconceptionId` option. */
+  readonly generateMisconceptionId?: () => string;
+}
+
+export interface AppendMisconceptionObservedLogResult {
+  /** The full, validated record actually written (schemaVersion, eventId and misconceptionId included). */
+  readonly record: MisconceptionObservedLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -558,6 +586,70 @@ export async function appendExplainBackOfferRecord(
   if (!parsed.success) {
     throw new Error(
       `appendExplainBackOfferRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **misconception-observed**
+ * event — a wrong MCQ pick (`[D-202]`, `ol-egov.92`; `ol-0r92.44`).
+ *
+ * The eighth sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`/`appendSuccessionRecord`/`appendDisputeRecord`/
+ * `appendRetrospectiveOfferRecord`/`appendExplainBackOfferRecord`, sharing
+ * the same append path and the same durability discipline.
+ *
+ * **This is the one mint site for `misconceptionId`, and it always mints
+ * fresh — it never looks anything up first.** `[D-202]`'s own words: "a
+ * never-matched record stays as written... reconciles at read time, never
+ * by rewriting the event." Unlike `packages/core/src/misconception/
+ * events.ts`'s `buildObservationEvent` (the OTHER misconception stream, fed
+ * by explain-back's free-text findings), which runs an M1 embedding match
+ * BEFORE minting because a spoken explanation's wording is ambiguous, an MCQ
+ * pick is a deterministic choice among a fixed, already-known distractor
+ * set — there is nothing to compare here, so this function accepts no
+ * candidates and calls no matcher. Reconciling occurrences of "the same"
+ * misconception across records is `ol-pjs7`'s aggregation, a read-time
+ * projection concern this writer does not implement or anticipate.
+ *
+ * **Reachability.** Called from `packages/plugin/src/review/ports.ts`'s
+ * `createVaultReviewLogPort.recordReview`, immediately after the paired
+ * review record's own append (whose `eventId` becomes this record's
+ * `reviewEventId`) — see that port's own doc. Triggered from
+ * `packages/plugin/src/review/session.ts`'s `mcqNext`, the same call that
+ * computes `[D-205]`'s `correctness`, only when the pick was wrong AND the
+ * chosen option's `McqOption` carries provenance (`believes`/`source_says`)
+ * — which today no generation/materialize producer populates yet (a
+ * separate, larger plumbing gap filed as its own bead; see this bead's
+ * close notes). That makes this function correctly reachable and correct
+ * whenever data exists, and a safe no-op otherwise — the same "declared seam
+ * awaiting its phase" shape `packages/core/src/misconception/
+ * observe.ts`'s own module doc states for `buildObservationEventWithEmbedding`.
+ */
+export async function appendMisconceptionObservedRecord(
+  vault: VaultSource,
+  input: MisconceptionObservedLogRecordInput,
+  options: AppendMisconceptionObservedOptions,
+): Promise<AppendMisconceptionObservedLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+  const generateMisconceptionId = options.generateMisconceptionId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'misconception-observed',
+    eventId: generateEventId(),
+    misconceptionId: generateMisconceptionId(),
+    ...input,
+  };
+
+  const parsed = misconceptionObservedLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendMisconceptionObservedRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

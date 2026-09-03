@@ -1380,6 +1380,101 @@ export const explainBackOfferLogRecordV5 = z
 export type ExplainBackOfferLogRecordV5 = z.infer<typeof explainBackOfferLogRecordV5>;
 
 /**
+ * A wrong MCQ pick's distractor provenance, carried INLINE on
+ * `misconceptionObservedLogRecordV5` (`[D-202]`, `ol-egov.92`; `ol-0r92.44`)
+ * — field-for-field the same shape `quiz.generate.v1`'s distractor schema
+ * requires at generation time (`[D-195]`, `olea-service/src/tasks/
+ * quizGenerate.ts`, private; read for shape only), right down to
+ * `source_says`'s snake_case, so the two sides of the wire never need a
+ * translation step.
+ *
+ * **Inline, not a reference, because there is nowhere else this survives
+ * to.** By the time she answers — days or weeks after generation, on
+ * whatever device holds the schedule — the vault's persisted MCQ block
+ * carries only the option's `text` (`McqFields.distractors: readonly
+ * string[]`, unchanged by `[D-202]`; the persisted-BLOCK shape was never
+ * ruled to become an object array, only the event's shape was). `believes`/
+ * `source_says` are not recoverable from the vault at answer time by any
+ * other route, so this event is the one place they are captured — the same
+ * "capture it from day one or lose it permanently" argument F5.6 already
+ * makes for the misconception store itself.
+ */
+export const mcqMisconceptionProvenance = z.object({
+  /** The option text she saw — matches the chosen `McqOption.label` verbatim. */
+  text: z.string().min(1),
+  /** The specific wrong belief this distractor encodes (F2.15/`[D-195]`). */
+  believes: z.string().min(1),
+  /** What the source material actually says, correcting `believes`. */
+  source_says: z.string().min(1),
+});
+export type McqMisconceptionProvenance = z.infer<typeof mcqMisconceptionProvenance>;
+
+/**
+ * One wrong MCQ pick (`[D-202]`, `ol-egov.92`; build bead `ol-0r92.44`) —
+ * additive to the v5 discriminated union, no `schemaVersion` bump, the same
+ * reasoning `[D-178 / LOG-3]` applied when `explainBackOfferLogRecordV5` and
+ * `retrospectiveOfferLogRecordV5` arrived: a discriminated union may grow a
+ * member without moving every existing record forward.
+ *
+ * **Appended only on a wrong pick; a correct pick appends nothing here.**
+ * The review event itself (`kind: 'review'`, the SAME `mcqNext` call,
+ * carrying `correctness.matchedKey: true`) is the whole record of a right
+ * answer — see `mcqCorrectness`'s own doc. This record's `reviewEventId`
+ * names that paired review event's `eventId`, the same "half of a pair
+ * points at the other half by event id" shape `disputeLogRecordV5`'s
+ * `resolves` and `explainBackOfferLogRecordV5`'s `answers` already use.
+ *
+ * **`misconceptionId` is minted CLIENT-SIDE, always freshly, at write time —
+ * never matched against existing history first.** `[D-202]`'s own words:
+ * "a never-matched record stays as written... [and] reconciles at read
+ * time, never by rewriting the event." This is a deliberately different
+ * mechanism from the *other* misconception stream this codebase already has
+ * (`packages/core/src/misconception/events.ts`'s `buildObservationEvent`,
+ * explain-back's free-text findings): that path runs M1's embedding match
+ * BEFORE minting, because a spoken explanation's wording varies occurrence
+ * to occurrence and needs a similarity judgement to avoid minting a
+ * duplicate id for the same belief. An MCQ pick has no such ambiguity — it
+ * is a deterministic choice among a fixed, already-known set of distractors
+ * — so there is nothing to match against at write time, and this record
+ * carries no embedding and calls no matcher. Reconciling occurrences of "the
+ * same" misconception across records (by a content-derived distractor key,
+ * per `ol-pjs7`'s aggregation proposal) is a READ-time projection concern,
+ * not this writer's — this schema does not encode that key, and nothing
+ * here should be read as anticipating its shape.
+ *
+ * **The Worker mints nothing into this event (D-005, stateless calculator).**
+ * It never sees a misconception-observed record at all: the write happens
+ * entirely on-device, in `packages/core/src/review-log/write.ts`'s
+ * `appendMisconceptionObservedRecord`, the only mint site for both
+ * `eventId` and `misconceptionId`.
+ *
+ * **Never content beyond the one distractor she actually picked, which she
+ * already saw rendered on screen** — the same privacy posture
+ * `mcqCorrectness` states for its own two fields, extended to the
+ * provenance of that specific option. No free-text answer of hers, no
+ * grader output, and no reference to any OTHER option in the pool.
+ */
+export const misconceptionObservedLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  kind: z.literal('misconception-observed'),
+  /** Stable unique id for this event; makes a two-device same-day append idempotent, same as every other kind here. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset — same local-time reasoning as every other timestamp in this file. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The MCQ instrument this pick was on. */
+  instrumentId: z.string().min(1),
+  /** Every concept the instrument practises — the same value as the paired review record's `conceptIds`. Non-empty for the same reason that record's is. */
+  conceptIds: z.array(z.string().min(1)).min(1),
+  /** The paired review record's own `eventId` — the SAME `mcqNext` call, `kind: 'review'`, that carries `correctness.matchedKey: false` for this pick. */
+  reviewEventId: z.string().min(1),
+  /** Client-minted, always fresh at write time — see this record's own doc for why no matching happens here. */
+  misconceptionId: z.string().min(1),
+  /** The chosen distractor's provenance, inline — see `mcqMisconceptionProvenance`'s own doc for why inline is the only option. */
+  distractor: mcqMisconceptionProvenance,
+});
+export type MisconceptionObservedLogRecordV5 = z.infer<typeof misconceptionObservedLogRecordV5>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v5 lines against.
  *
@@ -1395,6 +1490,7 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   disputeLogRecordV5,
   retrospectiveOfferLogRecordV5,
   explainBackOfferLogRecordV5,
+  misconceptionObservedLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
@@ -1419,6 +1515,8 @@ export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV5;
 export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV5>;
 export const explainBackOfferLogRecord = explainBackOfferLogRecordV5;
 export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV5>;
+export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV5;
+export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;

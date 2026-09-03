@@ -85,6 +85,23 @@ export interface McqOption {
   readonly id: string;
   readonly label: string;
   readonly correct: boolean;
+  /**
+   * `[D-202]` (`ol-egov.92`, `ol-0r92.44`) — this distractor's wrong belief
+   * and correcting source, present only when it survived generation through
+   * to review time. `undefined` for a correct option always, and for every
+   * distractor today: `[D-195]`'s per-distractor grounding
+   * (`packages/plugin/src/generation/types.ts`'s `DraftDistractorGrounding`)
+   * is currently in-memory/cache-scoped only — nothing yet persists it onto
+   * the vault's MCQ block or a sidecar `queue-adapter.ts` could read it back
+   * from, so no production composer sets these two fields yet. They exist
+   * here, ahead of that plumbing, so `session.ts`'s `mcqNext` has somewhere
+   * to read provenance from the moment a later bead wires it — see that
+   * follow-up's filing on `ol-0r92.44`'s close notes. Never a fabricated
+   * value: absence here means "not carried forward", not "no misconception".
+   */
+  readonly believes?: string;
+  /** Paired with `believes` above — see that field's own doc. */
+  readonly source_says?: string;
 }
 
 export interface McqItem extends ReviewInstrumentCommon {
