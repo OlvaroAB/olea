@@ -113,6 +113,9 @@ export const RHYTHM_STATES = ['rhythm-two-flagged', 'rhythm-one-flagged'] as con
 export const BULK_REVIEW_STATES = ['bulk-review-two-groups', 'bulk-review-empty'] as const;
 
 // F8.4's registry (`ol-4v2l`, `[D-171]`) — see `registry-scenarios.ts` for the source of truth.
+// `registry-duplicate-title` (`[D-203]`) and `registry-thin-note` (`[D-214]`) added per WB-6
+// (`ol-ppxj.29`)'s drift-guard fix: registry-scenarios.ts already carried both, this list had
+// silently fallen behind.
 export const REGISTRY_STATES = [
   'registry-populated',
   'registry-empty',
@@ -120,6 +123,8 @@ export const REGISTRY_STATES = [
   'registry-explain-back-history',
   'registry-note-offer',
   'registry-rename-proposal',
+  'registry-duplicate-title',
+  'registry-thin-note',
 ] as const;
 
 // F7's plugin surface (`ol-z6x2`) — see `plugin-surface-scenarios.ts` for the source of truth.

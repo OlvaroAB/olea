@@ -64,9 +64,11 @@ test('explain-back-graded-feedback: a graded answer renders feedback, missed poi
     .fill('The alpha mechanism does something.');
   await panel(page).getByRole('button', { name: 'Check this' }).click();
 
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveText(
-    'Part of this holds up.',
-  );
+  // `[D-217]` (`ol-0r92.48`): the graded phase renders no verdict heading at
+  // all — the old three-verdict wording this test asserted ("Part of this
+  // holds up.") is rejected wording; only the fact-based feedback line and
+  // the headings below render here now.
+  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
   await expect(panel(page).locator('.olea-explain-back-feedback')).toContainText(
     'effect on half-life is missing',
   );
@@ -109,7 +111,9 @@ test('explain-back-graded-feedback: declining ("Try again") returns to answering
   const typedAnswer = 'The alpha mechanism does something specific.';
   await panel(page).locator('.olea-explain-back-answer').fill(typedAnswer);
   await panel(page).getByRole('button', { name: 'Check this' }).click();
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toBeVisible();
+  // `[D-217]`: the graded phase shows the feedback line, never an outcome
+  // heading — see the sibling test above.
+  await expect(panel(page).locator('.olea-explain-back-feedback')).toBeVisible();
 
   await panel(page).getByRole('button', { name: 'Try again' }).click();
 
@@ -127,7 +131,12 @@ test('explain-back-graded-clean: accepting a clean grading shows the one honest 
   await panel(page).locator('.olea-explain-back-answer').fill('A complete, correct explanation.');
   await panel(page).getByRole('button', { name: 'Check this' }).click();
 
-  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveText('This holds up.');
+  // `[D-217]`: no verdict heading in the graded phase — just the fact-based
+  // feedback line `cleanGrading()` sets.
+  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
+  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveText(
+    'This names the mechanism and its target correctly.',
+  );
   // Clean: none of the three headings, and no D-171 registry action.
   await expect(panel(page).locator('.olea-explain-back-heading')).toHaveCount(0);
   await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
@@ -138,6 +147,11 @@ test('explain-back-graded-clean: accepting a clean grading shows the one honest 
     "That's the first time this concept has been explained at full depth.",
   );
   await expect(panel(page).getByRole('button', { name: 'Done' })).toBeVisible();
+  // The workbench fixture's deps never wire `recordSoloGradeAndReview`
+  // (`explain-back-scenarios.ts`), so no SOLO depth comes back and the
+  // accepted phase renders no outcome heading either — `renderAcceptedPhase`
+  // only prints one when a level is actually returned.
+  await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
 });
 
 test('explain-back-refused-check-failed: a transient check failure shows the error-refusal, never the insufficient-notes wording', async ({
