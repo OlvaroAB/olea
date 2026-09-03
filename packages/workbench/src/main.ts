@@ -133,6 +133,7 @@ import {
   SESSION_STATES,
   type SessionScenario,
 } from './session-scenarios.js';
+import { SimulatorController } from './simulator/index.js';
 import {
   applyVariableSet,
   DEFAULT_VARIABLE_SET,
@@ -183,7 +184,8 @@ type RouteSurface =
   | 'registry'
   | 'plugin-surface'
   | 'grove'
-  | 'walk';
+  | 'walk'
+  | 'simulator';
 
 const DEFAULT_STATE = 'qa-front';
 const DEFAULT_TODAY_STATE = 'today-due';
@@ -200,6 +202,18 @@ const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
 const DEFAULT_REGISTRY_STATE = 'registry-populated';
 const DEFAULT_PLUGIN_SURFACE_STATE = 'plugin-surface-fresh';
 const DEFAULT_GROVE_STATE = 'grove-declared';
+
+/**
+ * `#/simulator` (`ol-3ux7.64.2` [WBX-1]) has exactly one addressable "state"
+ * — it is a live vault and a live clock, not N canned conditions — so this
+ * is a placeholder id `findStateFor`/`defaultStateFor` recognise rather than
+ * a real state list.
+ */
+const DEFAULT_SIMULATOR_STATE = 'simulator-live';
+const SIMULATOR_STATE_NOTE =
+  'The lived term: a persisted vault overlay (IndexedDB) and a page-level clock over the real ' +
+  'TodayView and the real due-queue composer. Not the whole plugin yet — see the pane for what ' +
+  'that means. Reachability: this route (ol-3ux7.64.2).';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -315,6 +329,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_STATE;
     case 'walk':
       return DEFAULT_WALK_STEP;
+    case 'simulator':
+      return DEFAULT_SIMULATOR_STATE;
   }
 }
 
@@ -363,6 +379,14 @@ function findStateFor(
       const step = findWalkStep(stateId);
       return step === undefined ? undefined : { id: String(step.n), note: step.title };
     }
+    case 'simulator':
+      // Not a scripted state list (ol-3ux7.64.2 [WBX-1]) — the simulator is a
+      // live vault plus a live clock, not one of N addressable canned
+      // conditions, so there is exactly one "state" to find and it always
+      // resolves.
+      return stateId === DEFAULT_SIMULATOR_STATE
+        ? { id: DEFAULT_SIMULATOR_STATE, note: SIMULATOR_STATE_NOTE }
+        : undefined;
   }
 }
 
@@ -402,7 +426,9 @@ function readRoute(): Route {
                                 ? 'grove'
                                 : segments[0] === 'walk'
                                   ? 'walk'
-                                  : 'review';
+                                  : segments[0] === 'simulator'
+                                    ? 'simulator'
+                                    : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -780,6 +806,16 @@ async function main(): Promise<void> {
    * `mounted` for every flat-surface view.
    */
   let mountedModal: { close(): void } | null = null;
+  /**
+   * The simulator's own controller (`ol-3ux7.64.2` [WBX-1]) — holds the
+   * persisted vault, the page-level clock and the mounted `TodayView`
+   * together, outside `mounted`/`generation`'s per-render lifecycle, because
+   * its day-advance/reset/rate controls remount the pane on their own
+   * timeline (a button click, not a `hashchange`). `mountSimulator` below
+   * keeps `mounted` in step via `onViewChange` so navigating AWAY from
+   * `#/simulator` still closes whatever it last mounted.
+   */
+  let simulatorController: SimulatorController | null = null;
   let generation = 0;
   /**
    * The persona history currently loaded into the vault, and where it went.
@@ -904,6 +940,14 @@ async function main(): Promise<void> {
     if (mountedModal !== null) {
       mountedModal.close();
       mountedModal = null;
+    }
+    if (route.surface !== 'simulator' && simulatorController !== null) {
+      // Uninstalls the simulator's page-level `Date` override before any
+      // other surface's `WORKBENCH_NOW`-fixed rendering runs — see
+      // `SimulatorController.dispose`'s own doc for why this must not also
+      // re-close the view the block above already closed.
+      simulatorController.dispose();
+      simulatorController = null;
     }
     host.empty();
     host.removeAttribute('data-wb-detached');
@@ -1224,6 +1268,45 @@ async function main(): Promise<void> {
         boundary,
         scenario,
         recomputed,
+      });
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
+    /**
+     * `#/simulator` (`ol-3ux7.64.2` [WBX-1], `docs/dev/simulator-design.md`
+     * §3). Unlike every other flat surface, this is not one of a scripted
+     * `WORKBENCH_NOW`-fixed state list — `SimulatorController` owns a
+     * dedicated, persisted `PersistentVaultSource` (never the shared `vault`
+     * every scripted state reads, which must stay pristine and fixed-clock)
+     * and a page-level clock, and mounts the real `TodayView` over both,
+     * live. `mounted` is kept in step through `onViewChange` so navigating
+     * away still runs the generic `onClose`/`unloadComponent` cleanup above.
+     *
+     * Reachability: this is `ol-3ux7.64.2`'s named production caller.
+     */
+    async function mountSimulator(): Promise<void> {
+      const controlsEl = host.createDiv({ cls: 'wb-sim-controls' });
+      const badgeEl = host.createDiv({ cls: 'wb-sim-badge-host' });
+      const noticeEl = host.createDiv({ cls: 'wb-sim-notice-host' });
+      const paneEl = host.createDiv({ cls: 'wb-sim-pane' });
+
+      simulatorController = await SimulatorController.create({
+        elements: { pane: paneEl, controls: controlsEl, badge: badgeEl, notice: noticeEl },
+        onViewChange: (view) => {
+          mounted = view === null ? null : { view };
+        },
+      });
+      if (run !== generation) return;
+
+      inspector.empty();
+      inspector.createDiv({
+        cls: 'wb-inspector-note',
+        text:
+          'F9 simulator (ol-3ux7.64.2 [WBX-1]) — a persisted vault overlay (IndexedDB) and a ' +
+          'page-level clock, over the real TodayView and the real due-queue composer. What she ' +
+          'does today changes tomorrow: rate an item, advance a day, reload — the due set moves ' +
+          'and the review is still there. Whole-plugin mount (commands, ReviewView, settings) is ' +
+          'WBX-2/later; see the pane for what that means today.',
       });
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
@@ -1920,6 +2003,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'review') {
       await mountReview(route.stateId);
+      return;
+    }
+    if (route.surface === 'simulator') {
+      await mountSimulator();
       return;
     }
   }
