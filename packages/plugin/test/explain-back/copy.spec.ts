@@ -1,3 +1,4 @@
+import type { SoloLevel } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import {
   EXPLAIN_BACK_ACCEPT_LABEL,
@@ -14,8 +15,9 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
-  explainBackOutcomeHeading,
+  explainBackDepthHeading,
 } from '../../src/explain-back/copy.js';
+import { explainBackDepthPhrase } from '../../src/registry/copy.js';
 
 const STATIC_STRINGS: readonly string[] = [
   EXPLAIN_BACK_MODAL_TITLE,
@@ -34,25 +36,57 @@ const STATIC_STRINGS: readonly string[] = [
   EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
 ];
 
-const OUTCOME_HEADINGS: readonly string[] = [
-  explainBackOutcomeHeading('correct'),
-  explainBackOutcomeHeading('partial'),
-  explainBackOutcomeHeading('incorrect'),
+/** The five SOLO levels, in R9/registry order (`[D-117]`, `../../src/registry/copy.ts`). */
+const ALL_SOLO_LEVELS: readonly SoloLevel[] = [
+  'prestructural',
+  'unistructural',
+  'multistructural',
+  'relational',
+  'extended-abstract',
 ];
 
-const ALL_STRINGS = [...STATIC_STRINGS, ...OUTCOME_HEADINGS];
+const DEPTH_HEADINGS: readonly string[] = ALL_SOLO_LEVELS.map((level) =>
+  explainBackDepthHeading(level),
+);
 
-describe('explainBackOutcomeHeading', () => {
-  it('never prints the raw verdict word (V6, GLOSSARY "never exposed by name")', () => {
-    for (const text of OUTCOME_HEADINGS) {
+const ALL_STRINGS = [...STATIC_STRINGS, ...DEPTH_HEADINGS];
+
+describe('explainBackDepthHeading ([D-217], F5.3)', () => {
+  it('reuses ../registry/copy.ts explainBackDepthPhrase verbatim, for every level, never a second copy of the wording', () => {
+    for (const level of ALL_SOLO_LEVELS) {
+      expect(explainBackDepthHeading(level)).toBe(
+        `You explained this ${explainBackDepthPhrase(level)}.`,
+      );
+    }
+  });
+
+  it('returns a distinct heading for each of the five depth levels', () => {
+    expect(new Set(DEPTH_HEADINGS).size).toBe(5);
+  });
+
+  it('the ice worked example (`[D-217]`\'s own): multistructural reads "with several points, not yet connected"', () => {
+    expect(explainBackDepthHeading('multistructural')).toBe(
+      'You explained this with several points, not yet connected.',
+    );
+  });
+
+  it('never prints the rejected holds up / hold up wording anywhere (vocabulary registry §9, `[D-217]`)', () => {
+    for (const text of DEPTH_HEADINGS) {
+      expect(text.toLowerCase()).not.toContain('holds up');
+      expect(text.toLowerCase()).not.toContain('hold up');
+    }
+  });
+
+  it('never prints the raw correctness verdict word either (V6, GLOSSARY "never exposed by name")', () => {
+    for (const text of DEPTH_HEADINGS) {
       for (const word of ['correct', 'partial', 'incorrect']) {
         expect(text.toLowerCase()).not.toContain(word);
       }
     }
   });
 
-  it('returns a distinct heading for each of the three verdicts', () => {
-    expect(new Set(OUTCOME_HEADINGS).size).toBe(3);
+  it('takes no confidence/closeness argument — fixed wording per level, per `[D-217]` clause 3', () => {
+    expect(explainBackDepthHeading).toHaveLength(1);
   });
 });
 

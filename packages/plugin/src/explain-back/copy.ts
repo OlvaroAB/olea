@@ -6,14 +6,39 @@
  * this file's exported strings the same way `review/copy.spec.ts` sweeps
  * its own.
  *
- * `explainBackOutcomeHeading` deliberately never prints "correct" / "partial"
- * / "incorrect" (V6, and GLOSSARY's "never exposed to her by name" posture
- * for graded jargon) — it names what the grading found in plain language,
- * leaving the model's own generated `feedback` text (governed separately,
- * `@manual` per `features/F5-explain-back.md`) to carry the substance.
+ * `explainBackDepthHeading` (`[D-217]`, `ol-egov.104`, F5.3) replaces the
+ * former `explainBackOutcomeHeading`, which printed one of three correctness
+ * verdicts ("This holds up." / "Part of this holds up." / "This doesn't hold
+ * up yet."). The ruling's own test — cover the detail beneath and read the
+ * line alone — found that heading was a verdict wearing plain language, not
+ * a fact, and its `holding` word family borrowed vocabulary the registry
+ * reserves for recall over time (vocabulary registry §9, the `holds up` /
+ * `hold up` rejected row). The replacement states what her explanation DID,
+ * mapped from the five-level SOLO depth field (`[D-117]`), in the SAME five
+ * phrases `../registry/copy.ts`'s `explainBackDepthPhrase` already speaks
+ * for F8.4b's history rows — imported, never re-typed, so the two surfaces
+ * she meets this wording in cannot drift apart. Fixed wording per level; it
+ * never flexes with the grader's confidence (`[D-217]` clause 3) — a close
+ * call belongs beneath the heading as a stated fact, not a change of
+ * heading wording.
+ *
+ * **Timing note (`[D-217]`, `ol-0r92.48`):** the correctness verdict this
+ * heading used to read is available the moment `./modal.ts`'s
+ * `renderGradedPhase` runs; the SOLO depth level this heading now reads is
+ * not — it is graded later, best-effort, inside `acceptGrading` (`ol-cqz8`).
+ * So `modal.ts` never calls this function from `renderGradedPhase` — that
+ * phase shows the fact-based detail (feedback, missed points, cited issues,
+ * misconceptions) with no heading at all, never a verdict-shaped
+ * placeholder. This heading is called from `renderAcceptedPhase`, once
+ * `deps.recordSoloGradeAndReview` has actually run, and only when it
+ * reports a level — see that file's own doc for the reachability gap this
+ * leaves open (the real depth level does not yet reach that call in
+ * production; the render path is real and ready for the day it does).
  */
 
-import type { ExplainBackGradingWireResponse } from 'olea-core';
+import type { SoloLevel } from 'olea-contracts';
+
+import { explainBackDepthPhrase } from '../registry/copy.js';
 
 export const EXPLAIN_BACK_MODAL_TITLE = 'Explain it back';
 
@@ -61,20 +86,16 @@ export const EXPLAIN_BACK_REGISTRY_ENTRY_ACTION = 'See in registry';
 export const EXPLAIN_BACK_SESSION_ENTRY_LABEL = 'Explain something back';
 
 /**
- * Plain-language framing of the judge's `correct`/`partial`/`incorrect`
- * verdict, never the enum word itself (V6). The model's own `feedback` text
- * always renders alongside this as the specific evidence — this heading is
- * orientation, not the whole answer.
+ * States what her explanation did, never whether it passed (`[D-217]`, F5.3
+ * — see the module doc for the full argument and the timing note that
+ * governs where `./modal.ts` may call this). `explainBackDepthPhrase`
+ * (`../registry/copy.ts`) is reused verbatim, not re-typed, so this heading
+ * and F8.4b's history rows never drift onto different wording for the same
+ * depth level. Fixed per level; this function takes no confidence/closeness
+ * argument at all, so there is nothing here that could vary the wording —
+ * a close call is a fact for the caller to render beneath this heading, not
+ * an input to it.
  */
-export function explainBackOutcomeHeading(
-  verdict: ExplainBackGradingWireResponse['verdict'],
-): string {
-  switch (verdict) {
-    case 'correct':
-      return 'This holds up.';
-    case 'partial':
-      return 'Part of this holds up.';
-    case 'incorrect':
-      return "This doesn't hold up yet.";
-  }
+export function explainBackDepthHeading(soloLevel: SoloLevel): string {
+  return `You explained this ${explainBackDepthPhrase(soloLevel)}.`;
 }

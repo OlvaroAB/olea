@@ -65,3 +65,42 @@ describe('ExplainBackModal times an attempt through its own injected clock, neve
     );
   });
 });
+
+/**
+ * `[D-217]` (`ol-0r92.48`, F5.3) — the same "source is the only instrument"
+ * constraint as above applies to this heading's timing: the graded phase and
+ * the accepted phase are both DOM the real `Modal` renders, and `obsidian`
+ * cannot load under Vitest (this file's own header). What CAN be checked
+ * structurally: `renderGradedPhase` never calls the depth heading function
+ * (no verdict-shaped placeholder while depth is unknown), `renderAcceptedPhase`
+ * is the only call site, and it renders conditionally on an actual level
+ * rather than unconditionally. `copy.spec.ts` covers the heading's own
+ * wording; this only covers WHERE it is (and isn't) called from.
+ */
+describe('ExplainBackModal renders the [D-217] depth heading only once a level is known, never on the graded phase', () => {
+  it('renderGradedPhase never calls explainBackDepthHeading — no verdict-shaped placeholder while depth is still ungraded', () => {
+    const gradedPhaseStart = modal.indexOf('private renderGradedPhase(');
+    const acceptedPhaseStart = modal.indexOf('private renderAcceptedPhase(');
+    expect(gradedPhaseStart).toBeGreaterThan(-1);
+    expect(acceptedPhaseStart).toBeGreaterThan(gradedPhaseStart);
+    const gradedPhaseBody = modal.slice(gradedPhaseStart, acceptedPhaseStart);
+    expect(gradedPhaseBody).not.toMatch(/explainBackDepthHeading/);
+    expect(gradedPhaseBody).not.toMatch(/olea-explain-back-outcome/);
+  });
+
+  it('renderAcceptedPhase is the one call site, and only renders the heading when a soloLevel actually came back', () => {
+    const acceptedPhaseStart = modal.indexOf('private renderAcceptedPhase(');
+    expect(acceptedPhaseStart).toBeGreaterThan(-1);
+    const acceptedPhaseBody = modal.slice(acceptedPhaseStart, acceptedPhaseStart + 800);
+    expect(acceptedPhaseBody).toMatch(/if \(soloLevel !== null\) \{/);
+    expect(acceptedPhaseBody).toMatch(/text: explainBackDepthHeading\(soloLevel\),/);
+    const callSites = modal.match(/explainBackDepthHeading\(/g) ?? [];
+    expect(callSites).toHaveLength(1);
+  });
+
+  it('acceptGrading reads whatever recordSoloGradeAndReview reports and carries it into the accepted phase state, never fabricating a level', () => {
+    expect(modal).toMatch(/const depthOutcome = await this\.deps\.recordSoloGradeAndReview\(/);
+    expect(modal).toMatch(/if \(depthOutcome\) soloLevel = depthOutcome;/);
+    expect(modal).toMatch(/phase: 'accepted', message, soloLevel \};/);
+  });
+});

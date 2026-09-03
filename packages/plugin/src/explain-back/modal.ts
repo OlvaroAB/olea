@@ -25,6 +25,23 @@
  * (nothing here reads a PRIOR review event's id — `recordSoloGradeAndReview`
  * writes a fresh one).
  *
+ * `ol-0r92.48` UPDATE (`[D-217]`): the graded phase's old three-verdict
+ * heading is gone — `renderGradedPhase` below never renders a heading at
+ * all, because the SOLO depth level `[D-217]` requires it to read is not
+ * known yet at that point in the exchange (it grades later, inside
+ * `acceptGrading`, per the paragraph above). `deps.recordSoloGradeAndReview`
+ * now optionally returns the `SoloLevel` it graded — `void`/`undefined` when
+ * nothing was written (no concept id, the Worker unconfigured, a caught
+ * failure) — and `renderAcceptedPhase` renders `explainBackDepthHeading`
+ * when one comes back, never a placeholder when it does not. The return
+ * type is widened rather than changed (`SoloLevel | void`) so `main.ts`'s
+ * existing `Promise<void>`-returning wrapper (outside this bead's `owns`)
+ * keeps satisfying the interface unmodified; that wrapper does not yet
+ * forward the level `solo-review.ts`'s own `recordSoloGradeAndReview`
+ * computes internally (via `acceptSoloGrading`) but never returns — closing
+ * that is a small, disclosed follow-up in two files this bead does not own
+ * (`solo-review.ts`, `main.ts`), not a gap in this render path itself.
+ *
  * `ol-yj0k` UPDATE: `durationMs` on that same review-log write is now real,
  * not a hardcoded `null` — this view is the only place that can observe
  * both endpoints of "presentation to answer" for explain-back (they are UI
@@ -56,6 +73,7 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
+import type { SoloLevel } from 'olea-contracts';
 import {
   discardExplainBackGrading,
   type ExplainBackPromptContext,
@@ -88,7 +106,7 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
-  explainBackOutcomeHeading,
+  explainBackDepthHeading,
 } from './copy.js';
 import {
   buildExplainBackPromptContextFromInstrument,
@@ -124,6 +142,15 @@ export interface ExplainBackModalDeps {
    * `undefined` until a caller wires a real `RecordSoloGradeAndReviewDeps`
    * instance — see this file's module doc and `./solo-review.ts`'s own
    * "reachability" section for exactly what that needs and where it goes.
+   *
+   * `ol-0r92.48` (`[D-217]`): the return type is now `SoloLevel | void`,
+   * never a required `SoloLevel` — a caller that resolves `void` (today's
+   * `main.ts` wrapper does) still satisfies this type unchanged, so widening
+   * it needed no edit to a file this bead does not own. `acceptGrading`
+   * below reads whatever comes back and passes it straight to
+   * `renderAcceptedPhase`; a `void`/`undefined` result renders no heading at
+   * all (`[D-217]`: never a placeholder), exactly as it did before this
+   * field could report a level.
    */
   readonly recordSoloGradeAndReview?: (params: {
     readonly instrumentId: string;
@@ -132,7 +159,7 @@ export interface ExplainBackModalDeps {
     readonly answer: string;
     /** See this file's `now`/`presentedAtMs` doc just below for the definition. */
     readonly durationMs: number | null;
-  }) => Promise<void>;
+  }) => Promise<SoloLevel | void>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
@@ -183,7 +210,12 @@ type ModalState =
       readonly reason: 'unavailable' | 'check-failed' | 'insufficient-notes';
       readonly durationMs: number | null;
     }
-  | { readonly phase: 'accepted'; readonly message: string | null };
+  | {
+      readonly phase: 'accepted';
+      readonly message: string | null;
+      /** `[D-217]`: the SOLO depth level `deps.recordSoloGradeAndReview` reported, if any — `null` renders no heading (see `renderAcceptedPhase`), never a placeholder. */
+      readonly soloLevel: SoloLevel | null;
+    };
 
 export class ExplainBackModal extends Modal {
   private readonly deps: ExplainBackModalDeps;
@@ -328,15 +360,21 @@ export class ExplainBackModal extends Modal {
       sourceBlocks: prompt.sourceBlocks,
     });
     const result = await this.deps.acceptWithObservation(pending, context);
+    // `[D-217]`: whatever level comes back (or doesn't) is what
+    // `renderAcceptedPhase` renders the depth heading from — see this file's
+    // module doc and the deps field's own doc for why `void`/`undefined`
+    // here means "no heading", never a fabricated one.
+    let soloLevel: SoloLevel | null = null;
     if (this.deps.recordSoloGradeAndReview) {
       try {
-        await this.deps.recordSoloGradeAndReview({
+        const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
           subjectConceptId: prompt.subjectConceptId,
           context: prompt.context,
           answer,
           durationMs,
         });
+        if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {
         // Mirrors `acceptWithObservation`'s own isolation
         // (`grading/wiring.ts`'s `acceptExplainBackGradingWithObservation`
@@ -349,7 +387,7 @@ export class ExplainBackModal extends Modal {
       }
     }
     const message = result === null ? null : explainBackFullDepthEncouragement(result.accepted);
-    this.state = { phase: 'accepted', message };
+    this.state = { phase: 'accepted', message, soloLevel };
     this.render();
   }
 
@@ -400,7 +438,7 @@ export class ExplainBackModal extends Modal {
         this.renderRefusedPhase(root, this.state.prompt, this.state.answer, this.state.reason);
         return;
       case 'accepted':
-        this.renderAcceptedPhase(root, this.state.message);
+        this.renderAcceptedPhase(root, this.state.message, this.state.soloLevel);
         return;
     }
   }
@@ -445,10 +483,15 @@ export class ExplainBackModal extends Modal {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
 
-    root.createDiv({
-      cls: 'olea-explain-back-outcome',
-      text: explainBackOutcomeHeading(grading.verdict),
-    });
+    // `[D-217]`: no heading here. The correctness verdict this phase used to
+    // print as a heading ("This holds up." etc.) is rejected wording — the
+    // registry vocabulary the ruling replaces it with is the five-level SOLO
+    // depth phrase, and that depth is not known yet at this point in the
+    // exchange (it grades later, best-effort, inside `acceptGrading`). This
+    // phase shows the fact-based detail below with no heading at all rather
+    // than a verdict-shaped placeholder — see `explainBackDepthHeading`'s own
+    // doc (`./copy.ts`) and `renderAcceptedPhase` below, where the heading
+    // renders once a depth level actually comes back.
     root.createEl('p', { cls: 'olea-explain-back-feedback', text: grading.feedback });
 
     if (grading.missedPoints.length > 0) {
@@ -520,7 +563,22 @@ export class ExplainBackModal extends Modal {
     }
   }
 
-  private renderAcceptedPhase(root: HTMLElement, message: string | null): void {
+  private renderAcceptedPhase(
+    root: HTMLElement,
+    message: string | null,
+    soloLevel: SoloLevel | null,
+  ): void {
+    // `[D-217]`: the depth heading renders here, once accepting has actually
+    // produced a level — never on the graded phase above, and never a
+    // placeholder when none came back (see this file's module doc and
+    // `deps.recordSoloGradeAndReview`'s own doc for why that is the common
+    // case in production today).
+    if (soloLevel !== null) {
+      root.createDiv({
+        cls: 'olea-explain-back-outcome',
+        text: explainBackDepthHeading(soloLevel),
+      });
+    }
     if (message !== null)
       root.createEl('p', { cls: 'olea-explain-back-encouragement', text: message });
     const button = root.createEl('button', { text: 'Done' });
