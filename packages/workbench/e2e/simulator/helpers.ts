@@ -11,45 +11,34 @@
  * SETTLING, NOT SLEEPING: every control here (`[data-sim-advance]`,
  * `[data-sim-rate]`, `[data-sim-reset]`, a palette command) triggers
  * `SimulatorController.remountPane()`, which empties and rebuilds the pane
- * asynchronously. `SimulatorController` sets its own notice text and the
- * badge date/world/transport spans synchronously, but a text notice is set
- * *before* the awaited remount starts (see `controller.ts`'s `rateNextDue`/
- * `reset`), so it is necessary-but-not-sufficient evidence that the click
- * "landed" — it is never sufficient evidence the pane finished re-rendering.
- * The actual settle signal used throughout is `waitForTodayRendered`:
- * Playwright's `toBeVisible`/`toHaveText`/`toHaveAttribute` retry against the
- * live DOM, so asserting the FINAL expected state (rather than waiting for an
- * intermediate "done" flag that does not exist) is what absorbs the async gap.
+ * asynchronously. **`ol-3ux7.64.11` [WBX-9] closed the hook gap this doc used
+ * to name here**: `SimulatorMountElements.root` now carries
+ * `[data-wb-remount]`, bumped once `remountPane()`'s mount (and, for the
+ * whole-plugin path, the default Today view) has fully resolved
+ * (`controller.ts`'s own doc). {@link waitForRemount} is the settle signal
+ * every control helper below waits on, in place of the necessarily
+ * approximate content waits (a badge date changing, a notice appearing) this
+ * file used before. `waitForTodayRendered` stays, but now purely as a
+ * PRODUCT assertion — "the Today panel actually rendered" — not as a stand-in
+ * settle mechanism.
  *
- * HOOK GAP (report this, do not route around it silently): there is no
- * `[data-sim-busy]` / "remount complete" attribute anywhere in `simulator/`.
- * Every helper below works around that with a content-based wait
- * (`.olea-today-count`/`.olea-today-note` becoming visible, or a badge value
- * changing) rather than a purpose-built hook. A cheap follow-up: have
- * `SimulatorController` toggle one attribute (e.g. `[data-sim-busy="true"]`
- * on `elements.pane`) for the duration of `remountPane()`.
- *
- * SECOND HOOK GAP, found by running this suite rather than by reading the
- * design doc: every `remountPane()` constructs a BRAND NEW `OleaPlugin`
- * (`mountPlugin(OleaPlugin, ...)` in `controller.ts`), so `main.ts`'s
- * in-memory, never-persisted `courseSetupSeenCodes` is empty again on every
- * single reset/advance/rate — not just at first mount. The real plugin's
- * cold-start course-detection scan (`checkForCourseSetupProposals`,
- * `main.ts:1544`) therefore reopens `CourseSetupModal` (`.olea-course-setup-
- * confirm`, rendered into the TOP document's `[data-wb-modal-host]` — NEVER
- * inside `[data-wb-surface]`, see `obsidian-shim/index.ts`'s `Modal.open()`
- * doc — so it visually covers, and intercepts clicks into, the iframe) for
- * EVERY course-shaped folder the fixture vault has (two, today:
- * `01 Courses/GEOL204` and `01 Courses/MUSTH104`) after every single control
- * click. `onConfirm` writes nothing to the vault (`course-setup/confirmation-
- * view.ts`'s own doc: "persistence... is not this module's decision to
- * make"), so clicking through it is a safe no-op for every assertion in this
- * suite — but every helper that can trigger a remount calls
- * {@link dismissCourseSetupModals} first, or its screenshot/click would hang
- * against an intercepting overlay. A real fix belongs to whichever bead owns
- * `controller.ts` (WBX-1/WBX-6): either persist `courseSetupSeenCodes`
- * across remounts the way the device id and clock offset already are, or
- * suppress the cold-start scan for the simulator's own mount path.
+ * COURSE-SETUP MODALS: `main.ts`'s in-memory-only `courseSetupSeenCodes`
+ * used to reset on every single `remountPane()` (a brand new `OleaPlugin`
+ * every time), reopening `CourseSetupModal` for every course-shaped fixture
+ * folder (`01 Courses/GEOL204`, `01 Courses/MUSTH104`) after every control
+ * click. WBX-9 fixed this from the simulator side
+ * (`simulator/course-setup-bridge.ts` — `packages/plugin` is out of scope for
+ * that bead): the seen set now survives a remount, so {@link advanceDays} and
+ * {@link rateNextDue} no longer need to click through anything. Two cases
+ * still legitimately show fresh proposals and still call
+ * {@link dismissCourseSetupModals}: the real cold start ({@link
+ * gotoSimulator}) and immediately after `[data-sim-reset]`
+ * ({@link resetSimulator}) — a reset clears the SAME shared plugin-data blob
+ * the seen set lives in (`course-setup-bridge.ts`'s own doc explains why that
+ * is the right behaviour, not a residual bug). `CourseSetupModal` renders
+ * into the TOP document's `[data-wb-modal-host]` — never inside
+ * `[data-wb-surface]` (`obsidian-shim/index.ts`'s `Modal.open()` doc) — which
+ * is why {@link dismissCourseSetupModals} queries `page`, not `frame(page)`.
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import { frame, hostFrameElement, waitForSettled } from '../helpers.js';
@@ -82,11 +71,14 @@ export interface GotoSimulatorOptions {
 /**
  * Clicks through any `CourseSetupModal` confirmation(s) the real plugin's
  * cold-start course-detection scan opened on this mount — see this module's
- * doc header's second hook gap. Bounded (5 rounds, 150ms apart) rather than
- * polled to a stable "definitely none left" state: the fixture vault has a
- * small, fixed number of course-shaped folders, so this is generous headroom
- * over the real chain length, not a tight fit. In the top document
- * (`[data-wb-modal-host]`), never inside `[data-wb-surface]`.
+ * doc header. Only ever needed right after a genuine "fresh device" moment
+ * (the real cold start, or right after `[data-sim-reset]` clears the shared
+ * plugin-data blob WBX-9's seen-set lives in) — {@link advanceDays} and
+ * {@link rateNextDue} no longer call this. Bounded (5 rounds, 150ms apart)
+ * rather than polled to a stable "definitely none left" state: the fixture
+ * vault has a small, fixed number of course-shaped folders, so this is
+ * generous headroom over the real chain length, not a tight fit. In the top
+ * document (`[data-wb-modal-host]`), never inside `[data-wb-surface]`.
  */
 export async function dismissCourseSetupModals(page: Page): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
@@ -134,6 +126,24 @@ export function noticeLocator(page: Page): Locator {
   return frame(page).locator('.wb-sim-notice');
 }
 
+/** `[data-wb-remount]` on the simulator root (`SimulatorMountElements.root`, `ol-3ux7.64.11` [WBX-9]) — see this module's own doc. */
+export function remountLocator(page: Page): Locator {
+  return frame(page).locator('[data-wb-remount]');
+}
+
+/**
+ * Waits for `[data-wb-remount]` to move past `before` — the precise
+ * "the remount this click triggered has finished" signal, replacing the
+ * badge-date/notice-text content waits every control helper used before
+ * WBX-9 (see this module's own doc: those were necessary-but-not-sufficient,
+ * never a purpose-built hook). `before` is `null` only if the element was
+ * somehow missing when read — treated as `'0'`, the attribute's own initial
+ * value (`main.ts`'s `mountSimulator`), so a first-ever wait still works.
+ */
+export async function waitForRemount(page: Page, before: string | null): Promise<void> {
+  await expect(remountLocator(page)).not.toHaveAttribute('data-wb-remount', before ?? '0');
+}
+
 /** Reads `.olea-today-count`'s number, or `'none'` when `.olea-today-note` is showing instead (nothing due / unavailable). Call only after {@link waitForTodayRendered}. */
 export async function readDueCount(page: Page): Promise<number | 'none'> {
   await waitForTodayRendered(page);
@@ -146,30 +156,46 @@ export async function readDueCount(page: Page): Promise<number | 'none'> {
   return n;
 }
 
-/** `[data-sim-reset]` — clears the overlay, plugin data and clock offset together (`SimulatorStore.resetAll`). */
+/**
+ * `[data-sim-reset]` — clears the overlay, plugin data and clock offset
+ * together (`SimulatorStore.resetAll`). That same plugin-data blob is where
+ * WBX-9's course-setup seen-set lives, so a reset is a genuine "fresh
+ * device" moment — {@link dismissCourseSetupModals} here is the guarded
+ * dismiss this module's doc says is still legitimate, not a leftover.
+ */
 export async function resetSimulator(page: Page): Promise<void> {
+  const before = await remountLocator(page).getAttribute('data-wb-remount');
   await frame(page).locator('[data-sim-reset]').click();
+  await waitForRemount(page, before);
   await expect(noticeLocator(page)).toHaveText('Reset to the fixture snapshot.');
   await dismissCourseSetupModals(page);
   await waitForTodayRendered(page);
 }
 
-/** `[data-sim-advance]`, clicked `days` times in sequence, waiting for the badge date to move on each click before the next (a real user cannot advance faster than the previous remount settles, and clicking through an in-flight remount is unspecified behaviour this suite does not want to exercise). */
+/** `[data-sim-advance]`, clicked `days` times in sequence, waiting for the remount each click triggers to finish before the next (a real user cannot advance faster than the previous remount settles, and clicking through an in-flight remount is unspecified behaviour this suite does not want to exercise). */
 export async function advanceDays(page: Page, days: number): Promise<void> {
   for (let i = 0; i < days; i += 1) {
-    const before = (await badgeDate(page).textContent()) ?? '';
+    const before = await remountLocator(page).getAttribute('data-wb-remount');
     await frame(page).locator('[data-sim-advance]').click();
-    await expect(badgeDate(page)).not.toHaveText(before);
-    await dismissCourseSetupModals(page);
+    await waitForRemount(page, before);
     await waitForTodayRendered(page);
   }
 }
 
-/** `[data-sim-rate]` — writes exactly one review-log record for the first due item, or rates nothing if none is due. */
+/**
+ * `[data-sim-rate]` — writes exactly one review-log record for the first due
+ * item, or rates nothing if none is due. Only the "rated" outcome remounts
+ * (`controller.ts`'s `rateNextDue` returns early, before `remountPane()`,
+ * when nothing is due) — waiting on `[data-wb-remount]` unconditionally would
+ * hang on the "nothing due" path, so this only waits on it when the notice
+ * says a rating actually happened.
+ */
 export async function rateNextDue(page: Page): Promise<void> {
+  const before = await remountLocator(page).getAttribute('data-wb-remount');
   await frame(page).locator('[data-sim-rate]').click();
   await expect(noticeLocator(page)).toHaveText(/^Rated 1 item|^Nothing is due right now/);
-  await dismissCourseSetupModals(page);
+  const noticeText = (await noticeLocator(page).textContent()) ?? '';
+  if (noticeText.startsWith('Rated 1 item')) await waitForRemount(page, before);
   await waitForTodayRendered(page);
 }
 

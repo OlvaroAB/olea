@@ -103,6 +103,11 @@ import {
 import { loadFixtureVault } from '../vault/fixture-vault.js';
 import type { MemoryVaultSource } from '../vault/memory-source.js';
 import { createSimulatorClock, type SimulatorClock } from './clock.js';
+import {
+  type CourseSetupSeenBridge,
+  installCourseSetupSeenBridge,
+  loadCourseSetupSeenCodes,
+} from './course-setup-bridge.js';
 import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
@@ -286,6 +291,17 @@ function missingWholePluginGlobals(): readonly string[] {
 }
 
 export interface SimulatorMountElements {
+  /**
+   * The stable wrapper around every element below — never emptied or
+   * replaced by `remountPane()`, unlike `pane`. Carries `[data-wb-remount]`
+   * (`ol-3ux7.64.11` [WBX-9]): a counter bumped once per `remountPane()` call,
+   * after the mount (and, for the whole-plugin path, the default Today view)
+   * has fully resolved. `e2e/simulator/helpers.ts`'s `waitForRemount` is the
+   * one settle signal every control helper needs, replacing the
+   * necessarily-approximate content waits (a badge date changing, a notice
+   * appearing) used before this bead.
+   */
+  readonly root: HTMLElement;
   /** Where the whole plugin's chrome mounts — analogous to `main.ts`'s `host`. */
   readonly pane: HTMLElement;
   /** Where the day-advance/jump/reset/rate controls render. */
@@ -439,6 +455,19 @@ export class SimulatorController {
   private mountedPlugin: MountedPlugin<OleaPlugin> | null = null;
   /** Set instead of {@link mountedPlugin} when {@link missingWholePluginGlobals} is non-empty. */
   private fallbackView: TodayView | null = null;
+  /**
+   * WBX-9 (`ol-3ux7.64.11`): the course-setup seen-codes recorded in an
+   * EARLIER mount, as of the top of the CURRENT `remountPane()` call — the
+   * snapshot {@link courseSetupSeenBridge}'s watcher compares an opening
+   * modal's code against. Refreshed at the top of every `remountPane()`;
+   * empty right after `reset()` clears the shared plugin-data blob (the one
+   * legitimate reopen — see `course-setup-bridge.ts`'s own doc).
+   */
+  private beforeMountCourseSetupSeenCodes: ReadonlySet<string> = new Set();
+  /** Installed once, for this controller's whole lifetime — see `course-setup-bridge.ts`'s own doc on why a per-remount poll cannot do this job. */
+  private readonly courseSetupSeenBridge: CourseSetupSeenBridge;
+  /** Bumped once per `remountPane()` call, written onto `elements.root`'s `[data-wb-remount]` — see {@link SimulatorMountElements.root}'s own doc. */
+  private remountCount = 0;
 
   private constructor(
     private readonly elements: SimulatorMountElements,
@@ -451,7 +480,12 @@ export class SimulatorController {
     private deviceId: string,
     private readonly transport: SimulatorTransport,
     private readonly uninstallTransportBridge: () => void,
-  ) {}
+  ) {
+    this.courseSetupSeenBridge = installCourseSetupSeenBridge(
+      this.pluginDataHost,
+      () => this.beforeMountCourseSetupSeenCodes,
+    );
+  }
 
   static async create(options: SimulatorControllerOptions): Promise<SimulatorController> {
     const dbName = options.dbName ?? DEFAULT_SIMULATOR_DB_NAME;
@@ -505,6 +539,7 @@ export class SimulatorController {
   async dispose(): Promise<void> {
     this.uninstallClock();
     this.uninstallTransportBridge();
+    this.courseSetupSeenBridge.dispose();
     await this.closeCurrent();
   }
 
@@ -560,6 +595,13 @@ export class SimulatorController {
   private async remountPane(): Promise<void> {
     await this.closeCurrent();
     this.elements.pane.empty();
+    // WBX-9: read BEFORE `mountPlugin` below — the fresh `OleaPlugin`
+    // instance's own cold-start scan can start proposing courses during
+    // `onload()`, and this snapshot must reflect only what an EARLIER mount
+    // recorded, never anything this mount's own scan adds (see
+    // `course-setup-bridge.ts`'s own doc on why the watcher needs a thunk
+    // rather than reading this field directly).
+    this.beforeMountCourseSetupSeenCodes = await loadCourseSetupSeenCodes(this.pluginDataHost);
 
     const missing = missingWholePluginGlobals();
     if (missing.length === 0) {
@@ -591,6 +633,13 @@ export class SimulatorController {
     }
 
     this.renderBadge();
+    // WBX-9's remount-complete signal: bumped once mount (and, for the
+    // whole-plugin path, the default Today view) has fully resolved — the
+    // one settle condition `e2e/simulator/helpers.ts`'s `waitForRemount`
+    // needs, in place of the approximate content waits used before this
+    // bead. See `SimulatorMountElements.root`'s own doc.
+    this.remountCount += 1;
+    this.elements.root.setAttribute('data-wb-remount', String(this.remountCount));
   }
 
   private renderBadge(): void {

@@ -1319,10 +1319,18 @@ async function main(): Promise<void> {
      * Reachability: this is `ol-3ux7.64.10`'s named production caller.
      */
     async function mountSimulator(): Promise<void> {
-      const controlsEl = host.createDiv({ cls: 'wb-sim-controls' });
-      const badgeEl = host.createDiv({ cls: 'wb-sim-badge-host' });
-      const noticeEl = host.createDiv({ cls: 'wb-sim-notice-host' });
-      const paneEl = host.createDiv({ cls: 'wb-sim-pane' });
+      // `[data-wb-remount]` (`ol-3ux7.64.11` [WBX-9]) starts at `'0'` here and
+      // is bumped by `SimulatorController.remountPane` itself, once its mount
+      // (and, for the whole-plugin path, the default Today view) has fully
+      // resolved — the remount-complete signal `e2e/simulator/helpers.ts`'s
+      // `waitForRemount` waits on instead of a content-based heuristic. This
+      // wrapper, unlike `paneEl`, is never emptied by `remountPane()`, so the
+      // attribute survives every remount for a helper to read.
+      const rootEl = host.createDiv({ cls: 'wb-sim-root', attr: { 'data-wb-remount': '0' } });
+      const controlsEl = rootEl.createDiv({ cls: 'wb-sim-controls' });
+      const badgeEl = rootEl.createDiv({ cls: 'wb-sim-badge-host' });
+      const noticeEl = rootEl.createDiv({ cls: 'wb-sim-notice-host' });
+      const paneEl = rootEl.createDiv({ cls: 'wb-sim-pane' });
 
       // `record`'s own default base URL is same-origin `/__olea` (`simulator-serve.mjs`'s proxy,
       // which is necessarily what served this very page — there is no other same-origin
@@ -1335,7 +1343,13 @@ async function main(): Promise<void> {
             ? `${window.location.origin}/__olea`
             : '';
       simulatorController = await SimulatorController.create({
-        elements: { pane: paneEl, controls: controlsEl, badge: badgeEl, notice: noticeEl },
+        elements: {
+          root: rootEl,
+          pane: paneEl,
+          controls: controlsEl,
+          badge: badgeEl,
+          notice: noticeEl,
+        },
         transport: route.transportMode,
         // `exactOptionalPropertyTypes`: an absent base URL must be OMITTED, never `undefined`.
         ...(transportBaseUrl.length > 0 ? { transportBaseUrl } : {}),

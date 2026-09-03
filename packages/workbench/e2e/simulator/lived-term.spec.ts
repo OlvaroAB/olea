@@ -122,3 +122,28 @@ test('@auto-web:simulator/lived-term — advancing a day re-mounts the plugin an
   expectedNext.setUTCDate(expectedNext.getUTCDate() + 1);
   expect(day1).toBe(expectedNext.toISOString().slice(0, 10));
 });
+
+test('@auto-web:simulator/lived-term — a second day-advance shows no course-setup modal', async ({
+  page,
+}) => {
+  // `ol-3ux7.64.11` [WBX-9]: every `remountPane()` used to construct a
+  // BRAND NEW `OleaPlugin` whose in-memory `courseSetupSeenCodes` started
+  // empty, so `CourseSetupModal` reopened for every course-shaped fixture
+  // folder after every single control click — `[data-sim-advance]` included.
+  // `resetSimulator` legitimately reopens the proposals once (it clears the
+  // SAME shared plugin-data blob the seen-set now lives in — the one
+  // legitimate reopen this bead's brief names) and its own guarded dismiss
+  // resolves them; the assertion below is on the mount AFTER that, and the
+  // one after THAT, so neither can be passing only because the reset's own
+  // dismiss loop happened to still be draining.
+  await gotoSimulator(page);
+  await resetSimulator(page);
+
+  await advanceDays(page, 1);
+  await advanceDays(page, 1);
+
+  // `[data-wb-modal-open]` is set on `[data-wb-modal-host]` in the TOP
+  // document, never inside `[data-wb-surface]` (`obsidian-shim`'s
+  // `Modal.open()` doc) — matching `dismissCourseSetupModals`' own query.
+  await expect(page.locator('[data-wb-modal-open]')).toHaveCount(0);
+});
