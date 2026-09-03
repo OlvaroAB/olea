@@ -24,10 +24,12 @@ import {
   appendReviewLogRecord,
   calendarDayFromLocalDate,
   createFsrsScheduler,
+  enumerateVaultInstruments,
   parseReviewLog,
   provisionalConceptKey,
   reviewLogPath,
   suspendedInstrumentIds,
+  writeDistractorProvenance,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -252,6 +254,74 @@ describe('opening a session composes it from her vault', () => {
     // The empty screen, not a refusal to open: "nothing is due" and "the
     // command is broken" must not be the same experience.
     expect(outcome.session.getViewModel().phase).toBe('empty');
+  });
+});
+
+describe('[D-220] (ol-yfyi) — the distractor-provenance sidecar reaches the live queue', () => {
+  /** One concept, one mcq instrument — deterministic offer order, no F2.17 deferral to reason about. */
+  function mcqOnlyVault() {
+    return memoryVault({
+      'Concepts/Alpha.md': CONCEPT_NOTE,
+      'Courses/TEST101/Week one.md': [
+        FRONTMATTER('[Alpha]'),
+        '## A question?',
+        '',
+        MCQ_BLOCK,
+        '',
+      ].join('\n'),
+    });
+  }
+
+  it('populates each mcq option from the sidecar, matched by text, never by position or on the correct answer', async () => {
+    const vault = mcqOnlyVault();
+    // Same enumeration `openReviewSession` runs internally — reading it here
+    // first only to learn the id the sidecar must be keyed under, the same
+    // thing a real accept-time write already did before this session ever
+    // opens.
+    const enumerated = await enumerateVaultInstruments(vault);
+    const mcqRecord = enumerated.records.find((record) => record.instrumentType === 'mcq');
+    if (mcqRecord === undefined) throw new Error('expected the fixture to enumerate one mcq');
+
+    await writeDistractorProvenance(vault, mcqRecord.instrumentId, {
+      entries: [
+        { text: 'd1', believes: 'she believes d1', source_says: 'the source says otherwise' },
+      ],
+    });
+
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+
+    const item = outcome.session.currentItem?.instrument;
+    if (item?.type !== 'mcq') throw new Error('expected the single instrument to be the mcq');
+
+    const named = item.options.find((option) => option.label === 'd1');
+    expect(named?.believes).toBe('she believes d1');
+    expect(named?.source_says).toBe('the source says otherwise');
+
+    // Every other option — the other three distractors and the correct
+    // answer — carries neither field: the sidecar named one distractor by
+    // text, not a shape every option inherits.
+    for (const option of item.options) {
+      if (option.label === 'd1') continue;
+      expect(option.believes).toBeUndefined();
+      expect(option.source_says).toBeUndefined();
+    }
+  });
+
+  it('leaves every option without believes/source_says when no sidecar was ever written — absent, not fabricated', async () => {
+    const vault = mcqOnlyVault();
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+
+    const item = outcome.session.currentItem?.instrument;
+    if (item?.type !== 'mcq') throw new Error('expected the single instrument to be the mcq');
+
+    for (const option of item.options) {
+      expect(option.believes).toBeUndefined();
+      expect(option.source_says).toBeUndefined();
+    }
   });
 });
 

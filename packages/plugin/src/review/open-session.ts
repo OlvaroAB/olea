@@ -61,11 +61,13 @@ import type {
   ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
+  DistractorProvenance,
   QueueFilter,
   RandomSource,
   Scheduler,
   SittingScopeSnapshot,
   SittingStalenessInput,
+  VaultInstrumentRecord,
   VaultPath,
   VaultSource,
 } from 'olea-core';
@@ -75,6 +77,7 @@ import {
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlan,
+  readDistractorProvenance,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
   reviewLogPath,
@@ -303,10 +306,22 @@ export async function openReviewSession(
     // plan is the Phase A shape, not a branch — see the module doc.
     const executed = executeStudyPlan({ queue: composed.queue, plan: input.plan ?? null });
 
+    // `[D-220]`'s read side (`ol-yfyi`): one vault read per `mcq` instrument
+    // in this enumeration, off the SAME `composed.instruments.records` this
+    // module already has in hand — no second walk. Absent for every
+    // instrument with no sidecar (nothing generated it, or it predates
+    // D-220), which `queue-adapter.ts` reads as "no provenance" and never
+    // fabricates.
+    const distractorProvenanceById = await distractorProvenanceLookupFor(
+      input.vault,
+      composed.instruments.records,
+    );
+
     const adapterInput = {
       items: executed.items,
       recordsById: composed.recordsById,
       supportHistory: buildSupportLevelHistoryLookup(composed.entries),
+      distractorProvenanceById,
       ...(input.random !== undefined ? { random: input.random } : {}),
     };
     // `ol-v7r5.35` (`[D-193]`): a caller-supplied `frozenQueue` routes this
@@ -423,6 +438,37 @@ function earliestFutureDue(
     if (earliest === null || due < earliest) earliest = due;
   }
   return earliest === null ? null : new Date(earliest);
+}
+
+/**
+ * D-220's read side (`ol-yfyi`, discovered-from `ol-0r92.52`): one
+ * `readDistractorProvenance` call per `mcq` instrument in the composed
+ * enumeration, folded into the `instrumentId -> DistractorProvenance` map
+ * `queue-adapter.ts`'s `distractorProvenanceById` expects.
+ *
+ * Vault I/O, so it happens here rather than inside `queue-adapter.ts`'s pure
+ * sync functions — the same reason `supportHistory` above is built by this
+ * module and only handed in. Every non-`mcq` record is skipped without a
+ * read; an `mcq` record with no sidecar reads as `undefined` and is simply
+ * omitted from the map, the same "absent, never fabricated" posture
+ * `readDistractorProvenance` itself documents — never a second place that
+ * decides what counts as missing.
+ */
+async function distractorProvenanceLookupFor(
+  vault: VaultSource,
+  records: readonly VaultInstrumentRecord[],
+): Promise<ReadonlyMap<string, DistractorProvenance>> {
+  const mcqIds = records
+    .filter((record) => record.instrumentType === 'mcq')
+    .map((record) => record.instrumentId);
+  const entries = await Promise.all(
+    mcqIds.map(async (id) => [id, await readDistractorProvenance(vault, id)] as const),
+  );
+  const byId = new Map<string, DistractorProvenance>();
+  for (const [id, provenance] of entries) {
+    if (provenance !== undefined) byId.set(id, provenance);
+  }
+  return byId;
 }
 
 // ---------------------------------------------------------------------------
