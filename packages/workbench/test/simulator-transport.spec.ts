@@ -131,6 +131,98 @@ describe('createSimulatorTransport — record', () => {
   });
 });
 
+describe('createSimulatorTransport — bundled cassette (WBX-11, ol-3ux7.64.13)', () => {
+  // `simulator/controller.ts`'s `loadReplayCassette` fetches
+  // `dist/simulator-cassette.json` (bundled by `olea-service`'s
+  // `scripts/simulator-build.mjs`) at startup for `replay`/`direct` only, and
+  // falls through to an EMPTY cassette (`{version, datasetVersion: 0, entries:
+  // []}`) whenever the fetch 404s, the response is not JSON, or the parsed
+  // shape does not carry the expected `version`/`entries` fields — never a
+  // throw. This factory (this module) never fetches anything itself (see its
+  // own module doc), so what it must get right is the CONSUMING half of that
+  // contract: an empty cassette behaves exactly like "nothing was bundled,"
+  // for both modes that ever receive one.
+  const EMPTY_CASSETTE: GenerationCassette = { version: 1, datasetVersion: 0, entries: [] };
+
+  it('replay: an empty (fallback) cassette is a miss for every request, never a throw before send()', async () => {
+    const misses: { taskId: string; payloadHash: string }[] = [];
+    const transport = createSimulatorTransport({
+      mode: 'replay',
+      cassette: EMPTY_CASSETTE,
+      onMiss: (miss) => misses.push(miss),
+    });
+
+    await expect(
+      transport.send({ contractVersion: 1, taskId: TASK_ID, payload: PAYLOAD }),
+    ).rejects.toThrow(WorkerTransportError);
+    expect(misses).toHaveLength(1);
+  });
+
+  it('direct: an empty (fallback) cassette reports a miss and goes live, same as no cassette at all', async () => {
+    const misses: { taskId: string; payloadHash: string }[] = [];
+    const httpRequest: HttpRequestFn = async () => ({
+      status: 200,
+      text: JSON.stringify({
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: 'v1', modelId: 'm', usage: {} },
+        result: { questions: [{ stem: 'live' }] },
+        budgetHeadroom: 1,
+      }),
+    });
+    const transport = createSimulatorTransport({
+      mode: 'direct',
+      cassette: EMPTY_CASSETTE,
+      baseUrl: 'https://olea-service-staging.example.workers.dev',
+      token: 'pasted-token',
+      httpRequest,
+      onMiss: (miss) => misses.push(miss),
+    });
+
+    const response = (await transport.send({
+      contractVersion: 1,
+      taskId: TASK_ID,
+      payload: PAYLOAD,
+    })) as { ok: boolean; result: unknown };
+
+    expect(response.ok).toBe(true);
+    expect(response.result).toEqual({ questions: [{ stem: 'live' }] });
+    expect(misses).toHaveLength(1);
+  });
+
+  it('record: is never given a cassette at all (the bundled file is never loaded for this mode) and never checks one if it were', async () => {
+    // `controller.ts`'s own ternary only calls `loadReplayCassette` for
+    // `'replay' || 'direct'` — `record` always forwards to the proxy, which
+    // decides hit/miss server-side. This factory has no `cassette`-shaped
+    // branch in its `'record'` arm at all (see `createSimulatorTransport`'s
+    // source), so passing one through anyway must be a no-op: the call still
+    // goes over `httpRequest` to `baseUrl`, never short-circuited locally.
+    const calls: Parameters<HttpRequestFn>[0][] = [];
+    const httpRequest: HttpRequestFn = async (params) => {
+      calls.push(params);
+      return {
+        status: 200,
+        text: JSON.stringify({
+          ok: true,
+          stamp: { contractVersion: 1, promptVersion: 'v1', modelId: 'm', usage: {} },
+          result: { questions: [] },
+          budgetHeadroom: 1,
+        }),
+      };
+    };
+    const cassette = await cassetteWithOneEntry();
+    const transport = createSimulatorTransport({
+      mode: 'record',
+      cassette,
+      baseUrl: 'http://127.0.0.1:4322/__olea',
+      httpRequest,
+    });
+
+    await transport.send({ contractVersion: 1, taskId: TASK_ID, payload: PAYLOAD });
+
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe('createSimulatorTransport — direct', () => {
   it('prefers a cassette hit over a live call', async () => {
     const cassette = await cassetteWithOneEntry();
