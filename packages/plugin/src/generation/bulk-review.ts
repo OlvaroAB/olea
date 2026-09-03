@@ -45,6 +45,7 @@
  */
 
 import type { DraftAcceptPort } from './accept.js';
+import { type SourceMarkerOrigin, sourceMarkerOrigin } from './bulk-review-copy.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { basenameWithoutExtension } from './review-adapter.js';
 import type { DraftRecord } from './types.js';
@@ -85,6 +86,28 @@ export interface BulkReviewGroupViewModel {
   readonly sourcePath: string;
   readonly noteTitle: string;
   readonly courseCode: string;
+  /**
+   * `[D-214]` / `ol-ymew`: which register the row's source marker renders
+   * in — `'reading'` (`[D-216]`'s original case) or `'authored-note'`
+   * (a note she wrote herself). Derived once per group, from the group's
+   * oldest item's `sourceCitation`, by `bulk-review-copy.ts`'s
+   * `sourceMarkerOrigin` — the honest, construction-guaranteed signal that
+   * module's own doc explains, never a bare filename guess made here.
+   */
+  readonly sourceMarkerOrigin: SourceMarkerOrigin;
+  /**
+   * The title `bulk-review-view.ts` passes to `sourceMarkerText` alongside
+   * `sourceMarkerOrigin` above. Equal to `noteTitle` for `'reading'`
+   * (unchanged from `[D-216]`). For `'authored-note'`, this is HER note's
+   * own title — derived from `sourceCitation.sourcePath`, never from
+   * `noteTitle`, which for this origin names the Olea-created, "(Olea)"-
+   * suffixed sibling home note (`generation/home-note.ts`'s
+   * `homeNotePathForSource`) that the draft actually materializes into.
+   * Pointing at the sibling's internal bookkeeping name would leak Olea's
+   * own naming convention into a sentence that is supposed to name the note
+   * she wrote.
+   */
+  readonly sourceMarkerNoteTitle: string;
   readonly items: readonly BulkReviewItemViewModel[];
 }
 
@@ -122,10 +145,23 @@ export function buildBulkReviewGroups(
     const sorted = [...items].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const first = sorted[0];
     if (first === undefined) continue; // unreachable — bySourcePath never holds an empty list
+    const noteTitle = basenameWithoutExtension(sourcePath);
+    // `[D-214]` / `ol-ymew`: origin is derived from the group's oldest
+    // item's citation, the same "first" convention `courseCode` above
+    // already uses for a per-group aggregate — see `sourceMarkerOrigin`'s
+    // own doc for why this is a construction-guaranteed signal, not a
+    // filename guess.
+    const origin = sourceMarkerOrigin(first.sourceCitation?.sourcePath);
+    const sourceMarkerNoteTitle =
+      origin === 'authored-note' && first.sourceCitation !== undefined
+        ? basenameWithoutExtension(first.sourceCitation.sourcePath)
+        : noteTitle;
     groups.push({
       sourcePath,
-      noteTitle: basenameWithoutExtension(sourcePath),
+      noteTitle,
       courseCode: first.courseCode,
+      sourceMarkerOrigin: origin,
+      sourceMarkerNoteTitle,
       items: sorted.map((r) => ({
         draftId: r.draftId,
         stem: r.question.stem,

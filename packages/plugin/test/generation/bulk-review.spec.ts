@@ -124,6 +124,64 @@ describe('buildBulkReviewGroups', () => {
     const groups = buildBulkReviewGroups([record({ conceptIds: ['concept-key-9'] })]);
     expect(groups[0]?.items[0]?.conceptIds).toEqual(['concept-key-9']);
   });
+
+  // `[D-214]` / `ol-ymew`: the source-marker origin/title the group carries
+  // for `bulk-review-view.ts` to render — see `BulkReviewGroupViewModel`'s
+  // own doc for why `sourceMarkerNoteTitle` diverges from `noteTitle` here.
+  describe('sourceMarkerOrigin / sourceMarkerNoteTitle', () => {
+    it('defaults to "reading" and the destination note title when no sourceCitation is present', () => {
+      const groups = buildBulkReviewGroups([record({ sourcePath: NOTE_A })]);
+      expect(groups[0]?.sourceMarkerOrigin).toBe('reading');
+      expect(groups[0]?.sourceMarkerNoteTitle).toBe('Week 2');
+    });
+
+    it('reads "reading" for a non-markdown citation (a PDF/PPTX/DOCX/image), title unchanged', () => {
+      const groups = buildBulkReviewGroups([
+        record({
+          sourcePath: NOTE_A,
+          sourceCitation: { sourcePath: '01 Courses/COGS214/Lecture 4.pdf', page: 3 },
+        }),
+      ]);
+      expect(groups[0]?.sourceMarkerOrigin).toBe('reading');
+      expect(groups[0]?.sourceMarkerNoteTitle).toBe('Week 2');
+    });
+
+    it('reads "authored-note" for a markdown citation, naming HER note, never the destination note', () => {
+      const groups = buildBulkReviewGroups([
+        record({
+          // The destination note is Olea's own home note beside hers
+          // (`[D-214]`'s sibling) — deliberately a different path from the
+          // cited authored note below, mirroring `homeNotePathForSource`'s
+          // real "(Olea)"-suffixed naming.
+          sourcePath: '01 Courses/COGS214/My Own Thoughts (Olea).md',
+          sourceCitation: { sourcePath: '01 Courses/COGS214/My Own Thoughts.md' },
+        }),
+      ]);
+      expect(groups[0]?.sourceMarkerOrigin).toBe('authored-note');
+      expect(groups[0]?.sourceMarkerNoteTitle).toBe('My Own Thoughts');
+      // The destination note's own title is still carried, unchanged, for
+      // the group header — only the source marker's title diverges.
+      expect(groups[0]?.noteTitle).toBe('My Own Thoughts (Olea)');
+    });
+
+    it('derives origin from the group\'s oldest item, the same "first" convention courseCode already uses', () => {
+      const groups = buildBulkReviewGroups([
+        record({
+          draftId: 'older',
+          sourcePath: NOTE_A,
+          createdAt: '2026-08-25T09:00:00-07:00',
+          sourceCitation: { sourcePath: '01 Courses/COGS214/My Own Thoughts.md' },
+        }),
+        record({
+          draftId: 'newer',
+          sourcePath: NOTE_A,
+          createdAt: '2026-08-25T09:05:00-07:00',
+          sourceCitation: { sourcePath: '01 Courses/COGS214/Lecture 4.pdf' },
+        }),
+      ]);
+      expect(groups[0]?.sourceMarkerOrigin).toBe('authored-note');
+    });
+  });
 });
 
 describe('BulkReviewController', () => {

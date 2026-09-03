@@ -289,7 +289,18 @@ export class BulkReviewView extends ItemView {
     this.renderHints(root);
 
     for (const group of vm.groups) {
-      this.renderGroup(root, group.sourcePath, group.courseCode, group.noteTitle, group.items);
+      this.renderGroup(
+        root,
+        group.sourcePath,
+        group.courseCode,
+        group.noteTitle,
+        // `[D-214]` / `ol-ymew`: the source marker's own title and register
+        // are the group's, not `noteTitle` above — see
+        // `BulkReviewGroupViewModel`'s own doc for why the two diverge for
+        // an authored-note origin.
+        sourceMarkerText(group.sourceMarkerNoteTitle, group.sourceMarkerOrigin),
+        group.items,
+      );
     }
   }
 
@@ -308,6 +319,7 @@ export class BulkReviewView extends ItemView {
     sourcePath: string,
     courseCode: string,
     noteTitle: string,
+    sourceMarker: string,
     items: readonly {
       readonly draftId: string;
       readonly stem: string;
@@ -345,9 +357,11 @@ export class BulkReviewView extends ItemView {
       // `[D-216]` clause 2: the row's floor is a named origin in ordinary
       // words, always visible — rendered regardless of whether the
       // click-through below is wired. Clause 5: this text names the origin,
-      // it never claims the draft is supported by it.
+      // it never claims the draft is supported by it. `[D-214]` / `ol-ymew`:
+      // `sourceMarker` already carries the right register (reading vs. a
+      // note she wrote), computed once per group in `render()` above.
       const source = row.createDiv({ cls: 'olea-bulk-review-item-source' });
-      source.createSpan({ text: sourceMarkerText(noteTitle) });
+      source.createSpan({ text: sourceMarker });
       // `[D-216]` clause 3/4: the passage stays one step away, opened on
       // request through the SAME affordance `review/view.ts` renders for an
       // ordinary instrument (`REGISTRY_ENTRY_ACTION`, imported not
