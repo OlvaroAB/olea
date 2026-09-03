@@ -711,3 +711,61 @@ export function contestRateHealthCheck(input: {
   }
   return readings.sort((a, b) => (a.claimRendering < b.claimRendering ? -1 : 1));
 }
+
+/**
+ * `[D-215]`'s REVISIT clause, made into a check that can fail — the second
+ * half of this bead, distinct from `contestRateHealthCheck`'s rate-with-a-
+ * floor. The ruling: "when the contest count on any open kind exceeds the
+ * count on the least-contested routed kind over a term, rule that kind's
+ * bead next." That is a plain count comparison, not a rate — no minimum
+ * denominator, because a single dispute against a routed total of zero is
+ * exactly the signal the clause names, not noise to floor away.
+ *
+ * **Keyed by `claimRendering`, not by the single `unsorted` kind.** Five
+ * renderings share that kind (`[D-215]`'s widened routing table) and each
+ * names a different decision bead (DSN-1 open questions 6 through 10) — a
+ * kind-level total would tell David *that* something is contested without
+ * saying which bead to rule next, which is the whole point of the clause.
+ *
+ * **Folded from the rate check's own readings, not a second pass over the
+ * log** — `disputes` and `claimKind` are already counted there; this only
+ * regroups them. Numbers only, same as its input: a rendering name and two
+ * integers, nothing that could carry content (D-005).
+ */
+export interface ContestRevisitTrigger {
+  readonly claimRendering: ClaimRendering;
+  /** This rendering's own dispute count over the term. */
+  readonly disputes: number;
+  /** The lowest dispute total any of the three RULED kinds carried over the same term. */
+  readonly leastContestedRoutedKindDisputes: number;
+  /** `disputes > leastContestedRoutedKindDisputes` — rule this rendering's decision bead next. */
+  readonly revisit: boolean;
+}
+
+export function contestRevisitTriggers(
+  readings: readonly ContestRateReading[],
+): readonly ContestRevisitTrigger[] {
+  const routedTotals: Record<Exclude<ContestedClaimKind, 'unsorted'>, number> = {
+    reading: 0,
+    structural: 0,
+    grade: 0,
+  };
+  for (const reading of readings) {
+    if (reading.claimKind === 'unsorted') continue;
+    routedTotals[reading.claimKind] += reading.disputes;
+  }
+  const leastContestedRoutedKindDisputes = Math.min(
+    routedTotals.reading,
+    routedTotals.structural,
+    routedTotals.grade,
+  );
+
+  return readings
+    .filter((reading) => reading.claimKind === 'unsorted')
+    .map((reading) => ({
+      claimRendering: reading.claimRendering,
+      disputes: reading.disputes,
+      leastContestedRoutedKindDisputes,
+      revisit: reading.disputes > leastContestedRoutedKindDisputes,
+    }));
+}

@@ -12,6 +12,7 @@ import {
   contestEffectFor,
   contestOutcomeShapes,
   contestRateHealthCheck,
+  contestRevisitTriggers,
   contestStateForClaim,
   isDisputeCurrent,
   quarantinedGradeInstrumentIds,
@@ -437,6 +438,190 @@ describe('the contest-rate health check ([D-095] §4)', () => {
       claimsAsserted: { 'mastery-reading': 2 },
     });
     expect(reading?.firing).toBe(false);
+  });
+});
+
+describe("[D-215]'s revisit trigger — an open kind's count against the least-contested routed kind", () => {
+  it('reports counts only — a rendering name and two integers, nothing else', () => {
+    const readings = contestRateHealthCheck({
+      records: [
+        dispute({ claimKind: 'unsorted', claimRendering: 'trend-sentence', routingStatus: 'open' }),
+      ],
+      claimsAsserted: { 'trend-sentence': 10, 'mastery-reading': 10 },
+    });
+    const [trigger] = contestRevisitTriggers(readings);
+    expect(Object.keys(trigger as object).sort()).toEqual([
+      'claimRendering',
+      'disputes',
+      'leastContestedRoutedKindDisputes',
+      'revisit',
+    ]);
+  });
+
+  it("fires when an open rendering's dispute count exceeds the least-contested routed kind's", () => {
+    // Every ruled kind carries exactly one dispute — the least-contested routed
+    // kind's count is 1 — while the open rendering carries three.
+    const openDisputes = Array.from({ length: 3 }, (_, index) =>
+      dispute({
+        eventId: `open-${index}`,
+        conceptIds: [`concept-open-${index}`],
+        claimKind: 'unsorted',
+        claimRendering: 'trend-sentence',
+        routingStatus: 'open',
+      }),
+    );
+    const readingDispute = dispute({
+      eventId: 'reading-0',
+      claimKind: 'reading',
+      claimRendering: 'mastery-reading',
+    });
+    const structuralDispute = dispute({
+      eventId: 'structural-0',
+      claimKind: 'structural',
+      claimRendering: 'concept-relation-edge',
+    });
+    const gradeDispute = dispute({
+      eventId: 'grade-0',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+    });
+    const readings = contestRateHealthCheck({
+      records: [...openDisputes, readingDispute, structuralDispute, gradeDispute],
+      claimsAsserted: {
+        'trend-sentence': 20,
+        'mastery-reading': 20,
+        'concept-relation-edge': 20,
+        'explain-back-grade': 20,
+      },
+    });
+    const [trigger] = contestRevisitTriggers(readings);
+    expect(trigger).toMatchObject({
+      claimRendering: 'trend-sentence',
+      disputes: 3,
+      leastContestedRoutedKindDisputes: 1,
+      revisit: true,
+    });
+  });
+
+  it('does not fire when the open rendering is at or below the least-contested routed kind', () => {
+    // Every ruled kind carries exactly one dispute here, so the least-contested
+    // routed kind's count is 1 — equal to, not less than, the open rendering's.
+    const openDispute = dispute({
+      claimKind: 'unsorted',
+      claimRendering: 'trend-sentence',
+      routingStatus: 'open',
+    });
+    const readingDispute = dispute({
+      eventId: 'reading-0',
+      claimKind: 'reading',
+      claimRendering: 'mastery-reading',
+    });
+    const structuralDispute = dispute({
+      eventId: 'structural-0',
+      claimKind: 'structural',
+      claimRendering: 'concept-relation-edge',
+    });
+    const gradeDispute = dispute({
+      eventId: 'grade-0',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+    });
+    const readings = contestRateHealthCheck({
+      records: [openDispute, readingDispute, structuralDispute, gradeDispute],
+      claimsAsserted: {
+        'trend-sentence': 20,
+        'mastery-reading': 20,
+        'concept-relation-edge': 20,
+        'explain-back-grade': 20,
+      },
+    });
+    const [trigger] = contestRevisitTriggers(readings);
+    expect(trigger).toMatchObject({
+      leastContestedRoutedKindDisputes: 1,
+      disputes: 1,
+      revisit: false,
+    });
+  });
+
+  it('is keyed by claimRendering — two open renderings may disagree on whether they fire', () => {
+    const trendDisputes = Array.from({ length: 2 }, (_, index) =>
+      dispute({
+        eventId: `trend-${index}`,
+        conceptIds: [`concept-trend-${index}`],
+        claimKind: 'unsorted',
+        claimRendering: 'trend-sentence',
+        routingStatus: 'open',
+      }),
+    );
+    const readings = contestRateHealthCheck({
+      records: trendDisputes,
+      claimsAsserted: {
+        'trend-sentence': 20,
+        refusal: 20,
+        'mastery-reading': 20,
+      },
+    });
+    const triggers = contestRevisitTriggers(readings);
+    const trend = triggers.find((trigger) => trigger.claimRendering === 'trend-sentence');
+    const refusal = triggers.find((trigger) => trigger.claimRendering === 'refusal');
+    expect(trend?.revisit).toBe(true);
+    expect(refusal?.revisit).toBe(false);
+  });
+
+  it("sums a routed kind's total across every rendering that routes to it", () => {
+    // Reading's total (2) comes from two DIFFERENT renderings that both route
+    // to it; structural and grade each carry 3, so reading — not either of
+    // them — is the least-contested routed kind, and the sum is what makes it so.
+    const structuralDisputes = Array.from({ length: 3 }, (_, index) =>
+      dispute({
+        eventId: `structural-${index}`,
+        conceptIds: [`concept-structural-${index}`],
+        claimKind: 'structural',
+        claimRendering: 'concept-relation-edge',
+      }),
+    );
+    const gradeDisputes = Array.from({ length: 3 }, (_, index) =>
+      dispute({
+        eventId: `grade-${index}`,
+        conceptIds: [`concept-grade-${index}`],
+        claimKind: 'grade',
+        claimRendering: 'explain-back-grade',
+      }),
+    );
+    const readings = contestRateHealthCheck({
+      records: [
+        dispute({ eventId: 'r1', claimKind: 'reading', claimRendering: 'mastery-reading' }),
+        dispute({
+          eventId: 'r2',
+          conceptIds: [CONCEPT_B],
+          claimKind: 'reading',
+          claimRendering: 'cross-term-recognition',
+        }),
+        ...structuralDisputes,
+        ...gradeDisputes,
+        dispute({
+          eventId: 'open-1',
+          claimKind: 'unsorted',
+          claimRendering: 'trend-sentence',
+          routingStatus: 'open',
+        }),
+      ],
+      claimsAsserted: {
+        'mastery-reading': 20,
+        'cross-term-recognition': 20,
+        'concept-relation-edge': 20,
+        'explain-back-grade': 20,
+        'trend-sentence': 20,
+      },
+    });
+    const [trigger] = contestRevisitTriggers(readings);
+    // reading's summed total (2, from both its renderings) is the floor, so
+    // the one open dispute does not exceed it.
+    expect(trigger).toMatchObject({
+      leastContestedRoutedKindDisputes: 2,
+      disputes: 1,
+      revisit: false,
+    });
   });
 });
 
