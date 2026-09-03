@@ -209,6 +209,22 @@ export const NOTE_OFFER_LINE =
 export const NOTE_OFFER_ACCEPT_ACTION = 'Create the note';
 export const NOTE_OFFER_DECLINE_ACTION = 'Not now';
 
+/**
+ * `[D-203]`'s duplicate-title state — genuinely NEW copy, permitted for the
+ * same reason F8.4a's/F8.4b's are (the clause defines this surface). States
+ * the fact and the evidence — which two notes — never a nudge, and never a
+ * chooser: `duplicateTitleLine` names both notes but offers no way to pick
+ * between them, matching the ratified clause's own "nothing is chosen for
+ * her". `DUPLICATE_TITLE_LABEL` mirrors `WITHDRAWN_LABEL`'s badge shape one
+ * section up.
+ */
+export const DUPLICATE_TITLE_LABEL = 'Duplicate title';
+
+/** `[D-203]`'s structural reason, plus the evidence and what would clear it — one line, in her terms, on the row itself. */
+export function duplicateTitleLine(notePaths: readonly string[]): string {
+  return `Two of your notes share this title, so Olea cannot tell them apart: ${notePaths.join(', ')}. Nothing is bound until you rename one of them.`;
+}
+
 export const INSTRUMENTS_SECTION_HEADING = 'Instruments';
 export const NO_INSTRUMENTS_LINE = 'No instruments yet for this concept.';
 

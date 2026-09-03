@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { EMPTY_REGISTRY_OVERRIDES } from './overrides.js';
 import {
   acceptRenameProposal,
+  declinedRenameSignaturesFrom,
   declineSignature,
   gateRenameCandidate,
   outranksCurrent,
   type RenameProposalMemory,
   recordDeclinedRenameProposal,
+  renameProposalMemoryFrom,
 } from './rename-proposal.js';
-import type { RenameProposal } from './types.js';
+import type { RegistryOverrides, RenameProposal } from './types.js';
 
 const LOCATION = { sourcePath: 'course/Her note.md' };
 
@@ -164,6 +166,7 @@ describe('acceptRenameProposal', () => {
     expect(next.renames.k1).toEqual({
       displayName: 'Her own wording',
       aliases: ['Slide-deck wording'],
+      sourceTier: 1,
     });
   });
 
@@ -185,7 +188,7 @@ describe('acceptRenameProposal', () => {
   });
 });
 
-describe('recordDeclinedRenameProposal', () => {
+describe('recordDeclinedRenameProposal (`[D-206]`)', () => {
   const proposal: RenameProposal = {
     key: 'k1',
     currentDisplayName: 'Old wording',
@@ -193,14 +196,121 @@ describe('recordDeclinedRenameProposal', () => {
     candidate: { tier: 1, wording: 'New wording' },
   };
 
-  it('adds the signature', () => {
-    const next = recordDeclinedRenameProposal(new Set(), proposal);
-    expect(next.has(declineSignature(proposal.candidate))).toBe(true);
+  it('adds the signature to RegistryOverrides.declinedRenameSignatures', () => {
+    const next = recordDeclinedRenameProposal(EMPTY_REGISTRY_OVERRIDES, proposal);
+    expect(next.declinedRenameSignatures).toEqual([declineSignature(proposal.candidate)]);
   });
 
   it('declining the same proposal twice returns the same reference', () => {
-    const once = recordDeclinedRenameProposal(new Set(), proposal);
+    const once = recordDeclinedRenameProposal(EMPTY_REGISTRY_OVERRIDES, proposal);
     const twice = recordDeclinedRenameProposal(once, proposal);
     expect(twice).toBe(once);
+  });
+
+  it('a different concept declining a different candidate accumulates rather than replacing', () => {
+    const other: RenameProposal = {
+      key: 'k2',
+      currentDisplayName: 'Another old wording',
+      currentTier: 2,
+      candidate: { tier: 1, wording: 'Another new wording' },
+    };
+    const afterFirst = recordDeclinedRenameProposal(EMPTY_REGISTRY_OVERRIDES, proposal);
+    const afterSecond = recordDeclinedRenameProposal(afterFirst, other);
+    expect(afterSecond.declinedRenameSignatures).toEqual(
+      expect.arrayContaining([
+        declineSignature(proposal.candidate),
+        declineSignature(other.candidate),
+      ]),
+    );
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-206] —
+// the rename-proposal baseline survives a restart", tagged
+// `@auto:core/registry/rename-proposal.spec`.
+describe('renameProposalMemoryFrom (`[D-206]`)', () => {
+  it('reconstructs the baseline from an override written by accepting a proposal', () => {
+    const proposal: RenameProposal = {
+      key: 'k1',
+      currentDisplayName: 'Slide-deck wording',
+      currentTier: 3,
+      candidate: { tier: 2, wording: 'Tag wording' },
+    };
+    const overrides = acceptRenameProposal(EMPTY_REGISTRY_OVERRIDES, proposal);
+    expect(renameProposalMemoryFrom(overrides, 'k1')).toEqual({
+      tier: 2,
+      displayName: 'Tag wording',
+    });
+  });
+
+  it('is undefined for a concept with no override at all', () => {
+    expect(renameProposalMemoryFrom(EMPTY_REGISTRY_OVERRIDES, 'k1')).toBeUndefined();
+  });
+
+  it('is undefined for a plain hand-typed rename, which carries no sourceTier', () => {
+    // `acceptRenameProposal` is the only writer that supplies a tier;
+    // building the override the way `overrides.ts`'s own spec does for a
+    // typed rename (no fifth argument) leaves `sourceTier` absent.
+    const overrides = {
+      ...EMPTY_REGISTRY_OVERRIDES,
+      renames: { k1: { displayName: 'Her own wording', aliases: ['Old wording'] } },
+    };
+    expect(renameProposalMemoryFrom(overrides, 'k1')).toBeUndefined();
+  });
+});
+
+describe('declinedRenameSignaturesFrom (`[D-206]`)', () => {
+  it('reads back every persisted signature as a Set', () => {
+    const overrides: RegistryOverrides = {
+      ...EMPTY_REGISTRY_OVERRIDES,
+      declinedRenameSignatures: ['1:Tag wording', '2:Other wording'],
+    };
+    const result = declinedRenameSignaturesFrom(overrides);
+    expect(result.has('1:Tag wording')).toBe(true);
+    expect(result.has('2:Other wording')).toBe(true);
+    expect(result.size).toBe(2);
+  });
+
+  it('an overrides value with the field absent (pre-[D-206]) reads back as an empty set, not an error', () => {
+    expect(declinedRenameSignaturesFrom(EMPTY_REGISTRY_OVERRIDES).size).toBe(0);
+  });
+});
+
+describe('gateRenameCandidate — declined signature survives across a simulated restart (`[D-206]`)', () => {
+  it('a declined proposal does not re-fire when its memory and declined set are both reconstructed from persisted overrides, not carried over in a live session Map/Set', () => {
+    // Simulates the exact sequence `[D-206]`'s scenario describes: she
+    // declines a proposal, Obsidian restarts (a FRESH `gateRenameCandidate`
+    // call site with no session memory of its own), and the same source
+    // proposes the identical wording again. Everything the gate needs this
+    // time is reconstructed fresh from `RegistryOverrides` — never from a
+    // `Map`/`Set` surviving the "restart".
+    const declineProposal: RenameProposal = {
+      key: 'k1',
+      currentDisplayName: 'Slide-deck wording',
+      currentTier: 3,
+      candidate: { tier: 1, wording: 'Her own wording' },
+    };
+    const overridesAfterDecline = recordDeclinedRenameProposal(
+      EMPTY_REGISTRY_OVERRIDES,
+      declineProposal,
+    );
+
+    // "Restart": a brand-new read reconstructs both gate inputs purely from
+    // the persisted overrides — no override exists yet (she declined, she
+    // did not accept), so the baseline comes from THIS read's own
+    // extraction, exactly as a genuine first sight would.
+    const reconstructedMemory = renameProposalMemoryFrom(overridesAfterDecline, 'k1') ?? {
+      tier: 3,
+      displayName: 'Slide-deck wording',
+    };
+    const reconstructedDeclined = declinedRenameSignaturesFrom(overridesAfterDecline);
+
+    const result = gateRenameCandidate(
+      { key: 'k1', displayName: 'Her own wording', originalName: 'Her own wording', tier: 1 },
+      reconstructedMemory,
+      reconstructedDeclined,
+    );
+    expect(result.renameProposal).toBeNull();
+    expect(result.displayName).toBe('Slide-deck wording');
   });
 });

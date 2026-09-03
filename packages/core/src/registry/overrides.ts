@@ -27,6 +27,16 @@
  *   local alias list), only the convenience of a "previously called X" note
  *   once she is back to the name her vault already carries.
  *
+ * ## `sourceTier` (`[D-206]`, `ol-2zfj.59`)
+ *
+ * `renameConcept`'s optional last argument records which provenance tier
+ * WON the current wording — set by `./rename-proposal.ts`'s
+ * `acceptRenameProposal` when she accepts a `[D-183]` proposal, absent for
+ * a rename she types herself. It exists so the rank gate's comparison
+ * baseline (`./rename-proposal.ts`'s `RenameProposalMemory`) survives an
+ * Obsidian restart instead of living only in the plugin provider's
+ * in-session `Map` — see that file's `renameProposalMemoryFrom`.
+ *
  * ## Prune semantics
  *
  * `pruneConcept`/`unpruneConcept` only ever add or remove a key from a set.
@@ -36,6 +46,7 @@
  * functions do).
  */
 
+import type { ConceptTier } from '../concept/types.js';
 import type { RegistryOverrides, RegistryRenameOverride } from './types.js';
 
 export const EMPTY_REGISTRY_OVERRIDES: RegistryOverrides = {
@@ -59,12 +70,21 @@ function dedupeAliases(candidate: string, existing: readonly string[]): readonly
  * Returns `overrides` unchanged (same reference) when `newDisplayName` is
  * blank or equal to the concept's current resolved display name — a no-op
  * guard the caller does not have to duplicate.
+ *
+ * `sourceTier` (`[D-206]`, `ol-2zfj.59`) is optional and always REPLACES
+ * whatever the override previously carried, never merged: pass it when this
+ * rename is `./rename-proposal.ts`'s `acceptRenameProposal` adopting a
+ * `[D-183]` candidate (the tier that proposed it), and omit it for every
+ * other caller — a rename she types herself directly carries no tier at all
+ * (her own word, tier-less, INV-6), so a follow-up hand-typed rename over an
+ * accepted one correctly clears any `sourceTier` the acceptance had set.
  */
 export function renameConcept(
   overrides: RegistryOverrides,
   key: string,
   originalName: string,
   newDisplayName: string,
+  sourceTier?: ConceptTier,
 ): RegistryOverrides {
   const trimmed = newDisplayName.trim();
   const currentOverride = overrides.renames[key];
@@ -83,7 +103,11 @@ export function renameConcept(
 
   const priorAliases = currentOverride?.aliases ?? [];
   const aliases = dedupeAliases(currentDisplayName, priorAliases);
-  const nextOverride: RegistryRenameOverride = { displayName: trimmed, aliases };
+  const nextOverride: RegistryRenameOverride = {
+    displayName: trimmed,
+    aliases,
+    ...(sourceTier !== undefined ? { sourceTier } : {}),
+  };
   return { ...overrides, renames: { ...overrides.renames, [key]: nextOverride } };
 }
 

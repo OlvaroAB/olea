@@ -128,6 +128,19 @@ export const REGISTRY_STATES: readonly RegistryWorkbenchState[] = [
       'held for this scenario instance, so the same proposal never re-fires — the row keeps its ' +
       'current wording either way.',
   },
+  {
+    id: 'registry-duplicate-title',
+    label: 'A duplicate-title state — the binder refuses, no chooser offered',
+    group: 'registry',
+    note:
+      "`[D-203]`'s duplicate-title state (F8.4, `ol-2zfj.60`). One concept's title is carried " +
+      'by two of its notes, so the binder (`ConceptRecord.ambiguousNotePaths`) refuses to bind ' +
+      'either — the row shows a badge and one line naming both notes and the structural reason, ' +
+      'with no button, dropdown, or any other way to pick between them. The state is fed ' +
+      'straight from `buildRegistryModel` itself, not a session overlay: it clears the moment a ' +
+      'fresh build hands in a `ConceptRecord` with no `ambiguousNotePaths` at all, which is what ' +
+      'renaming one of the two notes in Obsidian produces.',
+  },
 ];
 
 export function findRegistryState(
@@ -514,6 +527,45 @@ function renameProposalDeclineSignature(candidate: RenameProposal['candidate']):
   return `${candidate.tier}:${candidate.wording}`;
 }
 
+// ---------------------------------------------------------------------------
+// `[D-203]` (`ol-2zfj.60`) — the duplicate-title state on the concept row.
+// ---------------------------------------------------------------------------
+
+/**
+ * Two Zettelkasten notes, invented, that would share one title in a real
+ * vault — never a real note name (INV-3). `CORVALE.ambiguousNotePaths`
+ * carries both, matching the shape `../../core/src/concept/extract.ts`'s
+ * `resolveTitle` mints when it refuses to bind: `boundNotePath` absent,
+ * tier 2.
+ */
+const DUPLICATE_TITLE_NOTE_PATHS: readonly string[] = [
+  '05 Zettelkasten/syn:concept:corvale.md',
+  // `Outcrop Sketches` is the same cleared subfolder name
+  // `../../core/src/concept/extract.spec.ts` already uses for its own
+  // duplicate-title fixture — reused rather than a second phrase invented
+  // and re-screened for the same purpose (INV-3, `node
+  // scripts/check-fixture-vocabulary.mjs --term`).
+  '05 Zettelkasten/Outcrop Sketches/syn:concept:corvale.md',
+];
+
+const CORVALE = concept({
+  key: 'syn:concept-key:corvale',
+  name: 'syn:concept:corvale',
+  tier: 2,
+  courses: ['syn:course:vantrel'],
+  sourcePaths: ['01 Courses/syn:course:vantrel/Week 7.md'],
+  ambiguousNotePaths: DUPLICATE_TITLE_NOTE_PATHS,
+});
+
+/** Proves the state coexists with an ordinary instrument mix — the duplicate-title note is one more fact on the row, not a replacement for the rest of it. */
+const CORVALE_INSTRUMENT = instrument({
+  instrumentId: 'qa:syn:concept-key:corvale:1',
+  conceptIds: ['syn:concept-key:corvale'],
+  notePath: '01 Courses/syn:course:vantrel/Week 7.md',
+  noteTitle: 'Week 7',
+  blockId: 'syn-block-corvale-1',
+});
+
 function inputFor(stateId: string): BuildRegistryModelInput {
   if (stateId === 'registry-empty') {
     return {
@@ -557,6 +609,18 @@ function inputFor(stateId: string): BuildRegistryModelInput {
     return {
       concepts: [RENWICK],
       instrumentRecords: [RENWICK_INSTRUMENT],
+      entries: [],
+      scheduler,
+      now: NOW,
+      holdingCut: HOLDING_CUT,
+      overrides: EMPTY_REGISTRY_OVERRIDES,
+      suspendedInstrumentIds: new Set(),
+    };
+  }
+  if (stateId === 'registry-duplicate-title') {
+    return {
+      concepts: [CORVALE],
+      instrumentRecords: [CORVALE_INSTRUMENT],
       entries: [],
       scheduler,
       now: NOW,

@@ -187,9 +187,22 @@ describe('createLocalRegistryProvider — rename proposal ([D-183])', () => {
     expect(row?.key).toBe(entry.key);
     expect(row?.displayName).toBe('Her own wording for it');
     expect(row?.aliases).toEqual([entry.originalName]);
+
+    // `[D-206]` (ol-2zfj.59): the winning tier is persisted alongside the
+    // rename, not just the wording — read directly off the stored blob
+    // since `sourceTier` is not itself rendered by the registry view.
+    const stored = (host.blob as Record<string, unknown>).registryOverrides as {
+      renames: Record<string, { sourceTier?: number }>;
+    };
+    expect(stored.renames[entry.key]?.sourceTier).toBe(1);
   });
 
-  it('declineRenameProposal never writes to the override store — it is session memory only', async () => {
+  // `[D-206]` (ol-2zfj.59): a decline now persists through the same override
+  // store every other write here uses, instead of only living in a session
+  // `Map`/`Set` this provider instance would lose on the next Obsidian
+  // restart. Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 /
+  // [D-206] — the rename-proposal baseline survives a restart".
+  it('declineRenameProposal persists the decline through the override store, and it survives a fresh provider instance on the same host', async () => {
     const host = new FakeDataHost();
     const seen: unknown[] = [];
     const provider = createLocalRegistryProvider({
@@ -213,12 +226,37 @@ describe('createLocalRegistryProvider — rename proposal ([D-183])', () => {
       candidate: { tier: 1 as const, wording: 'Her own wording for it' },
     };
     await expect(provider.declineRenameProposal(entry, proposal)).resolves.toBeUndefined();
-    expect(seen).toHaveLength(0);
-    expect(host.blob).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect(host.blob).not.toBeNull();
 
     // Declining left the concept's own name untouched — nothing was accepted.
     const after = await modelFrom(await provider.load());
     expect(after.concepts[0]?.displayName).toBe(entry.originalName);
+
+    // The signature is on the store, readable by a SECOND provider instance
+    // backed by the same host — the "Obsidian restart" this bead closes the
+    // gap for, since a fresh instance starts with an empty session `Map` and
+    // must reconstruct everything it knows from `overrides` alone. (A real
+    // re-fire of this exact candidate through `load()` cannot be produced
+    // from a vault fixture — see this describe block's own module comment
+    // on the reachability gap `ol-zfty` still waits on — so this checks the
+    // durable fact the decline was recorded against, which
+    // `core/registry/rename-proposal.spec.ts`'s own "declined signature
+    // survives across a simulated restart" test already proves is
+    // sufficient for `gateRenameCandidate` to keep suppressing it.)
+    const restarted = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    });
+    const afterRestart = await modelFrom(await restarted.load());
+    expect(afterRestart.concepts[0]?.renameProposal ?? null).toBeNull();
+    const stored = (host.blob as Record<string, unknown>).registryOverrides as {
+      declinedRenameSignatures?: readonly string[];
+    };
+    expect(stored.declinedRenameSignatures).toContain('1:Her own wording for it');
   });
 });
 

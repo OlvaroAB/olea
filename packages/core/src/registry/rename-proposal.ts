@@ -35,30 +35,37 @@
  * to demote — see `acceptRenameProposal` below. `RegistryRenameOverride`
  * needs no new field for this half of the mechanism.
  *
- * ## The CLASS C gap this bead's tripwire stopped on, named exactly
+ * ## The CLASS C gap `ol-2zfj.58`'s tripwire stopped on — CLOSED by `[D-206]` (`ol-2zfj.59`)
  *
  * Detecting that a higher-ranked source has ARRIVED — as opposed to having
  * always been there — needs memory of what tier/wording was showing on the
  * PREVIOUS read, because `../concept/extract.js` always mints a fresh
  * `ConceptRecord` at whatever is the single highest tier currently
  * available; there is no second, lower-ranked candidate surviving in its
- * output to compare against. Today that memory is session-scoped only:
- * `packages/plugin/src/registry/provider.ts` keeps it in an in-memory `Map`/
- * `Set`, alive only as long as the plugin stays loaded, and its own module
- * doc says so. Making it durable — surviving a restart, the way `renames`
- * and `prunedConceptKeys` already do — needs a genuinely new persisted
- * field: concretely, `RegistryOverrides.renames[key]` would need to carry
- * the tier that set the CURRENT (possibly override-free) display name
- * whenever a candidate has been detected pending, plus a durable record of
- * declined `(tier, wording)` signatures per concept key so "a declined
- * proposal does not fire again" (`[D-183]`) survives more than one session.
- * That is a persisted-schema change — Class C by the run charter's own
- * ladder — and this bead's brief is explicit: stop and report it rather
- * than add it. This file and `provider.ts` are built so wiring that field
- * in later is a small, additive change: `gateRenameCandidate`'s `memory`
- * parameter already takes exactly the shape (`RenameProposalMemory`) such a
- * field would carry; nothing here would need to change shape, only where it
- * is read from and written to.
+ * output to compare against. That memory was session-scoped only through
+ * `ol-2zfj.58`: `packages/plugin/src/registry/provider.ts` kept it in an
+ * in-memory `Map`/`Set`, alive only as long as the plugin stayed loaded.
+ *
+ * `[D-206]` adds the two additive, non-migrating fields this file's own
+ * doc named as the fix: `./types.ts`'s `RegistryRenameOverride.sourceTier`
+ * (the tier that set the current wording, when it came from ACCEPTING a
+ * proposal) and `RegistryOverrides.declinedRenameSignatures` (every
+ * declined `(tier, wording)` pair, global rather than per-key — the same
+ * unit `declineSignature` already used for the session `Set`). Two readers
+ * below turn those persisted fields back into `gateRenameCandidate`'s
+ * existing parameter shapes, so the pure gate function itself needed no
+ * signature change: `renameProposalMemoryFrom` reconstructs a
+ * `RenameProposalMemory` baseline for a key that has an accepted override,
+ * and `declinedRenameSignaturesFrom` reconstructs the whole declined `Set`.
+ * A caller (`provider.ts`'s `load()`) seeds its per-session memory from
+ * these on first sight of a key each session, then keeps advancing it in
+ * memory exactly as before — durable data supplies the STARTING point,
+ * session memory still carries a genuinely PENDING (not yet accepted or
+ * declined) proposal through the rest of that one session, which remains a
+ * real, named, and much narrower gap than the one this closes: a proposal
+ * that is live but undecided when Obsidian restarts is re-derived fresh on
+ * the next load rather than staying frozen, because nothing about a merely
+ * PENDING candidate is written anywhere until she acts.
  *
  * ## A second, deeper reachability gap — independent of the persistence one
  *
@@ -79,7 +86,8 @@
  * `packages/core/src/index.ts` is `olea-core`'s only public surface, and it
  * sits outside `ol-2zfj.58`'s `owns` (a shared file, edited by whichever
  * lane is live on it — see this repo's own file-ownership rule). So
- * `gateRenameCandidate`/`declineSignature`/`RenameProposalMemory` are not
+ * `gateRenameCandidate`/`declineSignature`/`RenameProposalMemory`/
+ * `renameProposalMemoryFrom`/`declinedRenameSignaturesFrom` are not
  * exported there, and cannot be imported cross-package today.
  * `provider.ts`'s module doc carries a small, function-for-function mirror
  * of this file's decision logic for exactly that reason, with a comment
@@ -222,15 +230,18 @@ export function gateRenameCandidate(
 
 /**
  * Accept: mutates `RegistryOverrides.renames` exactly as a manual rename
- * would (`./overrides.ts`'s `renameConcept`, unmodified — no new persisted
- * field needed for this half). `proposal.currentDisplayName` is handed in
- * as `renameConcept`'s `originalName` parameter — not `proposal.key`'s raw
- * extraction wording, which by construction already equals
- * `proposal.candidate.wording` and would make `renameConcept` see "renaming
- * to what's already current" and no-op. Passing the frozen OLD wording
- * instead is what makes `renameConcept` demote exactly that wording to an
- * alias, matching `[D-183]`'s "the old wording stays as a permanent alias
- * in every case."
+ * would (`./overrides.ts`'s `renameConcept`), plus `[D-206]`'s addition —
+ * `proposal.candidate.tier` is passed as the new `sourceTier`, so a LATER
+ * proposal's rank gate has this acceptance's winning tier to compare
+ * against even after an Obsidian restart wipes session memory (see
+ * `renameProposalMemoryFrom` below). `proposal.currentDisplayName` is
+ * handed in as `renameConcept`'s `originalName` parameter — not
+ * `proposal.key`'s raw extraction wording, which by construction already
+ * equals `proposal.candidate.wording` and would make `renameConcept` see
+ * "renaming to what's already current" and no-op. Passing the frozen OLD
+ * wording instead is what makes `renameConcept` demote exactly that wording
+ * to an alias, matching `[D-183]`'s "the old wording stays as a permanent
+ * alias in every case."
  */
 export function acceptRenameProposal(
   overrides: RegistryOverrides,
@@ -241,23 +252,59 @@ export function acceptRenameProposal(
     proposal.key,
     proposal.currentDisplayName,
     proposal.candidate.wording,
+    proposal.candidate.tier,
   );
 }
 
 /**
- * Decline: a pure `Set` transform recording `(tier, wording)` so
- * `gateRenameCandidate` stops re-raising this exact candidate. Returns the
- * same reference when the signature is already present (matching this
- * package's own no-op-returns-same-reference convention, e.g.
- * `./overrides.ts`'s `renameConcept`). See this file's module doc: the
- * caller decides where this set lives, and today that is session-scoped
- * memory in `provider.ts`, not a persisted store.
+ * Reconstructs `gateRenameCandidate`'s `priorMemory` parameter from a
+ * persisted override — `[D-206]`'s durable substitute for the provider's
+ * session-scoped `Map`, read fresh on every load. `undefined` exactly when
+ * `key` has no override yet, or has one with no `sourceTier` — a rename she
+ * typed directly (INV-6: her own word, tier-less) already signals "manual
+ * override" through `entry.displayName !== entry.originalName` on its own,
+ * with no need for tier bookkeeping, so an absent `sourceTier` correctly
+ * yields no reconstructed baseline here rather than a fabricated one.
+ */
+export function renameProposalMemoryFrom(
+  overrides: RegistryOverrides,
+  key: string,
+): RenameProposalMemory | undefined {
+  const override = overrides.renames[key];
+  if (override === undefined || override.sourceTier === undefined) return undefined;
+  return { tier: override.sourceTier, displayName: override.displayName };
+}
+
+/**
+ * Reconstructs `gateRenameCandidate`'s `declinedSignatures` parameter from
+ * `RegistryOverrides.declinedRenameSignatures` — `[D-206]`'s durable
+ * substitute for the provider's session-scoped `Set`. Absent in the
+ * persisted file (every overrides blob written before `[D-206]`) reads back
+ * as an empty set, never an error — matching this module's own
+ * "additive, no migration" convention.
+ */
+export function declinedRenameSignaturesFrom(overrides: RegistryOverrides): ReadonlySet<string> {
+  return new Set(overrides.declinedRenameSignatures ?? []);
+}
+
+/**
+ * Decline: a pure `RegistryOverrides` transform recording `(tier, wording)`
+ * so `gateRenameCandidate` stops re-raising this exact candidate —
+ * `[D-206]`'s persisted form of what was a bare `Set` transform under
+ * `ol-2zfj.58`. Returns the same reference when the signature is already
+ * present (matching this package's own no-op-returns-same-reference
+ * convention, e.g. `./overrides.ts`'s `renameConcept`). The caller
+ * (`provider.ts`'s `declineRenameProposal`) persists the result through the
+ * same `ObsidianRegistryOverridesStore.save()` path `rename`/`withdraw`/
+ * `restore` already use, so a decline now survives a restart the same way
+ * they do.
  */
 export function recordDeclinedRenameProposal(
-  declined: ReadonlySet<string>,
+  overrides: RegistryOverrides,
   proposal: RenameProposal,
-): ReadonlySet<string> {
+): RegistryOverrides {
   const signature = declineSignature(proposal.candidate);
-  if (declined.has(signature)) return declined;
-  return new Set([...declined, signature]);
+  const existing = overrides.declinedRenameSignatures ?? [];
+  if (existing.includes(signature)) return overrides;
+  return { ...overrides, declinedRenameSignatures: [...existing, signature] };
 }

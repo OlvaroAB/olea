@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   aliasesLine,
   coursesLine,
+  DUPLICATE_TITLE_LABEL,
+  duplicateTitleLine,
   EXPLAIN_BACK_HISTORY_CONTESTED_MARKER,
   EXPLAIN_BACK_HISTORY_HEADING,
   explainBackDepthPhrase,
@@ -68,6 +70,8 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     NOTE_OFFER_LINE,
     NOTE_OFFER_ACCEPT_ACTION,
     NOTE_OFFER_DECLINE_ACTION,
+    DUPLICATE_TITLE_LABEL,
+    duplicateTitleLine(['05 Zettelkasten/Test note.md', '05 Zettelkasten/Other/Test note.md']),
   ];
 }
 
@@ -222,5 +226,25 @@ describe('explainBackHistoryRowLine (F8.4b)', () => {
       contested: false,
     });
     expect(line).not.toMatch(/\d%|\bscore\b/i);
+  });
+});
+
+describe('duplicateTitleLine ([D-203])', () => {
+  it('states the structural reason and names both notes', () => {
+    const line = duplicateTitleLine([
+      '05 Zettelkasten/Concept A.md',
+      '05 Zettelkasten/Outcrop/Concept A.md',
+    ]);
+    expect(line).toContain('Two of your notes share this title');
+    expect(line).toContain('05 Zettelkasten/Concept A.md');
+    expect(line).toContain('05 Zettelkasten/Outcrop/Concept A.md');
+  });
+
+  it('states what clears it — renaming one of the notes — never a chooser between them', () => {
+    const line = duplicateTitleLine(['a.md', 'b.md']);
+    expect(line.toLowerCase()).toContain('rename');
+    // No pick-one wording anywhere in the line — the clause's own "nothing is
+    // chosen for her".
+    expect(line.toLowerCase()).not.toMatch(/choose|pick|select/);
   });
 });

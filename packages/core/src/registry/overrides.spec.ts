@@ -64,6 +64,72 @@ describe('renameConcept', () => {
   });
 });
 
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-206] —
+// the rename-proposal baseline survives a restart", tagged
+// `@auto:core/registry/overrides.spec`.
+describe('renameConcept — sourceTier (`[D-206]`)', () => {
+  it('a rename accepted from a tiered candidate carries that tier as sourceTier', () => {
+    const next = renameConcept(
+      EMPTY_REGISTRY_OVERRIDES,
+      'k1',
+      'Slide-deck wording',
+      'Tag wording',
+      2,
+    );
+    expect(next.renames.k1).toEqual({
+      displayName: 'Tag wording',
+      aliases: ['Slide-deck wording'],
+      sourceTier: 2,
+    });
+  });
+
+  it('a plain rename with no tier argument carries no sourceTier at all', () => {
+    const next = renameConcept(EMPTY_REGISTRY_OVERRIDES, 'k1', 'Imbrication', 'Rock layering');
+    expect(next.renames.k1?.sourceTier).toBeUndefined();
+    expect('sourceTier' in (next.renames.k1 ?? {})).toBe(false);
+  });
+
+  it('a later hand-typed rename over an accepted one clears the earlier sourceTier', () => {
+    const accepted = renameConcept(
+      EMPTY_REGISTRY_OVERRIDES,
+      'k1',
+      'Slide-deck wording',
+      'Tag wording',
+      2,
+    );
+    const retyped = renameConcept(accepted, 'k1', 'Slide-deck wording', 'Her own wording');
+    expect(retyped.renames.k1?.sourceTier).toBeUndefined();
+    expect(retyped.renames.k1?.displayName).toBe('Her own wording');
+  });
+
+  it('renaming back to the original name clears sourceTier along with the rest of the override', () => {
+    const accepted = renameConcept(
+      EMPTY_REGISTRY_OVERRIDES,
+      'k1',
+      'Slide-deck wording',
+      'Tag wording',
+      2,
+    );
+    const revertedBack = renameConcept(accepted, 'k1', 'Slide-deck wording', 'Slide-deck wording');
+    expect(revertedBack.renames.k1).toBeUndefined();
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-206] —
+// existing overrides without the new fields still load", tagged
+// `@auto:core/registry/overrides.spec`.
+describe('RegistryOverrides — additive [D-206] fields, no migration', () => {
+  it('an overrides value written before [D-206] has no sourceTier and no declinedRenameSignatures', () => {
+    // Exactly the shape a pre-[D-206] `renameConcept` call already produced
+    // — nothing here has been touched to add the new fields, matching what
+    // a file written by the OLD code, then loaded by the NEW code, looks
+    // like before anything is written again.
+    const legacy = renameConcept(EMPTY_REGISTRY_OVERRIDES, 'k1', 'Imbrication', 'Rock layering');
+    expect(legacy.renames.k1?.sourceTier).toBeUndefined();
+    expect(legacy.declinedRenameSignatures).toBeUndefined();
+  });
+});
+
 describe('pruning', () => {
   it('a fresh concept is not pruned', () => {
     expect(isConceptPruned(EMPTY_REGISTRY_OVERRIDES, 'k1')).toBe(false);

@@ -35,6 +35,13 @@
  *     demoted to an alias
  *   - declining calls through to `RegistryViewDeps.declineRenameProposal`: the section
  *     disappears immediately, AND the same proposal does not re-fire on a later refresh
+ *
+ * `[D-203]`'s duplicate-title state (F8.4, `ol-2zfj.60`), covering the `@auto-web` scenario
+ * "the state is shown on the row, not hidden in a missing binding":
+ *   - a concept whose title is carried by two of its notes shows a badge and one line naming
+ *     both notes and the structural reason, with no chooser anywhere in that section
+ *   - the rest of the row (instrument mix, rename/withdraw actions) renders exactly as it
+ *     would for any other concept — the binder's refusal stands, nothing else is suppressed
  */
 import { expect, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -296,4 +303,42 @@ test('registry-rename-proposal: declining removes the proposal, and it does not 
   const rowAfterRefresh = rows(page).filter({ hasText: 'syn:concept:renwick' });
   await expect(rowAfterRefresh.locator('.olea-registry-rename-proposal')).toHaveCount(0);
   await expect(rowAfterRefresh.locator('h3')).toHaveText('syn:concept:renwick');
+});
+
+// ---------------------------------------------------------------------------
+// `[D-203]` (`ol-2zfj.60`) — the duplicate-title state on the concept row.
+// F8-concepts-scope.md, `@auto-web:e2e/registry.spec.ts`: "the state is shown
+// on the row, not hidden in a missing binding."
+// ---------------------------------------------------------------------------
+
+test("registry-duplicate-title: the row renders the state and its reason in her terms, offers no chooser, and the binder's refusal stands", async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-duplicate-title', 'obsidian-dark');
+  const row = rows(page).filter({ hasText: 'syn:concept:corvale' });
+  await expect(row).toHaveCount(1);
+
+  // The badge and the structural reason, in her terms — both note paths named.
+  await expect(row.locator('.olea-registry-duplicate-title-badge')).toHaveText('Duplicate title');
+  const reason = row.locator('.olea-registry-duplicate-title');
+  await expect(reason).toContainText('Two of your notes share this title');
+  await expect(reason).toContainText('syn:concept:corvale.md');
+  await expect(reason).toContainText('Outcrop Sketches/syn:concept:corvale.md');
+
+  // No chooser: no button or control anywhere in the duplicate-title section,
+  // and the rest of the row (instrument mix, actions) renders exactly as it
+  // would for any other concept — the binder's refusal stands, nothing else
+  // on the row is suppressed because of it.
+  await expect(reason.locator('button, input, select, [role="button"]')).toHaveCount(0);
+  await expect(row.locator('.olea-registry-instruments li')).toHaveCount(1);
+  await expect(row.getByRole('button', { name: 'Rename' })).toBeVisible();
+});
+
+test('registry-duplicate-title: an ordinary concept in the same list shows no badge and no duplicate-title section', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
+  const first = rows(page).nth(0);
+  await expect(first.locator('.olea-registry-duplicate-title-badge')).toHaveCount(0);
+  await expect(first.locator('.olea-registry-duplicate-title')).toHaveCount(0);
 });

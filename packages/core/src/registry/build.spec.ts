@@ -234,6 +234,60 @@ describe('buildRegistryModel — prune, never delete (F8.5)', () => {
   });
 });
 
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-203] —
+// a duplicate-title state on the concept row (ol-2zfj.60)", tagged
+// `@auto:core/registry/build.spec`.
+describe('buildRegistryModel — duplicate-title state (F8.4 / [D-203])', () => {
+  it('two of her notes share one title and the binder refuses: the row carries state duplicate-title with the structural reason, and no note is bound', () => {
+    const model = buildFor({
+      concepts: [
+        concept({
+          ambiguousNotePaths: [
+            '05 Zettelkasten/Concept A.md',
+            '05 Zettelkasten/Outcrop/Concept A.md',
+          ],
+        }),
+      ],
+    });
+    const row = model.concepts[0];
+    expect(row?.duplicateTitle).toEqual({
+      notePaths: ['05 Zettelkasten/Concept A.md', '05 Zettelkasten/Outcrop/Concept A.md'],
+    });
+  });
+
+  it('an ordinary concept (no duplicated title) carries no duplicateTitle field at all', () => {
+    const model = buildFor({ concepts: [concept()] });
+    expect(model.concepts[0]?.duplicateTitle).toBeUndefined();
+  });
+
+  it('renaming one of the notes clears the state: the next build binds the remaining match and the state is gone', () => {
+    const ambiguous = buildFor({
+      concepts: [
+        concept({
+          ambiguousNotePaths: [
+            '05 Zettelkasten/Concept A.md',
+            '05 Zettelkasten/Outcrop/Concept A.md',
+          ],
+        }),
+      ],
+    });
+    expect(ambiguous.concepts[0]?.duplicateTitle).toBeDefined();
+
+    // The next build after she renames one of the two notes: the binder
+    // (`../concept/extract.ts`) now resolves the remaining match and mints a
+    // `ConceptRecord` with no `ambiguousNotePaths` at all — this module does
+    // no title comparison of its own, so a fresh `ConceptRecord` with a
+    // resolved `boundNotePath` is exactly what a real re-extraction produces.
+    const resolved = buildFor({
+      concepts: [concept({ boundNotePath: '05 Zettelkasten/Concept A.md' })],
+    });
+    expect(resolved.concepts[0]?.duplicateTitle).toBeUndefined();
+    expect(resolved.concepts[0]?.sourceLocations.map((l) => l.sourcePath)).toContain(
+      '05 Zettelkasten/Concept A.md',
+    );
+  });
+});
+
 // Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 / [D-171] —
 // The registry carries source provenance", tagged `@auto:core/registry/build.spec`.
 describe('buildRegistryModel — source provenance (F8.4 / [D-171])', () => {

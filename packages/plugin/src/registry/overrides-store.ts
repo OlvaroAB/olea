@@ -45,7 +45,21 @@ function isRegistryOverrides(value: unknown): value is RegistryOverrides {
   if (candidate.version !== 1) return false;
   if (typeof candidate.renames !== 'object' || candidate.renames === null) return false;
   if (!Array.isArray(candidate.prunedConceptKeys)) return false;
-  return candidate.prunedConceptKeys.every((key) => typeof key === 'string');
+  if (!candidate.prunedConceptKeys.every((key) => typeof key === 'string')) return false;
+  // `[D-206]` (`ol-2zfj.59`): additive and OPTIONAL — a blob written before
+  // this field existed simply omits it, and that still loads (the "existing
+  // overrides without the new fields still load" scenario). Only reject
+  // when the key is present but malformed; `renames[key].sourceTier` is not
+  // deep-validated here for the same reason `renames` itself never was —
+  // this guard checks the store's own top-level shape, not every nested
+  // field `./types.ts` documents.
+  if (candidate.declinedRenameSignatures !== undefined) {
+    if (!Array.isArray(candidate.declinedRenameSignatures)) return false;
+    if (!candidate.declinedRenameSignatures.every((signature) => typeof signature === 'string')) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export class ObsidianRegistryOverridesStore {

@@ -45,6 +45,17 @@
  * "every sentence comes from `./copy.ts`" above, not a design choice; move
  * them there the moment that file's owner is free (Class A/B, self-ratified,
  * logged here for retroactive review).
+ *
+ * **`[D-203]` adds `renderDuplicateTitle`**, a row-header badge plus one
+ * line, present whenever `entry.duplicateTitle` is set: two of her own
+ * notes share this concept's title, the binder (`../../core/registry/
+ * build.ts`) refuses to resolve which one it binds to, and this state names
+ * both notes without offering a way to pick between them. No accept/decline
+ * shape here — unlike the rename proposal and the note offer, there is
+ * nothing for her to act on inside this view; the only thing that clears it
+ * is renaming one of the notes in Obsidian, which the NEXT build reflects.
+ * Its copy lives properly in `./copy.ts` (this bead owns that file, unlike
+ * `[D-183]`'s bead above).
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -58,6 +69,8 @@ import {
 import {
   aliasesLine,
   coursesLine,
+  DUPLICATE_TITLE_LABEL,
+  duplicateTitleLine,
   EDIT_INSTRUMENT_ACTION,
   EXPLAIN_BACK_HISTORY_HEADING,
   explainBackHistoryRowLine,
@@ -302,6 +315,14 @@ export class RegistryView extends ItemView {
     if (entry.pruned) {
       header.createEl('span', { cls: 'olea-registry-withdrawn-badge', text: WITHDRAWN_LABEL });
     }
+    if (entry.duplicateTitle !== undefined) {
+      header.createEl('span', {
+        cls: 'olea-registry-duplicate-title-badge',
+        text: DUPLICATE_TITLE_LABEL,
+      });
+    }
+
+    this.renderDuplicateTitle(row, entry);
 
     row.createDiv({ cls: 'olea-registry-courses', text: coursesLine(entry.courses) });
 
@@ -327,6 +348,28 @@ export class RegistryView extends ItemView {
     this.renderActions(row, entry);
     this.renderSourceLocations(row, entry.sourceLocations);
     this.renderInstruments(row, entry);
+  }
+
+  /**
+   * `[D-203]`'s duplicate-title state — the badge (in `renderConcept`'s
+   * header, mirroring `WITHDRAWN_LABEL`'s own badge shape) plus this one
+   * line naming the two notes and what would clear it. **No chooser is
+   * rendered anywhere here**: no button, no dropdown, no way to pick between
+   * `entry.duplicateTitle.notePaths` — the binder's refusal (`../../core/
+   * registry/build.ts`'s `duplicateTitleFor`, an unmodified read of
+   * `ConceptRecord.ambiguousNotePaths`) stands exactly as it is, matching the
+   * ratified clause's own "nothing is chosen for her". Renders before the
+   * courses line since it is the most salient structural fact about a row in
+   * this state — there is no bound note for anything else on the row to
+   * follow from.
+   */
+  private renderDuplicateTitle(root: HTMLElement, entry: RegistryConceptEntry): void {
+    const duplicateTitle = entry.duplicateTitle;
+    if (duplicateTitle === undefined) return;
+    root.createDiv({
+      cls: 'olea-registry-duplicate-title',
+      text: duplicateTitleLine(duplicateTitle.notePaths),
+    });
   }
 
   /**

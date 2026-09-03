@@ -62,6 +62,15 @@
  * for why a freeform/topic-seeded attempt (no real vault instrument to
  * attach to) is invisible at this grain and still counted at the concept
  * grain by `explainBackSummaryFor` below.
+ *
+ * ## `[D-203]` — the duplicate-title state
+ *
+ * `duplicateTitleFor` below carries `ConceptRecord.ambiguousNotePaths`
+ * straight onto the row, unmodified — this module detects nothing new here
+ * either; the binder (`../concept/extract.ts`'s `resolveTitle`) already
+ * decided the concept has no bound note, and this is only the fold that
+ * makes that decision visible on F8.4's browse surface instead of reading
+ * as an ordinary unbound tier-2 concept.
  */
 
 import { noteOfferEligible } from '../concept/note-offer.js';
@@ -331,6 +340,22 @@ function explainBackSummaryFor(
   return { attempted: attemptCount > 0, attemptCount };
 }
 
+/**
+ * `[D-203]`'s duplicate-title state — a direct, unmodified read of
+ * `ConceptRecord.ambiguousNotePaths` (see that field's own doc in
+ * `../concept/types.ts` for the binder's pre-existing refusal this surfaces,
+ * and `./types.ts`'s `RegistryDuplicateTitleState` for what the registry
+ * does with it). No new detection logic here — the binder already decided
+ * this; this module only carries the fact through to the row.
+ */
+function duplicateTitleFor(
+  concept: BuildRegistryModelInput['concepts'][number],
+): RegistryConceptEntry['duplicateTitle'] {
+  return concept.ambiguousNotePaths === undefined
+    ? undefined
+    : { notePaths: concept.ambiguousNotePaths };
+}
+
 function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): number {
   if (a.displayName !== b.displayName) return a.displayName < b.displayName ? -1 : 1;
   return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
@@ -399,6 +424,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
         `buildRegistryModel: no mastery/vitality computed for concept ${concept.key}`,
       );
     }
+    const duplicateTitle = duplicateTitleFor(concept);
     return {
       key: concept.key,
       displayName,
@@ -413,6 +439,12 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       mastery,
       vitality,
       noteOffer: noteOfferFor(concept, mastery, instrumentRecordsByConcept, courseRankingsByCourse),
+      // `exactOptionalPropertyTypes`: an explicit `duplicateTitle: undefined`
+      // is a type error on an optional field (matching this file's own
+      // `BuildRegistryModelInput.disputes`/`.courseRankings` convention in
+      // `build.spec.ts`'s `buildFor`), so the key is omitted entirely for the
+      // ordinary, non-duplicated case rather than set to `undefined`.
+      ...(duplicateTitle === undefined ? {} : { duplicateTitle }),
     };
   });
 

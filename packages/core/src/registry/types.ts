@@ -54,11 +54,14 @@
  * display name never overwrites it silently — it surfaces as a proposal, through the same
  * accept/decline shape `noteOffer` already established one field up. See `./rename-proposal.ts`'s
  * module doc for the whole mechanism, what it reuses from `./overrides.ts`'s existing
- * `renameConcept` (accept needs no new persisted shape at all), and the one Class C question this
- * bead's tripwire stopped on rather than answering unilaterally: making the "declined proposals
- * don't re-fire" promise and the "which tier set the current name" memory survive a restart, not
- * just a session, needs a genuinely new persisted field on `RegistryOverrides`/
- * `RegistryRenameOverride` — named, not added, in that file's doc.
+ * `renameConcept` (accept needs no new persisted shape at all).
+ *
+ * **`[D-206]` (`ol-2zfj.59`) closed the one Class C question `ol-2zfj.58`'s tripwire stopped on
+ * rather than answering unilaterally**: making the "declined proposals don't re-fire" promise and
+ * the "which tier set the current name" memory survive a restart, not just a session.
+ * `RegistryRenameOverride.sourceTier` and `RegistryOverrides.declinedRenameSignatures` above are
+ * those two additive fields — see their own doc comments, and `./rename-proposal.ts`'s module doc
+ * for how the rank gate reads them.
  */
 
 /**
@@ -90,6 +93,30 @@ export interface RenameProposal {
   readonly currentDisplayName: string;
   readonly currentTier: ConceptTier;
   readonly candidate: RenameProposalCandidate;
+}
+
+/**
+ * `[D-203]`'s duplicate-title state — present exactly when
+ * `ConceptRecord.ambiguousNotePaths` is set: this concept's title is carried
+ * by more than one of her Zettelkasten notes, so `../concept/extract.js`'s
+ * binder refuses to resolve which one it binds to and `boundNotePath` stays
+ * absent (that refusal predates this bead — held, not ruled, by `[D-196]`,
+ * and ruled here by `[D-203]`). `notePaths` is `ConceptRecord.ambiguousNotePaths`
+ * unchanged: the several notes whose filenames all match, sorted.
+ *
+ * **It is her material and a lever, unlike the unreadable-file case `[D-196]`
+ * rules elsewhere, so it is shown** rather than the row silently reading as
+ * an ordinary tier-2 concept with no binding. **No chooser is offered**:
+ * choosing between the two notes by any rule of ours would assert an
+ * identity nothing in her vault states (the same argument
+ * `ConceptRecord.ambiguousNotePaths`'s own doc already makes) — this field
+ * carries only the fact and the evidence, never a pick-one affordance.
+ * Clears on the next build once she renames one of the notes so the titles
+ * differ — nothing here persists between builds, matching `./build.ts`'s own
+ * "pure function of its input" doc.
+ */
+export interface RegistryDuplicateTitleState {
+  readonly notePaths: readonly VaultPath[];
 }
 
 import type { MasteryState, ReviewLogEntry, SoloLevel } from 'olea-contracts';
@@ -314,6 +341,16 @@ export interface RegistryConceptEntry {
    * persisted field this bead's tripwire stopped it from adding).
    */
   readonly renameProposal?: RenameProposal | null;
+  /**
+   * `[D-203]`'s duplicate-title state — see `RegistryDuplicateTitleState`'s
+   * own doc. Absent means this concept's title is not currently duplicated
+   * (the ordinary case); present means the binder's refusal stands and no
+   * note is bound. Populated directly by `./build.ts` from
+   * `ConceptRecord.ambiguousNotePaths` — unlike `renameProposal` above, this
+   * needs no session-scoped overlay, since the fact is fully determined by
+   * this run's own vault walk.
+   */
+  readonly duplicateTitle?: RegistryDuplicateTitleState;
 }
 
 /** The whole browsable inventory (F8.4). Concepts in no course are included (F1.3: a statement, not a failure) — filtering by course is a view concern, not a model concern. */
@@ -365,6 +402,21 @@ export interface RegistryRenameOverride {
   readonly displayName: string;
   /** Every previous `displayName` this concept has carried under this override, most recent first, deduplicated. */
   readonly aliases: readonly string[];
+  /**
+   * `[D-206]` (`ol-2zfj.59`): the provenance tier that set the CURRENT
+   * `displayName`, present only when this override came from ACCEPTING a
+   * `[D-183]` rename proposal (`./rename-proposal.ts`'s
+   * `acceptRenameProposal`, which passes `proposal.candidate.tier`) —
+   * absent when she typed the name directly, which carries no tier at all
+   * (her own word, tier-less, INV-6; `renameConcept`'s plain call leaves
+   * this unset). Read by `./rename-proposal.ts`'s `renameProposalMemoryFrom`
+   * to reconstruct the rank gate's comparison baseline across an Obsidian
+   * restart instead of losing it to the provider's session-scoped memory
+   * (see that file's module doc, "the Class C gap this bead's tripwire
+   * stopped on," which this field closes). **Absent on every override
+   * written before `[D-206]` — additive field, no migration.**
+   */
+  readonly sourceTier?: ConceptTier;
 }
 
 /**
@@ -381,4 +433,16 @@ export interface RegistryOverrides {
   readonly renames: Readonly<Record<string, RegistryRenameOverride>>;
   /** Concept keys currently withdrawn (F8.5) — a set, represented as a sorted array for a deterministic persisted shape. */
   readonly prunedConceptKeys: readonly string[];
+  /**
+   * `[D-206]` (`ol-2zfj.59`): every `[D-183]` `(tier, wording)` decline
+   * signature (`./rename-proposal.ts`'s `declineSignature`) she has ever
+   * declined — global across every concept, mirroring the shape the
+   * session-scoped `Set` it replaces already used (a proposal is identified
+   * by source tier plus wording, never by concept key). Read via
+   * `./rename-proposal.ts`'s `declinedRenameSignaturesFrom` so a decline
+   * survives an Obsidian restart instead of lasting only the session.
+   * **Absent/empty on every overrides file written before `[D-206]` —
+   * additive field, no migration.**
+   */
+  readonly declinedRenameSignatures?: readonly string[];
 }
