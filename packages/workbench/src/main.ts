@@ -153,6 +153,7 @@ import {
   TODAY_STATES,
   type TodayScenario,
 } from './today-scenarios.js';
+import type { SimulatorTransportMode } from './transport/index.js';
 import {
   buildTrendsScenario,
   findTrendsState,
@@ -292,6 +293,18 @@ interface Route {
    * a build-session link is reloadable on its own.
    */
   readonly focus: string;
+  /**
+   * The simulator surface's transport switch (`ol-3ux7.64.7` [WBX-6]),
+   * `?transport=` — `'replay'` (default, zero real network), `'record'`
+   * (via `simulator-serve.mjs`'s same-origin `/__olea` proxy) or `'direct'`
+   * (a real Worker). Same "always present, ignored elsewhere" convention as
+   * {@link day}/{@link focus} — only `mountSimulator` reads it. Never a
+   * token: D-005/INV-3 keeps a bearer token out of a URL/history entry, so
+   * `direct` mode's token has no query-param seam here.
+   */
+  readonly transportMode: SimulatorTransportMode;
+  /** `record`/`direct` only — see {@link transportMode}. `''` means unset. */
+  readonly transportBaseUrl: string;
 }
 
 function defaultStateFor(surface: RouteSurface): string {
@@ -434,6 +447,11 @@ function readRoute(): Route {
   const persona = findPersona(personaId);
   const stateFound = findStateFor(surface, requestedStateId);
   const requestedDay = Number(params.get('day'));
+  const requestedTransport = params.get('transport');
+  const transportMode: SimulatorTransportMode =
+    requestedTransport === 'record' || requestedTransport === 'direct'
+      ? requestedTransport
+      : 'replay';
   return {
     surface,
     stateId: stateFound === undefined ? defaultStateFor(surface) : requestedStateId,
@@ -441,12 +459,23 @@ function readRoute(): Route {
     personaId: persona === undefined ? DEFAULT_PERSONA : persona.id,
     day: Number.isFinite(requestedDay) && params.has('day') ? requestedDay : DEFAULT_TIMELINE_DAY,
     focus: params.get('focus') ?? '',
+    transportMode,
+    transportBaseUrl: params.get('transportBaseUrl') ?? '',
   };
 }
 
 function writeRoute(route: Route): void {
   const focusParam = route.focus.length > 0 ? `&focus=${encodeURIComponent(route.focus)}` : '';
-  const next = `#/${route.surface}/${route.stateId}?set=${route.setId}&persona=${route.personaId}&day=${String(route.day)}${focusParam}`;
+  // `transport`/`transportBaseUrl` are only ever meaningful on the simulator surface, and only
+  // ever set by opening a URL that already carries them (the walk driver, or a manual paste) —
+  // `writeRoute` never invents one, same "only append when non-default" rule `focusParam` uses.
+  const transportParam =
+    route.transportMode === 'replay' ? '' : `&transport=${route.transportMode}`;
+  const transportBaseUrlParam =
+    route.transportBaseUrl.length > 0
+      ? `&transportBaseUrl=${encodeURIComponent(route.transportBaseUrl)}`
+      : '';
+  const next = `#/${route.surface}/${route.stateId}?set=${route.setId}&persona=${route.personaId}&day=${String(route.day)}${focusParam}${transportParam}${transportBaseUrlParam}`;
   if (window.location.hash !== next) window.location.hash = next;
 }
 
@@ -1295,8 +1324,21 @@ async function main(): Promise<void> {
       const noticeEl = host.createDiv({ cls: 'wb-sim-notice-host' });
       const paneEl = host.createDiv({ cls: 'wb-sim-pane' });
 
+      // `record`'s own default base URL is same-origin `/__olea` (`simulator-serve.mjs`'s proxy,
+      // which is necessarily what served this very page — there is no other same-origin
+      // candidate) unless `?transportBaseUrl=` overrides it; `direct` has no safe default (a real
+      // Worker's base URL is never guessable) and `replay` never reads this field at all.
+      const transportBaseUrl =
+        route.transportBaseUrl.length > 0
+          ? route.transportBaseUrl
+          : route.transportMode === 'record'
+            ? `${window.location.origin}/__olea`
+            : '';
       simulatorController = await SimulatorController.create({
         elements: { pane: paneEl, controls: controlsEl, badge: badgeEl, notice: noticeEl },
+        transport: route.transportMode,
+        // `exactOptionalPropertyTypes`: an absent base URL must be OMITTED, never `undefined`.
+        ...(transportBaseUrl.length > 0 ? { transportBaseUrl } : {}),
       });
       if (run !== generation) return;
 

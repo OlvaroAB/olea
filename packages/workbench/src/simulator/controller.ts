@@ -39,12 +39,48 @@
  * **Reachability.** `packages/workbench/src/main.ts`'s `simulator` route
  * (`RouteSurface`, `readRoute`, and the `route.surface === 'simulator'`
  * branch in `render()`) is this controller's only caller.
+ *
+ * **The transport bridge (`ol-3ux7.64.7` [WBX-6]).** `OleaPlugin.onload()`
+ * builds its own `WorkerHttpTransport` internally (`main.ts:492-495`,
+ * `createRecordingTransport`) with no injection seam, and neither
+ * `MountPluginDeps` (`obsidian-shim/mount-plugin.ts`, WBX-2's file) nor
+ * `packages/plugin/src/main.ts` (no WBX bead owns it) is on this lane's owns
+ * list — so `createSimulatorTransport` (`../transport/index.ts`, WBX-4)
+ * cannot be handed to the plugin directly the way that factory's own module
+ * doc suggests. Instead, {@link installTransportBridge} does for `fetch`
+ * exactly what `SimulatorClock.install` (`./clock.ts`) already does for
+ * `Date`: a page-level override, installed once at `create()` and restored
+ * in {@link SimulatorController.dispose}, so every real seam this class was
+ * told to leave alone stays untouched. Every plugin HTTP call is a `POST` to
+ * `<baseUrl>/v1/task` (`worker/transport.ts`'s `buildTaskUrl`,
+ * `olea-contracts`' `TASK_ENDPOINT_PATH`) with `JSON.stringify(request)` as
+ * the body — so the bridge does not need to guess a `WorkerTaskRequest`'s
+ * shape, only re-parse what `sendWorkerTask` already serialised. A hit
+ * resolves with a real `Response` wrapping `transport.send(request)`'s
+ * result; a miss (or any other failure `transport.send` throws) rejects the
+ * patched `fetch` the same way a genuine network failure would, which is
+ * exactly what `sendWorkerTask`'s own `catch` turns into the plugin's real
+ * `WorkerTransportError` — so the bridge never needs to fabricate that class
+ * or its message itself. The one thing the bridge must get right that
+ * `Date` did not: the `record`/`direct` transports' OWN outbound call (to
+ * the proxy or to staging) is also a `fetch`, so it is built with a plain
+ * adapter over the ORIGINAL, pre-patch `fetch` — using `globalThis.fetch` at
+ * call time would recurse into the very interceptor that call is trying to
+ * make (the proxy's own path, `/__olea/v1/task`, also ends in `/v1/task`).
  */
 
-import type { Rating } from 'olea-contracts';
-import type { Scheduler } from 'olea-core';
-import { appendReviewLogRecord, createFsrsScheduler } from 'olea-core';
+import { type Rating, TASK_ENDPOINT_PATH } from 'olea-contracts';
+import {
+  appendReviewLogRecord,
+  createFsrsScheduler,
+  type Scheduler,
+  type WorkerTaskRequest,
+  type WorkerTaskTransport,
+} from 'olea-core';
+import { OLEA_COMMAND_PROCESS_NOTE_NOW } from '../../../plugin/src/commands/ids.js';
 import OleaPlugin from '../../../plugin/src/main.js';
+import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
+import type { HttpRequestFn } from '../../../plugin/src/worker/transport.js';
 import { WORKBENCH_NOW } from '../clock.js';
 import type { ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
 import {
@@ -58,6 +94,12 @@ import {
   type TodayViewDeps,
 } from '../plugin-bridge.js';
 import { isoWithLocalOffset } from '../scenarios.js';
+import { GENERATION_CASSETTE_VERSION, type GenerationCassette } from '../synthetic-bridge.js';
+import {
+  createSimulatorTransport,
+  type SimulatorTransportMiss,
+  type SimulatorTransportMode,
+} from '../transport/index.js';
 import { loadFixtureVault } from '../vault/fixture-vault.js';
 import type { MemoryVaultSource } from '../vault/memory-source.js';
 import { createSimulatorClock, type SimulatorClock } from './clock.js';
@@ -66,6 +108,157 @@ import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
 import { renderProvenanceBadge, type SimulatorTransport } from './provenance-badge.js';
 import { DEFAULT_SIMULATOR_DB_NAME, openSimulatorStore, type SimulatorStore } from './store.js';
+
+/**
+ * Best-effort, never-throwing load of a bundled replay cassette from a plain
+ * static path (`simulator-serve.mjs`'s existing static file serving — no
+ * server change needed: anything under `dist/` is already served this way).
+ * Nothing in this lane's owns list builds that file into `dist/` yet (that
+ * is `scripts/simulator-build.mjs`, WBX-3's file), so today this always
+ * falls through to the empty cassette — an honest "no recording available"
+ * default, never a fabricated hit, and never a real network call beyond the
+ * one static GET. `fetchFn` is the caller's captured ORIGINAL `fetch` (see
+ * this module's doc on why the bridge must not use `globalThis.fetch` for
+ * its own outbound calls).
+ */
+async function loadReplayCassette(fetchFn: typeof fetch): Promise<GenerationCassette> {
+  const empty: GenerationCassette = {
+    version: GENERATION_CASSETTE_VERSION,
+    datasetVersion: 0,
+    entries: [],
+  };
+  try {
+    const response = await fetchFn('/simulator-cassette.json');
+    if (!response.ok) return empty;
+    const raw: unknown = await response.json();
+    if (
+      typeof raw === 'object' &&
+      raw !== null &&
+      (raw as { version?: unknown }).version === GENERATION_CASSETTE_VERSION &&
+      Array.isArray((raw as { entries?: unknown }).entries)
+    ) {
+      return raw as GenerationCassette;
+    }
+    return empty;
+  } catch {
+    return empty;
+  }
+}
+
+/** Resolves the URL a `fetch(input, init)` call was made with, whatever shape `input` took. */
+function fetchRequestUrl(input: string | URL | Request): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+/**
+ * Installs the page-level `fetch` override described in this module's own
+ * doc, and returns the restore function. `transport` is whatever
+ * `createSimulatorTransport` built for the active mode — this function's
+ * only job is routing the plugin's one HTTP call shape (`POST .../v1/task`)
+ * to it.
+ */
+function installTransportBridge(
+  transport: WorkerTaskTransport,
+  originalFetch: typeof fetch,
+): () => void {
+  const patched: typeof fetch = async (input, init) => {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method !== 'POST') return originalFetch(input, init);
+    let pathname: string;
+    try {
+      pathname = new URL(fetchRequestUrl(input), window.location.origin).pathname;
+    } catch {
+      return originalFetch(input, init);
+    }
+    if (!pathname.endsWith(TASK_ENDPOINT_PATH)) return originalFetch(input, init);
+
+    let request: WorkerTaskRequest;
+    try {
+      request = JSON.parse(String(init?.body ?? '')) as WorkerTaskRequest;
+    } catch {
+      // Not a task envelope we can forward to `transport` — fall back to a
+      // real network call rather than guessing.
+      return originalFetch(input, init);
+    }
+    const result = await transport.send(request);
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  globalThis.fetch = patched;
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+/**
+ * Builds the mode-appropriate `WorkerTaskTransport` (WBX-4's factory) and
+ * installs the bridge above so the mounted plugin's own, unmodified HTTP
+ * call reaches it. D-005/INV-3: `onMiss` only ever receives a task id and a
+ * payload hash (`SimulatorTransportMiss`'s own contract) — never logged with
+ * anything else, never the payload.
+ */
+async function createTransportBridge(options: {
+  readonly mode: SimulatorTransportMode;
+  readonly baseUrl: string | undefined;
+  readonly token: string | undefined;
+}): Promise<() => void> {
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  const rawHttpRequest: HttpRequestFn = async (params) => {
+    const response = await originalFetch(params.url, {
+      method: params.method,
+      headers: params.headers,
+      body: params.body,
+    });
+    return { status: response.status, text: await response.text() };
+  };
+
+  // `exactOptionalPropertyTypes`: `createSimulatorTransport` distinguishes "field omitted" from
+  // "field explicitly undefined", so each optional below is spread in only when it has a value.
+  const cassette =
+    options.mode === 'replay' || options.mode === 'direct'
+      ? await loadReplayCassette(originalFetch)
+      : undefined;
+
+  const transport = createSimulatorTransport({
+    mode: options.mode,
+    ...(cassette !== undefined ? { cassette } : {}),
+    ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+    ...(options.token !== undefined ? { token: options.token } : {}),
+    httpRequest: rawHttpRequest,
+    onMiss: (miss: SimulatorTransportMiss) => {
+      console.info(`simulator: transport miss — ${miss.taskId} (${miss.payloadHash})`);
+    },
+  });
+
+  return installTransportBridge(transport, originalFetch);
+}
+
+/**
+ * A placeholder `PersistedWorkerConfig` — never the real staging URL or a real token, and never
+ * read by anything (the fetch bridge above matches by PATH suffix, `TASK_ENDPOINT_PATH`, so the
+ * literal origin here is irrelevant to where a call actually goes). Its only job is making
+ * `isWorkerConfigured` (`config-store.ts`) read `true`, because several product surfaces —
+ * F7.8's grey-out, the materiality judge, the F3.3 generation trigger — check that BEFORE
+ * attempting a call at all and skip it silently otherwise (discovered live: a first-read walk
+ * with no seeded config triggered zero `/__olea/v1/*` requests, since every one of those call
+ * sites believed no Worker was configured). Written directly into the plugin's own persisted
+ * `data.json` shape, bypassing the settings tab UI entirely — there is no student-facing
+ * affordance here, just the same storage key F7.1's real paste-a-token flow writes to.
+ */
+const SIMULATOR_WORKER_CONFIG_PLACEHOLDER = {
+  version: 1 as const,
+  baseUrl: 'https://simulator.invalid',
+  token: 'simulator-walk',
+};
+
+/** See {@link SIMULATOR_WORKER_CONFIG_PLACEHOLDER}'s own doc — called once per mount lifetime and again after every `reset()`, since `SimulatorStore.resetAll` clears the plugin-data store this lives in. */
+async function seedSimulatorWorkerConfig(pluginDataHost: ObsidianDataHost): Promise<void> {
+  await new ObsidianWorkerConfigStore(pluginDataHost).save(SIMULATOR_WORKER_CONFIG_PLACEHOLDER);
+}
 
 /**
  * The fixture world's snapshot instant — the same fixed instant every other
@@ -107,8 +300,20 @@ export interface SimulatorControllerOptions {
   readonly elements: SimulatorMountElements;
   readonly scheduler?: Scheduler;
   readonly dbName?: string;
-  /** Injectable for tests; production always replays real time. */
+  /**
+   * The transport mode the mounted plugin's Worker calls go through (WBX-6,
+   * `ol-3ux7.64.7`) — `'replay'` (cassette-only, zero real network, the
+   * default), `'record'` (via `simulator-serve.mjs`'s same-origin `/__olea`
+   * proxy, `baseUrl` required) or `'direct'` (a real Worker, `baseUrl`
+   * required). Also the badge's own displayed value. Injectable for tests;
+   * production reads it from the route (`main.ts`'s `?transport=` query
+   * param).
+   */
   readonly transport?: SimulatorTransport;
+  /** `record`/`direct` only — see {@link transport}. Ignored by `replay`. */
+  readonly transportBaseUrl?: string;
+  /** `direct` only — the pasted F7.1 token. Ignored by `replay`/`record` (the proxy never reads it). */
+  readonly transportToken?: string;
 }
 
 function settle(): Promise<void> {
@@ -163,6 +368,72 @@ function toShimVaultSource(source: PersistentVaultSource): ShimVaultSource {
   };
 }
 
+declare global {
+  interface Window {
+    __oleaSimulatorDriver?: SimulatorWalkDriver;
+  }
+}
+
+/**
+ * A non-visual automation seam for `scripts/simulator-walk.mjs` (WBX-6,
+ * `ol-3ux7.64.7`) — never rendered, never a control a student can see or
+ * click, so CLAUDE.md's "no user-visible affordance without a clause" rule
+ * does not govern it. It exists because no file-list UI renders yet to click
+ * a "Process this note now" context-menu item through
+ * (`obsidian-shim/index.ts`'s own doc on `Workspace.setActiveFile`: "Set by
+ * whichever host renders the simulator's file list" — nothing does, yet),
+ * and building that UI is not this lane's job. Set only while the whole
+ * plugin is mounted ({@link installSimulatorWalkDriver}, from
+ * {@link SimulatorController.remountPane}); cleared on every teardown
+ * ({@link clearSimulatorWalkDriver}, from
+ * {@link SimulatorController.closeCurrent}) — the same lifecycle
+ * `mountedPlugin` already gets.
+ */
+export interface SimulatorWalkDriver {
+  /** Every note/PDF path currently in the vault (`Vault.getFiles()`, unfiltered — the caller picks which folder). */
+  listFilePaths(): readonly string[];
+  /**
+   * Sets `path` as the active file and invokes `OLEA_COMMAND_PROCESS_NOTE_NOW`
+   * — the identical check-then-execute path a real palette invocation takes
+   * (`main.ts`'s `processNoteNowCheckCallback`). Returns `false` (a no-op,
+   * never a throw) for a path outside the vault or a file type
+   * `isProcessNowSupported` excludes, exactly as a real invocation with no
+   * supported active file would.
+   */
+  processNoteNow(path: string): boolean;
+  /** The `[data-sim-advance]` button's own action, awaitable — see {@link SimulatorController.advanceOneDay}. */
+  advanceOneDay(): Promise<void>;
+  /** The `[data-sim-rate]` button's own action, awaitable — see {@link SimulatorController.rateNextDue}. */
+  rateNextDue(): Promise<boolean>;
+  /** The `[data-sim-reset]` button's own action, awaitable — see {@link SimulatorController.reset}. */
+  reset(): Promise<void>;
+}
+
+function installSimulatorWalkDriver(
+  controller: SimulatorController,
+  mounted: MountedPlugin<OleaPlugin>,
+): void {
+  if (typeof window === 'undefined') return;
+  window.__oleaSimulatorDriver = {
+    listFilePaths: () => mounted.app.vault.getFiles().map((file) => file.path),
+    processNoteNow: (path: string): boolean => {
+      const file = mounted.app.vault.getFileByPath(path);
+      if (file === null) return false;
+      mounted.app.workspace.setActiveFile(file);
+      return mounted.plugin.invokeCommand(OLEA_COMMAND_PROCESS_NOTE_NOW);
+    },
+    advanceOneDay: () => controller.advanceOneDay(),
+    rateNextDue: () => controller.rateNextDue(),
+    reset: () => controller.reset(),
+  };
+}
+
+function clearSimulatorWalkDriver(): void {
+  if (typeof window === 'undefined') return;
+  // `exactOptionalPropertyTypes`: `delete`, never an explicit `undefined` assignment.
+  delete window.__oleaSimulatorDriver;
+}
+
 export class SimulatorController {
   /** Set when the whole plugin is mounted (the normal path — see this class's module doc). */
   private mountedPlugin: MountedPlugin<OleaPlugin> | null = null;
@@ -179,6 +450,7 @@ export class SimulatorController {
     private pluginDataHost: ObsidianDataHost,
     private deviceId: string,
     private readonly transport: SimulatorTransport,
+    private readonly uninstallTransportBridge: () => void,
   ) {}
 
   static async create(options: SimulatorControllerOptions): Promise<SimulatorController> {
@@ -191,6 +463,13 @@ export class SimulatorController {
     const uninstallClock = clock.install();
     const pluginDataHost = createPluginDataHost(store);
     const deviceId = await ensureDeviceId(pluginDataHost);
+    await seedSimulatorWorkerConfig(pluginDataHost);
+    const transportMode = options.transport ?? 'replay';
+    const uninstallTransportBridge = await createTransportBridge({
+      mode: transportMode,
+      baseUrl: options.transportBaseUrl,
+      token: options.transportToken,
+    });
 
     const controller = new SimulatorController(
       options.elements,
@@ -201,7 +480,8 @@ export class SimulatorController {
       uninstallClock,
       pluginDataHost,
       deviceId,
-      options.transport ?? 'replay',
+      transportMode,
+      uninstallTransportBridge,
     );
     controller.renderControls();
     await controller.remountPane();
@@ -224,10 +504,12 @@ export class SimulatorController {
    */
   async dispose(): Promise<void> {
     this.uninstallClock();
+    this.uninstallTransportBridge();
     await this.closeCurrent();
   }
 
   private async closeCurrent(): Promise<void> {
+    clearSimulatorWalkDriver();
     if (this.mountedPlugin !== null) {
       await this.mountedPlugin.unmount();
       this.mountedPlugin = null;
@@ -297,6 +579,7 @@ export class SimulatorController {
       // (`ol-3ux7.64.10` [WBX-1b]): every remount wiped the message the
       // action that triggered it had just set.
       mounted.plugin.invokeCommand(OLEA_COMMAND_TODAY_OPEN);
+      installSimulatorWalkDriver(this, mounted);
     } else {
       this.setDegradedNotice(missing);
       const deps = this.buildFallbackDeps();
@@ -399,13 +682,21 @@ export class SimulatorController {
    * palette) as a one-click shortcut for exercising write scenarios without
    * running a full review session.
    */
-  async rateNextDue(): Promise<void> {
+  /**
+   * Returns whether an item was actually rated — added for
+   * {@link SimulatorWalkDriver} (WBX-6), which needs an awaitable,
+   * unambiguous result rather than polling the notice element's text for
+   * "Nothing is due" vs. "Rated 1 item…". The button's own click handler
+   * (`renderControls`) already discards the return value, so this is a
+   * strictly additive change.
+   */
+  async rateNextDue(): Promise<boolean> {
     const now = this.clock.now();
     const queue = await loadLiveDueQueue({ vault: this.vault, scheduler: this.scheduler, now });
     const item = queue.items[0];
     if (item === undefined) {
       this.setNotice('Nothing is due right now — nothing was rated.');
-      return;
+      return false;
     }
     await appendReviewLogRecord(
       this.vault,
@@ -423,6 +714,7 @@ export class SimulatorController {
     );
     this.setNotice(`Rated 1 item (${item.instrument.instrumentId}).`);
     await this.remountPane();
+    return true;
   }
 
   /**
@@ -442,6 +734,8 @@ export class SimulatorController {
     const freshBase = await loadFixtureVault();
     this.vault = await PersistentVaultSource.create(freshBase, this.store);
     this.deviceId = await ensureDeviceId(this.pluginDataHost);
+    // `resetAll` clears the plugin-data store this lives in — see its own doc.
+    await seedSimulatorWorkerConfig(this.pluginDataHost);
     this.setNotice('Reset to the fixture snapshot.');
     await this.remountPane();
   }
