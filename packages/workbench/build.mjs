@@ -91,7 +91,22 @@ const dist = serve
 
 const PLUGIN_STYLES = resolve(here, '..', 'plugin', 'styles.css');
 const THINGS_THEME = resolve(here, 'vendor', 'things', 'theme.css');
-const FIXTURE_VAULT = resolve(here, '..', 'core', 'fixtures', 'vault');
+/**
+ * `WB_VAULT` overrides which vault directory `copyFixtureVault` copies into `dist/vault/` —
+ * same shape as `WB_DIST` above, and for the same reason: a build-script-level environment
+ * read that changes where a `cp` reads FROM, never something baked into the bundle (no esbuild
+ * `define` reads it; the rule two paragraphs below stays true either way).
+ *
+ * Added for `olea-service`'s private simulator build (WBX-3, `docs/dev/simulator-design.md`
+ * §1-2): that script runs THIS file with `WB_VAULT` pointed at a real-vault snapshot the public
+ * repo must never contain, so this constant's default is unchanged and no caller that omits the
+ * variable is affected — a build with no `WB_VAULT` is byte-identical to before this line
+ * existed.
+ */
+const FIXTURE_VAULT =
+  process.env.WB_VAULT === undefined || process.env.WB_VAULT === ''
+    ? resolve(here, '..', 'core', 'fixtures', 'vault')
+    : resolve(process.env.WB_VAULT);
 /** Written by `scripts/precompute-embeddings.mjs` (`ol-opmb.2` [TB-2]) — gitignored, optional. */
 const EMBEDDING_CASSETTE = resolve(here, '.embedding-cassette', 'cassette.json');
 /** Written by `scripts/precompute-generation.mjs` (`ol-opmb.3` [TB-3]) — gitignored, optional. */
