@@ -57,11 +57,48 @@
  * no `encouragement` field on `TodayPanelInput`/`TodayViewModel`, no
  * encouragement string in `today/copy.ts`). "Off" is simply the only state
  * this pane can currently exhibit.
+ *
+ * ## WB-8 (`ol-ppxj.31`) — one state, given a real (if thin) mastery reading
+ *
+ * `ol-l5og.17` [VIT-3] found that no state in this file ever supplies
+ * `TodayPanelInput.concepts`, so `buildTodayPanel`'s `mastery` field is
+ * `null` for every one of them (this module's own doc, `renderMastery`'s
+ * "`null` means the panel was never handed a concept set") — a DIFFERENT gap
+ * from `trends-scenarios.ts`'s (that file always supplied `concepts` but
+ * never `vitality`, tripping the separate D-115/D-116 all-null-vitality
+ * bail-out). Wiring a real `TodayTrendsSource` over the fixture vault for the
+ * `loadTodayPanel`-backed states (`today-due` and its siblings) needs an
+ * export `plugin-bridge.ts` does not carry yet — outside this bead's `owns`
+ * (`trends-scenarios.ts`, `today-scenarios.ts`, `e2e/`) — so it is not done
+ * here.
+ *
+ * `today-scope-not-declared` is the one state this bead extends instead: it
+ * already hand-builds `buildTodayPanel` directly (no `plugin-bridge.ts`
+ * widening needed) and already coins one course, `WB_SCOPE_COURSE`. Giving
+ * that same course a handful of concept ids and a real `vitality` input
+ * (`WB_SCOPE_CONCEPTS`, below) makes its `MasteryOverview` non-null with a
+ * real, unfabricated reading — over `entries: []`, so every concept folds to
+ * growth stage `seed` and vitality `early`, which is the true state of a
+ * course with a registered concept set and literally no review evidence yet,
+ * not a hand-set field standing in for one. The other hand-built states
+ * (`today-nothing-due`, `today-unavailable`, the rhythm pair) are left alone
+ * on purpose: `today-rhythm-quiet`/`today-rhythm-fresh` are a directly
+ * comparable pair (same course, same technique, differing only in the
+ * rhythm reading) and adding mastery to one but not the other would break
+ * that comparability, and `today-nothing-due`/`today-unavailable` are
+ * specifically about F6.1's due-count states, not F6.2's.
  */
 
 import type { Rating } from 'olea-contracts';
-import type { GroveCourseModel, RhythmCourseInput, Scheduler, VaultSource } from 'olea-core';
-import { appendReviewLogRecord, buildTodayPanel } from 'olea-core';
+import type {
+  ConceptCourses,
+  GroveCourseModel,
+  RhythmCourseInput,
+  Scheduler,
+  TodayPanelInput,
+  VaultSource,
+} from 'olea-core';
+import { appendReviewLogRecord, buildTodayPanel, createFsrsScheduler } from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
 import type { PersonaHistory } from './persona/history.js';
@@ -263,6 +300,36 @@ const WB_RHYTHM_QUIET_ARRIVAL_DAY = '2026-12-15';
 /** 3 days back — well inside the 21-day quiet threshold, so nothing fires. */
 const WB_RHYTHM_FRESH_ARRIVAL_DAY = '2027-01-12';
 
+/**
+ * WB-8 (`ol-ppxj.31`) — `today-scope-not-declared`'s concept set, in
+ * `WB_SCOPE_COURSE` (its own course), so `TodayPanelInput.concepts` is
+ * non-empty for that one state. Coined ids (INV-3), never a real vault
+ * concept.
+ */
+const WB_SCOPE_CONCEPTS: readonly ConceptCourses[] = [
+  { conceptId: 'syn:concept:vantrel-1', courses: [WB_SCOPE_COURSE] },
+  { conceptId: 'syn:concept:vantrel-2', courses: [WB_SCOPE_COURSE] },
+  { conceptId: 'syn:concept:vantrel-3', courses: [WB_SCOPE_COURSE] },
+];
+
+/**
+ * `MasteryVitalityInputs` is not exported directly from `olea-core` — the
+ * same indexed-access mirror `trends-scenarios.ts`'s
+ * `TrendsVitalityInputs` and `packages/plugin/src/today/data-source.ts`'s
+ * `TodayPanelVitalityInputs` already use, for the identical reason.
+ */
+type TodayVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
+
+/**
+ * `[D-115]`'s ratified retrievability cut, declared independently — see
+ * `trends-scenarios.ts`'s identical declaration and its own doc for why
+ * there is no single shared constant to import instead. A plain-English
+ * default, not a derivation.
+ */
+const WB_SCOPE_HOLDING_CUT = 0.8;
+
+const scopeVitalityScheduler = createFsrsScheduler();
+
 export function buildTodayScenario(options: BuildTodayScenarioOptions): TodayScenario {
   const { vault, scheduler, queue, stateId } = options;
   // Unused today (see the state note on `today-due`) but accepted for symmetry
@@ -456,6 +523,16 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
 
     case 'today-scope-not-declared': {
       const model: GroveCourseModel = { status: 'no-registered-source', course: WB_SCOPE_COURSE };
+      // WB-8 (`ol-ppxj.31`): a real (if thin) `vitality` input over this
+      // state's own `entries: []` — see the module doc. Every
+      // `WB_SCOPE_CONCEPTS` id folds to growth stage `seed` and vitality
+      // `early`, the true reading for a course with no review evidence yet,
+      // never a hand-set field standing in for one.
+      const vitality: TodayVitalityInputs = {
+        scheduler: scopeVitalityScheduler,
+        now: WORKBENCH_NOW,
+        holdingCut: WB_SCOPE_HOLDING_CUT,
+      };
       return {
         deps: {
           load: () =>
@@ -467,6 +544,8 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
                 dueThrough,
                 windowDays: DEFAULT_STREAK_WINDOW_DAYS,
                 courseScopeModels: [model],
+                concepts: WB_SCOPE_CONCEPTS,
+                vitality,
               }),
             ),
           startReview,

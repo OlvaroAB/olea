@@ -50,12 +50,47 @@
  * Everything behind this surface is fabricated. It exercises machinery. No
  * number on it is evidence about the alpha user and no threshold may be tuned
  * against it.
+ *
+ * ## WB-8 (`ol-ppxj.31`) — vitality, wired from the same stream
+ *
+ * `ol-l5og.17` [VIT-3] found this surface's own reachability gap: every state
+ * built `buildTodayPanel` with no `vitality` input, so
+ * `MasteryOverviewInput.vitality` was never supplied and every
+ * `CourseMastery.vitality` came back `null` — `TodayView.renderMastery`'s
+ * D-115/D-116 all-null bail-out (`courses.every((c) => c.vitality === null)`)
+ * fired for every state, and the ladder (and the sprig geometry VIT-3 put
+ * inside it) never reached the screen here.
+ *
+ * `buildTrendsViewModel` now supplies `vitality` for every state except
+ * `trends-cramming-neutralised` (`TrendsWorkbenchState.vitalityWired`) —
+ * `createFsrsScheduler()`, `WORKBENCH_NOW` and a locally declared holding cut,
+ * the identical three-part shape `packages/plugin/src/today/data-source.ts`'s
+ * `loadTodayPanel` already assembles for the real product (`ol-95vv.5`), and
+ * `packages/plugin/src/registry/provider.ts`'s `DECLARED_FALLBACK_HOLDING_CUT`
+ * before it — a THIRD independent Class B declaration of the same
+ * unmeasured constant, matching this codebase's existing convention of no
+ * single shared `holdingCut`. **No hand-set vitality field anywhere**: the
+ * reading for every course still comes out of `readAllConceptVitality`'s
+ * fold over the state's own `entries`, exactly the "real core path, not a
+ * hand-set field" this bead's brief asks for — a state with a thin history
+ * (`trends-too-early`) reads mostly `early`, a state with ninety days of
+ * regular reviews (`trends-healthy`) reads a real mix, and nothing here
+ * decides a course's vitality directly.
+ *
+ * `trends-cramming-neutralised` is left with `vitality` omitted on purpose:
+ * one state has to, or the D-115/D-116 bail-out stops being exercised by any
+ * fixture at all, and this is the state whose own note is about the spacing
+ * detector's measured limitation, not about the mastery ladder — no other
+ * state's documented claim depends on its ladder being visible the way
+ * `trends-healthy`'s and `trends-course-behind`'s notes do.
  */
 
 import {
   buildTodayPanel,
   type ConceptCourses,
   type CourseFloorShare,
+  createFsrsScheduler,
+  type TodayPanelInput,
   type TodayViewModel,
 } from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
@@ -79,6 +114,18 @@ export interface TrendsWorkbenchState {
   readonly persona: PersonaId;
   /** `true` for the member of a pair with `planted.neutralise` applied. */
   readonly neutralised: boolean;
+  /**
+   * `false` for exactly one state (`trends-cramming-neutralised`) — see this
+   * file's module doc, "WB-8". `true` for the rest: `buildTrendsViewModel`
+   * folds `MasteryVitalityInputs` over that state's own stream, so every
+   * `CourseMastery.vitality` is a real reading rather than the D-116
+   * omitted-caller fallback. Kept `false` for one state so a real fixture
+   * still exercises `TodayView.renderMastery`'s D-115/D-116 all-null bail-out
+   * (`view.ts`'s `courses.every((course) => course.vitality === null)`),
+   * rather than that path going untested the moment every other state stops
+   * hitting it.
+   */
+  readonly vitalityWired: boolean;
   /** Days of simulated history. One, for the too-early state. */
   readonly days: number;
   readonly note: string;
@@ -91,6 +138,7 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'steady-reviewer',
     neutralised: false,
+    vitalityWired: true,
     days: 90,
     note:
       'F6.2 — the mastery overview with something in most of the five named states, in both ' +
@@ -104,6 +152,7 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'lopsided-effort',
     neutralised: false,
+    vitalityWired: true,
     days: 90,
     note:
       'F6.5(b) — her hours went almost entirely to one of two courses, and it is not the one ' +
@@ -117,6 +166,7 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'lopsided-effort',
     neutralised: true,
+    vitalityWired: true,
     days: 90,
     note:
       'The same persona and the same seed with planted.neutralise applied — courseTakeRate back ' +
@@ -130,6 +180,7 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'crammer',
     neutralised: false,
+    vitalityWired: true,
     days: 90,
     note:
       'F6.5(a) — many times the daily rate in the week before an assessment, and a large share ' +
@@ -143,6 +194,11 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'crammer',
     neutralised: true,
+    // WB-8 (`ol-ppxj.31`): the one state left without a vitality input, so
+    // `TodayView.renderMastery`'s D-115/D-116 all-null bail-out still has a
+    // real fixture exercising it — see this file's module doc. Nothing about
+    // the finding below depends on the mastery ladder being visible.
+    vitalityWired: false,
     days: 90,
     note:
       'The same persona and seed with planted.neutralise applied: no cram window, no early ' +
@@ -152,7 +208,9 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
       'leave roughly ten pre-assessment calendar days and one busy evening among them moves the ' +
       'rate a long way. Separating cleanly on this corpus needs a concentration threshold near ' +
       '5; it has not been moved there, because tuning a threshold on fabricated data is what ' +
-      'N-015 forbids. The numbers are in test/trends-scenarios.spec.ts.',
+      'N-015 forbids. The numbers are in test/trends-scenarios.spec.ts. Mastery vitality is ' +
+      "deliberately left unwired on this one state (see trends-scenarios.ts's module doc, " +
+      '"WB-8") so the D-115/D-116 all-null bail-out still has a real fixture to fire on.',
   },
   {
     id: 'trends-too-early',
@@ -160,6 +218,7 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     group: 'trends',
     persona: 'single-session',
     neutralised: false,
+    vitalityWired: true,
     days: 1,
     note:
       'One day of first exposures. Both detectors decline, and the pane says so rather than ' +
@@ -261,6 +320,30 @@ function streamFor(state: TrendsWorkbenchState): SyntheticStream {
 const viewModelCache = new Map<string, TodayViewModel>();
 
 /**
+ * `MasteryVitalityInputs` is not exported directly from `olea-core` (it sits
+ * behind `today/panel.ts`'s public `TodayPanelInput`) — the same
+ * indexed-access mirror `packages/plugin/src/today/data-source.ts`'s
+ * `TodayPanelVitalityInputs` already uses, for the identical reason: the type
+ * needed here is a nested field of an already-exported type, and widening
+ * `olea-core`'s index is a change to a shared file outside this bead's
+ * `owns`.
+ */
+type TrendsVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
+
+/**
+ * `[D-115]`'s ratified retrievability cut, declared independently rather than
+ * imported — see the module doc, "WB-8": neither
+ * `packages/plugin/src/registry/provider.ts`'s `DECLARED_FALLBACK_HOLDING_CUT`
+ * nor `packages/plugin/src/today/data-source.ts`'s copy is exported, and this
+ * workbench has no dependency on `packages/plugin` to import one from anyway.
+ * A plain-English default, not a derivation — this file's own N-015 note
+ * already says no number here is evidence about the alpha user.
+ */
+const WORKBENCH_HOLDING_CUT = 0.8;
+
+const trendsScheduler = createFsrsScheduler();
+
+/**
  * The real `buildTodayPanel`, over a real persona stream. Nothing here
  * hand-builds a `TodayViewModel`: the states differ only in which stream they
  * feed the product's own pure function.
@@ -274,6 +357,13 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     throw new Error(`workbench: unknown trends state ${JSON.stringify(stateId)}`);
 
   const stream = streamFor(state);
+  // WB-8 (`ol-ppxj.31`): every course shares this one `vitality` input, or
+  // (for `state.vitalityWired === false`) none does — see
+  // `MasteryOverviewInput.vitality`'s own doc for why that is an "either all
+  // of them carry a reading or none do" choice, not a per-course one.
+  const vitality: TrendsVitalityInputs | undefined = state.vitalityWired
+    ? { scheduler: trendsScheduler, now: WORKBENCH_NOW, holdingCut: WORKBENCH_HOLDING_CUT }
+    : undefined;
   const vm = buildTodayPanel({
     entries: stream.entries,
     // See the module doc (WBF-2, `ol-9j3w`): `[]`, not `null` — a real "no
@@ -285,6 +375,7 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     windowDays: state.days,
     concepts: TRENDS_CONCEPTS,
     floorShares: TRENDS_ASSESSMENTS,
+    ...(vitality !== undefined ? { vitality } : {}),
   });
 
   viewModelCache.set(stateId, vm);

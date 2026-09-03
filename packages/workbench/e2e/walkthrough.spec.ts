@@ -82,9 +82,15 @@ test('WBF-2: the trends screen never opens on the read-failure message', async (
  * claim worth pinning; a viewer SEEING it is. These two assertions exist
  * because the plugin unit tests pass whether or not any workbench surface ever
  * mounts a view that reaches `renderSprig`, and the Today golden screenshots
- * did NOT change when the sprig landed — the flat `today` states are never
- * given a trends source, so their mastery section renders nothing and the
- * goldens could not have caught a regression here either way.
+ * did NOT change when the sprig landed — at the time this doc was written,
+ * every flat `today` state built `TodayPanelInput` with no `concepts` at all,
+ * so their mastery section rendered nothing and the goldens could not have
+ * caught a regression here either way. WB-8 (`ol-ppxj.31`) has since given
+ * ONE flat `today` state, `today-scope-not-declared`, a real (concepts +
+ * vitality) mastery reading — see `today-scenarios.ts`'s module doc — so
+ * that one state's golden now does carry ladder/sprig content and was
+ * re-baselined for it; every other flat `today` state is unchanged and this
+ * paragraph's claim still holds for them.
  */
 test('SPRIG-1: the sprig actually reaches the screen on the gap view (step 8)', async ({
   page,
@@ -103,22 +109,22 @@ test('SPRIG-1: the sprig actually reaches the screen on the gap view (step 8)', 
   await expect(sprigs.first().locator('ellipse')).toHaveCount(1);
 });
 
-// WB-7 (`ol-ppxj.30`) finding, left as a reported red rather than fixed here:
-// step 12 mounts `TodayView` (surface `trends`), and `TodayView`'s ladder form
-// (`renderLadderRow` in `packages/plugin/src/today/view.ts`) draws each
-// concept as a plain `.olea-today-mastery-ladder-dot` div, never a real
-// `renderSprig()` — `.olea-sprig` genuinely does not exist on this surface,
-// under any selector. That is a real gap against the vocabulary registry's
-// own normative invariant ("The two forms" §, "Invariant across both forms":
-// "identical sprig geometry, only the pixel size changes" — F2.11, amended by
-// `[D-049]`/`[D-116]`), which this assertion is correctly pinning: the ladder
-// form should draw sprig geometry per concept and currently draws a plain
-// mark instead. VIT-2 (`ol-a3hv`, closed) built the ladder with plain
-// tending/early marks rather than sprig geometry, so the gap is pre-existing,
-// not a WB-7 regression. Per this bead's own instruction ("if the affordance
-// is clause-backed but unbuilt, do NOT build it"), this e2e-only lane does
-// not touch `packages/plugin/src/today/view.ts` — the fix belongs to whoever
-// owns that file, as a follow-up to VIT-2 under F2.11. Left red on purpose.
+// WB-7 (`ol-ppxj.30`) found this red; VIT-3 (`ol-l5og.17`) then built the
+// ladder's real `renderSprig()` call (`packages/plugin/src/today/view.ts`'s
+// `renderLadderRow`, matching the field form's geometry per the vocabulary
+// registry's "Invariant across both forms" and F2.11/`[D-049]`/`[D-116]`) but
+// left this assertion red for a different, upstream reason: step 12's
+// `trends-cramming` state (`walkthrough.ts`) built `buildTodayPanel` with no
+// `vitality` input, so `MasteryOverviewInput.vitality` was `undefined` and
+// `TodayView.renderMastery`'s D-115/D-116 all-null bail-out
+// (`courses.every((course) => course.vitality === null)`) suppressed the
+// whole mastery section before `renderLadderRow`, and therefore
+// `renderSprig()`, ever ran — the sprig geometry was built and simply never
+// reachable from any workbench fixture. WB-8 (`ol-ppxj.31`) closed that gap in
+// `trends-scenarios.ts` (`buildTrendsViewModel` now supplies a real
+// `vitality` input, folded from the state's own review-log entries, for
+// every state except `trends-cramming-neutralised` — see that file's module
+// doc), and `trends-cramming` is one of the states that now carries one.
 test('SPRIG-1: the sprig reaches the trends screen too (step 12)', async ({ page }) => {
   await gotoWalkStep(page, 12);
   await expect(frame(page).locator('.olea-sprig').first()).toBeVisible();
