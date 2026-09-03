@@ -34,10 +34,14 @@
  * which ids succeeded and which did not, so a re-run only touches what is
  * still pending.
  *
- * **No keyboard bindings this round (disclosed, `ol-uxk9`).** Every action
- * is reached by click only; `ol-uxk9` is the filed follow-up. `keymap.ts`'s
- * Q6.5 promise ("every ON-SCREEN hint is a real binding") still holds
- * because this surface draws no hint row at all.
+ * **Keyboard bindings landed (`[D-216]` / `ol-egov.105`).** Move down the
+ * list, keep, fix and bin are now real key bindings, resolved by
+ * `bulk-review-keymap.ts`'s `resolveBulkReviewKey` and hinted on screen by
+ * `bulk-review-view.ts` — the "click-only this round, disclosed (`ol-uxk9`)"
+ * caveat this doc used to carry no longer applies. This controller itself
+ * stays input-agnostic: `accept`/`editBeforeSaving`/`reject` are the same
+ * three methods a click or a key both resolve to, so nothing about this
+ * file changed to make the keys work.
  */
 
 import type { DraftAcceptPort } from './accept.js';
@@ -65,6 +69,16 @@ export interface BulkReviewItemViewModel {
   readonly stem: string;
   readonly conceptName: string;
   readonly createdAt: string;
+  /**
+   * `[D-216]`'s click-through target: `DraftRecord.conceptIds` carried
+   * through unchanged so `bulk-review-view.ts` can open the same
+   * `REGISTRY_ENTRY_ACTION` affordance `review/view.ts` opens by
+   * `instrumentId` — a still-pending draft has no `instrumentId` yet (that
+   * only exists once accepted), so the row opens by concept key instead.
+   * Every real F3.3 draft carries exactly one (`types.ts`'s own doc on the
+   * field), never empty (`isDraftRecord` rejects an empty array).
+   */
+  readonly conceptIds: readonly string[];
 }
 
 export interface BulkReviewGroupViewModel {
@@ -117,6 +131,7 @@ export function buildBulkReviewGroups(
         stem: r.question.stem,
         conceptName: r.conceptName,
         createdAt: r.createdAt,
+        conceptIds: r.conceptIds,
       })),
     });
   }
