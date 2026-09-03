@@ -42,6 +42,23 @@
  * restart — unlike `PreviousTextTracker` (session-scoped only, by design,
  * because row 1.4's `previousText` is a whole file), a stripped-material
  * block is small enough that persisting it costs nothing worth naming.
+ *
+ * **Update, `ol-0r92.46`: the per-instrument source-passage pointer this doc
+ * once called out of reach now exists — `[D-181]`'s citation sidecar
+ * (`../../../../core/src/instrument/citation-store.ts`), read back onto
+ * `VaultInstrumentRecord.sourceProvenance` by `enumerate.ts` — and this
+ * store's caller (`citation-revision-wiring.ts`'s `citedPassagePath`) prefers
+ * it over the home-note-minus-spans text whenever it names a markdown note
+ * distinct from the instrument's own `notePath`.** That is exactly the
+ * `[D-179]`/`[D-214]` split-home-note shape: `sourcePath` on a record this
+ * store holds is then that OTHER note — her authored note, or whatever note
+ * held the material at draft time — never the home note, which in that shape
+ * carries no material to diff at all. The home-note-minus-spans rule above is
+ * still what runs whenever no such pointer exists (a hand-authored
+ * instrument, or a generated one no sidecar-writer has cited) or it names a
+ * non-markdown source (a bare PDF/PPTX/DOCX/image this store cannot diff as
+ * text) — this file's own shape (`sourcePath` + `text`) is unchanged either
+ * way; only which file the caller reads before saving here has changed.
  */
 
 import type { VaultPath } from 'olea-core';
@@ -54,9 +71,14 @@ export interface ObsidianDataHost {
 
 /** One instrument's last-observed citation anchor. */
 export interface CitationAnchorRecord {
-  /** The note this instrument's material was last observed in. */
+  /**
+   * The note this instrument's material was last observed in — its own
+   * `notePath` (home-note-minus-spans reading), or, per this module's
+   * `ol-0r92.46` update, a distinct source note named by
+   * `sourceProvenance.sourcePath` when the two have split.
+   */
   readonly sourcePath: VaultPath;
-  /** The home note's material text (instrument blocks stripped) as last observed. */
+  /** That note's material text as last observed — instrument blocks stripped when `sourcePath` is the instrument's own `notePath`; raw when it is a split-off source note (nothing there to strip). */
   readonly text: string;
   /** The instrument's own concept bindings at last observation — carried so a later `'revised'` suspend write has them without a second vault walk. */
   readonly conceptIds: readonly string[];

@@ -42,6 +42,24 @@
  * block gets suspended, not one whose bytes a judge call just rewrote), at
  * the cost of every MCQ sharing one note reacting to the same material delta
  * rather than to its own individually-nearest passage.
+ *
+ * **Exception, since `[D-179]`/`[D-214]` split an instrument's home note from
+ * its actual source (`ol-0r92.46`): when `sourceProvenance.sourcePath` names
+ * a markdown note distinct from `notePath`, THAT note's raw text is the
+ * cited passage instead — never home-note-minus-spans.** Before that split,
+ * an instrument's home note and its cited material were the same file, so
+ * "home note minus instrument spans" and "the material" were one and the
+ * same text; a bare-dropped source (`[D-179]`) or an authored note
+ * (`[D-214]`) puts the instrument in a *sibling* home note that never
+ * carries her material at all — that note's own text never changes when she
+ * edits her real note, so the pre-existing rule left every split-home-note
+ * instrument's cited passage permanently "unchanged," silently. The home
+ * note itself is never the source in that shape; `citedPassagePath` below is
+ * the one seam that decides which file to read. The check is markdown-only
+ * (`isMarkdownVaultPath`) so a bare PDF/PPTX/DOCX/image source — whose
+ * `sourceProvenance.sourcePath` names a binary this module cannot diff as
+ * text — keeps the pre-existing home-note-minus-spans behaviour unchanged;
+ * only an authored note's own source note is ever substituted in.
  */
 
 import {
@@ -113,6 +131,31 @@ function isMcqRecord(record: VaultInstrumentRecord): record is McqInstrumentReco
   return record.instrumentType === 'mcq';
 }
 
+/** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
+function isMarkdownVaultPath(path: VaultPath): boolean {
+  return path.toLowerCase().endsWith('.md');
+}
+
+/**
+ * The file whose raw text is "the cited passage" for one instrument — see
+ * this module's own doc, "THE CITED PASSAGE," for the exception this
+ * implements. `sourceProvenance` is `undefined` for a hand-authored
+ * instrument (nothing mints a citation sidecar for those) and for a
+ * generated one no sidecar-writer has cited yet — both fall through to the
+ * pre-existing `notePath` rule, unchanged.
+ */
+function citedPassagePath(record: McqInstrumentRecord): VaultPath {
+  const sourcePath = record.sourceProvenance?.sourcePath;
+  if (
+    sourcePath !== undefined &&
+    sourcePath !== record.notePath &&
+    isMarkdownVaultPath(sourcePath)
+  ) {
+    return sourcePath;
+  }
+  return record.notePath;
+}
+
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
 interface MutableTickReport {
   tracked: number;
@@ -182,7 +225,10 @@ export class CitationRevisionTrigger {
       let current: CurrentPassageState;
       try {
         if (currentRecord !== undefined) {
-          current = { kind: 'found-at-anchor', text: await materialFor(currentRecord.notePath) };
+          current = {
+            kind: 'found-at-anchor',
+            text: await materialFor(citedPassagePath(currentRecord)),
+          };
         } else {
           current = {
             kind: 'not-found',
@@ -229,9 +275,10 @@ export class CitationRevisionTrigger {
     for (const [instrumentId, record] of currentByInstrumentId) {
       if (stored.has(instrumentId)) continue;
       try {
-        const text = await materialFor(record.notePath);
+        const path = citedPassagePath(record);
+        const text = await materialFor(path);
         await this.deps.store.save(instrumentId, {
-          sourcePath: record.notePath,
+          sourcePath: path,
           text,
           conceptIds: record.conceptIds,
         });
@@ -303,7 +350,7 @@ export class CitationRevisionTrigger {
         if (currentRecord !== undefined && current.kind === 'found-at-anchor') {
           try {
             await this.deps.store.save(instrumentId, {
-              sourcePath: currentRecord.notePath,
+              sourcePath: citedPassagePath(currentRecord),
               text: current.text,
               conceptIds: currentRecord.conceptIds,
             });
@@ -345,21 +392,25 @@ export class CitationRevisionTrigger {
  * `embeddedIn.notePath`/`sourcePath`" posture `main.ts`'s
  * `triggerAuthoredNoteGenerationIfObserved` already uses for a synthesised
  * `Provenance`: `classifyRelocation` only ever reads `candidate.text` and
- * `candidate.anchor.sourcePath`.
+ * `candidate.anchor.sourcePath`. Deduped and read by `citedPassagePath`, not
+ * raw `notePath` — the same substitution `tick`'s tracked-instrument loop
+ * makes, so a relocation search for a split-home-note instrument (`ol-0r92.46`)
+ * looks at candidates' real source text too, not their empty home-note stubs.
  */
 async function buildRelocationCandidates(
   mcqRecords: readonly McqInstrumentRecord[],
-  materialFor: (notePath: VaultPath) => Promise<string>,
+  materialFor: (path: VaultPath) => Promise<string>,
 ): Promise<RelocationCandidate[]> {
   const seen = new Set<VaultPath>();
   const candidates: RelocationCandidate[] = [];
   for (const record of mcqRecords) {
-    if (seen.has(record.notePath)) continue;
-    seen.add(record.notePath);
-    const text = await materialFor(record.notePath);
+    const path = citedPassagePath(record);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const text = await materialFor(path);
     candidates.push({
       anchor: {
-        sourcePath: record.notePath,
+        sourcePath: path,
         location: { page: 1, charRange: { start: 0, end: text.length } },
       },
       text,

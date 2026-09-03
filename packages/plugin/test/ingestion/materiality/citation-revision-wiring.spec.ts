@@ -9,14 +9,20 @@
  * `'refreshed'` (baseline advances, no vault write), `'revised'` (suspend +
  * enqueue called, tracking retired), and `'not-found'` → `'relocated'`
  * (silent heal to the new location).
+ *
+ * The second `describe` block below (`ol-0r92.46`) proves the `[D-214]`
+ * split-home-note fix specifically: every outcome above, replayed against a
+ * fixture where the instrument's home note and its cited material are
+ * DIFFERENT files, `sourceProvenance.sourcePath` naming the real source.
  */
-import type {
-  ListOptions,
-  RevisionJudgePort,
-  Unsubscribe,
-  VaultEvent,
-  VaultPath,
-  VaultSource,
+import {
+  citationStorePath,
+  type ListOptions,
+  type RevisionJudgePort,
+  type Unsubscribe,
+  type VaultEvent,
+  type VaultPath,
+  type VaultSource,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import type {
@@ -114,6 +120,44 @@ function note(paragraph: string, mcqId: string = MCQ_ID): string {
     mcqBlock(mcqId),
     '',
   ].join('\n');
+}
+
+// `[D-179]`/`[D-214]` split-home-note fixtures (`ol-0r92.46`): the instrument
+// lives in its own sibling home note (frontmatter + MCQ block only, no
+// material), and the cited material lives in a SEPARATE authored note that
+// carries no instrument block at all — exactly the shape
+// `buildAuthoredNoteUnit` (`ingestion/process-now.ts`) produces once she
+// writes in `SOURCE_NOTE_PATH` and Olea drafts beside it.
+const SOURCE_NOTE_PATH = 'Zettel/Weathering rates.md';
+const HOME_NOTE_PATH = 'Zettel/Weathering rates (Olea).md';
+
+function homeNote(mcqId: string = MCQ_ID): string {
+  return [
+    '---',
+    `topic: [${CONCEPT_TOPIC}]`,
+    'course: GEO101',
+    '---',
+    '',
+    mcqBlock(mcqId),
+    '',
+  ].join('\n');
+}
+
+/** `[D-181]` citation sidecar entry — what `enumerate.ts` reads back onto `sourceProvenance`. */
+function citationSidecar(instrumentId: string, sourcePath: VaultPath): string {
+  return `${JSON.stringify({ instrumentId, sourcePath, page: 1, schemaVersion: 1 }, null, 2)}\n`;
+}
+
+function splitHomeNoteVault(
+  sourceText: string,
+  overrides: Readonly<Record<string, string>> = {},
+): MemoryVaultSource {
+  return new MemoryVaultSource({
+    [HOME_NOTE_PATH]: homeNote(),
+    [SOURCE_NOTE_PATH]: sourceText,
+    [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, SOURCE_NOTE_PATH),
+    ...overrides,
+  });
 }
 
 function actions(overrides: Partial<Parameters<CitationRevisionTrigger['tick']>[1]> = {}) {
@@ -279,6 +323,119 @@ describe('CitationRevisionTrigger.tick', () => {
 
     const stored = await store.loadAll();
     expect(stored.get(MCQ_ID)?.sourcePath).toBe(DECOY_PATH);
+  });
+});
+
+/**
+ * `[D-214]` split-home-note revision (`ol-0r92.46`) — `features/F3-learn-
+ * from-anything.md`'s "Feature: F3.3 / [D-214] revision" scenarios,
+ * converted from `@manual` to `@auto` here for the four this fix closes
+ * (unchanged / changed-claim / same-claim-reworded / never-writes-her-note).
+ * "A genuinely new passage drafts" is generation/pipeline.ts's existing
+ * per-concept cache, outside this file's own concern, and stays `@manual`.
+ */
+describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)', () => {
+  it('@auto:F3.3-D214-revision-unchanged — an unchanged authored-note passage produces nothing, diffed from the source note rather than the empty home-note stub', async () => {
+    const vault = splitHomeNoteVault(PARAGRAPH_A);
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn() };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+
+    const baseline = await trigger.tick(vault, actions());
+    expect(baseline.newlyBaselined).toBe(1);
+    const baselined = await store.loadAll();
+    // The tracked text is the SOURCE note's own words, not the home note's
+    // (frontmatter-plus-MCQ-only) stub — proof the fix reads the right file.
+    expect(baselined.get(MCQ_ID)?.sourcePath).toBe(SOURCE_NOTE_PATH);
+    expect(baselined.get(MCQ_ID)?.text).toBe(PARAGRAPH_A);
+
+    const act = actions();
+    const second = await trigger.tick(vault, act);
+    expect(second.revised).toBe(0);
+    expect(second.refreshed).toBe(0);
+    expect(judge.judge).not.toHaveBeenCalled();
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('@auto:F3.3-D214-revision-changed — a meaningfully changed authored-note passage suspends the predecessor and enqueues a successor, never rewriting either note synchronously', async () => {
+    const vault = splitHomeNoteVault(PARAGRAPH_A);
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+    };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+    await trigger.tick(vault, actions());
+
+    // She edits HER note, not the home note — the exact edit a home-note-
+    // keyed diff could never see.
+    await vault.write(SOURCE_NOTE_PATH, PARAGRAPH_B);
+    const homeNoteBefore = await vault.read(HOME_NOTE_PATH);
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(report.revised).toBe(1);
+    expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+    expect(act.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          kind: 'instrument-revision',
+          predecessorInstrumentId: MCQ_ID,
+        }),
+      }),
+    );
+
+    // Never an immediate rewrite: the predecessor's own home note (still
+    // holding its block, physically unchanged) and her source note are
+    // exactly as this tick left them — a successor is only ENQUEUED as a
+    // job here, never materialized synchronously, which is what makes the
+    // eventual replacement a paced proposal through the ordinary review/
+    // accept surface rather than a rewrite at the moment of the edit.
+    expect(await vault.read(HOME_NOTE_PATH)).toBe(homeNoteBefore);
+    expect(await vault.read(SOURCE_NOTE_PATH)).toBe(PARAGRAPH_B);
+
+    const stored = await store.loadAll();
+    expect(stored.has(MCQ_ID)).toBe(false);
+  });
+
+  it('@auto:F3.3-D214-revision-reworded — the same claim reworded in the authored note refreshes the tracked baseline silently, never suspending', async () => {
+    const vault = splitHomeNoteVault(PARAGRAPH_A);
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(SOURCE_NOTE_PATH, PARAGRAPH_B);
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(report.refreshed).toBe(1);
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.sourcePath).toBe(SOURCE_NOTE_PATH);
+    expect(stored.get(MCQ_ID)?.text).toBe(PARAGRAPH_B);
+  });
+
+  it('@auto:F3.3-D214-revision-no-source-write — falls back to home-note-minus-spans, never reading a non-markdown source-provenance path as text', async () => {
+    // A generated instrument cited from a real PDF (not an authored note):
+    // `sourceProvenance.sourcePath` names a binary this module must never
+    // try to diff as text. `MemoryVaultSource.read` throws for any path not
+    // in its map, so if the fix wrongly preferred this path the baseline
+    // write below would fail rather than silently misbehave.
+    const PDF_PATH = 'Sources/Deck.pdf';
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, PDF_PATH),
+    });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn() };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+
+    const report = await trigger.tick(vault, actions());
+    expect(report.newlyBaselined).toBe(1);
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.sourcePath).toBe(NOTE_PATH);
   });
 });
 
