@@ -449,11 +449,12 @@ export function earlyPullSentence(earlyShare: number): string | null {
 }
 
 /**
- * F6.5(b). **The course code is not in this string**, exactly as it is not in
- * `courseCountLabel`: every course string on this panel comes from her vault at
- * runtime, and a copy module that could name a course is a copy module that
- * can leak one (`ol-p2t08`, and `copy.spec.ts`'s INV-3 check over every string
- * this file can produce). The view renders the code beside this clause.
+ * F6.5(b) (`[D-209]`). **The course code is not in this string**, exactly as
+ * it is not in `courseCountLabel`: every course string on this panel comes
+ * from her vault at runtime, and a copy module that could name a course is a
+ * copy module that can leak one (`ol-p2t08`, and `copy.spec.ts`'s INV-3 check
+ * over every string this file can produce). The view renders the code beside
+ * this clause.
  *
  * That naming is not decorative — `ol-7j54` (ARC-1) makes it a requirement,
  * because this clause's truth depends on where its course sits in its term.
@@ -461,16 +462,33 @@ export function earlyPullSentence(earlyShare: number): string | null {
  * function directly only where the caller already, separately, guarantees the
  * course is rendered alongside it.
  *
+ * **Two facts, each naming its denominator, never a gap figure (`[D-209]`,
+ * `ol-egov.98`).** The prior wording — "has logged N% of the time against a
+ * minimum share of M% for this window" — left the window's ownership
+ * implicit and called the second fact a bare "minimum share". D-209 rules
+ * that F8.3's provenance rule and principle 12's form rule both require a
+ * fact's denominator to be nameable, and the plan's own window qualifies only
+ * when it is named as the plan's own record rather than left as an
+ * unattributed "this window" (F8.3, amended). So the sentence states **the
+ * hours in the plan's window** as the first fact's denominator, and **the
+ * plan's set-aside** — `floorShare`, itself a share of that same window — as
+ * the second fact, juxtaposed and never subtracted from the first: two facts
+ * assert only themselves, and a computed gap would assert a study model this
+ * contract does not hold (D-209 point 4). The reference shape the ruling
+ * gives is count-denominated ("9 of your last 30 study hours went to this
+ * course; the plan had set aside about 6 of them"); this module keeps
+ * percentages instead, since `CourseEffort` carries shares and no caller here
+ * has an hours-denominated window total to report — D-209 makes count vs.
+ * percentage a style choice, naming the denominators the part that is not.
+ *
  * **`floorShare`, not a grade-weight share (`ol-v7r5.33`, `[D-081]`/
  * `[D-092]`).** The plan's own windowed floor is the guaranteed minimum this
  * course is owed over the current window — `olea-core`'s `CourseEffort
  * .floorShare`, sourced from the cached study-plan artifact, never a raw
- * assessment weight. Naming it "minimum share" rather than "floor" in the
- * sentence itself: the reader has never seen the word "floor" used this way,
- * and "minimum share" says what it means without requiring the vocabulary.
+ * assessment weight.
  */
 export function effortShareClause(floorShare: number, timeShare: number): string {
-  return `has logged ${percent(timeShare)} of the time against a minimum share of ${percent(floorShare)} for this window.`;
+  return `has logged ${percent(timeShare)} of the hours in the plan's window; the plan had set aside ${percent(floorShare)} of that window.`;
 }
 
 /** `effortInsightLine`'s return shape: the course a claim is about, paired with the claim. */

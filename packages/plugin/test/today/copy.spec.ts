@@ -262,9 +262,36 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
   it('the effort clause names no course — the code comes from her vault (ol-p2t08)', () => {
     const clause = effortShareClause(0.57, 0.14);
     expect(clause).toBe(
-      'has logged 14% of the time against a minimum share of 57% for this window.',
+      "has logged 14% of the hours in the plan's window; the plan had set aside 57% of that window.",
     );
     expect(clause).not.toMatch(/[A-Z]/);
+  });
+
+  it('names both denominators as the plan\'s own record, never a bare "this window" (D-209)', () => {
+    const clause = effortShareClause(0.57, 0.14);
+    expect(clause).toContain("the plan's window");
+    expect(clause).toContain('the plan had set aside');
+  });
+
+  it('never renders a computed gap or an adequacy word between the two facts (D-209)', () => {
+    const clause = effortShareClause(0.57, 0.14);
+    for (const word of [
+      'minimum',
+      'behind',
+      'ahead',
+      'gap',
+      'short',
+      'enough',
+      'adequate',
+      'target',
+      'goal',
+    ]) {
+      expect(clause.toLowerCase(), `"${word}" reads as adequacy or a computed gap`).not.toContain(
+        word,
+      );
+    }
+    // Two facts, not a subtraction: floorShare - timeShare (0.43, "43") never appears.
+    expect(clause).not.toContain('43%');
   });
 
   it('states the window it read rather than implying it read everything (ol-1n1v)', () => {
