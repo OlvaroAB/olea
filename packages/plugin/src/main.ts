@@ -112,8 +112,11 @@ import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import {
   buildFirstReadFolderViews,
   buildIngestionRunner,
+  type FirstReadFolderCounts,
   type FirstReadFolderView,
+  firstReadFoldersJustFinished,
   type IngestionWiring,
+  summarizeFirstReadByFolder,
 } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
@@ -390,6 +393,30 @@ export default class OleaPlugin extends Plugin {
    * on every plugin restart). Read by `firstReadFolderViewsFor` below.
    */
   private tickedCourseFolders: VaultPath[] = [];
+  /**
+   * `[D-219]` (`ol-9c0k`): the previous tick's per-folder queue counts, keyed
+   * by folder — this method's own folder-grain half of
+   * `ingestionSessionJustClosed`'s two-snapshot pattern.
+   * `firstReadFoldersJustFinished` (`ingestion/wiring.ts`) compares this
+   * against the current tick's counts to find which folders just drained.
+   * Empty until the first tick that has any ticked folder to track; never
+   * persisted, same in-memory-for-the-process-lifetime posture as
+   * `tickedCourseFolders` above.
+   */
+  private lastFirstReadCountsByFolder: ReadonlyMap<VaultPath, FirstReadFolderCounts> = new Map();
+  /**
+   * `[D-219]` (`ol-9c0k`): real concept display names landed so far this
+   * session, per course folder — the production feed
+   * `ingestion/wiring.ts`'s `FirstReadFolderView.landedConcepts` names as a
+   * typed slot with no real producer behind it (`ol-0r92.47`'s own module
+   * doc, now closed by this field and `readLandedConceptsForFinishedFolders`
+   * below). Populated one `readConceptsFromVault` call per folder, fired the
+   * instant that folder's own queued/in-flight work reaches zero. Never
+   * persisted, same posture as `tickedCourseFolders` above; a folder absent
+   * from this map renders as "nothing landed yet" (`buildFirstReadFolderViews`'s
+   * own fallback), never a fabricated placeholder.
+   */
+  private landedConceptsByFolder = new Map<VaultPath, readonly string[]>();
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -1589,15 +1616,69 @@ export default class OleaPlugin extends Plugin {
    * `folders` — `[]` before `this.ingestion` exists (the brief window before
    * `onload` reaches its construction, same guard `processNoteNow` takes for
    * its own not-yet-constructed field) or when `folders` is empty (nothing
-   * ticked yet). `landedConcepts` is supplied as an empty map for every
-   * folder: no incremental per-folder concept producer exists in production
-   * yet (`ingestion/wiring.ts`'s own module doc; tracked separately on
-   * `ol-9c0k`), so this is the honest "nothing has landed yet" state rather
-   * than a fabricated one, not a gap this bead's build scope answers.
+   * ticked yet). `landedConcepts` is now fed from `this.landedConceptsByFolder`
+   * (`[D-219]`, `ol-9c0k`) — real concept names, per folder, as
+   * `readLandedConceptsForFinishedFolders` below lands them — rather than the
+   * always-empty map this method used to pass; a folder with nothing landed
+   * yet still renders honestly empty (`buildFirstReadFolderViews`'s own
+   * fallback), never fabricated.
    */
   private firstReadFolderViewsFor(folders: readonly VaultPath[]): readonly FirstReadFolderView[] {
     if (this.ingestion === null || folders.length === 0) return [];
-    return buildFirstReadFolderViews(this.ingestion.engine.list(), folders, new Map());
+    return buildFirstReadFolderViews(
+      this.ingestion.engine.list(),
+      folders,
+      this.landedConceptsByFolder,
+    );
+  }
+
+  /**
+   * `[D-219]` (`ol-9c0k`): one `readConceptsFromVault` call per folder in
+   * `folders`, scoped to that folder's own subtree (`under: folder`) rather
+   * than the whole vault, so this stays a bounded per-folder cost and never
+   * an extra whole-vault batch read — the whole-vault read
+   * `tickIngestionAndMaybeRunCorpusRelations` already performs at ingestion-
+   * session close is unchanged and remains the corpus-relations trigger.
+   *
+   * **The budget.** No `budget` is passed, so each call falls back to
+   * `readConceptsFromVault`'s own declared default
+   * (`concept/wiring.ts`'s `DEFAULT_MAX_PASSAGES_PER_READ` /
+   * `DEFAULT_PASSAGES_PER_CALL`) — the same D-210-governed per-call ceiling
+   * every other read in this plugin already falls back to. This method
+   * declares no budget constant of its own.
+   *
+   * Folders run one at a time, in the order given, rather than concurrently
+   * — two folders finishing on the same tick cost their calls in a fixed,
+   * readable order; nothing here depends on running them in parallel. A
+   * folder whose call comes back `null` (Worker unconfigured, F7.8) or
+   * `'unrecognised'` is left untouched in `landedConceptsByFolder` rather
+   * than cleared — a call that could not read is not evidence that nothing
+   * has landed. A thrown error is logged and never propagated, the same
+   * posture `tickIngestionAndMaybeRunCorpusRelations`'s own `catch` takes for
+   * the corpus stage.
+   *
+   * Refreshes any open Home leaf once every folder in this batch has been
+   * attempted, so a concept that just landed reaches the screen without
+   * waiting for the next ingestion tick's own refresh.
+   */
+  private async readLandedConceptsForFinishedFolders(folders: readonly VaultPath[]): Promise<void> {
+    for (const folder of folders) {
+      try {
+        const result = await this.readConceptsFromVault({ under: folder });
+        if (result !== null && result.outcome === 'read') {
+          this.landedConceptsByFolder.set(
+            folder,
+            result.concepts.map((concept) => concept.name),
+          );
+        }
+      } catch (error) {
+        console.error(
+          'Olea: per-folder concept read failed (first-read readout unaffected)',
+          error,
+        );
+      }
+    }
+    void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_HOME);
   }
 
   /**
@@ -1616,6 +1697,32 @@ export default class OleaPlugin extends Plugin {
     const current = this.ingestion?.engine.snapshot() ?? null;
     if (current === null) return;
     this.lastIngestionSnapshot = current;
+
+    // `[D-219]` (`ol-9c0k`): one D-068 reader call per course folder, fired
+    // the instant that folder's own queued/in-flight work reaches zero —
+    // the per-folder analogue of `ingestionSessionJustClosed` below, at
+    // folder grain instead of engine grain. Deliberately never gated on the
+    // corpus stage's own early return further down: a folder finishing is a
+    // distinct event from an ingestion session closing, and this fires
+    // whether or not the whole engine has caught up. Fire-and-forget
+    // (`void`) so a slow per-folder read never delays this tick's own
+    // corpus-relation-batch check below.
+    if (this.ingestion !== null && this.tickedCourseFolders.length > 0) {
+      const currentFirstReadCounts = summarizeFirstReadByFolder(
+        this.ingestion.engine.list(),
+        this.tickedCourseFolders,
+      );
+      const justFinished = firstReadFoldersJustFinished(
+        this.lastFirstReadCountsByFolder,
+        currentFirstReadCounts,
+      );
+      this.lastFirstReadCountsByFolder = new Map(
+        currentFirstReadCounts.map(({ folder, counts }) => [folder, counts]),
+      );
+      if (justFinished.length > 0) {
+        void this.readLandedConceptsForFinishedFolders(justFinished);
+      }
+    }
 
     // `ol-ppa9` (F1.4/`[D-213]`): an open Home leaf's first-read readout
     // renders live counts off `this.ingestion.engine.list()` — refresh it on

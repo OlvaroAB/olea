@@ -172,9 +172,18 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
  * thing F1.4 is strict about naming precisely. So `FirstReadFolderView`
  * below takes landed concepts as an opaque, caller-supplied
  * `readonly string[]` per folder rather than deriving them here — the counts
- * half is real and wired to `PersistedJob`; the concept half is a typed,
- * tested slot ready to receive a real stream once one exists. Recorded as a
- * reachability gap on this bead rather than papered over.
+ * half is real and wired to `PersistedJob`; the concept half is a typed
+ * slot this module never fills on its own.
+ *
+ * **`ol-9c0k` (`[D-219]`) closed the reachability gap this doc used to
+ * name.** The real producer is one layer up, in `main.ts`: this module's own
+ * `firstReadFoldersJustFinished` (below) tells the host which folders just
+ * drained (their queued/in-flight work reached zero), and `main.ts`'s
+ * `readLandedConceptsForFinishedFolders` fires one real `readConceptsFromVault`
+ * call per such folder, scoped to that folder's subtree, and feeds the
+ * concept names it returns into `buildFirstReadFolderViews`'
+ * `landedConceptsByFolder` argument. Nothing here changed to make that
+ * true — the slot was always real and tested; only the feed was missing.
  */
 export type FirstReadFolderCounts = QueueStatusCounts;
 
@@ -217,6 +226,43 @@ export function summarizeFirstReadByFolder(
       counts: summarizeQueueStatusCounts({ version: 1, jobs: inFolder, headroom: null }),
     };
   });
+}
+
+/**
+ * Which of `current`'s folders just finished extracting — the per-folder
+ * analogue of `concept/corpusRelationTrigger.ts`'s `ingestionSessionJustClosed`,
+ * at folder grain instead of whole-queue grain (`ol-9c0k`, `[D-219]`). A
+ * folder "just finished" when it had queued or in-flight work as of
+ * `previousCounts` and has neither as of its matching `current` entry —
+ * the same non-empty-to-empty transition, scoped to one folder's own jobs
+ * rather than the whole engine.
+ *
+ * `previousCounts` never having an entry for a folder — the first tick that
+ * has ever seen it, or a folder idle from the moment tracking started — can
+ * never report that folder as just-finished: there is nothing recorded to
+ * have finished, the same guard `ingestionSessionJustClosed` applies for
+ * `previous === null`. A folder that already fired once and later gains new
+ * files (F1's "registering a source mid-term re-runs extraction") fires
+ * again the next time it drains — `[D-219]` is one call per finish, not one
+ * call ever per folder.
+ *
+ * Pure and synchronous, mirroring `ingestionSessionJustClosed`: the host
+ * calls this once per tick with the counts map it held after the previous
+ * tick and the counts this tick just computed.
+ */
+export function firstReadFoldersJustFinished(
+  previousCounts: ReadonlyMap<VaultPath, FirstReadFolderCounts>,
+  current: readonly { readonly folder: VaultPath; readonly counts: FirstReadFolderCounts }[],
+): readonly VaultPath[] {
+  return current
+    .filter(({ folder, counts }) => {
+      const previous = previousCounts.get(folder);
+      if (previous === undefined) return false;
+      const wasActive = previous.queued > 0 || previous['in-flight'] > 0;
+      const isIdleNow = counts.queued === 0 && counts['in-flight'] === 0;
+      return wasActive && isIdleNow;
+    })
+    .map(({ folder }) => folder);
 }
 
 /**

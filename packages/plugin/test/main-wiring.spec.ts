@@ -381,6 +381,61 @@ describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle
   });
 });
 
+describe('the first-read readout has a real per-folder concept feed (ol-9c0k, [D-219])', () => {
+  // `ol-0r92.47` shipped `FirstReadFolderView.landedConcepts` as a real,
+  // tested slot fed only by an always-empty map — `ingestion/wiring.ts`'s own
+  // module doc named the missing half: no incremental per-folder concept
+  // producer existed in production. These assertions are the source-level
+  // proof that `main.ts` now feeds it for real: a per-folder drain detector
+  // on every ingestion tick (`firstReadFoldersJustFinished`, folder grain of
+  // the same non-empty-to-empty transition `ingestionSessionJustClosed`
+  // detects at engine grain), and one bounded `readConceptsFromVault` call
+  // per folder that just drained — never the whole vault, never a new budget
+  // constant of its own.
+
+  it('detects which ticked folders just drained, per tick, at folder grain', () => {
+    expect(main).toMatch(
+      /const currentFirstReadCounts = summarizeFirstReadByFolder\(\s*this\.ingestion\.engine\.list\(\),\s*this\.tickedCourseFolders,\s*\);\s*const justFinished = firstReadFoldersJustFinished\(\s*this\.lastFirstReadCountsByFolder,\s*currentFirstReadCounts,\s*\);/,
+    );
+  });
+
+  it('fires the per-folder read only for folders that just finished, never on every tick', () => {
+    expect(main).toMatch(
+      /if \(justFinished\.length > 0\) \{\s*void this\.readLandedConceptsForFinishedFolders\(justFinished\);\s*\}/,
+    );
+  });
+
+  it('the whole-vault batch read at ingestion-session close is unchanged — the per-folder call is additional, not a replacement', () => {
+    expect(main).toMatch(
+      /if \(!ingestionSessionJustClosed\(previous, current\)\) return;[\s\S]*?const pass = await readConceptsAndRelations\(/,
+    );
+  });
+
+  it('the per-folder call is scoped to that folder alone, through the same composed readConceptsFromVault every other caller uses — and adds no budget of its own', () => {
+    expect(main).toMatch(
+      /const result = await this\.readConceptsFromVault\(\{ under: folder \}\);/,
+    );
+  });
+
+  it('a folder that could not be read (F7.8 grey-out, or an unrecognised vault) leaves its previously landed concepts untouched, never cleared', () => {
+    expect(main).toMatch(
+      /if \(result !== null && result\.outcome === 'read'\) \{\s*this\.landedConceptsByFolder\.set\(\s*folder,\s*result\.concepts\.map\(\(concept\) => concept\.name\),\s*\);\s*\}/,
+    );
+  });
+
+  it('a thrown read error is logged and never propagated out of the tick loop', () => {
+    expect(main).toMatch(
+      /\} catch \(error\) \{\s*console\.error\(\s*'Olea: per-folder concept read failed \(first-read readout unaffected\)',\s*error,\s*\);\s*\}/,
+    );
+  });
+
+  it('the readout now reads real landed concepts, not the always-empty map ol-0r92.47 shipped', () => {
+    expect(main).toMatch(
+      /return buildFirstReadFolderViews\(\s*this\.ingestion\.engine\.list\(\),\s*folders,\s*this\.landedConceptsByFolder,\s*\);/,
+    );
+  });
+});
+
 describe('the gap/coverage screen is registered and reachable (ol-2tyj)', () => {
   // `GapView` and `createLocalGapProvider` were both complete and tested —
   // this is the same defect shape this file's own module doc opens with:

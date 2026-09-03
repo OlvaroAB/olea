@@ -32,6 +32,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFirstReadFolderViews,
   buildIngestionRunner,
+  type FirstReadFolderCounts,
+  firstReadFoldersJustFinished,
   summarizeFirstReadByFolder,
 } from '../../src/ingestion/wiring.js';
 
@@ -309,5 +311,79 @@ describe('buildFirstReadFolderViews', () => {
       new Map(),
     );
     expect(views[0]?.landedConcepts).toEqual([]);
+  });
+});
+
+// `[D-219]` (`ol-9c0k`): which folders just finished extracting, so
+// `main.ts` knows when to fire its one-D-068-reader-call-per-folder — the
+// per-folder analogue of `concept/corpusRelationTrigger.ts`'s
+// `ingestionSessionJustClosed`.
+
+const IDLE: FirstReadFolderCounts = { queued: 0, 'in-flight': 0, done: 3, deferred: 0, failed: 0 };
+const ACTIVE: FirstReadFolderCounts = {
+  queued: 2,
+  'in-flight': 1,
+  done: 1,
+  deferred: 0,
+  failed: 0,
+};
+
+describe('firstReadFoldersJustFinished', () => {
+  it('reports a folder that had work last tick and has none now', () => {
+    const previous = new Map<VaultPath, FirstReadFolderCounts>([['COGS214', ACTIVE]]);
+    const current = [{ folder: 'COGS214' as VaultPath, counts: IDLE }];
+
+    expect(firstReadFoldersJustFinished(previous, current)).toEqual(['COGS214']);
+  });
+
+  it('never reports a folder still doing work', () => {
+    const previous = new Map<VaultPath, FirstReadFolderCounts>([['COGS214', ACTIVE]]);
+    const current = [{ folder: 'COGS214' as VaultPath, counts: ACTIVE }];
+
+    expect(firstReadFoldersJustFinished(previous, current)).toEqual([]);
+  });
+
+  it('never reports a folder this map has not observed before — nothing recorded to have finished', () => {
+    const current = [{ folder: 'COGS214' as VaultPath, counts: IDLE }];
+
+    expect(firstReadFoldersJustFinished(new Map(), current)).toEqual([]);
+  });
+
+  it('never reports a folder idle on both the previous and the current tick — idle-to-idle is not a finish', () => {
+    const previous = new Map<VaultPath, FirstReadFolderCounts>([['COGS214', IDLE]]);
+    const current = [{ folder: 'COGS214' as VaultPath, counts: IDLE }];
+
+    expect(firstReadFoldersJustFinished(previous, current)).toEqual([]);
+  });
+
+  it('fires again the next time the same folder drains, after gaining new files mid-term (F1.4)', () => {
+    const previous = new Map<VaultPath, FirstReadFolderCounts>([['COGS214', ACTIVE]]);
+    const current = [{ folder: 'COGS214' as VaultPath, counts: IDLE }];
+    const firstFinish = firstReadFoldersJustFinished(previous, current);
+    expect(firstFinish).toEqual(['COGS214']);
+
+    // A new file arrives, this folder goes active again, then drains a second time.
+    const secondPrevious = new Map<VaultPath, FirstReadFolderCounts>([['COGS214', ACTIVE]]);
+    const secondCurrent = [{ folder: 'COGS214' as VaultPath, counts: IDLE }];
+    expect(firstReadFoldersJustFinished(secondPrevious, secondCurrent)).toEqual(['COGS214']);
+  });
+
+  it('five folders of different sizes: only the ones that transitioned to idle are reported, each independently', () => {
+    const previous = new Map<VaultPath, FirstReadFolderCounts>([
+      ['A', ACTIVE],
+      ['B', IDLE],
+      ['C', ACTIVE],
+      ['D', ACTIVE],
+      ['E', ACTIVE],
+    ]);
+    const current = [
+      { folder: 'A' as VaultPath, counts: IDLE }, // just finished
+      { folder: 'B' as VaultPath, counts: IDLE }, // was already idle — not a finish
+      { folder: 'C' as VaultPath, counts: ACTIVE }, // still going
+      { folder: 'D' as VaultPath, counts: IDLE }, // just finished
+      { folder: 'E' as VaultPath, counts: ACTIVE }, // still going
+    ];
+
+    expect(firstReadFoldersJustFinished(previous, current)).toEqual(['A', 'D']);
   });
 });
