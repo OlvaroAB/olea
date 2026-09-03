@@ -116,6 +116,14 @@ describe('buildBulkReviewGroups', () => {
     const groups = buildBulkReviewGroups([record({ sourcePath: NOTE_A })]);
     expect(groups[0]?.noteTitle).toBe('Week 2');
   });
+
+  // `[D-216]`'s click-through target: `bulk-review-view.ts` opens the source
+  // peek by concept key, so the view model must carry it through unchanged
+  // from `DraftRecord.conceptIds` — types.ts's own doc on that field.
+  it('carries conceptIds through to the item view model, for the source-peek click-through', () => {
+    const groups = buildBulkReviewGroups([record({ conceptIds: ['concept-key-9'] })]);
+    expect(groups[0]?.items[0]?.conceptIds).toEqual(['concept-key-9']);
+  });
 });
 
 describe('BulkReviewController', () => {
