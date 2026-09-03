@@ -52,7 +52,8 @@ Review states: `loading`, `empty`, `qa-front`, `qa-reveal`, `cloze-front`, `cloz
 `note-missing`, `session-complete`.
 
 Today states: `today-nothing-due`, `today-due`, `today-after-writing`, `today-stale`,
-`today-unavailable`, `today-scope-not-declared`, `today-rhythm-quiet`, `today-rhythm-fresh`.
+`today-unavailable`, `today-scope-not-declared`, `today-rhythm-quiet`, `today-rhythm-fresh`,
+`today-after-reentry`, `today-encouragement-off`, `today-term-dates-pointer`.
 
 Variable sets: `obsidian-dark`, `obsidian-light`, `things-dark`, `things-light`,
 `things-dark-no-baseline`, `things-light-no-baseline`. The last two deliberately do **not**
@@ -63,13 +64,15 @@ Personas: `none` (default), `steady-reviewer`, `crammer`, `instrument-skipper`,
 
 ## What mounts, and what does not
 
-Sixteen route surfaces today (`main.ts`'s `RouteSurface`): `review`, `today`, `oracle`,
+Seventeen route surfaces today (`main.ts`'s `RouteSurface`): `review`, `today`, `oracle`,
 `retrieve`, `generate`, `timeline`, `explain`, `explain-back`, `session`, `trends`, `rhythm`,
-`bulk-review`, `registry`, `plugin-surface`, `grove`, and `walk` (a linear mode over the other
-six original surfaces' scenario builders — see `walkthrough.ts`'s module doc). Every one mounts
-either a real `packages/plugin` view/modal against real `deps`, or — where no product view exists
-yet for the underlying mechanism — reports through the inspector and says so on screen, never a
-hand-built view model standing in for one.
+`bulk-review`, `registry`, `plugin-surface`, `grove`, `walk` (a linear mode over the other
+six original surfaces' scenario builders — see `walkthrough.ts`'s module doc), and `simulator`
+(`ol-3ux7.64`, [E-SIM] — a live, persisted vault and clock over the WHOLE real plugin, not a
+scripted state; see "The simulator" below). Every flat/scripted surface mounts either a real
+`packages/plugin` view/modal against real `deps`, or — where no product view exists yet for the
+underlying mechanism — reports through the inspector and says so on screen, never a hand-built
+view model standing in for one.
 
 **Mounts:** `ReviewView` — all seven screens it can render, plus the three MCQ answer
 variants, twelve addressable states in total. Every one is reached by sending **real
@@ -77,7 +80,7 @@ keystrokes** to the mounted view, resolved by the real `keymap.ts`. Nothing poke
 `ReviewSession`'s internals and no view model is hand-built, so a state that cannot be
 reached by a binding the resolver accepts cannot be reached here either.
 
-**Also mounts, since run 11:** `TodayView` (F6.1, `[P2-T09]`, DONE) — eight addressable
+**Also mounts, since run 11:** `TodayView` (F6.1, `[P2-T09]`, DONE) — eleven addressable
 states, built by `src/today-scenarios.ts`. Three of them (`ol-z6x2` [WB-2] F1/C3 tranche)
 wire `buildTodayPanel`'s `courseScopeModels`/`courseMaterialArrivals` fields for the first
 time — `today-scope-not-declared` (F6.2/F8.1's cross-course scope section, stating the same
@@ -210,6 +213,26 @@ lane's ownership this run.
   `'oracle-fixture'`, the same real `GapView` `oracle` mounts, over the real fixture vault
   instead of the synthetic corpus, per D-041). `walkthrough.ts` is data and derivation only —
   `main.ts` is still the one place that mounts a screen.
+
+### The simulator (`ol-3ux7.64`, [E-SIM])
+
+`#/simulator` is not a scripted state — it is a live, persisted vault (an IndexedDB overlay over
+the fixture snapshot) and a page-level clock, over the **whole real plugin**, mounted through
+`obsidian-shim/mount-plugin.ts`'s `mountPlugin(OleaPlugin, { vault, pluginData })`
+(`simulator/controller.ts`, `ol-3ux7.64.10` [WBX-1b]). The plugin's own `onload()` registers every
+command, view and the settings tab; the controller opens the Today panel once, right after mount,
+through the real `OLEA_COMMAND_TODAY_OPEN` command, so the pane never starts blank. Day-advance,
+jump-to-date and reset all do a full unmount/re-mount — the plugin's own `onunload`/`onload`, the
+same as a real Obsidian reload.
+
+**Degraded fallback.** `OleaPlugin.onload()` reads `navigator.onLine` and calls
+`window.setInterval` directly, bypassing the shim (`test/obsidian-shim-whole-plugin.spec.ts`'s own
+module doc names this as an "environment gap between plain Node and a real browser, not a gap in
+this shim"). Every real browser has both; this package's own Vitest suite (plain Node, no
+jsdom/happy-dom dependency) does not. `SimulatorController` checks for both before every mount
+attempt and, if either is missing, degrades to a single-view `TodayView` mount with a notice
+naming exactly which global is absent — never a silent blank pane or an uncaught throw partway
+through `onload()`.
 
 **Nothing is left in a "does not exist yet" or "deliberately not shimmed" state today.** Two
 things this README used to say don't mount — a triage view, and `OleaSettingTab` — both now do:

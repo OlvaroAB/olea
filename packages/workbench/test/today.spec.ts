@@ -73,7 +73,15 @@ function fakeTodayView(): TodayView & { readonly refresh: ReturnType<typeof vi.f
 }
 
 describe('today-scenarios — every advertised Today state is reachable', () => {
-  it('has exactly the eight states the README documents', () => {
+  it('has exactly the eleven states the README documents', () => {
+    // Was eight until `ol-3ux7.64.10` [WBX-1b]: WBX-1/WBX-2 landed
+    // concurrently with three more F6.6/F6.8/F6.9 states
+    // (`today-after-reentry`, `today-encouragement-off`,
+    // `today-term-dates-pointer`) that this assertion had never counted —
+    // caught by this test going red on main. Fixed by counting what
+    // `today-scenarios.ts` actually declares, never by loosening the
+    // assertion to something order- or count-insensitive; the README is
+    // updated in the same commit.
     expect(TODAY_STATES.map((s) => s.id)).toEqual([
       'today-nothing-due',
       'today-due',
@@ -83,6 +91,9 @@ describe('today-scenarios — every advertised Today state is reachable', () => 
       'today-scope-not-declared',
       'today-rhythm-quiet',
       'today-rhythm-fresh',
+      'today-after-reentry',
+      'today-encouragement-off',
+      'today-term-dates-pointer',
     ]);
   });
 

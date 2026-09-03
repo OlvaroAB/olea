@@ -211,9 +211,8 @@ const DEFAULT_GROVE_STATE = 'grove-declared';
  */
 const DEFAULT_SIMULATOR_STATE = 'simulator-live';
 const SIMULATOR_STATE_NOTE =
-  'The lived term: a persisted vault overlay (IndexedDB) and a page-level clock over the real ' +
-  'TodayView and the real due-queue composer. Not the whole plugin yet — see the pane for what ' +
-  'that means. Reachability: this route (ol-3ux7.64.2).';
+  'The lived term: a persisted vault overlay (IndexedDB) and a page-level clock over the WHOLE ' +
+  'real plugin. What she does today changes tomorrow. Reachability: this route (ol-3ux7.64.10).';
 
 /**
  * The illustrative label D-041 (`ol-st9i`) requires next to the numbers on the fixture-vault
@@ -807,13 +806,14 @@ async function main(): Promise<void> {
    */
   let mountedModal: { close(): void } | null = null;
   /**
-   * The simulator's own controller (`ol-3ux7.64.2` [WBX-1]) — holds the
-   * persisted vault, the page-level clock and the mounted `TodayView`
-   * together, outside `mounted`/`generation`'s per-render lifecycle, because
-   * its day-advance/reset/rate controls remount the pane on their own
-   * timeline (a button click, not a `hashchange`). `mountSimulator` below
-   * keeps `mounted` in step via `onViewChange` so navigating AWAY from
-   * `#/simulator` still closes whatever it last mounted.
+   * The simulator's own controller (`ol-3ux7.64.10` [WBX-1b]) — holds the
+   * persisted vault, the page-level clock and the mounted whole plugin (or
+   * its degraded fallback) together, outside `mounted`/`generation`'s
+   * per-render lifecycle, because its day-advance/reset/rate controls
+   * remount the pane on their own timeline (a button click, not a
+   * `hashchange`). Never bridged into `mounted` — `SimulatorController`
+   * owns its own mount's whole lifecycle; navigating AWAY from `#/simulator`
+   * calls `simulatorController.dispose()` directly, below.
    */
   let simulatorController: SimulatorController | null = null;
   let generation = 0;
@@ -942,11 +942,14 @@ async function main(): Promise<void> {
       mountedModal = null;
     }
     if (route.surface !== 'simulator' && simulatorController !== null) {
-      // Uninstalls the simulator's page-level `Date` override before any
-      // other surface's `WORKBENCH_NOW`-fixed rendering runs — see
-      // `SimulatorController.dispose`'s own doc for why this must not also
-      // re-close the view the block above already closed.
-      simulatorController.dispose();
+      // Uninstalls the simulator's page-level `Date` override and unmounts
+      // whatever it last mounted (the whole plugin, or its degraded
+      // fallback) — see `SimulatorController.dispose`'s own doc. The
+      // simulator's mounts are never routed through the generic `mounted`
+      // block above (a whole-plugin mount is not one of the `ItemView`
+      // types that lifecycle closes), so this is the only teardown call for
+      // whatever this controller owns — no double-close.
+      await simulatorController.dispose();
       simulatorController = null;
     }
     host.empty();
@@ -1273,16 +1276,18 @@ async function main(): Promise<void> {
     }
 
     /**
-     * `#/simulator` (`ol-3ux7.64.2` [WBX-1], `docs/dev/simulator-design.md`
-     * §3). Unlike every other flat surface, this is not one of a scripted
+     * `#/simulator` (`ol-3ux7.64.10` [WBX-1b], `docs/dev/simulator-design.md`
+     * §3/§4). Unlike every other flat surface, this is not one of a scripted
      * `WORKBENCH_NOW`-fixed state list — `SimulatorController` owns a
      * dedicated, persisted `PersistentVaultSource` (never the shared `vault`
-     * every scripted state reads, which must stay pristine and fixed-clock)
-     * and a page-level clock, and mounts the real `TodayView` over both,
-     * live. `mounted` is kept in step through `onViewChange` so navigating
-     * away still runs the generic `onClose`/`unloadComponent` cleanup above.
+     * every scripted state reads, which must stay pristine and fixed-clock),
+     * a page-level clock, and mounts the whole real `OleaPlugin` over both,
+     * live (its own `Plugin.loadData`/`saveData` reading the same persisted
+     * `plugin-data` host). This controller's mounts never join the generic
+     * `mounted`/`onClose` lifecycle above — `SimulatorController.dispose`'s
+     * own doc explains why — so nothing here needs an `onViewChange` bridge.
      *
-     * Reachability: this is `ol-3ux7.64.2`'s named production caller.
+     * Reachability: this is `ol-3ux7.64.10`'s named production caller.
      */
     async function mountSimulator(): Promise<void> {
       const controlsEl = host.createDiv({ cls: 'wb-sim-controls' });
@@ -1292,9 +1297,6 @@ async function main(): Promise<void> {
 
       simulatorController = await SimulatorController.create({
         elements: { pane: paneEl, controls: controlsEl, badge: badgeEl, notice: noticeEl },
-        onViewChange: (view) => {
-          mounted = view === null ? null : { view };
-        },
       });
       if (run !== generation) return;
 
@@ -1302,11 +1304,13 @@ async function main(): Promise<void> {
       inspector.createDiv({
         cls: 'wb-inspector-note',
         text:
-          'F9 simulator (ol-3ux7.64.2 [WBX-1]) — a persisted vault overlay (IndexedDB) and a ' +
-          'page-level clock, over the real TodayView and the real due-queue composer. What she ' +
-          'does today changes tomorrow: rate an item, advance a day, reload — the due set moves ' +
-          'and the review is still there. Whole-plugin mount (commands, ReviewView, settings) is ' +
-          'WBX-2/later; see the pane for what that means today.',
+          'F9 simulator (ol-3ux7.64.10 [WBX-1b]) — a persisted vault overlay (IndexedDB) and a ' +
+          'page-level clock, over the WHOLE real plugin: commands, palette, every registered ' +
+          'view (Today opens by default), the settings tab. What she does today changes ' +
+          'tomorrow: rate an item from the panel or start a real review, advance a day, reload ' +
+          '— the due set moves and the review is still there. A host missing `window`/' +
+          '`navigator` degrades to a Today-only fallback with a notice naming what is missing ' +
+          '(never silently) — see the pane.',
       });
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }

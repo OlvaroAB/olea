@@ -14,6 +14,22 @@
  * against the real typings under its own tsconfig.
  */
 
+/**
+ * The command id `revealTodayView`'s door (`register-commands.ts`) is
+ * registered under — the simulator's whole-plugin mount invokes it once
+ * right after mount so the pane shows the Today panel rather than an empty
+ * workspace, the same first screen the single-view mount always gave.
+ */
+export { OLEA_COMMAND_TODAY_OPEN } from '../../plugin/src/commands/ids.js';
+/**
+ * The real per-install device id (`ol-3ux7.64.10` [WBX-1b]). `device-id.ts`
+ * has no `obsidian` import — only `olea-core` and a local `{ loadData,
+ * saveData }` mirror structurally identical to `simulator/plugin-data-host.ts`'s
+ * own `ObsidianDataHost` — so there is nothing INV-1 needs redirected here.
+ * `simulator/device-id.ts`'s own local copy (WBX-1, written before this
+ * export existed) is retired in favour of this one; see that file's doc.
+ */
+export { ensureDeviceId, resetDeviceId } from '../../plugin/src/device/device-id.js';
 // The gap surface's copy layer (`ol-opmb.5` [TB-4]'s response-function and
 // feedback-point suites need to assert the REAL sentences the view renders,
 // not just the raw model fields they are derived from — `readinessNote` and
@@ -103,7 +119,6 @@ export {
 } from '../../plugin/src/today/data-source.js';
 export type { TodayViewDeps } from '../../plugin/src/today/view.js';
 export { TodayView, VIEW_TYPE_OLEA_TODAY } from '../../plugin/src/today/view.js';
-
 /**
  * Whole-plugin mount (`ol-3ux7.64.3` [WBX-2],
  * `docs/dev/simulator-design.md` §4 in olea-service). Every export above

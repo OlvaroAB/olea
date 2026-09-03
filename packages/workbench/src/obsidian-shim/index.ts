@@ -654,6 +654,8 @@ export class Modal {
   readonly containerEl: HTMLElement;
   readonly titleEl: HTMLElement;
   readonly contentEl: HTMLElement;
+  private escapeHandler: ((event: KeyboardEvent) => void) | null = null;
+  private backdropHandler: ((event: MouseEvent) => void) | null = null;
 
   constructor(app: App) {
     this.app = app;
@@ -670,21 +672,65 @@ export class Modal {
     this.containerEl.appendChild(modalEl);
   }
 
+  /**
+   * Escape-to-close and click-outside-to-close (`ol-3ux7.64.10` [WBX-1b]) —
+   * real Obsidian's `Modal` offers both regardless of what the subclass's
+   * own content renders, and at least one caller relies on exactly that:
+   * `packages/plugin/src/course-setup/setup-modal.ts`'s own module doc names
+   * "the Escape key, clicking outside" as how its modal closes WITHOUT
+   * confirming, and its confirmation view renders only a Confirm button —
+   * no cancel affordance of its own. Found via the simulator's whole-plugin
+   * mount: a fixture vault with course-shaped folders opens
+   * `CourseSetupModal` on cold start (`main.ts`'s `checkForCourseSetupProposals`),
+   * and with neither of these this shim had NO way to dismiss it — the very
+   * first real mount got stuck behind a permanently open, unclosable overlay
+   * blocking the whole app, `Notice`-and-everything-else included.
+   */
   open(): void {
-    const host = document.querySelector('[data-wb-modal-host]');
+    const host = document.querySelector<HTMLElement>('[data-wb-modal-host]');
     if (host === null) {
       console.info('[obsidian-shim] Modal.open(): no [data-wb-modal-host] in this document');
       return;
     }
     host.appendChild(this.containerEl);
     host.setAttribute('data-wb-modal-open', 'true');
+    // Moves keyboard focus into the modal (real Obsidian modals do this too,
+    // for the same accessibility reason) — load-bearing here for a second
+    // reason specific to this shim's two-document layout: whatever surface
+    // was focused before the modal opened is very likely inside the
+    // `[data-wb-surface]` IFRAME (every flat/whole-plugin view mounts
+    // there), and a `keydown` dispatched to a focused element inside a
+    // same-origin iframe does NOT bubble into this (the parent) document.
+    // Without moving focus here first, Escape would only ever reach this
+    // listener if the browser's focus already happened to sit in the top
+    // document — true by luck, not by construction.
+    this.containerEl.tabIndex = -1;
+    this.containerEl.focus();
+    this.escapeHandler = (event) => {
+      if (event.key === 'Escape') this.close();
+    };
+    document.addEventListener('keydown', this.escapeHandler);
+    this.backdropHandler = (event) => {
+      // Only the host itself counts as "outside" — a click anywhere inside
+      // `containerEl` (the modal box) must never close it.
+      if (event.target === host) this.close();
+    };
+    host.addEventListener('click', this.backdropHandler);
     void this.onOpen();
   }
 
   close(): void {
     this.containerEl.remove();
-    const host = document.querySelector('[data-wb-modal-host]');
+    const host = document.querySelector<HTMLElement>('[data-wb-modal-host]');
     if (host !== null) host.removeAttribute('data-wb-modal-open');
+    if (this.escapeHandler !== null) {
+      document.removeEventListener('keydown', this.escapeHandler);
+      this.escapeHandler = null;
+    }
+    if (this.backdropHandler !== null) {
+      host?.removeEventListener('click', this.backdropHandler);
+      this.backdropHandler = null;
+    }
     this.onClose();
   }
 
