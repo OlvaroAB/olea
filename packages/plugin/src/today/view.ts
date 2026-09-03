@@ -393,10 +393,11 @@ export class TodayView extends ItemView {
    * The one gesture, identical in string and position, on every claim the
    * panel asserts (`[D-046]` clause 4; DSN-1 frame 01).
    *
-   * A claim DSN-1 left unrouted still renders its sheet — she can still see
-   * what the line rests on — and the sheet says plainly that this kind of line
-   * cannot be disputed yet, rather than offering a gesture that would do
-   * something nobody has ruled.
+   * A claim DSN-1 left open still renders its sheet and its evidence, and the
+   * gesture still records (`[D-215]`) — the sheet says plainly, after the
+   * evidence, that no ending is ruled for this kind of line yet and that the
+   * disagreement counts anyway, rather than inventing an ending nobody has
+   * ruled.
    */
   private renderContestGesture(parent: HTMLElement, claimId: string): void {
     const support = this.deps.contest;
@@ -442,9 +443,10 @@ export class TodayView extends ItemView {
     if (sheet.acknowledgement !== null) {
       panel.createDiv({ cls: 'olea-today-contest-ack', text: sheet.acknowledgement });
     }
-    if (sheet.withheldReason !== null) {
-      panel.createDiv({ cls: 'olea-today-contest-withheld', text: sheet.withheldReason });
-      return;
+    if (sheet.openRoutingNote !== null) {
+      // [D-215]: this is a disclosure, not a withholding — it renders after
+      // the evidence and beside a working gesture, never instead of one.
+      panel.createDiv({ cls: 'olea-today-contest-withheld', text: sheet.openRoutingNote });
     }
     if (sheet.gestureLabel === null) return;
 

@@ -78,11 +78,15 @@ describe('routing — [D-095] rules six renderings and leaves five open', () => 
     ).toEqual([6, 7, 8, 9, 10]);
   });
 
-  it('refuses to contest an unrouted rendering instead of picking a plausible kind', () => {
+  it('holds a declared fact apart — correcting a declaration is not a contest', () => {
+    expect(routeClaimRendering('declared-fact').status).toBe('not-a-contest');
+  });
+
+  it('still refuses a declared fact — correcting a declaration is not a contest at all', () => {
     expect(() =>
       contestClaim({
         claim: {
-          rendering: 'trend-sentence',
+          rendering: 'declared-fact',
           conceptIds: [CONCEPT_A],
           evidenceBasis: 'basis-1',
         },
@@ -90,9 +94,93 @@ describe('routing — [D-095] rules six renderings and leaves five open', () => 
       }),
     ).toThrow(UnroutedClaimError);
   });
+});
 
-  it('holds a declared fact apart — correcting a declaration is not a contest', () => {
-    expect(routeClaimRendering('declared-fact').status).toBe('not-a-contest');
+describe('an open-routed rendering is recorded, not refused ([D-215])', () => {
+  it('records claimKind unsorted and routingStatus open, effect held, instead of throwing', () => {
+    const outcome = contestClaim({
+      claim: {
+        rendering: 'trend-sentence',
+        conceptIds: [CONCEPT_A],
+        evidenceBasis: 'basis-1',
+      },
+      timestamp: '2026-08-21T09:00:00+02:00',
+    });
+    expect(outcome.kind).toBe('unsorted');
+    expect(outcome.effect).toBe('held');
+    expect(outcome.record.claimKind).toBe('unsorted');
+    expect(outcome.record.claimRendering).toBe('trend-sentence');
+    expect(outcome.record.routingStatus).toBe('open');
+    expect(outcome.record.effect).toBe('held');
+  });
+
+  it('produces a record every one of the five open renderings can validate as', () => {
+    for (const rendering of [
+      'trend-sentence',
+      'study-plan-ranking',
+      'refusal',
+      'vault-freshness-line',
+      'generated-explanation',
+    ] as const) {
+      const outcome = contestClaim({
+        claim: { rendering, conceptIds: [CONCEPT_A], evidenceBasis: 'basis-1' },
+        timestamp: '2026-08-21T09:00:00+02:00',
+      });
+      const parsed = safeParseDisputeLogRecord({
+        schemaVersion: 5,
+        kind: 'dispute',
+        eventId: 'e1',
+        ...outcome.record,
+      });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  it('a routed rendering is unchanged — no routingStatus, claimKind still the ruled kind', () => {
+    const outcome = contestClaim({
+      claim: {
+        rendering: 'mastery-reading',
+        conceptIds: [CONCEPT_A],
+        evidenceBasis: 'basis-1',
+      },
+      timestamp: '2026-08-21T09:00:00+02:00',
+    });
+    expect(outcome.record.claimKind).toBe('reading');
+    expect('routingStatus' in outcome.record).toBe(false);
+  });
+
+  it('the schema rejects unsorted without routingStatus, and a ruled kind carrying it', () => {
+    expect(safeParseDisputeLogRecord(dispute({ claimKind: 'unsorted' })).success).toBe(false);
+    expect(
+      safeParseDisputeLogRecord(dispute({ claimKind: 'reading', routingStatus: 'open' })).success,
+    ).toBe(false);
+    expect(
+      safeParseDisputeLogRecord(
+        dispute({
+          claimKind: 'unsorted',
+          claimRendering: 'trend-sentence',
+          routingStatus: 'open',
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('a pre-D-215 record with no routingStatus still validates (additive, no schemaVersion bump)', () => {
+    expect(safeParseDisputeLogRecord(dispute()).success).toBe(true);
+  });
+
+  it('the health check counts an open rendering under claimKind unsorted rather than dropping it', () => {
+    const opening = contestClaim({
+      claim: { rendering: 'trend-sentence', conceptIds: [CONCEPT_A], evidenceBasis: 'basis-1' },
+      timestamp: '2026-08-21T09:00:00+02:00',
+    });
+    const record: DisputeLogRecord = { ...dispute(), ...opening.record, eventId: 'd1' };
+    const [reading] = contestRateHealthCheck({
+      records: [record],
+      claimsAsserted: { 'trend-sentence': CONTEST_RATE_MIN_CLAIMS },
+    });
+    expect(reading?.claimKind).toBe('unsorted');
+    expect(reading?.disputes).toBe(1);
   });
 });
 

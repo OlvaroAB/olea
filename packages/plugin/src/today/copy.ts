@@ -716,11 +716,16 @@ export { CONTEST_GESTURE_LABEL };
 export const CONTEST_SHEET_LABEL = 'What this is based on';
 
 /**
- * The withheld-gesture line for a claim DSN-1 left unrouted (open questions
- * 6-10). She is told plainly that this kind of claim has no contest yet, rather
- * than being offered a gesture that would do something nobody has ruled.
+ * The disclosure shown on a claim DSN-1 left open (open questions 6-10) —
+ * after the evidence, never instead of it (`[D-215]`, `ol-egov.103`). The
+ * gesture is no longer withheld here: the tap still writes the dispute, and
+ * this states plainly that no ending is ruled for this kind of line yet and
+ * that her disagreement counts anyway. It is a disclosure about the tool,
+ * bound to state a fact and no more — never a verdict on her, never an
+ * apology, never a promise of when.
  */
-export const CONTEST_NOT_YET_ROUTED = 'There is no way to dispute this kind of line yet.';
+export const CONTEST_OPEN_ROUTING_KEPT =
+  "I've kept your disagreement; I don't yet have a way to act on this kind of line, and when I do, this will count.";
 
 /** Offline is a state the sheet renders in, never a reason it fails to open. */
 export const CONTEST_SHEET_OFFLINE_NOTE = 'This works without a connection.';
@@ -908,7 +913,7 @@ export function allTodayStrings(): readonly string[] {
     // --- the contest gesture and its sheet (`[D-046]` clause 4, `[D-095]`) ---
     CONTEST_GESTURE_LABEL,
     CONTEST_SHEET_LABEL,
-    CONTEST_NOT_YET_ROUTED,
+    CONTEST_OPEN_ROUTING_KEPT,
     CONTEST_SHEET_OFFLINE_NOTE,
     contestHeldLine(0, null),
     contestHeldLine(1, '2026-08-18'),

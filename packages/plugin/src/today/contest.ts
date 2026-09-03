@@ -1,7 +1,16 @@
 /**
  * The Today panel's half of the contest mechanism (`ol-fgba` [DISP-1];
  * `[D-046]` clause 4, mechanised by `[D-095]`, drawn in DSN-1 and approved by
- * `[D-136]`).
+ * `[D-136]`; open-routed disputes ruled by `[D-215]`, `ol-egov.103`).
+ *
+ * **Record now, route later (`[D-215]`).** A claim on one of the five
+ * renderings DSN-1 leaves open no longer withholds the gesture or refuses the
+ * tap. The sheet shows the same evidence it always has, then — after it,
+ * never instead of it — the disclosure that no ending is ruled for this kind
+ * yet and that the disagreement is kept and counted (`copy.ts`'s
+ * `CONTEST_OPEN_ROUTING_KEPT`). `olea-core`'s `contestClaim` records it with
+ * `claimKind: 'unsorted'` and `routingStatus: 'open'`; nothing here decides
+ * that, it only renders what `contestClaim` already decided.
  *
  * Obsidian-free by construction (INV-1) — `view.ts` is the only file under
  * `today/` that touches the host. Everything here is a pure builder plus one
@@ -43,7 +52,7 @@ import {
 } from 'olea-core';
 import {
   CONTEST_DISSENT_MARK,
-  CONTEST_NOT_YET_ROUTED,
+  CONTEST_OPEN_ROUTING_KEPT,
   CONTEST_SHEET_LABEL,
   CONTEST_SHEET_OFFLINE_NOTE,
   CONTEST_UPHELD_ACKNOWLEDGEMENT,
@@ -69,13 +78,18 @@ export interface DisputeSheet {
   /** The offline note — this sheet works with the network down, and says so. */
   readonly offlineNote: string;
   /**
-   * The gesture, or `null` when DSN-1 left this rendering's routing open. A
-   * withheld gesture is stated (`CONTEST_NOT_YET_ROUTED`), never silently
-   * absent, and never replaced by a plausible-looking one.
+   * The gesture, identical on every claim-bearing surface — `[D-215]`
+   * (`ol-egov.103`): a rendering DSN-1 left open no longer withholds it.
+   * `null` only for a rendering that is not a contest at all
+   * (`declared-fact`), which never reaches the Today panel today.
    */
   readonly gestureLabel: string | null;
-  /** Why the gesture is withheld, when it is. */
-  readonly withheldReason: string | null;
+  /**
+   * The disclosure shown when DSN-1 leaves this rendering's routing open —
+   * after the evidence, never instead of it, and never in place of the
+   * gesture (`[D-215]`). `null` for a ruled rendering.
+   */
+  readonly openRoutingNote: string | null;
   /** The mark riding beside a claim she has already disputed. */
   readonly dissentMark: string | null;
   /** The once-only acknowledgment, when a re-derivation has upheld the claim. */
@@ -155,10 +169,10 @@ export interface TodayContestDeps {
  */
 export function reasoningFor(reviewCount: number, latest: string | null): string {
   // Every rendering on this panel gets the same account, including the rows
-  // DSN-1 left unrouted: what evidence stands behind the line, and when the
-  // most recent of it was. A claim whose gesture is withheld still owes her
-  // its reasoning — withholding the contest is not a reason to withhold the
-  // evidence, and doing so would make the open rows feel like refusals.
+  // DSN-1 left open: what evidence stands behind the line, and when the most
+  // recent of it was. [D-215] records the tap on these rows too now, but the
+  // reasoning owed her never depended on that — an open row still needed its
+  // evidence shown, or the open rows would have felt like refusals.
   return contestHeldLine(reviewCount, latest);
 }
 
@@ -198,8 +212,12 @@ export function buildDisputeSheet(input: {
       date: review.timestamp.slice(0, 10),
     })),
     offlineNote: CONTEST_SHEET_OFFLINE_NOTE,
-    gestureLabel: routing.status === 'routed' ? CONTEST_GESTURE_LABEL : null,
-    withheldReason: routing.status === 'routed' ? null : CONTEST_NOT_YET_ROUTED,
+    // [D-215]: the gesture is identical everywhere. It is withheld only for
+    // a rendering that is `not-a-contest` at all — `declared-fact` never
+    // appears among the Today panel's claims, so this is defensive, not a
+    // path this panel exercises.
+    gestureLabel: routing.status === 'not-a-contest' ? null : CONTEST_GESTURE_LABEL,
+    openRoutingNote: routing.status === 'open' ? CONTEST_OPEN_ROUTING_KEPT : null,
     dissentMark: state.disputed && state.effect === 'held' ? CONTEST_DISSENT_MARK : null,
     acknowledgement:
       state.acknowledgementDue && state.resolution === 'upheld'

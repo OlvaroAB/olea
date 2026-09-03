@@ -39,9 +39,19 @@
  * `CLAIM_ROUTING` because routing silently at build time is how "every claim
  * contestable" becomes "every claim contestable, and the ones we were not
  * sure about behave however the first implementer guessed". Five rows are
- * `open` and this module REFUSES to contest them rather than picking a
- * plausible kind — `routeClaimRendering` returns the open status and the
- * open-question number, and `contestClaim` throws on it.
+ * `open` — `routeClaimRendering` returns the open status and the
+ * open-question number — and `contestClaim` still refuses to guess a ruled
+ * kind for them, but no longer refuses to record.
+ *
+ * **`[D-215]` (`ol-egov.103`): record now, route later.** A contest on an
+ * `open` row is no longer thrown away. `contestClaim` records it with
+ * `claimKind: 'unsorted'` and `routingStatus: 'open'`, effect `held` —
+ * nothing moves and nothing is invented, and the claim's own routing question
+ * (6 through 10) stays exactly as open as it was. `contestClaim` still throws
+ * `UnroutedClaimError` for the one row that is not a contest at all
+ * (`declared-fact`) — that refusal is unchanged, because inventing a dispute
+ * about a fact she declared would be a different mistake than recording one
+ * on a claim rendering with no ruled kind yet.
  *
  * **No content, per D-005.** Nothing in this module or its record carries her
  * text, a note title, or a rendered sentence. Concept and instrument ids are
@@ -69,9 +79,12 @@ export type {
 } from './contest-record.js';
 
 /**
- * Whether a rendering is one of the six `[D-095]` routes. The persisted record
- * only ever carries one of those six, so this guard is what keeps the open
- * rows out of the log rather than a cast at the write site.
+ * Whether a rendering is one of the eleven `contestedClaimRendering` carries —
+ * every `ClaimRendering` except `declared-fact`, which is never a contest at
+ * all (`[D-215]` widened this from the original six ruled routes to include
+ * the five DSN-1 left open; `declared-fact` is the one rendering this guard
+ * still excludes). This is what keeps a claim about a declared fact out of
+ * the log rather than a cast at the write site.
  */
 export function isRoutedRendering(rendering: ClaimRendering): rendering is ContestedClaimRendering {
   return (CONTESTED_CLAIM_RENDERINGS as readonly string[]).includes(rendering);
@@ -171,6 +184,13 @@ export type ClaimRouting =
  * screens and are different mechanisms with different records. A build that
  * routed a mis-registered document through the contest gesture would produce a
  * dispute record about a claim Olea never made.
+ *
+ * **`open` no longer means refused.** `[D-215]` (`ol-egov.103`) rules that a
+ * claim on one of the five open rows is still recorded — as `claimKind:
+ * 'unsorted'`, `routingStatus: 'open'` — while this table's shape and its
+ * open cells are unchanged. Ruling one of these rows still means editing this
+ * table, not the write path: the table stays the single place a rendering's
+ * eventual kind gets decided.
  */
 export const CLAIM_ROUTING: Readonly<Record<ClaimRendering, ClaimRouting>> = {
   'mastery-reading': {
@@ -240,9 +260,12 @@ export function routeClaimRendering(rendering: ClaimRendering): ClaimRouting {
 }
 
 /**
- * `[D-095]`'s effect table. The whole of "what happens depends on what she
- * touched, never on what she picked" is these three lines, and nothing else in
- * the codebase may branch on a reason she selected.
+ * `[D-095]`'s effect table, plus `[D-215]`'s fourth line. The whole of "what
+ * happens depends on what she touched, never on what she picked" is these
+ * four lines, and nothing else in the codebase may branch on a reason she
+ * selected. `unsorted` holds for the same reason `reading` does — nothing
+ * moves and nothing is invented — but is a distinct kind because no ruled
+ * ending exists for it yet, unlike a reading's ruled hold.
  */
 export function contestEffectFor(kind: ContestedClaimKind): ContestEffect {
   switch (kind) {
@@ -252,13 +275,19 @@ export function contestEffectFor(kind: ContestedClaimKind): ContestEffect {
       return 'returned-to-candidate';
     case 'grade':
       return 'quarantined';
+    case 'unsorted':
+      return 'held';
   }
 }
 
 /**
  * The proof that both endings exist, as data rather than as prose — `[D-046]`
  * clause 4's "a contest has two possible endings and both must exist" asserted
- * across the three kinds, which is where the drawing says the pair lives.
+ * across the three RULED kinds, which is where the drawing says the pair
+ * lives. `unsorted` (`[D-215]`) is deliberately not a member here: it is a
+ * steady state with no ruled ending at all yet, not a fourth shape in this
+ * proof — `[D-215]` §3 rules that open is not a shipping defect, so there is
+ * nothing this function should assert about where `unsorted` eventually goes.
  *
  * `moves` is whether the state moves at the moment of contest; `mayMoveLater`
  * is whether it can move afterwards, on evidence. A reading is (false, true) —
@@ -268,7 +297,10 @@ export function contestEffectFor(kind: ContestedClaimKind): ContestEffect {
  * dims now and is answered when the re-derivation lands.
  */
 export function contestOutcomeShapes(): Readonly<
-  Record<ContestedClaimKind, { readonly moves: boolean; readonly mayMoveLater: boolean }>
+  Record<
+    Exclude<ContestedClaimKind, 'unsorted'>,
+    { readonly moves: boolean; readonly mayMoveLater: boolean }
+  >
 > {
   return {
     reading: { moves: false, mayMoveLater: true },
@@ -312,24 +344,21 @@ export interface ContestOutcome {
 }
 
 /**
- * Thrown when a contest is attempted on a rendering nothing has routed. It is
- * an error rather than a silent default precisely because a default here is
- * the failure this module exists to prevent — see `CLAIM_ROUTING`'s doc.
+ * Thrown when a contest is attempted on a rendering that is not a contest at
+ * all — `declared-fact`, the one row `CLAIM_ROUTING` marks `not-a-contest`.
+ * It is an error rather than a silent default precisely because a default
+ * here is the failure this module exists to prevent — see `CLAIM_ROUTING`'s
+ * doc. **Since `[D-215]`, the five `open` rows no longer throw this** —
+ * `contestClaim` records them as `unsorted` instead (below).
  */
 export class UnroutedClaimError extends Error {
   constructor(
     readonly rendering: ClaimRendering,
-    readonly routing: ClaimRouting,
+    readonly routing: Extract<ClaimRouting, { readonly status: 'not-a-contest' }>,
   ) {
-    const detail =
-      routing.status === 'open'
-        ? `open question ${routing.openQuestion}: ${routing.why}`
-        : routing.status === 'not-a-contest'
-          ? routing.why
-          : 'routed';
     super(
-      `contestClaim: "${rendering}" has no ruled claim kind — ${detail}. ` +
-        'Routing it here would invent a behaviour [D-095] did not rule.',
+      `contestClaim: "${rendering}" is not a contest at all — ${routing.why}. ` +
+        'Routing it here would invent a behaviour nothing has ruled.',
     );
     this.name = 'UnroutedClaimError';
   }
@@ -341,17 +370,53 @@ export class UnroutedClaimError extends Error {
  * consumers' (`quarantinedGradeInstrumentIds`, `withdrawnStructuralClaims`,
  * `standingDissent` below).
  *
- * Throws `UnroutedClaimError` for the five open rows and for a declared fact.
+ * Throws `UnroutedClaimError` only for `declared-fact` — correcting a
+ * declaration is not a contest at all. `[D-215]`: the five `open` rows no
+ * longer throw. A claim on one of them is recorded with `claimKind:
+ * 'unsorted'` and `routingStatus: 'open'`, effect `held` — nothing moves and
+ * nothing is invented, and the routing question stays exactly as open as it
+ * was before she disagreed.
  */
 export function contestClaim(input: ContestInput): ContestOutcome {
   const routing = routeClaimRendering(input.claim.rendering);
-  if (routing.status !== 'routed' || !isRoutedRendering(input.claim.rendering)) {
+  if (routing.status === 'not-a-contest') {
     throw new UnroutedClaimError(input.claim.rendering, routing);
+  }
+  if (!isRoutedRendering(input.claim.rendering)) {
+    // Unreachable in practice — `CLAIM_ROUTING`'s `routed`/`open` rows and
+    // `contestedClaimRendering`'s eleven values are kept in lockstep by both
+    // modules' own docs. A plain Error, not `UnroutedClaimError`: this is a
+    // drift-between-the-two-tables bug, never a routing decision.
+    throw new Error(
+      `contestClaim: "${input.claim.rendering}" routes to "${routing.status}" but is not one of ` +
+        "contestedClaimRendering's eleven values — CLAIM_ROUTING and the contracts enum have drifted",
+    );
   }
   const rendering: ContestedClaimRendering = input.claim.rendering;
   if (input.claim.conceptIds.length === 0) {
     throw new Error('contestClaim: a contested claim must name at least one concept');
   }
+
+  if (routing.status === 'open') {
+    const effect = contestEffectFor('unsorted');
+    return {
+      kind: 'unsorted',
+      effect,
+      record: {
+        timestamp: input.timestamp,
+        claimKind: 'unsorted',
+        claimRendering: rendering,
+        conceptIds: [...input.claim.conceptIds],
+        ...(input.claim.instrumentId === undefined
+          ? {}
+          : { instrumentId: input.claim.instrumentId }),
+        evidenceBasis: input.claim.evidenceBasis,
+        effect,
+        routingStatus: 'open',
+      },
+    };
+  }
+
   const effect = contestEffectFor(routing.kind);
   return {
     kind: routing.kind,
@@ -392,6 +457,13 @@ export function resolveDispute(input: {
     ...(dispute.instrumentId === undefined ? {} : { instrumentId: dispute.instrumentId }),
     evidenceBasis: dispute.evidenceBasis,
     effect: dispute.effect,
+    // Carried through, not dropped, so a resolution built from an `unsorted`
+    // opening still pairs `routingStatus` with `claimKind` — `[D-215]`'s own
+    // pairing rule binds a resolution record exactly as it binds an opening
+    // one. There is no ruled re-derivation for `unsorted` today, so this path
+    // is not reachable in production yet; it stays correct rather than
+    // assuming it never will be.
+    ...(dispute.routingStatus === undefined ? {} : { routingStatus: dispute.routingStatus }),
     resolves: dispute.eventId,
     outcome: input.outcome,
   };
@@ -577,6 +649,13 @@ export function standingDissent(
  * Slow at n=1 by construction and fine: the check exists from day one so that
  * a contest-rate spike on one grader or one reading has somewhere to be seen
  * the moment there is enough history to see it.
+ *
+ * **`[D-215]`: unchanged in shape, widened in coverage.** A rendering DSN-1
+ * still leaves `open` now reports `claimKind: 'unsorted'` here instead of
+ * being skipped — the revisit rule ("when the contest count on any open kind
+ * exceeds the count on the least-contested routed kind over a term, rule that
+ * kind's bead next") has nothing to compare without it. `declared-fact` is
+ * still skipped: it is not a contest at all, ruled or otherwise.
  */
 export interface ContestRateReading {
   readonly claimKind: ContestedClaimKind;
@@ -619,10 +698,11 @@ export function contestRateHealthCheck(input: {
     number,
   ][]) {
     const routing = routeClaimRendering(rendering);
-    if (routing.status !== 'routed') continue;
+    if (routing.status === 'not-a-contest') continue;
+    const claimKind: ContestedClaimKind = routing.status === 'routed' ? routing.kind : 'unsorted';
     const disputes = counts.get(rendering) ?? 0;
     readings.push({
-      claimKind: routing.kind,
+      claimKind,
       claimRendering: rendering,
       disputes,
       claimsAsserted: asserted,

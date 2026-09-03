@@ -1087,8 +1087,14 @@ export type SuccessionLogRecordV5 = z.infer<typeof successionLogRecordV5>;
  * `[D-095]`'s three kinds a claim can be — the effect on a contest is fixed
  * by which of these the disputed claim was, never by what she picked
  * (`disputeLogRecordV5`'s own doc).
+ *
+ * `unsorted` is a fourth, added by `[D-215]` (`ol-egov.103`): the claim kind
+ * used exactly when the disputed rendering's routing row is still `open` —
+ * the tap still records, the effect is `held` (nothing moves, nothing is
+ * invented), and `unsorted` names that no ruled kind has claimed the line
+ * yet, never that the record itself is malformed.
  */
-export const contestedClaimKind = z.enum(['reading', 'structural', 'grade']);
+export const contestedClaimKind = z.enum(['reading', 'structural', 'grade', 'unsorted']);
 export type ContestedClaimKind = z.infer<typeof contestedClaimKind>;
 
 /**
@@ -1104,7 +1110,15 @@ export type ContestedClaimKind = z.infer<typeof contestedClaimKind>;
 export const contestEffect = z.enum(['held', 'returned-to-candidate', 'quarantined']);
 export type ContestEffect = z.infer<typeof contestEffect>;
 
-/** The six routed renderings, matching `olea-core`'s `review-log/contest.ts` `CLAIM_ROUTING`. */
+/**
+ * The eleven persisted renderings, matching `olea-core`'s
+ * `review-log/contest.ts` `CLAIM_ROUTING` — every `ClaimRendering` except
+ * `declared-fact`, which is never a contest at all and never reaches this
+ * schema. Six are routed to a ruled `[D-095]` kind; five widened in by
+ * `[D-215]` (`ol-egov.103`) carry `claimKind: 'unsorted'` and
+ * `routingStatus: 'open'` instead — DSN-1's open questions 6-10, recorded
+ * rather than refused now that a claim on one of them is still recordable.
+ */
 export const contestedClaimRendering = z.enum([
   'mastery-reading',
   'cross-term-recognition',
@@ -1112,6 +1126,11 @@ export const contestedClaimRendering = z.enum([
   'concept-relation-edge',
   'cross-course-match',
   'explain-back-grade',
+  'trend-sentence',
+  'study-plan-ranking',
+  'refusal',
+  'vault-freshness-line',
+  'generated-explanation',
 ]);
 export type ContestedClaimRendering = z.infer<typeof contestedClaimRendering>;
 
@@ -1137,6 +1156,32 @@ function refineDisputeResolutionPairing(
     message:
       'a resolving dispute record carries both `resolves` and `outcome`, and an opening one ' +
       'carries neither',
+  });
+}
+
+/**
+ * `[D-215]`'s pairing: `routingStatus: 'open'` is present exactly when
+ * `claimKind` is `'unsorted'`, and absent for the three ruled kinds. Modelled
+ * on `refineDisputeResolutionPairing` immediately above — a field that only
+ * means something alongside a specific sibling value is exactly the shape
+ * that pairing already guards.
+ */
+function refineOpenRoutingPairing(
+  value: {
+    readonly claimKind: ContestedClaimKind;
+    readonly routingStatus?: 'open' | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const isUnsorted = value.claimKind === 'unsorted';
+  const hasRoutingStatus = value.routingStatus !== undefined;
+  if (isUnsorted === hasRoutingStatus) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['routingStatus'],
+    message:
+      '`routingStatus` is present exactly when `claimKind` is `unsorted`, and absent for the ' +
+      'three ruled kinds',
   });
 }
 
@@ -1168,6 +1213,14 @@ function refineDisputeResolutionPairing(
  * makes the compensating event `[D-095]` §2 requires able to name her
  * contest as its catalyst: a real, durable event id, written where she can
  * see it.
+ *
+ * **`routingStatus` is additive, ruled by `[D-215]` (`ol-egov.103`).** A
+ * dispute on one of the five renderings the routing table still leaves open
+ * carries `claimKind: 'unsorted'` and `routingStatus: 'open'`; `effect` is
+ * still `held` — nothing moves and nothing is invented. A later ruling that
+ * routes the rendering does not rewrite these records: a recorded-open
+ * dispute may be acknowledged but never acted on retroactively. Absent for
+ * the three ruled kinds, exactly as before this widening.
  */
 export const disputeLogRecordV5 = z
   .object({
@@ -1199,8 +1252,15 @@ export const disputeLogRecordV5 = z
     resolves: z.string().min(1).optional(),
     /** How the re-derivation landed. Present exactly when `resolves` is. */
     outcome: z.enum(['upheld', 'corrected']).optional(),
+    /**
+     * The single literal `'open'`, present exactly when `claimKind` is
+     * `'unsorted'` (`[D-215]`) — see this record's own doc above. Never a
+     * reason field: it names the routing state, not what she picked.
+     */
+    routingStatus: z.literal('open').optional(),
   })
-  .superRefine(refineDisputeResolutionPairing);
+  .superRefine(refineDisputeResolutionPairing)
+  .superRefine(refineOpenRoutingPairing);
 export type DisputeLogRecordV5 = z.infer<typeof disputeLogRecordV5>;
 
 /**

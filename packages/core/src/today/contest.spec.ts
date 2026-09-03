@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contestClaim, contestStateForClaim, UnroutedClaimError } from '../review-log/contest.js';
+import { contestClaim, contestStateForClaim } from '../review-log/contest.js';
 import type { DisputeLogRecord } from '../review-log/contest-record.js';
 import {
   contestedClaimFor,
@@ -51,7 +51,7 @@ describe('every reading the panel asserts carries the same contest gesture', () 
     expect(claims[0]?.contestable).toBe(true);
   });
 
-  it('enumerates the trend and freshness readings too, and withholds the gesture rather than guessing their kind', () => {
+  it('enumerates the trend and freshness readings too, ruled kind not yet named', () => {
     const claims = enumerateTodayClaims({
       viewModel: viewModel({
         insights: { spacing: null, earlyPull: null, effort: null } as never,
@@ -65,10 +65,17 @@ describe('every reading the panel asserts carries the same contest gesture', () 
     expect(renderings).toContain('vault-freshness-line');
     for (const claim of claims.filter((c) => c.rendering !== 'mastery-reading')) {
       expect(claim.contestable).toBe(false);
-      // And the mechanism refuses to route them — DSN-1 open questions 6 and 9.
-      expect(() =>
-        contestClaim({ claim: contestedClaimFor(claim), timestamp: '2026-08-21T09:00:00+02:00' }),
-      ).toThrow(UnroutedClaimError);
+      // `[D-215]` (`ol-egov.103`): the mechanism no longer refuses these — a
+      // tap records claimKind `unsorted` and routingStatus `open` instead of
+      // throwing. `contestable: false` still names that no RULED kind exists
+      // yet, not that the tap is refused.
+      const outcome = contestClaim({
+        claim: contestedClaimFor(claim),
+        timestamp: '2026-08-21T09:00:00+02:00',
+      });
+      expect(outcome.kind).toBe('unsorted');
+      expect(outcome.effect).toBe('held');
+      expect(outcome.record.routingStatus).toBe('open');
     }
   });
 

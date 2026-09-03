@@ -5,7 +5,7 @@ import {
   allTodayStrings,
   CONTEST_DISSENT_MARK,
   CONTEST_GESTURE_LABEL,
-  CONTEST_NOT_YET_ROUTED,
+  CONTEST_OPEN_ROUTING_KEPT,
   CONTEST_SHEET_OFFLINE_NOTE,
   CONTEST_UPHELD_ACKNOWLEDGEMENT,
 } from '../../src/today/copy.js';
@@ -53,17 +53,23 @@ describe('the dispute sheet opens with the network down', () => {
     expect(sheet.gestureLabel).toBe(CONTEST_GESTURE_LABEL);
   });
 
-  it('withholds the gesture, and says why, on a rendering DSN-1 left open', () => {
+  it('does not withhold the gesture on a rendering DSN-1 left open, and shows the kept-and-counted note ([D-215])', () => {
     const sheet = buildDisputeSheet({
       claim: claim({ id: 'insights', rendering: 'trend-sentence', contestable: false }),
       entries,
       disputes: [],
     });
-    expect(sheet.gestureLabel).toBeNull();
-    expect(sheet.withheldReason).toBe(CONTEST_NOT_YET_ROUTED);
-    // She still gets the reasoning: withholding the contest is not a reason to
-    // withhold the evidence.
+    // [D-215]: identical gesture everywhere — an open row no longer withholds it.
+    expect(sheet.gestureLabel).toBe(CONTEST_GESTURE_LABEL);
+    expect(sheet.openRoutingNote).toBe(CONTEST_OPEN_ROUTING_KEPT);
+    // She still gets the reasoning, and the note is shown after it, never instead of it.
     expect(sheet.reasoning.length).toBeGreaterThan(0);
+  });
+
+  it('shows neither an open-routing note nor a withheld gesture for a routed rendering', () => {
+    const sheet = buildDisputeSheet({ claim: claim(), entries, disputes: [] });
+    expect(sheet.openRoutingNote).toBeNull();
+    expect(sheet.gestureLabel).toBe(CONTEST_GESTURE_LABEL);
   });
 
   it('carries no confidence figure and no verdict on her', () => {
@@ -104,6 +110,31 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
     expect(parsed.disputes).toHaveLength(1);
     expect(parsed.disputes[0]?.claimRendering).toBe('mastery-reading');
     expect(parsed.disputes[0]?.effect).toBe('held');
+  });
+
+  it('records a tap on an open row too, instead of refusing it ([D-215])', async () => {
+    const vault = memoryVault();
+    const support = createTodayContestSupport({
+      vault,
+      deviceId: 'device-1',
+      conceptIdsByCourse: async () => ({ [COURSE]: CONCEPTS }),
+      today: () => '2026-08-21',
+      now: () => '2026-08-21T09:00:00+02:00',
+      readHistory: async () => ({ entries: [], disputes: [] }),
+    });
+
+    const result = await support.contest(
+      claim({ id: 'insights', rendering: 'trend-sentence', contestable: false }),
+    );
+    expect(result.effect).toBe('held');
+    expect(result.record.claimKind).toBe('unsorted');
+    expect(result.record.routingStatus).toBe('open');
+    expect(result.record.claimRendering).toBe('trend-sentence');
+
+    const written = vault.contentOf(reviewLogPath('2026-08-21', 'device-1')) ?? '';
+    const parsed = parseReviewLog(written);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.disputes).toHaveLength(1);
   });
 
   it('shows her dissent beside a standing reading', () => {
