@@ -46,6 +46,7 @@ import type {
   Vitality,
 } from 'olea-core';
 import { CONTEST_GESTURE_LABEL, MASTERY_ORDER, type TodayClaim } from 'olea-core';
+import { renderSprig } from '../sprig/render-sprig.js';
 import type { DisputeSheet, TodayContestSupport } from './contest.js';
 import {
   conceptCountLabel,
@@ -89,6 +90,20 @@ import type { TermDatesAskState } from './term-window-store.js';
  * derived, matching `MASTERY_ORDER`'s own precedent one file over.
  */
 const VITALITY_ORDER: readonly Vitality[] = ['holding', 'tending', 'early'];
+
+/**
+ * The ladder's own resolution of the one sprig geometry (`[VIT-3]`,
+ * `ol-l5og.17`). The vocabulary registry's "Invariant across both forms"
+ * (§1) is explicit that ladder and field draw "identical sprig geometry,
+ * only the pixel size changes" — `gap/view.ts` and `grove/view.ts` call
+ * `renderSprig` at `size: 12` for the field form; this is the ladder's
+ * smaller resolution of the same renderer, matching the existing
+ * `.olea-today-mastery-ladder-dot` box this replaces (`styles.css`'s
+ * 7×7 rule, outside this bead's `owns` and therefore left unchanged —
+ * see `renderLadderRow`'s own doc for how the dot's CSS classes still
+ * apply to the sprig this draws).
+ */
+const LADDER_SPRIG_SIZE = 7;
 
 export const VIEW_TYPE_OLEA_TODAY = 'olea-today';
 
@@ -297,15 +312,33 @@ export class TodayView extends ItemView {
    * One ladder row (vocabulary registry §1: "Ladder — four rows, one per
    * stage, with one dot per concept and a count").
    *
-   * **The co-presence rule, satisfied per row.** Every dot carries its
-   * vitality as a mark — honey for `needs tending`, a dashed outline for
-   * `too early to say`, and no mark at all for `holding` (F2.11: "holding is
-   * the value that carries no mark" — safe here BECAUSE the other two marks
-   * exist; the old strip's failure was omitting all three, which made an
-   * unmarked stage indistinguishable from an intentionally-unmarked
-   * `holding` one). The dots are `aria-hidden`, same posture the old strip
-   * took, because the breakdown row beneath restates every non-zero bucket
-   * as text (`vitalityCountLabel`) — and because every occupied stage's
+   * **Sprig geometry, not a plain mark (`[VIT-3]`, `ol-l5og.17`).** Every
+   * concept in a row shares that row's growth `state`, so each dot now
+   * nests `renderSprig({ state, size: LADDER_SPRIG_SIZE, ... })` inside it —
+   * the identical parameterised renderer `gap/view.ts` and `grove/view.ts`
+   * call for the field form, at the ladder's own smaller pixel size. The
+   * vocabulary registry's own words for this ("identical sprig geometry,
+   * only the pixel size changes") are exactly what `WB-7` (`ol-ppxj.30`)
+   * found missing here: a plain `.olea-today-mastery-ladder-dot` div with no
+   * sprig underneath it at all, which is what left `walkthrough.spec.ts`'s
+   * SPRIG-1 red on the trends surface.
+   *
+   * **The co-presence rule, satisfied per row.** The wrapper div keeps
+   * carrying the same `.olea-today-mastery-ladder-dot`/`is-tending`/
+   * `is-early` classes it always did — honey for `needs tending`, a dashed
+   * outline for `too early to say`, and no mark at all for `holding` (F2.11:
+   * "holding is the value that carries no mark" — safe here BECAUSE the
+   * other two marks exist; the old strip's failure was omitting all three,
+   * which made an unmarked stage indistinguishable from an
+   * intentionally-unmarked `holding` one). The sprig nests INSIDE that
+   * wrapper rather than replacing it (`renderSprig`'s `SVGSVGElement` return
+   * carries no Obsidian `addClass` — that extension covers `HTMLElement`,
+   * not every `SVGElement` — and reusing the wrapper's exact classes/rules
+   * means the vitality mark still renders from `styles.css`'s existing
+   * rules with no edit to that file, which sits outside this bead's
+   * `owns`). The dots are `aria-hidden`, same posture the old strip took,
+   * because the breakdown row beneath restates every non-zero bucket as
+   * text (`vitalityCountLabel`) — and because every occupied stage's
    * buckets sum to its count, a non-empty stage always states at least one
    * vitality word, so a stage with concepts in it never reads as
    * vitality-silent.
@@ -326,9 +359,19 @@ export class TodayView extends ItemView {
     dots.setAttr('aria-hidden', 'true');
     for (const vitality of VITALITY_ORDER) {
       for (let i = 0; i < byVitality[vitality]; i += 1) {
+        // The wrapper keeps carrying the vitality mark exactly as before —
+        // `styles.css`'s existing `.olea-today-mastery-ladder-dot`/
+        // `is-tending`/`is-early` rules are untouched by this bead, and a
+        // `createDiv`/`addClass` pair is also what `test/today/
+        // styles.spec.ts`'s static class scan looks for. The sprig itself is
+        // the new content nested inside it, sized to fill the same box
+        // (`renderSprig`'s SVG element carries no Obsidian `addClass`, since
+        // `SVGSVGElement` is not one of the elements Obsidian's runtime
+        // extends).
         const dot = dots.createDiv({ cls: 'olea-today-mastery-ladder-dot' });
         if (vitality === 'tending') dot.addClass('is-tending');
         else if (vitality === 'early') dot.addClass('is-early');
+        dot.appendChild(renderSprig({ state, size: LADDER_SPRIG_SIZE, container: dot }));
       }
     }
 
