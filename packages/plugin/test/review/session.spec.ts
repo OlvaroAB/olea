@@ -580,6 +580,66 @@ describe('review-log write shape (D7.1, F2.14)', () => {
   });
 });
 
+// F3.3 / `[D-205 / SIG-2]` (`ol-yj0k`, `ol-egov.96`) — MCQ correctness is
+// persisted on the review-log record, captured at the exact point `mcqNext`
+// already computes the self-rating from `option?.correct`. Forwarded
+// verbatim into `RecordReviewInput.correctness`; `createVaultReviewLogPort`
+// (`ports.spec.ts`) is what merges it into the actual write, never this
+// class — same "caller decides, port writes" split `schedulingObservation`
+// above already proves.
+describe('[D-205 / SIG-2] MCQ correctness — the behavioural signal beside the self-rating (ol-yj0k, ol-egov.96)', () => {
+  it('a correct MCQ answer records the chosen index and matchedKey: true', async () => {
+    const item = queueItem(mcqFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+
+    await session.mcqAnswer(0); // the fixture's correct option
+    await session.mcqNext();
+
+    expect(reviewLog.calls[0]?.correctness).toEqual({ chosenIndex: 0, matchedKey: true });
+  });
+
+  it('a wrong MCQ answer records the chosen index and matchedKey: false — the rating mapping is untouched', async () => {
+    const item = queueItem(mcqFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+
+    await session.mcqAnswer(1); // wrong option in the fixture
+    await session.mcqNext();
+
+    expect(reviewLog.calls[0]?.correctness).toEqual({ chosenIndex: 1, matchedKey: false });
+    // The rating mapping this rides beside is unchanged — same `mcqRating`
+    // logic, unaffected by this bead.
+    expect(reviewLog.calls[0]?.rating).toBe('again');
+  });
+
+  it('a Q&A review writes no correctness field at all — the signal only exists for mcq', async () => {
+    const item = queueItem(qaFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'correctness')).toBe(false);
+  });
+
+  it('a cloze review writes no correctness field either', async () => {
+    const item = queueItem(clozeFixture());
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'correctness')).toBe(false);
+  });
+});
+
 describe('F2.16 — the session maps through core, and holds no mapping of its own', () => {
   // Scenario: features/F2-review.md, "F2.16 — One rating mapping, not two".
   // The three cases below are also asserted individually above; what this adds
@@ -1021,6 +1081,99 @@ describe('F5.3a / R7 — the scheduling observation’s third trigger wired into
 
     expect(session.getConfusionRoutingOffer()?.promptText).toBe('confusion offer text');
     expect(session.getSchedulingObservationOffer()?.promptText).toBe('reciprocal offer text');
+  });
+});
+
+// Feature: F5.3a offer record / [D-178], [D-204] — features/F5-explain-it-back.md
+// "arriving and clearing unaccepted reuse the F2.12 pairing" scenario.
+describe('D-204 / LOG-4 — the F5.3a scheduling-observation offer write, threaded through session deps (ol-0r92.25)', () => {
+  it('recordSchedulingObservationOfferShown writes trigger scheduling-observation naming the NEIGHBOUR concept, not the instrument’s own conceptIds', async () => {
+    const instrument = qaFixture({ instrumentId: 'inst-qa-9', conceptIds: ['concept-subject'] });
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offer = { instrument, neighbourConceptId: 'concept-neighbour', promptText: 'x' };
+    const eventId = session.recordSchedulingObservationOfferShown(offer);
+
+    expect(eventId).toBe(explainBackOfferLog.offered[0]?.eventId);
+    expect(explainBackOfferLog.offered).toEqual([
+      {
+        conceptIds: ['concept-neighbour'],
+        trigger: 'scheduling-observation',
+        instrumentId: 'inst-qa-9',
+        eventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined).toEqual([]);
+  });
+
+  it('recordSchedulingObservationOfferDeclined pairs with the SAME event id via `answers`, manner is always not-taken', async () => {
+    const instrument = qaFixture({ instrumentId: 'inst-qa-9', conceptIds: ['concept-subject'] });
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offer = { instrument, neighbourConceptId: 'concept-neighbour', promptText: 'x' };
+    const offerEventId = session.recordSchedulingObservationOfferShown(offer);
+    session.recordSchedulingObservationOfferDeclined(offer, offerEventId);
+
+    expect(explainBackOfferLog.declined).toEqual([
+      {
+        conceptIds: ['concept-neighbour'],
+        trigger: 'scheduling-observation',
+        instrumentId: 'inst-qa-9',
+        answers: offerEventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined[0]?.answers).toBe(explainBackOfferLog.offered[0]?.eventId);
+  });
+
+  it('with no explainBackOfferLog port wired, recordSchedulingObservationOfferShown returns null and writes nothing — the offer can still render', async () => {
+    const session = new ReviewSession(baseDeps());
+    await session.start();
+
+    const offer = {
+      instrument: qaFixture(),
+      neighbourConceptId: 'concept-neighbour',
+      promptText: 'x',
+    };
+    expect(session.recordSchedulingObservationOfferShown(offer)).toBeNull();
+  });
+
+  it('recordSchedulingObservationOfferDeclined is a no-op when offerEventId is null — never a decline naming nothing', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offer = {
+      instrument: qaFixture(),
+      neighbourConceptId: 'concept-neighbour',
+      promptText: 'x',
+    };
+    session.recordSchedulingObservationOfferDeclined(offer, null);
+
+    expect(explainBackOfferLog.declined).toEqual([]);
+  });
+
+  it('never collides with F2.12’s repeated-failure offer/decline pair — independent event streams', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const confusionInstrument = qaFixture({ instrumentId: 'inst-a', conceptIds: ['concept-a'] });
+    session.recordExplainBackOfferShown(confusionInstrument);
+    const schedulingOffer = {
+      instrument: qaFixture({ instrumentId: 'inst-b', conceptIds: ['concept-b'] }),
+      neighbourConceptId: 'concept-neighbour',
+      promptText: 'x',
+    };
+    session.recordSchedulingObservationOfferShown(schedulingOffer);
+
+    expect(explainBackOfferLog.offered.map((o) => o.trigger)).toEqual([
+      'repeated-failure',
+      'scheduling-observation',
+    ]);
   });
 });
 

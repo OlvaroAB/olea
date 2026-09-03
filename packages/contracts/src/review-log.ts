@@ -838,6 +838,49 @@ function refineExplainBackGradeInstrumentType(
  * be the second-scoring-target bug R9/C5.11 forbid, caught structurally
  * rather than trusted to a caller.
  */
+/**
+ * An MCQ review's behavioural correctness (`[D-205 / SIG-2]`, `ol-yj0k`,
+ * `ol-egov.96`) — which option she chose and whether it matched the key,
+ * captured alongside the self-reported rating rather than discarded once
+ * `mapMcqRating` has used it. **Never content** (D-005): an index and a
+ * boolean, never the option's text, stem or concept wording. Present only
+ * on a graded MCQ review; absent on every other instrument kind and on every
+ * pre-`[D-205]` MCQ record — a reader treats absence as "signal not
+ * captured," never as "incorrect." Additive on v5, no `schemaVersion` bump,
+ * same reasoning `[D-178]` applied to `schedulingObservation` above. Read by
+ * nothing until a named consumer (the effort or misconception insight) cites
+ * it — the rating mapping this rides beside is unchanged.
+ */
+export const mcqCorrectness = z.object({
+  /** The option index she chose (0-based, matching `McqItem.options`). */
+  chosenIndex: z.number().int().min(0),
+  /** Whether `chosenIndex` matched the key. */
+  matchedKey: z.boolean(),
+});
+export type McqCorrectness = z.infer<typeof mcqCorrectness>;
+
+/**
+ * `correctness` may only appear on an `instrumentType: 'mcq'` review — the
+ * same "shape enforces the restriction the field's own doc states" pattern
+ * `refineExplainBackGradeInstrumentType` above uses for `explainBackGrade`.
+ */
+function refineCorrectnessInstrumentType(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly correctness?: McqCorrectness | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.instrumentType === 'mcq') return;
+  if (value.correctness !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['correctness'],
+      message: 'correctness may only appear on an mcq review',
+    });
+  }
+}
+
 function refineSchedulingObservationNotSubject(
   value: {
     readonly conceptIds: readonly string[];
@@ -911,10 +954,17 @@ export const reviewLogRecordV5 = z
      * demonstrated use of a neighbour concept named as context.
      */
     schedulingObservation: schedulingObservation.optional(),
+    /**
+     * Present only for a graded MCQ review (`[D-205 / SIG-2]`). See
+     * `mcqCorrectness`'s own doc for the privacy and additive-schema
+     * reasoning.
+     */
+    correctness: mcqCorrectness.optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineExplainBackGradeInstrumentType)
-  .superRefine(refineSchedulingObservationNotSubject);
+  .superRefine(refineSchedulingObservationNotSubject)
+  .superRefine(refineCorrectnessInstrumentType);
 export type ReviewLogRecordV5 = z.infer<typeof reviewLogRecordV5>;
 
 /**
@@ -1209,17 +1259,26 @@ export const retrospectiveOfferLogRecordV5 = z.object({
 export type RetrospectiveOfferLogRecordV5 = z.infer<typeof retrospectiveOfferLogRecordV5>;
 
 /**
- * Which of F2.12/F2.14a's on-demand routes produced an explain-back offer
+ * Which of F2.12/F2.14a/F5.3a's routes produced an explain-back offer
  * (`explainBackOfferLogRecordV5`'s own doc). Stored on the record rather than
  * derived, because the question this data exists to answer is *which trigger
  * goes untaken* — a proposal she never asked for (`strong-recall-proposal`,
- * F2.14a) and a routing after repeated failure (`repeated-failure`, F2.12)
- * are not the same offer, and `on-demand` is her own request.
+ * F2.14a), a routing after repeated failure (`repeated-failure`, F2.12),
+ * `on-demand` (her own request), and the F5.3a reciprocal prompt off a live
+ * scheduling observation (`scheduling-observation`, `[D-204 / LOG-4]`,
+ * `ol-egov.95`) are four distinct offers, never collapsed into one another.
+ *
+ * **`scheduling-observation` (`[D-204]`) is additive at the schema level —
+ * no `schemaVersion` bump**, the same reasoning `[D-178 / LOG-3]` applied
+ * when this field itself was introduced: widening an enum's meaning-set is
+ * additive exactly like adding an optional field, and D7.1 (amended by
+ * `[D-204]`) is what authorises the fourth literal, not this file alone.
  */
 export const explainBackOfferTrigger = z.enum([
   'repeated-failure',
   'strong-recall-proposal',
   'on-demand',
+  'scheduling-observation',
 ]);
 export type ExplainBackOfferTrigger = z.infer<typeof explainBackOfferTrigger>;
 

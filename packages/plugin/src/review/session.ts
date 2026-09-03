@@ -14,7 +14,7 @@
  * call.
  */
 
-import type { Rating } from 'olea-contracts';
+import type { McqCorrectness, Rating } from 'olea-contracts';
 import type {
   BuildSchedulingObservationFieldInput,
   ConfusionRoutingDecision,
@@ -593,7 +593,8 @@ export class ReviewSession {
     const item = await this.resolveDraftAt(this.index, 'accepted');
     const instrument = this.requireMcq(item);
     const rating = this.mcqRating(instrument, this.mcqSelectedIndex);
-    await this.logAndAdvance(item, rating, this.wasUnsure);
+    const correctness = this.mcqCorrectness(instrument, this.mcqSelectedIndex);
+    await this.logAndAdvance(item, rating, this.wasUnsure, correctness);
   }
 
   async suspend(): Promise<void> {
@@ -739,6 +740,49 @@ export class ReviewSession {
     return offer;
   }
 
+  /**
+   * The D7.1 write for an F5.3a offer the instant it reaches the surface
+   * (`[D-178 / LOG-3]` item 2 widened by `[D-204 / LOG-4]`, `ol-0r92.25`) —
+   * mirrors `recordExplainBackOfferShown` exactly, except the concept named
+   * is the NEIGHBOUR concept the offer is about (`offer.neighbourConceptId`),
+   * never `offer.instrument.conceptIds` (the subject just rated, which is
+   * evidence FOR the neighbour, not what the offer itself concerns), and the
+   * trigger is the fourth literal `[D-204]` added rather than F2.12's
+   * `repeated-failure`. `view.ts`'s `syncSchedulingObservationOffer` calls
+   * this from its offer-arrives branch and holds the returned event id for
+   * the paired decline below — same seam, same "thread it through session
+   * deps" discipline.
+   */
+  recordSchedulingObservationOfferShown(offer: PendingSchedulingObservationOffer): string | null {
+    if (this.deps.explainBackOfferLog === undefined) return null;
+    return this.deps.explainBackOfferLog.recordOffered({
+      conceptIds: [offer.neighbourConceptId],
+      trigger: 'scheduling-observation',
+      instrumentId: offer.instrument.instrumentId,
+    });
+  }
+
+  /**
+   * The paired write for an F5.3a offer that left the surface unaccepted
+   * (`[D-178 / LOG-3]` item 2 widened by `[D-204 / LOG-4]`) — mirrors
+   * `recordExplainBackOfferDeclined` exactly, with the same
+   * neighbour-concept/trigger substitution `recordSchedulingObservationOfferShown`
+   * above documents. `offerEventId` is whatever that method returned for the
+   * SAME offer; `null` means nothing to pair, same no-op posture.
+   */
+  recordSchedulingObservationOfferDeclined(
+    offer: PendingSchedulingObservationOffer,
+    offerEventId: string | null,
+  ): void {
+    if (this.deps.explainBackOfferLog === undefined || offerEventId === null) return;
+    this.deps.explainBackOfferLog.recordDeclined({
+      conceptIds: [offer.neighbourConceptId],
+      trigger: 'scheduling-observation',
+      instrumentId: offer.instrument.instrumentId,
+      answers: offerEventId,
+    });
+  }
+
   async skipMissingNote(): Promise<void> {
     if (this.phase !== 'note-missing') return;
     this.index += 1;
@@ -776,6 +820,22 @@ export class ReviewSession {
       correct: option?.correct ?? false,
       wasUnsure: this.wasUnsure,
     });
+  }
+
+  /**
+   * `[D-205 / SIG-2]` (`ol-yj0k`, `ol-egov.96`) — the behavioural signal this
+   * bead persists, captured at the exact spot `mcqRating` just above already
+   * reads `option?.correct` transiently to build the self-rating. Never
+   * content (D-005): an opaque index and a boolean, never the option's
+   * label. `chosenIndex: -1` cannot reach `mcqNext` in practice (only
+   * reachable from `mcq-answered`, which requires a real `mcqAnswer` tap
+   * first), but this mirrors `mcqRating`'s own `?? -1` defensive read rather
+   * than assuming a non-null selection.
+   */
+  private mcqCorrectness(instrument: McqItem, selectedIndex: number | null): McqCorrectness {
+    const chosenIndex = selectedIndex ?? -1;
+    const option = instrument.options[chosenIndex];
+    return { chosenIndex, matchedKey: option?.correct ?? false };
   }
 
   private previewMcqInterval(rating: Rating): string {
@@ -902,6 +962,7 @@ export class ReviewSession {
     item: ReviewQueueItem,
     rating: Rating,
     wasUnsure: boolean,
+    correctness?: McqCorrectness,
   ): Promise<void> {
     // Stamped BEFORE the review-log write or the scheduler call below, so a
     // marker minted this exact moment is what both of them key on — never
@@ -946,6 +1007,10 @@ export class ReviewSession {
       // Same conditional-spread discipline as `supportLevel` just above, and
       // for the same `exactOptionalPropertyTypes` reason.
       ...(schedulingObservationInput !== undefined ? { schedulingObservationInput } : {}),
+      // `[D-205 / SIG-2]`: present only when `mcqNext` computed it (an MCQ
+      // review) — `rate()`'s Q&A/cloze call never passes a fourth argument,
+      // so this stays absent there, never a fabricated `false`/`-1` pair.
+      ...(correctness !== undefined ? { correctness } : {}),
     });
 
     // Called directly (rather than through `previewSingleInterval`) because

@@ -681,6 +681,26 @@ button.olea-review-mcq-option:hover {
   margin: 0;
 }
 
+/* ---- F5.3a scheduling-observation offer (`[D-178]`/`[D-204]`, ol-0r92.25) ----
+   Same card shape as the F2.12 confusion banner just above — one banner,
+   one prompt, one action, no dismiss control (F2.14a). */
+
+.olea-review-scheduling-observation-banner {
+  width: 100%;
+  text-align: left;
+  background: var(--olea-host-elev);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+}
+
+.olea-review-scheduling-observation-prompt {
+  font: 400 15px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  margin: 0 0 12px;
+}
+
 /* ---- F2.10 heading offer (`[D-170]`/`[GEN-2]`, ol-0r92.27) ----
    Same card shape as the F2.12 confusion banner just above: this is the
    mount `view.ts`'s `renderHeadingOfferBanner` builds, not yet mounted from
@@ -1827,7 +1847,7 @@ button.olea-review-mcq-option:hover {
    ring plus a background wash so the highlighted row reads as "this one"
    even for a mouse user who never triggers `:focus-visible`. Reads
    `--background-modifier-hover` directly with the same dark-floor literal
-   already established as `--olea-dark-wash` above, rather than standing up
+   the shared wash token above already establishes, rather than standing up
    this pane's own copy of the host-read indirection for one property. */
 .olea-registry-root :focus-visible {
   outline: 2px solid var(--interactive-accent, #8a5cf6);

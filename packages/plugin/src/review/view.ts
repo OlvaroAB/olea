@@ -79,6 +79,7 @@ import {
   REVIEW_UNAVAILABLE_TITLE,
   ratingKeycap,
   ratingLabel,
+  SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL,
   SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
@@ -100,6 +101,7 @@ import {
 } from './keymap.js';
 import type {
   PendingConfusionRoutingOffer,
+  PendingSchedulingObservationOffer,
   ReviewSession,
   ReviewViewModel,
   SessionCompleteSummary,
@@ -139,6 +141,32 @@ interface ConfusionBannerState {
    * later decline can name it via `answers`. `null` when no
    * `explainBackOfferLog` port is wired; the paired decline write is then
    * skipped rather than naming nothing.
+   */
+  readonly offerEventId: string | null;
+}
+
+/**
+ * F5.3a's reciprocal-prompt banner state (`[D-178]`/`[D-204]`, `ol-0r92.25`)
+ * — the F2.12 shape exactly (`ConfusionBannerState`'s own doc), with
+ * `neighbourConceptId` standing in for the field that would otherwise be
+ * re-derived from `instrument`: the offer is about the NEIGHBOUR concept
+ * `PendingSchedulingObservationOffer` names, never `instrument`'s own
+ * `conceptIds` (that instrument is evidence FOR the neighbour, not the
+ * offer's subject — same distinction `recordSchedulingObservationOfferShown`'s
+ * own doc draws). No `status`/`outcome` fields for the same reason
+ * `ConfusionBannerState` has none: accepting hands off to `ExplainBackModal`
+ * (when a destination instrument exists) rather than rendering an inline
+ * result here.
+ */
+interface SchedulingObservationBannerState {
+  readonly instrument: ReviewInstrument;
+  readonly neighbourConceptId: string;
+  readonly promptText: string;
+  readonly presentedWithInstrumentId: string | null;
+  /**
+   * The event id `ReviewSession.recordSchedulingObservationOfferShown`
+   * returned when this offer arrived — held so a later decline can name it
+   * via `answers`. `null` when no `explainBackOfferLog` port is wired.
    */
   readonly offerEventId: string | null;
 }
@@ -259,6 +287,7 @@ export class ReviewView extends ItemView {
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
   private confusionBanner: ConfusionBannerState | null = null;
+  private schedulingObservationBanner: SchedulingObservationBannerState | null = null;
 
   /**
    * `onReviewActivity` fires whenever her due counts may have moved, which is
@@ -545,6 +574,8 @@ export class ReviewView extends ItemView {
     }
     this.syncConfusionRoutingOffer(this.session);
     this.renderConfusionRoutingBanner();
+    this.syncSchedulingObservationOffer(this.session);
+    this.renderSchedulingObservationBanner();
     this.renderHeadingOfferBannerIfAny(this.session);
     const vm = this.session.getViewModel();
     // Every path that changes the queue ends in a `render()`, so this is the one
@@ -929,6 +960,109 @@ export class ReviewView extends ItemView {
     session.resolveConfusionRoutingOffer();
     this.confusionBanner = null;
     this.openExplainBack?.(pending.instrument);
+    this.render();
+  }
+
+  // ---- F5.3a scheduling-observation offer (`[D-178]`/`[D-204]`, `ol-0r92.25`) ----
+
+  /**
+   * The F5.3a mirror of `syncConfusionRoutingOffer` — same offer-arrives /
+   * clears-unaccepted structure, same D7.1 pairing discipline, over
+   * `session.getSchedulingObservationOffer()` and
+   * `recordSchedulingObservationOfferShown`/`recordSchedulingObservationOfferDeclined`
+   * instead of the F2.12 pair. See that method's own doc for why the banner
+   * clears itself once she moves past the instrument it arrived with, rather
+   * than carrying a second, explicit dismiss control (F2.14a).
+   */
+  private syncSchedulingObservationOffer(session: ReviewSession): void {
+    const offer: PendingSchedulingObservationOffer | null = session.getSchedulingObservationOffer();
+    const currentInstrumentId = session.currentItem?.instrument.instrumentId ?? null;
+
+    if (
+      offer !== null &&
+      offer.instrument.instrumentId !== this.schedulingObservationBanner?.instrument.instrumentId
+    ) {
+      this.schedulingObservationBanner = {
+        instrument: offer.instrument,
+        neighbourConceptId: offer.neighbourConceptId,
+        promptText: offer.promptText,
+        presentedWithInstrumentId: currentInstrumentId,
+        offerEventId: session.recordSchedulingObservationOfferShown(offer),
+      };
+      return;
+    }
+    if (
+      this.schedulingObservationBanner !== null &&
+      this.schedulingObservationBanner.presentedWithInstrumentId !== currentInstrumentId
+    ) {
+      session.recordSchedulingObservationOfferDeclined(
+        {
+          instrument: this.schedulingObservationBanner.instrument,
+          neighbourConceptId: this.schedulingObservationBanner.neighbourConceptId,
+          promptText: this.schedulingObservationBanner.promptText,
+        },
+        this.schedulingObservationBanner.offerEventId,
+      );
+      this.schedulingObservationBanner = null;
+    }
+  }
+
+  private renderSchedulingObservationBanner(): void {
+    const state = this.schedulingObservationBanner;
+    if (state === null) return;
+
+    const banner = this.contentEl.createDiv({ cls: 'olea-review-scheduling-observation-banner' });
+    banner.createEl('p', {
+      cls: 'olea-review-scheduling-observation-prompt',
+      text: state.promptText,
+    });
+
+    const btn = banner.createEl('button', {
+      cls: 'olea-review-primary-action',
+      attr: { [FOCUSABLE_ATTR]: 'true' },
+    });
+    btn.createSpan({ text: SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL });
+    this.registerDomEvent(btn, 'click', () => this.handleAcceptSchedulingObservationOffer());
+  }
+
+  /**
+   * The banner's one action, mirroring `handleAcceptConfusionOffer` — but
+   * F2.12's version always has a destination (`ExplainBackModal`, seeded
+   * from the SAME instrument the offer was about); this offer's destination
+   * is a DIFFERENT concept (`neighbourConceptId`), and `ExplainBackModal`'s
+   * `instrument`-seed only exists for a real `ReviewInstrument` — there is
+   * no `concept`-seed variant (`explain-back/modal.ts`'s `ExplainBackSeed`).
+   *
+   * **Never fakes a destination.** This looks for an instrument teaching
+   * the neighbour concept among what THIS session already has queued
+   * (`session.queueSnapshot`, the honest "does the view have one" reading —
+   * a real instrument some other item in today's queue already carries,
+   * never invented). When one exists, hand off to it exactly as F2.12 does;
+   * when none does, the offer is simply resolved — session-side acceptance,
+   * no vault write (there is no `accepted` kind; an accepted offer is
+   * evidenced by the `explain-back` review record a real hand-off would
+   * produce, same restraint `explainBackOfferLogRecordV5`'s own doc states)
+   * — and the banner clears. The missing destination stays a known gap
+   * rather than a fabricated one; a dedicated per-concept lookup is filed
+   * separately (`ol-0r92.25`'s notes) rather than invented here under this
+   * bead.
+   *
+   * **Never through `recordSchedulingObservationOfferDeclined`** — same
+   * "accepting is not a decline" posture `handleAcceptConfusionOffer`
+   * documents.
+   */
+  private handleAcceptSchedulingObservationOffer(): void {
+    const session = this.session;
+    const pending = this.schedulingObservationBanner;
+    if (session === null || pending === null) return;
+    session.resolveSchedulingObservationOffer();
+    this.schedulingObservationBanner = null;
+
+    const destination = session.queueSnapshot.find((queued) =>
+      queued.instrument.conceptIds.includes(pending.neighbourConceptId),
+    )?.instrument;
+    if (destination !== undefined) this.openExplainBack?.(destination);
+
     this.render();
   }
 

@@ -9,11 +9,16 @@
 // crossing against — see `review-log.ts`'s header for the full argument).
 // v1, v2 and v3 are untouched and keep their own permanent suites.
 //
+// `[D-205 / SIG-2]` (`ol-egov.96`, `ol-yj0k`, ratified 2026-09-03) added a
+// fourth optional field, `correctness` — an MCQ review's chosen option index
+// and whether it matched the key — additive the same way the original three
+// were, still no `schemaVersion` bump.
+//
 // What v5 has to prove, and none of it is "does zod work" trivia:
 //
-//   1. v5 is v4 plus three fields — `supportLevelShown`, `explainBackGrade`,
-//      `schedulingObservation` — all optional, and nothing else moved,
-//      appeared or vanished;
+//   1. v5 is v4 plus four fields — `supportLevelShown`, `explainBackGrade`,
+//      `schedulingObservation`, `correctness` — all optional, and nothing
+//      else moved, appeared or vanished;
 //   2. `explainBackGrade` is gated to explain-back reviews only
 //      (`refineExplainBackGradeInstrumentType`); `schedulingObservation` is
 //      NOT — `[D-185]` (`ol-0r92.41`) widened F5.3a/C5.11 to any instrument
@@ -32,6 +37,8 @@ import { describe, expect, it } from 'vitest';
 import {
   type ExplainBackGrade,
   explainBackGrade,
+  type McqCorrectness,
+  mcqCorrectness,
   REVIEW_LOG_SCHEMA_VERSION,
   reviewLogEntry,
   reviewLogEntryV3,
@@ -143,12 +150,12 @@ describe('review-log schema version 5 is the current one', () => {
   });
 });
 
-describe('v5 is v4 plus three optional fields — nothing else changed', () => {
-  it('the record gains exactly three keys, all the ones this bead adds', () => {
+describe('v5 is v4 plus four optional fields — nothing else changed', () => {
+  it('the record gains exactly four keys: the three [D-117] added plus [D-205]’s correctness', () => {
     // `reviewLogRecordV4` no longer exists as a symbol (`[D-109]`'s
     // migrate-in-place rename), so the comparison is against v3 plus every
-    // key v4 ever added: `masteryAtTime` (`ol-g6zg`) and the three from this
-    // bead.
+    // key v4 ever added: `masteryAtTime` (`ol-g6zg`), the three `[D-117]`
+    // fields, and `[D-205]`'s `correctness`.
     const v3Keys = Object.keys(reviewLogRecordV3.shape).sort();
     const v5Keys = Object.keys(reviewLogRecordV5.shape).sort();
     expect(v5Keys).toEqual(
@@ -158,6 +165,7 @@ describe('v5 is v4 plus three optional fields — nothing else changed', () => {
         'supportLevelShown',
         'explainBackGrade',
         'schedulingObservation',
+        'correctness',
       ].sort(),
     );
   });
@@ -169,14 +177,16 @@ describe('v5 is v4 plus three optional fields — nothing else changed', () => {
     expect(suspendLogRecordV5.parse(v5SuspendLine()).schemaVersion).toBe(5);
   });
 
-  it('a record with none of the three new fields parses, and acquires none of the keys', () => {
+  it('a record with none of the four new fields parses, and acquires none of the keys', () => {
     const parsed = reviewLogRecordV5.parse(v5ReviewLine());
     expect(parsed.supportLevelShown).toBeUndefined();
     expect(parsed.explainBackGrade).toBeUndefined();
     expect(parsed.schedulingObservation).toBeUndefined();
+    expect(parsed.correctness).toBeUndefined();
     expect(Object.hasOwn(parsed, 'supportLevelShown')).toBe(false);
     expect(Object.hasOwn(parsed, 'explainBackGrade')).toBe(false);
     expect(Object.hasOwn(parsed, 'schedulingObservation')).toBe(false);
+    expect(Object.hasOwn(parsed, 'correctness')).toBe(false);
   });
 });
 
@@ -266,6 +276,56 @@ describe('explainBackGrade is gated to explain-back reviews; schedulingObservati
     );
     expect(parsed.explainBackGrade).toEqual(GRADE);
     expect(parsed.schedulingObservation).toEqual(OBSERVATION);
+  });
+});
+
+// F3.3 / `[D-205]` (`ol-yj0k`) — MCQ correctness is persisted on the
+// review-log record.
+const CORRECT: McqCorrectness = { chosenIndex: 2, matchedKey: true };
+
+describe('correctness is gated to mcq reviews ([D-205 / SIG-2])', () => {
+  it('a graded MCQ answer records which option was chosen and whether it matched the key', () => {
+    const parsed = reviewLogRecordV5.parse(
+      v5ReviewLine({ instrumentType: 'mcq', correctness: CORRECT }),
+    );
+    expect(parsed.correctness).toEqual({ chosenIndex: 2, matchedKey: true });
+    expect(parsed.schemaVersion).toBe(5);
+  });
+
+  it('the field is never content — only an index and a boolean', () => {
+    const parsed = mcqCorrectness.parse(CORRECT);
+    expect(Object.keys(parsed).sort()).toEqual(['chosenIndex', 'matchedKey']);
+    expect(typeof parsed.chosenIndex).toBe('number');
+    expect(typeof parsed.matchedKey).toBe('boolean');
+  });
+
+  it('rejects correctness on a qa review — the signal only exists for mcq', () => {
+    expect(reviewLogRecordV5.safeParse(v5ReviewLine({ correctness: CORRECT })).success).toBe(false);
+  });
+
+  it('rejects correctness on an explain-back review — the same non-mcq rule', () => {
+    expect(reviewLogRecordV5.safeParse(explainBackLine({ correctness: CORRECT })).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects a negative chosenIndex or a non-integer', () => {
+    expect(mcqCorrectness.safeParse({ chosenIndex: -1, matchedKey: false }).success).toBe(false);
+    expect(mcqCorrectness.safeParse({ chosenIndex: 1.5, matchedKey: false }).success).toBe(false);
+  });
+
+  it('pre-D-205 records still validate — absence reads as "not captured," never "wrong"', () => {
+    const parsed = reviewLogRecordV5.parse(v5ReviewLine({ instrumentType: 'mcq' }));
+    expect(parsed.correctness).toBeUndefined();
+    expect(Object.hasOwn(parsed, 'correctness')).toBe(false);
+  });
+
+  it('the refinement fires through the union too, not only on the bare record', () => {
+    expect(reviewLogEntryV5.safeParse(v5ReviewLine({ correctness: CORRECT })).success).toBe(false);
+    expect(
+      reviewLogEntryV5.safeParse(v5ReviewLine({ instrumentType: 'mcq', correctness: CORRECT }))
+        .success,
+    ).toBe(true);
   });
 });
 

@@ -330,3 +330,76 @@ describe('createVaultReviewLogPort — the scheduling-observation write seam ([D
     expect(Object.hasOwn(record, 'schedulingObservation')).toBe(false);
   });
 });
+
+describe('createVaultReviewLogPort — the [D-205 / SIG-2] correctness write seam (ol-yj0k, ol-egov.96)', () => {
+  const DEVICE = 'ports-spec-correctness-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-mcq-2',
+    conceptIds: ['concept-b'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'mcq',
+    stem: 'Which of these?',
+    options: [
+      { id: 'opt-1', label: 'Not this one', correct: false },
+      { id: 'opt-2', label: 'This one', correct: true },
+    ],
+    feedback: 'Correct — this one.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['mcq'],
+    planVersion: null,
+  };
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  it('merges the caller’s correctness verbatim — index and matched-key boolean, no transformation', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+      correctness: { chosenIndex: 1, matchedKey: true },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(record.correctness).toEqual({ chosenIndex: 1, matchedKey: true });
+  });
+
+  it('writes no correctness field at all when the caller passes none — never a fabricated one', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 800,
+      selectionContext: SELECTION_CONTEXT,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(Object.hasOwn(record, 'correctness')).toBe(false);
+  });
+});

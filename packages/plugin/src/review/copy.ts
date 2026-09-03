@@ -192,6 +192,18 @@ export const EXPLAIN_WHY_REFUSAL =
 export const EXPLAIN_WHY_UNAVAILABLE =
   "Explain it back isn't available yet — no AI Worker is configured.";
 
+/**
+ * F5.3a's reciprocal-prompt banner (`[D-178]`/`[D-204]`, `ol-0r92.25`) — the
+ * one action on the scheduling-observation offer, same "one available
+ * action, no dismiss control" shape F2.12's banner already has (F2.14a). The
+ * fact and reinterpretation half of the banner is `promptText`, built by
+ * `olea-core`'s `schedulingObservationPromptLine` and handed through the
+ * session — only this fixed action label lives here, mirroring the split
+ * `SESSION_COMPLETE_CONTINUE_LABEL` already draws between a derived summary
+ * sentence and its own unconditional button text.
+ */
+export const SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL = 'Explain it back';
+
 // ---------------------------------------------------------------------------
 // F5 Feynman-mode explain-back: the folded grounding refusal (C4.7, `[D-089]`)
 // ---------------------------------------------------------------------------

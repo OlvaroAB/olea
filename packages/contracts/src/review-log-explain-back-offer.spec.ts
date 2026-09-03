@@ -59,11 +59,12 @@ describe('explainBackOfferEventKind / explainBackOfferTrigger / explainBackDecli
     ]);
   });
 
-  it('the trigger names all three routes: F2.12, F2.14a, and her own request', () => {
+  it('the trigger names all four routes: F2.12, F2.14a, her own request, and F5.3a', () => {
     expect(explainBackOfferTrigger.options).toEqual([
       'repeated-failure',
       'strong-recall-proposal',
       'on-demand',
+      'scheduling-observation',
     ]);
   });
 
@@ -150,6 +151,35 @@ describe('explainBackOfferLogRecordV5', () => {
 
   it('`explainBackOfferLogRecord` is the v5 alias', () => {
     expect(explainBackOfferLogRecord).toBe(explainBackOfferLogRecordV5);
+  });
+});
+
+// `[D-204 / LOG-4]` (`ol-egov.95`, `ol-0r92.25`): F5.3a's reciprocal prompt
+// (the scheduling-observation trigger, `ol-0r92.11`) gets its own literal
+// rather than reusing one of the three `[D-178]` triggers — additive on v5,
+// no `schemaVersion` bump, same reasoning `[D-178]` applied when the field
+// itself was introduced.
+describe('scheduling-observation trigger (`[D-204 / LOG-4]`)', () => {
+  it('an explain-back-offered record with the fourth trigger validates under v5, no schemaVersion bump', () => {
+    const parsed = explainBackOfferLogRecordV5.safeParse(
+      offeredLine({ trigger: 'scheduling-observation', conceptIds: ['concept-neighbour1'] }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.schemaVersion).toBe(5);
+  });
+
+  it('the paired decline also validates with the fourth trigger', () => {
+    expect(
+      explainBackOfferLogRecordV5.safeParse(
+        declinedLine({ trigger: 'scheduling-observation', conceptIds: ['concept-neighbour1'] }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('an unknown trigger literal still fails', () => {
+    expect(
+      explainBackOfferLogRecordV5.safeParse(offeredLine({ trigger: 'neighbour-hint' })).success,
+    ).toBe(false);
   });
 });
 

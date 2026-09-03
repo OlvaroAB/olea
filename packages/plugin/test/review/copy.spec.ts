@@ -31,6 +31,7 @@ import {
   REVIEW_UNAVAILABLE_TITLE,
   ratingKeycap,
   ratingLabel,
+  SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL,
   SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
@@ -143,6 +144,20 @@ describe('SESSION_COMPLETE_CONTINUE_LABEL — [D-091] / ol-0r92.32', () => {
       expect(text).not.toContain(word);
     }
     expect(SESSION_COMPLETE_CONTINUE_LABEL).not.toMatch(/\d/);
+  });
+});
+
+describe('SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL — F5.3a / [D-178], [D-204], ol-0r92.25', () => {
+  it('is the same action verb F2.12’s own banner already uses — one shared "explain it back" affordance, not a second wording', () => {
+    expect(SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL).toBe('Explain it back');
+  });
+
+  it('carries no streak, score or verdict language — an action label, not a claim', () => {
+    const text = SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL.toLowerCase();
+    for (const word of ['streak', 'score', 'total', 'great', 'well done', 'correct', 'wrong']) {
+      expect(text).not.toContain(word);
+    }
+    expect(SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL).not.toMatch(/\d/);
   });
 });
 

@@ -6,7 +6,12 @@
  * real, Obsidian-backed implementations.
  */
 
-import type { ExplainBackOfferTrigger, Rating, SelectionContextV4 } from 'olea-contracts';
+import type {
+  ExplainBackOfferTrigger,
+  McqCorrectness,
+  Rating,
+  SelectionContextV4,
+} from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
 // `masteryAtTimeForConceptIds` (C5.4's rollup) had no consumer outside core
 // and `packages/workbench` until this bead (`ol-rpr4`), so nothing had ever
@@ -73,6 +78,19 @@ export interface RecordReviewInput {
    * field at all, never a fabricated one.
    */
   readonly schedulingObservationInput?: BuildSchedulingObservationFieldInput;
+  /**
+   * `[D-205 / SIG-2]` (`ol-yj0k`, `ol-egov.96`) — the MCQ behavioural signal
+   * `session.ts`'s `mcqNext` computes at the same spot it always transiently
+   * read `option?.correct` to build the self-rating, now carried through to
+   * the write instead of being discarded. Unlike `schedulingObservationInput`
+   * above, there is no builder function here — an index and a boolean need
+   * no transformation, so this port merges it straight into the record (see
+   * `createVaultReviewLogPort` below). `undefined` for every non-MCQ review
+   * (`rate()`'s Q&A/cloze call never computes one), and the record is
+   * written with no `correctness` field at all — never a fabricated
+   * `{ chosenIndex: -1, matchedKey: false }`.
+   */
+  readonly correctness?: McqCorrectness;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -185,6 +203,9 @@ export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): 
           // Merged only when a scheduling observation was actually produced
           // above — never a fabricated one.
           ...(schedulingObservation !== undefined ? { schedulingObservation } : {}),
+          // `[D-205 / SIG-2]`: merged verbatim, only when the caller computed
+          // one (an MCQ review) — see `RecordReviewInput.correctness`'s doc.
+          ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
         },
         { deviceId },
       );
