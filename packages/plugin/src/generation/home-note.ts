@@ -55,6 +55,23 @@
  * time a given concept reaches this note. A second sweep over the same
  * source therefore reuses the same note and, at most, appends a `topic:`
  * entry it did not already have — it never recreates or duplicates it.
+ *
+ * **`[D-214]`'s second caller: a source that is ALREADY a `.md` file.**
+ * `ol-0r92.45` reuses this exact module for an authored note she wrote
+ * herself, via `pipeline.ts`'s pre-existing bare-drop branch
+ * (`unit.provenance.embeddedIn` absent, `sourcePath` her note's own path —
+ * see `ingestion/process-now.ts`'s `buildAuthoredNoteUnit`, outside this
+ * bead's own `owns` but the caller this fix exists for). The naming rule
+ * above (`${dir}${stem}.md`) is a no-op collision for any source that is
+ * itself already `.md`: stripping and re-adding the same extension returns
+ * the SAME path, which would make `ensureHomeNoteForConcept` read HER note
+ * back, find no marker, and return `null` — silently drafting nothing,
+ * forever, for every authored note. `homeNotePathForSource` below special-
+ * cases exactly that one collision (never reachable by a PDF/PPTX/DOCX/image
+ * source, none of which end in `.md`) so an authored note gets a genuinely
+ * separate sibling note — never itself. INV-6 is unaffected: the sibling is
+ * still Olea's own layer, still collision-checked the same way, and her
+ * note is never the one this module opens for writing.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
@@ -83,9 +100,18 @@ function fileNameOf(path: VaultPath): string {
 
 /**
  * The home note's vault path for a given source: same folder, source's own
- * file-name stem, `.md` extension. Never collides with the source itself —
- * the four formats this applies to (C3.1: PDF/PPTX/DOCX/image) never carry a
- * `.md` extension of their own.
+ * file-name stem, `.md` extension. Never collides with the source itself for
+ * the four formats `[D-179]` built this against (C3.1: PDF/PPTX/DOCX/image),
+ * none of which carry a `.md` extension of their own.
+ *
+ * **The one collision this guards against (`[D-214]`, `ol-0r92.45`):** a
+ * source that is itself already `.md` — an authored note — strips and
+ * re-adds the identical extension, so the naive rule above would return
+ * `sourcePath` unchanged and this module would mistake HER note for its own
+ * home note. When the derived candidate would equal the source verbatim,
+ * a distinguishing suffix makes the home note a genuinely separate sibling
+ * file instead — still beside the source, still named from its stem, never
+ * the source itself.
  */
 export function homeNotePathForSource(sourcePath: VaultPath): VaultPath {
   const slash = sourcePath.lastIndexOf('/');
@@ -93,7 +119,8 @@ export function homeNotePathForSource(sourcePath: VaultPath): VaultPath {
   const fileName = fileNameOf(sourcePath);
   const dot = fileName.lastIndexOf('.');
   const stem = dot <= 0 ? fileName : fileName.slice(0, dot);
-  return `${dir}${stem}.md`;
+  const candidate = `${dir}${stem}.md`;
+  return candidate === sourcePath ? `${dir}${stem} (Olea).md` : candidate;
 }
 
 /** Whether `content` carries `HOME_NOTE_MARKER_KEY` — see the module doc's "collision, not a guess" note. */
@@ -119,7 +146,11 @@ function initialHomeNoteContent(sourcePath: VaultPath): string {
     `${HOME_NOTE_MARKER_KEY}: ${HOME_NOTE_MARKER_VALUE}`,
     '---',
     '',
-    `*Olea created this note for \`${fileName}\`, which had no note of its own to draft into.`,
+    // Worded to hold for both callers: a bare document with no note of its
+    // own (`[D-179]`) and a note she wrote herself, whose own text is never
+    // written into (`[D-214]`, INV-6) — "beside" is true either way, and
+    // this file never claims the source "had no note of its own."
+    `*Olea created this note beside \`${fileName}\`, to keep generated practice out of it directly.`,
     "Generated quiz items land here on acceptance. This note is Olea's own layer (INV-6) —",
     'renameable and prunable like anything else Olea writes without asking.*',
     '',

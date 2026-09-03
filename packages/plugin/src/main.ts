@@ -1443,23 +1443,30 @@ export default class OleaPlugin extends Plugin {
    * above uses, so the materiality gate — not a second, independent debounce
    * — is the one churn control for both consumers) as a second caller of
    * `onUnitsLanded`, the SAME hook the ingestion path already drives. It
-   * synthesises exactly one `ExtractedUnit` whose `provenance.embeddedIn
-   * .notePath` is the note's OWN path — the only field `runGenerationSweep`'s
-   * `embeddingNotePaths` reads (`generation/pipeline.ts`) to decide which
-   * note, and therefore which course, "landed." `provenance.location` is a
-   * placeholder (`page: 1`, the whole canonicalised text as one range): the
-   * sweep never reads a synthesised unit's `text` or its non-`embeddedIn`
-   * provenance fields, only `embeddedIn.notePath` — see that file's module
-   * doc.
+   * synthesises exactly one `ExtractedUnit` whose `provenance.sourcePath` is
+   * the note's OWN path and whose `provenance.embeddedIn` is ABSENT.
    *
-   * By the same construction, the note's own path is also
-   * `materializeAcceptedDraft`'s insertion target
-   * (`generation/materialize-mcq.ts`'s module doc: "a draft's `sourcePath`
-   * is always the note that embedded the material it was drafted from") — so
-   * an authored note's drafted instrument lands back inside that same note,
-   * and only at accept, through the existing passive-accept review flow
-   * (`[D-097]`). That flow — not this method — is the consent gesture INV-6
-   * requires; nothing here writes to the vault.
+   * **`[D-214]` (`ol-0r92.45`): the note is never the drafting target.**
+   * Before `[D-214]`, `embeddedIn.notePath` named the note itself, which put
+   * this unit on `runGenerationSweep`'s F1.6 "embedded" branch
+   * (`generation/pipeline.ts`) and made the note her drafted instrument's
+   * insertion target — a write into an authored note INV-6 never permits,
+   * accept or no accept. Omitting `embeddedIn` instead routes the unit
+   * through the SAME bare-drop branch `[D-179]` already built for a
+   * standalone source with no embedding note: Olea creates or reuses a home
+   * note BESIDE this one, in her own layer, and that sibling — never this
+   * note — is what `materializeAcceptedDraft` later writes into, only at
+   * accept, through the existing passive-accept review flow (`[D-097]`).
+   * `provenance.sourcePath` staying this note's own path is what keeps the
+   * drafted instrument's citation (`[D-171]`) opening HER note at the
+   * passage, even though materialization lands elsewhere — see
+   * `ingestion/process-now.ts`'s `buildAuthoredNoteUnit` (this method's own
+   * unit-building function) for the full argument, including the one
+   * naming-collision fix this required in `generation/home-note.ts`
+   * (outside this bead's own `owns`, touched only for that fix).
+   * `provenance.location` is a placeholder (`page: 1`, the whole
+   * canonicalised text as one range) — the passage-scoped revision this
+   * implies is a separate, later bead (`ol-0r92.46`).
    *
    * A note outside every course folder (`courseFromPath` finds none) is a
    * silent, disclosed no-op — `runGenerationSweep` already returns its zero

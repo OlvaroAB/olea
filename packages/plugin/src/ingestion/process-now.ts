@@ -98,11 +98,32 @@ function isMarkdownPath(path: VaultPath): boolean {
  * The exact single-unit shape `main.ts`'s `triggerAuthoredNoteGenerationIfObserved`
  * builds for TRG-1's authored-note consumer (`[AUTH-1b]`) — factored out here so
  * the debounce-driven path and this manual override share one function rather
- * than two copies of the same shape. `runGenerationSweep`
- * (`generation/pipeline.ts`) reads only `provenance.embeddedIn.notePath` off a
- * synthesized unit; `location` is the same `page: 1`, whole-text placeholder
- * range that call site already uses, for the same reason (nothing downstream
- * reads it for this case).
+ * than two copies of the same shape.
+ *
+ * **`[D-214]` (`ol-0r92.45`): `embeddedIn` is deliberately ABSENT, not the
+ * note's own path.** Before this bead, `embeddedIn.notePath` was set to the
+ * note itself, which made `runGenerationSweep` (`generation/pipeline.ts`)
+ * treat the authored note as F1.6's "embedded" case — the note she wrote is
+ * the drafting target, and an accepted draft is materialized straight into
+ * it. That is exactly the write `[D-214]` rules out: nothing lands inside an
+ * authored note, ever, without her consent, and drafting is not consent.
+ *
+ * Omitting `embeddedIn` instead routes this unit through the SAME bare-drop
+ * branch `[D-179]` already built for a standalone PDF/PPTX/DOCX/image with no
+ * embedding note (`standaloneSourcePaths`/`ensureHomeNoteForConcept`,
+ * `generation/pipeline.ts`/`generation/home-note.ts` — outside this bead's
+ * own `owns`, touched only for the one-line naming-collision fix
+ * `homeNotePathForSource`'s own doc explains: a source that is itself
+ * already `.md` would otherwise derive a home-note path identical to
+ * itself). The effect: Olea creates or reuses a home note BESIDE this note,
+ * in her own layer, never this note, and that sibling is the drafting
+ * target — `sourcePath` below stays the note's own path, which is what
+ * `runGenerationSweep`'s `citationFromUnit` cites, so the drafted
+ * instrument's provenance still opens HER note at the passage (`[D-171]`),
+ * even though it is materialized somewhere else. `location` is the same
+ * `page: 1`, whole-text placeholder range this call site has always used —
+ * nothing downstream reads it for anything beyond that citation today; the
+ * passage-scoped revision path (`ol-0r92.46`) is a separate, later bead.
  */
 export function buildAuthoredNoteUnit(path: VaultPath, currentText: string): ExtractedUnit {
   return {
@@ -110,7 +131,6 @@ export function buildAuthoredNoteUnit(path: VaultPath, currentText: string): Ext
     provenance: {
       sourcePath: path,
       location: { page: 1, charRange: { start: 0, end: currentText.length } },
-      embeddedIn: { notePath: path, blockStart: 0, blockEnd: currentText.length },
     },
   };
 }

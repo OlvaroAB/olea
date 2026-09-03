@@ -36,6 +36,20 @@ describe('homeNotePathForSource', () => {
   it('handles a source with no extension by using the whole file name as the stem', () => {
     expect(homeNotePathForSource('01 Courses/GEOL204/README')).toBe('01 Courses/GEOL204/README.md');
   });
+
+  it('[D-214] never returns the source itself: a source that is already .md gets a distinguishing suffix, not a self-collision', () => {
+    // The naive rule (strip extension, re-add `.md`) is a no-op for a
+    // source that is already markdown — an authored note, `ol-0r92.45`'s
+    // caller. Returning the source unchanged would make
+    // `ensureHomeNoteForConcept` read HER note back, find no Olea marker,
+    // and return `null` — silently drafting nothing for every authored
+    // note, forever. This is the one collision `[D-179]`'s original rule
+    // never had to consider (no PDF/PPTX/DOCX/image source ends in `.md`).
+    const sourcePath = 'Zettelkasten/My Thoughts.md';
+    const homeNotePath = homeNotePathForSource(sourcePath);
+    expect(homeNotePath).not.toBe(sourcePath);
+    expect(homeNotePath).toBe('Zettelkasten/My Thoughts (Olea).md');
+  });
 });
 
 describe('isOleaHomeNote', () => {
@@ -102,5 +116,26 @@ describe('ensureHomeNoteForConcept', () => {
 
     expect(result).toBeNull();
     expect(vault.raw(NOTE_PATH)).toBe(herNote);
+  });
+
+  it('[D-214] an authored note as the source gets a sibling home note beside it, and her note is never read as reusable or written into', async () => {
+    const authoredNotePath = 'Zettelkasten/My Thoughts.md';
+    const herProse = '# My Thoughts\n\nSomething she actually wrote.\n';
+    const vault = new MemoryVaultSource({ [authoredNotePath]: herProse });
+
+    const result = await ensureHomeNoteForConcept(vault, authoredNotePath, 'Osmosis');
+
+    const expectedHomeNotePath = homeNotePathForSource(authoredNotePath);
+    expect(expectedHomeNotePath).not.toBe(authoredNotePath);
+    expect(result).toBe(expectedHomeNotePath);
+
+    // Her note is byte-identical to before — this module never opened it
+    // for writing, let alone wrote into it (INV-6, `[D-214]`).
+    expect(vault.raw(authoredNotePath)).toBe(herProse);
+
+    const homeContent = vault.raw(expectedHomeNotePath) ?? '';
+    expect(isOleaHomeNote(homeContent)).toBe(true);
+    const fm = frontmatterOf(homeContent);
+    expect(readList(fm, 'topic').items).toEqual(['Osmosis']);
   });
 });

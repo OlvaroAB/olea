@@ -638,14 +638,22 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
     );
   });
 
-  it('synthesises exactly one unit whose embeddedIn.notePath is the note itself — no new ingestion format', () => {
+  it('[D-214] synthesises exactly one unit sourced from the note itself, with embeddedIn ABSENT — the note is never its own drafting target', () => {
     // `ol-0r92.21` [D-152]: this shape moved into `ingestion/process-now.ts`'s
     // `buildAuthoredNoteUnit`, shared with the manual process-now override
     // (see that file's own test) — asserted against the source it now lives
     // in, since `main.ts` calls it rather than building the literal inline.
-    expect(codeOf('ingestion/process-now.ts')).toMatch(
-      /embeddedIn:\s*\{\s*notePath:\s*path,\s*blockStart:\s*0,\s*blockEnd:\s*currentText\.length\s*\},/,
+    // `[D-214]` (`ol-0r92.45`) removed `embeddedIn` entirely: setting it to
+    // the note's own path put the unit on `runGenerationSweep`'s "embedded"
+    // branch and made materialization write straight into an authored note
+    // — the write INV-6 rules out. Omitting it routes through the bare-drop
+    // branch `[D-179]` already built, so Olea drafts into a home note beside
+    // this one instead.
+    const processNowSource = codeOf('ingestion/process-now.ts');
+    expect(processNowSource).toMatch(
+      /provenance:\s*\{\s*sourcePath:\s*path,\s*location:\s*\{\s*page:\s*1,\s*charRange:\s*\{\s*start:\s*0,\s*end:\s*currentText\.length\s*\},?\s*\},?\s*\},/,
     );
+    expect(processNowSource).not.toMatch(/embeddedIn:\s*\{\s*notePath:\s*path/);
   });
 
   it('delegates to onUnitsLanded — the SAME F3.3 hook the ingestion path calls, not a second sweep entry point', () => {

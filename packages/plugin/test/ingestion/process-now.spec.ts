@@ -123,20 +123,22 @@ describe('isProcessNowSupported', () => {
 });
 
 describe('buildAuthoredNoteUnit — the shape shared with the debounce-driven authored-note path', () => {
-  it('synthesizes one unit whose source and embedding note are both the note itself', () => {
+  it('[D-214] synthesizes a unit whose source is the note itself, with embeddedIn ABSENT — never the note as its own drafting target', () => {
     const unit = buildAuthoredNoteUnit('Zettelkasten/idea.md', 'her own words');
     expect(unit).toEqual<ExtractedUnit>({
       text: 'her own words',
       provenance: {
         sourcePath: 'Zettelkasten/idea.md',
         location: { page: 1, charRange: { start: 0, end: 'her own words'.length } },
-        embeddedIn: {
-          notePath: 'Zettelkasten/idea.md',
-          blockStart: 0,
-          blockEnd: 'her own words'.length,
-        },
       },
     });
+    // The pre-`[D-214]` shape set `embeddedIn.notePath` to the note itself,
+    // which routed the unit onto `runGenerationSweep`'s F1.6 "embedded"
+    // branch and made the note its own drafting target — exactly the write
+    // into an authored note INV-6 rules out. Omitting `embeddedIn` instead
+    // routes through the bare-drop branch `[D-179]` already built, so Olea
+    // drafts into a home note beside this one, never this one.
+    expect(unit.provenance).not.toHaveProperty('embeddedIn');
   });
 });
 
