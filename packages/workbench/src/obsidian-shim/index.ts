@@ -34,6 +34,62 @@
  * the WORKBENCH build breaks — loudly, at the seam, which is the point.
  */
 
+import type {
+  EventRef,
+  PluginDataStore,
+  PluginManifest,
+  ShimVaultSource,
+  TFile,
+} from './vault-shim.js';
+import {
+  createInMemoryPluginDataStore,
+  DEFAULT_MANIFEST,
+  MetadataCache,
+  Vault,
+} from './vault-shim.js';
+
+/** Everything in `./vault-shim.ts` is part of the `obsidian` surface this file aliases to — re-exported here rather than duplicated, per this file's own "one alias target" rule (see `tsconfig.json`/`build.mjs`, cited above). */
+export * from './vault-shim.js';
+
+/**
+ * ## Whole-plugin mount (`ol-3ux7.64.3` [WBX-2], `docs/dev/simulator-design.md`
+ * §4 in olea-service)
+ *
+ * The section above is WB-1/WB-2's original "chrome only" shim, unchanged.
+ * This tranche adds what `packages/plugin/src/main.ts` and
+ * `commands/register-commands.ts` need to mount the WHOLE plugin — commands
+ * and a palette, view registration and leaves, a settings route,
+ * `register`/`registerEvent`/`registerInterval` lifecycle bookkeeping,
+ * `loadData`/`saveData`, and a `Vault`/`TFile`/`TFolder`/`Platform`/
+ * `apiVersion` layer over an injected vault source (`./vault-shim.ts`).
+ * `../plugin-bridge.ts`'s `mountPlugin` is the one new entry point that
+ * exercises all of it — see that file's own doc for the exact call a host
+ * (WBX-1's `simulator/`/`main.ts`) makes.
+ *
+ * **What stays `@manual` here — named once, at the head of the file, per
+ * this bead's own instruction, and matching `docs/dev/simulator-design.md`
+ * §4's table exactly:**
+ *
+ * - Hotkey **binding** through Obsidian's real keymap (the palette below
+ *   renders a hotkey's label; it never listens for the chord).
+ * - Split panes, drag, pinning — every leaf here is a single-pane tab strip.
+ * - Obsidian's real right-click context menu (`Workspace.trigger('file-menu',
+ *   ...)` below is wired and recorded; nothing renders a native menu).
+ * - Rename events (`Vault.on('rename', ...)` is declared, for typecheck
+ *   parity with `ObsidianSource.watch`, but never fires — see
+ *   `./vault-shim.ts`'s `ShimVaultEvent` doc).
+ * - Sync races and INV-2 byte-identical round-trips through a REAL vault —
+ *   this shim's frontmatter reader is a reduced, read-only scalar scanner,
+ *   never the round-trip engine (see `./vault-shim.ts`'s `MetadataCache`
+ *   doc).
+ * - Mobile chrome (`Platform.isMobile` is always `false`).
+ * - `Bases` rendering and live metadata-cache invalidation beyond
+ *   create/modify/delete.
+ *
+ * `features/F9-simulator.md`'s F9.S3 `@manual` scenario cites this exact
+ * list.
+ */
+
 /** Obsidian's `IconName` is a string alias; the view only ever returns a literal. */
 export type IconName = string;
 
@@ -62,6 +118,8 @@ interface RegisteredListener {
  */
 export class Component {
   private readonly registered: RegisteredListener[] = [];
+  private readonly teardownCallbacks: Array<() => void> = [];
+  private readonly intervalIds: number[] = [];
 
   registerDomEvent<K extends keyof HTMLElementEventMap>(
     target: HTMLElement,
@@ -73,8 +131,78 @@ export class Component {
     this.registered.push({ target, type, listener: bound });
   }
 
-  /** Not an Obsidian API name — the workbench's own teardown hook. */
+  /**
+   * Obsidian's `Component.register` (§4 gap table: `main.ts`'s vault-watch
+   * and keyword-index-unsubscribe calls). Runs `callback` exactly once, at
+   * teardown (`unloadComponent()`), same as every other `register*` member.
+   */
+  register(callback: () => void): void {
+    this.teardownCallbacks.push(callback);
+  }
+
+  /**
+   * Obsidian's `Component.registerEvent` (§4 gap table: `main.ts`'s
+   * `workspace.on('file-menu', ...)` registration). Takes the `EventRef`
+   * `Workspace.on`/`Vault.on` (`./vault-shim.ts`) both return and unsubscribes
+   * it at teardown.
+   */
+  registerEvent(ref: { unsubscribe(): void }): void {
+    this.teardownCallbacks.push(() => ref.unsubscribe());
+  }
+
+  /**
+   * Obsidian's `Component.registerInterval` (§4 gap table: `main.ts`'s
+   * ingestion-tick interval). Returns `id` unchanged, matching Obsidian's own
+   * convention that callers may still hold and clear it themselves; this
+   * class clears it too, at teardown, so a forgotten `clearInterval` is not a
+   * leak.
+   */
+  registerInterval(id: number): number {
+    this.intervalIds.push(id);
+    return id;
+  }
+
+  /**
+   * Obsidian's `Component.onload` — concrete (never abstract) on the real
+   * class, which is what lets `main.ts`'s `override async onload(): Promise<void> { ... }`
+   * compile. A no-op by default; `../plugin-bridge.ts`'s `mountPlugin` is
+   * what actually calls this, once, after the vault is warm.
+   */
+  onload(): void | Promise<void> {}
+
+  /**
+   * Obsidian's `Component.onunload` — concrete (never abstract) on the real
+   * class, which is what lets `main.ts`'s `override onunload(): void { ... }`
+   * compile. A no-op by default: chrome has nothing of its own to tear down.
+   */
+  onunload(): void {}
+
+  /**
+   * Not an Obsidian API name — the workbench's own teardown hook, called by
+   * the workbench's own view-swap code (`main.ts:901`, pre-existing) and now
+   * also by `../plugin-bridge.ts`'s `mountPlugin().unmount()` for a whole
+   * `Plugin`. Runs `onunload()` first (so a subclass's own teardown logic
+   * fires before this class reclaims anything under it), then drains every
+   * `register`/`registerEvent`/`registerInterval` cleanup, then the DOM-event
+   * cleanup this method always had.
+   */
   unloadComponent(): void {
+    this.onunload();
+    for (const cleanup of this.teardownCallbacks.splice(0)) {
+      try {
+        cleanup();
+      } catch (error) {
+        console.error('[obsidian-shim] Component teardown callback threw', error);
+      }
+    }
+    for (const id of this.intervalIds.splice(0)) {
+      // The bare global, not `window.clearInterval`: `main.ts` mints the id via
+      // the browser's `window.setInterval` (a global this shim does not wrap —
+      // see this file's head-of-file note), but clearing it needs no `window`
+      // reference, which keeps this class usable under plain Node (this
+      // package's own vitest config has no `window` at all).
+      clearInterval(id);
+    }
     for (const { target, type, listener } of this.registered) {
       target.removeEventListener(type, listener);
     }
@@ -179,18 +307,50 @@ export interface WorkspaceLeaf {
   setViewState(state: unknown): Promise<void>;
 }
 
+/** A registered view's factory — `Plugin.registerView`'s second argument, matching real Obsidian's own signature exactly. */
+export type ViewFactory = (leaf: WorkspaceLeaf) => ItemView;
+
 class RecordingWorkspaceLeaf implements WorkspaceLeaf {
   viewType: string | null = null;
-  view: unknown = null;
+  view: ItemView | null = null;
+
+  constructor(private readonly workspace: Workspace) {}
 
   detach(): void {
-    this.viewType = null;
-    this.view = null;
+    this.closeCurrentView();
+    this.workspace.forgetLeaf(this);
   }
 
+  private closeCurrentView(): void {
+    const closing = this.view;
+    if (closing === null) return;
+    this.view = null;
+    void closing.onClose();
+    closing.unloadComponent();
+    closing.containerEl.remove();
+  }
+
+  /**
+   * §4 gap table: real Obsidian instantiates the registered view factory and
+   * mounts it here — `revealReviewView`/`revealTodayView`/etc in `main.ts`
+   * all depend on this actually doing that, not just recording the type
+   * string the old (pre-WBX-2) stub did.
+   */
   async setViewState(state: unknown): Promise<void> {
     const type = (state as { type?: unknown } | null | undefined)?.type;
-    if (typeof type === 'string') this.viewType = type;
+    if (typeof type !== 'string') return;
+    if (this.viewType === type && this.view !== null) return;
+    this.closeCurrentView();
+    this.viewType = type;
+    const factory = this.workspace.viewFactoryFor(type);
+    if (factory === undefined) {
+      console.info(`[obsidian-shim] setViewState: no view registered for type "${type}"`);
+      return;
+    }
+    const view = factory(this);
+    this.view = view;
+    await view.onOpen();
+    this.workspace.onLeafViewMounted(this);
   }
 }
 
@@ -203,30 +363,187 @@ class RecordingWorkspaceLeaf implements WorkspaceLeaf {
  * registry path this shim was built for) call `openLinkText` too, and the
  * whole module typechecks regardless of which export a given bridge actually
  * imports — so `openLinkText` is declared here as a harmless no-op stub, not
- * because anything in this package's build calls it. No real pane management
- * anywhere below — see this file's module doc above for what is and is not
- * exercised.
+ * because anything in this package's build calls it.
+ *
+ * **§4 gap-table addition (WBX-2): `getLeavesOfType`/`getLeaf`/`getRightLeaf`/
+ * `revealLeaf`/`detachLeavesOfType` now back a real single-pane DOM —
+ * `containerEl` is a `[data-wb-tab-strip]` + `[data-wb-pane]` pair, mounted
+ * by whichever leaf is revealed.** No split panes (`@manual`, see `index.ts`'s
+ * head-of-file note): `getLeaf`/`getRightLeaf` mint from the same single pool.
  */
 export class Workspace {
   private readonly leaves: RecordingWorkspaceLeaf[] = [];
   private readonly revealed: WorkspaceLeaf[] = [];
+  private readonly viewFactories = new Map<string, ViewFactory>();
+  private readonly eventHandlers = new Map<string, Set<(...args: never[]) => void>>();
+  private activeLeaf: RecordingWorkspaceLeaf | null = null;
+  private activeFile: TFile | null = null;
+
+  private dom: { containerEl: HTMLElement; tabStripEl: HTMLElement; paneEl: HTMLElement } | null =
+    null;
+
+  /**
+   * The single-pane host DOM: a tab strip over whichever leaf was last
+   * revealed, plus the pane it paints into. `../plugin-bridge.ts`'s
+   * `mountPlugin` folds this into `Plugin`'s own `hostEl` — see that file's
+   * doc for the exact element a host appends.
+   *
+   * **Built lazily, on first access.** This package's vitest config runs
+   * under plain Node (no jsdom — verified: nothing in `packages/workbench`
+   * exercises `document` under `pnpm test` today), so every method that only
+   * touches leaf/view-registry BOOKKEEPING (`getLeaf`, `getLeavesOfType`,
+   * `registerViewType`, `on`/`trigger`, `getActiveFile`) stays unit-testable
+   * with no DOM at all; only actually asking for `containerEl` (a real host
+   * rendering the workspace) requires one.
+   */
+  get containerEl(): HTMLElement {
+    return this.ensureDom().containerEl;
+  }
+
+  private ensureDom(): { containerEl: HTMLElement; tabStripEl: HTMLElement; paneEl: HTMLElement } {
+    if (this.dom !== null) return this.dom;
+    const containerEl = document.createElement('div');
+    containerEl.setAttribute('data-wb-workspace', 'true');
+    const tabStripEl = document.createElement('div');
+    tabStripEl.setAttribute('data-wb-tab-strip', 'true');
+    const paneEl = document.createElement('div');
+    paneEl.setAttribute('data-wb-pane', 'true');
+    containerEl.append(tabStripEl, paneEl);
+    this.dom = { containerEl, tabStripEl, paneEl };
+    return this.dom;
+  }
+
+  /** Not an Obsidian API name — `Plugin.registerView` (`index.ts`) delegates here. */
+  registerViewType(viewType: string, factory: ViewFactory): void {
+    this.viewFactories.set(viewType, factory);
+  }
+
+  /** Not an Obsidian API name — `RecordingWorkspaceLeaf.setViewState` reads the factory registry through here. */
+  viewFactoryFor(viewType: string): ViewFactory | undefined {
+    return this.viewFactories.get(viewType);
+  }
 
   getLeavesOfType(viewType: string): WorkspaceLeaf[] {
     return this.leaves.filter((leaf) => leaf.viewType === viewType);
   }
 
   getLeaf(_kind: 'tab' | 'split' = 'tab'): WorkspaceLeaf {
-    const leaf = new RecordingWorkspaceLeaf();
+    const leaf = new RecordingWorkspaceLeaf(this);
     this.leaves.push(leaf);
     return leaf;
   }
 
+  /**
+   * Obsidian's sidebar-leaf minting (§4 gap table: `main.ts`'s
+   * `revealTodayView`/`revealGapView`/etc all call this for their "or create
+   * one" half). `_split` is accepted for signature fidelity only — there is
+   * no separate right-sidebar pool here, same single leaf pool `getLeaf`
+   * draws from (no split panes, `@manual`).
+   */
+  getRightLeaf(_split: boolean): WorkspaceLeaf | null {
+    return this.getLeaf('tab');
+  }
+
+  /** §4 gap table. Detaches every leaf of `viewType` — each `detach()` closes its view and forgets the leaf, same teardown `WorkspaceLeaf.detach()` always does. */
+  detachLeavesOfType(viewType: string): void {
+    for (const leaf of this.leaves.filter((candidate) => candidate.viewType === viewType)) {
+      leaf.detach();
+    }
+  }
+
+  /** Not an Obsidian API name — `RecordingWorkspaceLeaf.detach()` calls this to drop itself from the tracked pool. */
+  forgetLeaf(leaf: RecordingWorkspaceLeaf): void {
+    const index = this.leaves.indexOf(leaf);
+    if (index !== -1) this.leaves.splice(index, 1);
+    if (this.activeLeaf === leaf) this.activeLeaf = null;
+    this.renderTabStrip();
+  }
+
   async revealLeaf(leaf: WorkspaceLeaf): Promise<void> {
     this.revealed.push(leaf);
+    if (!(leaf instanceof RecordingWorkspaceLeaf)) return;
+    this.activeLeaf = leaf;
+    this.mountActiveLeaf();
+  }
+
+  /** Not an Obsidian API name — `RecordingWorkspaceLeaf.setViewState` calls this once its view has mounted, so an already-revealed leaf's pane updates without a second `revealLeaf` call. */
+  onLeafViewMounted(leaf: RecordingWorkspaceLeaf): void {
+    this.renderTabStrip();
+    if (this.activeLeaf === leaf) this.mountActiveLeaf();
+  }
+
+  /** No-op until something has actually asked for `containerEl` — see that getter's doc. Rendering into a pane nobody will ever look at is wasted DOM work, and (more importantly for this package) lets pure leaf bookkeeping run with no `document` at all. */
+  private mountActiveLeaf(): void {
+    if (this.dom === null) return;
+    this.renderTabStrip();
+    const { paneEl } = this.dom;
+    paneEl.replaceChildren();
+    if (this.activeLeaf?.view != null) paneEl.appendChild(this.activeLeaf.view.containerEl);
+    paneEl.setAttribute('data-wb-active-view-type', this.activeLeaf?.viewType ?? '');
+  }
+
+  private renderTabStrip(): void {
+    if (this.dom === null) return;
+    const { tabStripEl } = this.dom;
+    tabStripEl.replaceChildren();
+    for (const leaf of this.leaves) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.setAttribute('data-wb-tab', 'true');
+      tab.setAttribute('data-wb-view-type', leaf.viewType ?? '');
+      tab.textContent = leaf.view?.getDisplayText() ?? leaf.viewType ?? '(empty)';
+      if (leaf === this.activeLeaf) tab.setAttribute('data-wb-tab-active', 'true');
+      tab.addEventListener('click', () => {
+        void this.revealLeaf(leaf);
+      });
+      tabStripEl.appendChild(tab);
+    }
   }
 
   /** Unused by this shim's own explain-back → registry path — see this class's own doc. */
   async openLinkText(_linktext: string, _sourcePath: string, _newLeaf?: unknown): Promise<void> {}
+
+  /** §4 gap table: `main.ts:759`'s `processNoteNowCheckCallback` reads this. Set by whichever host renders the simulator's file list — see `setActiveFile` below. */
+  getActiveFile(): TFile | null {
+    return this.activeFile;
+  }
+
+  /** Not an Obsidian API name — the simulator's file-list door onto `getActiveFile()` above (design §4: "the simulator's selected file"). */
+  setActiveFile(file: TFile | null): void {
+    this.activeFile = file;
+  }
+
+  /**
+   * §4 gap table's `Workspace.on('file-menu')` — real Obsidian's `Workspace`
+   * inherits a generic `Events.on`/`.trigger` pair; this shim declares only
+   * the one name `main.ts` actually registers (`file-menu`) plus a generic
+   * fallback so an unlisted name still typechecks and records rather than
+   * throwing. Nothing in this package fires `'file-menu'` on its own — see
+   * `Menu`/`MenuItem` below and this file's head-of-file note: the real
+   * context menu stays `@manual`, and firing this is the simulator's file
+   * list's job (WBX-1), via `trigger('file-menu', menu, file)`.
+   */
+  on(eventName: 'file-menu', callback: (menu: Menu, file: TFile) => void): EventRef;
+  on(eventName: string, callback: (...args: never[]) => void): EventRef {
+    let set = this.eventHandlers.get(eventName);
+    if (set === undefined) {
+      set = new Set();
+      this.eventHandlers.set(eventName, set);
+    }
+    set.add(callback);
+    return { unsubscribe: () => set?.delete(callback) };
+  }
+
+  offref(ref: EventRef): void {
+    ref.unsubscribe();
+  }
+
+  /** Not an Obsidian API name on `Workspace` itself (real Obsidian inherits it from `Events`) — fires every handler registered under `eventName`. */
+  trigger(eventName: string, ...args: unknown[]): void {
+    for (const callback of this.eventHandlers.get(eventName) ?? []) {
+      (callback as (...callArgs: unknown[]) => void)(...args);
+    }
+  }
 
   /** Workbench-only inspection hook — never an Obsidian API name. */
   get revealedCount(): number {
@@ -235,11 +552,87 @@ export class Workspace {
 }
 
 /**
- * Obsidian's `App`, reduced to the one member `ExplainBackModal`'s
- * constructor and the `[D-171]` hand-off actually read: `workspace`.
+ * Obsidian's context-menu item, reduced to the three chained setters
+ * `main.ts`'s one `menu.addItem((item) => item.setTitle(...).setIcon(...).onClick(...))`
+ * call needs. No real menu ever paints — see this file's head-of-file note.
+ */
+export class MenuItem {
+  private clickHandler: (() => void) | null = null;
+  private titleText = '';
+  private iconName = '';
+
+  setTitle(title: string): this {
+    this.titleText = title;
+    return this;
+  }
+
+  setIcon(icon: string): this {
+    this.iconName = icon;
+    return this;
+  }
+
+  onClick(callback: () => void): this {
+    this.clickHandler = callback;
+    return this;
+  }
+
+  /** Workbench-only inspection hooks — never Obsidian API names. */
+  get title(): string {
+    return this.titleText;
+  }
+
+  get icon(): string {
+    return this.iconName;
+  }
+
+  /** Not an Obsidian API name — invokes the handler `onClick` registered, same as a real click would. */
+  invoke(): void {
+    this.clickHandler?.();
+  }
+}
+
+/**
+ * Obsidian's context menu, reduced to `addItem` — the one member
+ * `main.ts`'s `workspace.on('file-menu', ...)` handler calls. `items` is a
+ * workbench-only inspection hook so a caller (WBX-1's file list) can render
+ * whatever `main.ts` populated without this shim knowing what a menu looks
+ * like.
+ */
+export class Menu {
+  readonly items: MenuItem[] = [];
+
+  addItem(callback: (item: MenuItem) => void): this {
+    const item = new MenuItem();
+    callback(item);
+    this.items.push(item);
+    return this;
+  }
+}
+
+/**
+ * Obsidian's `App` — `workspace` is the original (WB-2 F5) member
+ * `ExplainBackModal`'s constructor reads; `vault`/`metadataCache` are the §4
+ * gap-table addition whole-plugin mount needs.
+ *
+ * **`vault` starts cold.** `Vault.ready()` (`./vault-shim.ts`) must be
+ * awaited before anything reads `app.vault.getFileByPath`/`.getFiles` —
+ * `../plugin-bridge.ts`'s `mountPlugin` does this before constructing the
+ * plugin, matching a real Obsidian host, whose vault is already scanned
+ * before any plugin's `onload` runs. The two pre-existing zero-arg
+ * `new App()` call sites (`plugin-surface-scenarios.ts`,
+ * `explain-back-scenarios.ts`) never call `ready()` and never read
+ * `app.vault` — both are unaffected, over an empty source that answers every
+ * read with "no such file" (`./vault-shim.ts`'s `createEmptyVaultSource`).
  */
 export class App {
   readonly workspace = new Workspace();
+  readonly vault: Vault;
+  readonly metadataCache: MetadataCache;
+
+  constructor(deps: { readonly vault?: ShimVaultSource } = {}) {
+    this.vault = new Vault(deps.vault);
+    this.metadataCache = new MetadataCache(this.vault);
+  }
 }
 
 /**
@@ -512,19 +905,233 @@ export class PluginSettingTab {
   hide(): void {}
 }
 
+/** Obsidian's `Command`/`Hotkey`, matching `commands/types.ts`'s own `OleaCommandSpec`/`OleaHotkey` structurally (never imported from `packages/plugin` — same "small local mirror" reason `vault-shim.ts`'s module doc gives). */
+export interface Hotkey {
+  modifiers: string[];
+  key: string;
+}
+
+export interface Command {
+  readonly id: string;
+  readonly name: string;
+  readonly callback?: () => void;
+  readonly checkCallback?: (checking: boolean) => boolean;
+  readonly hotkeys?: Hotkey[];
+}
+
+function hotkeyLabel(hotkey: Hotkey): string {
+  return [...hotkey.modifiers, hotkey.key].join('+');
+}
+
 /**
- * Obsidian's `Plugin` (via `Component`), reduced to the one field
- * `OleaSettingTab`'s constructor signature carries a `Plugin` for: nothing
- * in this bead's fixtures reads anything off it beyond `app`, so the
- * manifest/`onload`/`onunload` surface real `Plugin` declares is absent —
- * the WB-1 rule again, grown only as far as a real call site needs.
+ * Obsidian's `Plugin` (via `Component`) — the §4 gap table's whole-plugin
+ * mount. `app` is the original (WB-2 F7) field `OleaSettingTab`'s
+ * constructor reads; everything else below is this bead's addition:
+ * `addCommand` + a palette, `registerView`, `addSettingTab` + a settings
+ * route, `loadData`/`saveData`. `register`/`registerEvent`/`registerInterval`
+ * live on `Component` above (real Obsidian's own inheritance shape).
+ *
+ * **`manifest`/`dataStore` are optional, defaulting to the real production
+ * manifest and an in-memory store** — so the one pre-existing call site with
+ * no second/third argument (`plugin-surface-scenarios.ts`'s
+ * `new Plugin(app)`) still compiles unchanged. Real Obsidian only ever passes
+ * `(app, manifest)`; `dataStore` is this shim's own injection seam (this
+ * bead's brief: "define the shim's constructor/injection interface") for
+ * `../plugin-bridge.ts`'s `mountPlugin` to thread WBX-1's persisted
+ * `PluginDataStore` through — see that file's doc for the exact call.
  */
 export class Plugin extends Component {
   readonly app: App;
+  readonly manifest: PluginManifest;
+  private readonly dataStore: PluginDataStore;
+  private readonly commands = new Map<string, Command>();
+  private settingTab: PluginSettingTab | null = null;
 
-  constructor(app: App) {
+  private dom: {
+    rootEl: HTMLElement;
+    paletteEl: HTMLElement;
+    paletteInputEl: HTMLInputElement;
+    paletteListEl: HTMLElement;
+    settingsRouteEl: HTMLElement;
+  } | null = null;
+
+  constructor(
+    app: App,
+    manifest: PluginManifest = DEFAULT_MANIFEST,
+    dataStore: PluginDataStore = createInMemoryPluginDataStore(),
+  ) {
     super();
     this.app = app;
+    this.manifest = manifest;
+    this.dataStore = dataStore;
+  }
+
+  /**
+   * The plugin's whole mounted chrome — palette trigger, palette overlay,
+   * the workspace's tab strip + pane, and the settings route.
+   * `../plugin-bridge.ts`'s `mountPlugin` returns this as `hostEl`; a host
+   * appends it wherever the simulator's visible surface lives.
+   *
+   * **Built lazily, on first access** — same reasoning `Workspace.containerEl`
+   * states: `addCommand`/`registerView`/`addSettingTab`/`loadData`/`saveData`/
+   * `invokeCommand` all stay unit-testable with no `document` at all (this
+   * package's vitest config has none), and a real `onload()` that calls
+   * `addSettingTab` never touches DOM either UNLESS something has already
+   * asked for `rootEl`.
+   */
+  get rootEl(): HTMLElement {
+    return this.ensureDom().rootEl;
+  }
+
+  private ensureDom(): {
+    rootEl: HTMLElement;
+    paletteEl: HTMLElement;
+    paletteInputEl: HTMLInputElement;
+    paletteListEl: HTMLElement;
+    settingsRouteEl: HTMLElement;
+  } {
+    if (this.dom !== null) return this.dom;
+
+    const paletteToggle = document.createElement('button');
+    paletteToggle.type = 'button';
+    paletteToggle.setAttribute('data-wb-palette-toggle', 'true');
+    paletteToggle.textContent = 'Command palette';
+    paletteToggle.addEventListener('click', () => this.togglePalette());
+
+    const paletteInputEl = document.createElement('input');
+    paletteInputEl.type = 'text';
+    paletteInputEl.setAttribute('data-wb-palette-input', 'true');
+    paletteInputEl.placeholder = 'Type a command…';
+    paletteInputEl.addEventListener('input', () => this.renderPalette());
+
+    const paletteListEl = document.createElement('ul');
+    paletteListEl.setAttribute('data-wb-palette-list', 'true');
+
+    const paletteEl = document.createElement('div');
+    paletteEl.setAttribute('data-wb-palette', 'true');
+    paletteEl.hidden = true;
+    paletteEl.append(paletteInputEl, paletteListEl);
+
+    const settingsRouteEl = document.createElement('div');
+    settingsRouteEl.setAttribute('data-wb-settings-route', 'true');
+    settingsRouteEl.hidden = true;
+
+    const rootEl = document.createElement('div');
+    rootEl.setAttribute('data-wb-plugin-root', 'true');
+    rootEl.append(paletteToggle, paletteEl, this.app.workspace.containerEl, settingsRouteEl);
+
+    this.dom = { rootEl, paletteEl, paletteInputEl, paletteListEl, settingsRouteEl };
+    if (this.settingTab !== null) this.renderSettingsRoute();
+    return this.dom;
+  }
+
+  /**
+   * §4 gap table. Stores the command and re-renders the palette list —
+   * matches `register-commands.ts`'s `registerOleaCommands`, which calls
+   * this once per `buildOleaCommands` entry during `onload`.
+   */
+  addCommand(command: Command): Command {
+    this.commands.set(command.id, command);
+    if (this.dom !== null && !this.dom.paletteEl.hidden) this.renderPalette();
+    return command;
+  }
+
+  private togglePalette(): void {
+    const dom = this.ensureDom();
+    dom.paletteEl.hidden = !dom.paletteEl.hidden;
+    if (dom.paletteEl.hidden) return;
+    dom.paletteInputEl.value = '';
+    this.renderPalette();
+    dom.paletteInputEl.focus();
+  }
+
+  /**
+   * Case-insensitive substring match — a reduction of Obsidian's real fuzzy
+   * matcher (§4 gap table: "a palette overlay ... with fuzzy match"). A
+   * command whose `checkCallback(true)` returns `false` right now is
+   * excluded, same as a real palette hiding an inapplicable command.
+   */
+  private renderPalette(): void {
+    if (this.dom === null) return;
+    const { paletteInputEl, paletteListEl } = this.dom;
+    const query = paletteInputEl.value.trim().toLowerCase();
+    paletteListEl.replaceChildren();
+    for (const command of this.commands.values()) {
+      if (command.checkCallback !== undefined && !command.checkCallback(true)) continue;
+      if (query !== '' && !command.name.toLowerCase().includes(query)) continue;
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('data-wb-command', 'true');
+      button.setAttribute('data-wb-command-id', command.id);
+      const hotkey = command.hotkeys?.[0];
+      if (hotkey !== undefined) button.setAttribute('data-wb-command-hotkey', hotkeyLabel(hotkey));
+      button.textContent = command.name;
+      button.addEventListener('click', () => {
+        this.invokeCommand(command.id);
+        if (this.dom !== null) this.dom.paletteEl.hidden = true;
+      });
+      item.appendChild(button);
+      paletteListEl.appendChild(item);
+    }
+  }
+
+  /**
+   * Not an Obsidian API name — the Playwright rig's door onto a command by
+   * id (this bead's brief: "invoke by command id"), without simulating a
+   * click on `[data-wb-command]`. Runs the same check-then-execute path a
+   * real invocation takes: `false` from `checkCallback(true)` means "hidden,"
+   * matching what the palette itself already enforces in `renderPalette`.
+   * Pure bookkeeping — never touches DOM, so a command's `callback`/
+   * `checkCallback` is unit-testable with no `document` at all.
+   */
+  invokeCommand(id: string): boolean {
+    const command = this.commands.get(id);
+    if (command === undefined) return false;
+    if (command.checkCallback !== undefined) {
+      if (!command.checkCallback(true)) return false;
+      command.checkCallback(false);
+      return true;
+    }
+    command.callback?.();
+    return true;
+  }
+
+  /** §4 gap table. Delegates to `Workspace.registerViewType` — `Plugin` never holds its own view-type registry, since `WorkspaceLeaf.setViewState` (in `Workspace`'s own file section) is what actually needs it. Pure bookkeeping, no DOM. */
+  registerView(viewType: string, factory: ViewFactory): void {
+    this.app.workspace.registerViewType(viewType, factory);
+  }
+
+  /** §4 gap table. Stores the one settings tab a plugin registers (real Obsidian supports more than one via `openTabById`; this plugin registers exactly one, `OleaSettingTab`). Renders into the settings route only once something has actually asked for DOM (`ensureDom`'s own "if a tab is already registered" branch covers the reverse order). */
+  addSettingTab(tab: PluginSettingTab): void {
+    this.settingTab = tab;
+    if (this.dom !== null) this.renderSettingsRoute();
+  }
+
+  /**
+   * Not an Obsidian API name — the simulator's settings-route door (F9.S3:
+   * "the settings route is opened"). Un-hides the route and (re-)renders the
+   * registered tab's `display()` output.
+   */
+  openSettingsRoute(): void {
+    const dom = this.ensureDom();
+    dom.settingsRouteEl.hidden = false;
+    this.renderSettingsRoute();
+  }
+
+  private renderSettingsRoute(): void {
+    if (this.dom === null || this.settingTab === null) return;
+    this.dom.settingsRouteEl.replaceChildren(this.settingTab.containerEl);
+    this.settingTab.display();
+  }
+
+  /** §4 gap table. Delegates to the injected `PluginDataStore` — `device/id.ts`'s `ensureDeviceId` and every `Obsidian*Store` in `packages/plugin` call these two. No DOM. */
+  async loadData(): Promise<unknown> {
+    return this.dataStore.loadData();
+  }
+
+  async saveData(data: unknown): Promise<void> {
+    return this.dataStore.saveData(data);
   }
 }
 

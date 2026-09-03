@@ -103,3 +103,45 @@ export {
 } from '../../plugin/src/today/data-source.js';
 export type { TodayViewDeps } from '../../plugin/src/today/view.js';
 export { TodayView, VIEW_TYPE_OLEA_TODAY } from '../../plugin/src/today/view.js';
+
+/**
+ * Whole-plugin mount (`ol-3ux7.64.3` [WBX-2],
+ * `docs/dev/simulator-design.md` §4 in olea-service). Every export above
+ * this point mounts one view against a hand-built `leaf`/`app`; this is the
+ * one export that constructs the REAL `packages/plugin/src/main.ts` default
+ * export (`OleaPlugin`) over the shim and awaits its own `onload()` — F9.S3's
+ * "the simulator route mounted `OleaPlugin` and awaited `onload`."
+ *
+ * Deliberately generic over `PluginClass` rather than importing `OleaPlugin`
+ * by name: this file's own module doc says its ownership is "which real
+ * views does the workbench mount, and what does it need from the plugin" —
+ * `mountPlugin` is a MECHANISM (construct, seed the vault, await onload,
+ * hand back a teardown), and naming the one production plugin class is a
+ * one-line call at the actual mount site (`packages/workbench/src/main.ts` /
+ * `simulator/`, WBX-1's owned paths — not this file's).
+ *
+ * **The exact call WBX-1's `simulator/`+`main.ts` code makes:**
+ *
+ * ```ts
+ * import OleaPlugin from '../../plugin/src/main.js';
+ * import { mountPlugin } from '../plugin-bridge.js';
+ *
+ * const mounted = await mountPlugin(OleaPlugin, {
+ *   vault: persistedVaultSource,   // §3's persisted VaultSource, or undefined for an empty vault
+ *   pluginData: persistedPluginDataStore, // §3's IndexedDB `plugin-data` store, or undefined for in-memory
+ * });
+ * hostFrame.appendChild(mounted.hostEl); // the plugin's whole chrome: palette + workspace + settings route
+ * // ... later, on day-advance (§3) or teardown:
+ * await mounted.unmount();
+ * ```
+ *
+ * `vault`/`pluginData` are optional — omitting both mounts the plugin over
+ * an empty in-memory vault, which is enough for a smoke test with nothing
+ * persisted.
+ */
+export type {
+  MountedPlugin,
+  MountPluginDeps,
+  PluginConstructor,
+} from './obsidian-shim/mount-plugin.js';
+export { mountPlugin } from './obsidian-shim/mount-plugin.js';
