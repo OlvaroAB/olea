@@ -347,6 +347,13 @@ export async function extractConcepts(
     });
   }
 
+  // `[D-180 / KEY-2]`'s rename-signature test (`key-store.ts`'s `resolveConceptKey`) needs to
+  // know whether a matched record's OLD wording is genuinely absent from this run, to tell a
+  // rename apart from two distinct concepts sharing one introducing note. `byName`'s keys are
+  // exactly this run's candidate names, before any minting happens, so this is captured once
+  // here — not per-candidate — and passed through unchanged to every `keyFor` call below.
+  const runTopicNames = new Set(byName.keys());
+
   /**
    * `[D-174]` read-back (design doc §7): look up an existing `ConceptKeyRecord` by this
    * candidate's anchor before minting anything, so a re-extraction resolves to the key already
@@ -354,6 +361,12 @@ export async function extractConcepts(
    * topic anchor's single `course` field — a concept may belong to several (M:N, see
    * `ConceptRecord.courses`'s doc), and the anchor is a lookup signal, not identity, so this is a
    * deliberate simplification rather than a claim that only one course applies.
+   *
+   * `sourcePaths` (`[D-180]`) becomes the topic anchor's `introducingPaths`, sorted — the
+   * candidate's own introducing material, threaded through so a topic-only concept surviving a
+   * display-string edit has something honest to match a rename on (see `key-store.ts`'s
+   * `isRenameSignatureMatch`). Unused when `boundNotePath` is set: a bound concept anchors on the
+   * note itself, not on introducing material.
    *
    * Gated on `options.stampConceptKeys` (see `ExtractConceptsOptions`'s doc) — off by default so
    * a call against a shared, tracked fixture vault never writes into it; falls back to the
@@ -364,6 +377,7 @@ export async function extractConcepts(
     name: string,
     boundNotePath: VaultPath | undefined,
     courses: readonly string[],
+    sourcePaths: readonly VaultPath[],
   ): Promise<string> {
     if (options.stampConceptKeys !== true) {
       return provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null });
@@ -371,8 +385,14 @@ export async function extractConcepts(
     const anchor: ConceptKeyAnchor =
       boundNotePath !== undefined
         ? { kind: 'note', noteUid: await noteUidFor(boundNotePath), notePath: boundNotePath }
-        : { kind: 'topic', course: [...courses].sort()[0] ?? '', name, aliases: [] };
-    return resolveConceptKey(vault, tier, anchor);
+        : {
+            kind: 'topic',
+            course: [...courses].sort()[0] ?? '',
+            name,
+            aliases: [],
+            introducingPaths: [...sourcePaths].sort(),
+          };
+    return resolveConceptKey(vault, tier, anchor, { runTopicNames });
   }
 
   const records: ConceptRecord[] = await Promise.all(
@@ -381,7 +401,7 @@ export async function extractConcepts(
       const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
       const sourcePaths = [...acc.sourcePaths].sort();
       const tier: ConceptTier = bound !== undefined ? 1 : 2;
-      const key = await keyFor(tier, name, bound, [...acc.courses]);
+      const key = await keyFor(tier, name, bound, [...acc.courses], sourcePaths);
       const record: ConceptRecord = {
         key,
         name,
@@ -448,7 +468,7 @@ export async function extractConcepts(
       // wrote, matched by exact title, so its definition is captured the
       // same way (`[DF-13]`) even though nothing tagged it as a `topic`.
       const definition = await definitionFor(boundNotePath, name);
-      const key = await keyFor(3, name, boundNotePath, [...courses]);
+      const key = await keyFor(3, name, boundNotePath, [...courses], [boundNotePath]);
       records.push({
         key,
         name,

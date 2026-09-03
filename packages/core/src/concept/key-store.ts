@@ -97,12 +97,27 @@ export interface NoteAnchor {
   readonly notePath: VaultPath;
 }
 
-/** A topic-only (tier-2) concept's anchor: the existing course/wording/alias match signal. */
+/**
+ * A topic-only (tier-2) concept's anchor: the existing course/wording/alias match signal.
+ *
+ * `introducingPaths` (`[D-180 / KEY-2]`, ol-egov.65, additive) holds the candidate's introducing
+ * material — `extract.ts`'s `keyFor` populates it from `ConceptRecord.sourcePaths`, sorted. It is
+ * the signal `resolveConceptKey`'s rename-signature match (below) uses to recognise the SAME
+ * topic-only concept under a re-worded `topic:` value, since a topic-only concept has no note to
+ * anchor a rename on the way a bound concept anchors on `noteUid`. **Optional, not required** —
+ * unlike `aliases` above, which every anchor-construction site has always populated — so a
+ * `ConceptKeyRecord` minted on disk before this field existed still validates and reads back: an
+ * absent value is treated as `[]` everywhere it is read (see `anchorIntroducingPaths` below),
+ * which by construction never matches the rename-signature branch's non-empty requirement, so an
+ * old record is simply never a candidate for that branch until its own next ordinary mint fills
+ * the field in.
+ */
 export interface TopicAnchor {
   readonly kind: 'topic';
   readonly course: string;
   readonly name: string;
   readonly aliases: readonly string[];
+  readonly introducingPaths?: readonly VaultPath[];
 }
 
 export type ConceptKeyAnchor = NoteAnchor | TopicAnchor;
@@ -155,6 +170,16 @@ function isTopicAnchor(value: unknown): value is TopicAnchor {
   if (typeof v.course !== 'string') return false;
   if (typeof v.name !== 'string' || v.name.length === 0) return false;
   if (!Array.isArray(v.aliases) || !v.aliases.every((a) => typeof a === 'string')) return false;
+  // Optional and additive (see the interface doc): absent is valid — every record minted before
+  // `[D-180]` has no `introducingPaths` field at all — but a present value must be a string array.
+  if (v.introducingPaths !== undefined) {
+    if (
+      !Array.isArray(v.introducingPaths) ||
+      !v.introducingPaths.every((p) => typeof p === 'string')
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -182,6 +207,11 @@ export function isConceptKeyRecord(value: unknown): value is ConceptKeyRecord {
 /** `record.aliases ?? []` — the one place that default lives, so no reader re-invents it. */
 function recordAliases(record: ConceptKeyRecord): readonly string[] {
   return record.aliases ?? [];
+}
+
+/** `anchor.introducingPaths ?? []` — the one place that default lives, mirroring `recordAliases`. */
+function anchorIntroducingPaths(anchor: TopicAnchor): readonly VaultPath[] {
+  return anchor.introducingPaths ?? [];
 }
 
 /**
@@ -307,8 +337,11 @@ function anchorEquals(a: ConceptKeyAnchor, b: ConceptKeyAnchor): boolean {
     return (
       a.course === b.course &&
       a.name === b.name &&
-      a.aliases.length === b.aliases.length &&
-      a.aliases.every((alias, i) => alias === b.aliases[i])
+      stringArraysEqual(a.aliases, b.aliases) &&
+      // `introducingPaths` drifts the same way `notePath` does above (module doc: "the anchor
+      // is ... allowed to drift") — comparing it here means the ordinary same-name match's
+      // in-place anchor refresh (below) keeps it current as new introducing notes appear.
+      stringArraysEqual(anchorIntroducingPaths(a), anchorIntroducingPaths(b))
     );
   }
   return false;
@@ -318,9 +351,55 @@ function serialize(record: ConceptKeyRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
+/**
+ * `[D-180 / KEY-2]` / `[D-183 / NAME-1]`'s rename-signature test — the fix for case (b) named on
+ * `ol-zfty`: a topic-only concept has no note to anchor a rename on, so a re-worded `topic:` value
+ * fails `anchorMatches`'s ordinary name/alias test and, before this, minted a second key.
+ *
+ * A candidate matches an EXISTING record on this branch only when all three hold: the anchor
+ * course is equal; the two `introducingPaths` sets are EQUAL (not merely overlapping — the
+ * narrower of the ruling's two mitigation options, chosen because `findings/topic-anchor-
+ * collision-rate.md` measured the plain equal-sets test alone colliding on 55–61% of a real
+ * vault's topic-only concepts, before this temporal qualifier); and the record's CURRENT wording
+ * is absent from `runTopicNames` — the caller's full set of this run's candidate names — which is
+ * exactly what tells a genuine rename (the old wording is gone) apart from two distinct concepts
+ * that merely share one introducing note (both wordings are still present in the same run, so
+ * neither one's "old wording" is actually absent). An empty `introducingPaths` set never matches:
+ * treating "no introducing note recorded" as a shared signal would match everything.
+ *
+ * Deliberately excludes anything `anchorMatches` already accepts (same name, or an existing
+ * alias) — this is a fallback for candidates that already failed that test, never a widening of
+ * it.
+ */
+function isRenameSignatureMatch(
+  record: ConceptKeyRecord,
+  candidate: TopicAnchor,
+  runTopicNames: ReadonlySet<string> | undefined,
+): boolean {
+  if (record.anchor.kind !== 'topic') return false;
+  const existingAnchor = record.anchor;
+  if (existingAnchor.course !== candidate.course) return false;
+  if (existingAnchor.name === candidate.name) return false; // anchorMatches already covers this
+  const candidatePaths = anchorIntroducingPaths(candidate);
+  if (candidatePaths.length === 0) return false;
+  if (!stringArraysEqual(anchorIntroducingPaths(existingAnchor), candidatePaths)) return false;
+  if (runTopicNames?.has(existingAnchor.name) === true) return false;
+  return true;
+}
+
 export interface ResolveConceptKeyOptions {
   /** Injectable for deterministic tests. Defaults to `new Date().toISOString().slice(0, 10)`. */
   readonly now?: () => string;
+  /**
+   * `[D-180]`/`[D-183]` rename-signature test only (see `isRenameSignatureMatch` above): every
+   * topic wording this extraction run has already seen — `extract.ts`'s `byName` keys, computed
+   * once before any candidate in the run is resolved. Used solely to confirm a candidate's
+   * matched record's OLD wording is genuinely absent from the current run, distinguishing a
+   * rename from two co-listed, distinct concepts. Omitted disables the rename-signature branch
+   * entirely (a topic-only candidate then behaves exactly as it did before this ruling) rather
+   * than guessing the run is empty.
+   */
+  readonly runTopicNames?: ReadonlySet<string>;
 }
 
 function defaultNow(): string {
@@ -356,6 +435,19 @@ export async function resolveConceptKey(
       await vault.write(hit.path, serialize(refreshed));
     }
     return hit.record.key;
+  }
+
+  // `[D-180]`/`[D-183]` rename signature (see `isRenameSignatureMatch`'s doc above): a topic-only
+  // candidate that failed the ordinary match above may still be the same concept, re-worded.
+  // **Never writes anything on this path** — the persisted record, and the wording it answers to,
+  // are left exactly as they are. Surfacing this as a formal rename proposal she can accept or
+  // decline (`[D-183]`'s existing accept/decline path, `ol-2zfj.58`/`ol-2zfj.59`) is a follow-up;
+  // this seam only stops the orphaning.
+  if (anchor.kind === 'topic') {
+    const renameHit = existing.find(({ record }) =>
+      isRenameSignatureMatch(record, anchor, options.runTopicNames),
+    );
+    if (renameHit !== undefined) return renameHit.record.key;
   }
 
   const key = mintKey(anchor);

@@ -435,7 +435,7 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
     });
   });
 
-  it('CASE (b), STILL OPEN: a topic-only concept whose display string is edited mints a NEW key', async () => {
+  it('CASE (b), CLOSED by [D-180]/[D-183]: a topic-only concept whose display string is edited keeps its key', async () => {
     await write(
       '01 Courses/COURSEA/Note.md',
       '---\ntopic: [Basalt weathering]\ncourse: COURSEA\n---\n\n# Note\n',
@@ -454,18 +454,85 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
     const renamed = after.find((c) => c.name === 'Basalt weathering process');
     expect(renamed).toBeDefined();
 
-    // THIS IS THE GAP: `resolveConceptKey`'s own alias-match path (exercised directly, in
-    // isolation, by "a topic-only concept is matched by the existing wording/alias precedence"
-    // above) is never reached from here, because `extract.ts`'s `keyFor` always calls
-    // `resolveConceptKey` with `aliases: []` — `ConceptRecord` carries no `aliases` field today
-    // (`./types.ts`'s own doc: "aliases ... are not yet fields here"), so there is nothing for
-    // the extraction pass to thread into the candidate anchor that would let the lookup recognise
-    // "Basalt weathering process" as the same concept as "Basalt weathering". A new key is
-    // minted, orphaning every review-log record and mastery rollup keyed on the old one — exactly
-    // the failure `ol-zfty` names as case (b), and `[D-174]` does not close it.
-    expect(renamed?.key).not.toBe(keyBefore);
+    // `[D-180 / KEY-2]`/`[D-183 / NAME-1]` closed the gap: `extract.ts`'s `keyFor` now threads the
+    // candidate's `sourcePaths` into the topic anchor as `introducingPaths`, and `key-store.ts`'s
+    // rename-signature match recognises "same course, same introducingPaths, old wording absent
+    // from this run" as the same concept re-worded. The display name renders the current wording
+    // (a mutable attribute, per `[D-183]`'s written-vs-computed boundary); the key — what a
+    // review-log record or mastery rollup actually joins on — does not move.
+    expect(renamed?.key).toBe(keyBefore);
 
+    // Never a silent rebind: exactly one sidecar record, and it is UNCHANGED — still anchored on
+    // the old wording, since only a formal, accepted rename proposal (not built here) would ever
+    // rewrite it.
     const records = await listConceptKeyRecords(source);
-    expect(records).toHaveLength(2);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.anchor).toEqual({
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+      introducingPaths: ['01 Courses/COURSEA/Note.md'],
+    });
+  });
+
+  it('two distinct topic-only concepts sharing one introducing note are never merged', async () => {
+    // Both wordings are cited by the SAME note, in the SAME run — not a rename, two concepts.
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ntopic: [Basalt weathering, Basalt weathering process]\ncourse: COURSEA\n---\n\n# Note\n',
+    );
+    const records = await extractConcepts(source, { stampConceptKeys: true });
+    const a = records.find((c) => c.name === 'Basalt weathering');
+    const b = records.find((c) => c.name === 'Basalt weathering process');
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    // The old-wording-absent test fails for both (each is present in this very run), so the
+    // rename signature never fires and each keeps its own key.
+    expect(a?.key).not.toBe(b?.key);
+
+    const sidecarRecords = await listConceptKeyRecords(source);
+    expect(sidecarRecords).toHaveLength(2);
+  });
+
+  it('a record with no introducingPaths on disk never matches on the rename-signature branch', async () => {
+    // Simulates a `ConceptKeyRecord` minted before `[D-180]` — no `introducingPaths` field at all.
+    await mkdir(join(root, CONCEPT_KEY_STORE_FOLDER), { recursive: true });
+    const preExistingKey = 'concept-prov1:COURSEA Basalt weathering';
+    await writeFile(
+      join(root, conceptKeyRecordPath(preExistingKey)),
+      `${JSON.stringify(
+        {
+          key: preExistingKey,
+          tier: 2,
+          anchor: { kind: 'topic', course: 'COURSEA', name: 'Basalt weathering', aliases: [] },
+          mintedAt: '2026-08-01',
+          schemaVersion: 1,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await write(
+      '01 Courses/COURSEA/Note.md',
+      '---\ntopic: [Basalt weathering process]\ncourse: COURSEA\n---\n\n# Note\n',
+    );
+    const records = await extractConcepts(source, { stampConceptKeys: true });
+    const renamed = records.find((c) => c.name === 'Basalt weathering process');
+    expect(renamed).toBeDefined();
+    // No `introducingPaths` on the old record to compare against — never a match on this branch,
+    // so a fresh key mints and the old record survives untouched.
+    expect(renamed?.key).not.toBe(preExistingKey);
+
+    const sidecarRecords = await listConceptKeyRecords(source);
+    expect(sidecarRecords).toHaveLength(2);
+    const untouched = sidecarRecords.find(({ record }) => record.key === preExistingKey);
+    expect(untouched?.record.anchor).toEqual({
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
   });
 });
