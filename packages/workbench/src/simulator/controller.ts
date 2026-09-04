@@ -92,7 +92,7 @@ import OleaPlugin from '../../../plugin/src/main.js';
 import { ObsidianStudyPlanSettingsStore } from '../../../plugin/src/plan/settings-store.js';
 import { VIEW_TYPE_OLEA_REGISTRY } from '../../../plugin/src/registry/view.js';
 import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
-import type { HttpRequestFn } from '../../../plugin/src/worker/transport.js';
+import { type HttpRequestFn, WorkerTransportError } from '../../../plugin/src/worker/transport.js';
 import type { App, ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
 import {
   createVaultInstrumentSource,
@@ -184,15 +184,91 @@ function fetchRequestUrl(input: string | URL | Request): string {
 }
 
 /**
+ * WBX-27 (`ol-3ux7.64.27`) — the fault axis: lets a journey force the very
+ * NEXT Worker task call, or every vault `read()` call from a chosen point
+ * on, to fail — so the two "couldn't check" refusal states (explain-back's
+ * `check-failed` eyebrow and gap's `renderUnavailable`, C4.7/`[D-089]`) can
+ * be captured deterministically rather than hoping a cassette happens to
+ * miss on whichever topic a given world's first file resolves to.
+ *
+ * **The two triggers are shaped differently, on purpose.**
+ *
+ * `armTransportFailure()` is ONE-SHOT: armed, consumed by the very next
+ * matching call, then off again — explain-back's grading round trip is a
+ * single Worker call, and a journey that never arms it sees byte-identical
+ * behaviour to before this bead.
+ *
+ * `armVaultReadFailure()` is STICKY, not one-shot, and NOT a simple counter
+ * either — every `read()` call fails from the moment it is armed onward,
+ * for the rest of the page's lifetime (there is no unarm; no journey has
+ * needed one yet). A counter was tried first and measured to be unsound:
+ * `enumerateVaultInstruments` reads its files CONCURRENTLY
+ * (`Promise.all(paths.map(...))`), so a fixed count of N armed failures can
+ * be consumed by N reads inside the SAME `load()` call before its rejection
+ * even propagates, leaving a later, un-armed `load()` call (`main.ts`'s
+ * `revealGapView` always calls `refreshGapViews()` right after the
+ * freshly-opened leaf's own `onOpen()`-triggered load — two real `load()`
+ * calls per "open Gap" gesture) to succeed and silently overwrite the
+ * refusal. Verified empirically: two arms against gap's real concurrent
+ * read fan-out still rendered a populated model, not `'unavailable'`.
+ * Sticky-until-end-of-test is the only shape that survives unknown
+ * concurrency inside a caller this bead does not own.
+ *
+ * **Never touches the network, and never the `unavailable`-no-Worker branch
+ * `[D-089]` keeps separate.** The transport trigger throws BEFORE
+ * `transport.send()` is ever invoked ({@link installTransportBridge}, below)
+ * — no mode (replay/record/direct) ever issues or awaits a real request
+ * while it fires. It reuses the SAME class and message
+ * `ReplayTransport.send`'s own cassette-miss path throws (`../transport/
+ * index.ts`), so the plugin renders its genuine, already-tested
+ * `check-failed` refusal rather than a bespoke fault-axis-only shape. The
+ * vault trigger throws inside {@link toShimVaultSource}, the one shim wrapper
+ * every mounted surface's `VaultSource` reads through — `gap/provider.ts`'s
+ * `createLocalGapProvider` is entirely on-device (its own module doc: "no
+ * Worker call"), so a transport fault can never reach it; this is the one
+ * lever that can make its `try`/`catch` land on `'unavailable'` on demand.
+ * Journeys only ever exercise either trigger under the default `replay`
+ * transport mode.
+ */
+interface SimulatorFaultAxis {
+  armTransportFailure(): void;
+  consumeTransportFailure(): boolean;
+  armVaultReadFailure(): void;
+  /** Sticky, NOT one-shot — see this interface's own doc on why. Never resets itself. */
+  isVaultReadFailureArmed(): boolean;
+}
+
+function createSimulatorFaultAxis(): SimulatorFaultAxis {
+  let transportArmed = false;
+  let vaultReadArmed = false;
+  return {
+    armTransportFailure: () => {
+      transportArmed = true;
+    },
+    consumeTransportFailure: () => {
+      if (!transportArmed) return false;
+      transportArmed = false;
+      return true;
+    },
+    armVaultReadFailure: () => {
+      vaultReadArmed = true;
+    },
+    isVaultReadFailureArmed: () => vaultReadArmed,
+  };
+}
+
+/**
  * Installs the page-level `fetch` override described in this module's own
  * doc, and returns the restore function. `transport` is whatever
  * `createSimulatorTransport` built for the active mode — this function's
  * only job is routing the plugin's one HTTP call shape (`POST .../v1/task`)
- * to it.
+ * to it. `faultAxis` is WBX-27's one-shot transport trigger — see
+ * {@link SimulatorFaultAxis}'s own doc.
  */
 function installTransportBridge(
   transport: WorkerTaskTransport,
   originalFetch: typeof fetch,
+  faultAxis: SimulatorFaultAxis,
 ): () => void {
   const patched: typeof fetch = async (input, init) => {
     const method = (init?.method ?? 'GET').toUpperCase();
@@ -204,6 +280,17 @@ function installTransportBridge(
       return originalFetch(input, init);
     }
     if (!pathname.endsWith(TASK_ENDPOINT_PATH)) return originalFetch(input, init);
+
+    if (faultAxis.consumeTransportFailure()) {
+      // The SAME class/message `ReplayTransport.send`'s own cassette-miss
+      // path throws (`../transport/index.ts`) — never fabricated here, so
+      // the plugin renders its one genuine "couldn't check" refusal rather
+      // than a fault-axis-only shape. Thrown before `transport.send` is ever
+      // reached: no mode, live or replayed, ever sees this request.
+      throw new WorkerTransportError(
+        'olea: could not reach the Worker. Check the base URL and your connection.',
+      );
+    }
 
     let request: WorkerTaskRequest;
     try {
@@ -236,6 +323,8 @@ async function createTransportBridge(options: {
   readonly mode: SimulatorTransportMode;
   readonly baseUrl: string | undefined;
   readonly token: string | undefined;
+  /** WBX-27's one-shot transport trigger — see {@link SimulatorFaultAxis}'s own doc. */
+  readonly faultAxis: SimulatorFaultAxis;
 }): Promise<() => void> {
   const originalFetch = globalThis.fetch.bind(globalThis);
   const rawHttpRequest: HttpRequestFn = async (params) => {
@@ -275,7 +364,7 @@ async function createTransportBridge(options: {
     },
   });
 
-  return installTransportBridge(transport, originalFetch);
+  return installTransportBridge(transport, originalFetch, options.faultAxis);
 }
 
 /**
@@ -534,11 +623,38 @@ async function openOrRevealView(app: App, viewType: string): Promise<void> {
  * only, never a real filter: the persisted vault's base is a
  * `MemoryVaultSource` and has no code path that emits `'rename'`, but the
  * mount site still has to satisfy the shim's narrower event type to compile.
+ *
+ * `faultAxis` is WBX-27's STICKY vault-read trigger (see
+ * {@link SimulatorFaultAxis}'s own doc) — wired onto `read`, NOT `list`.
+ * Production `gap/provider.ts` (and every other on-device consumer) is
+ * handed `ObsidianSource` (`packages/plugin/src/vault/obsidian-source.ts`),
+ * not this raw shim directly: `ObsidianSource.list()` reads the shim
+ * `Vault`'s own `getFiles()` cache (`vault-shim.ts`'s `Vault` populates that
+ * cache from ONE `source.list()` call at construction, then never calls
+ * `list` again), so a fault on `list` here fires only once, at mount, long
+ * before a journey ever gets to arm it — verified empirically: an armed
+ * `list` fault produced zero effect and gap rendered its ordinary populated
+ * model. `ObsidianSource.read()` → `Vault.read()` → `this.source.read(...)`
+ * DOES call straight through to here on every single call, live, with no
+ * cache — the same live-per-call shape a real disk read has — so this is the
+ * one seam that can actually fail an on-device walk already past its list
+ * step.
  */
-function toShimVaultSource(source: PersistentVaultSource): ShimVaultSource {
+function toShimVaultSource(
+  source: PersistentVaultSource,
+  faultAxis: SimulatorFaultAxis,
+): ShimVaultSource {
   return {
     list: (options) => source.list(options),
-    read: (path) => source.read(path),
+    read: (path) => {
+      if (faultAxis.isVaultReadFailureArmed()) {
+        throw new Error(
+          'olea: could not read your vault just now (simulator fault axis, WBX-27) — the same ' +
+            'honest throw a real vault read failure would produce to any on-device consumer.',
+        );
+      }
+      return source.read(path);
+    },
     readBinary: (path) => source.readBinary(path),
     write: (path, content) => source.write(path, content),
     exists: (path) => source.exists(path),
@@ -615,6 +731,31 @@ export interface SimulatorWalkDriver {
    * populates — there is no separate allowlist to keep in sync.
    */
   runCommand(id: string): boolean;
+  /**
+   * WBX-27's fault axis: arms a one-shot trigger so the NEXT Worker task
+   * call fails exactly as a real transient network failure would, without
+   * ever touching a real network — see {@link SimulatorFaultAxis}'s own doc.
+   * Never affects the `unavailable`-no-Worker-configured branch `[D-089]`
+   * keeps distinct (that state never reaches the transport at all). Consumed
+   * by the first matching call after arming; a journey that fires this and
+   * then takes an unrelated action first will consume it there instead —
+   * arm immediately before the gesture that should refuse.
+   */
+  forceNextTransportFailure(): void;
+  /**
+   * WBX-27's fault axis: arms a STICKY trigger so EVERY vault `read()` call
+   * fails from this point on, for the rest of the page's lifetime (there is
+   * no unarm) — the lever for surfaces with no Worker call at all, like
+   * `gap/provider.ts`'s entirely-on-device walk, to reach their own
+   * "couldn't check" `'unavailable'` state on demand. Deliberately NOT a
+   * one-shot like {@link forceNextTransportFailure}: `gap/view.ts`'s open
+   * path runs TWO real `load()` calls per open, each reading multiple files
+   * CONCURRENTLY, so any fixed count of failures can be exhausted inside a
+   * single one of those calls before its rejection even propagates — see
+   * {@link SimulatorFaultAxis}'s own doc for the full argument and what was
+   * measured. Arm immediately before the gesture that should refuse.
+   */
+  forceNextVaultReadFailure(): void;
 }
 
 /** {@link driverExplain}'s result — deliberately narrower than `ExplainBackModal`'s own three refusal reasons (`unavailable`/`check-failed`/`insufficient-notes`, `modal.ts`'s `ModalState`): all three read as `'unavailable'` here, with `reason` carrying whichever refusal sentence the modal actually rendered. */
@@ -1064,6 +1205,8 @@ function installSimulatorWalkDriver(
     contest: (target) => driverContest(mounted, shellRoot, target),
     openRegistry: () => driverOpenRegistry(mounted),
     runCommand: (id) => driverRunCommand(mounted, id),
+    forceNextTransportFailure: () => controller.armNextTransportFailure(),
+    forceNextVaultReadFailure: () => controller.armNextVaultReadFailure(),
   };
 }
 
@@ -1103,6 +1246,8 @@ export class SimulatorController {
     private deviceId: string,
     private readonly transport: SimulatorTransport,
     private readonly uninstallTransportBridge: () => void,
+    /** WBX-27's fault axis, shared by the transport bridge and every `remountPane()`'s shim vault wrapper — see {@link SimulatorFaultAxis}'s own doc. */
+    private readonly faultAxis: SimulatorFaultAxis,
     /** The world descriptor's own display label (`world.ts`) — the badge reads this, never a hard-coded `'FIXTURE'` (`ol-3ux7.64.14` [WBX-12], design doc §7). */
     private readonly worldLabel: string,
     /** The world descriptor's `asOf`, parsed — the instant `reset()` and (via `create()`'s clock construction) a never-touched first mount return to, never `WORKBENCH_NOW` by name (WBX-12: the fixture world's `asOf` happens to equal `WORKBENCH_NOW`'s date, but a private/persona world's does not). */
@@ -1158,10 +1303,16 @@ export class SimulatorController {
     // vault's `.olea/drafts/` rather than through a new mechanism.
     await seedSimulatorDrafts(vault);
     const transportMode = options.transport ?? 'replay';
+    // WBX-27: one fault axis, shared by the transport bridge built here and
+    // every `remountPane()`'s shim vault wrapper (see `SimulatorFaultAxis`'s
+    // own doc) — created before either so both readers get the SAME instance
+    // for this controller's whole lifetime, never a per-mount reset.
+    const faultAxis = createSimulatorFaultAxis();
     const uninstallTransportBridge = await createTransportBridge({
       mode: transportMode,
       baseUrl: options.transportBaseUrl,
       token: options.transportToken,
+      faultAxis,
     });
 
     const controller = new SimulatorController(
@@ -1175,6 +1326,7 @@ export class SimulatorController {
       deviceId,
       transportMode,
       uninstallTransportBridge,
+      faultAxis,
       worldLoad.descriptor.label,
       worldAsOf,
       worldLoad.descriptor,
@@ -1283,7 +1435,7 @@ export class SimulatorController {
     const missing = missingWholePluginGlobals();
     if (missing.length === 0) {
       const mounted = await mountPlugin(OleaPlugin, {
-        vault: toShimVaultSource(this.vault),
+        vault: toShimVaultSource(this.vault, this.faultAxis),
         pluginData: this.pluginDataHost,
       });
       this.mountedPlugin = mounted;
@@ -1484,6 +1636,16 @@ export class SimulatorController {
     await this.clock.advanceDays(1);
     this.syncVisibilityCutoff();
     await this.remountPane();
+  }
+
+  /** WBX-27: arms the fault axis's transport trigger — see {@link SimulatorFaultAxis}'s own doc and {@link SimulatorWalkDriver.forceNextTransportFailure}. */
+  armNextTransportFailure(): void {
+    this.faultAxis.armTransportFailure();
+  }
+
+  /** WBX-27: arms the fault axis's vault-read trigger — see {@link SimulatorFaultAxis}'s own doc and {@link SimulatorWalkDriver.forceNextVaultReadFailure}. */
+  armNextVaultReadFailure(): void {
+    this.faultAxis.armVaultReadFailure();
   }
 
   /**

@@ -64,6 +64,9 @@ type DriverWindow = {
     explain(text: string, conceptRef?: string): Promise<{ outcome: string; reason?: string }>;
     contest(target: 'review' | 'today'): Promise<{ outcome: string; reason?: string }>;
     openRegistry(): Promise<void>;
+    runCommand(id: string): boolean;
+    forceNextTransportFailure(): void;
+    forceNextVaultReadFailure(): void;
   };
 };
 
@@ -99,6 +102,58 @@ export async function driverOpenRegistry(page: Page): Promise<void> {
       throw new Error('driverOpenRegistry: window.__oleaSimulatorDriver is not installed.');
     await driver.openRegistry();
   });
+}
+
+/** `window.__oleaSimulatorDriver.runCommand(id)` — the generic check-then-execute path (WBX-16c). */
+export async function driverRunCommand(page: Page, id: string): Promise<boolean> {
+  return page.evaluate((commandId) => {
+    const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
+    if (driver === undefined)
+      throw new Error('driverRunCommand: window.__oleaSimulatorDriver is not installed.');
+    return driver.runCommand(commandId);
+  }, id);
+}
+
+/** WBX-27's one-shot transport-fault trigger — see `controller.ts`'s `SimulatorFaultAxis` doc. */
+export async function driverForceNextTransportFailure(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
+    if (driver === undefined) {
+      throw new Error(
+        'driverForceNextTransportFailure: window.__oleaSimulatorDriver is not installed.',
+      );
+    }
+    driver.forceNextTransportFailure();
+  });
+}
+
+/** WBX-27's one-shot vault-read-fault trigger — see `controller.ts`'s `SimulatorFaultAxis` doc. */
+export async function driverForceNextVaultReadFailure(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
+    if (driver === undefined) {
+      throw new Error(
+        'driverForceNextVaultReadFailure: window.__oleaSimulatorDriver is not installed.',
+      );
+    }
+    driver.forceNextVaultReadFailure();
+  });
+}
+
+/**
+ * Waits for `viewType` to be the active view in whichever pane it lands in — the same
+ * `[data-wb-pane]`/`[data-wb-right-pane]` marker `tour-helpers.ts`'s `openViewSurface` waits on
+ * after a ribbon click, restated here (rather than imported — that file is out of this lane's
+ * scope, see this module's own "READ-ONLY IMPORTS" doc) for journeys that reach a view through
+ * `runCommand`/a rendered button instead of the ribbon.
+ */
+export async function waitForActiveView(page: Page, viewType: string): Promise<void> {
+  await frame(page)
+    .locator(
+      `[data-wb-pane][data-wb-active-view-type="${viewType}"], [data-wb-right-pane][data-wb-active-view-type="${viewType}"]`,
+    )
+    .first()
+    .waitFor({ state: 'attached', timeout: 15_000 });
 }
 
 /**
