@@ -89,6 +89,7 @@ import {
 } from '../../../plugin/src/explain-back/copy.js';
 import { VIEW_TYPE_OLEA_HOME } from '../../../plugin/src/home/view.js';
 import OleaPlugin from '../../../plugin/src/main.js';
+import { ObsidianStudyPlanSettingsStore } from '../../../plugin/src/plan/settings-store.js';
 import { VIEW_TYPE_OLEA_REGISTRY } from '../../../plugin/src/registry/view.js';
 import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
 import type { HttpRequestFn } from '../../../plugin/src/worker/transport.js';
@@ -119,6 +120,7 @@ import {
   installCourseSetupSeenBridge,
   loadCourseSetupSeenCodes,
 } from './course-setup-bridge.js';
+import { seedSimulatorDrafts } from './draft-seed.js';
 import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
@@ -297,6 +299,48 @@ const SIMULATOR_WORKER_CONFIG_PLACEHOLDER = {
 /** See {@link SIMULATOR_WORKER_CONFIG_PLACEHOLDER}'s own doc — called once per mount lifetime and again after every `reset()`, since `SimulatorStore.resetAll` clears the plugin-data store this lives in. */
 async function seedSimulatorWorkerConfig(pluginDataHost: ObsidianDataHost): Promise<void> {
   await new ObsidianWorkerConfigStore(pluginDataHost).save(SIMULATOR_WORKER_CONFIG_PLACEHOLDER);
+}
+
+/**
+ * `02 Assignments/Assignments.base` — the F1.3 conventional path the bundled
+ * fixture vault (`packages/core/fixtures/vault/02 Assignments/
+ * Assignments.base`) already ships a Base file at, and the same path every
+ * persona world `scripts/persona-world.mjs` (`olea-service`) generates as of
+ * `ol-3ux7.64.19` [WBX-19] ships one at too (`eval/data/persona-synthetic/
+ * worlds/README.md`).
+ */
+const SIMULATOR_ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
+
+/**
+ * Seeds `plan/settings-store.ts`'s `studyPlanConfig` key with the
+ * conventional Base path above — the identical "same storage key the real
+ * flow writes to, no invented surface" posture {@link
+ * seedSimulatorWorkerConfig} already takes for F7.1's token, applied here to
+ * `[D-134]`'s F8.8 retrospective, Gap's ranked state and Grove's `'declared'`
+ * grid, which all sit behind `isStudyPlanConfigured` returning `true`
+ * (`plan/settings-store.ts`). `ol-3ux7.64.19` [WBX-19]'s read-only sweeps
+ * (`docs/dev/simulator-design.md`) found every simulator world stuck at the
+ * honest-empty/`'unavailable'` state purely because nothing had ever typed a
+ * path into this setting — there is no onboarding step that does, and the
+ * simulator has no student to do the typing by hand.
+ *
+ * Guarded on `vault.exists(...)` rather than seeded unconditionally: a world
+ * whose vault has no Base file at this exact path (the real world, whose own
+ * assignments layout is a separate, later piece of work — see WBX-19's close
+ * notes) is left exactly as unconfigured as it was before this change,
+ * never pointed at a path that is not actually there. Called from `create()`
+ * and again from `reset()`, alongside {@link seedSimulatorWorkerConfig} —
+ * `resetAll` clears the same plugin-data store this key lives in.
+ */
+async function seedSimulatorStudyPlanConfig(
+  pluginDataHost: ObsidianDataHost,
+  vault: PersistentVaultSource,
+): Promise<void> {
+  if (!(await vault.exists(SIMULATOR_ASSIGNMENTS_BASE_PATH))) return;
+  await new ObsidianStudyPlanSettingsStore(pluginDataHost).save({
+    version: 1,
+    assignmentsBasePath: SIMULATOR_ASSIGNMENTS_BASE_PATH,
+  });
 }
 
 const RATE_GOOD: Rating = 'good';
@@ -629,8 +673,19 @@ function requireMountedForDriver(
  * explain — matching {@link SimulatorWalkDriver.listFilePaths}'s own
  * "unfiltered, caller picks" posture. Never returned in a driver result
  * (INV-3: no vault content echoed back to a caller that might log it).
+ *
+ * **WBX-18 fix (`ol-qm6u`, discovered fixing the real-world vault root):** the extension strip
+ * used to be `base.replace(/\.[^./]+$/, '')`, which also matches a HIDDEN file's entire name —
+ * `.gitignore` has exactly one dot and nothing before it, so the "extension" the old regex
+ * captured was the whole string, collapsing the default topic to `''`. The topic modal's own
+ * Continue handler is a silent no-op on an empty string (`explain-back/modal.ts`'s
+ * `renderTopicPhase`: `if (value.length === 0) return;`), so this produced a modal that just sat
+ * on the topic screen forever with no error — exactly what a vault-root fix that promotes a
+ * dotfile to "first file alphabetically" (`.gitignore` sorts before every real note) will do. The
+ * regex below requires at least one character BEFORE the final dot, so a pure hidden file with no
+ * real extension is returned unchanged rather than emptied.
  */
-function defaultExplainTopic(mounted: MountedPlugin<OleaPlugin>): string {
+export function defaultExplainTopic(mounted: MountedPlugin<OleaPlugin>): string {
   const [first] = mounted.app.vault.getFiles();
   if (first === undefined) {
     throw new Error(
@@ -639,7 +694,8 @@ function defaultExplainTopic(mounted: MountedPlugin<OleaPlugin>): string {
     );
   }
   const base = first.path.split('/').pop() ?? first.path;
-  return base.replace(/\.[^./]+$/, '');
+  const withExtensionStripped = /^(.+)\.[^./]+$/.exec(base);
+  return withExtensionStripped === null ? base : (withExtensionStripped[1] ?? base);
 }
 
 /**
@@ -1035,6 +1091,11 @@ export class SimulatorController {
     const pluginDataHost = createPluginDataHost(store);
     const deviceId = await ensureDeviceId(pluginDataHost);
     await seedSimulatorWorkerConfig(pluginDataHost);
+    await seedSimulatorStudyPlanConfig(pluginDataHost, vault);
+    // WBX-19 (`ol-3ux7.64.19` follow-up): a populated bulk-review state —
+    // see `draft-seed.ts`'s own doc for why this writes directly into the
+    // vault's `.olea/drafts/` rather than through a new mechanism.
+    await seedSimulatorDrafts(vault);
     const transportMode = options.transport ?? 'replay';
     const uninstallTransportBridge = await createTransportBridge({
       mode: transportMode,
@@ -1469,6 +1530,10 @@ export class SimulatorController {
     this.deviceId = await ensureDeviceId(this.pluginDataHost);
     // `resetAll` clears the plugin-data store this lives in — see its own doc.
     await seedSimulatorWorkerConfig(this.pluginDataHost);
+    await seedSimulatorStudyPlanConfig(this.pluginDataHost, this.vault);
+    // `resetAll` builds a fresh vault overlay above — reseed the same
+    // populated bulk-review state (see `create()`'s own comment).
+    await seedSimulatorDrafts(this.vault);
     this.setNotice('Reset to the fixture snapshot.');
     await this.remountPane();
   }

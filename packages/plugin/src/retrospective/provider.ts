@@ -44,11 +44,13 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
+  type AssessmentReadReport,
   type AssessmentRecord,
   buildRetrospective,
   type ConceptRecord,
   createFsrsScheduler,
   hasAssessmentPassed,
+  REQUIRED_ASSESSMENT_FIELDS,
   type RetrospectiveConceptCoverage,
   type RetrospectiveOfferEvent,
   type RetrospectiveOfferStatus,
@@ -149,6 +151,40 @@ function hasStatedScope(assessment: AssessmentRecord): boolean {
   return assessment.scope !== undefined && assessment.scope.trim() !== '';
 }
 
+/**
+ * `readAssessments`, but an unconfigured or unreadable `.base` path
+ * resolves to an honest empty report rather than a thrown exception —
+ * matching `home/provider.ts`'s `safeAssessmentRecords` for the identical
+ * input (`assignmentsBasePath === ''` is the ordinary early-install case,
+ * not a read failure). Before this fix, `load()` below let that throw
+ * propagate all the way to `main.ts`'s outer `try`/`catch`, which turns ANY
+ * exception into `{ kind: 'unavailable' }` — the alarming "Olea could not
+ * read your vault just now" message — even though `retrospective/view.ts`'s
+ * own module doc distinguishes `'unavailable'` (a real read failure) from
+ * `'none'` (nothing has passed yet, the correct state when there is simply
+ * no assignments Base configured). Class A fix (`[D-072]`-style bug, no
+ * contract change): see `retrospective/provider.safe-read.spec.ts`.
+ */
+async function safeReadAssessments(
+  vault: VaultSource,
+  basePath: string,
+): Promise<AssessmentReadReport> {
+  try {
+    return await readAssessments(vault, basePath);
+  } catch {
+    return {
+      records: [],
+      sourceFolders: [],
+      notesScanned: [],
+      notesWithoutFrontmatter: [],
+      columns: [],
+      unresolvedFields: [...REQUIRED_ASSESSMENT_FIELDS],
+      unrecognizedColumns: [],
+      configErrors: [],
+    };
+  }
+}
+
 function compareByDueDescending(a: AssessmentRecord, b: AssessmentRecord): number {
   const aDue = a.due ?? '';
   const bDue = b.due ?? '';
@@ -201,7 +237,7 @@ export function createLocalRetrospectiveProvider(
       const now = deps.now();
       const { assignmentsBasePath } = await settingsStore.load();
       const [assessmentsRead, history, offerEvents] = await Promise.all([
-        readAssessments(deps.vault, assignmentsBasePath),
+        safeReadAssessments(deps.vault, assignmentsBasePath),
         readReviewHistory(deps.vault, deps.deviceId, {
           today: localToday(now),
           windowDays: RETROSPECTIVE_HISTORY_WINDOW_DAYS,
