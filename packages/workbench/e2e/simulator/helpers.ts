@@ -164,6 +164,23 @@ export function remountLocator(page: Page): Locator {
 }
 
 /**
+ * `[data-wb-remount]`'s settle budget. Playwright's own `expect` default
+ * (5000ms) is enough for the fixture world's handful of files, but
+ * `ol-8jnh` [WBX-24] measured a real-vault (514 files) reset consistently at
+ * ~6.5-7s wall clock (three `resetSimulator` runs against a freshly-built
+ * `dist-real`, driven directly with console/pageerror capture — no thrown
+ * error anywhere in the sequence, so the 5s timeout was firing on a slow
+ * settle, not masking a crash), spiking past 10s under concurrent CPU load
+ * in the same run. This is a single documented larger bound rather than a
+ * per-vault-size calculation: `[data-wb-remount]` carries no vault-size
+ * signal a caller could read, and the fixture/steady worlds settle in well
+ * under a second regardless, so a generous ceiling costs them nothing while
+ * giving the real world's heavier reset (a full re-ingest, not an
+ * incremental day-advance) comfortable margin above the worst observed.
+ */
+const REMOUNT_TIMEOUT_MS = 20_000;
+
+/**
  * Waits for `[data-wb-remount]` to move past `before` — the precise
  * "the remount this click triggered has finished" signal, replacing the
  * badge-date/notice-text content waits every control helper used before
@@ -171,9 +188,12 @@ export function remountLocator(page: Page): Locator {
  * never a purpose-built hook). `before` is `null` only if the element was
  * somehow missing when read — treated as `'0'`, the attribute's own initial
  * value (`main.ts`'s `mountSimulator`), so a first-ever wait still works.
+ * See {@link REMOUNT_TIMEOUT_MS} for why the timeout is explicit here.
  */
 export async function waitForRemount(page: Page, before: string | null): Promise<void> {
-  await expect(remountLocator(page)).not.toHaveAttribute('data-wb-remount', before ?? '0');
+  await expect(remountLocator(page)).not.toHaveAttribute('data-wb-remount', before ?? '0', {
+    timeout: REMOUNT_TIMEOUT_MS,
+  });
 }
 
 /** Reads `.olea-today-count`'s number, or `'none'` when `.olea-today-note` is showing instead (nothing due / unavailable). Call only after {@link waitForTodayRendered}. */
