@@ -348,3 +348,59 @@ export async function overlayEntryCount(page: Page): Promise<number> {
     });
   });
 }
+
+/**
+ * Sums the byte length of every overlay row's stored content — same store as
+ * {@link overlayEntryCount}, but a total over `bytes.byteLength` rather than
+ * a row count. Needed because `appendReviewLogRecord` (and the
+ * `retrospective-offered` writer sharing its append path, `[D-134]` Q5) is a
+ * ONE-FILE-PER-DAY-PER-DEVICE append (C5.2): a second write dated on a day
+ * whose file the overlay already holds lands as MORE BYTES in the SAME row,
+ * not a new row. `[ol-3ux7.64.22]` (WBX-19, `retrospective/provider.ts`'s
+ * try/catch fix) made the fixture world's cold-start mount actually render
+ * Home's standing retrospective offers, which means every fresh mount now
+ * writes one `retrospective-offered` line per outstanding assessment into
+ * `asOf`'s own review-log file BEFORE `lived-term.spec.ts`'s "reset returns
+ * the world to its snapshot" test ever calls `rateNextDue` — so that file
+ * already exists at the reset baseline, and `overlayEntryCount` can no
+ * longer tell "rated, on the same day the baseline was taken" apart from "no
+ * write happened at all". Byte-total still can, and — since the daily-file
+ * writes are the only ones this suite ever finds and the concept-provenance
+ * rows `overlayEntryCount`'s own doc names are deterministic, stable content
+ * rewritten identically on every remount — it does not spuriously drift
+ * across a plain day-advance either.
+ */
+export async function overlayTotalBytes(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const DB_NAME = 'olea-simulator';
+    const STORE_NAME = 'overlay';
+    return new Promise<number>((resolve, reject) => {
+      const openRequest = indexedDB.open(DB_NAME);
+      openRequest.onerror = () => reject(openRequest.error ?? new Error('indexedDB.open failed'));
+      openRequest.onsuccess = () => {
+        const db = openRequest.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.close();
+          resolve(0);
+          return;
+        }
+        const transaction = db.transaction(STORE_NAME, 'readonly');
+        const getAllRequest = transaction.objectStore(STORE_NAME).getAll() as IDBRequest<
+          Array<{ readonly bytes?: Uint8Array | null }>
+        >;
+        getAllRequest.onsuccess = () => {
+          const total = getAllRequest.result.reduce(
+            (sum, row) => sum + (row.bytes?.byteLength ?? 0),
+            0,
+          );
+          resolve(total);
+          db.close();
+        };
+        getAllRequest.onerror = () => {
+          reject(getAllRequest.error ?? new Error('overlay getAll failed'));
+          db.close();
+        };
+      };
+    });
+  });
+}

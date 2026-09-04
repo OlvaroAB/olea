@@ -24,6 +24,7 @@ import {
   badgeDate,
   gotoSimulator,
   overlayEntryCount,
+  overlayTotalBytes,
   rateNextDue,
   readDueCount,
   resetSimulator,
@@ -81,14 +82,24 @@ test('@auto-web:simulator/lived-term — reset returns the world to its snapshot
   // of the snapshot writes", not "back to nothing" — so the baseline read
   // right after this test's own first reset is what "reset" is compared
   // against below, not a literal 0.
-  const baselineOverlay = await overlayEntryCount(page);
+  //
+  // Byte total, not row count (`ol-3ux7.64.22` [WBX-19], `helpers.ts`'s
+  // `overlayTotalBytes` doc): the fixture world's cold-start mount now
+  // renders Home's standing retrospective offers, which writes one
+  // `retrospective-offered` line per outstanding assessment into `asOf`'s
+  // own review-log file before `rateNextDue` below ever runs — so that file
+  // (one overlay ROW) already exists at this baseline, and `rateNextDue`'s
+  // write lands as more bytes in the SAME row rather than a new one.
+  // `overlayEntryCount` can no longer tell "wrote something, same day as the
+  // baseline" apart from "wrote nothing"; the byte total still can.
+  const baselineOverlay = await overlayTotalBytes(page);
 
   await rateNextDue(page);
   await advanceDays(page, 2);
-  expect(await overlayEntryCount(page)).toBeGreaterThan(baselineOverlay);
+  expect(await overlayTotalBytes(page)).toBeGreaterThan(baselineOverlay);
 
   await resetSimulator(page);
-  expect(await overlayEntryCount(page)).toBe(baselineOverlay);
+  expect(await overlayTotalBytes(page)).toBe(baselineOverlay);
   await expect(badgeDate(page)).toHaveText(originalDate);
   expect(await readDueCount(page)).toBe(before);
 });
