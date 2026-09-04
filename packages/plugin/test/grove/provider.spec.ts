@@ -563,7 +563,13 @@ describe('createLocalGroveProvider — load', () => {
     if (firstModel.status !== 'declared')
       throw new Error(`expected declared, got ${firstModel.status}`);
     expect(firstModel.cells).toEqual([
-      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: false },
+      {
+        conceptKey: expect.any(String),
+        conceptName: 'Concept A',
+        state: 'ground',
+        stall: false,
+        pastPaperCitationCount: 0,
+      },
     ]);
 
     // Second "session": a BRAND NEW provider instance (as if the plugin were
@@ -581,7 +587,13 @@ describe('createLocalGroveProvider — load', () => {
     if (secondModel.status !== 'declared')
       throw new Error(`expected declared, got ${secondModel.status}`);
     expect(secondModel.cells).toEqual([
-      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: true },
+      {
+        conceptKey: expect.any(String),
+        conceptName: 'Concept A',
+        state: 'ground',
+        stall: true,
+        pastPaperCitationCount: 0,
+      },
     ]);
   });
 
@@ -654,7 +666,13 @@ describe('createLocalGroveProvider — load', () => {
     if (thirdModel.status !== 'declared')
       throw new Error(`expected declared, got ${thirdModel.status}`);
     expect(thirdModel.cells).toEqual([
-      { conceptKey: expect.any(String), conceptName: 'Concept A', state: 'ground', stall: false },
+      {
+        conceptKey: expect.any(String),
+        conceptName: 'Concept A',
+        state: 'ground',
+        stall: false,
+        pastPaperCitationCount: 0,
+      },
     ]);
   });
 });

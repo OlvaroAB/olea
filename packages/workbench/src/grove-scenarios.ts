@@ -64,6 +64,7 @@ export function findGroveState(
 
 const COURSE = 'syn:course:vantrel';
 const OBJECTIVES_SOURCE_PATH = '01 Courses/syn:course:vantrel/Objectives.md';
+const PAST_PAPER_SOURCE_PATH = '01 Courses/syn:course:vantrel/Past Paper 2024.md';
 
 function modelFor(stateId: string): GroveCourseModel {
   if (stateId === 'grove-declared') {
@@ -76,14 +77,18 @@ function modelFor(stateId: string): GroveCourseModel {
           conceptName: 'syn:concept:alpha',
           state: 'sprout',
           stall: false,
+          // `ol-l5og.18.2`: asked in the one registered past paper — exercises
+          // the papers-tick mark in the workbench preview, not just a real vault.
+          pastPaperCitationCount: 1,
         },
       ],
-      materialGaps: [{ conceptName: 'syn:concept:beta' }],
+      materialGaps: [{ conceptName: 'syn:concept:beta', pastPaperCitationCount: 0 }],
       volunteers: [{ conceptKey: 'syn:grove-key:florzik', conceptName: 'syn:concept:florzik' }],
       summary: {
         builtCount: 1,
         denominatorCount: 2,
-        denominatorSourcePaths: [OBJECTIVES_SOURCE_PATH],
+        denominatorSourcePaths: [OBJECTIVES_SOURCE_PATH, PAST_PAPER_SOURCE_PATH],
+        pastPaperSourcePaths: [PAST_PAPER_SOURCE_PATH],
       },
     };
   }

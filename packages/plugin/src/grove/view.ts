@@ -26,9 +26,22 @@
  * disclaimer, which is the honest reading available until that naming
  * question is answered.
  *
- * **Styles.** `packages/plugin/styles.css` is not this bead's file, so this
- * view's classes have no stylesheet section yet and render on host defaults
- * meanwhile — the same honest gap `gap/view.ts` names for itself.
+ * **Styles (`ol-l5og.18.2`).** `packages/plugin/styles.css` now carries this
+ * view's own section, ported from `docs/design/pass5b-mastery-ratified`'s
+ * Candidate E (`Pass5bCoverage.jsx`, the ratified kit, `[D-054]`) — the
+ * per-cell card treatment, the ground/material-gap dashed-vs-dotted split,
+ * the papers ticks (`renderPapers` below) and the legend (`renderLegend`).
+ * **Not ported: per-syllabus-unit column grouping.** The kit's primary grid
+ * groups cells under syllabus-unit headings; no unit field exists anywhere
+ * in this codebase's extraction pipeline (no `Source`, `ConceptRecord` or
+ * `ConceptCitation` carries one), and building it means a new heading-
+ * extraction pass over the objectives document — outside this bead's `owns`
+ * (`packages/core/src/scope/grove.ts` plus this package's grove files) and
+ * a real feature in its own right, not a styling port. `cells` therefore
+ * still renders as one flat, styled grid — filed as follow-up work rather
+ * than guessed at here. **Also not ported: the vitality/tending wash and
+ * mark** — a disclosed `MAT-2` deferral, same as `../sprig/render-sprig.ts`
+ * already states for the sprig's own `wilt` overlay.
  *
  * **No test file for this module and none is expected** — `obsidian` has no
  * runtime outside a real host; the honesty properties are asserted against
@@ -57,6 +70,9 @@ import {
   GROVE_EMPTY_COURSE,
   GROVE_GROUND_STALL_NOTE,
   GROVE_INFERRED_DISCLAIMER,
+  GROVE_LEGEND_GROUND_NOTE,
+  GROVE_LEGEND_MATERIAL_GAP_NOTE,
+  GROVE_LEGEND_PAPERS_NOTE,
   GROVE_MATERIAL_GAP_LABEL,
   GROVE_NO_COURSES_BODY,
   GROVE_NO_COURSES_HEADING,
@@ -67,12 +83,16 @@ import {
   GROVE_VIEW_TITLE,
   GROVE_VOLUNTEER_SECTION_HEADING,
   GROVE_VOLUNTEER_SECTION_NOTE,
+  grovePapersLabel,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
   groveUnreadableReasonLabel,
   OPEN_RETROSPECTIVE_ACTION,
 } from './copy.js';
+
+/** The four growth-stage words, for the legend — same set `renderSprig`/`groveStateLabel` already read from `olea-core`. */
+const LEGEND_STAGES = ['seed', 'sprout', 'sapling', 'tree'] as const;
 
 export const VIEW_TYPE_OLEA_GROVE = 'olea-grove';
 
@@ -183,6 +203,14 @@ export class GroveView extends ItemView {
     }
 
     for (const section of state.courses) this.renderCourse(root, section);
+
+    // `ol-l5og.18.2`: one legend for the whole screen, not one per course —
+    // only when at least one course actually reached the real grid (the
+    // marks it explains do not exist on the `'inferred'`/`'no-registered-
+    // source'` branches).
+    if (state.courses.some((section) => section.model.status === 'declared')) {
+      this.renderLegend(root);
+    }
   }
 
   private renderCourse(parent: HTMLElement, section: GroveCourseSection): void {
@@ -259,23 +287,43 @@ export class GroveView extends ItemView {
     if (model.cells.length === 0 && model.materialGaps.length === 0) {
       parent.createDiv({ cls: 'olea-grove-empty', text: GROVE_EMPTY_COURSE });
     } else {
+      // `ol-l5og.18.2`: the papers denominator is per-COURSE (how many
+      // past papers are registered for it, not how many cite any given
+      // concept) — zero means no past paper is registered at all, in
+      // which case no cell draws a papers mark (`GroveCourseSummary
+      // .pastPaperSourcePaths`'s own doc: an objectives document alone
+      // can still make a course `'declared'`).
+      const papersTotal = model.summary.pastPaperSourcePaths.length;
       const list = parent.createDiv({ cls: 'olea-grove-concepts' });
       for (const cell of model.cells) {
-        const el = list.createDiv({ cls: 'olea-grove-concept' });
+        const el = list.createDiv({
+          cls:
+            cell.state === 'ground'
+              ? 'olea-grove-cell olea-grove-cell-ground'
+              : 'olea-grove-cell olea-grove-cell-planted',
+        });
+        const header = el.createDiv({ cls: 'olea-grove-cell-header' });
         if (cell.state !== 'ground') {
-          el.appendChild(renderSprig({ state: cell.state, size: 12, container: el }));
-        } else {
-          el.createSpan({ cls: 'olea-grove-ground-mark', text: groveStateLabel('ground') });
+          header.appendChild(renderSprig({ state: cell.state, size: 16, container: header }));
         }
-        el.createSpan({ cls: 'olea-grove-concept-name', text: cell.conceptName });
+        header.createSpan({ cls: 'olea-grove-concept-name', text: cell.conceptName });
+        const footer = el.createDiv({ cls: 'olea-grove-cell-footer' });
+        footer.createSpan({ cls: 'olea-grove-stage-label', text: groveStateLabel(cell.state) });
+        if (papersTotal > 0) {
+          this.renderPapers(footer, cell.pastPaperCitationCount, papersTotal);
+        }
         if (cell.stall) {
           el.createSpan({ cls: 'olea-grove-ground-stall', text: GROVE_GROUND_STALL_NOTE });
         }
       }
       for (const gap of model.materialGaps) {
-        const el = list.createDiv({ cls: 'olea-grove-material-gap' });
+        const el = list.createDiv({ cls: 'olea-grove-cell olea-grove-cell-material-gap' });
         el.createSpan({ cls: 'olea-grove-concept-name', text: gap.conceptName });
-        el.createSpan({ cls: 'olea-grove-material-gap-label', text: GROVE_MATERIAL_GAP_LABEL });
+        const footer = el.createDiv({ cls: 'olea-grove-cell-footer' });
+        footer.createSpan({ cls: 'olea-grove-material-gap-label', text: GROVE_MATERIAL_GAP_LABEL });
+        if (papersTotal > 0) {
+          this.renderPapers(footer, gap.pastPaperCitationCount, papersTotal);
+        }
       }
     }
 
@@ -296,6 +344,52 @@ export class GroveView extends ItemView {
         });
       }
     }
+  }
+
+  /**
+   * `ol-l5og.18.2`: the kit's `Papers` mark (`Pass5bCoverage.jsx`) — one
+   * tick per registered past paper, filled for the ones that asked this
+   * concept. Decorative marks with a real accessible name, same posture
+   * `renderSprig` already takes toward its own `role="img"`/`aria-label`
+   * pair — `grovePapersLabel` states the count and the denominator exactly
+   * once, on the group, never per tick.
+   */
+  private renderPapers(parent: HTMLElement, citedIn: number, total: number): void {
+    const el = parent.createDiv({ cls: 'olea-grove-papers' });
+    el.setAttribute('role', 'img');
+    el.setAttribute('aria-label', grovePapersLabel(citedIn, total));
+    for (let i = 0; i < total; i += 1) {
+      el.createSpan({
+        cls: i < citedIn ? 'olea-grove-papers-tick is-asked' : 'olea-grove-papers-tick',
+      });
+    }
+  }
+
+  /**
+   * `ol-l5og.18.2`: one legend for the whole screen (`render` calls this
+   * once, after every course, only when at least one reached `'declared'`)
+   * — spells out every mark the grid can draw, same purpose the kit's own
+   * `GroveLegend` serves. Vitality/tending is not in this legend: it is a
+   * disclosed `MAT-2` deferral (see `../sprig/render-sprig.ts`'s own module
+   * doc), not a mark this build can draw yet.
+   */
+  private renderLegend(parent: HTMLElement): void {
+    const el = parent.createDiv({ cls: 'olea-grove-legend' });
+    for (const state of LEGEND_STAGES) {
+      const item = el.createDiv({ cls: 'olea-grove-legend-item' });
+      item.appendChild(renderSprig({ state, size: 14, container: item }));
+      item.createSpan({ text: groveStateLabel(state) });
+    }
+    const groundItem = el.createDiv({ cls: 'olea-grove-legend-item' });
+    groundItem.createDiv({ cls: 'olea-grove-legend-swatch olea-grove-legend-swatch-ground' });
+    groundItem.createSpan({ text: GROVE_LEGEND_GROUND_NOTE });
+    const gapItem = el.createDiv({ cls: 'olea-grove-legend-item' });
+    gapItem.createDiv({
+      cls: 'olea-grove-legend-swatch olea-grove-legend-swatch-material-gap',
+    });
+    gapItem.createSpan({ text: GROVE_LEGEND_MATERIAL_GAP_NOTE });
+    const papersItem = el.createDiv({ cls: 'olea-grove-legend-item' });
+    papersItem.createSpan({ text: GROVE_LEGEND_PAPERS_NOTE });
   }
 
   /**

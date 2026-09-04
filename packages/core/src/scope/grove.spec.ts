@@ -279,7 +279,9 @@ describe('buildGroveModel — F8.2 material gaps inside a declared scope', () =>
     });
     if (model.status !== 'declared') throw new Error('expected declared');
     expect(model.cells).toEqual([]);
-    expect(model.materialGaps).toEqual([{ conceptName: 'Invented Concept Unwritten' }]);
+    expect(model.materialGaps).toEqual([
+      { conceptName: 'Invented Concept Unwritten', pastPaperCitationCount: 0 },
+    ]);
     expect(model.summary.denominatorCount).toBe(1);
   });
 });
@@ -308,10 +310,65 @@ describe('buildGroveModel — F8.3 no coverage scalar', () => {
       builtCount: 1,
       denominatorCount: 2,
       denominatorSourcePaths: [objectivesPath],
+      pastPaperSourcePaths: [],
     });
     for (const key of Object.keys(model.summary)) {
       expect(key.toLowerCase()).not.toMatch(/ratio|percent|quotient|completion/);
     }
+  });
+});
+
+describe('buildGroveModel — past-paper citation count (`ol-l5og.18.2`)', () => {
+  it('counts DISTINCT past-paper source paths per concept, never raw citation count, and reports the paper denominator separately', () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const paperOnePath = '03 Research/Past Paper 2023.md' as VaultPath;
+    const paperTwoPath = '03 Research/Past Paper 2024.md' as VaultPath;
+    const conceptA = concept('key-a', 'Invented Concept A');
+    // 'Invented Concept B' is deliberately never in `concepts` — a material gap, still examiner-asked.
+
+    const { model } = buildGroveModel({
+      course: COURSE,
+      concepts: [conceptA],
+      sources: [
+        objectivesSource(objectivesPath),
+        pastPaperSource(paperOnePath),
+        pastPaperSource(paperTwoPath),
+      ],
+      citations: [
+        citation('Invented Concept A', 'objectives', objectivesPath),
+        // Two mentions in the SAME paper — still counts as one paper asking it.
+        citation('Invented Concept A', 'past-paper', paperOnePath),
+        citation('Invented Concept A', 'past-paper', paperOnePath),
+        citation('Invented Concept A', 'past-paper', paperTwoPath),
+        citation('Invented Concept B', 'objectives', objectivesPath),
+        citation('Invented Concept B', 'past-paper', paperOnePath),
+      ],
+      materialPresence: new Map([['key-a', presence(conceptA.sourcePaths, 1)]]),
+      mastery: new Map([['key-a', mastery('key-a', 'sprout')]]),
+    });
+
+    if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+    expect(model.summary.pastPaperSourcePaths).toEqual([paperOnePath, paperTwoPath]);
+    const cellA = model.cells.find((c) => c.conceptName === 'Invented Concept A');
+    expect(cellA?.pastPaperCitationCount).toBe(2);
+    const gapB = model.materialGaps.find((g) => g.conceptName === 'Invented Concept B');
+    expect(gapB?.pastPaperCitationCount).toBe(1);
+  });
+
+  it('reports zero, and no past-paper denominator, when only an objectives document is registered', () => {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const conceptA = concept('key-a', 'Invented Concept A');
+    const { model } = buildGroveModel({
+      course: COURSE,
+      concepts: [conceptA],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [citation('Invented Concept A', 'objectives', objectivesPath)],
+      materialPresence: new Map([['key-a', presence(conceptA.sourcePaths, 1)]]),
+      mastery: new Map([['key-a', mastery('key-a', 'sprout')]]),
+    });
+    if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+    expect(model.summary.pastPaperSourcePaths).toEqual([]);
+    expect(model.cells[0]?.pastPaperCitationCount).toBe(0);
   });
 });
 

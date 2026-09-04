@@ -24,7 +24,7 @@ function declared(
     cells: [],
     materialGaps: [],
     volunteers: [],
-    summary: { builtCount, denominatorCount, denominatorSourcePaths },
+    summary: { builtCount, denominatorCount, denominatorSourcePaths, pastPaperSourcePaths: [] },
   };
 }
 

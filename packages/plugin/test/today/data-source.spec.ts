@@ -1031,6 +1031,7 @@ describe('loadTodayPanel', () => {
                 builtCount: 3,
                 denominatorCount: 5,
                 denominatorSourcePaths: ['Sources/geo-objectives.pdf'],
+                pastPaperSourcePaths: [],
               },
             },
           ];

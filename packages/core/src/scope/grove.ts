@@ -109,18 +109,34 @@ import {
 
 export type { GroveDeclaredState } from './coverage.js';
 
-/** One in-scope concept's coverage reading — one of the five `GroveDeclaredState` values, never `volunteer` (volunteers are a separate array; see module doc). */
+/**
+ * One in-scope concept's coverage reading — one of the five `GroveDeclaredState` values, never
+ * `volunteer` (volunteers are a separate array; see module doc).
+ *
+ * `pastPaperCitationCount` (`ol-l5og.18.2`, F8.1's grid styling pass): how many of the course's
+ * registered `role: 'past-paper'` sources cite this concept by name — the kit's own `Papers`
+ * mark (`Pass5bCoverage.jsx`, "how often the exam has asked this... a weight, not a score").
+ * Counted by DISTINCT `sourcePath` (a concept cited twice in the same paper is one paper asking
+ * it once), never by raw citation count — see `buildGroveModel`'s computation. This describes
+ * the exam, never the student, so it is safe under the same F8.3 ban `groveSummaryLine` states:
+ * a count and a denominator, side by side, never their ratio (`GroveCourseSummary
+ * .pastPaperSourcePaths.length` is that denominator).
+ */
 export interface GroveCell {
   readonly conceptKey: string;
   readonly conceptName: string;
   readonly state: GroveDeclaredState;
   /** F4.5's stall flag — true only when `state === 'ground'` and it has persisted; see `./coverage.js`'s module doc. */
   readonly stall: boolean;
+  /** See this interface's own doc. */
+  readonly pastPaperCitationCount: number;
 }
 
 /** An examiner-declared name with no matching material — F4.10, named in plain language (registry §6), never a `GroveCell`. */
 export interface GroveMaterialGapCell {
   readonly conceptName: string;
+  /** Same reading as `GroveCell.pastPaperCitationCount` — a material gap can still be examiner-asked. */
+  readonly pastPaperCitationCount: number;
 }
 
 /** A concept built from her notes that no registered source names — F8.2's `volunteer`, outside the declared-scope count and never auto-pruned. */
@@ -137,6 +153,14 @@ export interface GroveCourseSummary {
   readonly denominatorCount: number;
   /** Which registered documents produced this denominator — F8.1's "the denominator is the examiner's": always traceable to a real, registered source. */
   readonly denominatorSourcePaths: readonly VaultPath[];
+  /**
+   * `ol-l5og.18.2`: the `role: 'past-paper'` subset of `denominatorSourcePaths` — the
+   * denominator `GroveCell.pastPaperCitationCount`/`GroveMaterialGapCell.pastPaperCitationCount`
+   * are counted against ("asked in N of THIS MANY past papers"). Empty when the course has no
+   * registered past paper (an objectives document alone can still make a course `'declared'`) —
+   * a caller renders no papers mark at all in that case, rather than a "0 of 0".
+   */
+  readonly pastPaperSourcePaths: readonly VaultPath[];
 }
 
 /** Names forbidden on any grove-facing shape (F8.3) — see this module's doc. */
@@ -263,6 +287,26 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
       .map((c) => c.conceptName),
   );
 
+  const pastPaperSourcePaths = sortedUnique(
+    input.sources
+      .filter((source) => source.course === course && source.role === 'past-paper')
+      .map((source) => source.path),
+  );
+
+  // `ol-l5og.18.2`: distinct past-paper SOURCE PATHS per concept name — a
+  // concept quoted twice in the same paper is one paper asking it, not two
+  // (`GroveCell.pastPaperCitationCount`'s own doc: "a weight, not a score").
+  const pastPaperSourcesByName = new Map<string, Set<VaultPath>>();
+  for (const c of input.citations) {
+    if (c.course !== course || c.kind !== 'past-paper') continue;
+    const set = pastPaperSourcesByName.get(c.conceptName) ?? new Set<VaultPath>();
+    set.add(c.sourcePath);
+    pastPaperSourcesByName.set(c.conceptName, set);
+  }
+  function pastPaperCitationCount(conceptName: string): number {
+    return pastPaperSourcesByName.get(conceptName)?.size ?? 0;
+  }
+
   const conceptsByName = new Map(input.concepts.map((concept) => [concept.name, concept]));
 
   // C7.9's part-of fold: a container name whose own part is also declared
@@ -282,7 +326,10 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     if (concept === undefined) {
       // The examiner's document names this concept and her material does
       // not — F4.10, never `ground` (registry §6's "ground correction").
-      materialGaps.push({ conceptName });
+      materialGaps.push({
+        conceptName,
+        pastPaperCitationCount: pastPaperCitationCount(conceptName),
+      });
       continue;
     }
 
@@ -297,7 +344,10 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     });
 
     if (classification.kind === 'material-gap') {
-      materialGaps.push({ conceptName });
+      materialGaps.push({
+        conceptName,
+        pastPaperCitationCount: pastPaperCitationCount(conceptName),
+      });
       continue;
     }
 
@@ -306,6 +356,7 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
       conceptName,
       state: classification.state,
       stall: classification.stall,
+      pastPaperCitationCount: pastPaperCitationCount(conceptName),
     });
     if (classification.state === 'ground') {
       nextGroundStreaks.set(concept.key, classification.groundStreak);
@@ -321,6 +372,7 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     builtCount: cells.filter((cell) => cell.state !== 'ground').length,
     denominatorCount: cells.length + materialGaps.length,
     denominatorSourcePaths,
+    pastPaperSourcePaths,
   };
 
   return {

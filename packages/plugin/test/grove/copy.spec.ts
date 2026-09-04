@@ -12,22 +12,25 @@ import {
   GROVE_INFERRED_DISCLAIMER,
   GROVE_MATERIAL_GAP_LABEL,
   GROVE_VIEW_TITLE,
+  grovePapersLabel,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
 } from '../../src/grove/copy.js';
 
 const SUMMARIES: readonly GroveCourseSummary[] = [
-  { builtCount: 0, denominatorCount: 0, denominatorSourcePaths: [] },
+  { builtCount: 0, denominatorCount: 0, denominatorSourcePaths: [], pastPaperSourcePaths: [] },
   {
     builtCount: 1,
     denominatorCount: 1,
     denominatorSourcePaths: ['03 Research/Objectives.md'],
+    pastPaperSourcePaths: [],
   },
   {
     builtCount: 3,
     denominatorCount: 7,
     denominatorSourcePaths: ['03 Research/Objectives.md', '03 Research/Past Paper 2024.md'],
+    pastPaperSourcePaths: ['03 Research/Past Paper 2024.md'],
   },
 ];
 
@@ -36,9 +39,22 @@ const SHRINK_RECEIPTS: readonly string[] = [
   groveScopeCorrectionReceiptLine('03 Research/Objectives.md' as VaultPath, 1, 0),
 ];
 
+/** Representative `grovePapersLabel` outputs (`ol-l5og.18.2`) — same "sweep a templated function's output" convention `SUMMARIES`/`SHRINK_RECEIPTS` already follow. */
+const PAPERS_LABELS: readonly string[] = [
+  grovePapersLabel(0, 0),
+  grovePapersLabel(0, 1),
+  grovePapersLabel(2, 6),
+  grovePapersLabel(6, 6),
+];
+
 /** Every string this module can put in front of her, across representative summaries — the sweep target for F8.3's ban, matching `gap/copy.ts`'s own convention. */
 function everyProducibleString(): readonly string[] {
-  return [...allGroveStrings(), ...SUMMARIES.map(groveSummaryLine), ...SHRINK_RECEIPTS];
+  return [
+    ...allGroveStrings(),
+    ...SUMMARIES.map(groveSummaryLine),
+    ...SHRINK_RECEIPTS,
+    ...PAPERS_LABELS,
+  ];
 }
 
 describe('grove copy — F8.3 no scalar', () => {
@@ -68,6 +84,11 @@ describe('grove copy — F8.3 no scalar', () => {
     const line = groveSummaryLine(SUMMARIES[2] as GroveCourseSummary);
     expect(line).toContain('3 of 7 built');
     expect(line).toContain('2 registered sources');
+  });
+
+  it('the papers label (`ol-l5og.18.2`) names the count and the registered denominator separately — never their quotient', () => {
+    expect(grovePapersLabel(2, 6)).toBe('Asked in 2 of 6 registered past papers.');
+    expect(grovePapersLabel(1, 1)).toBe('Asked in 1 of 1 registered past paper.');
   });
 
   it('the shrink receipt (`[D-184]`) names the reclassified document and both counts, once', () => {

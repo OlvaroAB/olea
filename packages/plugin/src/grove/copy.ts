@@ -180,6 +180,33 @@ export function groveScopeCorrectionReceiptLine(
   );
 }
 
+/**
+ * `ol-l5og.18.2`, F8.1's grid styling pass, the kit's `Papers` mark
+ * (`Pass5bCoverage.jsx`): "how often the exam has asked this... a weight,
+ * not a score." Same sanctioned shape as `groveSummaryLine` — a count and a
+ * denominator, side by side, never their quotient. `total` is the number of
+ * REGISTERED past papers (`GroveCourseSummary.pastPaperSourcePaths.length`),
+ * never a claim about how many exist; the caller renders nothing at all when
+ * `total` is `0` (no past paper registered — an objectives document alone
+ * can still make a course `'declared'`), matching that field's own doc.
+ */
+export function grovePapersLabel(citedIn: number, total: number): string {
+  const paperNoun = total === 1 ? 'past paper' : 'past papers';
+  return `Asked in ${citedIn} of ${total} registered ${paperNoun}.`;
+}
+
+/**
+ * The grove's own legend (`ol-l5og.18.2`, F8.1's grid styling pass) — the
+ * four growth-stage words get their label from `groveStateLabel` already;
+ * these three cover what a legend needs to say and `groveStateLabel`/
+ * `GROVE_MATERIAL_GAP_LABEL` do not already say on their own.
+ */
+export const GROVE_LEGEND_GROUND_NOTE =
+  'Ground — your notes are here, nothing built from them yet.';
+export const GROVE_LEGEND_MATERIAL_GAP_NOTE = `${GROVE_MATERIAL_GAP_LABEL} — nothing of yours to build from yet.`;
+export const GROVE_LEGEND_PAPERS_NOTE =
+  'Ticks show how many of the registered past papers asked this — a fact about the exam, never about you.';
+
 /** Every string this module can render, for `test/grove/copy.spec.ts`'s honesty checks. */
 export function allGroveStrings(): readonly string[] {
   return [
@@ -199,6 +226,9 @@ export function allGroveStrings(): readonly string[] {
     OPEN_RETROSPECTIVE_ACTION,
     DISMISS_OFFER_ACTION,
     GROUND_LABEL,
+    GROVE_LEGEND_GROUND_NOTE,
+    GROVE_LEGEND_MATERIAL_GAP_NOTE,
+    GROVE_LEGEND_PAPERS_NOTE,
     ...(['seed', 'sprout', 'sapling', 'tree'] as const).map((s) => MASTERY_DISPLAY[s].label),
     ...(['no-reader-for-format', 'image-only-no-text', 'not-linked'] as const).map(
       groveUnreadableReasonLabel,
