@@ -67,13 +67,19 @@ import {
   type CourseOrTopicOption,
   courseOrTopicNotFoundLine,
   DEFAULT_SESSION_BUDGET_MINUTES,
+  emptySessionLines,
+  reentryEmptyLines,
   reentryScreenCopy,
   SESSION_BUDGET_OPTIONS,
+  SESSION_EMPTY_EYEBROW,
   SESSION_UNAVAILABLE_BODY,
   SESSION_UNAVAILABLE_TITLE,
   SESSION_VIEW_TITLE,
+  SESSION_WHY_THESE_LABEL,
+  sessionFraming,
   sessionItemLine,
   sessionScreenCopy,
+  sessionSummaryLine,
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_SESSION = 'olea-session-builder';
@@ -256,17 +262,70 @@ export class SessionBuilderView extends ItemView {
     // for an ordinary session, `reentryScreenCopy` for F6.6's re-entry one
     // (never the same function: see that function's own doc for why
     // `leftOutLines` must never run over a re-entry view). Neither branch of
-    // this loop may gain a sibling that writes a sentence of its own.
+    // this loop may gain a sibling that writes a sentence of its own — what
+    // follows only sorts these SAME strings into one of three containers by
+    // which pure function of the SAME model already produced each one; it
+    // computes no sentence `copy.ts` did not.
     const lines =
       state.kind === 'reentry' ? reentryScreenCopy(state.view) : sessionScreenCopy(state.model);
+    const items = state.kind === 'reentry' ? state.view.items : state.model.items;
+    const modelLike = state.kind === 'reentry' ? state.view : state.model;
+
+    // The headline (kit: `ExamSession.jsx`'s bold serif sentence naming the
+    // plan) is `sessionSummaryLine`'s existing string, called again here only
+    // to know which element of `lines` it is — never a re-wording of it, and
+    // `null` (no headline) exactly when `lines` itself carries none
+    // (`sessionScreenCopy`/`reentryScreenCopy` both push it only `if
+    // (items.length > 0)`).
+    const summaryLine = items.length > 0 ? sessionSummaryLine(modelLike) : null;
+    if (summaryLine !== null) {
+      root.createDiv({ cls: 'olea-session-headline', text: summaryLine });
+    }
+
+    // The honest-empty pair (kit: `Pass5dEmpties.jsx`'s `EmptyNothingToBuild`/
+    // `EmptyRankedNothing`) — `emptySessionLines`/`reentryEmptyLines` return
+    // these same two sentences only when `items.length === 0`, so this set is
+    // empty whenever `summaryLine` is not, and the two blocks below never
+    // compete for the same line.
+    const emptyLines = new Set(
+      state.kind === 'reentry' ? reentryEmptyLines(state.view) : emptySessionLines(state.model),
+    );
+    if (emptyLines.size > 0) {
+      const empty = root.createDiv({ cls: 'olea-session-empty' });
+      empty.createDiv({ cls: 'olea-session-empty-eyebrow', text: SESSION_EMPTY_EYEBROW });
+      for (const line of lines) {
+        if (emptyLines.has(line)) empty.createDiv({ cls: 'olea-session-empty-line', text: line });
+      }
+    }
+
+    // F4.9's framing (kit: the "Why these" reasoning box) gets that box only
+    // once a session actually has items to reason about — the honest-empty
+    // family above draws no such box for a state with nothing built, so on
+    // an empty screen these two sentences fall through to the plain flow
+    // below unchanged, exactly as they always have.
+    const framingLines = new Set(sessionFraming());
+
     const copy = root.createDiv({ cls: 'olea-session-copy' });
     for (const line of lines) {
+      if (line === summaryLine) continue;
+      if (emptyLines.has(line)) continue;
+      if (items.length > 0 && framingLines.has(line)) continue;
       copy.createDiv({ cls: 'olea-session-line', text: line });
     }
 
-    const items = state.kind === 'reentry' ? state.view.items : state.model.items;
     const list = root.createDiv({ cls: 'olea-session-items' });
     for (const item of items) this.renderItem(list, item);
+
+    if (items.length > 0) {
+      const framingPresent = lines.filter((line) => framingLines.has(line));
+      if (framingPresent.length > 0) {
+        const why = root.createDiv({ cls: 'olea-session-why' });
+        why.createDiv({ cls: 'olea-session-why-label', text: SESSION_WHY_THESE_LABEL });
+        for (const line of framingPresent) {
+          why.createDiv({ cls: 'olea-session-why-line', text: line });
+        }
+      }
+    }
   }
 
   private renderBudgetControls(parent: HTMLElement): void {

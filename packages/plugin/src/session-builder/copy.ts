@@ -186,6 +186,26 @@ export function sessionFraming(): readonly string[] {
   return [SESSION_ATTRIBUTION, FULL_SYLLABUS_ADVICE];
 }
 
+/**
+ * The reasoning box's own section label (`docs/design/pass4-oracle-gap`'s
+ * `ExamSession.jsx`, `SessionBuilder`'s "Why these"). Not a new claim — the
+ * two sentences it labels are exactly {@link sessionFraming}'s, unchanged;
+ * this is the eyebrow `view.ts` prints above them once a session has items,
+ * the same kind of section heading `today/view.ts`'s "MASTERY"/"WHAT EACH
+ * COURSE DECLARES" already use with no clause of their own, because it
+ * groups already-approved content rather than asserting anything new.
+ */
+export const SESSION_WHY_THESE_LABEL = 'Why these';
+
+/**
+ * The empty session states' own eyebrow (`docs/design/pass5d-trends-today`'s
+ * `Pass5dEmpties.jsx`, `EmptyNothingToBuild`'s `eyebrow`) — printed above
+ * {@link emptySessionLines}/{@link reentryEmptyLines}'s own two sentences,
+ * unchanged, the same "label an existing pair, invent nothing" rule
+ * {@link SESSION_WHY_THESE_LABEL} follows.
+ */
+export const SESSION_EMPTY_EYEBROW = 'Session builder';
+
 // ---------------------------------------------------------------------------
 // F4.7 — the countdown
 // ---------------------------------------------------------------------------
@@ -612,6 +632,8 @@ export function allSessionBuilderStrings(): readonly string[] {
     SESSION_UNAVAILABLE_BODY,
     SESSION_ATTRIBUTION,
     FULL_SYLLABUS_ADVICE,
+    SESSION_WHY_THESE_LABEL,
+    SESSION_EMPTY_EYEBROW,
     ...Object.values(DURATION_BASIS_LINES),
     ...Object.values(INSTRUMENT_TYPE_LABELS),
     ...SESSION_BUDGET_OPTIONS.map(budgetOptionLabel),
