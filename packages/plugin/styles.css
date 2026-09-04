@@ -306,7 +306,7 @@ declares nothing at all. See the header.
 }
 
 .olea-review-contest-badge::before {
-  content: '';
+  content: "";
   flex: none;
   width: 8px;
   height: 8px;
@@ -1346,7 +1346,7 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-today-contest-offline::before {
-  content: '';
+  content: "";
   flex: none;
   width: 5px;
   height: 5px;
@@ -2330,7 +2330,7 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-session-empty-eyebrow::before {
-  content: '';
+  content: "";
   width: 18px;
   height: 0;
   flex: none;
@@ -5237,4 +5237,210 @@ body.theme-light .olea-retrospective-root {
    button. */
 .olea-retrospective-accept {
   margin-top: 2px;
+}
+
+/* ---- Home: the landing screen (F6.10, `[D-223]`, `ol-l5og.21` [HOME-2]) ----
+
+   Kit: `docs/design/pass7-home-and-history/ui_kits/olea-plugin/Pass7Kit.jsx`
+   (`HomeScreen`/`HomeHead`/`Offer`/`HomePanel`/`CourseRow`) and `Pass7Home.jsx`
+   (the five draw states), olea-service — DP-1 evidence, retrieved for layout
+   and hierarchy, never edited in place (`docs/design/CLAUDE.md`).
+
+   Reuses the shared design-system primitives (`.olea-panel`, `.olea-card`,
+   `.olea-eyebrow`, `.olea-button`, `.olea-fine`/`.olea-prose`/`.olea-meta`)
+   rather than a second card/button vocabulary — see `home/view.ts`'s own
+   module doc. What follows is only what those primitives do not already
+   cover: this pane's own root tokens, the offer card's headline size (the
+   kit's own hero step), the course-row layout and the reduced-size grove
+   marks, and the one-quiet-line-per-course treatment.
+
+   Marks. `.olea-home-mark` wraps either a `renderSprig` SVG (the four
+   growth-stage states — the plugin's existing mark vocabulary, at row
+   scale) or one of the two small squares below, which restate — at reduced
+   size — the exact dashed/dotted-plus-hatch split `.olea-grove-cell-ground`/
+   `.olea-grove-cell-material-gap` already draw at card scale, rather than a
+   third visual language for the same two facts. */
+
+.olea-home-root {
+  /* This pane's own floor for the reads below — the same plain neutral
+     colours every other browse pane (grove/registry/today) supplies for its
+     own copy of this indirection. */
+  --olea-host-bg-floor: #ffffff;
+  --olea-host-text-floor: #202020;
+  --olea-host-muted-floor: #6b6b6b;
+  --olea-host-faint-floor: #999999;
+  --olea-host-line-floor: #d8d8d8;
+
+  --olea-host-bg: var(--background-primary, var(--olea-host-bg-floor));
+  --olea-host-text: var(--text-normal, var(--olea-host-text-floor));
+  --olea-host-muted: var(--text-muted, var(--olea-host-muted-floor));
+  --olea-host-faint: var(--text-faint, var(--olea-host-faint-floor));
+  --olea-host-line: var(--background-modifier-border, var(--olea-host-line-floor));
+  --olea-host-line-hover: var(--background-modifier-border-hover, #c2c2c2);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+  --olea-host-content-font: var(--font-text, Georgia, serif);
+
+  /* Owned by Olea — same constants every other pane declares. */
+  --olea-host-brand: #8a9a63;
+  --olea-host-attention: #e0a94e;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--olea-space-5);
+  /* The kit's own `HomeScreen` takes a wider column than a session
+     (`col={1180}`, Pass7Kit.jsx) — Home is a landing, not a reading
+     measure. The offer's reason paragraph and the panel note keep their own
+     narrower `max-width` for line length, so the wide column does not force
+     prose onto an uncomfortably long line. */
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--olea-space-5) var(--olea-space-4) 32px;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+  background: var(--olea-host-bg);
+}
+
+/* ol-g5tr's same measured fix as `.theme-light .olea-grove-root`/`.olea-
+   today-root` — #8a9a63 falls short of 4.5:1 on a light ground. */
+.theme-light .olea-home-root {
+  --olea-host-brand: #677647;
+}
+
+.olea-home-root :focus-visible {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.olea-home-unavailable {
+  font-size: var(--olea-type-body);
+  color: var(--olea-host-muted);
+}
+
+/* ---- The offer: F6.4's headline, moved here (`[D-223]`) ---- */
+
+.olea-home-offer-eyebrow {
+  margin-bottom: var(--olea-space-3);
+}
+
+/* The kit's own hero step (`--olea-type-hero`, ExamSession.jsx's session-
+   builder headline) — nothing on Home may be larger, matching F6.1's "a due
+   count that outgrew [the offer] would make the count the headline". */
+.olea-home-offer-title {
+  margin: 0;
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-hero);
+  font-weight: 500;
+  line-height: 1.24;
+  color: var(--olea-host-text);
+}
+
+.olea-home-offer-reason {
+  margin-top: var(--olea-space-3);
+  max-width: 620px;
+}
+
+.olea-home-offer-reason-line + .olea-home-offer-reason-line {
+  margin-top: 6px;
+}
+
+.olea-home-offer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--olea-space-3);
+  margin-top: var(--olea-space-4);
+}
+
+/* ---- The courses panel: "Where each course stands" ---- */
+
+.olea-home-panel-head {
+  flex-wrap: wrap;
+}
+
+.olea-home-panel-action {
+  margin-left: auto;
+}
+
+.olea-home-course-row {
+  padding: var(--olea-space-3) var(--olea-space-4);
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-home-course-row-first {
+  border-top: none;
+}
+
+.olea-home-course-name {
+  font-size: var(--olea-type-body-lg);
+  font-weight: 500;
+  color: var(--olea-host-text);
+}
+
+.olea-home-course-map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--olea-space-2);
+  min-height: 12px;
+}
+
+.olea-home-course-no-map {
+  font-size: var(--olea-type-micro);
+}
+
+.olea-home-mark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.olea-home-mark-ground,
+.olea-home-mark-material-gap {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.olea-home-mark-ground {
+  border: 1px dashed var(--olea-host-line-hover);
+}
+
+.olea-home-mark-material-gap {
+  border: 1px dotted var(--olea-host-faint);
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 0,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* ---- The quiet line: never more than one per course (F6.10) ---- */
+
+.olea-home-quiet {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--olea-space-2);
+  margin-top: var(--olea-space-2);
+}
+
+.olea-home-quiet-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--olea-host-faint);
+  flex: none;
+  transform: translateY(-3px);
+}
+
+.olea-home-quiet-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
 }
