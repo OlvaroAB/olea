@@ -12,12 +12,17 @@
  * sweep over an `olea-core` vocabulary the way `gap/styles.spec.ts`'s three
  * dynamic suffixes are — Grove has no `GapClass`-shaped enum to read.
  *
- * **Appended LAST in `styles.css`** (this bead's own append): this slice
- * reads from its own banner to the END of the file, with no upper bound.
- * `today/styles.spec.ts`'s own header names the exact failure mode that
- * creates for a FUTURE lane that appends a further section after this
- * one — if that happens, this file's slice needs the same fix Today's did
- * (an explicit `NEXT_SECTION_MARKER`), not a rewrite of the approach.
+ * **The slice used to run to the end of the file**, which was correct only
+ * while the grove genuinely was the last section in `styles.css`. This
+ * header predicted the failure mode for a future lane appending after it and
+ * named the fix — an explicit `NEXT_SECTION_MARKER`, as
+ * `today/styles.spec.ts` and `session-builder/styles.spec.ts` already use.
+ * `[STY-1]` (`ol-l5og.18.11`) is that lane: it appends a shared design-system
+ * section, deliberately last so an equal-specificity rule there wins over the
+ * per-view section it corrects. So the bound is applied here rather than the
+ * approach rewritten. Without it the negative assertions below (no cascade
+ * layer, no dark-floor tokens, no faint text) would silently start reading
+ * the design system's rules as though they were the grove's.
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,7 +39,10 @@ const viewCode = view.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 const GROVE_SECTION_MARKER = '---- Grove: course scope surface';
 
-/** Just the grove section of `styles.css` — from its own banner to end of file (see module doc). */
+/** The next section appended after the grove's own — see the module doc. */
+const NEXT_SECTION_MARKER = '---- The design system';
+
+/** Just the grove section of `styles.css` — from its own banner to the next one. */
 function groveSection(): string {
   const at = fullCss.indexOf(GROVE_SECTION_MARKER);
   expect(at, `styles.css contains a "${GROVE_SECTION_MARKER}" banner`).toBeGreaterThanOrEqual(0);
@@ -42,7 +50,14 @@ function groveSection(): string {
   expect(commentStart, 'the grove-section banner is inside a comment block').toBeGreaterThanOrEqual(
     0,
   );
-  return fullCss.slice(commentStart);
+
+  const nextAt = fullCss.indexOf(NEXT_SECTION_MARKER, at);
+  expect(
+    nextAt,
+    `styles.css contains a "${NEXT_SECTION_MARKER}" banner after the grove section's`,
+  ).toBeGreaterThanOrEqual(0);
+  const nextCommentStart = fullCss.lastIndexOf('/*', nextAt);
+  return fullCss.slice(commentStart, nextCommentStart);
 }
 
 const css = groveSection();

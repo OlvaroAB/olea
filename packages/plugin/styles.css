@@ -1962,6 +1962,116 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
+/* ---- STY-2 (`[D-224]`, `ol-l5og.18` child): per-concept detail pages ----
+
+   Two fixes from the 2026-09-04 kit-fidelity re-judgement of `ol-l5og.18.3`'s
+   own work, both in `gap/copy.ts` and `gap/view.ts` above this section
+   (unchanged here): a mastery-gap row's body was the oracle's raw
+   `reasoning` diagnostic string ("priority score 0.081"-shaped, a derived
+   constant reaching the student — the component register's line this file's
+   own header above already argues from); and `[D-224]` asked for full-tab
+   PER-CONCEPT pages, which the prior build never built — every course's rows
+   stacked on one page instead. The rules below are the second fix's chrome:
+   a quiet click-through on a mastery-gap/material-gap row's header
+   (`.olea-gap-row-header-open`, never a filled host-default button — see
+   this section's own header above on why the same defect reads two opposite
+   ways) into a detail page (`.olea-gap-detail-*`) that reuses
+   `.olea-gap-mastery`/`.olea-gap-nostage`/`.olea-gap-papers`/
+   `.olea-gap-readiness`/`.olea-gap-actions`/`.olea-gap-counterweight*`
+   verbatim rather than drawing a second copy of any of them. */
+
+.olea-gap-row-header-open {
+  cursor: pointer;
+  border-radius: 8px;
+  margin: -4px -8px;
+  padding: 4px 8px;
+}
+
+.olea-gap-row-header-open:hover,
+.olea-gap-row-header-open:focus-visible {
+  background: var(--olea-host-wash);
+  outline: none;
+}
+
+/* The only new visual mark this bead adds, and it is plain text rather than
+   an invented icon: no kit draws a chevron for this gesture, so this reads
+   as navigation chrome (muted), never a call to action (brand/attention). */
+.olea-gap-row-chevron {
+  margin-left: auto;
+  font-family: var(--olea-host-ui-font);
+  font-size: 13px;
+  color: var(--olea-host-muted);
+  flex: none;
+}
+
+.olea-gap-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.olea-gap-detail-back {
+  align-self: flex-start;
+  margin-bottom: 18px;
+  font-size: 12.5px;
+  color: var(--olea-host-muted);
+  cursor: pointer;
+}
+
+.olea-gap-detail-back:hover,
+.olea-gap-detail-back:focus-visible {
+  color: var(--olea-host-text);
+  outline: none;
+}
+
+.olea-gap-detail-eyebrow {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-detail-title {
+  font-family: var(--olea-host-ui-font);
+  font-weight: 500;
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--olea-host-text);
+  margin: 10px 0 14px;
+}
+
+.olea-gap-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-gap-detail-meta {
+  margin-left: auto;
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-detail-narrative {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+  max-width: 640px;
+}
+
+.olea-gap-detail-narrative-line {
+  font-family: var(--olea-host-content-font);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--olea-host-text);
+}
+
 /* ============================================================
    ---- Session builder (F4.6, F4.7, F4.8, F4.9; ol-p5t06b) ----
    ============================================================
@@ -4011,4 +4121,300 @@ button.olea-review-mcq-option:hover {
 .olea-grove-offer-open {
   border-color: var(--olea-host-brand);
   color: var(--olea-host-brand);
+}
+
+/* ============================================================
+   ---- The design system: panel, controls, type ramp (`[STY-1]`, ol-l5og.18.11) ----
+   ============================================================
+
+   Kit: `docs/design/dsn2-retrospective/retrospective-surface.html` is the
+   reference for everything below — it is the most recent drawing and the one
+   that states the container idiom most plainly — cross-checked against
+   `docs/design/pass4-oracle-gap/ui_kits/olea-plugin/ExamSession.jsx` for the
+   controls and `docs/design/shared/theme-host.css` for the role names.
+
+   WHY THIS SECTION EXISTS. The 2026-09-04 kit-fidelity judgement scored every
+   built view against its kit and found the colour layer already correct — the
+   built hexes match the kits' token table exactly. Three things carried the
+   gap instead, and all three are the absence of a system rather than a
+   mistake in any one view:
+
+     1. "the kit's bordered, radius-12, elevated panel with an eyebrow head is
+        missing everywhere" — the single most-repeated divergence across all
+        five judging lanes. Registry, retrospective, session-builder and bulk
+        review all rendered edge-to-edge on the bare pane, which is why
+        composed surfaces read as raw documents.
+     2. No control system: 7 button rules for ~47 buttons across ten views,
+        `mod-cta` used zero times, and exactly one control in the whole
+        product with a background. The same hole reads two opposite ways —
+        registry's `Open` inherits the host's filled chrome and becomes the
+        loudest object in every row, while explain-back's actions are
+        undifferentiated grey — and session-builder's raw native `<select>` is
+        OS chrome sitting against authored chrome.
+     3. Twenty-one distinct font sizes, and monospace used more often than the
+        interface font. The kits use mono, but only ever for eyebrows, pills,
+        counts and metadata lines; a sentence set in it is what "looks like a
+        terminal, not the prototype" means.
+
+   WHERE IT SITS, AND WHY LAST. Every rule here either introduces a new
+   `.olea-` primitive class or deliberately overrides a view's own rule with
+   the shared treatment. Cascade order is therefore load-bearing: this section
+   is appended at the END of the file so that an equal-specificity rule here
+   wins over the per-view section it is correcting. `test/grove/styles.spec.ts`
+   used to slice "from the grove banner to end of file" and now stops at this
+   banner — the same bounding `test/today/styles.spec.ts` and
+   `test/session-builder/styles.spec.ts` already do, and the fix that file's
+   own module doc already named as the right one.
+
+   HOST ROLES, WITH INLINE FALLBACKS. The `--olea-host-*` roles are declared
+   per root, and not every root declares every role (only `.olea-review-root`
+   has `--olea-host-elev`; `--olea-host-attention` and `--olea-host-brand` are
+   declared on five roots between them). A primitive that must work on any
+   root therefore reads each role with an `--olea-`-side fallback: an owned
+   literal where the value is Olea's own and constant in every host theme
+   (brand olive, honey attention), and a `color-mix` against roles every root
+   does declare where the value must follow the host's ground. Nothing here
+   introduces a read of a host variable this file did not already read, so
+   `test/review/styles-host-vars.spec.ts`'s floor is untouched.
+
+   ONE DELIBERATE DIVERGENCE FROM THE KIT, and it is a ruling, not an
+   oversight. The kit paints eyebrows, meta lines and its `.fine` role with
+   `--faint`. `ol-nrrm` measured the host's own faint token at 2.6-3.1:1
+   against the grounds this file uses, in every variable set, and moved every
+   text reader of it onto `--olea-host-muted`; `styles-contrast.spec.ts`
+   holds that. So every label role below is muted where the kit is faint. The
+   hierarchy is preserved by size, weight, tracking and case rather than by a
+   fourth ink. */
+
+:root {
+  /* ---- The type ramp ----
+
+     Ten steps, each one a size the kit actually sets, with the kit line it
+     comes from. Half-pixel steps are kept deliberately: the judgement read
+     the build's 61 half-pixel declarations as "fitted by eye", but the kits
+     themselves are set on a half-pixel ramp (10.5 / 11.5 / 12.5 / 13.5), so
+     the defect was twenty-one ad-hoc sizes with no named roles, not the .5
+     itself. What is gone is the sizes below the kit's floor (9px, 9.5px) and
+     the one-off larges. Line heights travel with the size because the kit
+     sets them together in its `font:` shorthand. ---- */
+  --olea-type-eyebrow: 10px; /* `.eyebrow` — retrospective-surface.html:39 */
+  --olea-type-meta: 10.5px; /* `.panel .bar .meta` — :55 */
+  --olea-type-micro: 11px; /* `.scope-src`, `.pill` — :80, :95 */
+  --olea-type-fine: 11.5px; /* `.fine`, `.card .head` — :88, :86 */
+  --olea-type-label: 12.5px; /* `.panel .bar .title` — :54 */
+  --olea-type-body: 13px; /* `.body-copy`, `.cx-row .cname` — :87, :91 */
+  --olea-type-body-lg: 13.5px; /* `.claim-row .claim-text` — :103 */
+  --olea-type-lead: 15px; /* `.scope-fact` — :79 */
+  --olea-type-title: 18px; /* `.frame h2` — :42 */
+  --olea-type-hero: 22px; /* the session-builder headline — ExamSession.jsx:39 */
+
+  --olea-track-eyebrow: 0.14em; /* retrospective-surface.html:39 */
+  --olea-track-label: 0.1em; /* `.boxhead` — :77 */
+
+  /* ---- The spacing scale ----
+
+     Six steps replacing the 28 ad-hoc px values the judgement counted. The
+     kit's own paddings land on them: panel bar `12px 16px` (:53), panel body
+     `16px 18px 18px` (:56), card `18px 19px 20px` (:85). ---- */
+  --olea-space-1: 4px;
+  --olea-space-2: 8px;
+  --olea-space-3: 12px;
+  --olea-space-4: 16px;
+  --olea-space-5: 20px;
+  --olea-space-6: 26px;
+
+  --olea-radius-panel: 12px; /* `.panel`, `.card` — :52, :85 */
+  --olea-radius-control: 10px; /* `.offer .go`, ExamSession.jsx:75 */
+  --olea-radius-pill: 6px; /* `.pill` — :95 */
+}
+
+/* ---- The panel primitive ----
+
+   `.panel` (retrospective-surface.html:52-56) and `.card` (:85) are the same
+   object at two densities: a 1px border, a 12px radius, an elevated ground,
+   and — on the panel — a head bar carrying a title and a right-aligned count
+   over a rule. Both grounds are computed rather than read from
+   `--background-primary-alt`, because only one root declares that role; the
+   mix is toward the host's own text colour, so a panel is raised on a dark
+   theme and on a light one without either being hard-coded. ---- */
+
+.olea-panel,
+.olea-card {
+  --olea-panel-ground: var(
+    --olea-host-elev,
+    color-mix(in srgb, var(--olea-host-text) 3.5%, var(--olea-host-bg))
+  );
+  --olea-panel-head-ground: color-mix(in srgb, var(--olea-host-text) 4%, var(--olea-panel-ground));
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-panel);
+  background: var(--olea-panel-ground);
+}
+
+.olea-panel {
+  overflow: hidden;
+}
+
+.olea-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--olea-space-2);
+  padding: var(--olea-space-3) var(--olea-space-4);
+  border-bottom: 1px solid var(--olea-host-line);
+  background: var(--olea-panel-head-ground);
+}
+
+.olea-panel-body {
+  padding: var(--olea-space-4) 18px 18px;
+}
+
+.olea-card {
+  padding: 18px 19px var(--olea-space-5);
+}
+
+/* `.card .head` (:86) — the card's own quiet title, in the interface face
+   rather than the eyebrow's mono, because a card head is a phrase and an
+   eyebrow is a label. */
+.olea-card-head {
+  margin: 0 0 14px;
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--olea-host-muted);
+}
+
+/* ---- The eyebrow (:38-41) ---- */
+
+.olea-eyebrow {
+  display: block;
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-eyebrow);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--olea-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+/* The olive variant, for an eyebrow that names the thing rather than
+   labelling the frame — the kit's own brand-olive eyebrow (Pass 2's document
+   header, and `.eyebrow` where it reads `var(--olea-olive)` in the pass1
+   kits). Olive is Olea-owned and constant in every host theme, so it carries
+   its own literal where a root has not declared the role. */
+.olea-eyebrow-brand {
+  color: var(--olea-host-brand, #8a9a63);
+}
+
+/* `.panel .bar .title` (:54) and `.panel .bar .meta` (:55) — a phrase, then a
+   count pushed to the far end. The count is the one number the kit allows in
+   a panel head, and it is a count with a named denominator, never a ratio. */
+.olea-panel-title {
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-label);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--olea-host-text);
+}
+
+.olea-panel-count {
+  margin-left: auto;
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-meta);
+  line-height: 1;
+  color: var(--olea-host-muted);
+}
+
+/* ---- The three text roles a panel's body is built from (:87, :88, :79) ---- */
+
+.olea-lead {
+  font-family: var(--olea-host-content-font, var(--font-text, Georgia, serif));
+  font-size: var(--olea-type-lead);
+  line-height: 1.5;
+  color: var(--olea-host-text);
+  text-wrap: pretty;
+}
+
+.olea-prose {
+  font-family: var(--olea-host-content-font, var(--font-text, Georgia, serif));
+  font-size: var(--olea-type-body);
+  line-height: 1.65;
+  color: var(--olea-host-text);
+  text-wrap: pretty;
+}
+
+.olea-fine {
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  text-wrap: pretty;
+}
+
+/* `.scope-src` (:80) — a source line: mono, small, and never a sentence. */
+.olea-meta {
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-micro);
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+/* ============================================================
+   ---- The panel primitive, applied to the surfaces that were missing it ----
+   ============================================================
+
+   The judgement named registry, retrospective, session-builder and bulk
+   review. Two of those are reached here; the retrospective builds its own
+   section below on the same primitive; and the session builder is left to
+   `[STY-0f]`'s successor lane, which owns `src/session-builder/**` — the
+   class it should adopt is `.olea-panel` on its proposal card, with
+   `.olea-eyebrow-brand` on the "a suggested session" head.
+
+   Registry additionally wants a column-header row and bulk review a document
+   header block; both are `view.ts` changes in packages this bead does not
+   own, and both are recorded on the bead rather than reached for here. */
+
+.olea-registry-list {
+  --olea-panel-ground: var(
+    --olea-host-elev,
+    color-mix(in srgb, var(--olea-host-text) 3.5%, var(--olea-host-bg))
+  );
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-panel);
+  background: var(--olea-panel-ground);
+  padding: 2px 18px 4px;
+}
+
+/* The last row's rule would otherwise draw a line immediately above the
+   panel's own bottom edge. */
+.olea-registry-list .olea-registry-row:last-child {
+  border-bottom: none;
+}
+
+/* Scoped to the root so this rule's specificity is not below the adjacent-
+   sibling rule further up the file (Biome's `noDescendingSpecificity`); the
+   root is on the same element tree in every case, so the scope changes what
+   the selector matches not at all. */
+.olea-bulk-review-root .olea-bulk-review-group {
+  --olea-panel-ground: var(
+    --olea-host-elev,
+    color-mix(in srgb, var(--olea-host-text) 3.5%, var(--olea-host-bg))
+  );
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-panel);
+  background: var(--olea-panel-ground);
+  padding: 0 18px 14px;
+}
+
+.olea-bulk-review-root .olea-bulk-review-group + .olea-bulk-review-group {
+  margin-top: 18px;
+}
+
+/* Its existing header already carries the kit's olive eyebrow and serif
+   document title (`.olea-bulk-review-group-course` / `-note`); inside a panel
+   it only needs the head bar's own padding. */
+.olea-bulk-review-root .olea-bulk-review-group-header {
+  padding: 14px 0 12px;
+  margin-bottom: 2px;
 }
