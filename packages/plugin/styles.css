@@ -2291,16 +2291,19 @@ button.olea-review-mcq-option:hover {
 /* The headline (kit: `pass4-oracle-gap`'s `ExamSession.jsx`, the bold serif
    sentence naming the whole plan) — `sessionSummaryLine`'s own string,
    never a rewording of it (`view.ts`'s `render`). Serif, like the review
-   screen's own question. Now the card's own first line, so its top margin
-   is tighter than a standalone heading would need. */
-.olea-session-card > .olea-session-headline {
-  margin-top: 10px;
-}
-
+   screen's own question. */
 .olea-session-headline {
   margin: 12px 0 2px;
   font: 500 17px / 1.4 var(--olea-host-question-font, var(--olea-host-content-font));
   color: var(--olea-host-text);
+}
+
+/* Now the card's own first line, so its top margin is tighter than a
+   standalone heading would need. Declared after the base rule, not before
+   (noDescendingSpecificity): a more specific selector overriding a plainer
+   one earlier in the cascade, never the reverse. */
+.olea-session-card > .olea-session-headline {
+  margin-top: 10px;
 }
 
 /* The honest-empty pair (kit: `pass5d-trends-today`'s `Pass5dEmpties.jsx`,
@@ -2387,16 +2390,34 @@ button.olea-review-mcq-option:hover {
   border-top: 1px solid var(--olea-host-line);
 }
 
+/* STY-4: one heading per run of consecutive same-kind items (kit:
+   `ExamSession.jsx`'s `PLAN` rows, already grouped by kind) —
+   `view.ts`'s `renderItemGroups`. Count-first, mirroring
+   `sessionSummaryLine`'s own "N instruments" order. */
+.olea-session-group-heading {
+  margin: 14px 0 4px;
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-session-items > .olea-session-group-heading:first-child {
+  margin-top: 0;
+}
+
 .olea-session-item {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 20px 1fr auto;
   align-items: baseline;
-  column-gap: 8px;
-  padding: 8px 0;
+  column-gap: 10px;
+  padding: 7px 0;
   border-top: 1px solid var(--olea-host-line);
 }
 
-.olea-session-item:first-child {
+.olea-session-item:first-child,
+.olea-session-group-heading + .olea-session-item {
   border-top: none;
 }
 
@@ -2414,28 +2435,44 @@ button.olea-review-mcq-option:hover {
   grid-column: 2;
 }
 
+/* STY-4: the composition table's own minute column (kit: `ExamSession.jsx`'s
+   `p.mins`) — bare, right-aligned, no "about" hedge: the global hedge lives
+   once, in `.olea-session-countdown`/`durationBasisLine`'s own sentence
+   below, the same "state it once" rule the framing box already follows. */
+.olea-session-minutes {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  color: var(--olea-host-muted);
+  grid-column: 3;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* STY-4: course and note title share one meta row beneath the concept name
+   — the same two facts `.olea-session-course`/`.olea-session-note` always
+   carried, just no longer forced onto two separate lines now that the
+   instrument-kind subtitle they used to share a row with moved to the group
+   heading above. */
+.olea-session-item-meta {
+  grid-column: 2 / span 2;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .olea-session-course {
   font-family: var(--olea-host-mono);
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--olea-host-muted);
-  grid-column: 3;
-}
-
-.olea-session-item-line {
-  grid-column: 2 / span 2;
-  font-size: 11.5px;
-  color: var(--olea-host-muted);
-  margin-top: 2px;
 }
 
 .olea-session-note {
-  grid-column: 2 / span 2;
   font-family: var(--olea-host-mono);
   font-size: 10.5px;
   color: var(--olea-host-muted);
-  margin-top: 2px;
 }
 
 /* F4.8, made visible: an item chosen because it matches the format of her
@@ -2449,6 +2486,71 @@ button.olea-review-mcq-option:hover {
 .olea-session-item-other-format,
 .olea-session-item-no-preference {
   color: var(--olea-host-text);
+}
+
+/* STY-4 (`ol-l5og.18.13`; kit: `ExamSession.jsx`'s separate `Countdown`
+   component). Replaces `countdownLine`'s plain sentence, in place, whenever
+   there is a number to draw (`view.ts`'s `renderNextAssessment`) — same
+   facts, never a second computation of them: the numeral is `daysUntil`
+   verbatim and the date is `due` verbatim (R1/R2, never reformatted). Sits
+   below the card, same as the sentence it replaces — never inside it, same
+   as the kit's own two components stay two components. No colour beyond
+   the pane's ordinary text tiers: the kit's own comment is explicit that
+   "the number falling is the only signal", so this never paints urgency as
+   the date approaches. */
+.olea-session-countdown {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+}
+
+.olea-session-countdown-eyebrow {
+  margin-bottom: 8px;
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-session-countdown-name {
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+}
+
+.olea-session-countdown-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.olea-session-countdown-days {
+  font: 500 26px / 1 var(--olea-host-question-font, var(--olea-host-content-font));
+  color: var(--olea-host-text);
+}
+
+.olea-session-countdown-unit {
+  font-size: 12px;
+  color: var(--olea-host-muted);
+}
+
+.olea-session-countdown-spacer {
+  flex: 1;
+}
+
+.olea-session-countdown-date {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  color: var(--olea-host-muted);
+}
+
+.olea-session-countdown-format {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--olea-host-muted);
 }
 
 /* ============================================================

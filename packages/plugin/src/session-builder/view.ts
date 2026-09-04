@@ -56,28 +56,39 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type { ReentryStudySessionView, StudySessionItem, StudySessionModel } from 'olea-core';
+import type {
+  ReentryStudySessionView,
+  SessionAssessmentCountdown,
+  StudySessionItem,
+  StudySessionModel,
+} from 'olea-core';
 import { EXPLAIN_BACK_SESSION_ENTRY_LABEL } from '../explain-back/copy.js';
 import {
+  assessmentName,
   budgetOptionLabel,
   COURSE_OR_TOPIC_ALL_LABEL,
   COURSE_OR_TOPIC_COURSE_GROUP_LABEL,
   COURSE_OR_TOPIC_LABEL,
   COURSE_OR_TOPIC_TOPIC_GROUP_LABEL,
   type CourseOrTopicOption,
+  countdownLine,
   courseOrTopicNotFoundLine,
   DEFAULT_SESSION_BUDGET_MINUTES,
+  daysOutLabel,
   emptySessionLines,
+  instrumentGroupHeading,
+  minutesLabel,
   reentryEmptyLines,
   reentryScreenCopy,
   SESSION_BUDGET_OPTIONS,
   SESSION_EMPTY_EYEBROW,
+  SESSION_EYEBROW_LABEL,
+  SESSION_NEXT_ASSESSMENT_LABEL,
   SESSION_UNAVAILABLE_BODY,
   SESSION_UNAVAILABLE_TITLE,
   SESSION_VIEW_TITLE,
   SESSION_WHY_THESE_LABEL,
   sessionFraming,
-  sessionItemLine,
   sessionScreenCopy,
   sessionSummaryLine,
 } from './copy.js';
@@ -278,9 +289,6 @@ export class SessionBuilderView extends ItemView {
     // (`sessionScreenCopy`/`reentryScreenCopy` both push it only `if
     // (items.length > 0)`).
     const summaryLine = items.length > 0 ? sessionSummaryLine(modelLike) : null;
-    if (summaryLine !== null) {
-      root.createDiv({ cls: 'olea-session-headline', text: summaryLine });
-    }
 
     // The honest-empty pair (kit: `Pass5dEmpties.jsx`'s `EmptyNothingToBuild`/
     // `EmptyRankedNothing`) — `emptySessionLines`/`reentryEmptyLines` return
@@ -305,26 +313,123 @@ export class SessionBuilderView extends ItemView {
     // below unchanged, exactly as they always have.
     const framingLines = new Set(sessionFraming());
 
-    const copy = root.createDiv({ cls: 'olea-session-copy' });
-    for (const line of lines) {
-      if (line === summaryLine) continue;
-      if (emptyLines.has(line)) continue;
-      if (items.length > 0 && framingLines.has(line)) continue;
-      copy.createDiv({ cls: 'olea-session-line', text: line });
-    }
+    // STY-4 (`ol-l5og.18.13`; kit: `ExamSession.jsx`'s bordered `SessionBuilder`
+    // card): the headline, the composition table and the "Why these" box move
+    // inside one card, in the SAME relative order the kit draws them (items
+    // before the reasoning box) — once a session actually has items. The
+    // honest-empty family above stays a bare pane, matching `Pass5dEmpties.jsx`,
+    // which draws no card either. No "Start this"/"Not now" gate is drawn here
+    // — see the module doc and `features/F4-oracle.md`'s own scenario for why.
+    if (summaryLine !== null) {
+      const card = root.createDiv({ cls: 'olea-session-card' });
+      const header = card.createDiv({ cls: 'olea-session-card-header' });
+      header.createSpan({ cls: 'olea-session-card-eyebrow', text: SESSION_EYEBROW_LABEL });
+      header.createSpan({ cls: 'olea-session-card-spacer' });
+      const daysUntil = modelLike.nextAssessment?.daysUntil ?? null;
+      if (daysUntil !== null) {
+        header.createSpan({ cls: 'olea-session-card-days', text: daysOutLabel(daysUntil) });
+      }
 
-    const list = root.createDiv({ cls: 'olea-session-items' });
-    for (const item of items) this.renderItem(list, item);
+      card.createDiv({ cls: 'olea-session-headline', text: summaryLine });
 
-    if (items.length > 0) {
+      const list = card.createDiv({ cls: 'olea-session-items' });
+      this.renderItemGroups(list, items);
+
       const framingPresent = lines.filter((line) => framingLines.has(line));
       if (framingPresent.length > 0) {
-        const why = root.createDiv({ cls: 'olea-session-why' });
+        const why = card.createDiv({ cls: 'olea-session-why' });
         why.createDiv({ cls: 'olea-session-why-label', text: SESSION_WHY_THESE_LABEL });
         for (const line of framingPresent) {
           why.createDiv({ cls: 'olea-session-why-line', text: line });
         }
       }
+    }
+
+    // Everything else `copy.ts` produced for this render — F6.7's by-source
+    // lines, the focus line, the format-preference line, the duration-basis
+    // line and the left-out lines — stays plain, below the card (or below the
+    // honest-empty pair). Wording and relative order are both unchanged; the
+    // one substitution is the countdown SENTENCE (`countdownLine`), replaced
+    // by the numeral block the kit's own `Countdown` component draws (STY-4)
+    // wherever there is a number to draw it from — the same underlying fact,
+    // never a second computation of it — falling back to the sentence
+    // verbatim whenever `daysUntil` cannot be read.
+    const countdownText = countdownLine(modelLike);
+    const copy = root.createDiv({ cls: 'olea-session-copy' });
+    for (const line of lines) {
+      if (line === summaryLine) continue;
+      if (emptyLines.has(line)) continue;
+      if (items.length > 0 && framingLines.has(line)) continue;
+      if (countdownText !== null && line === countdownText) {
+        this.renderNextAssessment(copy, modelLike.nextAssessment, countdownText);
+        continue;
+      }
+      copy.createDiv({ cls: 'olea-session-line', text: line });
+    }
+  }
+
+  /**
+   * STY-4: one heading per run of CONSECUTIVE same-`instrumentType` items
+   * (kit: `ExamSession.jsx`'s `PLAN` rows, already grouped by kind). Groups
+   * by adjacency only — `items` keeps `StudySessionItem.position`'s own
+   * order throughout; this never re-sorts or merges items across a run.
+   */
+  private renderItemGroups(parent: HTMLElement, items: readonly StudySessionItem[]): void {
+    let index = 0;
+    while (index < items.length) {
+      const current = items[index];
+      if (current === undefined) break;
+      let end = index + 1;
+      while (end < items.length && items[end]?.instrumentType === current.instrumentType) {
+        end += 1;
+      }
+      const group = items.slice(index, end);
+      parent.createDiv({
+        cls: 'olea-session-group-heading',
+        text: instrumentGroupHeading(current.instrumentType, group.length),
+      });
+      for (const item of group) this.renderItem(parent, item);
+      index = end;
+    }
+  }
+
+  /**
+   * STY-4 (kit: `ExamSession.jsx`'s separate `Countdown` component). Every
+   * field comes straight off `next` — the numeral is `daysUntil` verbatim and
+   * the date is `due` verbatim (`SessionAssessmentCountdown.due`'s own doc:
+   * "Never reformatted here — R1/R2") — so this draws no fact `countdownLine`
+   * did not already state, only in the kit's own shape. Falls back to
+   * `fallbackLine`, `countdownLine`'s existing sentence, whenever there is no
+   * number to draw (no assessment, or an unreadable date) — never rendering
+   * both for the same fact.
+   */
+  private renderNextAssessment(
+    parent: HTMLElement,
+    next: SessionAssessmentCountdown | null,
+    fallbackLine: string,
+  ): void {
+    if (next === null || next.daysUntil === null) {
+      parent.createDiv({ cls: 'olea-session-line', text: fallbackLine });
+      return;
+    }
+    const block = parent.createDiv({ cls: 'olea-session-countdown' });
+    block.createDiv({
+      cls: 'olea-session-countdown-eyebrow',
+      text: SESSION_NEXT_ASSESSMENT_LABEL,
+    });
+    block.createDiv({ cls: 'olea-session-countdown-name', text: assessmentName(next) });
+    const row = block.createDiv({ cls: 'olea-session-countdown-row' });
+    row.createSpan({ cls: 'olea-session-countdown-days', text: String(next.daysUntil) });
+    row.createSpan({
+      cls: 'olea-session-countdown-unit',
+      text: next.daysUntil === 1 ? 'day' : 'days',
+    });
+    row.createSpan({ cls: 'olea-session-countdown-spacer' });
+    if (next.due !== null) {
+      row.createSpan({ cls: 'olea-session-countdown-date', text: next.due });
+    }
+    if (next.type !== null) {
+      block.createDiv({ cls: 'olea-session-countdown-format', text: next.type });
     }
   }
 
@@ -356,14 +461,12 @@ export class SessionBuilderView extends ItemView {
    * same reason `renderBudgetControls`' sibling controls still render (they
    * do not depend on `state`) while this one, which does, cannot.
    *
-   * No `cls:`/`addClass` here on purpose, unlike every other element this
-   * file draws: adding a new class would require a matching rule in
-   * `packages/plugin/styles.css`, which sits outside this bead's file
-   * ownership (`owns: packages/plugin/src/session-builder/`) — see
-   * `test/session-builder/styles.spec.ts`'s own "every class the view emits
-   * has a rule" check, which this omission keeps vacuously true rather than
-   * red. Obsidian's host theme still renders a bare `<select>` usably;
-   * styling it to match the budget buttons is a follow-up, not a blocker.
+   * STY-4 (`ol-l5og.18.13`): now carries `olea-session-select`, styled in this
+   * pane's own `styles.css` section — STY-0f's own doc named this the
+   * follow-up rather than a blocker, and file ownership now covers
+   * `styles.css` too, so the bare host `<select>` this control used to render
+   * (the loudest unstyled element on the screen, per the fidelity judgment)
+   * gets the same chrome the budget buttons carry.
    */
   private renderCourseOrTopicControls(parent: HTMLElement, state: SessionBuilderState): void {
     if (state.kind === 'unavailable') return;
@@ -381,7 +484,10 @@ export class SessionBuilderView extends ItemView {
     // `DomElementInfo`, outside this bead's file ownership) does not declare
     // one, and `HTMLOptionElement.value` is a standard lib.dom property
     // either shim leaves untouched.
-    const select = parent.createEl('select', { attr: { 'aria-label': COURSE_OR_TOPIC_LABEL } });
+    const select = parent.createEl('select', {
+      cls: 'olea-session-select',
+      attr: { 'aria-label': COURSE_OR_TOPIC_LABEL },
+    });
     const allOption = select.createEl('option', { text: COURSE_OR_TOPIC_ALL_LABEL });
     allOption.value = '';
 
@@ -438,14 +544,22 @@ export class SessionBuilderView extends ItemView {
     button.addEventListener('click', () => openExplainBack());
   }
 
+  /**
+   * STY-4: restyled as a compact table row — position, concept, course and
+   * note title unchanged in content, but the instrument kind no longer
+   * repeats here (it is the group heading above, `renderItemGroups`) and the
+   * minutes get their own right-aligned column (kit: `ExamSession.jsx`'s
+   * `p.mins` column), rather than a "kind · about N min" subtitle line.
+   */
   private renderItem(parent: HTMLElement, item: StudySessionItem): void {
     const el = parent.createDiv({
       cls: `olea-session-item olea-session-item-${item.formatMatch}`,
     });
     el.createSpan({ cls: 'olea-session-position', text: String(item.position) });
     el.createSpan({ cls: 'olea-session-concept', text: item.conceptName });
-    el.createSpan({ cls: 'olea-session-course', text: item.course });
-    el.createDiv({ cls: 'olea-session-item-line', text: sessionItemLine(item) });
-    el.createDiv({ cls: 'olea-session-note', text: item.noteTitle });
+    el.createSpan({ cls: 'olea-session-minutes', text: minutesLabel(item.estimatedSeconds) });
+    const meta = el.createDiv({ cls: 'olea-session-item-meta' });
+    meta.createSpan({ cls: 'olea-session-course', text: item.course });
+    meta.createSpan({ cls: 'olea-session-note', text: item.noteTitle });
   }
 }

@@ -25,10 +25,12 @@ import {
   COURSE_OR_TOPIC_ALL_LABEL,
   countdownLine,
   courseOrTopicNotFoundLine,
+  daysOutLabel,
   durationBasisLine,
   emptySessionLines,
   focusLine,
   formatPreferenceLine,
+  instrumentGroupHeading,
   instrumentTypeLabel,
   leftOutLines,
   minutesLabel,
@@ -38,6 +40,8 @@ import {
   reentryScreenCopy,
   SESSION_ATTRIBUTION,
   SESSION_BUDGET_OPTIONS,
+  SESSION_EYEBROW_LABEL,
+  SESSION_NEXT_ASSESSMENT_LABEL,
   sessionFraming,
   sessionItemLine,
   sessionScreenCopy,
@@ -131,6 +135,18 @@ function everyProducibleString(): readonly string[] {
   // STEER-2 (`ol-ijms`): the not-found line's one derived sentence.
   const notFound = courseOrTopicNotFoundLine({ kind: 'course', label: 'CRS101' }, []);
   if (notFound !== null) strings.push(notFound);
+
+  // STY-4 (`ol-l5og.18.13`): the card header's day count and the composition
+  // table's group headings — both derived, over the value ranges that
+  // exercise every branch (0/1/N days; each instrument kind, singular and
+  // plural counts).
+  strings.push(daysOutLabel(0), daysOutLabel(1), daysOutLabel(2), daysOutLabel(45));
+  for (const instrumentType of ['qa', 'cloze', 'mcq'] as const) {
+    strings.push(
+      instrumentGroupHeading(instrumentType, 1),
+      instrumentGroupHeading(instrumentType, 4),
+    );
+  }
 
   // `[D-162]`: one derived sentence per material-change reason, and one
   // combining all three, so the audit sees every clause
@@ -370,6 +386,37 @@ describe('the countdown states a date and a number of days, and nothing more', (
 // --------------------------------------------------------------------------
 // F4.8 — format matching
 // --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// STY-4 (`ol-l5og.18.13`) — the card header's day count and the composition
+// table's group headings
+// --------------------------------------------------------------------------
+
+describe('the card header names the same day count the countdown does, worded for one line', () => {
+  it('reads a passed-or-today assessment as due today, never a negative or zero count', () => {
+    expect(daysOutLabel(0)).toBe('due today');
+    expect(daysOutLabel(-1)).toBe('due today');
+  });
+
+  it('is singular for one day and plural otherwise', () => {
+    expect(daysOutLabel(1)).toBe('1 day out');
+    expect(daysOutLabel(2)).toBe('2 days out');
+    expect(daysOutLabel(45)).toBe('45 days out');
+  });
+
+  it('is part of the corpus the F4.9/principle-12 audits above reach', () => {
+    expect(allSessionBuilderStrings()).toContain(SESSION_EYEBROW_LABEL);
+    expect(allSessionBuilderStrings()).toContain(SESSION_NEXT_ASSESSMENT_LABEL);
+  });
+});
+
+describe('the composition table groups items by kind, count first', () => {
+  it('names the count and the kind, in that order', () => {
+    expect(instrumentGroupHeading('mcq', 4)).toBe('4 · multiple choice');
+    expect(instrumentGroupHeading('qa', 1)).toBe('1 · question and answer');
+    expect(instrumentGroupHeading('cloze', 2)).toBe('2 · fill in the blank');
+  });
+});
 
 describe('the format line explains a preference only when one actually fired', () => {
   it('explains multiple-choice-first when the preference applied to a chosen item', () => {

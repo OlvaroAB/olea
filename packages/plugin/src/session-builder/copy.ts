@@ -206,6 +206,57 @@ export const SESSION_WHY_THESE_LABEL = 'Why these';
  */
 export const SESSION_EMPTY_EYEBROW = 'Session builder';
 
+/**
+ * The populated card's own eyebrow (STY-4, `ol-l5og.18.13`; kit:
+ * `pass4-oracle-gap`'s `ExamSession.jsx`, `SessionBuilder`'s "A suggested
+ * session" label) — F6.4's own name for the object this screen renders
+ * ("the suggested session"), not a new noun: `docs/Olea_vocabulary_registry.md`
+ * §8 rules `session` the plain word for it and F6.4's own text already calls
+ * it "the suggested session". Shown only once a session actually has items —
+ * see `view.ts`'s card header.
+ */
+export const SESSION_EYEBROW_LABEL = 'A suggested session';
+
+/**
+ * The kit's separate `Countdown` component's own eyebrow (STY-4; same kit
+ * file, `Countdown`'s "Next assessment" label) — printed above the numeral
+ * block `view.ts` draws from `model.nextAssessment` whenever `daysUntil` is a
+ * real number. Falls back to {@link countdownLine}'s existing prose sentence,
+ * unchanged, whenever it is not (an unreadable date, or no assessment at
+ * all) — the numeral block is a presentation of the SAME fact
+ * `countdownLine` already states, never a second computation of it.
+ */
+export const SESSION_NEXT_ASSESSMENT_LABEL = 'Next assessment';
+
+/**
+ * The card header's compact day count (STY-4; kit: `SessionBuilder`'s
+ * top-right `{ASSESSMENT.days} days out`) — the exact same
+ * `SessionAssessmentCountdown.daysUntil` {@link countdownLine} already
+ * reports, reworded for a one-line header rather than a full sentence.
+ * `null` gets no caller (the header renders no tag at all — see `view.ts`),
+ * so this function is never asked to word an unreadable date.
+ */
+export function daysOutLabel(days: number): string {
+  if (days <= 0) return 'due today';
+  if (days === 1) return '1 day out';
+  return `${days} days out`;
+}
+
+/**
+ * One instrument-kind group's own header, in the composition table (STY-4;
+ * kit: `SessionBuilder`'s `PLAN` rows group by kind already — "8 quiz items",
+ * "4 cards"). `view.ts` groups CONSECUTIVE same-`instrumentType` items
+ * (never reordering `StudySessionItem.position`) and labels each run with
+ * this — count first, so a scan down the table reads density before kind,
+ * the same order `sessionSummaryLine`'s own "N instruments" leads with.
+ */
+export function instrumentGroupHeading(
+  instrumentType: StudySessionItem['instrumentType'],
+  count: number,
+): string {
+  return `${count} · ${instrumentTypeLabel(instrumentType)}`;
+}
+
 // ---------------------------------------------------------------------------
 // F4.7 — the countdown
 // ---------------------------------------------------------------------------
@@ -634,6 +685,8 @@ export function allSessionBuilderStrings(): readonly string[] {
     FULL_SYLLABUS_ADVICE,
     SESSION_WHY_THESE_LABEL,
     SESSION_EMPTY_EYEBROW,
+    SESSION_EYEBROW_LABEL,
+    SESSION_NEXT_ASSESSMENT_LABEL,
     ...Object.values(DURATION_BASIS_LINES),
     ...Object.values(INSTRUMENT_TYPE_LABELS),
     ...SESSION_BUDGET_OPTIONS.map(budgetOptionLabel),
