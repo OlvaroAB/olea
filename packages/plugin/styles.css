@@ -413,6 +413,15 @@ declares nothing at all. See the header.
   border-radius: 14px;
   padding: 22px 26px;
   margin-bottom: 26px;
+  /* BUG fix (ol-l5og.18.10): the kit's card carries a couple of sentences, but
+     a real note's answer/cloze-context text has no such limit — an
+     unconstrained answer block pushed the header above and the rating row
+     below the viewport on a long real card (0--journey-today-review--rated
+     golden). Capping the block's own height and letting IT scroll, rather
+     than the whole screen, keeps the question, ratings and hints on-screen
+     regardless of how long her note is. */
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .olea-review-eyebrow {
@@ -577,6 +586,29 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-correct);
 }
 .olea-review-mcq-option--wrong .olea-review-mcq-option-tag {
+  color: var(--olea-wrong);
+}
+
+/* BUG fix (ol-l5og.18.10): the kit pairs the "Correct answer"/"You chose" tag
+   with a check/X glyph (ReviewStates.jsx's `McqOption`); the implemented
+   answered state carried colour + text only. `-status` groups the tag and
+   the icon the same way the kit's own wrapper span does. */
+.olea-review-mcq-option-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.olea-review-mcq-option-icon {
+  display: flex;
+  flex: none;
+  color: var(--olea-host-muted);
+}
+
+.olea-review-mcq-option--correct .olea-review-mcq-option-icon {
+  color: var(--olea-correct);
+}
+.olea-review-mcq-option--wrong .olea-review-mcq-option-icon {
   color: var(--olea-wrong);
 }
 
@@ -1078,6 +1110,19 @@ button.olea-review-mcq-option:hover {
   gap: 4px;
 }
 
+/* Row dividers (ratified ladder form, `docs/design/pass5b-mastery-ratified`'s
+   `MasteryLadder`: `border-top` on every row but the first). STY-0i: this is
+   the one visual gap between the ladder here and the ratified ladder markup
+   that carries no ruling against it — unlike the kit's 18px per-row stage
+   glyph, which `[VIT-3]`/`ol-l5og.17` and the vocabulary registry's
+   "identical sprig geometry, only the pixel size changes" invariant already
+   supersede (the ladder keeps its 7px in-dot sprigs on purpose; this bead
+   does not reopen that). */
+.olea-today-mastery-ladder-row:not(:first-child) {
+  padding-top: 8px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
 .olea-today-mastery-ladder-head {
   font-size: 11.5px;
   color: var(--olea-host-muted);
@@ -1127,9 +1172,22 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
+/* The section top-border is the existing section separator (unchanged); the
+   left accent bar + padding below is the kit's `InsightRow` treatment
+   (`Pass5dTrends.jsx`: `borderLeft: 2px solid var(--olea-host-brand),
+   paddingLeft: 14`), applied to the whole block (eyebrow label through the
+   scope footer) rather than re-nesting the DOM, since `view.ts` already
+   groups them under this one class. `--olea-host-brand` is already read
+   elsewhere in this section (`.olea-today-mastery-label`), so this adds no
+   new host-colour declaration. This section is reused verbatim for the
+   rhythm reading (`renderRhythmBody`), which the kit does not draw
+   separately but which is structurally the same "one observed reading"
+   shape, so the same accent is correct there too. */
 .olea-today-insights {
   padding-top: 16px;
+  padding-left: 12px;
   border-top: 1px solid var(--olea-host-line);
+  border-left: 2px solid var(--olea-host-brand);
 }
 
 .olea-today-insights-label {

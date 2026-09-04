@@ -790,6 +790,37 @@ export class ReviewView extends ItemView {
     meta.createSpan({ cls: 'olea-review-meta-note', text: noteTitle });
   }
 
+  /**
+   * BUG fix (`ol-l5og.18.10`): the kit's answered-MCQ row (`ReviewStates.jsx`'s
+   * `McqOption`) pairs the "Correct answer"/"You chose" tag with a check or X
+   * glyph, coloured the same as the row; the implemented row carried colour
+   * and text only. Built the same way `render-sprig.ts` builds its SVG —
+   * `createElementNS`, never `createEl` — because Obsidian's `createEl`
+   * family does not cover the SVG namespace. `stroke` is set to the same
+   * `--olea-correct`/`--olea-wrong` variables the tag text already reads,
+   * via the parent's `currentColor`-driven CSS rather than a hardcoded hex.
+   */
+  private mcqStatusIcon(parent: HTMLElement, kind: 'correct' | 'wrong'): void {
+    const doc = parent.ownerDocument;
+    const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'olea-review-mcq-option-icon');
+    svg.setAttribute('width', '15');
+    svg.setAttribute('height', '15');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('fill', 'none');
+    const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute(
+      'd',
+      kind === 'correct' ? 'M3.5 8.5 6.5 11.5 12.5 4.5' : 'M4 4l8 8M12 4l-8 8',
+    );
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.6');
+    path.setAttribute('stroke-linecap', 'round');
+    if (kind === 'correct') path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    parent.appendChild(svg);
+  }
+
   private hints(parent: HTMLElement, screen: ReviewScreen): void {
     const row = parent.createDiv({ cls: 'olea-review-hints' });
     for (const hint of hintsFor(screen)) {
@@ -1244,10 +1275,12 @@ export class ReviewView extends ItemView {
       this.keycap(row, mcqOptionKeycap(i, optionCount));
       row.createSpan({ cls: 'olea-review-mcq-option-label', text: option.label });
       if (state !== 'dim') {
-        row.createSpan({
+        const status = row.createSpan({ cls: 'olea-review-mcq-option-status' });
+        status.createSpan({
           cls: 'olea-review-mcq-option-tag',
           text: option.correct ? 'Correct answer' : 'You chose',
         });
+        this.mcqStatusIcon(status, option.correct ? 'correct' : 'wrong');
       }
     });
 
