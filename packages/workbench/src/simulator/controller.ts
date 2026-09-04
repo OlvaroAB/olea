@@ -312,9 +312,53 @@ async function seedSimulatorWorkerConfig(pluginDataHost: ObsidianDataHost): Prom
 const SIMULATOR_ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
 
 /**
- * Seeds `plan/settings-store.ts`'s `studyPlanConfig` key with the
- * conventional Base path above — the identical "same storage key the real
- * flow writes to, no invented surface" posture {@link
+ * The F1.3 conventional folder itself, one level up from the exact path
+ * above — used only as a scan root for {@link discoverAssignmentsBasePath},
+ * never as a second hardcoded file path. A world may keep its Base file
+ * nested under here (a per-semester subfolder, a differently-named file)
+ * rather than directly at `Assignments.base`; this is the generic fallback
+ * for that shape, deliberately naming nothing more specific than the folder
+ * convention every world already shares — see that function's own doc for
+ * why (`ol-3ux7.64.23` [WBX-19 follow-up], check-snapshot-path-literals).
+ */
+const SIMULATOR_ASSIGNMENTS_FOLDER = '02 Assignments';
+
+/**
+ * Finds the Base file {@link seedSimulatorStudyPlanConfig} should point
+ * `studyPlanConfig.assignmentsBasePath` at, in two steps: the F1.3
+ * conventional exact path first (cheapest check, and where every
+ * persona/fixture world already ships one), then — generically, scanning
+ * rather than guessing a second literal path — the first `.base` file
+ * anywhere under {@link SIMULATOR_ASSIGNMENTS_FOLDER}, sorted for
+ * determinism across runs. `undefined` when neither exists.
+ *
+ * **Why a scan and not a second named path.** `ol-3ux7.64.23` [WBX-19
+ * follow-up]: the real world's own vault snapshot ships its Base file
+ * nested one level deeper than the convention (a per-semester subfolder
+ * whose name is real-vault content, not a product convention). Naming that
+ * nested path as a second literal here would put a real vault's own
+ * foldering into this public-repo file — exactly what
+ * `check-snapshot-path-literals` and INV-3 exist to keep out. Scanning the
+ * conventional folder generically reaches that file, and any other world's
+ * own nested Base file, without ever spelling out which one.
+ */
+async function discoverAssignmentsBasePath(
+  vault: PersistentVaultSource,
+): Promise<string | undefined> {
+  if (await vault.exists(SIMULATOR_ASSIGNMENTS_BASE_PATH)) {
+    return SIMULATOR_ASSIGNMENTS_BASE_PATH;
+  }
+  const baseFiles = await vault.list({
+    under: SIMULATOR_ASSIGNMENTS_FOLDER,
+    extensions: ['base'],
+  });
+  return baseFiles.length > 0 ? [...baseFiles].sort()[0] : undefined;
+}
+
+/**
+ * Seeds `plan/settings-store.ts`'s `studyPlanConfig` key with whatever
+ * {@link discoverAssignmentsBasePath} finds — the identical "same storage
+ * key the real flow writes to, no invented surface" posture {@link
  * seedSimulatorWorkerConfig} already takes for F7.1's token, applied here to
  * `[D-134]`'s F8.8 retrospective, Gap's ranked state and Grove's `'declared'`
  * grid, which all sit behind `isStudyPlanConfigured` returning `true`
@@ -324,22 +368,22 @@ const SIMULATOR_ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
  * path into this setting — there is no onboarding step that does, and the
  * simulator has no student to do the typing by hand.
  *
- * Guarded on `vault.exists(...)` rather than seeded unconditionally: a world
- * whose vault has no Base file at this exact path (the real world, whose own
- * assignments layout is a separate, later piece of work — see WBX-19's close
- * notes) is left exactly as unconfigured as it was before this change,
- * never pointed at a path that is not actually there. Called from `create()`
- * and again from `reset()`, alongside {@link seedSimulatorWorkerConfig} —
- * `resetAll` clears the same plugin-data store this key lives in.
+ * Guarded on discovery finding something rather than seeded unconditionally:
+ * a world whose vault has no Base file anywhere under the F1.3 folder is
+ * left exactly as unconfigured as it was before this change, never pointed
+ * at a path that is not actually there. Called from `create()` and again
+ * from `reset()`, alongside {@link seedSimulatorWorkerConfig} — `resetAll`
+ * clears the same plugin-data store this key lives in.
  */
 async function seedSimulatorStudyPlanConfig(
   pluginDataHost: ObsidianDataHost,
   vault: PersistentVaultSource,
 ): Promise<void> {
-  if (!(await vault.exists(SIMULATOR_ASSIGNMENTS_BASE_PATH))) return;
+  const assignmentsBasePath = await discoverAssignmentsBasePath(vault);
+  if (assignmentsBasePath === undefined) return;
   await new ObsidianStudyPlanSettingsStore(pluginDataHost).save({
     version: 1,
-    assignmentsBasePath: SIMULATOR_ASSIGNMENTS_BASE_PATH,
+    assignmentsBasePath,
   });
 }
 
