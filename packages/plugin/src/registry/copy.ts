@@ -190,7 +190,99 @@ export const RESTORE_INSTRUMENT_ACTION = 'Restore';
 export const EDIT_INSTRUMENT_ACTION = 'Edit in Obsidian';
 export const RENAME_ACTION = 'Rename';
 
-export const SHOW_WITHDRAWN_LABEL = 'Show withdrawn concepts';
+/**
+ * `ol-l5og.18.1` (design-fidelity sweep, `docs/design/dsn3-registry/registry-surface.html`
+ * frame 01, `[D-135]`) — the browsable inventory's closed-row facts and its chip filter bar,
+ * replacing the single "Show withdrawn concepts" checkbox this bead retires. Same Class B
+ * proposed-copy posture as the rest of this file.
+ *
+ * **Kept the filter's own label `Withdrawn`, never the kit's literal `Pruned`.** The vocabulary
+ * registry §3 clamp above (`never prints "prune"`) applies exactly as much to a filter chip as
+ * to an action label — `test/registry/copy.spec.ts`'s vocabulary sweep would catch either
+ * spelling, and "Withdrawn" is already this surface's own ratified noun for the state
+ * (`WITHDRAWN_LABEL`), so the chip reuses it rather than importing the kit's internal-triage
+ * word by copying its screenshot literally.
+ *
+ * **Default filter is `all`, and `all` EXCLUDES withdrawn concepts** — unlike the kit's frame 01,
+ * which draws a pruned row inline under "All". This keeps the pre-existing ratified behaviour
+ * this view's own module doc already argues for ("the default view hides them only to keep the
+ * working list legible... the toggle is one click away") intact under the new control: a chip
+ * is not a materially different discovery cost than a checkbox, so there was no reason to also
+ * change which state is hidden by default while changing how she reaches it.
+ */
+export const REGISTRY_ALL_FILTER_LABEL = 'All';
+export const REGISTRY_NEEDS_TENDING_FILTER_LABEL = 'Needs tending';
+export const REGISTRY_NOTHING_BUILT_FILTER_LABEL = 'Nothing built yet';
+export const REGISTRY_WITHDRAWN_FILTER_LABEL = 'Withdrawn';
+
+/** The closed row's own action verbs (frame 01's action column) — `Open`/`Close` toggle the
+ * detail panel; `Put it back` is the one-tap reversal frame 04's own note requires ("the way
+ * back is on the row... not a recovery flow reached from somewhere else"), reusing
+ * `deps.restoreConcept` directly rather than making her open the row first to find
+ * `RESTORE_CONCEPT_ACTION`. */
+export const REGISTRY_OPEN_ACTION = 'Open';
+export const REGISTRY_CLOSE_ACTION = 'Close';
+export const REGISTRY_PUT_IT_BACK_ACTION = 'Put it back';
+
+/** The closed row's instrument-mix cell when there is nothing scheduled yet — frame 01's own
+ * `im.none` text, reused as both the chip label's referent and the cell's own copy. */
+export const NOTHING_BUILT_YET_LABEL = 'nothing built yet';
+
+/** The closed row's instrument-mix cell for a withdrawn concept — frame 01's own `im.none`
+ * text for a pruned row, respelled with this surface's ratified `withdrawn` (never the kit's
+ * literal `pruned` — see this section's own doc above). */
+export const REGISTRY_WITHDRAWN_KEPT_LABEL = 'withdrawn · kept in full';
+
+/** The list's aggregate header (frame 01's `inv-head`: "27 across two courses") — a fact about
+ * the whole inventory, not a filtered count, so this always reads against every concept
+ * regardless of which chip is active. `courseCount` is 0 exactly when no concept in the vault
+ * carries a course association yet (`coursesLine`'s own "No course association yet" case, at
+ * the inventory grain rather than one row's). */
+export function registryAggregateLine(totalConcepts: number, courseCount: number): string {
+  const conceptNoun = totalConcepts === 1 ? 'concept' : 'concepts';
+  if (courseCount === 0) return `${totalConcepts} ${conceptNoun}`;
+  const courseNoun = courseCount === 1 ? 'course' : 'courses';
+  return `${totalConcepts} ${conceptNoun} across ${courseCount} ${courseNoun}`;
+}
+
+/** Filtering with no match — distinct from `REGISTRY_EMPTY_LINE` (no concepts exist at all):
+ * this is "some exist, none of them are in this bucket", which is never true prose for the
+ * vault itself. */
+export const REGISTRY_FILTER_EMPTY_LINE = 'Nothing matches this filter.';
+
+function instrumentMixTypeLabel(type: RegistryInstrumentSummary['instrumentType']): string {
+  switch (type) {
+    case 'qa':
+      return 'Q&A';
+    case 'cloze':
+      return 'cloze';
+    case 'mcq':
+      return 'MCQ';
+  }
+}
+
+const INSTRUMENT_MIX_ORDER: readonly RegistryInstrumentSummary['instrumentType'][] = [
+  'qa',
+  'cloze',
+  'mcq',
+];
+
+/** The closed row's instrument-mix summary (frame 01: "3 Q&A · 1 cloze · 2 MCQ") — counts
+ * ACTIVE (non-withdrawn) instruments by type, in a fixed reading order, never the per-instrument
+ * detail `renderInstruments` shows once the row is opened. `NOTHING_BUILT_YET_LABEL` when there
+ * is nothing active to summarize — mirrors `NO_INSTRUMENTS_LINE`'s own "nothing yet" register,
+ * one level up, at the browse grain rather than the opened-detail grain. */
+export function instrumentMixLine(instruments: readonly RegistryInstrumentSummary[]): string {
+  const active = instruments.filter((instrument) => !instrument.pruned);
+  if (active.length === 0) return NOTHING_BUILT_YET_LABEL;
+  const counts = new Map<RegistryInstrumentSummary['instrumentType'], number>();
+  for (const instrument of active) {
+    counts.set(instrument.instrumentType, (counts.get(instrument.instrumentType) ?? 0) + 1);
+  }
+  return INSTRUMENT_MIX_ORDER.filter((type) => counts.has(type))
+    .map((type) => `${counts.get(type)} ${instrumentMixTypeLabel(type)}`)
+    .join(' · ');
+}
 
 /**
  * F8.4a's note-offer standing affordance (`[D-176]`, `ol-r1by`) — genuinely

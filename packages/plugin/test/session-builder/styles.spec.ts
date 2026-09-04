@@ -40,8 +40,21 @@ const view = readFileSync(viewPath, 'utf8');
 const viewCode = view.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 const SESSION_SECTION_MARKER = '---- Session builder';
+/**
+ * The next section appended after the session builder's own — this slice used to run
+ * unbounded ("to end of file"), which was silently correct only while session-builder
+ * genuinely was the last section in the stylesheet. `ol-l5og.18.1` (the registry
+ * styling bead) tripped this: two sections landed after it in the same run (the
+ * explain-back modal, then a fully-styled registry section that legitimately reuses
+ * `--olea-host-attention` for its own "needs tending" mark, the same role Today's own
+ * mastery ladder already uses it for), and this file's "uses no attention colour at
+ * all" check below started reading THAT section's CSS as though it were the session
+ * builder's. Bounded the same way `test/today/styles.spec.ts` already bounds its own
+ * slice, rather than trusting "session builder is last" to stay true.
+ */
+const NEXT_SECTION_MARKER = '---- Brand: the sprig';
 
-/** Just the session-builder section of `styles.css` — the rest of the file belongs to the other three panes. */
+/** Just the session-builder section of `styles.css` — the rest of the file belongs to the other panes appended around it. */
 function sessionSection(): string {
   const at = fullCss.indexOf(SESSION_SECTION_MARKER);
   expect(at, `styles.css contains a "${SESSION_SECTION_MARKER}" banner`).toBeGreaterThanOrEqual(0);
@@ -50,7 +63,14 @@ function sessionSection(): string {
     commentStart,
     'the session-builder banner is inside a comment block',
   ).toBeGreaterThanOrEqual(0);
-  return fullCss.slice(commentStart);
+
+  const nextAt = fullCss.indexOf(NEXT_SECTION_MARKER, at);
+  expect(
+    nextAt,
+    `styles.css contains a "${NEXT_SECTION_MARKER}" banner after the session builder's`,
+  ).toBeGreaterThanOrEqual(0);
+  const nextCommentStart = fullCss.lastIndexOf('/*', nextAt);
+  return fullCss.slice(commentStart, nextCommentStart);
 }
 
 const css = sessionSection();

@@ -42,8 +42,23 @@ const view = readFileSync(viewPath, 'utf8');
 const viewCode = view.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 const GAP_SECTION_MARKER = '---- Gap and coverage views';
+/**
+ * The next section appended after the gap view's own — this slice used to run
+ * unbounded ("to end of file"), which was silently correct only while the gap
+ * section genuinely was the last one in the stylesheet. `ol-l5og.18.1` (the
+ * registry styling bead) tripped this the same way it tripped
+ * `test/session-builder/styles.spec.ts`'s own unbounded slice (see that
+ * file's identical fix and doc): several sections landed after the gap
+ * section in the same run, and one of them (a fully-styled registry section
+ * that legitimately declares its OWN local `--olea-host-*` reads rather than
+ * joining the shared `:is(...)` block — see `styles.css`'s Registry section
+ * header for why) was being read here as though it were the gap view's own
+ * "no local `--olea-host-*` declaration" case. Bounded the same way
+ * `test/today/styles.spec.ts` already bounds its own slice.
+ */
+const NEXT_SECTION_MARKER = '---- Session builder';
 
-/** Just the gap section of `styles.css` — the rest of the file belongs to the review view and the Today panel. */
+/** Just the gap section of `styles.css` — the rest of the file belongs to the other panes appended around it. */
 function gapSection(): string {
   const at = fullCss.indexOf(GAP_SECTION_MARKER);
   expect(at, `styles.css contains a "${GAP_SECTION_MARKER}" banner`).toBeGreaterThanOrEqual(0);
@@ -51,7 +66,14 @@ function gapSection(): string {
   expect(commentStart, 'the gap-section banner is inside a comment block').toBeGreaterThanOrEqual(
     0,
   );
-  return fullCss.slice(commentStart);
+
+  const nextAt = fullCss.indexOf(NEXT_SECTION_MARKER, at);
+  expect(
+    nextAt,
+    `styles.css contains a "${NEXT_SECTION_MARKER}" banner after the gap section's`,
+  ).toBeGreaterThanOrEqual(0);
+  const nextCommentStart = fullCss.lastIndexOf('/*', nextAt);
+  return fullCss.slice(commentStart, nextCommentStart);
 }
 
 const css = gapSection();

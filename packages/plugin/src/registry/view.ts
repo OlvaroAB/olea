@@ -19,11 +19,33 @@
  * The same discipline `commands/register-commands.ts` states for "open
  * Olea" and "explain something back" before they had a destination.
  *
- * **Withdrawn concepts stay visible, behind one toggle, never hidden by
- * default into a second screen.** F8.5: nothing is deleted, and a browsable
- * inventory that silently drops withdrawn rows would read as though they
- * had been. The default view hides them only to keep the working list
- * legible; the toggle is one click away, not a separate surface.
+ * **Withdrawn concepts stay reachable, behind one filter chip, never hidden
+ * by default into a second screen.** F8.5: nothing is deleted, and a
+ * browsable inventory that silently drops withdrawn rows would read as
+ * though they had been. The default (`All`) view hides them only to keep
+ * the working list legible; the `Withdrawn` chip (`renderFilterChips`,
+ * `RegistryFilter`) is one click away in the same chip row, not a separate
+ * surface — this replaced a single "Show withdrawn concepts" checkbox
+ * (`ol-l5og.18.1`, design-fidelity sweep against `docs/design/dsn3-registry/
+ * registry-surface.html` frame 01) with `[D-135]`'s own chip set: All,
+ * per-course, `Needs tending`, `Nothing built yet`, `Withdrawn`, each
+ * carrying its own count.
+ *
+ * **The same bead collapsed the row to two levels**, matching frame 01
+ * (closed: name, course tags, mastery pair, instrument-mix summary, one
+ * `Open` action) opening into frame 02's full detail (rename, the
+ * withdraw/restore action, source locations, the per-instrument list) —
+ * `renderCompactRow` draws the first level always; `renderDetail` draws the
+ * second only once `this.expanded` names the concept's key. Four sections
+ * that are already standing, actionable facts rather than the "editing"
+ * layer — `renderDuplicateTitle`, `renderThinNote`, `renderRenameProposal`,
+ * `renderNoteOffer`, plus the display-only `aliasesLine`/`explainBackLine`
+ * text — stay OUTSIDE that gate in `renderStandingFacts`, visible whether or
+ * not the row is open: hiding a pending accept/decline behind an extra tap
+ * would cost exactly the discoverability `[D-176]`'s and `[D-183]`'s own
+ * clauses argue for. `[D-171]`'s one-step hand-off (`focusEntry`) expands the
+ * target row itself, and resets an active filter that would otherwise hide
+ * it, before scrolling — see that method's own doc.
  *
  * **F8.4b (`[D-175]`) adds one instrument-grain section: explain-back
  * history**, rendered by `renderExplainBackHistory` right on the same row
@@ -75,6 +97,7 @@ import {
   type RegistryModel,
   type RegistrySourceLocation,
 } from 'olea-core';
+import { renderSprig } from '../sprig/render-sprig.js';
 import {
   aliasesLine,
   coursesLine,
@@ -86,28 +109,88 @@ import {
   explainBackLine,
   INSTRUMENTS_SECTION_HEADING,
   instrumentLabel,
-  masteryStatedLine,
+  instrumentMixLine,
   NO_INSTRUMENTS_LINE,
   NOTE_OFFER_ACCEPT_ACTION,
   NOTE_OFFER_DECLINE_ACTION,
   NOTE_OFFER_LINE,
+  NOTHING_BUILT_YET_LABEL,
   OPEN_SOURCE_LOCATION_ACTION,
+  REGISTRY_ALL_FILTER_LABEL,
+  REGISTRY_CLOSE_ACTION,
   REGISTRY_EMPTY_LINE,
+  REGISTRY_FILTER_EMPTY_LINE,
+  REGISTRY_NEEDS_TENDING_FILTER_LABEL,
+  REGISTRY_NOTHING_BUILT_FILTER_LABEL,
+  REGISTRY_OPEN_ACTION,
+  REGISTRY_PUT_IT_BACK_ACTION,
   REGISTRY_UNAVAILABLE_LINE,
   REGISTRY_VIEW_TITLE,
+  REGISTRY_WITHDRAWN_FILTER_LABEL,
+  REGISTRY_WITHDRAWN_KEPT_LABEL,
   RENAME_ACTION,
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
-  SHOW_WITHDRAWN_LABEL,
+  registryAggregateLine,
   SOURCE_LOCATIONS_HEADING,
   sourceLocationLabel,
   THIN_NOTE_LABEL,
   thinNoteLine,
+  vitalityLabel,
   WITHDRAW_CONCEPT_ACTION,
   WITHDRAW_INSTRUMENT_ACTION,
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
 } from './copy.js';
+
+/**
+ * The closed-row/open-detail split (`ol-l5og.18.1`, design-fidelity sweep against
+ * `docs/design/dsn3-registry/registry-surface.html` frame 01/02, `[D-135]`) — one of five
+ * possible reasons a row shows what it shows, kept as a discriminated union rather than a
+ * `course: string | null` scattered across booleans so `matchesRegistryFilter` stays a single
+ * exhaustive `switch`. `course` carries the exact course code a per-course chip was built for;
+ * every other variant is a fixed fact about the concept.
+ */
+type RegistryFilter =
+  | { readonly kind: 'all' }
+  | { readonly kind: 'course'; readonly course: string }
+  | { readonly kind: 'tending' }
+  | { readonly kind: 'nothing-built' }
+  | { readonly kind: 'withdrawn' };
+
+function filtersEqual(a: RegistryFilter, b: RegistryFilter): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind === 'course' && b.kind === 'course' ? a.course === b.course : true;
+}
+
+/** Every course code named by at least one concept, deduplicated and sorted — the per-course
+ * chip set (frame 01). Computed fresh from the loaded model on every render rather than cached:
+ * `RegistryModel` carries no course list of its own (`build.ts`'s own doc: "filtering by course
+ * is a view concern, not a model concern"). */
+function registryCourses(concepts: readonly RegistryConceptEntry[]): readonly string[] {
+  return Array.from(new Set(concepts.flatMap((entry) => entry.courses))).sort();
+}
+
+function activeInstrumentCount(entry: RegistryConceptEntry): number {
+  return entry.instruments.filter((instrument) => !instrument.pruned).length;
+}
+
+/** Whether `entry` belongs under `filter` — see `RegistryFilter`'s own doc for why `all`
+ * excludes withdrawn concepts rather than including them the way the kit's frame 01 draws it. */
+function matchesRegistryFilter(entry: RegistryConceptEntry, filter: RegistryFilter): boolean {
+  switch (filter.kind) {
+    case 'all':
+      return !entry.pruned;
+    case 'course':
+      return !entry.pruned && entry.courses.includes(filter.course);
+    case 'tending':
+      return !entry.pruned && entry.vitality.value === 'tending';
+    case 'nothing-built':
+      return !entry.pruned && activeInstrumentCount(entry) === 0;
+    case 'withdrawn':
+      return entry.pruned;
+  }
+}
 
 export const VIEW_TYPE_OLEA_REGISTRY = 'olea-registry';
 
@@ -140,8 +223,8 @@ function renameProposalLine(proposal: RenameProposal): string {
  * `data-olea-focusable`/`FOCUSABLE_ATTR` restore convention, but by tag
  * rather than a marker attribute: unlike that file's per-screen renders,
  * every control this view draws is already exactly a `<button>` or an
- * `<input>` (the rename field, the show-withdrawn checkbox), so no row
- * render site needs a new attribute added to opt in.
+ * `<input>` (the rename field, every filter chip, `Open`/`Close`), so no
+ * row render site needs a new attribute added to opt in.
  */
 const FOCUSABLE_SELECTOR = 'button, input';
 
@@ -181,7 +264,19 @@ export interface RegistryViewDeps {
 
 export class RegistryView extends ItemView {
   private readonly deps: RegistryViewDeps;
-  private showWithdrawn = false;
+  /** The active chip (`RegistryFilter`) — `all` on first render, same default the retired
+   * "Show withdrawn concepts" checkbox drew. */
+  private filter: RegistryFilter = { kind: 'all' };
+  /** Concept keys whose detail panel (frame 02) is open — `renderConcept` reads this to decide
+   * whether to draw `renderDetail` below the always-drawn `renderCompactRow`. Persists across a
+   * `refresh()` so a rename/withdraw/edit round-trip does not silently re-collapse the row she
+   * was just looking at. */
+  private readonly expanded = new Set<string>();
+  /** The last state `render()` drew, so a pure UI action (toggling a filter or a row's open
+   * state) can redraw without a real `deps.load()` round-trip — mirrors `RegistryEntryTarget`'s
+   * own need to inspect the loaded model in `focusEntry` below. `null` until the first
+   * `refresh()` completes. */
+  private lastState: RegistryViewState | null = null;
   /**
    * `ol-l5og.14`'s aria-live confirmation — a single stable node, created
    * once in `onOpen` as a sibling of `contentEl` rather than inside it, so
@@ -246,14 +341,59 @@ export class RegistryView extends ItemView {
     return Array.from(this.contentEl.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
   }
 
+  /** The concept a given instrument id belongs to, read from `lastState` — used only by
+   * `focusEntry` below to know which row to expand for an instrument-grain hand-off target. */
+  private conceptOwning(instrumentId: string): RegistryConceptEntry | null {
+    if (this.lastState === null || this.lastState.kind !== 'model') return null;
+    return (
+      this.lastState.model.concepts.find((entry) =>
+        entry.instruments.some((instrument) => instrument.instrumentId === instrumentId),
+      ) ?? null
+    );
+  }
+
+  private conceptByKey(key: string): RegistryConceptEntry | null {
+    if (this.lastState === null || this.lastState.kind !== 'model') return null;
+    return this.lastState.model.concepts.find((entry) => entry.key === key) ?? null;
+  }
+
   /**
    * `[D-171]`'s one-step affordance landing: scroll to and briefly highlight
    * the row `target` names. Public and separate from `refresh()` so
    * `./obsidian-ports.ts`'s `openRegistryEntryFor` can call `refresh()` then
    * this, rather than folding a target into `render()`'s own state and
    * risking a stale highlight surviving past the row it was for.
+   *
+   * **`ol-l5og.18.1` adds two pre-conditions the two-level browse/detail split
+   * introduced**: the target's row must be OPEN for an instrument-grain
+   * target to exist in the DOM at all (an instrument only ever renders inside
+   * `renderDetail`), and the target's concept must pass the ACTIVE filter or
+   * the compact row itself is never drawn. Both are corrected here, before
+   * the scroll/highlight below, rather than leaving the hand-off silently
+   * land on nothing — the same reachability guarantee this method already
+   * carried, just extended to cover state this bead's own UI change added.
    */
   focusEntry(target: RegistryEntryTarget): void {
+    const owner =
+      target.conceptKey !== undefined
+        ? this.conceptByKey(target.conceptKey)
+        : target.instrumentId !== undefined
+          ? this.conceptOwning(target.instrumentId)
+          : null;
+
+    let needsRedraw = false;
+    if (owner !== null) {
+      if (!this.expanded.has(owner.key)) {
+        this.expanded.add(owner.key);
+        needsRedraw = true;
+      }
+      if (!matchesRegistryFilter(owner, this.filter)) {
+        this.filter = { kind: 'all' };
+        needsRedraw = true;
+      }
+    }
+    if (needsRedraw && this.lastState !== null) this.render(this.lastState);
+
     const selector = target.instrumentId
       ? `[data-olea-instrument-id="${CSS.escape(target.instrumentId)}"]`
       : target.conceptKey
@@ -265,6 +405,14 @@ export class RegistryView extends ItemView {
     el.scrollIntoView({ block: 'center' });
     el.addClass('olea-registry-focused');
     setTimeout(() => el.removeClass('olea-registry-focused'), 2000);
+  }
+
+  /** Redraws from the last loaded state — for a pure UI action (a filter chip, an `Open`/`Close`
+   * toggle) that changes nothing `deps.load()` would re-fetch, so a full round-trip would only
+   * add latency and risk racing a concurrent mutation's own `refresh()`. No-op before the first
+   * `refresh()` completes (`lastState` is still `null`). */
+  private rerender(): void {
+    if (this.lastState !== null) this.render(this.lastState);
   }
 
   /**
@@ -283,6 +431,7 @@ export class RegistryView extends ItemView {
     const root = this.contentEl;
     const hadFocus = root.contains(root.ownerDocument.activeElement);
     root.empty();
+    this.lastState = state;
 
     if (state.kind === 'unavailable') {
       root.createDiv({ cls: 'olea-registry-unavailable', text: REGISTRY_UNAVAILABLE_LINE });
@@ -292,20 +441,25 @@ export class RegistryView extends ItemView {
 
     root.createEl('h2', { text: REGISTRY_VIEW_TITLE });
 
-    const toggleRow = root.createDiv({ cls: 'olea-registry-toggle-row' });
-    const toggleLabel = toggleRow.createEl('label');
-    const toggleInput = toggleLabel.createEl('input', { type: 'checkbox' });
-    toggleInput.checked = this.showWithdrawn;
-    toggleLabel.appendText(` ${SHOW_WITHDRAWN_LABEL}`);
-    toggleInput.addEventListener('change', () => {
-      this.showWithdrawn = toggleInput.checked;
-      void this.refresh();
+    const concepts = state.model.concepts;
+
+    if (concepts.length === 0) {
+      root.createDiv({ cls: 'olea-registry-empty', text: REGISTRY_EMPTY_LINE });
+      if (hadFocus) this.focusableControls()[0]?.focus();
+      return;
+    }
+
+    root.createDiv({
+      cls: 'olea-registry-summary',
+      text: registryAggregateLine(concepts.length, registryCourses(concepts).length),
     });
 
-    const visible = state.model.concepts.filter((entry) => this.showWithdrawn || !entry.pruned);
+    this.renderFilterChips(root, concepts);
+
+    const visible = concepts.filter((entry) => matchesRegistryFilter(entry, this.filter));
 
     if (visible.length === 0) {
-      root.createDiv({ cls: 'olea-registry-empty', text: REGISTRY_EMPTY_LINE });
+      root.createDiv({ cls: 'olea-registry-empty', text: REGISTRY_FILTER_EMPTY_LINE });
       if (hadFocus) this.focusableControls()[0]?.focus();
       return;
     }
@@ -316,70 +470,186 @@ export class RegistryView extends ItemView {
     if (hadFocus) this.focusableControls()[0]?.focus();
   }
 
+  /**
+   * Frame 01's chip bar — All, one per course, `Needs tending`, `Nothing built yet`,
+   * `Withdrawn` — each carrying its own count computed over the WHOLE inventory (`concepts`),
+   * never the currently-filtered subset, so switching chips never changes another chip's number.
+   * Single-select: clicking a chip replaces `this.filter` outright, matching frame 01's own
+   * mutually-exclusive `chip.on` reading (only one chip carries the `on` class in the kit).
+   */
+  private renderFilterChips(root: HTMLElement, concepts: readonly RegistryConceptEntry[]): void {
+    const chips = root.createDiv({ cls: 'olea-registry-chips' });
+
+    const addChip = (filter: RegistryFilter, label: string, count: number): void => {
+      const chip = chips.createEl('button', { cls: 'olea-registry-chip' });
+      if (filtersEqual(filter, this.filter)) chip.addClass('olea-registry-chip-on');
+      chip.createSpan({ text: label });
+      chip.createSpan({ cls: 'olea-registry-chip-count', text: String(count) });
+      chip.addEventListener('click', () => {
+        this.filter = filter;
+        // A real `deps.load()` round-trip, same as the retired "Show withdrawn concepts"
+        // checkbox's own `change` handler — a filter switch is a plausible moment for her
+        // material to have changed too, and this keeps `refresh()` the one place a stale
+        // model could go unnoticed for. `focusEntry`'s own filter correction below is the
+        // one place a cheap synchronous `rerender()` is used instead, because it runs right
+        // after a caller's own fresh `refresh()`.
+        void this.refresh();
+      });
+    };
+
+    addChip({ kind: 'all' }, REGISTRY_ALL_FILTER_LABEL, concepts.filter((e) => !e.pruned).length);
+    for (const course of registryCourses(concepts)) {
+      addChip(
+        { kind: 'course', course },
+        course,
+        concepts.filter((e) => !e.pruned && e.courses.includes(course)).length,
+      );
+    }
+    addChip(
+      { kind: 'tending' },
+      REGISTRY_NEEDS_TENDING_FILTER_LABEL,
+      concepts.filter((e) => !e.pruned && e.vitality.value === 'tending').length,
+    );
+    addChip(
+      { kind: 'nothing-built' },
+      REGISTRY_NOTHING_BUILT_FILTER_LABEL,
+      concepts.filter((e) => !e.pruned && activeInstrumentCount(e) === 0).length,
+    );
+    addChip(
+      { kind: 'withdrawn' },
+      REGISTRY_WITHDRAWN_FILTER_LABEL,
+      concepts.filter((e) => e.pruned).length,
+    );
+  }
+
   private renderConcept(root: HTMLElement, entry: RegistryConceptEntry): void {
     const row = root.createDiv({ cls: 'olea-registry-row' });
     row.dataset.oleaConceptKey = entry.key;
     if (entry.pruned) row.addClass('olea-registry-row-withdrawn');
 
-    const header = row.createDiv({ cls: 'olea-registry-row-header' });
-    header.createEl('h3', { text: entry.displayName });
+    this.renderCompactRow(row, entry);
+    this.renderStandingFacts(row, entry);
+
+    if (this.expanded.has(entry.key)) {
+      const detail = row.createDiv({ cls: 'olea-registry-detail' });
+      this.renderActions(detail, entry);
+      this.renderSourceLocations(detail, entry.sourceLocations);
+      this.renderInstruments(detail, entry);
+    }
+  }
+
+  /**
+   * Frame 01's closed row: name (plus its state badges), course tags, the mastery pair as a
+   * sprig icon beside its stage/vitality words (the sweep's "mastery icon" fix — `render-sprig.ts`
+   * is the same mark `today/view.ts` already draws, reused rather than a second glyph), the
+   * instrument-mix one-liner (`instrumentMixLine`), and one action: `Open`/`Close` toggles
+   * `this.expanded`; a withdrawn row also gets `Put it back` right here, matching frame 04's own
+   * "the way back is on the row" note rather than making her open the row first to find it.
+   */
+  private renderCompactRow(root: HTMLElement, entry: RegistryConceptEntry): void {
+    const compact = root.createDiv({ cls: 'olea-registry-row-compact' });
+
+    const nameCell = compact.createDiv({ cls: 'olea-registry-row-name' });
+    const nameLine = nameCell.createDiv({ cls: 'olea-registry-row-name-line' });
+    nameLine.createEl('h3', { text: entry.displayName });
     if (entry.pruned) {
-      header.createEl('span', { cls: 'olea-registry-withdrawn-badge', text: WITHDRAWN_LABEL });
+      nameLine.createEl('span', { cls: 'olea-registry-withdrawn-badge', text: WITHDRAWN_LABEL });
     }
     if (entry.duplicateTitle !== undefined) {
-      header.createEl('span', {
+      nameLine.createEl('span', {
         cls: 'olea-registry-duplicate-title-badge',
         text: DUPLICATE_TITLE_LABEL,
       });
     }
     if (entry.thinNote !== undefined) {
-      header.createEl('span', {
+      nameLine.createEl('span', {
         cls: 'olea-registry-thin-note-badge',
         text: THIN_NOTE_LABEL,
       });
     }
+    nameCell.createDiv({ cls: 'olea-registry-courses', text: coursesLine(entry.courses) });
 
-    this.renderDuplicateTitle(row, entry);
-    this.renderThinNote(row, entry);
-
-    row.createDiv({ cls: 'olea-registry-courses', text: coursesLine(entry.courses) });
-
-    const aliases = aliasesLine(entry.aliases);
-    if (aliases !== null) row.createDiv({ cls: 'olea-registry-aliases', text: aliases });
-
-    row.createDiv({
-      cls: 'olea-registry-mastery',
-      text: masteryStatedLine(MASTERY_DISPLAY[entry.mastery.state].label, entry.vitality),
+    const masteryCell = compact.createDiv({ cls: 'olea-registry-row-mastery' });
+    masteryCell.appendChild(
+      renderSprig({ state: entry.mastery.state, size: 16, container: masteryCell }),
+    );
+    const masteryText = masteryCell.createDiv({ cls: 'olea-registry-row-mastery-text' });
+    masteryText.createSpan({
+      cls: 'olea-registry-row-mastery-stage',
+      text: MASTERY_DISPLAY[entry.mastery.state].label,
     });
+    const vitalitySpan = masteryText.createSpan({
+      cls: 'olea-registry-row-mastery-vitality',
+      text: vitalityLabel(entry.vitality.value),
+    });
+    if (entry.vitality.value === 'tending') vitalitySpan.addClass('is-tending');
 
-    const explainBack = explainBackLine(entry.explainBack);
-    if (explainBack !== null) {
-      row.createDiv({ cls: 'olea-registry-explain-back', text: explainBack });
+    const mixCell = compact.createDiv({ cls: 'olea-registry-row-mix' });
+    const mixText = entry.pruned
+      ? REGISTRY_WITHDRAWN_KEPT_LABEL
+      : instrumentMixLine(entry.instruments);
+    mixCell.setText(mixText);
+    if (entry.pruned || mixText === NOTHING_BUILT_YET_LABEL) {
+      mixCell.addClass('olea-registry-row-mix-quiet');
     }
 
+    const actionCell = compact.createDiv({ cls: 'olea-registry-row-action' });
+    const isOpen = this.expanded.has(entry.key);
+    const openButton = actionCell.createEl('button', {
+      text: isOpen ? REGISTRY_CLOSE_ACTION : REGISTRY_OPEN_ACTION,
+    });
+    openButton.addEventListener('click', () => {
+      if (this.expanded.has(entry.key)) this.expanded.delete(entry.key);
+      else this.expanded.add(entry.key);
+      this.rerender();
+    });
     if (entry.pruned) {
-      row.createDiv({ cls: 'olea-registry-withdrawn-note', text: WITHDRAWN_NOTE });
+      const restoreButton = actionCell.createEl('button', {
+        cls: 'olea-registry-row-restore',
+        text: REGISTRY_PUT_IT_BACK_ACTION,
+      });
+      restoreButton.addEventListener('click', () => {
+        void this.deps.restoreConcept(entry).then(() => this.refresh());
+      });
     }
-
-    this.renderRenameProposal(row, entry);
-    this.renderNoteOffer(row, entry);
-    this.renderActions(row, entry);
-    this.renderSourceLocations(row, entry.sourceLocations);
-    this.renderInstruments(row, entry);
   }
 
   /**
-   * `[D-203]`'s duplicate-title state — the badge (in `renderConcept`'s
-   * header, mirroring `WITHDRAWN_LABEL`'s own badge shape) plus this one
+   * Facts and standing accept/decline affordances that stay visible whether or not the row is
+   * open — see this file's module doc for why these four (plus the display-only alias/
+   * explain-back lines) sit outside `renderDetail`'s gate.
+   */
+  private renderStandingFacts(root: HTMLElement, entry: RegistryConceptEntry): void {
+    this.renderDuplicateTitle(root, entry);
+    this.renderThinNote(root, entry);
+
+    const aliases = aliasesLine(entry.aliases);
+    if (aliases !== null) root.createDiv({ cls: 'olea-registry-aliases', text: aliases });
+
+    const explainBack = explainBackLine(entry.explainBack);
+    if (explainBack !== null) {
+      root.createDiv({ cls: 'olea-registry-explain-back', text: explainBack });
+    }
+
+    if (entry.pruned) {
+      root.createDiv({ cls: 'olea-registry-withdrawn-note', text: WITHDRAWN_NOTE });
+    }
+
+    this.renderRenameProposal(root, entry);
+    this.renderNoteOffer(root, entry);
+  }
+
+  /**
+   * `[D-203]`'s duplicate-title state — the badge (in `renderCompactRow`'s
+   * name line, mirroring `WITHDRAWN_LABEL`'s own badge shape) plus this one
    * line naming the two notes and what would clear it. **No chooser is
    * rendered anywhere here**: no button, no dropdown, no way to pick between
    * `entry.duplicateTitle.notePaths` — the binder's refusal (`../../core/
    * registry/build.ts`'s `duplicateTitleFor`, an unmodified read of
    * `ConceptRecord.ambiguousNotePaths`) stands exactly as it is, matching the
-   * ratified clause's own "nothing is chosen for her". Renders before the
-   * courses line since it is the most salient structural fact about a row in
-   * this state — there is no bound note for anything else on the row to
-   * follow from.
+   * ratified clause's own "nothing is chosen for her". Rendered by
+   * `renderStandingFacts`, so it stays visible whether or not the row is
+   * open — the same reasoning as `renderRenameProposal`/`renderNoteOffer`.
    */
   private renderDuplicateTitle(root: HTMLElement, entry: RegistryConceptEntry): void {
     const duplicateTitle = entry.duplicateTitle;
@@ -392,7 +662,7 @@ export class RegistryView extends ItemView {
 
   /**
    * `[D-214]`'s thin-note structural-reason state (`ol-2zfj.61`) — the badge
-   * (in `renderConcept`'s header, mirroring `WITHDRAWN_LABEL`'s/
+   * (in `renderCompactRow`'s name line, mirroring `WITHDRAWN_LABEL`'s/
    * `DUPLICATE_TITLE_LABEL`'s own badge shape) plus this one line stating the
    * measured word count and what would clear it. **No affordance that edits
    * her note anywhere here**: no button, no "open note" link, nothing that
@@ -400,10 +670,10 @@ export class RegistryView extends ItemView {
    * writing more into it in Obsidian, on her own, which the NEXT build
    * reflects (`../../core/registry/build.ts`'s `thinNoteFor`). Mutually
    * exclusive with `entry.duplicateTitle` by construction (see that field's
-   * own doc), so both never render for the same row. Renders right beside
-   * `renderDuplicateTitle` above, before the courses line, for the same
-   * reason: it is the most salient structural fact about a row in this
-   * state.
+   * own doc), so both never render for the same row. Rendered by
+   * `renderStandingFacts` right beside `renderDuplicateTitle`, staying
+   * visible whether or not the row is open, for the same reason that section
+   * gives.
    */
   private renderThinNote(root: HTMLElement, entry: RegistryConceptEntry): void {
     const thinNote = entry.thinNote;

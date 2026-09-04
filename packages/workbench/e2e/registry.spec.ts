@@ -9,6 +9,24 @@
  * own production `createLocalRegistryProvider` vault-walk wiring — same
  * posture `bulk-review.spec.ts`'s own doc states for its surface.
  *
+ * **`ol-l5og.18.1` (design-fidelity sweep against `docs/design/dsn3-registry/
+ * registry-surface.html`, `[D-135]`) collapsed every row to two levels.**
+ * Name, course tags, the mastery pair and the instrument-mix summary render
+ * closed by default; the rename field, the withdraw/restore action, source
+ * locations and the full per-instrument list only exist once `Open` is
+ * clicked on that row (`RegistryView.renderCompactRow`/`renderDetail`).
+ * Tests below that assert on any of those four now click `Open` first — the
+ * `open(row)` helper does that. The single "Show withdrawn concepts" checkbox
+ * was replaced by a chip bar (`renderFilterChips`): `All` still excludes
+ * withdrawn concepts by default, and a `Withdrawn` chip (not the kit's own
+ * `Pruned` — this surface's ratified noun, `WITHDRAWN_LABEL`) is the
+ * reachable filter now, alongside per-course, `Needs tending` and `Nothing
+ * built yet`. Four sections stayed OUTSIDE the open/closed gate — the
+ * duplicate-title badge/line, the thin-note badge/line, the rename proposal
+ * and the note offer — because they are standing accept/decline facts
+ * `[D-176]`/`[D-183]`/`[D-203]`/`[D-214]` all argue should cost no extra tap
+ * to see; the tests for those four are unchanged below.
+ *
  * Scenarios asserted (F8.4, `[D-171]`, F8.5):
  *   - browse: every concept lists with its course associations and instrument mix
  *   - Sources list per concept, and per instrument, with an Open source action
@@ -51,11 +69,17 @@
  *   - the rest of the row renders exactly as it would for any other concept, and the state
  *     reads distinctly from both an ordinary row and the duplicate-title row
  */
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
 
 function rows(page: Page) {
   return frame(page).locator('.olea-registry-row');
+}
+
+/** Clicks a closed row's `Open` action, revealing `renderDetail`'s content — the rename field,
+ * source locations and the full instrument list all live behind this now (`ol-l5og.18.1`). */
+async function open(row: Locator): Promise<void> {
+  await row.getByRole('button', { name: 'Open' }).click();
 }
 
 test('registry-populated: browse lists every concept with course associations and instrument mix', async ({
@@ -67,6 +91,8 @@ test('registry-populated: browse lists every concept with course associations an
   const first = rows(page).nth(0);
   await expect(first.locator('h3')).toHaveText('syn:concept:alpha');
   await expect(first.locator('.olea-registry-courses')).toContainText('syn:course:vantrel');
+
+  await open(first);
   await expect(first.locator('.olea-registry-instruments li')).toHaveCount(1);
 });
 
@@ -75,6 +101,7 @@ test('registry-populated: Sources list is shown per concept, with Open source pe
 }) => {
   await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
   const first = rows(page).nth(0);
+  await open(first);
 
   // The concept's own Sources section (`[D-171]`) lists both its note paths.
   const conceptSources = first.locator('.olea-registry-source-locations');
@@ -92,6 +119,7 @@ test('registry-populated: editing an instrument hands off, rather than opening a
 }) => {
   await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
   const first = rows(page).nth(0);
+  await open(first);
   await first.getByRole('button', { name: 'Edit in Obsidian' }).click();
   await expect(page.locator('[data-wb-inspector]')).toContainText('Edit hand-off recorded');
 });
@@ -99,6 +127,7 @@ test('registry-populated: editing an instrument hands off, rather than opening a
 test('registry-populated: renaming a concept changes the displayed name', async ({ page }) => {
   await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
   const first = rows(page).nth(0);
+  await open(first);
   const input = first.locator('.olea-registry-rename-input');
   await input.fill('syn:concept:alpha-renamed');
   await first.getByRole('button', { name: 'Rename' }).click();
@@ -106,20 +135,24 @@ test('registry-populated: renaming a concept changes the displayed name', async 
   await expect(rows(page).nth(0).locator('h3')).toHaveText('syn:concept:alpha-renamed');
 });
 
-test('registry-withdrawn-shown: withdrawn concept is hidden by default and reappears under the toggle — never deleted', async ({
+test('registry-withdrawn-shown: withdrawn concept is hidden by default and reachable through the Withdrawn filter chip — never deleted', async ({
   page,
 }) => {
   await gotoState(page, 'registry', 'registry-withdrawn-shown', 'obsidian-dark');
 
-  // Hidden by default: only the non-withdrawn concept shows.
+  // Hidden by default: only the non-withdrawn concept shows under `All`.
   await expect(rows(page)).toHaveCount(1);
 
-  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').check();
-  await expect(rows(page)).toHaveCount(2);
+  await frame(page)
+    .getByRole('button', { name: /^Withdrawn/ })
+    .click();
+  await expect(rows(page)).toHaveCount(1);
 
   const withdrawnRow = rows(page).filter({ hasText: 'syn:concept:beta' });
   await expect(withdrawnRow.locator('.olea-registry-withdrawn-badge')).toHaveText('Withdrawn');
-  await expect(withdrawnRow.getByRole('button', { name: 'Restore this concept' })).toBeVisible();
+  // The one-tap reversal lives right on the closed row (frame 04's "the way back is on the
+  // row"), no `Open` needed.
+  await expect(withdrawnRow.getByRole('button', { name: 'Put it back' })).toBeVisible();
 });
 
 test('registry-populated: withdrawing a concept and restoring it round-trips through the same row', async ({
@@ -127,15 +160,21 @@ test('registry-populated: withdrawing a concept and restoring it round-trips thr
 }) => {
   await gotoState(page, 'registry', 'registry-populated', 'obsidian-dark');
   const first = rows(page).nth(0);
+  await open(first);
   await first.getByRole('button', { name: 'Withdraw this concept' }).click();
 
-  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').check();
-  await expect(rows(page)).toHaveCount(2);
+  // Withdrawn concepts drop out of the default (`All`) view...
+  await expect(rows(page).filter({ hasText: 'syn:concept:alpha' })).toHaveCount(0);
+
+  // ...and are reachable through the `Withdrawn` chip.
+  await frame(page)
+    .getByRole('button', { name: /^Withdrawn/ })
+    .click();
   const withdrawn = rows(page).filter({ hasText: 'syn:concept:alpha' });
   await expect(withdrawn.locator('.olea-registry-withdrawn-badge')).toBeVisible();
 
-  await withdrawn.getByRole('button', { name: 'Restore this concept' }).click();
-  await expect(withdrawn.locator('.olea-registry-withdrawn-badge')).toHaveCount(0);
+  await withdrawn.getByRole('button', { name: 'Put it back' }).click();
+  await expect(rows(page).filter({ hasText: 'syn:concept:alpha' })).toHaveCount(0);
 });
 
 test('registry-empty: the honest empty state, never a bare unexplained blank grid', async ({
@@ -152,14 +191,30 @@ test('registry: no "Delete" AFFORDANCE (button/action) appears anywhere on this 
   page,
 }) => {
   await gotoState(page, 'registry', 'registry-withdrawn-shown', 'obsidian-dark');
-  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').check();
+
+  // Scans every control's label under both the default (`All`) filter and the `Withdrawn`
+  // one, opening every visible row first so the detail panel's controls (rename, withdraw/
+  // restore, sources, instruments) are in scope too — not just the always-visible ones.
+  async function scanControlLabels(): Promise<string[]> {
+    for (const row of await rows(page).all()) {
+      const openButton = row.getByRole('button', { name: 'Open' });
+      if ((await openButton.count()) > 0) await openButton.click();
+    }
+    return frame(page)
+      .locator('.olea-registry-root button, .olea-registry-root [role="button"]')
+      .allInnerTexts();
+  }
+
+  const allLabels = await scanControlLabels();
+  await frame(page)
+    .getByRole('button', { name: /^Withdrawn/ })
+    .click();
+  const withdrawnLabels = await scanControlLabels();
+
   // The copy DOES say "Nothing is deleted" (reassurance prose) — the clamp bans a Delete
   // AFFORDANCE, not the word in prose explaining that nothing is deleted. So this checks every
   // clickable control's own label, never the whole panel's text.
-  const controlLabels = await frame(page)
-    .locator('.olea-registry-root button, .olea-registry-root [role="button"]')
-    .allInnerTexts();
-  for (const label of controlLabels) expect(label).not.toMatch(/delete/i);
+  for (const label of [...allLabels, ...withdrawnLabels]) expect(label).not.toMatch(/delete/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -170,6 +225,7 @@ test('registry-explain-back-history: an instrument with two graded attempts show
   page,
 }) => {
   await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
+  await open(rows(page).filter({ hasText: 'syn:concept:brivane' }));
   const withHistory = frame(page).locator(
     '[data-olea-instrument-id="qa:syn:concept-key:brivane:2"]',
   );
@@ -190,6 +246,7 @@ test('registry-explain-back-history: an instrument that has never been explained
   page,
 }) => {
   await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
+  await open(rows(page).filter({ hasText: 'syn:concept:brivane' }));
   const bare = frame(page).locator('[data-olea-instrument-id="qa:syn:concept-key:brivane:1"]');
   await expect(bare.locator('.olea-registry-explain-back-history')).toHaveCount(0);
 });
@@ -303,11 +360,14 @@ test('registry-rename-proposal: declining removes the proposal, and it does not 
   // Declining is local wording-wise: the row keeps its current name.
   await expect(row.locator('h3')).toHaveText('syn:concept:renwick');
 
-  // Force a real `RegistryViewDeps.load()` round-trip (the "Show withdrawn"
-  // toggle calls `RegistryView.refresh()`) — proves the decline reached the
-  // deps' session-scoped memory, not just this render.
-  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').check();
-  await frame(page).locator('.olea-registry-toggle-row input[type="checkbox"]').uncheck();
+  // Force a real `RegistryViewDeps.load()` round-trip — every filter chip click calls
+  // `RegistryView.refresh()`, same as the retired "Show withdrawn" checkbox's own `change`
+  // handler did — proving the decline reached the deps' session-scoped memory, not just
+  // this render.
+  await frame(page)
+    .getByRole('button', { name: /^Withdrawn/ })
+    .click();
+  await frame(page).getByRole('button', { name: /^All/ }).click();
   const rowAfterRefresh = rows(page).filter({ hasText: 'syn:concept:renwick' });
   await expect(rowAfterRefresh.locator('.olea-registry-rename-proposal')).toHaveCount(0);
   await expect(rowAfterRefresh.locator('h3')).toHaveText('syn:concept:renwick');
@@ -326,7 +386,8 @@ test("registry-duplicate-title: the row renders the state and its reason in her 
   const row = rows(page).filter({ hasText: 'syn:concept:corvale' });
   await expect(row).toHaveCount(1);
 
-  // The badge and the structural reason, in her terms — both note paths named.
+  // The badge and the structural reason are STANDING facts (`renderStandingFacts`) —
+  // visible before the row is opened, unlike the instrument list and Rename below.
   await expect(row.locator('.olea-registry-duplicate-title-badge')).toHaveText('Duplicate title');
   const reason = row.locator('.olea-registry-duplicate-title');
   await expect(reason).toContainText('Two of your notes share this title');
@@ -334,10 +395,11 @@ test("registry-duplicate-title: the row renders the state and its reason in her 
   await expect(reason).toContainText('Outcrop Sketches/syn:concept:corvale.md');
 
   // No chooser: no button or control anywhere in the duplicate-title section,
-  // and the rest of the row (instrument mix, actions) renders exactly as it
-  // would for any other concept — the binder's refusal stands, nothing else
-  // on the row is suppressed because of it.
+  // and the rest of the row (instrument mix, actions), once opened, renders
+  // exactly as it would for any other concept — the binder's refusal stands,
+  // nothing else on the row is suppressed because of it.
   await expect(reason.locator('button, input, select, [role="button"]')).toHaveCount(0);
+  await open(row);
   await expect(row.locator('.olea-registry-instruments li')).toHaveCount(1);
   await expect(row.getByRole('button', { name: 'Rename' })).toBeVisible();
 });
@@ -364,17 +426,18 @@ test('registry-thin-note: the row renders the badge and the length fact in her t
   const row = rows(page).filter({ hasText: 'syn:concept:tessane' });
   await expect(row).toHaveCount(1);
 
-  // The badge and the length fact, in her terms — never a judgement.
+  // The badge and the length fact are STANDING facts — visible before the row is opened.
   await expect(row.locator('.olea-registry-thin-note-badge')).toHaveText('Too short to draft');
   const reason = row.locator('.olea-registry-thin-note');
   await expect(reason).toContainText('words so far');
   await expect(reason).toContainText('Keep writing');
 
   // No affordance that edits (or even opens) her note from this section, and
-  // the rest of the row (instrument mix, actions) renders exactly as it
-  // would for any other concept — nothing else on the row is suppressed
-  // because of this state.
+  // the rest of the row (instrument mix, actions), once opened, renders
+  // exactly as it would for any other concept — nothing else on the row is
+  // suppressed because of this state.
   await expect(reason.locator('button, input, select, [role="button"], a')).toHaveCount(0);
+  await open(row);
   await expect(row.locator('.olea-registry-instruments li')).toHaveCount(1);
   await expect(row.getByRole('button', { name: 'Rename' })).toBeVisible();
 });

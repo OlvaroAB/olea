@@ -1,4 +1,5 @@
 import type { SoloLevel } from 'olea-contracts';
+import type { RegistryInstrumentSummary } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   aliasesLine,
@@ -11,12 +12,24 @@ import {
   explainBackHistoryRowLine,
   explainBackLine,
   instrumentLabel,
+  instrumentMixLine,
   masteryStatedLine,
   NOTE_OFFER_ACCEPT_ACTION,
   NOTE_OFFER_DECLINE_ACTION,
   NOTE_OFFER_LINE,
+  NOTHING_BUILT_YET_LABEL,
+  REGISTRY_ALL_FILTER_LABEL,
+  REGISTRY_CLOSE_ACTION,
+  REGISTRY_FILTER_EMPTY_LINE,
+  REGISTRY_NEEDS_TENDING_FILTER_LABEL,
+  REGISTRY_NOTHING_BUILT_FILTER_LABEL,
+  REGISTRY_OPEN_ACTION,
+  REGISTRY_PUT_IT_BACK_ACTION,
+  REGISTRY_WITHDRAWN_FILTER_LABEL,
+  REGISTRY_WITHDRAWN_KEPT_LABEL,
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
+  registryAggregateLine,
   THIN_NOTE_LABEL,
   thinNoteLine,
   vitalityLabel,
@@ -25,6 +38,24 @@ import {
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
 } from '../../src/registry/copy.js';
+
+function instrument(
+  type: RegistryInstrumentSummary['instrumentType'],
+  pruned = false,
+): RegistryInstrumentSummary {
+  return {
+    instrumentId: `test:${type}:${pruned ? 'withdrawn' : 'active'}`,
+    instrumentType: type,
+    conceptIds: ['test:concept'],
+    notePath: '05 Zettelkasten/Test note.md',
+    noteTitle: 'Test note',
+    blockId: null,
+    heading: null,
+    sourceLocations: [],
+    explainBackHistory: [],
+    pruned,
+  };
+}
 
 const ALL_SOLO_LEVELS: readonly SoloLevel[] = [
   'prestructural',
@@ -78,6 +109,22 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     thinNoteLine(0),
     thinNoteLine(1),
     thinNoteLine(6),
+    REGISTRY_ALL_FILTER_LABEL,
+    REGISTRY_NEEDS_TENDING_FILTER_LABEL,
+    REGISTRY_NOTHING_BUILT_FILTER_LABEL,
+    REGISTRY_WITHDRAWN_FILTER_LABEL,
+    REGISTRY_OPEN_ACTION,
+    REGISTRY_CLOSE_ACTION,
+    REGISTRY_PUT_IT_BACK_ACTION,
+    NOTHING_BUILT_YET_LABEL,
+    REGISTRY_WITHDRAWN_KEPT_LABEL,
+    REGISTRY_FILTER_EMPTY_LINE,
+    registryAggregateLine(0, 0),
+    registryAggregateLine(1, 0),
+    registryAggregateLine(27, 2),
+    instrumentMixLine([]),
+    instrumentMixLine([instrument('qa', true)]),
+    instrumentMixLine([instrument('qa'), instrument('qa'), instrument('cloze'), instrument('mcq')]),
   ];
 }
 
@@ -287,5 +334,38 @@ describe('thinNoteLine ([D-214])', () => {
         /should|must|forgot|behind|not enough effort/,
       );
     }
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4 — The closed row and the chip
+// filter bar", tagged `@manual`. ol-l5og.18.1 (design-fidelity sweep against
+// docs/design/dsn3-registry/registry-surface.html frame 01).
+describe('registryAggregateLine (frame 01\'s "27 across two courses")', () => {
+  it('states the concept count alone when no concept carries a course yet', () => {
+    expect(registryAggregateLine(0, 0)).toBe('0 concepts');
+    expect(registryAggregateLine(1, 0)).toBe('1 concept');
+  });
+
+  it('states the count across the course count, pluralizing both independently', () => {
+    expect(registryAggregateLine(27, 2)).toBe('27 concepts across 2 courses');
+    expect(registryAggregateLine(1, 1)).toBe('1 concept across 1 course');
+  });
+});
+
+describe('instrumentMixLine (frame 01\'s "3 Q&A · 1 cloze · 2 MCQ")', () => {
+  it('reads "nothing built yet" with no active instrument', () => {
+    expect(instrumentMixLine([])).toBe(NOTHING_BUILT_YET_LABEL);
+    expect(instrumentMixLine([instrument('qa', true)])).toBe(NOTHING_BUILT_YET_LABEL);
+  });
+
+  it('counts active instruments by type, in a fixed reading order, excluding withdrawn ones', () => {
+    const line = instrumentMixLine([
+      instrument('mcq'),
+      instrument('qa'),
+      instrument('qa'),
+      instrument('cloze'),
+      instrument('qa', true),
+    ]);
+    expect(line).toBe('2 Q&A · 1 cloze · 1 MCQ');
   });
 });
