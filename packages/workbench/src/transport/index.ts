@@ -46,13 +46,41 @@
  * direct precedent for "figures only, never content"). This module also
  * never imports `obsidian` (INV-1): `worker/transport.ts` is "deliberately
  * obsidian-free" by its own module doc, and nothing added here changes that.
+ *
+ * ## `retrieval.embed.v1` is the ONE exception to "never fetches anything itself"
+ * (WBX-16d, `ol-3ux7.64.18.4`)
+ *
+ * The generation cassette above is small enough to load once, up front, as a caller-supplied
+ * value. The bundled embedding cassette is not (`olea-service`'s `scripts/simulator-build.mjs`
+ * already had to shard it under Cloudflare Pages' 25 MiB per-file cap), so eagerly fetching every
+ * shard defeats the point of sharding at all. `replay` and `direct` both check an OPTIONAL
+ * `embedShards: EmbedShardStore` (`./embed-shards.js`) for any `retrieval.embed.v1` request
+ * BEFORE their own cassette/live handling: a full hit (every requested chunk resolves) answers
+ * with zero network; anything else — no store given, no bundled index, an unknown key — falls
+ * through unchanged to that mode's EXISTING miss behaviour (`replay` throws
+ * `WorkerTransportError`; `direct` reports the miss and goes live). `record` mode is untouched:
+ * its proxy already owns embed hit/miss server-side (`simulator-serve.mjs`'s own
+ * `createEmbedHandler`).
  */
 
-import type { WorkerTaskRequest, WorkerTaskTransport } from 'olea-core';
+import {
+  RETRIEVAL_EMBED_TASK_ID,
+  type WorkerTaskRequest,
+  type WorkerTaskTransport,
+} from 'olea-core';
 import type { HttpRequestFn, WorkerConfig } from '../../../plugin/src/worker/transport.js';
 import { WorkerHttpTransport, WorkerTransportError } from '../../../plugin/src/worker/transport.js';
 import type { GenerationCassette, GenerationCassetteEntry } from '../synthetic-bridge.js';
 import { findGenerationEntryByRequest, hashGenerationPayload } from '../synthetic-bridge.js';
+import type { EmbedShardStore } from './embed-shards.js';
+
+export {
+  deriveEmbedKey,
+  type EmbedShardFile,
+  type EmbedShardIndex,
+  EmbedShardStore,
+  type EmbedShardStoreOptions,
+} from './embed-shards.js';
 
 export type SimulatorTransportMode = 'replay' | 'record' | 'direct';
 
@@ -102,6 +130,15 @@ export interface CreateSimulatorTransportOptions {
    * call was made to record.
    */
   readonly onCallRecorded?: SimulatorCallRecordedHandler;
+  /**
+   * `replay`/`direct` only (WBX-16d): the bundled embedding-shard store, checked for
+   * `retrieval.embed.v1` requests before the mode's own cassette/live handling. Omitting it
+   * means `retrieval.embed.v1` is treated exactly like any other task id — a checkout that never
+   * built shards (`scripts/simulator-build.mjs`'s own tolerance for an absent cassette) still
+   * works, just with retrieval.embed.v1 always falling to the mode's ordinary miss path. Unused
+   * by `record` (its proxy already owns embed hit/miss server-side).
+   */
+  readonly embedShards?: EmbedShardStore;
 }
 
 /** A plain browser `fetch` adapter satisfying `HttpRequestFn` — the default `httpRequest` for `record`/`direct`. */
@@ -159,9 +196,16 @@ class ReplayTransport implements WorkerTaskTransport {
   constructor(
     private readonly cassette: GenerationCassette,
     private readonly onMiss: ((miss: SimulatorTransportMiss) => void) | undefined,
+    private readonly embedShards: EmbedShardStore | undefined,
   ) {}
 
   async send(request: WorkerTaskRequest): Promise<unknown> {
+    if (this.embedShards !== undefined && request.taskId === RETRIEVAL_EMBED_TASK_ID) {
+      const served = await this.embedShards.answer(request);
+      if (served !== undefined) return served;
+      // Falls through to the cassette lookup below, unchanged — an embed request the shards
+      // could not fully answer is handled exactly like any other cassette miss (module doc).
+    }
     const payloadHash = await hashGenerationPayload(request.payload);
     const entry = findGenerationEntryByRequest(this.cassette, {
       taskId: request.taskId,
@@ -190,11 +234,18 @@ class DirectTransport implements WorkerTaskTransport {
     config: WorkerConfig,
     private readonly onMiss: ((miss: SimulatorTransportMiss) => void) | undefined,
     onCallRecorded: SimulatorCallRecordedHandler,
+    private readonly embedShards: EmbedShardStore | undefined,
   ) {
     this.live = new WorkerHttpTransport(httpRequest, config, onCallRecorded);
   }
 
   async send(request: WorkerTaskRequest): Promise<unknown> {
+    if (this.embedShards !== undefined && request.taskId === RETRIEVAL_EMBED_TASK_ID) {
+      const served = await this.embedShards.answer(request);
+      if (served !== undefined) return served;
+      // Falls through unchanged — no bundled answer for this embed request, so it is handled
+      // exactly like any other cassette miss below: reported, then a live call.
+    }
     if (this.cassette !== undefined) {
       const payloadHash = await hashGenerationPayload(request.payload);
       const entry = findGenerationEntryByRequest(this.cassette, {
@@ -228,7 +279,7 @@ export function createSimulatorTransport(
     if (options.cassette === undefined) {
       throw new Error('createSimulatorTransport: "replay" mode needs a cassette.');
     }
-    return new ReplayTransport(options.cassette, options.onMiss);
+    return new ReplayTransport(options.cassette, options.onMiss, options.embedShards);
   }
 
   if (options.mode === 'record') {
@@ -262,6 +313,7 @@ export function createSimulatorTransport(
     { baseUrl: options.baseUrl, token: options.token },
     options.onMiss,
     options.onCallRecorded,
+    options.embedShards,
   );
 }
 
