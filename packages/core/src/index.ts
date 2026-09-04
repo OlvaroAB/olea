@@ -1697,6 +1697,7 @@ export type {
   TodayClaim,
 } from './today/contest.js';
 export {
+  claimHasConcepts,
   contestedClaimFor,
   enumerateTodayClaims,
   evidenceBasisOf,

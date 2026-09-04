@@ -45,7 +45,7 @@ import type {
   TodayViewModel,
   Vitality,
 } from 'olea-core';
-import { CONTEST_GESTURE_LABEL, MASTERY_ORDER, type TodayClaim } from 'olea-core';
+import { CONTEST_GESTURE_LABEL, claimHasConcepts, MASTERY_ORDER, type TodayClaim } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
 import type { DisputeSheet, TodayContestSupport } from './contest.js';
 import {
@@ -441,12 +441,18 @@ export class TodayView extends ItemView {
    * evidence, that no ending is ruled for this kind of line yet and that the
    * disagreement counts anyway, rather than inventing an ending nobody has
    * ruled.
+   *
+   * **Except a claim naming no concept.** Ruled 2026-09-04: `claimHasConcepts`
+   * withholds the gesture entirely for a claim whose course has no concept
+   * layer yet — `contestClaim`'s "must name at least one concept" guard
+   * stays as is, so a claim that would only fail it never offers the tap.
    */
   private renderContestGesture(parent: HTMLElement, claimId: string): void {
     const support = this.deps.contest;
     if (support === undefined) return;
     const claim = this.claims.find((candidate) => candidate.id === claimId);
     if (claim === undefined) return;
+    if (!claimHasConcepts(claim)) return;
 
     const row = parent.createDiv({ cls: 'olea-today-contest' });
     const button = row.createEl('button', { cls: 'olea-today-contest-gesture' });
@@ -498,14 +504,30 @@ export class TodayView extends ItemView {
     this.registerDomEvent(record, 'click', () => void this.recordDispute());
   }
 
-  /** Records the dispute. Either way — that recording is the whole clause. */
+  /**
+   * Records the dispute. Either way — that recording is the whole clause.
+   *
+   * `claimHasConcepts` keeps `renderContestGesture` from ever offering this
+   * tap on a concept-less claim, so `support.contest` throwing here should be
+   * unreachable. The `try`/`catch` is defence-in-depth rather than the fix:
+   * this call used to run as `void this.recordDispute()`, which swallowed
+   * exactly this throw and left the sheet open with no message
+   * (`ol-3ux7.64.20`) — so any *future* silent throw here now logs instead of
+   * vanishing, and the sheet stays open (never falsely closes as if it had
+   * recorded) rather than proceeding to `refresh()`.
+   */
   private async recordDispute(): Promise<void> {
     const support = this.deps.contest;
     const open = this.openSheet;
     if (support === undefined || open === null) return;
     const claim = this.claims.find((candidate) => candidate.id === open.claimId);
     if (claim === undefined) return;
-    await support.contest(claim);
+    try {
+      await support.contest(claim);
+    } catch (error) {
+      console.error('Olea: recording a Today contest failed', error);
+      return;
+    }
     this.openSheet = null;
     await this.refresh();
   }

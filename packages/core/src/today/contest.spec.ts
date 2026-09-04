@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { contestClaim, contestStateForClaim } from '../review-log/contest.js';
 import type { DisputeLogRecord } from '../review-log/contest-record.js';
 import {
+  claimHasConcepts,
   contestedClaimFor,
   enumerateTodayClaims,
   heldReadingBasis,
@@ -204,5 +205,55 @@ describe('a held reading is acknowledged once and then left alone', () => {
         acknowledgedDisputeIds: ['d1'],
       }).acknowledgementDue,
     ).toBe(false);
+  });
+});
+
+describe('claimHasConcepts — the gesture-render precondition, mirroring contestClaim without relaxing it (ol-3ux7.64.20)', () => {
+  it('is true for a mastery claim whose course has a concept layer', () => {
+    const [claim] = enumerateTodayClaims({
+      viewModel: viewModel(),
+      conceptIdsByCourse,
+      today: '2026-08-21',
+    });
+    if (claim === undefined) throw new Error('expected a claim');
+    expect(claimHasConcepts(claim)).toBe(true);
+  });
+
+  it('is false for a mastery claim whose course has no concept layer yet — conceptIdsByCourse has no entry for it', () => {
+    const [claim] = enumerateTodayClaims({
+      viewModel: viewModel(),
+      conceptIdsByCourse: {}, // no entry for COURSE-1 at all
+      today: '2026-08-21',
+    });
+    if (claim === undefined) throw new Error('expected a claim');
+    expect(claim.conceptIds).toEqual([]);
+    expect(claimHasConcepts(claim)).toBe(false);
+  });
+
+  it('a concept-less claim is exactly the shape contestClaim refuses — claimHasConcepts predicts the throw without calling it', () => {
+    const [claim] = enumerateTodayClaims({
+      viewModel: viewModel(),
+      conceptIdsByCourse: {},
+      today: '2026-08-21',
+    });
+    if (claim === undefined) throw new Error('expected a claim');
+    expect(claimHasConcepts(claim)).toBe(false);
+    expect(() =>
+      contestClaim({ claim: contestedClaimFor(claim), timestamp: '2026-08-21T09:00:00+02:00' }),
+    ).toThrow('contestClaim: a contested claim must name at least one concept');
+  });
+
+  it('is false for the trend/rhythm renderings too, when no concept exists anywhere in the vault', () => {
+    const claims = enumerateTodayClaims({
+      viewModel: viewModel({
+        insights: { spacing: null, earlyPull: null, effort: null } as never,
+        rhythm: { id: 'rhythm', status: 'not-observed', measured: null, reason: '' },
+      }),
+      conceptIdsByCourse: {},
+      today: '2026-08-21',
+    });
+    for (const claim of claims) {
+      expect(claimHasConcepts(claim)).toBe(false);
+    }
   });
 });

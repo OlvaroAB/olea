@@ -786,13 +786,15 @@ export async function driverExplain(
  * `contest(target)` — clicks the identical rendered gesture her own tap
  * would, never `contestClaim`/`GradeContestPort.contestGrade` directly:
  *
- * - `'today'`: `.olea-today-contest-gesture` (`today/view.ts:452`,
- *   `renderContestGesture`) opens the dispute sheet
- *   (`openDisputeSheet`, `today/view.ts:462`); its own
- *   `.olea-today-contest-record` button (`today/view.ts:496`, present only
- *   when `DisputeSheet.gestureLabel` is non-`null`) is then clicked, calling
- *   `recordDispute` (`today/view.ts:502`) — the real
- *   `TodayContestSupport.contest` write (`today/contest.ts`).
+ * - `'today'`: `.olea-today-contest-gesture` (`today/view.ts:458`,
+ *   `renderContestGesture` — which, since `ol-3ux7.64.20` (ruled 2026-09-04),
+ *   renders nothing at all for a claim `claimHasConcepts` says has none)
+ *   opens the dispute sheet (`openDisputeSheet`, `today/view.ts:468`); its
+ *   own `.olea-today-contest-record` button (`today/view.ts:502`, present
+ *   only when `DisputeSheet.gestureLabel` is non-`null`) is then clicked,
+ *   calling `recordDispute` (`today/view.ts:519`) — the real
+ *   `TodayContestSupport.contest` write (`today/contest.ts`), now inside a
+ *   `try`/`catch` that logs rather than swallowing a throw.
  * - `'review'`: `.olea-review-contest` (`review/view.ts:1268`) is clicked
  *   directly — no sheet, one gesture — calling `handleContestGrade`
  *   (`review/view.ts:833`), the real `ReviewSession.contestGrade`
@@ -843,7 +845,7 @@ export async function driverContest(
       outcome: 'unavailable',
       reason:
         'no .olea-today-contest-gesture is rendered on the Today panel right now ' +
-        '(today/view.ts renderContestGesture, ~L445)',
+        '(today/view.ts renderContestGesture, ~L450)',
     };
   }
   gesture.click();
@@ -855,7 +857,7 @@ export async function driverContest(
   if (sheet === null) {
     throw new Error(
       "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet to " +
-        'open after clicking the gesture (today/view.ts openDisputeSheet, ~L462).',
+        'open after clicking the gesture (today/view.ts openDisputeSheet, ~L468).',
     );
   }
   const record = sheet.querySelector<HTMLButtonElement>('.olea-today-contest-record');
@@ -876,7 +878,7 @@ export async function driverContest(
   if (closed === null) {
     throw new Error(
       "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet to " +
-        'close after recording (today/view.ts recordDispute, ~L502).',
+        'close after recording (today/view.ts recordDispute, ~L519).',
     );
   }
   return { outcome: 'recorded' };

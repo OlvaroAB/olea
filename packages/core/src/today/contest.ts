@@ -193,6 +193,23 @@ function rhythmFingerprint(rhythm: RhythmInsight): string {
 }
 
 /**
+ * Whether the panel may offer this claim's contest gesture at all.
+ *
+ * Mirrors `contestClaim`'s own precondition
+ * (`packages/core/src/review-log/contest.ts`'s "a contested claim must name
+ * at least one concept") without loosening it. Ruled 2026-09-04: a claim
+ * whose `conceptIds` comes back empty — her course has no concept layer yet,
+ * so `conceptIdsByCourse` has no entry for it — must not render the gesture
+ * in the first place, rather than `contestClaim` being relaxed to let it
+ * record against nothing. Applies uniformly to every rendering this module
+ * enumerates (mastery, insights, rhythm): a concept-less claim can only
+ * throw if tapped, whichever kind it is.
+ */
+export function claimHasConcepts(claim: TodayClaim): boolean {
+  return claim.conceptIds.length > 0;
+}
+
+/**
  * Turn one enumerated claim into the shape `contestClaim` takes. Exists so a
  * caller cannot assemble a `ContestedClaim` by hand and drift from what the
  * panel actually asserted.
