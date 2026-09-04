@@ -2551,9 +2551,17 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * Opens the gap/coverage screen (`ol-2tyj`) in the right sidebar, or
-   * reveals the one already there — the same reuse-don't-stack shape as
+   * Opens the gap/coverage screen (`ol-2tyj`) as a full tab, or reveals the
+   * one already there — the same reuse-don't-stack shape as
    * `revealTodayView` above, for the same reason.
+   *
+   * **A tab, not the right sidebar (`[D-224]` / `ol-l5og.20`,
+   * `ol-l5og.18.3`).** `GapView` grew from a compact ranked-row list into the
+   * corrected kit's full-width per-concept detail pages — the same "sidebar
+   * width forces a simplification the container chose, not the design"
+   * argument that already justified `revealReviewView`'s own
+   * `workspace.getLeaf('tab')` door for F2.2. This is that same door,
+   * reused rather than a second pattern invented for it.
    *
    * Always refreshes on the way out, mirroring `revealTodayView`'s own
    * `ol-h3wy` reasoning: a freshly-created leaf already refreshes once in
@@ -2564,7 +2572,7 @@ export default class OleaPlugin extends Plugin {
   private async revealGapView(): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_GAP);
-    const leaf = existing[0] ?? workspace.getRightLeaf(false);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
     if (leaf === null || leaf === undefined) return;
     if (existing.length === 0) {
       await leaf.setViewState({ type: VIEW_TYPE_OLEA_GAP, active: true });

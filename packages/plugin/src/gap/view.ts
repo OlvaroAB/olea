@@ -24,10 +24,15 @@
  * unreachable through `coverageScreenCopy`, and this file's job is to not route
  * around it.
  *
- * **Styles.** `packages/plugin/styles.css` is not this lane's file, so this
- * view's section is not added there; the classes below are emitted for a later
- * styling pass and the pane renders on host defaults meanwhile. Named in the
- * task report rather than left for someone to discover.
+ * **Layout (`[D-224]` / `ol-l5og.20`, `ol-l5og.18.3`).** This view is a
+ * full-tab page (`main.ts`'s `revealGapView` opens it via
+ * `workspace.getLeaf('tab')`, the same door `ReviewView`'s F2.2 uses), not a
+ * sidebar list — replacing the compact single-line row this file drew before
+ * this bead. It still renders no theme-dark: nothing in the contract asks
+ * this surface to force dark the way F2.4 asks of the review session, so it
+ * follows the host's ambient theme, same as the Today panel.
+ * `packages/plugin/styles.css`'s "Gap and coverage views" section carries the
+ * rules for every class below.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -43,9 +48,13 @@ import {
   GAP_VIEW_TITLE,
   gapRowLine,
   MATERIAL_GAP_HEADING,
+  pastPaperChips,
+  pastPapersLabel,
   rankedCourseFraming,
   readinessNote,
   scopeSourceLine,
+  syllabusCounterweightBreakdown,
+  syllabusCounterweightSentence,
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_GAP = 'olea-gap';
@@ -145,33 +154,57 @@ export class GapView extends ItemView {
       section.createDiv({ cls: 'olea-gap-framing', text: line });
     }
 
+    // pass5g's counterweight block (`[D-224]`): non-dismissible, so it is
+    // drawn here unconditionally rather than behind a control that could
+    // hide it — never a footer a caller may forget.
+    this.renderSyllabusCounterweight(section, course.course, course.rows);
+
     const list = section.createDiv({ cls: 'olea-gap-rows' });
     for (const row of course.rows) this.renderRow(list, row);
   }
 
+  private renderSyllabusCounterweight(
+    parent: HTMLElement,
+    courseName: string,
+    rows: readonly GapRow[],
+  ): void {
+    const box = parent.createDiv({ cls: 'olea-gap-counterweight' });
+    box.createDiv({ cls: 'olea-gap-counterweight-mark' });
+    const body = box.createDiv({ cls: 'olea-gap-counterweight-body' });
+    body.createDiv({
+      cls: 'olea-gap-counterweight-text',
+      text: syllabusCounterweightSentence(courseName, rows),
+    });
+    const breakdown = syllabusCounterweightBreakdown(rows);
+    if (breakdown !== null) {
+      body.createDiv({ cls: 'olea-gap-counterweight-breakdown', text: breakdown });
+    }
+  }
+
   private renderRow(parent: HTMLElement, row: GapRow): void {
     const el = parent.createDiv({ cls: `olea-gap-row olea-gap-row-${row.gapClass}` });
-    el.createSpan({ cls: 'olea-gap-rank', text: String(row.rank) });
-    el.createSpan({ cls: 'olea-gap-concept', text: row.conceptName });
-    // The mastery word mastery computed, unchanged by the readiness weighting.
-    const masteryEl = el.createSpan({ cls: 'olea-gap-mastery' });
-    if (row.masteryState === 'unknown') {
-      // The oracle's own escape hatch (`OracleMasteryState = MasteryState | 'unknown'`) — there
-      // is no `MASTERY_DISPLAY` entry for it, so no sprig, same as before this task: the word
-      // alone.
-      masteryEl.setText(row.masteryState);
-    } else {
-      masteryEl.appendChild(
-        renderSprig({ state: row.masteryState, size: 12, container: masteryEl }),
-      );
-      masteryEl.createSpan({ text: row.masteryState });
+    const header = el.createDiv({ cls: 'olea-gap-row-header' });
+    header.createSpan({ cls: 'olea-gap-rank', text: String(row.rank) });
+    this.renderMasteryMark(header, row);
+    header.createSpan({ cls: 'olea-gap-concept', text: row.conceptName });
+
+    // pass5g redraws the mastery-gap and material-gap rows as the corrected
+    // kit's two dense screens; coverage-gap is explicitly out of scope on
+    // that sheet (`GapClasses`' own note: "designing them together is how
+    // they merged the first time"), so it keeps the plain line it always had.
+    const body =
+      row.gapClass === 'material-gap' ? el.createDiv({ cls: 'olea-gap-material-block' }) : el;
+
+    body.createDiv({ cls: 'olea-gap-line', text: gapRowLine(row) });
+
+    if (row.gapClass === 'mastery-gap' || row.gapClass === 'material-gap') {
+      this.renderPastPaperChips(body, row);
     }
-    el.createDiv({ cls: 'olea-gap-line', text: gapRowLine(row) });
 
     const note = readinessNote(row);
-    if (note !== null) el.createDiv({ cls: 'olea-gap-readiness', text: note });
+    if (note !== null) body.createDiv({ cls: 'olea-gap-readiness', text: note });
 
-    const actions = el.createDiv({ cls: 'olea-gap-actions' });
+    const actions = body.createDiv({ cls: 'olea-gap-actions' });
     // The affordance list comes from core, which is where F4.10's
     // no-draft-on-a-material-gap rule is enforced. This loop must never add to
     // it: a button written here is a button no test can see.
@@ -189,6 +222,60 @@ export class GapView extends ItemView {
           buildSession(row);
         });
       }
+    }
+  }
+
+  /**
+   * The stage mark beside a row's rank — a sprig-and-word for a mastery gap
+   * (unchanged rendering, just a larger mark for the full-tab page) or the
+   * `'no stage'` dotted-and-hatched swatch pass5g draws for a material gap
+   * (F4.10: there is nothing to grow yet). Coverage-gap keeps the small
+   * inline mark it always had — out of scope on the corrected kit, per
+   * `renderRow`'s own note.
+   *
+   * **No vitality/tending mark yet.** The kit draws one on a decayed
+   * mastery-gap sprig; `renderSprig`'s own module doc says vitality "is not
+   * yet a persisted field anywhere in this codebase" (`MAT-2`, `ol-95vv`,
+   * still open) — there is nothing for this method to read, so it draws
+   * none, same as `grove/view.ts` does for the identical reason.
+   */
+  private renderMasteryMark(parent: HTMLElement, row: GapRow): void {
+    if (row.gapClass === 'material-gap') {
+      const mark = parent.createSpan({ cls: 'olea-gap-mastery olea-gap-nostage' });
+      mark.createSpan({ cls: 'olea-gap-nostage-swatch' });
+      mark.createSpan({ text: 'no stage' });
+      return;
+    }
+
+    const size = row.gapClass === 'mastery-gap' ? 20 : 12;
+    const masteryEl = parent.createSpan({ cls: 'olea-gap-mastery' });
+    if (row.masteryState === 'unknown') {
+      // The oracle's own escape hatch (`OracleMasteryState = MasteryState | 'unknown'`) — there
+      // is no `MASTERY_DISPLAY` entry for it, so no sprig, same as before this task: the word
+      // alone.
+      masteryEl.setText(row.masteryState);
+    } else {
+      masteryEl.appendChild(renderSprig({ state: row.masteryState, size, container: masteryEl }));
+      masteryEl.createSpan({ text: row.masteryState });
+    }
+  }
+
+  /**
+   * pass5g's `PastPapers` chip row (`[D-224]`): named papers, never a bare
+   * count. Renders nothing for a row with no citations — `GapRow`'s own doc
+   * says citations are "never empty for a ranked entry", so this is
+   * defensive rather than a reachable state.
+   */
+  private renderPastPaperChips(parent: HTMLElement, row: GapRow): void {
+    const chips = pastPaperChips(row);
+    if (chips.length === 0) return;
+    const wrap = parent.createDiv({ cls: 'olea-gap-papers' });
+    wrap.createSpan({
+      cls: 'olea-gap-papers-label',
+      text: pastPapersLabel(row.distinctSourceCount),
+    });
+    for (const chip of chips) {
+      wrap.createSpan({ cls: 'olea-gap-paper-chip', text: chip });
     }
   }
 

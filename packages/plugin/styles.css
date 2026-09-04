@@ -1245,17 +1245,21 @@ button.olea-review-mcq-option:hover {
    ---- Gap and coverage views (F4.3, F4.5, F4.9, F4.10; ol-2tyj) ----
    ============================================================
 
-   `gap/view.ts`'s module doc says "the pane renders on host defaults
-   meanwhile" — this section is that later pass. `test/gap/styles.spec.ts`
-   asserts every class `view.ts` emits (including its three dynamic
-   suffixes: `olea-gap-row-<gapClass>`, `olea-gap-action-<affordance>`,
+   LAYOUT CHANGE (`[D-224]` / `ol-l5og.20`, `ol-l5og.18.3`): this pane moved
+   from the right sidebar to a full editor tab (`main.ts`'s `revealGapView`),
+   redrawing `pass5g-pass4-corrections`'s two dense concept-detail screens —
+   mastery gap and material gap — in place of the compact single-line row
+   the sidebar's width forced. `test/gap/styles.spec.ts` asserts every class
+   `view.ts` emits (including its three dynamic suffixes:
+   `olea-gap-row-<gapClass>`, `olea-gap-action-<affordance>`,
    `olea-gap-scope-source-<readState>`) has a rule here, the same
    drift guard `today/styles.spec.ts` runs for the Today panel.
 
-   Same theme posture as the Today panel, for the same reason: `revealGap
-   View` (`main.ts`) puts this in the sidebar, not a tab, so it carries no
-   `theme-dark` and forces no branch — no `ol-ro57` exposure, no
-   `olea-host-fallback` layer needed.
+   STILL NO FORCED DARK THEME. Moving to a tab is not what makes
+   `.olea-review-root` dark-by-default — F2.4 asks that of the review
+   session specifically. Nothing in the contract asks it of this surface, so
+   it keeps the Today panel's posture: read the host's ambient theme, no
+   `theme-dark` class, no `olea-host-fallback` cascade layer.
 
    DE-DUPLICATED (ol-0r92.8). The seven `--olea-host-*` reads this root needs
    (bg, text, muted, faint, line, ui-font, mono) no longer live here: they
@@ -1270,6 +1274,15 @@ button.olea-review-mcq-option:hover {
    the review view's dark-floor tokens, and that the shared block carries the
    seven role reads rather than this section repeating them.
 
+   THREE NEW LOCAL READS (`--olea-host-elev`/`-line-hover`/`-wash`). Not part
+   of the shared seven above — a compact sidebar row never needed an
+   elevation surface or a hover wash, so those three were never on the
+   shared block for any of the four roots (see that block's own comment).
+   The full-tab counterweight card and paper chips below do need them, so
+   this root declares its own copy, neutral-floored, the same shape
+   `.olea-grove-root`/`.olea-explain-back` already use for reads the shared
+   block does not carry.
+
    OWNED COLOUR: reuses the Today panel's two constants rather than
    inventing a third and a fourth for the three gap classes. A mastery-gap
    row (F4.3, "you know this badly") gets the same attention colour the
@@ -1282,6 +1295,16 @@ button.olea-review-mcq-option:hover {
    two-colour budget to a third surface is a Class B default, reversible
    by a real design pass; not claiming the "complete inventory" audit
    `ol-dp1` performed for the review view.
+
+   MARKS BORROWED, NEVER INVENTED (pass5g's own framing). A dashed edge
+   already means "instruments absent" from Pass 3 onward; a dotted, hatched
+   edge already means "material absent" from Pass 5b's grove. `.olea-gap-
+   material-block` and `.olea-gap-nostage-swatch` below reuse exactly those
+   two marks rather than drawing a third for the same absence.
+
+   NO VITALITY YET. The kit draws a tending mark on a decayed mastery-gap
+   sprig; `MAT-2` (`ol-95vv`) has not landed, so there is nothing here for a
+   tending-mark rule to colour — see `view.ts`'s `renderMasteryMark` doc.
 */
 
 .olea-gap-root {
@@ -1296,13 +1319,27 @@ button.olea-review-mcq-option:hover {
   --olea-host-faint-floor: #999999;
   --olea-host-line-floor: #d8d8d8;
 
+  /* This root's own copy of the three reads the shared `:is(...)` block
+     does not carry (see that block's comment: "a sidebar pane has no
+     elevation surface, hover wash… of its own") — true while Gap WAS a
+     compact sidebar row list. It is now a full-tab page with its own
+     elevated counterweight card and chip fills, so it needs them; declared
+     locally rather than widening the shared block, same shape
+     `.olea-grove-root`/`.olea-explain-back` already use for their own
+     non-shared reads. Neutral floor, never the review root's dark one. */
+  --olea-host-elev: var(--background-primary-alt, #f2f2f2);
+  --olea-host-line-hover: var(--background-modifier-border-hover, #c2c2c2);
+  --olea-host-wash: var(--background-modifier-hover, rgba(0, 0, 0, 0.035));
+
   /* Owned by Olea — the same two constants the Today panel declares. */
   --olea-host-attention: #e0a94e;
   --olea-host-brand: #8a9a63;
 
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 20px;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 32px 60px;
   font-family: var(--olea-host-ui-font);
   color: var(--olea-host-text);
 }
@@ -1333,7 +1370,7 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-gap-course {
-  padding: 14px 0;
+  padding: 26px 0;
   border-top: 1px solid var(--olea-host-line);
 }
 
@@ -1344,42 +1381,82 @@ button.olea-review-mcq-option:hover {
 
 .olea-gap-course-name {
   font-family: var(--olea-host-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--olea-host-text);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .olea-gap-abstain {
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--olea-host-muted);
 }
 
 .olea-gap-framing {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--olea-host-muted);
   margin-bottom: 6px;
+  max-width: 640px;
+}
+
+/* pass5g's non-dismissible counterweight block (`[D-224]`) — a bordered,
+   elevated card, never a collapsible or closable one: there is no control
+   here that hides it. */
+.olea-gap-counterweight {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 10px;
+  background: var(--olea-host-elev);
+}
+
+.olea-gap-counterweight-mark {
+  flex: none;
+  width: 3px;
+  align-self: stretch;
+  min-height: 20px;
+  border-radius: 2px;
+  background: var(--olea-host-brand);
+}
+
+.olea-gap-counterweight-body {
+  min-width: 0;
+}
+
+.olea-gap-counterweight-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--olea-host-text);
+}
+
+.olea-gap-counterweight-breakdown {
+  margin-top: 8px;
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  /* --olea-host-muted, not -faint: same ol-nrrm floor as .olea-gap-rank above. */
+  color: var(--olea-host-muted);
 }
 
 .olea-gap-rows {
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
+  margin-top: 18px;
 }
 
 .olea-gap-row {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  column-gap: 8px;
-  align-items: baseline;
-  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 0;
   border-top: 1px solid var(--olea-host-line);
   border-left: 3px solid transparent;
-  padding-left: 8px;
+  padding-left: 14px;
 }
 
 .olea-gap-row:first-child {
@@ -1403,6 +1480,13 @@ button.olea-review-mcq-option:hover {
   border-left-color: transparent;
 }
 
+.olea-gap-row-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .olea-gap-rank {
   font-family: var(--olea-host-mono);
   font-size: 11px;
@@ -1412,51 +1496,120 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-gap-concept {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 500;
   color: var(--olea-host-text);
-  grid-column: 3;
 }
 
 .olea-gap-mastery {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font-family: var(--olea-host-mono);
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--olea-host-muted);
-  grid-column: 2;
+}
+
+/* pass5g's "no stage" mark (F4.10) — sized up from `.olea-gap-mastery`'s
+   inline mark to match the material-gap header, at font-size 14px per the
+   kit's `no stage` word next to the swatch (`.olea-gap-nostage-swatch`
+   below), rather than the small mono caps a mastery/coverage row's stage
+   word uses. */
+.olea-gap-nostage {
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: var(--olea-host-ui-font);
+}
+
+/* The same dotted, hatched swatch the grove uses for a material gap
+   (`[D-054]`'s ground/material split), not a new mark invented for this
+   screen. */
+.olea-gap-nostage-swatch {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 4px;
+  border: 1px dotted var(--olea-host-line-hover);
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--olea-host-faint) 0 1px,
+    transparent 1px 4px
+  );
 }
 
 .olea-gap-line {
-  grid-column: 3;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--olea-host-muted);
-  margin-top: 2px;
+  margin-top: 10px;
+  max-width: 640px;
+}
+
+/* pass5g's material-gap panel: the same dotted/hatched treatment as the
+   "no stage" swatch above, at block scale — F4.10's absence, drawn once and
+   reused rather than invented per element. */
+.olea-gap-material-block {
+  margin-top: 10px;
+  padding: 16px 18px;
+  border: 1px dotted var(--olea-host-line-hover);
+  border-radius: 10px;
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--olea-host-faint) 0 1px,
+    transparent 1px 4px
+  );
+}
+
+.olea-gap-material-block .olea-gap-line {
+  margin-top: 0;
+}
+
+/* pass5g's `PastPapers` chip row (`[D-224]`) — named, never a bare count. */
+.olea-gap-papers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.olea-gap-papers-label {
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+  flex: none;
+}
+
+.olea-gap-paper-chip {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-brand);
+  background: var(--olea-host-wash);
+  border: 1px solid var(--olea-host-line);
+  border-radius: 6px;
+  padding: 3px 7px;
 }
 
 .olea-gap-readiness {
-  grid-column: 3;
-  font-size: 11.5px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
   /* --olea-host-muted, not -faint: same ol-nrrm floor as .olea-gap-rank above. */
   color: var(--olea-host-muted);
-  margin-top: 2px;
+  margin-top: 8px;
+  max-width: 640px;
 }
 
 .olea-gap-actions {
-  grid-column: 3;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 6px;
+  gap: 14px;
+  margin-top: 12px;
 }
 
 .olea-gap-action {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--olea-host-brand);
   cursor: pointer;
@@ -1581,6 +1734,13 @@ button.olea-review-mcq-option:hover {
   /* Owned by Olea — the same brand constant the Today panel declares. */
   --olea-host-brand: #8a9a63;
 
+  /* This root's own local reads — not on the shared `:is(...)` block (a
+     content/question font is not one of its seven shared roles). Same
+     pattern `.olea-explain-back` already uses for the identical need: the
+     headline below is the first serif text this pane has ever needed. */
+  --olea-host-content-font: var(--font-text, sans-serif);
+  --olea-host-question-font: var(--font-text, Georgia, serif);
+
   display: flex;
   flex-direction: column;
   padding: 14px 16px 20px;
@@ -1675,6 +1835,94 @@ button.olea-review-mcq-option:hover {
 
 .olea-session-line {
   margin-bottom: 4px;
+}
+
+/* The headline (kit: `pass4-oracle-gap`'s `ExamSession.jsx`, the bold serif
+   sentence naming the whole plan) — `sessionSummaryLine`'s own string,
+   never a rewording of it (`view.ts`'s `render`). Serif, like the review
+   screen's own question. */
+.olea-session-headline {
+  margin: 12px 0 2px;
+  font: 500 17px / 1.4 var(--olea-host-question-font, var(--olea-host-content-font));
+  color: var(--olea-host-text);
+}
+
+/* The honest-empty pair (kit: `pass5d-trends-today`'s `Pass5dEmpties.jsx`,
+   `EmptyNothingToBuild`/`EmptyRankedNothing`) — a dashed eyebrow over the
+   same two sentences `emptySessionLines`/`reentryEmptyLines` already
+   produce. Not a locked feature and not about her (that family's own doc). */
+.olea-session-empty {
+  padding: 14px 0 2px;
+}
+
+.olea-session-empty-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  /* --olea-host-muted, not -faint (ol-nrrm): this label carries text
+     (`SESSION_EMPTY_EYEBROW`), and faint measured sub-floor everywhere it
+     was checked — the same fix `.olea-review-hint` etc. already took. */
+  color: var(--olea-host-muted);
+}
+
+.olea-session-empty-eyebrow::before {
+  content: '';
+  width: 18px;
+  height: 0;
+  flex: none;
+  border-top: 1px dashed var(--olea-host-line);
+}
+
+.olea-session-empty-line {
+  margin-bottom: 8px;
+  font: 400 13.5px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+}
+
+.olea-session-empty-line:last-child {
+  margin-bottom: 0;
+  font-size: 12px;
+  color: var(--olea-host-muted);
+}
+
+/* "Why these" (kit: `ExamSession.jsx`'s reasoning box) — F4.9's own framing
+   sentences (`sessionFraming`), boxed once there is a session to reason
+   about. Brand-accented left border, the same "forward progress, not
+   alarm" colour this section already owns (see the header above) — never
+   the kit's own `--olea-host-cite`, which this stylesheet has never ported
+   (the same call `.olea-grove-material-gap-label` already makes). No
+   background wash: this pane declares no elevation surface, and a left
+   border alone reads as "boxed" beside the plain `.olea-session-line` flow. */
+.olea-session-why {
+  margin-top: 14px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--olea-host-brand);
+}
+
+.olea-session-why-label {
+  margin-bottom: 6px;
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* --olea-host-muted, not -faint (ol-nrrm) — see `.olea-session-empty-
+     eyebrow`'s own comment; same fix, same reason. */
+  color: var(--olea-host-muted);
+}
+
+.olea-session-why-line {
+  margin-bottom: 4px;
+  font: 400 12.5px / 1.6 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+}
+
+.olea-session-why-line:last-child {
+  margin-bottom: 0;
 }
 
 .olea-session-items {
@@ -2099,34 +2347,400 @@ button.olea-review-mcq-option:hover {
 }
 
 /* ============================================================
-   ---- Bulk review triage (F3.3; ol-jie3) ----
+   ---- Bulk review triage (F3.3; ol-jie3; [STY-0e] ol-l5og.18.5) ----
    ============================================================
 
-   `bulk-review-view.ts` carries NO rule here beyond this one, deliberately: the view
-   ships wholly unstyled, so every element renders on bare host defaults — `<h2>`,
-   `<p>` and `<button>` with no authored `color`/`background` at all. That is the
-   safest possible position on theme resilience (there is nothing here that COULD
-   read a wrong branch, because nothing here reads a host variable), and a full
-   stylesheet for this surface is its own separate piece of work, not a resilience
-   fix — the drift-guard pattern `test/today/styles.spec.ts` and
-   `test/gap/styles.spec.ts` run for their own panes has no counterpart here yet
-   because there is no rule set for it to guard.
+   Kit: `docs/design/pass2-triage-ingestion` (`TriageStates.jsx`/`TriageParts.jsx`,
+   BRIEF.md's "Generation triage" surface). `bulk-review-view.ts` previously shipped
+   with no authored styling beyond a focus ring (see the removed banner this section
+   replaces); this is that promised "separate piece of work."
 
-   The one gap worth closing now (ol-p6t03, Q6.1/Q6.5): the view's four buttons
-   (`.olea-bulk-review-remainder`, `.olea-bulk-review-action` ×3 per row) are real
-   `<button>` elements, so Tab already reaches every one of them and Enter/Space
-   already activates them — nothing here is click-only in the sense that would
-   matter for a keyboard-only reader, only in the sense the view's own module doc
-   already discloses (no single-key accelerator, `ol-uxk9`). What bare defaults do
-   NOT guarantee is a VISIBLE ring on that native focus, for the same reason
-   `.olea-today-root :focus-visible` above needed restating: the host commonly
-   resets a plain button's outline. Same fix, same fallback colour, no other rule
-   added — adding the rest of this surface's chrome is out of scope for a
-   resilience/access pass. */
+   **Same split every other full-tab/one-off root here uses** (`.olea-explain-back`'s
+   own banner is the fullest statement of it): read-from-host for ground/text/border/
+   font roles, own-by-Olea for brand olive, accept/reject/attention ink and the cite
+   role. `.olea-bulk-review-root` is not one of the four sidebar panes'
+   `:is(...)` block (a full-tab `ItemView`, like `.olea-review-root`, not a 380px
+   pane), and `bulk-review-view.ts`'s `onOpen` forces `theme-dark` on it exactly as
+   `review/view.ts` does (F2.4-style, module doc: "dark by default, regardless of her
+   theme") — so the floor values below are dark literals, matching
+   `.olea-review-root`'s own `--olea-dark-*` set, not a neutral floor. Unlike
+   `.olea-review-root`, this section does not replicate the branch-varying-variable
+   cascade layer that root's header documents at length — same simpler posture
+   `.olea-gap-root`/`.olea-session-builder-root`/`.olea-explain-back` already take on
+   their own one-off roots; the edge case that layer exists for (a theme declaring a
+   variable in only one branch) is disclosed there, not re-solved per view.
+
+   **What real data can and cannot show here (ol-l5og.18.5's own scope note).** Every
+   draft this cache ever holds is quiz-shaped — `draftQuizCardsForConcept` is the one
+   generator feeding it (`bulk-review.ts`'s `BulkReviewItemViewModel` doc) — so:
+     - the item-type mark only ever reads "MCQ"; Q&A/cloze glyphs from the kit have
+       no real row to attach to and are not built (nothing to disambiguate FROM).
+     - the duplicate indicator (`DupTag` in the kit) is not built: F3.11's dedupe
+       check runs BEFORE a draft is cached, so a duplicate never reaches this list
+       for her to see or reject — there is no clause naming a marker for a draft
+       that, by the same clause, never arrives.
+     - "settled" rows (the kit's dimmed above-the-fold history of what she already
+       decided this sitting) are not built: every row here is independently
+       actionable by mouse (`bulk-review.spec.ts` in the public repo clicks item 1's
+       Accept without focusing item 0 first), so collapsing a resolved item's
+       controls was never available to copy from the kit as drawn — a session-local
+       resolved-history list is a real kit affordance, left for a follow-up rather
+       than built here.
+   The completion tally (`.olea-bulk-review-complete-*`) and the MCQ pool
+   (`.olea-bulk-review-item-pool`) below both ARE built — see `bulk-review-copy.ts`
+   and `bulk-review-view.ts`'s own `[STY-0e]` comments for the copy/data-model side.
+
+   Motion: `docs/design/tokens/motion.css`'s declared (never fitted) control
+   transition, ported as literal values under a `prefers-reduced-motion` guard —
+   the first use of it in this file (the sweep's "no motion anywhere" finding);
+   scoped to this section only, not proposing it repo-wide.
+*/
+
+.olea-bulk-review-root {
+  /* ---- Read from the host ---- */
+  --olea-host-bg: var(--background-primary, #1e1e1e);
+  --olea-host-elev: var(--background-primary-alt, #242424);
+  --olea-host-text: var(--text-normal, #dadada);
+  --olea-host-muted: var(--text-muted, #9e9e9e);
+  --olea-host-faint: var(--text-faint, #6b6b6b);
+  --olea-host-line: var(--background-modifier-border, #2e2e2e);
+  --olea-host-line-hover: var(--background-modifier-border-hover, #3d3d3d);
+  --olea-host-accent: var(--interactive-accent, #8a5cf6);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+  --olea-host-content-font: var(--font-text, sans-serif);
+  --olea-host-question-font: var(--font-text, Georgia, serif);
+
+  /* ---- Owned by Olea — constant in every host theme (DP-1's inventory; the
+     accept/reject pair are the same hex `.olea-review-root`'s own
+     `--olea-correct`/`--olea-wrong` use, re-declared under a name that reads
+     right on a triage decision rather than a graded answer) ---- */
+  --olea-host-brand: #8a9a63;
+  --olea-host-accept: #8fbda0;
+  --olea-host-reject: #d97c66;
+  --olea-host-attention: #e0a94e;
+  --olea-host-cite: #9aa878;
+  --olea-host-cite-wash: rgba(138, 154, 99, 0.13);
+
+  background: var(--olea-host-bg);
+  color: var(--olea-host-text);
+  font-family: var(--olea-host-ui-font);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 26px 40px 22px;
+  outline: none;
+}
+
 .olea-bulk-review-root :focus-visible {
-  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline: 2px solid var(--olea-host-accent);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+.olea-bulk-review-title {
+  flex: none;
+  margin: 0 0 20px;
+  font: 500 11px / 1 var(--olea-host-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+}
+
+.olea-bulk-review-loading,
+.olea-bulk-review-empty {
+  font: 400 14px / 1.5 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+}
+
+/* ---- Hint row (`[D-216]` Q6.5) ---- */
+
+.olea-bulk-review-hints {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding-bottom: 16px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-bulk-review-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 12px / 1 var(--olea-host-ui-font);
+  color: var(--olea-host-muted);
+}
+
+.olea-bulk-review-keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--olea-host-line-hover);
+  border-radius: 5px;
+  font: 500 11px / 1 var(--olea-host-mono);
+  color: var(--olea-host-muted);
+}
+
+/* ---- Groups (one per source document, F3.3's "a document's drafts") ---- */
+
+.olea-bulk-review-group + .olea-bulk-review-group {
+  margin-top: 32px;
+}
+
+.olea-bulk-review-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-bulk-review-group-course {
+  flex: none;
+  font: 500 10px / 1 var(--olea-host-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+}
+
+.olea-bulk-review-group-dot {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--olea-host-faint);
+}
+
+.olea-bulk-review-group-note {
+  flex: 1;
+  min-width: 0;
+  font: 500 15px / 1.3 var(--olea-host-content-font);
+  color: var(--olea-host-text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olea-bulk-review-remainder {
+  flex: none;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--olea-host-line-hover);
+  background: transparent;
+  color: var(--olea-host-text);
+  font: 500 12px / 1 var(--olea-host-ui-font);
+  cursor: pointer;
+}
+
+.olea-bulk-review-remainder:hover {
+  border-color: var(--olea-host-brand);
+  color: var(--olea-host-brand);
+}
+
+/* ---- Items ---- */
+
+.olea-bulk-review-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.olea-bulk-review-item {
+  display: flex;
+  padding: 16px 10px;
+  margin: 0 -10px;
+  border-radius: 10px;
+  border-bottom: 1px solid var(--olea-host-line);
+  outline: none;
+}
+
+.olea-bulk-review-item:last-child {
+  border-bottom: none;
+}
+
+.olea-bulk-review-item:hover,
+.olea-bulk-review-item:focus-within {
+  background: var(--olea-host-elev);
+}
+
+.olea-bulk-review-item-body {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  gap: 14px;
+}
+
+.olea-bulk-review-item-type {
+  flex: none;
+  width: 40px;
+  padding-top: 3px;
+  font: 500 9px / 1.2 var(--olea-host-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--olea-host-muted);
+}
+
+.olea-bulk-review-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.olea-bulk-review-item-stem {
+  font: 500 16px / 1.4 var(--olea-host-question-font);
+  color: var(--olea-host-text);
+}
+
+.olea-bulk-review-item-concept {
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  color: var(--olea-host-muted);
+}
+
+/* ---- The MCQ pool she is judging (`[STY-0e]`; every real draft carries one) ---- */
+
+.olea-bulk-review-item-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.olea-bulk-review-item-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--olea-host-line);
+  background: var(--olea-host-bg);
+  font: 400 13px / 1.4 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+}
+
+.olea-bulk-review-item-option--correct {
+  border-color: var(--olea-host-accept);
+  background: color-mix(in srgb, var(--olea-host-accept) 11%, var(--olea-host-bg));
+  color: var(--olea-host-text);
+}
+
+.olea-bulk-review-item-option-mark {
+  flex: none;
+  font: 500 9.5px / 1 var(--olea-host-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--olea-host-accept);
+}
+
+/* ---- Source marker + peek (`[D-216]`/`[D-214]`) ---- */
+
+.olea-bulk-review-item-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  color: var(--olea-host-muted);
+}
+
+.olea-bulk-review-item-source-peek {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--olea-host-line);
+  background: transparent;
+  color: var(--olea-host-cite);
+  font: 400 11px / 1 var(--olea-host-ui-font);
+  cursor: pointer;
+}
+
+.olea-bulk-review-item-source-peek:hover {
+  border-color: var(--olea-host-cite);
+  background: var(--olea-host-cite-wash);
+}
+
+/* ---- Actions — accept / edit / reject, equal weight (F3.3) ---- */
+
+.olea-bulk-review-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.olea-bulk-review-action {
+  min-height: 32px;
+  padding: 0 13px;
+  border-radius: 9px;
+  border: 1px solid var(--olea-host-line-hover);
+  background: var(--olea-host-elev);
+  color: var(--olea-host-text);
+  font: 500 12.5px / 1 var(--olea-host-ui-font);
+  cursor: pointer;
+}
+
+.olea-bulk-review-action:hover {
+  border-color: currentColor;
+}
+
+.olea-bulk-review-action--accept {
+  color: var(--olea-host-accept);
+}
+
+.olea-bulk-review-action--edit {
+  color: var(--olea-host-attention);
+}
+
+.olea-bulk-review-action--reject {
+  color: var(--olea-host-reject);
+}
+
+/* ---- Completion — a receipt, not a badge (F6.7; `ol-2x4`'s narrowing) ---- */
+
+.olea-bulk-review-complete {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.olea-bulk-review-complete-heading {
+  margin: 0;
+  font: 500 21px / 1.3 var(--olea-host-question-font);
+  color: var(--olea-host-text);
+}
+
+.olea-bulk-review-complete-tally {
+  font: 500 13px / 1 var(--olea-host-mono);
+  color: var(--olea-host-muted);
+}
+
+/* ---- Motion — calm control transitions only, guarded (sweep: "no motion
+   anywhere"; values ported from `docs/design/tokens/motion.css`, declared not
+   fitted, unused elsewhere in this file today) ---- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .olea-bulk-review-remainder,
+  .olea-bulk-review-item-source-peek,
+  .olea-bulk-review-action {
+    transition:
+      background-color 180ms cubic-bezier(0.2, 0.6, 0.35, 1),
+      border-color 180ms cubic-bezier(0.2, 0.6, 0.35, 1),
+      color 180ms cubic-bezier(0.2, 0.6, 0.35, 1);
+  }
+
+  .olea-bulk-review-item {
+    transition: background-color 180ms cubic-bezier(0.2, 0.6, 0.35, 1);
+  }
 }
 
 /* ============================================================

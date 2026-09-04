@@ -185,7 +185,7 @@ describe('styles.css covers the gap view', () => {
   });
 });
 
-describe('the gap section of styles.css is a sidebar pane, like the Today panel, not a second review view', () => {
+describe('the gap section of styles.css is a full-tab pane that follows the host theme, not a forced-dark second review view', () => {
   it('carries no theme-dark class and no dark floor layer', () => {
     expect(viewCode).not.toContain('theme-dark');
     expect(css).not.toContain('@layer');

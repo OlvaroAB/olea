@@ -55,10 +55,12 @@
 import type {
   CoverageScope,
   CoverageScopeSource,
+  EvidenceQuestionCitation,
   GapAffordance,
   GapCourseView,
   GapRow,
   SourceReadState,
+  VaultPath,
 } from 'olea-core';
 
 // ---------------------------------------------------------------------------
@@ -154,6 +156,69 @@ export function rankedCourseFraming(rows: readonly GapRow[]): readonly string[] 
   return [rankingAttribution(rows), FULL_SYLLABUS_ADVICE];
 }
 
+// ---------------------------------------------------------------------------
+// pass5g's syllabus counterweight — a structural block, not a footer
+// (`[D-224]` / `ol-l5og.20`, `ol-l5og.18.3`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The corrected kit's on-screen counterweight (`SyllabusCounterweight`,
+ * `docs/design/pass5g-pass4-corrections`), distinct from
+ * {@link FULL_SYLLABUS_ADVICE} above rather than a replacement for it:
+ * `FULL_SYLLABUS_ADVICE` is the ratified F4.9 sentence and is left exactly as
+ * ratified; this is the kit's separate, more concrete block naming how much
+ * of the syllabus actually has something built, from data the ranking
+ * already carries. `view.ts` renders it unconditionally beside every ranked
+ * course's rows — never behind a dismiss control, matching the kit's own
+ * "not dismissible" framing.
+ *
+ * "Something built" means `'mastery-gap'` specifically — the class whose
+ * material AND instruments both exist (see `gap/build.ts`'s module doc for
+ * why the three classes are told apart by what is missing). A course with
+ * zero ranked rows still gets the sentence, without a denominator it cannot
+ * honestly state.
+ */
+export function syllabusCounterweightSentence(courseName: string, rows: readonly GapRow[]): string {
+  const total = rows.length;
+  if (total === 0) {
+    return 'Ranking tells you where to start, not what to skip. Covering the whole syllabus still comes first.';
+  }
+  const built = rows.filter((r) => r.gapClass === 'mastery-gap').length;
+  const conceptsNoun = total === 1 ? 'concept' : 'concepts';
+  const haveVerb = built === 1 ? 'has' : 'have';
+  const itThem = built === 1 ? 'it' : 'them';
+  return (
+    'Ranking tells you where to start, not what to skip. Covering the whole syllabus still comes ' +
+    `first — ${built} of ${total} ${conceptsNoun} in ${courseName} ${haveVerb} something built for ${itThem}.`
+  );
+}
+
+/**
+ * The counterweight's optional second line — the kit's own
+ * "9 with nothing built · 2 with no material" breakdown, counted from the
+ * same rows rather than a second computation. `null` when both counts are
+ * zero (every ranked row is already a mastery gap), so the block does not
+ * grow an empty breakdown line.
+ *
+ * Deliberately omits the kit's "See the whole grove" link: that names a
+ * different surface (`Grove`, a separate view/command), and adding a
+ * navigation affordance to it is not this bead's call to make — no clause
+ * names that door from this screen.
+ */
+export function syllabusCounterweightBreakdown(rows: readonly GapRow[]): string | null {
+  const nothingBuilt = rows.filter((r) => r.gapClass === 'coverage-gap').length;
+  const noMaterial = rows.filter((r) => r.gapClass === 'material-gap').length;
+  if (nothingBuilt === 0 && noMaterial === 0) return null;
+  const parts: string[] = [];
+  if (nothingBuilt > 0) {
+    parts.push(`${nothingBuilt} with nothing built`);
+  }
+  if (noMaterial > 0) {
+    parts.push(`${noMaterial} with no material`);
+  }
+  return parts.join(' · ');
+}
+
 /**
  * A course the oracle declined to rank.
  *
@@ -215,6 +280,40 @@ export function gapRowLine(row: GapRow): string {
     case 'mastery-gap':
       return row.reasoning;
   }
+}
+
+// ---------------------------------------------------------------------------
+// pass5g's past-paper chips (`[D-224]`) — named, never divided
+// ---------------------------------------------------------------------------
+
+/** The label above a row's chip strip — F4.9's "counted, never divided" applied to the prefix too. */
+export function pastPapersLabel(distinctSourceCount: number): string {
+  return `Asked in ${paperCount(distinctSourceCount)}:`;
+}
+
+/**
+ * One past-paper citation's chip — its own filename (R2, verbatim; her
+ * vault's own naming, not a derived slug) paired with the question label, so
+ * the same paper cited on two questions still reads as one paper rather than
+ * a repeated, unnamed source.
+ *
+ * **Deliberately no invented date.** The kit's chip reads "June 2024 · Q3";
+ * `Source` (`olea-core`) carries no sitting-date field, and there is no
+ * reader for one — so this names what is actually known (the file, verbatim)
+ * rather than parsing a date out of a filename that might not encode one.
+ * Widening `Source` to carry a real sitting date is a data-model change this
+ * bead's `owns` (view/copy/provider) does not reach; filed separately.
+ */
+export function pastPaperChipLabel(citation: EvidenceQuestionCitation): string {
+  const path: VaultPath = citation.sourcePath;
+  const file = path.slice(path.lastIndexOf('/') + 1);
+  const name = file.replace(/\.[^./]+$/, '');
+  return `${name} · ${citation.questionLabel}`;
+}
+
+/** A row's chip strip, in citation order — `citations` is never empty for a ranked entry (`GapRow`'s own doc). */
+export function pastPaperChips(row: GapRow): readonly string[] {
+  return row.citations.map(pastPaperChipLabel);
 }
 
 /**

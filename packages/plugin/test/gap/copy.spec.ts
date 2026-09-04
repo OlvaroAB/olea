@@ -10,11 +10,16 @@ import {
   coverageScreenCopy,
   FULL_SYLLABUS_ADVICE,
   gapRowLine,
+  pastPaperChipLabel,
+  pastPaperChips,
+  pastPapersLabel,
   rankedCourseFraming,
   rankingAttribution,
   readinessNote,
   readStateLabel,
   scopeSourceLine,
+  syllabusCounterweightBreakdown,
+  syllabusCounterweightSentence,
 } from '../../src/gap/copy.js';
 
 // --------------------------------------------------------------------------
@@ -142,6 +147,12 @@ function everyProducibleString(): readonly string[] {
     ...rows.flatMap((r) => r.affordances.map(affordanceLabel)),
     abstainedCourseSentence(abstained),
     abstainedCourseSentence(abstainedMany),
+    syllabusCounterweightSentence('CRS101', rows),
+    syllabusCounterweightSentence('CRS101', []),
+    ...[syllabusCounterweightBreakdown(rows)].filter((s): s is string => s !== null),
+    pastPapersLabel(1),
+    pastPapersLabel(2),
+    ...rows.flatMap((r) => pastPaperChips(r)),
     ...scopes.flatMap((scope) => [
       ...coverageScopeStatement(scope),
       ...coverageScreenCopy({ scope, gapRowCount: 0 }),
@@ -381,6 +392,85 @@ describe('row copy', () => {
     expect(affordanceLabel('open-concept')).toBe('Open the concept');
     expect(affordanceLabel('build-session')).toBe('Build a session from this');
     expect(affordanceLabel('find-source')).toBe('Find the source');
+  });
+});
+
+// --------------------------------------------------------------------------
+// pass5g's syllabus counterweight and past-paper chips (`[D-224]`)
+// --------------------------------------------------------------------------
+
+describe('the syllabus counterweight (pass5g, `[D-224]`)', () => {
+  it('names how many concepts actually have something built, out of the total ranked', () => {
+    const rows = [
+      row({ conceptName: 'Alpha', gapClass: 'mastery-gap' }),
+      row({ conceptName: 'Beta', gapClass: 'coverage-gap' }),
+      row({ conceptName: 'Gamma', gapClass: 'material-gap' }),
+    ];
+    expect(syllabusCounterweightSentence('CRS101', rows)).toBe(
+      'Ranking tells you where to start, not what to skip. Covering the whole syllabus still ' +
+        'comes first — 1 of 3 concepts in CRS101 has something built for it.',
+    );
+  });
+
+  it('states the sentence honestly for zero rows, without a denominator it cannot back', () => {
+    expect(syllabusCounterweightSentence('CRS101', [])).toBe(
+      'Ranking tells you where to start, not what to skip. Covering the whole syllabus still comes first.',
+    );
+  });
+
+  it('never advises skipping the syllabus, and never claims exam knowledge', () => {
+    const rows = [row({ gapClass: 'mastery-gap' })];
+    const sentence = syllabusCounterweightSentence('CRS101', rows).toLowerCase();
+    expect(sentence).toContain('not what to skip');
+    expect(sentence).toContain('whole syllabus');
+  });
+
+  it('breaks down the two non-mastery classes, and is null when every row is a mastery gap', () => {
+    const mixed = [
+      row({ gapClass: 'mastery-gap' }),
+      row({ gapClass: 'coverage-gap' }),
+      row({ gapClass: 'coverage-gap' }),
+      row({ gapClass: 'material-gap' }),
+    ];
+    expect(syllabusCounterweightBreakdown(mixed)).toBe('2 with nothing built · 1 with no material');
+    expect(syllabusCounterweightBreakdown([row({ gapClass: 'mastery-gap' })])).toBeNull();
+  });
+});
+
+describe('past-paper chips (pass5g, `[D-224]`) — named, never a bare count', () => {
+  it('pairs the paper file (verbatim, extension stripped) with the question label', () => {
+    const citation = {
+      sourcePath: '02 Assessments/Past papers/June 2024.pdf' as VaultPath,
+      questionLabel: 'Q3',
+      questionText: 'A question.',
+      provenance: { location: { page: 1, charRange: { start: 0, end: 4 } } },
+    } as GapRow['citations'][number];
+    expect(pastPaperChipLabel(citation)).toBe('June 2024 · Q3');
+  });
+
+  it('produces one chip per citation, in citation order', () => {
+    const r = row({
+      citations: [
+        {
+          sourcePath: '03 Research/paper-a.pdf' as VaultPath,
+          questionLabel: 'Q1',
+          questionText: 'A.',
+          provenance: { location: { page: 1, charRange: { start: 0, end: 1 } } },
+        } as GapRow['citations'][number],
+        {
+          sourcePath: '03 Research/paper-b.pdf' as VaultPath,
+          questionLabel: 'Q2',
+          questionText: 'B.',
+          provenance: { location: { page: 1, charRange: { start: 0, end: 1 } } },
+        } as GapRow['citations'][number],
+      ],
+    });
+    expect(pastPaperChips(r)).toEqual(['paper-a · Q1', 'paper-b · Q2']);
+  });
+
+  it('counts rather than divides, matching the ratified F4.9 discipline', () => {
+    expect(pastPapersLabel(1)).toBe('Asked in 1 past paper:');
+    expect(pastPapersLabel(3)).toBe('Asked in 3 past papers:');
   });
 });
 
