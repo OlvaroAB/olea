@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "datasetVersion": 1,
+  "entries": [
+    {
+      "taskId": "explain-back.judge.v1",
+      "promptVersion": "1.2.0",
+      "modelId": "@cf/nvidia/nemotron-3-120b-a12b",
+      "payloadHash": "9fb3de3ca58b7ca907d2d4e75ac0c8fbae7437e58ac89602f0e06cec70a3f000",
+      "response": {
+        "ok": true,
+        "result": {
+          "verdict": "incorrect",
+          "feedback": "Your answer does not explain the date 2026-08-10; it discusses a causal process unrelated to the question.",
+          "missedPoints": [
+            "Identify that 2026-08-10 falls on a Monday."
+          ],
+          "citedIssues": [
+            {
+              "kind": "omission",
+              "description": "The answer does not state that 2026-08-10 is a Monday.",
+              "sourceBlockIds": [
+                "00 Daily notes/2026-08-10.md#2#0"
+              ]
+            }
+          ],
+          "misconceptionCandidates": []
+        }
+      }
+    }
+  ]
+}

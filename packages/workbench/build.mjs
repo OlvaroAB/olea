@@ -111,6 +111,24 @@ const FIXTURE_VAULT =
 const EMBEDDING_CASSETTE = resolve(here, '.embedding-cassette', 'cassette.json');
 /** Written by `scripts/precompute-generation.mjs` (`ol-opmb.3` [TB-3]) — gitignored, optional. */
 const GENERATION_CASSETTE = resolve(here, '.generation-cassette', 'cassette.json');
+/**
+ * WBX-16e (`ol-3ux7.64.18.5`, olea-service) — a hand-curated, TRACKED (not
+ * gitignored) subset of `olea-service`'s private `.olea-harness/
+ * simulator-cassette.json`, holding only the entries the FIXTURE-world
+ * simulator journeys need at replay time. `simulator/controller.ts`'s
+ * `loadReplayCassette` fetches `/simulator-cassette.json` from the built
+ * dist and falls back to an empty cassette on a 404 (see that function's own
+ * doc — "nothing in this lane's owns list builds that file into dist/ yet");
+ * `copySimulatorCassette` below is that missing build step for the PUBLIC
+ * fixture world specifically (the PRIVATE real-world dist gets its own,
+ * much larger cassette from `olea-service`'s `scripts/simulator-build.mjs`,
+ * a separate script this one does not call or depend on). Same GenerationCassette
+ * shape/hashing as `.generation-cassette/cassette.json` (`packages/synthetic/
+ * src/generation-cassette.ts` is the shared schema and `hashGenerationPayload`
+ * both sides use), so an entry recorded once against staging replays free
+ * forever afterward — never a live model call from a public Pages visitor.
+ */
+const SIMULATOR_CASSETTE = resolve(here, '.generation-cassette', 'simulator-cassette.json');
 
 /**
  * `FolderSource` is core's node:fs implementation of `VaultSource`. The workbench
@@ -445,6 +463,30 @@ async function copyGenerationCassette() {
 }
 
 /**
+ * Copies the tracked, hand-curated simulator replay cassette (see
+ * `SIMULATOR_CASSETTE`'s own doc) into `dist/simulator-cassette.json`
+ * verbatim. Tolerates absence — a checkout that has deleted this file still
+ * builds; the simulator's `replay` transport falls back to an empty
+ * cassette and every fixture-world Worker call renders the ordinary
+ * unreachable-Worker degradation state (F7.8), exactly as it did before
+ * WBX-16e.
+ */
+async function copySimulatorCassette() {
+  if (!existsSync(SIMULATOR_CASSETTE)) {
+    console.log(
+      'workbench: no .generation-cassette/simulator-cassette.json found — the fixture-world ' +
+        'simulator will render its ordinary unreachable-Worker state for every task id, same as ' +
+        'before WBX-16e.',
+    );
+    return;
+  }
+  await cp(SIMULATOR_CASSETTE, join(dist, 'simulator-cassette.json'));
+  console.log(
+    'workbench: copied .generation-cassette/simulator-cassette.json to dist/simulator-cassette.json',
+  );
+}
+
+/**
  * `simulator-world.json` (`ol-3ux7.64.14` [WBX-12], `docs/dev/simulator-design.md`
  * §7, F9.S6): the world descriptor the simulator route's badge reads instead
  * of a hard-coded `'FIXTURE'` string. This public build only ever writes the
@@ -531,6 +573,7 @@ async function copyStatic() {
   await copyFixtureVault();
   await copyEmbeddingCassette();
   await copyGenerationCassette();
+  await copySimulatorCassette();
   await writeSimulatorWorldDescriptor();
   await writeFile(
     join(dist, '_headers'),

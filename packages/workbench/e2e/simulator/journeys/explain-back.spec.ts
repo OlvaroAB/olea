@@ -17,11 +17,21 @@
  * fill recorded (the fill is this same journey run with `WB_SIM_TRANSPORT=record`). The invented
  * answer text is generic and never copied from any real note (CLAUDE.md's "never quote").
  *
- * Steps captured: topic, answering, verdict, accepted. A cassette miss — guaranteed on the
- * fixture world, which bundles no judge entry for this payload — renders
- * `EXPLAIN_BACK_CHECK_FAILED_TEXT` at the verdict step, and this journey asserts that text is on
- * screen rather than skipping the step, per F9.S5; on a refusal the "accepted" step is the
- * refusal still on screen (there is nothing to accept), never a skipped capture.
+ * Steps captured: topic, answering, verdict, accepted. `ol-3ux7.64.18.5` (WBX-16e) recorded ONE
+ * real judge verdict for this exact fixture payload (`00 Daily notes/2026-08-10.md`'s explain
+ * topic, this file's own invented answer) via staging under the two-flag spend gate, and landed
+ * it in `packages/workbench/.generation-cassette/simulator-cassette.json` — a small, TRACKED
+ * exception to that directory's usual "reproducible, so gitignored" rule (see `build.mjs`'s
+ * `SIMULATOR_CASSETTE` doc), bundled into `dist/simulator-cassette.json` by
+ * `copySimulatorCassette` and fetched by `simulator/controller.ts`'s `loadReplayCassette`. So the
+ * fixture world now renders a GRADED verdict at this step, same as any other world with a
+ * recording — this journey's `verdict`/`accepted` goldens capture that graded phase
+ * (`.olea-explain-back-actions`), not the refusal. **A cassette miss still renders
+ * `EXPLAIN_BACK_CHECK_FAILED_TEXT`** (per F9.S5's "a journey step never skips a cassette miss"
+ * scenario) for any OTHER payload this cassette holds no entry for — this journey's own assertion
+ * below handles both outcomes rather than assuming one, exactly as F9.S5 requires; on a refusal
+ * the "accepted" step is the refusal still on screen (there is nothing to accept), never a
+ * skipped capture.
  */
 import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';

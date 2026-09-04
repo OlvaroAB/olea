@@ -7,4 +7,18 @@
 
 # The pre-computed generation cassette (ol-opmb.3 [TB-3]) — same reasoning as
 # .embedding-cassette/ above, written by scripts/precompute-generation.mjs.
-.generation-cassette/
+# NOTE: `.generation-cassette/*` (not a bare `.generation-cassette/`) is deliberate —
+# a bare directory pattern stops git from even looking inside it, which defeats the
+# negation exception right below (a classic gitignore footgun: negating a path inside
+# an already-ignored DIRECTORY does nothing unless the directory pattern itself is a
+# wildcard on contents, not the directory name).
+.generation-cassette/*
+
+# EXCEPTION: simulator-cassette.json (WBX-16e, ol-3ux7.64.18.5) does NOT fit the
+# "reproducible, so never commit it" reasoning above — it is a small, hand-curated
+# subset of one real staging recording (a judge verdict for the fixture explain-back
+# journey's exact payload), and the model call it records is not deterministically
+# reproducible by re-running a script: doing so could return different text and
+# silently invalidate the committed goldens that were baselined against this exact
+# entry. It is TRACKED on purpose. See build.mjs's SIMULATOR_CASSETTE doc.
+!.generation-cassette/simulator-cassette.json

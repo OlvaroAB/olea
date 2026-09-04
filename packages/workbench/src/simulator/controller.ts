@@ -137,13 +137,18 @@ import { loadSimulatorWorld, parseWorldAsOf, type SimulatorWorldDescriptor } fro
  * Best-effort, never-throwing load of a bundled replay cassette from a plain
  * static path (`simulator-serve.mjs`'s existing static file serving — no
  * server change needed: anything under `dist/` is already served this way).
- * Nothing in this lane's owns list builds that file into `dist/` yet (that
- * is `scripts/simulator-build.mjs`, WBX-3's file), so today this always
- * falls through to the empty cassette — an honest "no recording available"
- * default, never a fabricated hit, and never a real network call beyond the
- * one static GET. `fetchFn` is the caller's captured ORIGINAL `fetch` (see
- * this module's doc on why the bridge must not use `globalThis.fetch` for
- * its own outbound calls).
+ * Two independent producers build this file, for two different dists:
+ * `build.mjs`'s `copySimulatorCassette` (WBX-16e, `ol-3ux7.64.18.5`) copies
+ * the small, TRACKED, public `.generation-cassette/simulator-cassette.json`
+ * into the PUBLIC dist (this is what a Pages visitor / the fixture e2e suite
+ * gets); `olea-service`'s private `scripts/simulator-build.mjs` (WBX-3)
+ * copies the much larger, gitignored `.olea-harness/simulator-cassette.json`
+ * into the PRIVATE real-world dist. A checkout with neither file present
+ * still falls through to the empty cassette below — an honest "no recording
+ * available" default, never a fabricated hit, and never a real network call
+ * beyond the one static GET. `fetchFn` is the caller's captured ORIGINAL
+ * `fetch` (see this module's doc on why the bridge must not use
+ * `globalThis.fetch` for its own outbound calls).
  */
 async function loadReplayCassette(fetchFn: typeof fetch): Promise<GenerationCassette> {
   const empty: GenerationCassette = {
