@@ -9,7 +9,13 @@ import {
   coverageScopeStatement,
   coverageScreenCopy,
   FULL_SYLLABUS_ADVICE,
+  gapDetailEyebrow,
   gapRowLine,
+  masteryGapLine,
+  masteryGapMeta,
+  masteryGapNarrative,
+  materialGapMeta,
+  materialGapNarrative,
   pastPaperChipLabel,
   pastPaperChips,
   pastPapersLabel,
@@ -145,6 +151,16 @@ function everyProducibleString(): readonly string[] {
     ...rows.map(gapRowLine),
     ...rows.map(readinessNote).filter((s): s is string => s !== null),
     ...rows.flatMap((r) => r.affordances.map(affordanceLabel)),
+    // STY-2 (`[D-224]`) — the per-concept detail page's own copy, over both
+    // classes it is drawn for.
+    gapDetailEyebrow('CRS101', 'mastery-gap'),
+    gapDetailEyebrow('CRS101', 'material-gap'),
+    masteryGapMeta(row()),
+    materialGapMeta(row({ gapClass: 'material-gap', distinctSourceCount: 3, notePaths: [] })),
+    ...masteryGapNarrative(row()),
+    ...materialGapNarrative(
+      row({ gapClass: 'material-gap', distinctSourceCount: 2, notePaths: [] }),
+    ),
     abstainedCourseSentence(abstained),
     abstainedCourseSentence(abstainedMany),
     syllabusCounterweightSentence('CRS101', rows),
@@ -382,10 +398,24 @@ describe('row copy', () => {
     );
   });
 
-  it('shows the oracle reasoning verbatim on a mastery gap', () => {
-    expect(gapRowLine(row({ reasoning: 'Cited in one past paper.' }))).toBe(
-      'Cited in one past paper.',
+  it('states a mastery gap as counted facts, never the oracle reasoning verbatim (STY-2)', () => {
+    const r = row({
+      reasoning: 'yield rank 1, confidence 1.00, weight score 0.30. Priority score 0.081.',
+      distinctSourceCount: 2,
+      instrumentCount: 3,
+    });
+    const line = gapRowLine(r);
+    expect(line).toBe(masteryGapLine(r));
+    expect(line).toBe(
+      "Asked in 2 past papers; you have 3 instruments built but recall here hasn't caught up.",
     );
+    // The defect this bead fixes, named directly: no fitted/derived number —
+    // confidence, weight, priority score — may reach the student (component
+    // register's declared/derived line).
+    expect(line.toLowerCase()).not.toContain('confidence');
+    expect(line.toLowerCase()).not.toContain('priority score');
+    expect(line.toLowerCase()).not.toContain('weight score');
+    expect(line.toLowerCase()).not.toContain('yield rank');
   });
 
   it('labels every affordance core can actually offer, and no commissioning affordance exists to label', () => {
@@ -471,6 +501,53 @@ describe('past-paper chips (pass5g, `[D-224]`) — named, never a bare count', (
   it('counts rather than divides, matching the ratified F4.9 discipline', () => {
     expect(pastPapersLabel(1)).toBe('Asked in 1 past paper:');
     expect(pastPapersLabel(3)).toBe('Asked in 3 past papers:');
+  });
+});
+
+// --------------------------------------------------------------------------
+// STY-2's per-concept detail page (`[D-224]`) — the page half of the
+// container change `ol-l5og.18.3` shipped only the tab half of
+// --------------------------------------------------------------------------
+
+describe('the per-concept detail page copy (STY-2, `[D-224]`)', () => {
+  it('the eyebrow names the course and which of the two pages this is', () => {
+    expect(gapDetailEyebrow('CRS101', 'mastery-gap')).toBe('CRS101 · mastery gap');
+    expect(gapDetailEyebrow('CRS101', 'material-gap')).toBe('CRS101 · material gap');
+  });
+
+  it('the mastery-gap meta line states counted facts only — no per-attempt claim it cannot back', () => {
+    expect(masteryGapMeta(row({ instrumentCount: 6, distinctSourceCount: 4 }))).toBe(
+      '6 instruments · asked in 4 past papers',
+    );
+    expect(masteryGapMeta(row({ instrumentCount: 1, distinctSourceCount: 1 }))).toBe(
+      '1 instrument · asked in 1 past paper',
+    );
+  });
+
+  it('the material-gap meta line never claims the exam ahead has asked anything', () => {
+    const meta = materialGapMeta(
+      row({ gapClass: 'material-gap', distinctSourceCount: 2, notePaths: [] }),
+    );
+    expect(meta).toBe('Asked in 2 past papers · not in your materials');
+  });
+
+  it('the mastery-gap narrative names what exists and why it is ranked, with no fitted number', () => {
+    const lines = masteryGapNarrative(row({ instrumentCount: 2, distinctSourceCount: 1 }));
+    expect(lines).toHaveLength(2);
+    const joined = lines.join(' ').toLowerCase();
+    expect(joined).not.toContain('confidence');
+    expect(joined).not.toContain('priority score');
+    expect(joined).toContain('2 instruments');
+    expect(joined).toContain('1 past paper');
+  });
+
+  it('the material-gap narrative states a gap in the material, never in what she knows (F4.10)', () => {
+    const lines = materialGapNarrative(
+      row({ gapClass: 'material-gap', distinctSourceCount: 3, notePaths: [] }),
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(gapRowLine(row({ gapClass: 'material-gap', distinctSourceCount: 3 })));
+    expect(lines.join(' ')).toContain('not in what you know');
   });
 });
 

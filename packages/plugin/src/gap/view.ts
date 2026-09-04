@@ -33,6 +33,17 @@
  * follows the host's ambient theme, same as the Today panel.
  * `packages/plugin/styles.css`'s "Gap and coverage views" section carries the
  * rules for every class below.
+ *
+ * **Per-concept pages, list → page (STY-2, `[D-224]`).** `[D-224]` asked for
+ * "full-tab per-concept detail pages", and `ol-l5og.18.3` only ever built the
+ * full-tab half — every course's rows stacked on one page, mastery-gap and
+ * material-gap alike, with a mastery-gap row's body being the oracle's raw
+ * `reasoning` diagnostic string. This file now navigates: `render` shows the
+ * list by default and swaps to `renderDetail` for one row when `this.detail`
+ * names a mastery-gap or material-gap concept ({@link findDetailRow},
+ * {@link GapView.openDetail}/{@link GapView.closeDetail}); coverage-gap has no
+ * page, unchanged. `./copy.ts`'s module doc carries the copy-layer half of
+ * this fix.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -43,13 +54,20 @@ import {
   affordanceLabel,
   COVERAGE_GAP_HEADING,
   coverageScreenCopy,
+  GAP_DETAIL_BACK_LABEL,
   GAP_UNAVAILABLE_BODY,
   GAP_UNAVAILABLE_EYEBROW,
   GAP_UNAVAILABLE_RETRY_LABEL,
   GAP_UNAVAILABLE_TITLE,
   GAP_VIEW_TITLE,
+  type GapDetailClass,
+  gapDetailEyebrow,
   gapRowLine,
   MATERIAL_GAP_HEADING,
+  masteryGapMeta,
+  masteryGapNarrative,
+  materialGapMeta,
+  materialGapNarrative,
   pastPaperChips,
   pastPapersLabel,
   rankedCourseFraming,
@@ -58,6 +76,9 @@ import {
   syllabusCounterweightBreakdown,
   syllabusCounterweightSentence,
 } from './copy.js';
+
+/** A course whose ranking succeeded — the half of {@link GapCourseView} a detail page can be opened against. */
+type RankedCourseView = Extract<GapCourseView, { status: 'ranked' }>;
 
 export const VIEW_TYPE_OLEA_GAP = 'olea-gap';
 
@@ -120,8 +141,48 @@ export interface GapViewDeps {
   readonly buildSession?: (row: GapRow) => void;
 }
 
+/**
+ * Which per-concept page, if any, this view is showing instead of the list.
+ *
+ * Keyed by course name + `conceptKey` rather than holding the `GapRow` object
+ * itself, so a `refresh()` (her material changed) re-resolves against the
+ * fresh model instead of pinning a stale row — {@link GapView.render} looks
+ * this up every time and falls back to the list if the row no longer exists.
+ */
+interface GapDetailTarget {
+  readonly course: string;
+  readonly conceptKey: string;
+}
+
+/**
+ * Finds the row a {@link GapDetailTarget} names, in the CURRENT model.
+ *
+ * Excludes `'coverage-gap'` on purpose: pass5g draws no detail page for it
+ * (`GapClasses`' own note — designing it in is how the three classes merged
+ * the first time), so a stale target somehow pointing at one falls back to
+ * the list exactly as if the row had vanished, rather than opening a page
+ * this module has no copy for.
+ */
+function findDetailRow(
+  model: GapViewModel,
+  target: GapDetailTarget,
+): { readonly course: RankedCourseView; readonly row: GapRow } | null {
+  for (const course of model.courses) {
+    if (course.status !== 'ranked' || course.course !== target.course) continue;
+    const row = course.rows.find(
+      (r) => r.conceptKey === target.conceptKey && r.gapClass !== 'coverage-gap',
+    );
+    if (row !== undefined) return { course, row };
+  }
+  return null;
+}
+
 export class GapView extends ItemView {
   private readonly deps: GapViewDeps;
+  /** The last `'model'` state rendered — navigating (open/close a detail page) redraws from this rather than re-running `load()`, which reads the vault. */
+  private lastModelState: { readonly kind: 'model'; readonly model: GapViewModel } | null = null;
+  /** Set by {@link openDetail}, cleared by {@link closeDetail} or when the target no longer resolves. */
+  private detail: GapDetailTarget | null = null;
 
   constructor(leaf: WorkspaceLeaf, deps: GapViewDeps) {
     super(leaf);
@@ -155,6 +216,7 @@ export class GapView extends ItemView {
   }
 
   private render(state: GapViewState): void {
+    if (state.kind === 'model') this.lastModelState = state;
     const root = this.contentEl;
     root.empty();
 
@@ -164,8 +226,38 @@ export class GapView extends ItemView {
     }
 
     const { model } = state;
+    const opened = this.detail !== null ? findDetailRow(model, this.detail) : null;
+    if (this.detail !== null && opened === null) {
+      // The row this page was open on is gone from a fresh read (or was
+      // never a mastery/material gap to begin with) — the list is the only
+      // honest fallback, not a page pointing at nothing.
+      this.detail = null;
+    }
+    if (opened !== null) {
+      this.renderDetail(root, opened.course, opened.row);
+      return;
+    }
+
     for (const course of model.courses) this.renderCourse(root, course);
     this.renderCoverage(root, model);
+  }
+
+  /**
+   * Opens the per-concept detail page (`[D-224]`) for one row, from the list.
+   *
+   * Redraws from {@link lastModelState} rather than calling `load()` again —
+   * this is a view-state change (which page this tab shows), not a reason to
+   * re-read her vault.
+   */
+  private openDetail(course: string, row: GapRow): void {
+    this.detail = { course, conceptKey: row.conceptKey };
+    if (this.lastModelState !== null) this.render(this.lastModelState);
+  }
+
+  /** Returns to the ranked list. Same no-reload rule as {@link openDetail}. */
+  private closeDetail(): void {
+    this.detail = null;
+    if (this.lastModelState !== null) this.render(this.lastModelState);
   }
 
   /**
@@ -235,7 +327,7 @@ export class GapView extends ItemView {
     this.renderSyllabusCounterweight(section, course.course, course.rows);
 
     const list = section.createDiv({ cls: 'olea-gap-rows' });
-    for (const row of course.rows) this.renderRow(list, row);
+    for (const row of course.rows) this.renderRow(list, row, course.course);
   }
 
   private renderSyllabusCounterweight(
@@ -256,12 +348,36 @@ export class GapView extends ItemView {
     }
   }
 
-  private renderRow(parent: HTMLElement, row: GapRow): void {
+  /**
+   * `navigable` is `true` exactly for the two classes {@link findDetailRow}
+   * accepts (mastery-gap, material-gap) — pass5g draws a detail page for
+   * both, and coverage-gap for neither.
+   */
+  private renderRow(parent: HTMLElement, row: GapRow, courseName: string): void {
     const el = parent.createDiv({ cls: `olea-gap-row olea-gap-row-${row.gapClass}` });
+    const navigable = row.gapClass === 'mastery-gap' || row.gapClass === 'material-gap';
     const header = el.createDiv({ cls: 'olea-gap-row-header' });
+    // The row's own click-through into its per-concept page (`[D-224]`) —
+    // the header, not the whole row, so a click inside `actions` below never
+    // double-fires this as well as an affordance's own handler.
+    if (navigable) {
+      header.addClass('olea-gap-row-header-open');
+      header.setAttribute('role', 'button');
+      header.tabIndex = 0;
+      header.setAttribute('aria-label', `Open ${row.conceptName}`);
+      const open = (): void => this.openDetail(courseName, row);
+      header.addEventListener('click', open);
+      header.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter' || evt.key === ' ') {
+          evt.preventDefault();
+          open();
+        }
+      });
+    }
     header.createSpan({ cls: 'olea-gap-rank', text: String(row.rank) });
     this.renderMasteryMark(header, row);
     header.createSpan({ cls: 'olea-gap-concept', text: row.conceptName });
+    if (navigable) header.createSpan({ cls: 'olea-gap-row-chevron', text: '›' });
 
     // pass5g redraws the mastery-gap and material-gap rows as the corrected
     // kit's two dense screens; coverage-gap is explicitly out of scope on
@@ -297,7 +413,90 @@ export class GapView extends ItemView {
           buildSession(row);
         });
       }
+      // `open-concept` had never been wired to anything (`ol-l5og.18` sweep):
+      // now that a concept has a page to open, "open the concept" is that
+      // page, the same gesture the row header already offers — a second,
+      // labelled door onto it rather than a competing meaning.
+      if (affordance === 'open-concept') {
+        action.addEventListener('click', () => {
+          this.openDetail(courseName, row);
+        });
+      }
     }
+  }
+
+  /**
+   * The per-concept detail page (`[D-224]`) — pass5g's `MasteryGap`/
+   * `MaterialGap` screens, redrawn from what `GapRow` actually carries.
+   *
+   * **Left out, disclosed rather than fabricated** (same shape as
+   * `ol-l5og.18.3`'s own disclosures): the kit's attempts/evidence table
+   * (needs per-attempt review-log history `GapRow` does not carry) and, on a
+   * material gap, the kit's quoted "one note that touched it" (`notePaths` is
+   * empty by definition for this class — see `materialGapNarrative`'s doc).
+   * `open-concept` is not offered here as an action — this page IS "open the
+   * concept", so re-offering it would be a door back to itself.
+   */
+  private renderDetail(parent: HTMLElement, course: RankedCourseView, row: GapRow): void {
+    const isMastery = row.gapClass === 'mastery-gap';
+    const detailClass: GapDetailClass = isMastery ? 'mastery-gap' : 'material-gap';
+
+    const root = parent.createDiv({ cls: 'olea-gap-detail' });
+
+    const back = root.createDiv({ cls: 'olea-gap-detail-back', text: GAP_DETAIL_BACK_LABEL });
+    back.setAttribute('role', 'button');
+    back.tabIndex = 0;
+    const close = (): void => this.closeDetail();
+    back.addEventListener('click', close);
+    back.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter' || evt.key === ' ') {
+        evt.preventDefault();
+        close();
+      }
+    });
+
+    root.createDiv({
+      cls: 'olea-gap-detail-eyebrow',
+      text: gapDetailEyebrow(course.course, detailClass),
+    });
+    root.createDiv({ cls: 'olea-gap-detail-title', text: row.conceptName });
+
+    const header = root.createDiv({ cls: 'olea-gap-detail-header' });
+    this.renderMasteryMark(header, row);
+    header.createSpan({
+      cls: 'olea-gap-detail-meta',
+      text: isMastery ? masteryGapMeta(row) : materialGapMeta(row),
+    });
+
+    const narrative = root.createDiv({ cls: 'olea-gap-detail-narrative' });
+    for (const line of isMastery ? masteryGapNarrative(row) : materialGapNarrative(row)) {
+      narrative.createDiv({ cls: 'olea-gap-detail-narrative-line', text: line });
+    }
+
+    this.renderPastPaperChips(root, row);
+
+    const note = readinessNote(row);
+    if (note !== null) root.createDiv({ cls: 'olea-gap-readiness', text: note });
+
+    const actions = root.createDiv({ cls: 'olea-gap-actions' });
+    for (const affordance of row.affordances) {
+      if (affordance === 'open-concept') continue; // already open — see this method's doc
+      const action = actions.createSpan({
+        cls: `olea-gap-action olea-gap-action-${affordance}`,
+        text: affordanceLabel(affordance),
+      });
+      const buildSession = this.deps.buildSession;
+      if (affordance === 'build-session' && buildSession !== undefined) {
+        action.addEventListener('click', () => {
+          buildSession(row);
+        });
+      }
+    }
+
+    // pass5g's counterweight (`[D-224]`) belongs on the detail page too — F4.9's
+    // "present wherever a ranking is shown" — sized against the WHOLE course's
+    // rows, never just this one, so the denominator stays honest.
+    this.renderSyllabusCounterweight(root, course.course, course.rows);
   }
 
   /**

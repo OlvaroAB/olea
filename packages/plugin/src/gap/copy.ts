@@ -48,6 +48,20 @@
  * because it is honest, not because it is truncated") is **dropped**, because a
  * line that argues for its own honesty is the tell.
  *
+ * **STY-2 (`ol-l5og.18` child, `[D-224]`).** Two more things this surface had
+ * breached, found by the 2026-09-04 kit-fidelity judgement of `ol-l5og.18.3`'s
+ * own work: (1) a mastery-gap row's body was the oracle's raw `reasoning`
+ * string — "priority score 0.081"-shaped debug output in front of a student —
+ * fixed by {@link masteryGapLine} rather than a wording tweak, because the
+ * defect was a fitted number reaching her, not a bad sentence; (2) `[D-224]`
+ * asks for full-tab **per-concept detail pages**, and the prior build never
+ * built the *page* half, only the full-tab half. {@link gapDetailEyebrow},
+ * {@link masteryGapMeta}/{@link materialGapMeta} and
+ * {@link masteryGapNarrative}/{@link materialGapNarrative} are that page's
+ * copy; `view.ts` now navigates a mastery-gap or material-gap row's list entry
+ * into one. Coverage-gap has no detail page — pass5g's own `GapClasses` note
+ * says designing it in is how the three classes merged the first time.
+ *
  * **INV-1.** No `obsidian` import here — this module is unit-tested, which is
  * the entire point of it being separate from `view.ts`.
  */
@@ -279,15 +293,39 @@ function paperCount(n: number): string {
 }
 
 /**
+ * The mastery-gap row's summary line (F4.3) — what she can act on, never the
+ * oracle's own bookkeeping.
+ *
+ * **Replaces `row.reasoning` on this surface** (STY-2, `ol-l5og.18` child).
+ * `oracle/rank.ts`'s `reasoning` string is a developer audit trail —
+ * "yield rank 1, confidence 1.00, weight score 0.30, due in 38 days …
+ * Priority score 0.081" — mechanically assembled so an engineer can check the
+ * order matches the stated reasons (`rank.ts`'s own doc). It was never
+ * written to be read by her, and printing it verbatim put fitted numbers in
+ * front of a student on the one surface built to explain a ranking rather
+ * than just apply one — exactly the case `docs/Olea_component_register.md`'s
+ * declared/derived line rules on: `priorityScore`, `gapScore`, confidence and
+ * weight are all derived (fitted, unratified — R7's own module doc calls its
+ * weight "provisional and unratified"), so none of them may reach her,
+ * however honestly labelled. This sentence carries the same two COUNTED
+ * facts the reasoning string carries — how much is built, how often it has
+ * been asked — with no fitted number in it at all.
+ */
+export function masteryGapLine(row: GapRow): string {
+  const instruments =
+    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  return `Asked in ${paperCount(row.distinctSourceCount)}; you have ${instruments} built but recall here hasn't caught up.`;
+}
+
+/**
  * One gap row's sentence, per class.
  *
  * The material-gap line is **ratified copy**, with its count derived rather
  * than hard-coded. Its second clause is a statement about what was ingested,
  * not a judgement about her notes, and it is phrased that way deliberately.
  *
- * A mastery-gap row shows the oracle's own mechanically-assembled reasoning
- * verbatim — this module does not re-narrate a string that exists precisely so
- * that "the reasoning matches what actually drove the order" stays testable.
+ * The mastery-gap line is {@link masteryGapLine} — see that function's doc for
+ * why this stopped being the oracle's raw `reasoning` string.
  */
 export function gapRowLine(row: GapRow): string {
   switch (row.gapClass) {
@@ -296,9 +334,78 @@ export function gapRowLine(row: GapRow): string {
     case 'coverage-gap':
       return `Appears in ${paperCount(row.distinctSourceCount)}; you have notes on it but no cards yet.`;
     case 'mastery-gap':
-      return row.reasoning;
+      return masteryGapLine(row);
   }
 }
+
+// ---------------------------------------------------------------------------
+// pass5g's per-concept detail pages (`[D-224]` / `ol-l5og.20`) — one page per
+// mastery-gap or material-gap row, opened from the list; coverage-gap stays
+// list-only, per the corrected kit's own note that it is "deliberately
+// absent here"
+// ---------------------------------------------------------------------------
+
+/** The two gap classes pass5g draws a full detail page for. Coverage-gap has none — see this section's own note. */
+export type GapDetailClass = 'mastery-gap' | 'material-gap';
+
+/** The detail page's eyebrow (`[D-224]`) — course and class, matching pass5g's "COGS214 · mastery gap" / "COGS214 · material gap". */
+export function gapDetailEyebrow(course: string, gapClass: GapDetailClass): string {
+  return `${course} · ${gapClass === 'material-gap' ? 'material gap' : 'mastery gap'}`;
+}
+
+/**
+ * The mastery-gap detail page's header meta line (`[D-224]`).
+ *
+ * pass5g's own reads "6 instruments · 4 attempts in 10 days" — the second
+ * half needs per-attempt review-log history `GapRow` does not carry (no
+ * data-model change is in this bead's `owns`: view/copy/provider only, same
+ * disclosed gap `ol-l5og.18.3`'s close evidence already recorded). This
+ * states what is actually known instead of a placeholder for what is not.
+ */
+export function masteryGapMeta(row: GapRow): string {
+  const instruments =
+    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  return `${instruments} · asked in ${paperCount(row.distinctSourceCount)}`;
+}
+
+/** The material-gap detail page's header meta line (`[D-224]`) — F4.10's fact, not a claim about the exam ahead. */
+export function materialGapMeta(row: GapRow): string {
+  return `Asked in ${paperCount(row.distinctSourceCount)} · not in your materials`;
+}
+
+/**
+ * The mastery-gap detail page's narrative (F4.3, `[D-224]`) — two sentences,
+ * never pass5g's attempt-by-attempt story (its `ATTEMPTS` table), which needs
+ * per-attempt history this pipeline does not expose to the plugin layer
+ * (same disclosed gap as {@link masteryGapMeta}). What exists, then why it is
+ * ranked here — both COUNTED facts, no fitted score.
+ */
+export function masteryGapNarrative(row: GapRow): readonly string[] {
+  const instruments =
+    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  return [
+    `Your notes cover this, and ${instruments} are built from them — the material and the practice both exist.`,
+    `It's ranked here because it's been asked in ${paperCount(row.distinctSourceCount)}, and recall on it is worth another pass.`,
+  ];
+}
+
+/**
+ * The material-gap detail page's narrative (F4.10, `[D-224]`) — the same fact
+ * {@link gapRowLine} states, plus F4.10's own distinction spelled out: a gap
+ * in the material, never a judgement about what she knows. Never the kit's
+ * quoted "one note that touched it" — `GapRow.notePaths` is empty by
+ * definition for a material gap (`classifyGap`: no note names it at all), so
+ * there is no mention to quote, honestly.
+ */
+export function materialGapNarrative(row: GapRow): readonly string[] {
+  return [
+    gapRowLine(row),
+    "So there's nothing to build practice from yet — this is a gap in your material, not in what you know.",
+  ];
+}
+
+/** The detail page's back-to-list control. Navigation chrome, not a claim about her material — no clause governs its wording. */
+export const GAP_DETAIL_BACK_LABEL = '‹ Back to the list';
 
 // ---------------------------------------------------------------------------
 // pass5g's past-paper chips (`[D-224]`) — named, never divided
@@ -528,6 +635,7 @@ export function allGapStrings(): readonly string[] {
     GAP_UNAVAILABLE_RETRY_LABEL,
     GAP_UNAVAILABLE_EYEBROW,
     FULL_SYLLABUS_ADVICE,
+    GAP_DETAIL_BACK_LABEL,
     ...Object.values(AFFORDANCE_LABELS),
     ...Object.values(READ_STATE_LABELS),
   ];
