@@ -17,7 +17,10 @@
      of Obsidian's default appearance, not a byte-for-byte copy of it, and it is
      labelled that way here rather than in a commit message nobody re-reads.
 
-   • The font stacks are likewise approximations of Obsidian's defaults.
+   • The font stacks are likewise approximations of Obsidian's defaults. One
+     of them is a deliberate DIVERGENCE rather than an approximation: see the
+     STY-5 comment beside `--font-text` below for why it is no longer aliased
+     to `--font-interface`.
 
    Scoping is Obsidian's own convention: a theme declares its values under
    `.theme-dark` / `.theme-light`, and Obsidian puts one of those classes on
@@ -90,7 +93,25 @@
   --font-interface:
     -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
-  --font-text: var(--font-interface);
+  /* STY-5 (`ol-l5og.18`, 2026-09-04): this used to be `var(--font-interface)` —
+     an unconditional alias that made this reconstruction's Text-font role
+     permanently identical to its Interface-font role. Obsidian's own published
+     reference (`--font-interface-theme`: "Font used for UI elements" vs
+     `--font-text-theme`: "Font used for text in the editor") documents these
+     as two independently-settable roles, and giving the editor its own
+     reading face — via a theme or her own Appearance settings — is a common
+     real choice, not an edge case. The alias meant `packages/plugin/styles.css`'s
+     `--olea-host-question-font: var(--font-text, Georgia, serif)` could never
+     reach its serif fallback under ANY variable set this workbench offers —
+     so every captured golden (Home, session-builder, retrospective, gap)
+     showed the panel's own headline design as untested, not as verified sans.
+     Declared as its own literal stack instead, so the plugin's fallback chain
+     has something real to surface. This is a reconstruction choice for the
+     simulator's default variable sets — not a republished claim about a
+     literal out-of-the-box Obsidian install, which is not independently
+     verified either way (see the file header). Flagged Class B for
+     retroactive review. */
+  --font-text: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
   --font-monospace: "Fira Code", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -127,6 +148,24 @@
   --font-interface:
     -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial,
     sans-serif;
-  --font-text: var(--font-interface);
+  /* STY-5 (`ol-l5og.18`, 2026-09-04): this used to be `var(--font-interface)` —
+     an unconditional alias that made this reconstruction's Text-font role
+     permanently identical to its Interface-font role. Obsidian's own published
+     reference (`--font-interface-theme`: "Font used for UI elements" vs
+     `--font-text-theme`: "Font used for text in the editor") documents these
+     as two independently-settable roles, and giving the editor its own
+     reading face — via a theme or her own Appearance settings — is a common
+     real choice, not an edge case. The alias meant `packages/plugin/styles.css`'s
+     `--olea-host-question-font: var(--font-text, Georgia, serif)` could never
+     reach its serif fallback under ANY variable set this workbench offers —
+     so every captured golden (Home, session-builder, retrospective, gap)
+     showed the panel's own headline design as untested, not as verified sans.
+     Declared as its own literal stack instead, so the plugin's fallback chain
+     has something real to surface. This is a reconstruction choice for the
+     simulator's default variable sets — not a republished claim about a
+     literal out-of-the-box Obsidian install, which is not independently
+     verified either way (see the file header). Flagged Class B for
+     retroactive review. */
+  --font-text: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
   --font-monospace: "Fira Code", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
 }

@@ -242,3 +242,29 @@ describe('the Today pane restores a visible keyboard focus ring (ol-p6t03, Q6.1/
     expect(body).toMatch(/outline:\s*2px solid var\(--interactive-accent,\s*#[0-9a-f]{6}\)/);
   });
 });
+
+describe('the mastery ladder spends one baseline row per stage, not three (ol-l5og.18 STY-5)', () => {
+  /** The declaration block of one Today-section rule, by selector. */
+  function ruleBody(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(css);
+    expect(m, `styles.css declares "${selector}" in the Today section`).not.toBeNull();
+    return m?.[1] ?? '';
+  }
+
+  it('.olea-today-mastery-ladder-row lays its children out on one line, not stacked', () => {
+    const body = ruleBody('.olea-today-mastery-ladder-row');
+    expect(body).toMatch(/flex-direction:\s*row/);
+    expect(body).not.toMatch(/flex-direction:\s*column/);
+  });
+
+  it('the head, dots and vitality breakdown are all flex items of that one row (no nested column)', () => {
+    for (const selector of [
+      '.olea-today-mastery-ladder-head',
+      '.olea-today-mastery-ladder-dots',
+      '.olea-today-mastery-ladder-vitality',
+    ]) {
+      expect(ruleBody(selector)).toMatch(/flex:/);
+    }
+  });
+});

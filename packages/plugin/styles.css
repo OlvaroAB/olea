@@ -1091,14 +1091,39 @@ button.olea-review-mcq-option:hover {
 
    THE DOTS ARE DECORATIVE, AND THAT IS WHY THEY MAY BE `aria-hidden`.
    `view.ts` states every non-zero vitality bucket as text in
-   `.olea-today-mastery-ladder-vitality` directly beneath the dots, so no
-   meaning rides on a dot's mark alone. Exactly two marks exist (vocabulary
-   registry §1): `.is-tending` (honey — reuses `--olea-host-attention`,
-   already owned by this root) and `.is-early` (a dashed outline — reuses
-   `--olea-host-muted`, already read elsewhere on this pane). The unmarked,
-   default dot is `holding` — safe to leave unmarked only because the other
-   two ARE marked; see `view.ts`'s own doc on why silence stopped being the
-   bug once both marks exist. */
+   `.olea-today-mastery-ladder-vitality`, trailing the dots on the same row
+   (see STY-5 below), so no meaning rides on a dot's mark alone. Exactly two
+   marks exist (vocabulary registry §1): `.is-tending` (honey — reuses
+   `--olea-host-attention`, already owned by this root) and `.is-early` (a
+   dashed outline — reuses `--olea-host-muted`, already read elsewhere on
+   this pane). The unmarked, default dot is `holding` — safe to leave
+   unmarked only because the other two ARE marked; see `view.ts`'s own doc on
+   why silence stopped being the bug once both marks exist.
+
+   STY-5 (`ol-l5og.18`, 2026-09-04): ONE BASELINE ROW PER STAGE. The kit-
+   fidelity sweep's second judgement found `.olea-today-mastery-ladder-row`
+   spending three stacked lines per stage (head, dots, vitality breakdown)
+   against the ratified `LadderRow`'s one (`docs/design/
+   pass5b-mastery-ratified`'s `Pass5aCandidateD.jsx`) — six visual lines
+   for four stages once the zero-count rows collapsed to a single line each,
+   roughly doubling the pane's height. `view.ts`'s DOM order is unchanged
+   (head, dots, vitality, in that order); what changed is that the row lays
+   its children out horizontally instead of stacking them, and the vitality
+   breakdown element is no longer created at all when every bucket reads
+   zero (STY-5's `view.ts` change) rather than existing empty and still
+   claiming a flex gap. No information is dropped: the vitality text is the
+   same text, on the same line as the stage it describes rather than below
+   it, and the kit's own row never showed a separate breakdown line either —
+   its vitality axis rides the dot marks alone, with `aria-hidden` unavailable
+   to a static mock. This build keeps the worded fallback FOR assistive tech
+   (the co-presence clause's textual half) while matching the kit's visual
+   economy for sighted readers.
+
+   NOT ADOPTED: the kit's separate right-aligned numeral column. This ladder's
+   `masteryCountLabel` already bakes the count into the leading word ("`N
+   seed`"), so a second, unlabelled number at the row's far end would repeat
+   the same fact rather than add one — copy.ts's shape stays as `ol-lohq`
+   left it; only the layout direction changed. */
 
 .olea-today-mastery {
   padding-top: 18px;
@@ -1145,10 +1170,16 @@ button.olea-review-mcq-option:hover {
   gap: 8px;
 }
 
+/* STY-5: one baseline row per stage — head, dots and the vitality breakdown
+   sit on the same line (wrapping only if the pane is too narrow to hold
+   them), rather than stacked as three lines. See the section banner above. */
 .olea-today-mastery-ladder-row {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
 }
 
 /* Row dividers (ratified ladder form, `docs/design/pass5b-mastery-ratified`'s
@@ -1165,13 +1196,17 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-today-mastery-ladder-head {
+  flex: 0 0 auto;
   font-size: 11.5px;
+  white-space: nowrap;
   color: var(--olea-host-muted);
 }
 
 .olea-today-mastery-ladder-dots {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
 }
 
@@ -1197,6 +1232,7 @@ button.olea-review-mcq-option:hover {
 
 .olea-today-mastery-ladder-vitality {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   gap: 4px 10px;
   font-size: 11px;

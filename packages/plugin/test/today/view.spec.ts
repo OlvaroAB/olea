@@ -112,3 +112,36 @@ describe('TodayView.recordDispute — the recorded state stays visible (ol-l5og.
     expect(RECORD_BODY).not.toMatch(/this\.openSheet = null;/);
   });
 });
+
+describe('TodayView.renderLadderRow — the vitality breakdown is absent, not blank, at zero (ol-l5og.18 STY-5)', () => {
+  const LADDER_START = VIEW.indexOf('private renderLadderRow(');
+  const LADDER_END = VIEW.indexOf('private renderScope(', LADDER_START);
+  if (LADDER_START === -1 || LADDER_END === -1) {
+    throw new Error('view.spec.ts: renderLadderRow markers moved in view.ts');
+  }
+  const LADDER_BODY = VIEW.slice(LADDER_START, LADDER_END);
+
+  it('guards the breakdown element with an early return when every vitality bucket is zero', () => {
+    const guardIndex = LADDER_BODY.indexOf(
+      'if (!VITALITY_ORDER.some((vitality) => byVitality[vitality] > 0)) return;',
+    );
+    const createIndex = LADDER_BODY.indexOf(
+      "createDiv({ cls: 'olea-today-mastery-ladder-vitality' })",
+    );
+    expect(guardIndex, 'expected the zero-bucket guard').toBeGreaterThan(-1);
+    expect(
+      createIndex,
+      'expected the breakdown element to still be created on the non-zero path',
+    ).toBeGreaterThan(-1);
+    expect(guardIndex).toBeLessThan(createIndex);
+  });
+
+  it('still creates the dots container unconditionally (the dots stay decorative, not the guard)', () => {
+    const dotsIndex = LADDER_BODY.indexOf("createDiv({ cls: 'olea-today-mastery-ladder-dots' })");
+    const guardIndex = LADDER_BODY.indexOf(
+      'if (!VITALITY_ORDER.some((vitality) => byVitality[vitality] > 0)) return;',
+    );
+    expect(dotsIndex, 'expected the dots container').toBeGreaterThan(-1);
+    expect(dotsIndex).toBeLessThan(guardIndex);
+  });
+});

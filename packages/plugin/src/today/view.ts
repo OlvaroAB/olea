@@ -354,11 +354,26 @@ export class TodayView extends ItemView {
    * means the vitality mark still renders from `styles.css`'s existing
    * rules with no edit to that file, which sits outside this bead's
    * `owns`). The dots are `aria-hidden`, same posture the old strip took,
-   * because the breakdown row beneath restates every non-zero bucket as
-   * text (`vitalityCountLabel`) — and because every occupied stage's
-   * buckets sum to its count, a non-empty stage always states at least one
-   * vitality word, so a stage with concepts in it never reads as
-   * vitality-silent.
+   * because the breakdown text restates every non-zero bucket
+   * (`vitalityCountLabel`) — and because every occupied stage's buckets sum
+   * to its count, a non-empty stage always states at least one vitality
+   * word, so a stage with concepts in it never reads as vitality-silent.
+   *
+   * **STY-5 (`ol-l5og.18`, 2026-09-04): one baseline row per stage, not
+   * three.** The kit-fidelity sweep's second judgement found this row
+   * spending three stacked lines (head, dots, vitality breakdown) where
+   * `docs/design/pass5b-mastery-ratified`'s ratified `LadderRow` spends one —
+   * a stage word, its dots and its count all on the same line. `styles.css`
+   * now lays `.olea-today-mastery-ladder-row`'s three children out
+   * horizontally instead of stacked, so this function's DOM order is
+   * unchanged; the density fix is presentational. The one structural change
+   * here is the breakdown element itself: it is now created only when at
+   * least one vitality bucket is non-zero, the same "absent, not blank"
+   * rule `tendingLine`'s caller already applies below — an always-created
+   * empty flex child was adding a stray gap after the dots on a `holding`-
+   * only row, and the a11y story is unaffected (a screen reader still meets
+   * nothing to announce for a row with no tending/early concepts, same as
+   * before this fix).
    */
   private renderLadderRow(
     parent: HTMLElement,
@@ -391,6 +406,10 @@ export class TodayView extends ItemView {
         dot.appendChild(renderSprig({ state, size: LADDER_SPRIG_SIZE, container: dot }));
       }
     }
+
+    // Absent, not blank, when every bucket is zero (STY-5) — the same rule
+    // `renderMasteryCourse`'s own `tending` line already applies below.
+    if (!VITALITY_ORDER.some((vitality) => byVitality[vitality] > 0)) return;
 
     const breakdown = row.createDiv({ cls: 'olea-today-mastery-ladder-vitality' });
     for (const vitality of VITALITY_ORDER) {
