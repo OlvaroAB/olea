@@ -162,6 +162,30 @@ describe('KeywordIndexEngine — incremental updates from vault events (C1.5)', 
     expect(engine.toPersisted()).toEqual(before);
   });
 
+  it('a create/modify for a non-markdown path (a review-log append) never becomes a document', async () => {
+    // `ol-3ux7.64.18`: the full scan is markdown-only, and the incremental
+    // path must agree — a `.olea/reviews/<day>.<device>.jsonl` append that a
+    // vault source surfaces as a `modify` event was being indexed (and then
+    // embedded, with wall-clock timestamps that changed its hash every run).
+    const vault = new MutableVaultSource();
+    vault.set('a.md', '# A\nalpha\n');
+    const engine = await KeywordIndexEngine.create({
+      vault,
+      store: new MemoryKeywordIndexStore(),
+      scheduler: immediateScheduler,
+    });
+    await engine.rebuild();
+    vault.set(
+      '.olea/reviews/2026-08-28.dev.jsonl',
+      '{"kind":"rating","at":"2026-08-28T10:00:00Z"}\n',
+    );
+    await engine.applyEvent({ kind: 'create', path: '.olea/reviews/2026-08-28.dev.jsonl' });
+    await engine.applyEvent({ kind: 'modify', path: '.olea/reviews/2026-08-28.dev.jsonl' });
+    vault.set('notes.txt', 'plain text');
+    await engine.applyEvent({ kind: 'create', path: 'notes.txt' });
+    expect(engine.toPersisted().documents.map((doc) => doc.path)).toEqual(['a.md']);
+  });
+
   it('rename moves the entry — no duplicate, nothing left at the old path', async () => {
     const vault = new MutableVaultSource();
     vault.set('old.md', '# Title\nprose\n');

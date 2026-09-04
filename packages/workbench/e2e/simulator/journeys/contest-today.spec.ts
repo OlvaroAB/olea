@@ -26,9 +26,12 @@ test(`@auto-web:simulator/journeys/contest-today ${WORLD}/${PERSONA} — contest
   await captureJourneyStep(page, JOURNEY, WEEK, 'before');
 
   // `driverContest('today')` polls for the dispute sheet to close after recording
-  // (`controller.ts`'s own `DRIVER_POLL_TIMEOUT_MS`) and THROWS if that poll times out — a real
-  // condition this journey must report rather than let abort the whole run, since it is a UI
-  // settle timing question, not a claim this journey makes about the contest mechanism itself.
+  // (`controller.ts`'s own `DRIVER_POLL_TIMEOUT_MS`) and THROWS if that poll times out. A throw
+  // here is a real defect, never a settle-timing question: the sheet closes only when
+  // `recordDispute` (`today/view.ts`) completes, and the one way it does not is
+  // `contestClaim` throwing inside it — `ol-3ux7.64.20` (a gesture rendered for a claim with
+  // no concepts). So the golden is still captured (the open sheet IS the evidence), and then
+  // the journey fails with the driver's own message rather than logging it away.
   let outcome: { outcome: string; reason?: string } | null = null;
   let driverError: string | null = null;
   try {
@@ -36,16 +39,7 @@ test(`@auto-web:simulator/journeys/contest-today ${WORLD}/${PERSONA} — contest
   } catch (error) {
     driverError = error instanceof Error ? error.message : String(error);
   }
-
   await captureJourneyStep(page, JOURNEY, WEEK, 'after');
-
-  if (outcome !== null) {
-    expect(['recorded', 'unavailable']).toContain(outcome.outcome);
-  } else {
-    // The gesture was clicked and the dispute was recorded (per `driverContest`'s own doc, the
-    // throw fires only AFTER `recordDispute` has already run) — only the sheet's own close
-    // settle timed out. Reported, never silently swallowed.
-    // eslint-disable-next-line no-console -- a diagnostic line for this journey's own report, not product logging.
-    console.log(`contest-today journey: driverContest timed out on sheet-close settle: ${driverError}`);
-  }
+  expect(driverError, 'driverContest threw — see ol-3ux7.64.20').toBeNull();
+  expect(['recorded', 'unavailable']).toContain(outcome?.outcome);
 });

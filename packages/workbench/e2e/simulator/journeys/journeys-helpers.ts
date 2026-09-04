@@ -123,8 +123,26 @@ export async function reviewScreenKind(
 }
 
 /** `.olea-review-note-missing`'s real "Skip for now" click gesture — its source note was deleted from the vault since the item was scheduled (`review/view.ts`'s `renderNoteMissing`), a real state the review loop must move past rather than fail on. */
+/**
+ * Clicks `selector` and then waits for the CURRENT `.olea-review-body` to be replaced — every
+ * review gesture that advances the queue re-renders the whole body (`review/view.ts`'s
+ * `render*` methods empty and rebuild it), so "the old body is detached" is the honest signal
+ * that the next screen is the one being read. Without it, `reviewScreenKind` read the previous
+ * card's body in the gap after the click (`ol-3ux7.64.18`'s fixture run: the last rating's
+ * stale body read as a card, Space on the not-yet-rendered complete screen did nothing).
+ */
+async function clickAndWaitForNextScreen(page: Page, selector: string): Promise<void> {
+  const current = frame(page).locator('.olea-review-body').first();
+  const handle = await current.elementHandle({ timeout: 10_000 });
+  await frame(page).locator(selector).click();
+  if (handle !== null) {
+    await handle.waitForElementState('hidden', { timeout: 10_000 }).catch(() => undefined);
+    await handle.dispose();
+  }
+}
+
 export async function skipNoteMissing(page: Page): Promise<void> {
-  await frame(page).locator('.olea-review-note-missing .olea-review-primary-action').click();
+  await clickAndWaitForNextScreen(page, '.olea-review-note-missing .olea-review-primary-action');
 }
 
 /** {@link reviewScreenKind}, skipping past any leading `note-missing` items (a real, unremarkable state — see {@link skipNoteMissing}'s own doc) so a journey's own "revealed"/"rated" steps land on an actual ratable item, or on `empty`/`complete` honestly. Bounded (10 skips) for the same reason {@link rateRemainingQueue} bounds its own loop. */
@@ -156,15 +174,22 @@ export async function revealCard(page: Page): Promise<void> {
     await frame(page).locator('.olea-review-root').focus();
     // eslint-disable-next-line no-await-in-loop -- see above.
     await page.keyboard.press('Space');
+    // Wait for the reveal render itself, not a fixed 200ms: the four buttons attach a beat after
+    // the keydown, and a fixed pause shorter than that beat made the NEXT iteration read 0, press
+    // Space again, and flip the card back (`ol-3ux7.64.18`'s fixture run — 0 buttons after five
+    // presses, every one of them a reveal undone by the next).
     // eslint-disable-next-line no-await-in-loop -- see above.
-    await page.waitForTimeout(200);
+    await ratingButtons
+      .first()
+      .waitFor({ state: 'attached', timeout: 2_000 })
+      .catch(() => undefined);
   }
   await expect(ratingButtons).toHaveCount(4);
 }
 
 /** Clicks the real `.olea-review-rating-btn--good` gesture — the same button a tap on "good" would click. */
 export async function clickRatingGood(page: Page): Promise<void> {
-  await frame(page).locator('.olea-review-rating-btn--good').click();
+  await clickAndWaitForNextScreen(page, '.olea-review-rating-btn--good');
 }
 
 /** Answers the current MCQ by clicking its first option (a real click gesture), waits for feedback, then advances via the footer's real "next item" button. */

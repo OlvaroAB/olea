@@ -17,7 +17,12 @@
  */
 
 import type { VaultEvent, VaultPath, VaultSource } from '../vault/types.js';
-import { type BuildProgress, buildFullIndex, DEFAULT_INDEX_CHUNK_SIZE } from './build.js';
+import {
+  type BuildProgress,
+  buildFullIndex,
+  DEFAULT_INDEX_CHUNK_SIZE,
+  DEFAULT_INDEX_EXTENSIONS,
+} from './build.js';
 import { indexDocument } from './document.js';
 import { type SearchHit, type SearchOptions, searchKeywordIndex } from './query.js';
 import { type CancellationSignal, macrotaskScheduler, type YieldScheduler } from './scheduling.js';
@@ -92,6 +97,17 @@ export class KeywordIndexEngine {
 
   /** Re-reads and replaces `path`'s entry, or drops any stale entry if the vault no longer has that file — defensive against an event describing a file that's since moved on. */
   private async reindexOrForget(path: VaultPath): Promise<void> {
+    // The same markdown-only rule `rebuild` (`buildFullIndex`'s `extensions`)
+    // applies to a full scan, applied to one event: a `create`/`modify` for a
+    // path the scan would never list must not become a document here either.
+    // Obsidian itself never emits an event for a dot-folder file, but a vault
+    // source that does (the workbench shim surfaces `.olea/reviews/*.jsonl`
+    // as a file — `ol-3ux7.64.18`) turned every review-log append into an
+    // indexed, embedded, wall-clock-stamped "document" before this guard.
+    if (!isIndexableExtension(path)) {
+      this.documents.delete(path);
+      return;
+    }
     if (await this.vault.exists(path)) {
       this.documents.set(path, await indexDocument(this.vault, path));
     } else {
@@ -147,4 +163,12 @@ export class KeywordIndexEngine {
   private async persist(): Promise<void> {
     await this.store.save(this.toPersisted());
   }
+}
+
+/** `path`'s extension (lower-cased, no dot) is one `DEFAULT_INDEX_EXTENSIONS` lists. A path with no extension is never indexable. */
+function isIndexableExtension(path: VaultPath): boolean {
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return false;
+  return DEFAULT_INDEX_EXTENSIONS.includes(base.slice(dot + 1).toLowerCase());
 }

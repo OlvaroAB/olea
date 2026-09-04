@@ -49,6 +49,16 @@ import type { IndexedBlock, IndexedDocument, PersistedKeywordIndex } from './typ
 /** Documents indexed per chunk before yielding. Small enough that a slow device still stays responsive between yields. */
 export const DEFAULT_INDEX_CHUNK_SIZE = 25;
 
+/**
+ * The extensions this index scans — markdown only: the block model, and
+ * therefore this index, is markdown-only; C3's binary formats are a separate
+ * pipeline. Exported so `KeywordIndexEngine.applyEvent` applies the IDENTICAL
+ * filter to an incremental event that `buildFullIndex` applies to a full scan
+ * (`ol-3ux7.64.18` found the two disagreeing: a `.olea/reviews/*.jsonl` append
+ * surfaced as a `modify` event was indexed as a document, then embedded).
+ */
+export const DEFAULT_INDEX_EXTENSIONS: readonly string[] = ['md'];
+
 export interface BuildProgress {
   readonly documentsProcessed: number;
   readonly documentsTotal: number;
@@ -89,7 +99,7 @@ export async function buildFullIndex(options: BuildFullIndexOptions): Promise<Bu
     signal,
     chunkSize = DEFAULT_INDEX_CHUNK_SIZE,
     onProgress,
-    extensions = ['md'],
+    extensions = DEFAULT_INDEX_EXTENSIONS,
   } = options;
 
   // `VaultSource.list`'s contract guarantees a stable, sorted path order, so

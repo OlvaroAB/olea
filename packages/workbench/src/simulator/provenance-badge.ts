@@ -1,5 +1,5 @@
 /**
- * The simulator's provenance badge (`docs/dev/simulator-design.md` §7):
+ * The simulator's provenance badge (`docs/dev/simulator-design.md` §2a, the world descriptor):
  * "a provenance badge is always on screen" naming the loaded world, the
  * simulated date and the transport mode, and it "cannot be dismissed."
  *

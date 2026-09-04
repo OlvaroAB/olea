@@ -92,7 +92,14 @@ export async function dismissCourseSetupModals(page: Page): Promise<void> {
 export async function gotoSimulator(page: Page, options: GotoSimulatorOptions = {}): Promise<void> {
   const world = options.world ?? process.env.WB_SIM_WORLD ?? 'fixture';
   const persona = options.persona ?? 'none';
-  await page.goto(`/#/simulator?world=${world}&persona=${persona}`);
+  // `WB_SIM_TRANSPORT` (`ol-3ux7.64.18`): unset means the route's default (`replay`, the
+  // bundled cassette — what a Pages visitor gets). `record` points the SAME journeys at
+  // `olea-service`'s `simulator-serve.mjs --spend-authorized` proxy, so the cassette is filled
+  // by the exact gestures, answer texts and day-0 state the journeys replay afterwards — a fill
+  // walked by a different script diverges in payload and never replays (the first attempt did).
+  const transport = process.env.WB_SIM_TRANSPORT;
+  const transportParam = transport === undefined ? '' : `&transport=${transport}`;
+  await page.goto(`/#/simulator?world=${world}&persona=${persona}${transportParam}`);
   await waitForSettled(page, SIMULATOR_STATE_ID);
   await dismissCourseSetupModals(page);
 }
