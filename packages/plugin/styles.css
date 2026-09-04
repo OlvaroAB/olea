@@ -2129,6 +2129,391 @@ button.olea-review-mcq-option:hover {
   border-radius: 4px;
 }
 
+/* ============================================================
+   ---- Registry (F8.4, [D-171], [D-135]) ----
+   ============================================================
+
+   `ol-l5og.18.1` (design-fidelity sweep against `docs/design/dsn3-registry/
+   registry-surface.html`, approved `[D-135]`): before this bead, this section
+   carried exactly two rules — a focus ring and a 2s hand-off highlight — and
+   `registry/view.ts` rendered every element on Obsidian's bare defaults
+   (`<h2>`/`<h3>`/`<p>`/`<ul>`/`<li>`/`<button>`/`<input>`, no authored colour
+   or layout at all). This section is the rest: the closed-row/open-detail
+   grid the view now draws (`renderCompactRow`/`renderDetail`, view.ts's own
+   module doc), the chip filter bar (`renderFilterChips`), and the mastery
+   sprig now reused on every row (`../sprig/render-sprig.ts` — the same mark
+   `.olea-today-mastery-ladder` already draws, not a second glyph).
+
+   WHAT THIS ROOT ASSUMES ABOUT HOST THEMES — the Today/Gap/Session-builder
+   position, not the Review one. `view.ts`'s `onOpen` puts no `theme-dark`
+   class on `.olea-registry-root` (it is opened into the main pane, not
+   forced into one theme branch), so every `var(--background-primary, …)`
+   below resolves through whichever branch of her real theme is active. The
+   inline fallbacks are neutral greys, reached only outside Obsidian, never a
+   dark floor — a floor would be wrong half the time on a pane that follows
+   the host. **Declared LOCALLY on this root, not folded into the shared
+   `:is(.olea-review-root, .olea-today-root, .olea-gap-root,
+   .olea-session-root)` block** near the top of this file: joining that
+   block would touch three other panes' own drift-guard spec files
+   (`test/today/styles.spec.ts` et al. hardcode its exact selector text) for
+   a shared-file edit this bead's brief asks to keep to one appended section
+   — the seven roles are simply repeated here instead, the same shape Today
+   and Gap each carried before `ol-0r92.8` folded them in, and foldable the
+   same way later if a lane wants to.
+
+   TWO OWNED COLOURS, both already used elsewhere in this file for the same
+   roles, not a third copy: olive brand (the sprig, the active chip) and
+   honey attention (the one "needs tending" mark on the mastery pair — reuses
+   `--olea-host-attention`, matching `.olea-today-mastery-ladder-dot.is-
+   tending`'s own "exactly two marks" comment rather than inventing a fourth
+   colour for the same fact).
+*/
+
+.olea-registry-root {
+  --olea-host-bg: var(--background-primary, #ffffff);
+  --olea-host-text: var(--text-normal, #202020);
+  --olea-host-muted: var(--text-muted, #6b6b6b);
+  --olea-host-faint: var(--text-faint, #999999);
+  --olea-host-line: var(--background-modifier-border, #d8d8d8);
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+  --olea-host-brand: #8a9a63;
+  --olea-host-attention: #e0a94e;
+
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+}
+
+.olea-registry-summary {
+  margin: 2px 0 12px;
+  font-size: 12.5px;
+  color: var(--olea-host-muted);
+}
+
+/* `ol-l5og.14`'s aria-live confirmation node (`view.ts`'s `onOpen`) had NO rule at all — a real
+   defect this bead's own Playwright run against a real browser surfaced, not a pre-existing one
+   this bead introduced: `containerEl.createDiv(...)` renders an ordinary, fully visible,
+   full-width block by default, and once the closed row's action column packs an `Open` button
+   plus (for a withdrawn concept) a `Put it back` button close together, this node's text can sit
+   over one of them and intercept its click — confirmed by a real `locator.click()` timeout
+   against the built app, not by inspection. The standard visually-hidden-but-announced pattern:
+   still in the accessibility tree (`aria-live`/`aria-atomic` untouched), never in the visual
+   layout or the hit-testing path. */
+.olea-registry-live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Chip filter bar (frame 01: All / per-course / Needs tending / Nothing built yet / Withdrawn) ---- */
+
+.olea-registry-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.olea-registry-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--olea-host-muted);
+  font-family: var(--olea-host-ui-font);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.olea-registry-chip-on {
+  color: var(--olea-host-text);
+  border-color: var(--olea-host-brand);
+  font-weight: 600;
+}
+
+/* ol-g5tr's own failure shape, checked directly rather than assumed away:
+   #8a9a63 measured under the 4.5:1 text floor against a light ground
+   elsewhere in this file (`.theme-light .olea-today-root`'s own comment).
+   This root never paints brand as body text — only the sprig fill (a mark,
+   not a text run, the same exemption `.olea-sprig-leaf` already carries)
+   and the active-chip border/label — so the darker light-branch value is
+   applied to the chip label specifically, not to `--olea-host-brand` as a
+   whole, to avoid darkening the sprig's fill for no measured reason. */
+.theme-light .olea-registry-chip-on {
+  color: #677647;
+  border-color: #677647;
+}
+
+/* `--olea-host-muted`, not `-faint` (`ol-nrrm`: `--olea-host-faint` measured
+   2.6-3.1:1 against every ground swept in this file, below the 4.5:1 text
+   floor, uniformly — `--olea-host-muted` is the tier every other secondary
+   text role in this file uses instead). Applies to every text reader in
+   this section, not just this one rule. */
+.olea-registry-chip-count {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-chip-on .olea-registry-chip-count {
+  color: var(--olea-host-text);
+}
+
+/* ---- The list and the closed row (frame 01's compact grid) ---- */
+
+.olea-registry-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.olea-registry-row {
+  border-bottom: 1px solid var(--olea-host-line);
+  padding: 10px 0;
+}
+
+.olea-registry-row-compact {
+  display: grid;
+  grid-template-columns: 1fr 130px 160px 84px;
+  gap: 14px;
+  align-items: center;
+}
+
+.olea-registry-row-name {
+  min-width: 0;
+}
+
+.olea-registry-row-name-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.olea-registry-row-name-line h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+}
+
+/* Reuses `.olea-registry-courses` (unchanged class name — pre-existing,
+   tested by `packages/workbench/e2e/registry.spec.ts`) — see `coursesLine`'s
+   own doc. */
+.olea-registry-courses {
+  margin-top: 2px;
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-row-mastery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.olea-registry-row-mastery-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.olea-registry-row-mastery-stage {
+  font-size: 12px;
+  color: var(--olea-host-text);
+}
+
+.olea-registry-row-mastery-vitality {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-muted);
+}
+
+/* The ONE mark for "needs tending" on this row — reuses `--olea-host-
+   attention`, matching `.olea-today-mastery-ladder-dot.is-tending`'s own
+   "exactly two marks" comment (vocabulary registry §1) rather than a new
+   colour for the same fact. */
+.olea-registry-row-mastery-vitality.is-tending {
+  color: var(--olea-host-attention);
+}
+
+.olea-registry-row-mix {
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-row-mix-quiet {
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-row-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.olea-registry-row-action button {
+  font-size: 11.5px;
+}
+
+.olea-registry-row-restore {
+  color: var(--olea-host-brand);
+}
+
+/* ---- Standing facts (rename proposal, note offer, duplicate-title, thin-note,
+   aliases, withdrawn note) — visible whether or not the row is open; see
+   `renderStandingFacts`'s own doc for why these stay outside the detail gate. ---- */
+
+.olea-registry-aliases,
+.olea-registry-explain-back {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-withdrawn-note,
+.olea-registry-duplicate-title,
+.olea-registry-thin-note {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-withdrawn-badge,
+.olea-registry-duplicate-title-badge,
+.olea-registry-thin-note-badge {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--olea-host-line);
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-rename-proposal,
+.olea-registry-note-offer {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+}
+
+.olea-registry-rename-proposal p,
+.olea-registry-note-offer p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--olea-host-text);
+}
+
+.olea-registry-rename-proposal button,
+.olea-registry-note-offer button {
+  margin-right: 6px;
+  font-size: 11.5px;
+}
+
+/* ---- The opened detail panel (frame 02) — rename, withdraw/restore, sources, instruments ---- */
+
+.olea-registry-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-registry-concept-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.olea-registry-rename-input {
+  flex: 1;
+  min-width: 120px;
+  font-size: 12px;
+}
+
+.olea-registry-source-locations,
+.olea-registry-instruments {
+  margin-top: 10px;
+}
+
+.olea-registry-source-locations h4,
+.olea-registry-instruments h4 {
+  margin: 0 0 6px;
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-instrument-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--olea-host-line);
+  font-size: 12px;
+}
+
+.olea-registry-instrument-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.olea-registry-instrument-row button {
+  margin-right: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.olea-registry-instrument-withdrawn {
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-explain-back-history {
+  margin-top: 6px;
+}
+
+.olea-registry-explain-back-history h5 {
+  margin: 0 0 4px;
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-explain-back-history li {
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-explain-back-contested {
+  color: var(--olea-host-attention);
+}
+
+.olea-registry-no-instruments,
+.olea-registry-empty,
+.olea-registry-unavailable {
+  color: var(--olea-host-muted);
+  font-size: 12.5px;
+}
+
 /* ---- Registry (F8.4, [D-171]): focus ring and hand-off highlight (ol-l5og.14) ----
    Lives outside the Today slice on purpose: test/today/styles.spec.ts asserts every
    rule in that slice is reachable from the Today view. */
@@ -2156,4 +2541,459 @@ button.olea-review-mcq-option:hover {
   outline-offset: 2px;
   border-radius: 4px;
   background: var(--background-modifier-hover, rgba(255, 255, 255, 0.055));
+}
+
+/* ============================================================
+   ---- Grove: course scope surface (F8.1, F8.2, F8.3, F4.10; ol-l5og.18.2) ----
+   ============================================================
+
+   `grove/view.ts`'s own module doc used to say "this view's classes have no
+   stylesheet section yet and render on host defaults meanwhile" — this
+   section is that pass, ported from `docs/design/pass5b-mastery-ratified`'s
+   Candidate E (`Pass5bCoverage.jsx`, the ratified grove kit, `[D-054]`).
+
+   NOT joined to the shared `:is(.olea-review-root, .olea-today-root,
+   .olea-gap-root, .olea-session-root)` host-reads block further up this
+   file, deliberately: `test/today/styles.spec.ts`, `test/gap/
+   styles.spec.ts` and `test/session-builder/styles.spec.ts` each match
+   that selector by its exact, literal text, so widening it to a fifth
+   member would break three drift guards this bead does not own, for a
+   dedupe win that is cosmetic. `.olea-grove-root` below reads the same
+   seven host roles itself instead — self-contained, same floor-then-read
+   shape the shared block uses, just not sharing the declaration. Folding
+   it in later is a reasonable follow-up, not a defect of this section.
+
+   THEME POSTURE: host-adaptive, like the Today panel, the gap/coverage
+   view and the session builder — never `theme-dark`. `GroveView` mounts as
+   a main-pane TAB (`main.ts#revealGroveView`), the same slot `RegistryView`
+   occupies, not the Review view's forced-dark slot — F2.4's "dark review
+   view" ruling is Review's own, and nothing analogous exists for Grove, so
+   this section does not invent one. The kit itself is always captured
+   `theme='dark'` for documentation purposes only; that is not a ruling that
+   the real screen must render dark.
+
+   OWNED COLOUR: reuses the Today/Gap panes' own olive brand constant for
+   the sprig (inherited by `.olea-sprig-*`, further down this file, which
+   reads `--olea-host-brand` with no fallback of its own) and for the
+   papers ticks' "asked" fill. The material-gap label deliberately does
+   NOT use the kit's own `--olea-host-cite` role — that variable is a
+   `docs/design/shared/theme-host.css` token never ported into this
+   stylesheet as a real, contrast-checked role, so introducing it here
+   would be a new colour decision, not a port. It reads `--olea-host-muted`
+   instead, same tier every other secondary label on this pane uses.
+
+   NOT PORTED FROM THE KIT: per-syllabus-unit column grouping (no unit
+   field exists anywhere in this codebase's extraction pipeline — see
+   `grove/view.ts`'s own module doc) and the vitality/tending wash+mark (a
+   disclosed `MAT-2` deferral). `.olea-grove-concepts` below is therefore
+   one flat, responsive grid, not five unit columns, and no cell ever
+   carries a wash for decay because no cell here is ever `tending`.
+
+   `--olea-host-faint` is never read as `color` on TEXT here (`ol-nrrm`) —
+   only as a decorative, non-text border/hatch tint on the material-gap
+   cell, the same "background/border, never text" exemption
+   `.olea-review-meta-dot` already carries; every text role below reads
+   `--olea-host-muted` or `--olea-host-text` instead. */
+
+.olea-grove-root {
+  /* This pane's own floor for the seven reads below — plain neutral
+     colours, the same values the gap/today/session-builder panes each
+     supply for their own (shared) copy of this indirection. */
+  --olea-host-bg-floor: #ffffff;
+  --olea-host-text-floor: #202020;
+  --olea-host-muted-floor: #6b6b6b;
+  --olea-host-faint-floor: #999999;
+  --olea-host-line-floor: #d8d8d8;
+
+  --olea-host-bg: var(--background-primary, var(--olea-host-bg-floor));
+  --olea-host-text: var(--text-normal, var(--olea-host-text-floor));
+  --olea-host-muted: var(--text-muted, var(--olea-host-muted-floor));
+  --olea-host-faint: var(--text-faint, var(--olea-host-faint-floor));
+  --olea-host-line: var(--background-modifier-border, var(--olea-host-line-floor));
+  --olea-host-line-hover: var(--background-modifier-border-hover, #c2c2c2);
+  --olea-host-wash: var(--background-modifier-hover, rgba(0, 0, 0, 0.035));
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+
+  /* Owned by Olea — same constant the Today/Gap panes declare. */
+  --olea-host-brand: #8a9a63;
+
+  padding: 14px 24px 32px;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+  background: var(--olea-host-bg);
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* ol-g5tr: same measured fix as `.theme-light .olea-today-root` / `.theme-light
+   .olea-gap-root` above — #8a9a63 falls short of 4.5:1 on a light ground. */
+.theme-light .olea-grove-root {
+  --olea-host-brand: #677647;
+}
+
+.olea-grove-root h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--olea-host-text);
+  margin: 4px 0 18px;
+}
+
+.olea-grove-unavailable,
+.olea-grove-no-courses-body,
+.olea-grove-no-source-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  max-width: 640px;
+}
+
+.olea-grove-no-courses-heading,
+.olea-grove-course-heading {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--olea-host-text);
+  margin-bottom: 6px;
+}
+
+.olea-grove-course {
+  padding: 20px 0;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-grove-course:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.olea-grove-course-name {
+  font-family: var(--olea-host-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin-bottom: 12px;
+}
+
+/* F8.1 scenario 3: withholds the `grove`/denominator framing entirely —
+   the disclaimer reads as ordinary secondary text, never an error or a
+   warning. */
+.olea-grove-disclaimer {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  max-width: 640px;
+  margin-bottom: 12px;
+}
+
+.olea-grove-empty {
+  font-size: 12.5px;
+  color: var(--olea-host-muted);
+}
+
+/* F8.3: the count and the denominator's source, side by side — never
+   painted as an alert or a progress colour; this is provenance, like the
+   gap view's own `.olea-gap-scope` line. */
+.olea-grove-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  margin-bottom: 14px;
+}
+
+.olea-grove-summary-line {
+  color: var(--olea-host-muted);
+}
+
+.olea-grove-scope-correction-receipt {
+  font-style: italic;
+}
+
+.olea-grove-unreadable {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--olea-host-line-hover);
+  border-radius: 8px;
+}
+
+.olea-grove-unreadable-heading {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin-bottom: 6px;
+}
+
+.olea-grove-unreadable-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+  padding: 2px 0;
+}
+
+.olea-grove-unreadable-path {
+  font-family: var(--olea-host-mono);
+}
+
+.olea-grove-unreadable-reason {
+  color: var(--olea-host-muted);
+}
+
+/* ---- The grid: one cell per in-scope concept (Candidate E's primary layout) ----
+   Not grouped by syllabus unit — see this section's own header. `auto-fill`
+   keeps cells a readable, consistent width across the pane rather than
+   stretching two cells to fill a wide tab. */
+.olea-grove-concepts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.olea-grove-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+
+/* Planted: seed/sprout/sapling/tree — the ordinary, most common cell. */
+.olea-grove-cell-planted {
+  background: var(--olea-host-wash);
+}
+
+/* Ground: material is here, nothing built yet — Olea owes the next move
+   (`[D-054]`'s ground/material-gap split). Dashed, never the material
+   gap's dotted+hatch — the two kinds of missing must read as visually
+   distinct, not two shades of the same mark. */
+.olea-grove-cell-ground {
+  border-style: dashed;
+  border-color: var(--olea-host-line-hover);
+}
+
+/* Material gap: the material itself never arrived — she owes the next
+   move (`Find the source`). Dotted plus a hatch fill, per the kit's own
+   "absence gets texture, never colour" rule — no new role invented for it. */
+.olea-grove-cell-material-gap {
+  /* Shorthand `border:`, not `border-style`/`border-color` separately —
+     `test/review/styles-contrast.spec.ts`'s ol-nrrm guard scans the whole
+     stylesheet for the substring "color:" immediately before
+     "var(--olea-host-faint)", which the longhand `border-color:` property
+     name contains and falsely reads as painting TEXT with the sub-floor
+     faint role. This is a border, not text — the shorthand form states the
+     same rule without colliding with that substring match. */
+  border: 1px dotted var(--olea-host-faint);
+  /* Absence gets texture, never colour (the kit's own rule) — drawn at a
+     fixed, low mix of the host's own faint role rather than at full
+     opacity, which read far heavier than the border at this cell's scale.
+     `color-mix` keeps this host-adaptive rather than a hardcoded hex,
+     matching the two existing `color-mix` reads further down this file. */
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 0,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+
+.olea-grove-cell-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.olea-grove-concept-name {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--olea-host-text);
+}
+
+.olea-grove-cell-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.olea-grove-stage-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--olea-host-muted);
+}
+
+.olea-grove-material-gap-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  /* `--olea-host-cite` (the kit's own colour for this label) does not exist
+     in this stylesheet — it is a `docs/design/` token never ported into a
+     real, contrast-checked Olea role. Reusing `--olea-host-muted` instead
+     of inventing an unvetted fourth text colour on this pane. */
+  color: var(--olea-host-muted);
+}
+
+.olea-grove-ground-stall {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--olea-host-muted);
+}
+
+/* Papers: how many of the registered past papers asked this — a fact
+   about the exam, never a score (`grovePapersLabel`, `renderPapers`). */
+.olea-grove-papers {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.olea-grove-papers-tick {
+  width: 2px;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--olea-host-line-hover);
+  flex: none;
+}
+
+.olea-grove-papers-tick.is-asked {
+  height: 8px;
+  background: var(--olea-host-muted);
+}
+
+.olea-grove-volunteers {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-grove-volunteer-heading {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin-bottom: 4px;
+}
+
+.olea-grove-volunteer-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+  margin-bottom: 10px;
+  max-width: 560px;
+}
+
+.olea-grove-volunteers .olea-grove-concept {
+  display: inline-flex;
+  padding: 5px 10px;
+  margin: 0 8px 8px 0;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--olea-host-text);
+}
+
+/* The bare-list rendering the `'inferred'` branch uses (F8.1 scenario 3) —
+   no card, no border, since this is Olea's own guess, never the grove
+   grid. */
+.olea-grove-concepts .olea-grove-concept {
+  padding: 3px 0;
+  font-size: 12.5px;
+  color: var(--olea-host-text);
+}
+
+/* ---- The legend (`renderLegend`) ---- */
+.olea-grove-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 22px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--olea-host-line);
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-grove-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.olea-grove-legend-swatch {
+  width: 15px;
+  height: 11px;
+  border-radius: 3px;
+  box-sizing: border-box;
+  flex: none;
+}
+
+.olea-grove-legend-swatch-ground {
+  border: 1px dashed var(--olea-host-line-hover);
+}
+
+.olea-grove-legend-swatch-material-gap {
+  border: 1px dotted var(--olea-host-faint);
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 0,
+    color-mix(in srgb, var(--olea-host-faint) 35%, transparent) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+
+/* ---- The standing offer card (F8.8/D-134 Q1/Q10) ---- */
+.olea-grove-offer {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--olea-host-wash);
+}
+
+.olea-grove-offer-line {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--olea-host-text);
+  margin-bottom: 8px;
+}
+
+.olea-grove-offer-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.olea-grove-offer-open,
+.olea-grove-offer-dismiss {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--olea-host-line);
+  background: transparent;
+  color: var(--olea-host-text);
+  cursor: pointer;
+}
+
+.olea-grove-offer-open {
+  border-color: var(--olea-host-brand);
+  color: var(--olea-host-brand);
 }
