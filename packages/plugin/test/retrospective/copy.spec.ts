@@ -6,12 +6,17 @@ import type {
 import { describe, expect, it } from 'vitest';
 import {
   carriesLine,
+  carriesRowDetail,
+  carriesRowName,
   conceptLine,
+  conceptRowDetail,
+  conceptRowName,
   OWN_WORDS_PROMPT,
   OWN_WORDS_SECTION_HEADING,
   offerCardLine,
   scopeFactLine,
   scopeOriginLine,
+  sectionCountLine,
   tooEarlyCountLine,
   vitalityLabel,
 } from '../../src/retrospective/copy.js';
@@ -65,6 +70,50 @@ describe('retrospective copy — no score, no percentage, no verdict', () => {
     const text = conceptLine(line);
     expect(text).toContain('sapling');
     expect(text).toContain('holding');
+  });
+
+  it('the two-column row split keeps both axes together (F2.11 co-presence, `[D-116]`)', () => {
+    // The screen draws a concept as a name and a quiet detail column
+    // (`docs/design/dsn2-retrospective/retrospective-surface.html:90-93`). The
+    // split is the place co-presence could be lost silently: a detail column
+    // carrying only the stage is indistinguishable from one carrying "holding",
+    // and the drawing's own frame-04 note says the omission reads as the most
+    // flattering of the three values.
+    const line: RetrospectiveConceptLine = {
+      conceptId: 'c1',
+      conceptName: 'Concept one',
+      stage: 'sapling',
+      vitality: 'holding',
+    };
+    expect(conceptRowName(line)).toBe('Concept one');
+    expect(conceptRowDetail(line)).toContain('sapling');
+    expect(conceptRowDetail(line)).toContain('holding');
+    // Nothing about the concept's identity leaks into the quiet column, and
+    // nothing about its reading leaks into the name.
+    expect(conceptRowDetail(line)).not.toContain('Concept one');
+    expect(conceptRowName(line)).not.toContain('sapling');
+  });
+
+  it('the carries row split says where it carries, without re-asserting the name', () => {
+    const line: RetrospectiveCarriesLine = {
+      conceptId: 'c1',
+      conceptName: 'Concept one',
+      otherCourses: ['C2'],
+      carriesToFinalAssessment: false,
+    };
+    expect(carriesRowName(line)).toBe('Concept one');
+    expect(carriesRowDetail(line)).toContain('C2');
+    expect(carriesRowDetail(line)).not.toContain('Concept one');
+  });
+
+  it('a section count is a count with its own denominator, never a ratio', () => {
+    expect(sectionCountLine(1)).toBe('1 concept');
+    expect(sectionCountLine(21)).toBe('21 concepts');
+    expect(sectionCountLine(0)).toBe('0 concepts');
+    for (const n of [0, 1, 21]) {
+      expect(sectionCountLine(n)).not.toMatch(NO_SCORE_PATTERN);
+      expect(sectionCountLine(n)).not.toContain(' of ');
+    }
   });
 
   it('a carries line never fabricates a single "the" other course', () => {

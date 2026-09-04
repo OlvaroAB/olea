@@ -4866,3 +4866,273 @@ button.olea-review-mcq-option:hover {
 .olea-registry-root .olea-registry-row-mix-quiet {
   font-style: italic;
 }
+
+/* ============================================================
+   ---- Retrospective: F8.8's own view (`[STY-1]`, ol-l5og.18.11) ----
+   ============================================================
+
+   Kit: `docs/design/dsn2-retrospective/retrospective-surface.html` — DSN-2,
+   the approved drawing `[POST-1]` (`ol-r68l`) was built from. Frame 02 is the
+   scope statement, frames 04-06 the three groupings, frame 07 the
+   thin-evidence case.
+
+   WHY THIS SECTION EXISTS. `retrospective/view.ts` set ten
+   `olea-retrospective-*` classes and NONE of those selectors existed in this
+   file, so every frame of the drawing landed as a default `h2`, bare divs, and
+   a native input touching a grey button. The 2026-09-04 kit-fidelity
+   judgement scored the view 1 of 5 and recorded that its copy was faithful
+   throughout — "pure styling debt: item 1 alone likely moves this view from 1
+   to 3-4 without touching view.ts". It also produced one of David's two
+   "appeared empty" reports, which was this: five sentences at identical size,
+   weight and colour with no spacing reads as an error message, not as an
+   answer.
+
+   THE ONE THING THIS SECTION MUST GET RIGHT. Frame 02 is the drawing's
+   central move — "every post-exam screen ever built puts a number here; this
+   one puts the scope fact and its source". The space a grade would occupy is
+   not empty, it is occupied, and it has to LOOK occupied or the next build
+   that needs a headline will fill it. So the scope statement is the only
+   thing on this surface drawn as the kit's keep-box: brand border, brand
+   wash, a lead in the content face, and the honesty clamp inside the same
+   card rather than beneath the groupings as a footnote — which is what the
+   drawing's frame 02 says explicitly it must not be.
+
+   Everything else reuses the shared primitives above rather than drawing a
+   second copy: the three groupings are `.olea-panel` with `.olea-panel-head`
+   and `.olea-panel-count`, and the keep gesture is `.olea-button-primary`.
+   `view.ts` names those classes directly, so this section carries only what is
+   specific to the retrospective. */
+
+.olea-retrospective-root {
+  /* This pane's own floor for the host reads below — plain neutral colours,
+     the same values `.olea-grove-root` and the sidebar panes each supply. */
+  --olea-host-bg-floor: #ffffff;
+  --olea-host-text-floor: #202020;
+  --olea-host-muted-floor: #6b6b6b;
+  --olea-host-faint-floor: #999999;
+  --olea-host-line-floor: #d8d8d8;
+
+  --olea-host-bg: var(--background-primary, var(--olea-host-bg-floor));
+  --olea-host-text: var(--text-normal, var(--olea-host-text-floor));
+  --olea-host-muted: var(--text-muted, var(--olea-host-muted-floor));
+  --olea-host-faint: var(--text-faint, var(--olea-host-faint-floor));
+  --olea-host-line: var(--background-modifier-border, var(--olea-host-line-floor));
+  --olea-host-line-hover: var(--background-modifier-border-hover, #c2c2c2);
+  --olea-host-wash: var(--background-modifier-hover, rgba(0, 0, 0, 0.035));
+  --olea-host-ui-font: var(--font-interface, var(--font-text, sans-serif));
+  --olea-host-mono: var(--font-monospace, monospace);
+  --olea-host-content-font: var(--font-text, Georgia, serif);
+
+  /* Owned by Olea — the same constants the Today/Gap/Grove panes declare. */
+  --olea-host-brand: #8a9a63;
+  --olea-host-attention: #e0a94e;
+  /* The keep-box's own wash, `--olea-host-cite-wash` in the kit's token table
+     (docs/design/shared/theme-host.css) — olive at 13%, the one ground on this
+     surface that is not the host's. */
+  --olea-retrospective-keep-wash: rgba(138, 154, 99, 0.13);
+
+  padding: 18px 26px 36px;
+  font-family: var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+  background: var(--olea-host-bg);
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* The light branch takes the darker olive the token table specifies for it,
+   for the same reason every other pane does: the dark-ground olive drops below
+   the contrast floor on a light ground (`ol-g5tr`). */
+body.theme-light .olea-retrospective-root {
+  --olea-host-brand: #677647;
+  --olea-retrospective-keep-wash: rgba(107, 123, 74, 0.11);
+}
+
+.olea-retrospective-root :focus-visible {
+  outline: 2px solid var(--interactive-accent, #8a5cf6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The kit never leads with a view title — its surfaces open on the thing
+   itself. `[D-134]` Q10 made this a dedicated view, and a dedicated view in
+   Obsidian gets a tab, so the heading stays; it is set at the ramp's title
+   step and quietened so it reads as the tab's name rather than as a claim. */
+.olea-retrospective-title {
+  margin: 0 0 14px;
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-title);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--olea-host-text);
+}
+
+/* ---- Frame 02: the space a grade would occupy ---- */
+
+.olea-retrospective-scope {
+  margin-bottom: 22px;
+  padding: 18px 19px var(--olea-space-5);
+  border: 1px solid var(--olea-host-brand);
+  border-radius: var(--olea-radius-panel);
+  background: var(--olea-retrospective-keep-wash);
+}
+
+/* `.scope-fact` (:79) — the content face, at the ramp's lead step. This is the
+   sentence that stands where a mark would, and it is the only 15px text on the
+   surface. */
+.olea-retrospective-scope-fact {
+  font-family: var(--olea-host-content-font, var(--font-text, Georgia, serif));
+  font-size: var(--olea-type-lead);
+  line-height: 1.5;
+  color: var(--olea-host-text);
+  text-wrap: pretty;
+}
+
+/* The honesty clamp, inside the same card and immediately under the fact — the
+   drawing's frame 02 is explicit that it is "the honesty clamp stated up front
+   rather than as a disclaimer at the bottom". */
+.olea-retrospective-disclaimer {
+  margin-top: 10px;
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  text-wrap: pretty;
+}
+
+/* `.scope-src` (:80) — mono, small, a source line and never a sentence. */
+.olea-retrospective-scope-origin {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--olea-host-line);
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-micro);
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+}
+
+/* ---- Frames 04-06: the three groupings ----
+
+   The panel chrome comes from `.olea-panel` / `.olea-panel-head` /
+   `.olea-panel-count`, which `view.ts` names directly. Only the rows are
+   specific to this surface. ---- */
+
+.olea-retrospective-section {
+  margin-bottom: 16px;
+}
+
+/* `.cx-row` (:90-93): the name, then a quiet column carrying stage AND
+   vitality together. Both axes or neither (F2.11 / `[D-116]`), which is why
+   the detail column is one string from `copy.ts` rather than two fields the
+   layout could drop one of. */
+.olea-retrospective-row {
+  display: grid;
+  grid-template-columns: 1fr 170px;
+  gap: var(--olea-space-3);
+  align-items: baseline;
+  padding: 9px 2px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-retrospective-row:first-child {
+  border-top: none;
+}
+
+.olea-retrospective-row-name {
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body);
+  line-height: 1.35;
+  color: var(--olea-host-text);
+}
+
+.olea-retrospective-row-detail {
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-fine);
+  line-height: 1.35;
+  color: var(--olea-host-muted);
+}
+
+/* The stated count of concepts with no durable reading — a count, deliberately
+   NOT a fourth panel (DSN-2 NOTES §1: "a stated count, not a fourth
+   grouping"). Drawn as a line between the groupings so it cannot be read as
+   one of them. */
+.olea-retrospective-too-early {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--olea-host-line-hover, var(--olea-host-line));
+  border-radius: var(--olea-radius-control);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body);
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  text-wrap: pretty;
+}
+
+/* ---- The two states that are not a reading ---- */
+
+.olea-retrospective-none,
+.olea-retrospective-unavailable,
+.olea-retrospective-empty {
+  max-width: 560px;
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body);
+  line-height: 1.65;
+  color: var(--olea-host-muted);
+  text-wrap: pretty;
+}
+
+.olea-retrospective-none,
+.olea-retrospective-unavailable {
+  padding: 20px 0 0;
+}
+
+/* ---- `[D-190]`: the optional line, beside the keep gesture ----
+
+   The judgement found the input "at ~176px default width truncating its own
+   placeholder, and a grey button touching it". The placeholder is the whole
+   of what tells her the line is optional and one line, so an input that
+   truncates it has removed the explanation, not just the room. ---- */
+
+.olea-retrospective-accept-area {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--olea-host-line);
+  max-width: 560px;
+}
+
+.olea-retrospective-own-words-prompt {
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  line-height: 1.6;
+  color: var(--olea-host-muted);
+  text-wrap: pretty;
+}
+
+.olea-retrospective-own-words-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--olea-host-text);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body);
+  line-height: 1.4;
+}
+
+.olea-retrospective-own-words-input:hover {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+}
+
+/* `.olea-button` / `.olea-button-primary` carry this control; the margin is
+   the separation the judgement found missing between the input and the
+   button. */
+.olea-retrospective-accept {
+  margin-top: 2px;
+}

@@ -119,6 +119,52 @@ export function carriesLine(line: RetrospectiveCarriesLine): string {
   return `${line.conceptName} — carries into this course's own remaining assessment`;
 }
 
+/**
+ * DSN-2 draws a concept row as two columns, not one sentence: the name, and a
+ * quiet column carrying the stage and vitality together
+ * (`docs/design/dsn2-retrospective/retrospective-surface.html:90-93`, and the
+ * rows in frames 04-06). `conceptLine` / `carriesLine` above are the one-line
+ * form the vault note is written from (`note-writer.ts`) and are unchanged;
+ * these four are the same content split for the screen.
+ *
+ * They are deliberately a PAIR. F2.11's co-presence rule (`[D-116]`) says a
+ * surface carries both axes or neither, and the drawing's own note on frame 04
+ * says why it binds hardest here: `holding` is the value carrying no mark, so a
+ * stage rendered alone is indistinguishable from one rendered as holding, and
+ * "the omission reads as the most flattering of the three". A caller rendering
+ * `conceptRowName` without `conceptRowDetail` is making exactly that omission.
+ */
+export function conceptRowName(line: RetrospectiveConceptLine): string {
+  return line.conceptName;
+}
+
+export function conceptRowDetail(line: RetrospectiveConceptLine): string {
+  return `${line.stage}, ${vitalityLabel(line.vitality)}`;
+}
+
+export function carriesRowName(line: RetrospectiveCarriesLine): string {
+  return line.conceptName;
+}
+
+export function carriesRowDetail(line: RetrospectiveCarriesLine): string {
+  if (line.otherCourses.length > 0) {
+    const courseNoun = line.otherCourses.length === 1 ? 'course' : 'courses';
+    return `also in scope for ${line.otherCourses.join(', ')} (${courseNoun})`;
+  }
+  return "carries into this course's own remaining assessment";
+}
+
+/**
+ * The count in a grouping's panel head (`retrospective-surface.html:331`,
+ * `.bar .meta`). A count of the rows directly beneath it, with the grouping as
+ * its own denominator — never a quotient, and never added to another
+ * grouping's count (F8.3; F6.2 binds harder still on the carries section,
+ * which is an overlay rather than a third bucket).
+ */
+export function sectionCountLine(count: number): string {
+  return `${count} ${count === 1 ? 'concept' : 'concepts'}`;
+}
+
 /** No mark, no percentage, no claim about the paper — F8.3/F4.9, stated once rather than repeated per line (D-134 Q2). */
 export const HONESTY_DISCLAIMER =
   'This reading comes from your practice history alone. Olea never saw the assessment and never saw your answers.';

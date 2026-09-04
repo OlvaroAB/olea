@@ -21,8 +21,10 @@ import { ItemView, Notice, type WorkspaceLeaf } from 'obsidian';
 import type { RetrospectiveReading, VaultPath } from 'olea-core';
 import {
   CARRIES_SECTION_HEADING,
-  carriesLine,
-  conceptLine,
+  carriesRowDetail,
+  carriesRowName,
+  conceptRowDetail,
+  conceptRowName,
   emptyScopeLine,
   FADED_SECTION_HEADING,
   HELD_SECTION_HEADING,
@@ -32,6 +34,7 @@ import {
   RETROSPECTIVE_VIEW_TITLE,
   scopeFactLine,
   scopeOriginLine,
+  sectionCountLine,
   tooEarlyCountLine,
 } from './copy.js';
 
@@ -126,21 +129,36 @@ export class RetrospectiveView extends ItemView {
   }
 
   private renderReading(root: HTMLElement, reading: RetrospectiveReading): void {
-    root.createEl('h2', { text: RETROSPECTIVE_VIEW_TITLE });
-    root.createDiv({ cls: 'olea-retrospective-scope-fact', text: scopeFactLine(reading) });
-    root.createDiv({
+    root.createEl('h2', { cls: 'olea-retrospective-title', text: RETROSPECTIVE_VIEW_TITLE });
+
+    // DSN-2 frame 02 (`docs/design/dsn2-retrospective/retrospective-surface.html:206-260`):
+    // the scope fact, its clamp and its source are ONE statement occupying the
+    // position a mark would occupy, drawn as the kit's keep-box. The clamp sits
+    // WITH the fact rather than beneath the groupings, because "saying what Olea
+    // holds is also saying what it does not hold, and it costs nothing to say it
+    // where the number would have been" — a clamp printed last is the footnote
+    // the drawing says it must not be.
+    const scope = root.createDiv({ cls: 'olea-retrospective-scope' });
+    scope.createDiv({ cls: 'olea-retrospective-scope-fact', text: scopeFactLine(reading) });
+    scope.createDiv({ cls: 'olea-retrospective-disclaimer', text: HONESTY_DISCLAIMER });
+    scope.createDiv({
       cls: 'olea-retrospective-scope-origin',
       text: scopeOriginLine(reading.scopeOrigin),
     });
-    root.createDiv({ cls: 'olea-retrospective-disclaimer', text: HONESTY_DISCLAIMER });
 
     if (reading.scopeCount === 0) {
       root.createDiv({ cls: 'olea-retrospective-empty', text: emptyScopeLine() });
       return;
     }
 
-    this.renderSection(root, HELD_SECTION_HEADING, reading.held, conceptLine);
-    this.renderSection(root, FADED_SECTION_HEADING, reading.faded, conceptLine);
+    this.renderSection(root, HELD_SECTION_HEADING, reading.held, conceptRowName, conceptRowDetail);
+    this.renderSection(
+      root,
+      FADED_SECTION_HEADING,
+      reading.faded,
+      conceptRowName,
+      conceptRowDetail,
+    );
 
     const tooEarly = tooEarlyCountLine(reading);
     if (tooEarly !== null) {
@@ -148,7 +166,13 @@ export class RetrospectiveView extends ItemView {
     }
 
     if (reading.carries.length > 0) {
-      this.renderSection(root, CARRIES_SECTION_HEADING, reading.carries, carriesLine);
+      this.renderSection(
+        root,
+        CARRIES_SECTION_HEADING,
+        reading.carries,
+        carriesRowName,
+        carriesRowDetail,
+      );
     }
 
     // `[D-190]`: the optional line lives HERE, beside the keep gesture —
@@ -167,7 +191,7 @@ export class RetrospectiveView extends ItemView {
     });
 
     const acceptButton = acceptArea.createEl('button', {
-      cls: 'olea-retrospective-accept',
+      cls: 'olea-retrospective-accept olea-button olea-button-primary',
       text: 'Save this retrospective to my vault',
     });
     acceptButton.addEventListener('click', () => {
@@ -175,17 +199,36 @@ export class RetrospectiveView extends ItemView {
     });
   }
 
+  /**
+   * One grouping, drawn as the kit's panel: a head bar carrying the grouping's
+   * name and its own count over a rule, then two-column rows
+   * (`retrospective-surface.html:330-341`). The panel, its head and its count
+   * are the shared primitives from `styles.css`'s design-system section, so a
+   * grouping here and an inventory panel on the registry are the same object.
+   *
+   * `nameFor`/`detailFor` are taken as a pair rather than one line function
+   * because F2.11's co-presence rule (`[D-116]`) travels with them — the detail
+   * column always carries both axes, and there is no call shape here that can
+   * render a stage without its vitality.
+   */
   private renderSection<T>(
     root: HTMLElement,
     heading: string,
     rows: readonly T[],
-    lineFor: (row: T) => string,
+    nameFor: (row: T) => string,
+    detailFor: (row: T) => string,
   ): void {
     if (rows.length === 0) return;
-    const section = root.createDiv({ cls: 'olea-retrospective-section' });
-    section.createEl('h3', { text: heading });
-    const list = section.createEl('ul');
-    for (const row of rows) list.createEl('li', { text: lineFor(row) });
+    const section = root.createDiv({ cls: 'olea-retrospective-section olea-panel' });
+    const head = section.createDiv({ cls: 'olea-panel-head' });
+    head.createSpan({ cls: 'olea-panel-title', text: heading });
+    head.createSpan({ cls: 'olea-panel-count', text: sectionCountLine(rows.length) });
+    const body = section.createDiv({ cls: 'olea-panel-body' });
+    for (const row of rows) {
+      const line = body.createDiv({ cls: 'olea-retrospective-row' });
+      line.createSpan({ cls: 'olea-retrospective-row-name', text: nameFor(row) });
+      line.createSpan({ cls: 'olea-retrospective-row-detail', text: detailFor(row) });
+    }
   }
 
   /**
