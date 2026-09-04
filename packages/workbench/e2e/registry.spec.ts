@@ -129,6 +129,11 @@ test('registry-populated: renaming a concept changes the displayed name', async 
   const first = rows(page).nth(0);
   await open(first);
   const input = first.locator('.olea-registry-rename-input');
+  // Regression: the shim's `createEl('input', { value })` used to check `instanceof
+  // HTMLInputElement` against the wrong realm (the host pane renders in its own iframe
+  // document), so this field silently rendered empty rather than pre-filled — found by this
+  // very test suite, fixed in `packages/workbench/src/obsidian-shim/dom.ts`'s `applyInfo`.
+  await expect(input).toHaveValue('syn:concept:alpha');
   await input.fill('syn:concept:alpha-renamed');
   await first.getByRole('button', { name: 'Rename' }).click();
 

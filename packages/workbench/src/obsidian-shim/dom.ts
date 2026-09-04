@@ -39,7 +39,22 @@ function applyInfo(el: HTMLElement, info: DomElementInfoLike | string | undefine
   }
   if (info.text !== undefined) el.textContent = info.text;
   if (info.type !== undefined) el.setAttribute('type', info.type);
-  if (info.value !== undefined && el instanceof HTMLInputElement) el.value = info.value;
+  // `el instanceof HTMLInputElement` here silently fails whenever `el` was created in a
+  // DIFFERENT realm than this module's own — exactly the per-realm pitfall this file's own
+  // header describes for `createDiv`/`createEl` (`ol-mioe`, the host pane's own iframe
+  // document has its own `HTMLInputElement` constructor). `createEl` always builds through
+  // `this.ownerDocument`, so a view mounted in the host frame creates its input there, and
+  // `instanceof` against the OUTER window's `HTMLInputElement` binding is always `false` for
+  // it — `.value` is silently never set, and the input renders empty even though `info.value`
+  // was supplied. `registry/view.ts`'s rename field (`renderActions`, `[REG-1]`) is the one
+  // caller of `createEl('input', { value })` in the codebase today, and a real Playwright run
+  // against the built app (not just inspection) confirmed the empty field — `tagName` is
+  // realm-agnostic, unlike `instanceof`, and needs no per-realm constructor lookup to get
+  // right. Discovered via `ol-l5og.18.1` (registry styling), filed and fixed here rather than
+  // absorbed silently since it lives outside that bead's `owns` (this shim is shared by every
+  // view, not registry's alone).
+  if (info.value !== undefined && el.tagName === 'INPUT')
+    (el as HTMLInputElement).value = info.value;
   if (info.attr !== undefined) {
     for (const [name, value] of Object.entries(info.attr)) {
       if (value === null || value === false) el.removeAttribute(name);
