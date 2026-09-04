@@ -73,11 +73,14 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
-import type { SoloLevel } from 'olea-contracts';
+import type { MasteryState, SoloLevel } from 'olea-contracts';
 import {
+  type CitedIssue,
   discardExplainBackGrading,
   type ExplainBackPromptContext,
+  formatSourceCitation,
   type GradeExplainBackInput,
+  type GroundedGrading,
   type PendingExplainBackGrading,
 } from 'olea-core';
 import type {
@@ -92,6 +95,7 @@ import {
   explainBackInsufficientNotesRefusal,
 } from '../review/copy.js';
 import type { ReviewInstrument } from '../review/types.js';
+import { renderSprig } from '../sprig/render-sprig.js';
 import {
   EXPLAIN_BACK_ACCEPT_LABEL,
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
@@ -176,6 +180,21 @@ export interface ExplainBackModalDeps {
    * follow-up, not required for correctness.
    */
   readonly now?: () => Date;
+  /**
+   * `[STY-0d]`, `ol-l5og.18.4`: the mastery tag (sprig + word) the design kit
+   * (`docs/design/pass3-explainback-sprig`) places on every explain-back
+   * screen — see `renderMasteryTag` below for exactly where and why it
+   * renders. Optional and best-effort, the same posture as
+   * `recordSoloGradeAndReview` above: `main.ts`'s existing
+   * `openExplainBackModal` construction call (outside this bead's `owns`) does
+   * not wire one yet, so the tag renders nothing today rather than a
+   * placeholder — never a fabricated stage for a concept whose real mastery
+   * state this view has no way to ask for. Wiring a real lookup through from
+   * `main.ts` (`packages/core/src/mastery/rollup.ts` already computes
+   * `MasteryState` per concept) is a small, disclosed follow-up in a file
+   * this bead does not own.
+   */
+  readonly getMasteryState?: (conceptId: string) => MasteryState | null;
 }
 
 interface ResolvedPrompt {
@@ -456,8 +475,31 @@ export class ExplainBackModal extends Modal {
   }
 
   private renderQuestion(root: HTMLElement, prompt: ResolvedPrompt): void {
-    root.createDiv({ cls: 'olea-explain-back-question-label', text: EXPLAIN_BACK_QUESTION_LABEL });
+    const header = root.createDiv({ cls: 'olea-explain-back-header' });
+    header.createDiv({
+      cls: 'olea-explain-back-question-label',
+      text: EXPLAIN_BACK_QUESTION_LABEL,
+    });
+    this.renderMasteryTag(header, prompt.subjectConceptId);
     root.createDiv({ cls: 'olea-explain-back-question', text: prompt.context.question });
+  }
+
+  /**
+   * `[STY-0d]`: the sprig-plus-word tag the kit places on every explain-back
+   * screen — same shape as `gap/view.ts`'s `.olea-gap-mastery`
+   * (`renderSprig` for the mark, a plain text span for the word), reused
+   * rather than reinvented. Renders nothing for a free-form, topic-seeded
+   * attempt (`subjectConceptId === null` — there is no concept to show
+   * evidence for) and nothing until `deps.getMasteryState` is actually wired
+   * (see that field's own doc) — an absent tag, never a fabricated stage.
+   */
+  private renderMasteryTag(parent: HTMLElement, subjectConceptId: string | null): void {
+    if (subjectConceptId === null) return;
+    const state = this.deps.getMasteryState?.(subjectConceptId) ?? null;
+    if (state === null) return;
+    const tag = parent.createSpan({ cls: 'olea-explain-back-mastery' });
+    tag.appendChild(renderSprig({ state, size: 14, container: tag }));
+    tag.createSpan({ text: state });
   }
 
   private renderAnsweringPhase(root: HTMLElement, prompt: ResolvedPrompt, answer: string): void {
@@ -494,42 +536,20 @@ export class ExplainBackModal extends Modal {
     // renders once a depth level actually comes back.
     root.createEl('p', { cls: 'olea-explain-back-feedback', text: grading.feedback });
 
-    if (grading.missedPoints.length > 0) {
-      root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_MISSED_HEADING });
-      const list = root.createEl('ul');
-      for (const point of grading.missedPoints) list.createEl('li', { text: point });
-    }
-
-    if (grading.citedIssues.length > 0) {
-      root.createDiv({ cls: 'olea-explain-back-heading', text: EXPLAIN_BACK_CITED_HEADING });
-      const list = root.createEl('ul');
-      for (const issue of grading.citedIssues) list.createEl('li', { text: issue.description });
-      // `[D-171]`'s one-step affordance (F8.4): ONE control for the whole
-      // list, not one per issue — every cited issue in this attempt is
-      // grounded in the same originating instrument (`prompt
-      // .originInstrumentId`) — leading to that instrument's registry entry.
-      // Never a source path, heading or page printed here.
-      // `[D-175]`/F8.4b: that same registry entry now also carries this
-      // instrument's explain-back history, so this click target needed no
-      // change to also satisfy F8.4b's own one-step-affordance clause — see
-      // `./copy.ts`'s `EXPLAIN_BACK_REGISTRY_ENTRY_ACTION` doc.
-      const registryAction = root.createEl('button', {
-        cls: 'olea-explain-back-registry-action',
-        text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
-      });
-      registryAction.addEventListener('click', () => {
-        void openRegistryEntryFor(this.app, { instrumentId: prompt.originInstrumentId });
-      });
-    }
+    this.renderGradedRegions(root, prompt, grading);
 
     if (grading.misconceptionCandidates.length > 0) {
       root.createDiv({
         cls: 'olea-explain-back-heading',
         text: EXPLAIN_BACK_MISCONCEPTION_HEADING,
       });
-      const list = root.createEl('ul');
+      const lookup = sourceBlockPathLookup(prompt.sourceBlocks);
+      const list = root.createDiv({ cls: 'olea-explain-back-region-items' });
       for (const candidate of grading.misconceptionCandidates) {
-        list.createEl('li', { text: candidate.correction });
+        const row = list.createDiv({ cls: 'olea-explain-back-item' });
+        row.createDiv({ cls: 'olea-explain-back-item-text', text: candidate.correction });
+        const citation = citationLabelFor(candidate.correctionSourceBlockIds, lookup);
+        if (citation !== null) row.createDiv({ cls: 'olea-explain-back-cite', text: citation });
       }
     }
 
@@ -541,6 +561,108 @@ export class ExplainBackModal extends Modal {
     );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
+  }
+
+  /**
+   * `[STY-0d]` (`ol-l5og.18.4`): the graded phase's three edge-differentiated
+   * regions — covered / omission / confusion — `docs/design/pass3-
+   * explainback-sprig`'s `ExplainBack.jsx` `Region` component, told apart by
+   * left-edge style and heading colour rather than a red-to-green scale (no
+   * third hue for "partly right" — `styles.css`'s own Pass-3 header repeats
+   * this). **`covered` never renders today**: `GroundedGrading` (`olea-
+   * core`) carries no positive-evidence field — `verdict`/`feedback` are the
+   * only holistic signals, and there is no per-point "what she got right"
+   * list anywhere in the grading pipeline. Rendering it from nothing would
+   * be exactly the fabrication INV-5 exists to forbid, so this method omits
+   * the region entirely rather than drawing an empty box or inventing
+   * content — `.olea-explain-back-region-covered`'s CSS rule stays in
+   * `styles.css`, ready for the day `gradingPipeline.ts` grows that field,
+   * same "disclosed deferral" posture as `render-sprig.ts`'s own wilt
+   * overlay. Filed as a discovered-from gap, not silently absorbed here
+   * (this bead's `owns` is this file, `copy.ts` and `styles.css` — not
+   * `packages/core`).
+   *
+   * `omission` combines two sources that were previously rendered as two
+   * separate flat lists under two different headings: `missedPoints`
+   * (uncited — E2a's own gate, never grounded to a block) and any
+   * `citedIssues` entry the grader classified `kind: 'omission'` (grounded,
+   * so it carries a citation chip the uncited ones cannot). Both describe
+   * the same thing — something her notes have that her explanation did not
+   * — so `EXPLAIN_BACK_MISSED_HEADING`'s existing, voice-charter-reviewed
+   * wording covers both without a new string. `confusion` is every
+   * `citedIssues` entry classified `'error'` or `'confusion'` — where her
+   * explanation actively conflicts with a cited passage — reusing
+   * `EXPLAIN_BACK_CITED_HEADING` for the same reason. `[D-171]`'s shared
+   * "See in registry" control still fires once, for the whole `citedIssues`
+   * list regardless of which region an entry landed in — every entry is
+   * grounded in the same `prompt.originInstrumentId` either way.
+   */
+  private renderGradedRegions(
+    root: HTMLElement,
+    prompt: ResolvedPrompt,
+    grading: GroundedGrading,
+  ): void {
+    const lookup = sourceBlockPathLookup(prompt.sourceBlocks);
+    const omissionItems: ExplainBackRegionItem[] = [
+      ...grading.missedPoints.map((text) => ({ text, citation: null })),
+      ...citedIssuesOfKind(grading.citedIssues, 'omission').map((issue) => ({
+        text: issue.description,
+        citation: citationLabelFor(issue.sourceBlockIds, lookup),
+      })),
+    ];
+    const confusionItems: ExplainBackRegionItem[] = [
+      ...citedIssuesOfKind(grading.citedIssues, 'error'),
+      ...citedIssuesOfKind(grading.citedIssues, 'confusion'),
+    ].map((issue) => ({
+      text: issue.description,
+      citation: citationLabelFor(issue.sourceBlockIds, lookup),
+    }));
+
+    if (omissionItems.length > 0) {
+      this.renderRegion(root, 'omission', EXPLAIN_BACK_MISSED_HEADING, omissionItems);
+    }
+    if (confusionItems.length > 0) {
+      this.renderRegion(root, 'confusion', EXPLAIN_BACK_CITED_HEADING, confusionItems);
+    }
+    if (grading.citedIssues.length > 0) {
+      // `[D-171]`'s one-step affordance (F8.4): ONE control for the whole
+      // cited-issues list, not one per issue or one per region — every
+      // cited issue in this attempt is grounded in the same originating
+      // instrument (`prompt.originInstrumentId`) — leading to that
+      // instrument's registry entry. Never a source path, heading or page
+      // printed here. `[D-175]`/F8.4b: that same registry entry now also
+      // carries this instrument's explain-back history, so this click
+      // target needed no change to also satisfy F8.4b's own one-step-
+      // affordance clause — see `./copy.ts`'s
+      // `EXPLAIN_BACK_REGISTRY_ENTRY_ACTION` doc.
+      const registryAction = root.createEl('button', {
+        cls: 'olea-explain-back-registry-action',
+        text: EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
+      });
+      registryAction.addEventListener('click', () => {
+        void openRegistryEntryFor(this.app, { instrumentId: prompt.originInstrumentId });
+      });
+    }
+  }
+
+  private renderRegion(
+    root: HTMLElement,
+    kind: ExplainBackRegionKind,
+    heading: string,
+    items: readonly ExplainBackRegionItem[],
+  ): void {
+    const region = root.createDiv({
+      cls: `olea-explain-back-region olea-explain-back-region-${kind}`,
+    });
+    region.createDiv({ cls: 'olea-explain-back-region-head', text: heading });
+    const list = region.createDiv({ cls: 'olea-explain-back-region-items' });
+    for (const item of items) {
+      const row = list.createDiv({ cls: 'olea-explain-back-item' });
+      row.createDiv({ cls: 'olea-explain-back-item-text', text: item.text });
+      if (item.citation !== null) {
+        row.createDiv({ cls: 'olea-explain-back-cite', text: item.citation });
+      }
+    }
   }
 
   private renderRefusedPhase(
@@ -584,6 +706,49 @@ export class ExplainBackModal extends Modal {
     const button = root.createEl('button', { text: 'Done' });
     button.addEventListener('click', () => this.close());
   }
+}
+
+/** `renderGradedRegions`' three edge styles — never a fourth, never a "partly right" hue (see that method's doc). `'covered'` has no live caller yet; kept so `styles.css`'s rule for it and this file's own doc stay pointed at the same name. */
+type ExplainBackRegionKind = 'covered' | 'omission' | 'confusion';
+
+interface ExplainBackRegionItem {
+  readonly text: string;
+  /** `null` for an uncited `missedPoints` entry — never a fabricated source. */
+  readonly citation: string | null;
+}
+
+function citedIssuesOfKind(
+  issues: readonly CitedIssue[],
+  kind: CitedIssue['kind'],
+): readonly CitedIssue[] {
+  return issues.filter((issue) => issue.kind === kind);
+}
+
+/** `blockId -> notePath`, built fresh per render from the SAME `ExplainBackSourceBlock[]` the request that produced this grading was built from — the only place this view can resolve a grounded `sourceBlockIds` entry back to something showable. */
+function sourceBlockPathLookup(
+  sourceBlocks: readonly ExplainBackSourceBlock[],
+): ReadonlyMap<string, string> {
+  return new Map(sourceBlocks.map((entry) => [entry.block.blockId, entry.path]));
+}
+
+/**
+ * The first citable block among `sourceBlockIds` that this view actually
+ * retrieved, formatted the same way the registry's own citation chips are
+ * (`olea-core`'s `formatSourceCitation` — never a second, re-typed basename
+ * routine). `null` when none resolve — grounding guarantees at least one id
+ * in `sourceBlockIds` came from the caller's own `sourceBlocks`
+ * (`gradingPipeline.ts`'s `groundCitations`), so this is a defensive
+ * fallback, not the expected path.
+ */
+function citationLabelFor(
+  sourceBlockIds: readonly string[],
+  lookup: ReadonlyMap<string, string>,
+): string | null {
+  for (const id of sourceBlockIds) {
+    const sourcePath = lookup.get(id);
+    if (sourcePath !== undefined) return formatSourceCitation({ sourcePath });
+  }
+  return null;
 }
 
 function questionQuery(instrument: ReviewInstrument): string {
