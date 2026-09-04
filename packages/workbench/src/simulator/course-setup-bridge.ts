@@ -78,6 +78,36 @@
  * Escape (`setup-modal.ts`'s own doc: "Dismissing this modal (the Escape key,
  * clicking outside) is not a 'no' answer to anything"). A genuinely new code
  * is left open — this bridge only ever suppresses a REPEAT.
+ *
+ * **ol-yng7: the original watcher tracked by VALUE, not by INSTANCE, and a
+ * real-shaped vault broke that.** The first version of {@link react} read
+ * "the current code" with a single `querySelector` (first DOM match) and
+ * compared it against one scalar, `lastObservedCode`. `Modal.open()`
+ * (`obsidian-shim/index.ts`) only ever APPENDS a new `.modal-container` into
+ * `[data-wb-modal-host]` — it never removes an earlier, still-unresolved one
+ * — so once a second mount re-proposed the SAME code (exactly what a
+ * cross-mount repeat is), `querySelector` kept resolving to the FIRST
+ * (oldest, already-recorded) modal's input, whose value had not changed.
+ * `code === lastObservedCode` read `true`, and the whole branch —
+ * recording, and the `getBeforeMountSeenCodes().has(code)` check that would
+ * have caught the repeat — never ran again. Observed directly against the
+ * real vault: 7 `advanceOneDay()` calls (one simulated week) produced 7
+ * stacked, un-dismissed modal instances for 2 distinct courses.
+ *
+ * **The fix:** track by NODE IDENTITY ({@link selectNewlyOpenedCodes}'s
+ * `WeakSet`), not by the string a query happens to return. Every
+ * `.olea-course-setup-name-input` currently in the host is re-read on every
+ * mutation; any element not already in the handled set is a genuinely new
+ * modal INSTANCE regardless of whether its code matches an instance already
+ * handled, so a same-code repeat is never mistaken for "nothing changed."
+ * `selectNewlyOpenedCodes` is generic over the node type specifically so the
+ * identity-vs-value distinction that was the actual bug can be proven
+ * without a browser DOM (`test/simulator-course-setup-bridge.spec.ts`,
+ * `packages/workbench`) — this package's vitest suite runs under plain Node
+ * with no DOM (`test/obsidian-shim-whole-plugin.spec.ts`'s own doc), so the
+ * DOM wiring itself is proven the same way `Modal`'s rendering already is:
+ * the real browser tour (`docs/dev/simulator-design.md` §6/§7,
+ * `scripts/simulator-tour.mjs`).
  */
 
 import type { ObsidianDataHost } from './plugin-data-host.js';
@@ -136,12 +166,28 @@ export async function recordCourseSetupSeenCode(
   await host.saveData(blob);
 }
 
-/** The code the currently-open course-setup modal (if any) is proposing — `null` when none is open. */
-function currentCourseSetupCode(): string | null {
-  const modalHost = document.querySelector<HTMLElement>(MODAL_HOST_SELECTOR);
-  if (modalHost === null) return null;
-  const nameInput = modalHost.querySelector<HTMLInputElement>(COURSE_SETUP_NAME_INPUT_SELECTOR);
-  return nameInput === null ? null : nameInput.value;
+/**
+ * Splits `currentNodes` (every match currently present, in document order)
+ * into what this caller has already handled and what is genuinely new,
+ * tracking by NODE IDENTITY via `alreadyHandled` rather than by whatever
+ * `readCode` returns — see this module's own doc, "ol-yng7", for why a
+ * value-keyed check silently swallowed a real repeat. Generic over `T` so a
+ * plain object can stand in for a DOM node in a test with no DOM at all:
+ * nothing here reads `T` except through `readCode`.
+ */
+export function selectNewlyOpenedCodes<T>(
+  currentNodes: readonly T[],
+  alreadyHandled: { has(node: T): boolean },
+  readCode: (node: T) => string,
+): { readonly newCodes: readonly string[]; readonly newlyHandled: readonly T[] } {
+  const newCodes: string[] = [];
+  const newlyHandled: T[] = [];
+  for (const node of currentNodes) {
+    if (alreadyHandled.has(node)) continue;
+    newlyHandled.push(node);
+    newCodes.push(readCode(node));
+  }
+  return { newCodes, newlyHandled };
 }
 
 /**
@@ -185,17 +231,30 @@ export function installCourseSetupSeenBridge(
   const modalHost = document.querySelector<HTMLElement>(MODAL_HOST_SELECTOR);
   if (modalHost === null) return NOOP_BRIDGE;
 
-  let lastObservedCode: string | null = null;
+  // Node identity, not the string a query returns — see this module's own
+  // doc, "ol-yng7", and `selectNewlyOpenedCodes`'s. `WeakSet` rather than
+  // `Set`: once a modal's `containerEl` is closed and dropped, this must not
+  // hold it alive for the rest of the controller's (potentially many-week)
+  // lifetime.
+  const handledInputs = new WeakSet<HTMLInputElement>();
 
   const react = (): void => {
-    const code = currentCourseSetupCode();
-    if (code === lastObservedCode) return;
-    lastObservedCode = code;
-    if (code === null) return;
-    void recordCourseSetupSeenCode(pluginDataHost, code).catch((error: unknown) => {
-      console.error('simulator: could not persist a course-setup seen code', error);
-    });
-    if (getBeforeMountSeenCodes().has(code)) dismissOpenModal();
+    const currentInputs = Array.from(
+      modalHost.querySelectorAll<HTMLInputElement>(COURSE_SETUP_NAME_INPUT_SELECTOR),
+    );
+    const { newCodes, newlyHandled } = selectNewlyOpenedCodes(
+      currentInputs,
+      handledInputs,
+      (input) => input.value,
+    );
+    if (newCodes.length === 0) return;
+    for (const input of newlyHandled) handledInputs.add(input);
+    for (const code of newCodes) {
+      void recordCourseSetupSeenCode(pluginDataHost, code).catch((error: unknown) => {
+        console.error('simulator: could not persist a course-setup seen code', error);
+      });
+    }
+    if (newCodes.some((code) => getBeforeMountSeenCodes().has(code))) dismissOpenModal();
   };
 
   const observer = new MutationObserver(react);

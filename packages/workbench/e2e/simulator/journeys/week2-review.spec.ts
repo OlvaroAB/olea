@@ -9,12 +9,15 @@
  * repeats `today-review`'s own steps at week 1: open-today, revealed, rated, empty — named
  * `1--journey-week2-review--<step>.png`.
  *
- * **WBX-18 (`ol-qm6u`):** against a real-shaped vault, `advanceWeeksViaDriver`'s repeated
- * `advanceOneDay()` remounts can re-surface `CourseSetupModal` proposals that were already
- * confirmed on an earlier mount (`helpers.ts#dismissCourseSetupModals`'s own doc names the
- * underlying persistence gap) — a stack of these otherwise sits in front of every later gesture
- * and blocks it. `dismissCourseSetupModals` runs again here for that reason alone; it is not a
- * stand-in for anything the journey itself needs to click through.
+ * **WBX-18 (`ol-qm6u`) / ol-yng7:** against a real-shaped vault, `advanceWeeksViaDriver`'s
+ * repeated `advanceOneDay()` remounts used to be able to re-surface `CourseSetupModal` proposals
+ * that were already confirmed on an earlier mount (`helpers.ts#dismissCourseSetupModals`'s own
+ * doc names the underlying persistence gap `course-setup-bridge.ts` has since closed — a
+ * cross-mount repeat is now dismissed by node identity the instant it opens, not by a click-
+ * through budget sized to the day-advance count). `dismissCourseSetupModals` still runs again
+ * here, at its plain default, as the same small safety margin `gotoSimulator`'s own cold-start
+ * call already relies on — never a stand-in for anything the journey itself needs to click
+ * through.
  */
 import { test } from '@playwright/test';
 import { dismissCourseSetupModals, gotoSimulator, resetSimulator } from '../helpers.js';
@@ -40,7 +43,7 @@ test(`@auto-web:simulator/journeys/week2-review ${WORLD}/${PERSONA} — advance 
   await gotoSimulator(page, { world: WORLD, persona: PERSONA });
   await resetSimulator(page);
   await advanceWeeksViaDriver(page, WEEK);
-  await dismissCourseSetupModals(page, 20);
+  await dismissCourseSetupModals(page);
 
   await captureJourneyStep(page, JOURNEY, WEEK, 'open-today');
 

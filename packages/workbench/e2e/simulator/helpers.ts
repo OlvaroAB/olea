@@ -78,30 +78,32 @@ export interface GotoSimulatorOptions {
  * `SimulatorWalkDriver`'s own day-advance/rating methods — no longer need
  * to call this.
  *
- * **WBX-18 finding (`ol-qm6u`):** that claim does NOT extend to the newer,
- * raw driver path `advanceWeeksViaDriver` (`tour-helpers.ts`) drives via
- * `window.__oleaSimulatorDriver.advanceOneDay()` — against the real world,
- * once course attribution actually works (WBX-18's fix), a real vault's
- * course-shaped folders can re-surface a "This looks like a course" proposal
- * across a remount even after an earlier confirm, stacking several deep
- * across several day-advances (observed: 7 stacked proposals for 2 distinct
- * courses over 7 `advanceOneDay()` calls). This was invisible before WBX-18
- * because the real world had zero course-shaped folders reachable by path,
- * so zero proposals ever fired — a hidden defect in `courseSetupSeenCodes`'
- * cross-remount persistence (`course-setup-bridge.ts`'s own doc already
- * names this class of bug), not something this test helper can fix. The
- * defensive fix here is at the test-infrastructure level only: call this
- * again after any `advanceWeeksViaDriver` against a real-shaped vault, and
- * widen the round bound so a real vault's proposal count does not exhaust
- * it. The underlying persistence gap is filed separately (`ol-qm6u`'s
- * discovered-from list), not fixed by widening this bound.
+ * **WBX-18 finding (`ol-qm6u`), fixed by ol-yng7:** that claim briefly did
+ * NOT extend to the newer, raw driver path `advanceWeeksViaDriver`
+ * (`tour-helpers.ts`) drives via `window.__oleaSimulatorDriver.advanceOneDay()`
+ * — against the real world, once course attribution actually works (WBX-18's
+ * fix), a real vault's course-shaped folders could re-surface a "This looks
+ * like a course" proposal across a remount even after an earlier confirm,
+ * stacking several deep across several day-advances (observed: 7 stacked
+ * proposals for 2 distinct courses over 7 `advanceOneDay()` calls). This was
+ * invisible before WBX-18 because the real world had zero course-shaped
+ * folders reachable by path, so zero proposals ever fired. The cause was
+ * `course-setup-bridge.ts`'s watcher comparing the CURRENT modal's code by
+ * VALUE (a `querySelector` first-match against one scalar) rather than by
+ * INSTANCE: `Modal.open()` only ever appends a new `.modal-container`, never
+ * removing an earlier unresolved one, so a repeat proposal's input read the
+ * same value as the still-present earlier instance and the watcher never
+ * re-ran its seen-code check. Fixed by tracking modal instances with a
+ * `WeakSet` keyed on the DOM node itself — every caller driving a real-shaped
+ * vault across several day-advances now needs no more round budget than the
+ * plain default below; the widened, week-scaled bound this comment used to
+ * ask for is gone from every caller (`tour.spec.ts`, `week2-review.spec.ts`).
  *
- * Bounded (`rounds`, 150ms apart) rather than polled to a stable
- * "definitely none left" state — the fixture vault's small, fixed course
- * count needed only 5; a real vault's course count and its cross-remount
- * re-proposals need more headroom, so callers driving a real-shaped vault
- * across several day-advances should pass a larger `rounds`. In the top
- * document (`[data-wb-modal-host]`), never inside `[data-wb-surface]`.
+ * Bounded (`rounds`, 150ms apart) rather than polled to a stable "definitely
+ * none left" state — a real vault's course count needs no more headroom than
+ * the fixture vault's did now that a cross-mount repeat can never
+ * accumulate a round of its own. In the top document (`[data-wb-modal-host]`),
+ * never inside `[data-wb-surface]`.
  */
 export async function dismissCourseSetupModals(page: Page, rounds = 5): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {

@@ -120,11 +120,15 @@ for (const week of TOUR_WEEKS) {
     await resetSimulator(page);
     if (week > 0) {
       await advanceWeeksViaDriver(page, week);
-      // WBX-18 (`ol-qm6u`): against a real-shaped vault, repeated `advanceOneDay()` remounts can
-      // re-surface already-confirmed `CourseSetupModal` proposals (`helpers.ts`'s own doc names
-      // the underlying persistence gap) — scaled with `week` since more day-advances give more
-      // chances for a re-proposal to stack.
-      await dismissCourseSetupModals(page, Math.max(20, week * 15));
+      // ol-yng7: WBX-18 (`ol-qm6u`) found repeated `advanceOneDay()` remounts re-surfacing
+      // already-confirmed `CourseSetupModal` proposals against a real-shaped vault, and this call
+      // used to scale its round bound with `week` as a stand-in fix. `course-setup-bridge.ts`'s
+      // watcher now tracks modal instances by node identity rather than by the string a query
+      // happens to return (`helpers.ts`'s own doc), so a cross-mount repeat is dismissed the
+      // instant it opens — no click-through budget proportional to the day-advance count is
+      // needed any more. The plain default is kept only as the same small safety margin
+      // `gotoSimulator`'s own cold-start call already relies on.
+      await dismissCourseSetupModals(page);
     }
 
     const viewTypes = await ribbonViewTypes(page);
