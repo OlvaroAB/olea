@@ -4762,3 +4762,107 @@ button.olea-review-mcq-option:hover {
       color var(--olea-duration) var(--olea-ease);
   }
 }
+
+/* ============================================================
+   ---- The type ramp, applied (`[STY-1]`, ol-l5og.18.11) ----
+   ============================================================
+
+   Fix 4 of the 2026-09-04 kit-fidelity judgement: "21 distinct font sizes;
+   94 of 110 declarations are <=13px and only 10 fall in the 14-20px band, so
+   there is no step between 'small label' and 'page title'."
+
+   TWO OF THE JUDGEMENT'S THREE CLAIMS HOLD AND ONE DOES NOT, and saying which
+   is the point of this section, because the third would have been a
+   regression if applied as written.
+
+   HOLDS — no named steps. Twenty-one ad-hoc sizes with no role names is what
+   makes a stylesheet drift; the ramp declared at the top of this design-system
+   section fixes that, and every size below is one of its ten steps.
+
+   HOLDS — sizes below the kit's own floor. Ten rules set 9.5px, all of them
+   eyebrow, label or badge roles. The kits never set a label below 10px
+   (`.eyebrow` is `600 10px/1` — retrospective-surface.html:39), and 9.5px
+   uppercase mono at .14em tracking is at the edge of legibility on a
+   standard-density display. Every one of them is lifted to the ramp's
+   eyebrow step here.
+
+   DOES NOT HOLD — "61 of 110 are half-pixel values (9.5, 10.5, 11.5, 12.5) —
+   fitted by eye, not a ramp." The kits are themselves set on a half-pixel
+   ramp: 10.5px panel meta (:55), 11.5px `.fine` and `.card .head` (:88, :86),
+   12.5px panel title (:54), 13.5px claim text (:103), and the pass5 kits'
+   13.5px/15.5px body. Removing the .5 steps wholesale would have moved the
+   build FURTHER from the kit while appearing to tidy it. What was wrong was
+   the absence of named roles, not the presence of a half step, so the ramp
+   keeps them and names them.
+
+   DOES NOT HOLD, second half — "the kit's token contract defines only two
+   faces (interface, content) and no mono role whatsoever."
+   `docs/design/shared/theme-host.css:26` declares
+   `--olea-host-mono:var(--font-monospace,var(--olea-font-mono))`, and the
+   kits use it steadily: eyebrows (retrospective-surface.html:39), panel meta
+   (:55), source lines (:80), pills (:95), and the stage/date columns of a
+   concept row (:92, :93). So mono is a real role with a defined scope, and
+   the actual defect is narrower than "mono at all":
+
+     MONO IS FOR LABELS, COUNTS AND DATES. It carries an eyebrow, a pill, a
+     count, a source line, a timestamp — anything read as a token rather than
+     as language. It never carries a sentence, a concept name, or a word the
+     student reads as prose. A stage word is prose; the kit sets it in the
+     body face lowercase, and the build set it uppercase mono, which is where
+     "looks like a terminal, not the prototype" actually comes from.
+
+   The two rules below are that distinction applied where the judgement found
+   it by name; the wider sweep across the gap, Today and Home sections is left
+   to the lanes that own them tonight, and is recorded on the bead. */
+
+/* ---- Every 9.5px label lifted to the ramp's eyebrow step ---- */
+
+.olea-gap-unavailable-eyebrow-text,
+.olea-gap-detail-eyebrow,
+.olea-session-empty-eyebrow,
+.olea-session-why-label,
+.olea-session-group-heading,
+.olea-session-countdown-eyebrow,
+.olea-explain-back-refusal-eyebrow-text,
+.olea-explain-back-found-list-caption,
+.olea-bulk-review-item-option-mark,
+.olea-registry-thin-note-badge,
+.olea-registry-explain-back-history h5 {
+  font-size: var(--olea-type-eyebrow);
+}
+
+/* ---- Mono off the words that are prose ----
+
+   The grove's stage word — "seed", "sprout", "sapling", "tree" — is the
+   registry's own vocabulary read as language, not as a token. The kit sets it
+   lowercase in the body face; the build set it uppercase mono at 10px, which
+   makes the one word on the card that is a *word* look like a machine field.
+   Its host reads and its ink are unchanged. ---- */
+
+.olea-grove-root .olea-grove-stage-label {
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ---- Two registry states the judgement found inert ----
+
+   "Mastery stage at full text strength where kit has it muted, so 'seed' is
+   as loud as the concept name." The stage is metadata about the row, not the
+   row's subject.
+
+   And `.olea-registry-row-mix-quiet` "sets the same colour as its base rule —
+   the 'nothing built yet' recessive state is a no-op". It is made recessive
+   by style rather than by a fourth ink: an ink below `--olea-host-muted` is
+   `--olea-host-faint`, which `ol-nrrm` measured at 2.6-3.1:1 in every
+   variable set and `styles-contrast.spec.ts` keeps off text. Italic recedes
+   without spending contrast, which is the only budget this row has left. ---- */
+
+.olea-registry-root .olea-registry-row-mastery-stage {
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-root .olea-registry-row-mix-quiet {
+  font-style: italic;
+}
