@@ -518,6 +518,16 @@ export class TodayView extends ItemView {
    * (`ol-3ux7.64.20`) — so any *future* silent throw here now logs instead of
    * vanishing, and the sheet stays open (never falsely closes as if it had
    * recorded) rather than proceeding to `refresh()`.
+   *
+   * **The success path does not close the sheet — it rebuilds it
+   * (`ol-l5og.18.12` [STY-3]).** `[D-046]` clause 4 requires the dispute
+   * "recorded as evidence rather than swallowed," and DSN-1 frame 03/04
+   * (`[D-136]`) draws that as a mark riding beside the claim, not a panel
+   * that returns to its pre-tap state. `support.sheetFor(claim)` reads the
+   * log this call's `support.contest` just wrote to, so the rebuilt sheet's
+   * `dissentMark` (or, for a DSN-1-open rendering, `openRoutingNote`) is
+   * already correct — nothing here decides the mark, it only keeps showing
+   * what `buildDisputeSheet` computed all along.
    */
   private async recordDispute(): Promise<void> {
     const support = this.deps.contest;
@@ -531,7 +541,7 @@ export class TodayView extends ItemView {
       console.error('Olea: recording a Today contest failed', error);
       return;
     }
-    this.openSheet = null;
+    this.openSheet = { claimId: open.claimId, sheet: await support.sheetFor(claim) };
     await this.refresh();
   }
 

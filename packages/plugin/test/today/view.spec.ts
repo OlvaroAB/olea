@@ -82,15 +82,33 @@ describe('TodayView.recordDispute — a throw no longer leaves the sheet silentl
     expect(catchBlock).toMatch(/console\.error\(/);
   });
 
-  it('does not clear openSheet or refresh() after a caught error (never falsely reports success)', () => {
+  it('does not rebuild openSheet or refresh() after a caught error (never falsely reports success)', () => {
     const catchIndex = RECORD_BODY.indexOf('catch');
-    const catchBlockEnd = RECORD_BODY.indexOf('this.openSheet = null;');
+    const successIndex = RECORD_BODY.indexOf('this.openSheet = { claimId: open.claimId');
     expect(catchIndex).toBeGreaterThan(-1);
-    expect(catchBlockEnd).toBeGreaterThan(-1);
-    // The success path's `this.openSheet = null;` must come after the whole
-    // try/catch, i.e. after the catch block's own closing brace — checked
-    // structurally by requiring a `return;` inside the catch block before it.
-    const catchToClear = RECORD_BODY.slice(catchIndex, catchBlockEnd);
-    expect(catchToClear).toMatch(/return;/);
+    expect(
+      successIndex,
+      'expected the success path to rebuild openSheet, not clear it',
+    ).toBeGreaterThan(-1);
+    // The success path's rebuild must come after the whole try/catch, i.e.
+    // after the catch block's own closing brace — checked structurally by
+    // requiring a `return;` inside the catch block before it.
+    const catchToSuccess = RECORD_BODY.slice(catchIndex, successIndex);
+    expect(catchToSuccess).toMatch(/return;/);
+  });
+});
+
+describe('TodayView.recordDispute — the recorded state stays visible (ol-l5og.18.12 [STY-3], `[D-046]` clause 4)', () => {
+  it('rebuilds the sheet from support.sheetFor(claim) on the success path, rather than closing it', () => {
+    expect(RECORD_BODY).toMatch(
+      /this\.openSheet = \{ claimId: open\.claimId, sheet: await support\.sheetFor\(claim\) \};/,
+    );
+  });
+
+  it('never sets openSheet back to null on the success path', () => {
+    // The only `= null` allowed in this method is none at all any more —
+    // closing the sheet on a successful record is exactly the bug (goldens
+    // byte-identical before/after) `ol-l5og.18.12` fixes.
+    expect(RECORD_BODY).not.toMatch(/this\.openSheet = null;/);
   });
 });

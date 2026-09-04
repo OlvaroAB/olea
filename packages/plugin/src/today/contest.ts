@@ -80,8 +80,11 @@ export interface DisputeSheet {
   /**
    * The gesture, identical on every claim-bearing surface — `[D-215]`
    * (`ol-egov.103`): a rendering DSN-1 left open no longer withholds it.
-   * `null` only for a rendering that is not a contest at all
-   * (`declared-fact`), which never reaches the Today panel today.
+   * `null` for a rendering that is not a contest at all (`declared-fact`,
+   * which never reaches the Today panel today), and `null` again once a
+   * dispute already stands against the claim's current evidence
+   * (`ol-l5og.18.12` [STY-3]) — `dissentMark`/`openRoutingNote` below are
+   * what she sees instead of a "Record this" she has already pressed.
    */
   readonly gestureLabel: string | null;
   /**
@@ -212,11 +215,19 @@ export function buildDisputeSheet(input: {
       date: review.timestamp.slice(0, 10),
     })),
     offlineNote: CONTEST_SHEET_OFFLINE_NOTE,
-    // [D-215]: the gesture is identical everywhere. It is withheld only for
-    // a rendering that is `not-a-contest` at all — `declared-fact` never
-    // appears among the Today panel's claims, so this is defensive, not a
-    // path this panel exercises.
-    gestureLabel: routing.status === 'not-a-contest' ? null : CONTEST_GESTURE_LABEL,
+    // [D-215]: the gesture is identical everywhere. It is withheld for a
+    // rendering that is `not-a-contest` at all — `declared-fact` never
+    // appears among the Today panel's claims, so that arm is defensive, not
+    // a path this panel exercises — and it is withheld once a dispute
+    // already stands against this claim's current evidence
+    // (`ol-l5og.18.12` [STY-3]): a standing `state.disputed` is the sheet's
+    // post-record state, `dissentMark` below is what she sees instead, and
+    // repeating "Record this" underneath an already-recorded mark would
+    // read as the tap having done nothing. DSN-1's own open question 2 (does
+    // a second contest on an already-dissented claim need its own copy?) is
+    // untouched: this withholds the affordance rather than answering it.
+    gestureLabel:
+      routing.status === 'not-a-contest' || state.disputed ? null : CONTEST_GESTURE_LABEL,
     openRoutingNote: routing.status === 'open' ? CONTEST_OPEN_ROUTING_KEPT : null,
     dissentMark: state.disputed && state.effect === 'held' ? CONTEST_DISSENT_MARK : null,
     acknowledgement:

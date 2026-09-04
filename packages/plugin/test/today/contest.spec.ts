@@ -158,6 +158,59 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
     expect(sheet.dissentMark).toBe(CONTEST_DISSENT_MARK);
   });
 
+  // `ol-l5og.18.12` [STY-3]: pins the fix for the "no visible trace after
+  // recording" bug (`[D-046]` clause 4, DSN-1 frame 03/04). The mark alone
+  // is not enough evidence the recorded state is genuinely showing — a build
+  // could render `dissentMark` right next to a live "Record this" button and
+  // still read as pending, not recorded. This asserts the withheld half:
+  // rebuilding the sheet against a log that now carries her dispute must
+  // retire the record gesture, on both a routed AND a DSN-1-open rendering.
+  it('withholds the record gesture once a dispute stands, on a routed reading', () => {
+    const disputes: readonly DisputeLogRecord[] = [
+      {
+        schemaVersion: 5,
+        kind: 'dispute',
+        eventId: 'd1',
+        timestamp: '2026-08-21T09:00:00+02:00',
+        claimKind: 'reading',
+        claimRendering: 'mastery-reading',
+        conceptIds: CONCEPTS,
+        evidenceBasis: 'mastery|COURSE-1|seed=1',
+        effect: 'held',
+      },
+    ];
+    const sheet = buildDisputeSheet({ claim: claim(), entries, disputes });
+    expect(sheet.gestureLabel).toBeNull();
+    expect(sheet.dissentMark).toBe(CONTEST_DISSENT_MARK);
+  });
+
+  it('withholds the record gesture once a dispute stands, on a DSN-1-open rendering ([D-215])', () => {
+    const disputes: readonly DisputeLogRecord[] = [
+      {
+        schemaVersion: 5,
+        kind: 'dispute',
+        eventId: 'd1',
+        timestamp: '2026-08-21T09:00:00+02:00',
+        claimKind: 'unsorted',
+        claimRendering: 'trend-sentence',
+        conceptIds: CONCEPTS,
+        evidenceBasis: 'mastery|COURSE-1|seed=1',
+        effect: 'held',
+        routingStatus: 'open',
+      },
+    ];
+    const sheet = buildDisputeSheet({
+      claim: claim({ id: 'insights', rendering: 'trend-sentence', contestable: false }),
+      entries,
+      disputes,
+    });
+    expect(sheet.gestureLabel).toBeNull();
+    expect(sheet.dissentMark).toBe(CONTEST_DISSENT_MARK);
+    // The open-routing disclosure is a fact about the mechanism, not about
+    // whether she has disputed yet — it stays, beside the mark, not instead of it.
+    expect(sheet.openRoutingNote).toBe(CONTEST_OPEN_ROUTING_KEPT);
+  });
+
   it('acknowledges an upheld dispute exactly once', () => {
     const opening: DisputeLogRecord = {
       schemaVersion: 5,

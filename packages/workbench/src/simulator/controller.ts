@@ -899,7 +899,11 @@ export async function driverExplain(
  *   only when `DisputeSheet.gestureLabel` is non-`null`) is then clicked,
  *   calling `recordDispute` (`today/view.ts:519`) — the real
  *   `TodayContestSupport.contest` write (`today/contest.ts`), now inside a
- *   `try`/`catch` that logs rather than swallowing a throw.
+ *   `try`/`catch` that logs rather than swallowing a throw. **The sheet
+ *   stays open afterwards** (`ol-l5og.18.12` [STY-3]) showing its post-record
+ *   state — `today/contest.ts`'s `buildDisputeSheet` withholds
+ *   `gestureLabel` once `state.disputed` is true, so the record button's own
+ *   disappearance is what this driver polls for, not the sheet's.
  * - `'review'`: `.olea-review-contest` (`review/view.ts:1268`) is clicked
  *   directly — no sheet, one gesture — calling `handleContestGrade`
  *   (`review/view.ts:833`), the real `ReviewSession.contestGrade`
@@ -976,14 +980,27 @@ export async function driverContest(
   }
   record.click();
 
-  const closed = await pollForDriver(
-    () => (queryShellDom(shellRoot, '.olea-today-contest-sheet') === null ? true : null),
-    DRIVER_POLL_TIMEOUT_MS,
-  );
-  if (closed === null) {
+  // The sheet does NOT close on a successful record (`ol-l5og.18.12` [STY-3],
+  // `[D-046]` clause 4 / DSN-1 frame 03-04): closing it was the bug — goldens
+  // came back byte-identical before/after because the recorded state had
+  // nowhere to render. `recordDispute` (`today/view.ts`) rebuilds the sheet
+  // instead, and `buildDisputeSheet` (`today/contest.ts`) withholds the
+  // record button once `state.disputed` is true — so the button's own
+  // disappearance, not the sheet's, is what proves the write landed.
+  // Re-queried from `shellRoot` on every poll, never off the `sheet` handle
+  // captured above: `refresh()` calls `this.contentEl.empty()` before
+  // re-rendering, so that handle is detached the moment recording refreshes
+  // the panel and would silently poll a DOM subtree nothing sees again.
+  const recorded = await pollForDriver(() => {
+    const currentSheet = queryShellDom<HTMLElement>(shellRoot, '.olea-today-contest-sheet');
+    if (currentSheet === null) return null;
+    return currentSheet.querySelector('.olea-today-contest-record') === null ? true : null;
+  }, DRIVER_POLL_TIMEOUT_MS);
+  if (recorded === null) {
     throw new Error(
-      "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet to " +
-        'close after recording (today/view.ts recordDispute, ~L519).',
+      "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet's " +
+        'record button to retire after recording (today/contest.ts buildDisputeSheet, ' +
+        'gestureLabel; today/view.ts recordDispute, ~L519).',
     );
   }
   return { outcome: 'recorded' };
