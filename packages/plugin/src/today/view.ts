@@ -473,9 +473,14 @@ export class TodayView extends ItemView {
   }
 
   private renderDisputeSheet(parent: HTMLElement, sheet: DisputeSheet): void {
+    // DSN-1 frame 02: the offline pill sits above the sheet's own content,
+    // declaring up front that everything below came off the device before
+    // she reads a word of it — not a caveat found at the bottom.
+    parent.createDiv({ cls: 'olea-today-contest-offline', text: sheet.offlineNote });
+
     const panel = parent.createDiv({ cls: 'olea-today-contest-sheet' });
     panel.createDiv({ cls: 'olea-today-contest-sheet-label', text: sheet.heading });
-    panel.createEl('p', { text: sheet.reasoning });
+    panel.createEl('p', { cls: 'olea-today-contest-reasoning', text: sheet.reasoning });
 
     if (sheet.evidence.length > 0) {
       const list = panel.createEl('ul', { cls: 'olea-today-contest-evidence' });
@@ -483,8 +488,6 @@ export class TodayView extends ItemView {
         list.createEl('li', { text: line.date });
       }
     }
-
-    panel.createDiv({ cls: 'olea-today-contest-offline', text: sheet.offlineNote });
 
     if (sheet.dissentMark !== null) {
       panel.createDiv({ cls: 'olea-today-contest-dissent', text: sheet.dissentMark });

@@ -276,9 +276,42 @@ declares nothing at all. See the header.
   align-self: flex-start;
 }
 
+/* DSN-1's `--quarantine` role, vendored here (`ol-l5og.18.7` [STY-0g]; the
+   sweep's fix 1) — the same hex the Today panel's own section vendors,
+   declared as a second rule on `.olea-review-root` rather than folded into
+   the "Owned by Olea" block near the top of this file, for the same
+   disjoint-diff reason that section explains. This root is forced dark
+   (see the header at the top of this file), so it needs no light-branch
+   override: #7c93a8 measures ≥4.8:1 against both this root's dark ground
+   and its elevated surface. */
+.olea-review-root {
+  --olea-quarantine: #7c93a8;
+  --olea-quarantine-wash: rgba(124, 147, 168, 0.16);
+}
+
+/* Restyled from a bare muted sentence to DSN-1 frame 03/05's state-chip — a
+   quiet swatch dot naming the kind, wash and border reusing the role
+   colour, and the sentence itself kept at the ordinary text tier (never
+   tinted) so the colour reads as a category mark, not a verdict. */
 .olea-review-contest-badge {
-  color: var(--olea-host-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--olea-host-text);
+  background: var(--olea-quarantine-wash);
+  border: 1px solid color-mix(in srgb, var(--olea-quarantine) 45%, transparent);
+  border-radius: 8px;
+  padding: 7px 11px;
   font: 400 12px / 1.5 var(--olea-host-ui-font);
+}
+
+.olea-review-contest-badge::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--olea-quarantine);
 }
 
 .olea-review-ghost-action--active {
@@ -1197,52 +1230,182 @@ button.olea-review-mcq-option:hover {
 }
 
 /* The contest gesture and its dispute sheet on the Today panel
-   (`[D-046]` clause 4, `[D-095]`; `ol-fgba` [DISP-1], drawn in DSN-1).
+   (`[D-046]` clause 4, `[D-095]`; `ol-fgba` [DISP-1], drawn in DSN-1,
+   approved `[D-136]`, widened by `[D-215]`).
 
-   The gesture is deliberately quiet and identical wherever it appears — one
-   string, one position, on every claim. It is not a primary action and must
-   never read as one: it is there for the moment she disagrees, not as
-   something the panel is asking her to do. No colour carries meaning here, so
-   nothing below needs a contrast branch; the sheet's own words are the whole
-   signal. */
+   Restyled to DSN-1 frame 01's bordered pill and frame 02's bordered card
+   (`ol-l5og.18.7` [STY-0g]) — the design-fidelity sweep found this
+   rendering as a bare underlined text link and a plain left-bordered box.
+   Still deliberately quiet: the pill carries no attention colour, and the
+   sheet's own colour is limited to the evidence rows (reusing this root's
+   existing `--olea-host-brand`, not a new hue) and the dissent mark — DSN-1
+   frame 01's own argument for the gesture is that four different producers
+   share it with no visual weight of its own.
+
+   `--olea-quarantine`/`--olea-candidate`/`--olea-dissent` are DSN-1's three
+   proposed role tokens (`docs/design/dsn1-contestability/PROVENANCE.md`,
+   "New token roles"), vendored here rather than left as a builder
+   follow-up (the sweep's fix 1). Declared as a SECOND rule on
+   `.olea-today-root` — never folded into the "Owned by Olea" block near the
+   top of this section, which another STY-0 lane (STY-0i, trends) also
+   edits tonight; custom properties merge fine across separate rules for the
+   same selector, so this keeps the two lanes' diffs on disjoint lines.
+   Only `--olea-dissent` has a live reader on THIS panel (the dissent mark);
+   `--olea-quarantine` is read on the review view's own section (below in
+   this file); `--olea-candidate` has no renderer on either surface yet — no
+   code shows a withdrawn structural match — vendored anyway so the next
+   surface that needs one reads a role, not another ad-hoc hex. Light-branch
+   overrides follow the same darken-hold-hue argument as `--olea-host-
+   brand`'s own override above in this file (`ol-g5tr`): all three measured
+   2.0-3.2:1 against this pane's light-ground fixtures, darkened here for
+   ≥4.6:1 (hue held; computed, not eyeballed). This section reads neither of
+   the two host hover-state variables the Today section's own test forbids
+   ("reads no host variable a theme is likely to declare in only one
+   branch") — hover states below use `color-mix()` against tokens already
+   declared on this root instead. */
+.olea-today-root {
+  --olea-quarantine: #7c93a8;
+  --olea-candidate: #b79a5c;
+  --olea-dissent: #c9b98a;
+}
+
+.theme-light .olea-today-root {
+  --olea-quarantine: #5e778e;
+  --olea-candidate: #8a713d;
+  --olea-dissent: #83713c;
+}
+
 .olea-today-contest {
   margin: 4px 0 12px;
 }
 
-.olea-today-contest-gesture,
-.olea-today-contest-record {
+.olea-today-contest-gesture {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 999px;
+  padding: 5px 11px;
   background: none;
-  border: none;
-  padding: 2px 0;
-  font-size: 0.85em;
-  color: var(--text-muted, #888);
-  text-decoration: underline;
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
   cursor: pointer;
 }
 
+.olea-today-contest-gesture:hover {
+  border-color: var(--olea-host-brand);
+  color: var(--olea-host-text);
+}
+
+/* Frame 02's offline pill — dashed border, small dot, uppercase mono. Sits
+   above the sheet card (see `view.ts`'s `renderDisputeSheet`), never inside
+   it: it declares "this works with no connection" before she reads a word
+   of what it built from. */
+.olea-today-contest-offline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* --olea-host-muted, not -faint: ol-nrrm found --text-faint sub-floor
+     (2.6-3.1:1) against every swept ground, uniformly — the same fix this
+     panel's own course-name row already applies. */
+  color: var(--olea-host-muted);
+  border: 1px dashed var(--olea-host-line);
+  border-radius: 999px;
+  padding: 4px 9px;
+  margin-bottom: 8px;
+}
+
+.olea-today-contest-offline::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--olea-host-muted);
+}
+
 .olea-today-contest-sheet {
-  margin-top: 8px;
-  padding: 8px 10px;
-  border-left: 2px solid var(--background-modifier-border, #ddd);
+  padding: 12px 14px 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 10px;
 }
 
 .olea-today-contest-sheet-label {
   font-weight: 600;
-  font-size: 0.85em;
+  font-size: 11.5px;
+  color: var(--olea-host-text);
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--olea-host-line);
 }
 
+.olea-today-contest-reasoning {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--olea-host-text);
+  margin: 0 0 10px;
+}
+
+/* The evidence rows — DSN-1's tinted `.evidence-link` treatment, repeated
+   per dated review rather than the kit's single source link: this sheet's
+   evidence is "which reviews the reading rests on", not a document
+   locator. Reuses `--olea-host-brand` (already owned by this root) rather
+   than a new hue, matching the kit's own choice to tint evidence with the
+   same colour as citations elsewhere. */
 .olea-today-contest-evidence {
-  margin: 4px 0;
-  padding-left: 1.2em;
-  font-size: 0.85em;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
 }
 
-.olea-today-contest-offline,
-.olea-today-contest-withheld,
-.olea-today-contest-dissent,
-.olea-today-contest-ack {
-  font-size: 0.85em;
-  color: var(--text-muted, #888);
+.olea-today-contest-evidence li {
+  font-family: var(--olea-host-mono);
+  font-size: 11px;
+  color: var(--olea-host-brand);
+  background: color-mix(in srgb, var(--olea-host-brand) 12%, transparent);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+/* The one place this sheet carries a role colour: she disagreed, and DSN-1
+   frame 04 treats that as worth naming rather than folding into ordinary
+   muted text. */
+.olea-today-contest-dissent {
+  font-size: 11.5px;
+  color: var(--olea-dissent);
+  margin-bottom: 8px;
+}
+
+.olea-today-contest-ack,
+.olea-today-contest-withheld {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--olea-host-muted);
+  margin-bottom: 8px;
+}
+
+.olea-today-contest-record {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--olea-host-text);
+  cursor: pointer;
+}
+
+.olea-today-contest-record:hover {
+  background: color-mix(in srgb, var(--olea-host-line) 45%, transparent);
 }
 
 /* F7.2's term-dates quiet pointer (`[D-147]`, `ol-0r92.6`). Drawn beside a
