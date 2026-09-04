@@ -2173,6 +2173,25 @@ button.olea-review-mcq-option:hover {
   border-color: var(--olea-host-brand);
 }
 
+/* STY-4 (`ol-l5og.18.13`): the course/topic `<select>` (`view.ts`'s
+   `renderCourseOrTopicControls`) now carries the pane's own chrome rather
+   than the host's bare default — the fidelity judgment's own "loudest
+   unstyled element on the screen, OS chrome against authored chrome"
+   finding. Same border/radius language as `.olea-session-budget`, sized to
+   sit beside it rather than to match it exactly (a `<select>`'s own chrome
+   cannot be fully suppressed cross-platform). */
+.olea-session-select {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 4px 8px;
+  font-family: var(--olea-host-ui-font);
+  font-size: 12px;
+  color: var(--olea-host-text);
+  background: transparent;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 6px;
+}
+
 /* F4.6 / F6.4, `[D-163]` (`ol-12gs`): the door onto `ExplainBackModal` —
    standing, not tied to the budget row above, so it never reads as a fourth
    budget option. Muted like `.olea-session-unavailable-body`, never the
@@ -2228,10 +2247,56 @@ button.olea-review-mcq-option:hover {
   margin-bottom: 4px;
 }
 
+/* STY-4 (`ol-l5og.18.13`; kit: `ExamSession.jsx`'s bordered `SessionBuilder`
+   card) — the headline, the composition table and the "Why these" box move
+   inside one card once a session actually has items (`view.ts`'s `render`).
+   Border and radius only, deliberately no distinct elevation surface: this
+   pane declares none (see the header above and `.olea-session-why`'s own
+   comment, "this pane declares no elevation surface") and a card is not the
+   exception to that. */
+.olea-session-card {
+  margin-top: 14px;
+  padding: 16px 18px 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 10px;
+}
+
+.olea-session-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.olea-session-card-eyebrow {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+}
+
+.olea-session-card-spacer {
+  flex: 1;
+}
+
+/* The header's compact day count (kit: the top-right "N days out" tag) —
+   `copy.ts`'s `daysOutLabel`, the same `daysUntil` fact `.olea-session-
+   countdown-days` below draws in full. --olea-host-muted, not -faint
+   (ol-nrrm): this label carries text. */
+.olea-session-card-days {
+  font-size: 11.5px;
+  color: var(--olea-host-muted);
+}
+
 /* The headline (kit: `pass4-oracle-gap`'s `ExamSession.jsx`, the bold serif
    sentence naming the whole plan) — `sessionSummaryLine`'s own string,
    never a rewording of it (`view.ts`'s `render`). Serif, like the review
-   screen's own question. */
+   screen's own question. Now the card's own first line, so its top margin
+   is tighter than a standalone heading would need. */
+.olea-session-card > .olea-session-headline {
+  margin-top: 10px;
+}
+
 .olea-session-headline {
   margin: 12px 0 2px;
   font: 500 17px / 1.4 var(--olea-host-question-font, var(--olea-host-content-font));
@@ -4417,4 +4482,283 @@ button.olea-review-mcq-option:hover {
 .olea-bulk-review-root .olea-bulk-review-group-header {
   padding: 14px 0 12px;
   margin-bottom: 2px;
+}
+
+/* ============================================================
+   ---- The control system (`[STY-1]`, ol-l5og.18.11) ----
+   ============================================================
+
+   Kit: `docs/design/pass4-oracle-gap/ui_kits/olea-plugin/ExamSession.jsx:74-83`
+   is the canonical action row — a honey-filled primary carrying a keycap, a
+   bordered neutral secondary, and a quiet ghost action pushed to the far end.
+   `Pass4Annotations.jsx:61` states the rule the kits hold to throughout:
+   "The one honey on these surfaces is the primary action, exactly as
+   everywhere else."
+
+   WHY. The judgement counted 7 button rules for ~47 buttons across ten views,
+   `mod-cta` used zero times, and exactly one control in the whole product with
+   a background. With no system, the same hole reads two opposite ways: the
+   registry's `Open` inherits Obsidian's filled default chrome and becomes the
+   highest-contrast object in every row, while explain-back's actions are
+   undifferentiated grey. The session builder's raw native `<select>` is the
+   same hole again, in OS chrome.
+
+   THREE TIERS, AND AT MOST ONE OF THE FIRST PER SURFACE.
+     `.olea-button-primary` — honey fill, the kit's `Start this`. One per
+        surface, and only on the action the surface exists to offer.
+     `.olea-button` — bordered, transparent ground, muted ink. The default.
+        A secondary is not a demoted primary; it is what a control looks like.
+     `.olea-button-quiet` — no border, no ground, muted ink that resolves to
+        text on hover. For a row-level affordance that must not out-shout the
+        row, which is exactly the registry `Open` finding.
+
+   MAPPED ONTO THE HOST'S OWN CONVENTION. Obsidian marks a primary with
+   `mod-cta` and fills it with the user's accent. A view reaching for that
+   idiom is not wrong, but two different primaries on one surface would be, so
+   `.mod-cta` is redirected to Olea's honey here rather than left on the
+   accent. `--olea-host-accent` keeps its one job — the focus ring — which is
+   what the file header already says it is for.
+
+   The honey and its ink are Olea-owned and constant in every host theme
+   (`docs/design/shared/theme-host.css`, "Owned by Olea"), so each carries its
+   own literal where a root has not declared the role, rather than falling back
+   to a host colour that would silently un-brand the primary. */
+
+.olea-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-control);
+  background: transparent;
+  color: var(--olea-host-muted);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body-lg);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.olea-button:hover {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+  color: var(--olea-host-text);
+}
+
+.olea-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.olea-button-primary,
+.olea-button.mod-cta {
+  border-color: transparent;
+  /* `--olea-honey` / `--olea-honey-ink-strong`, docs/design/tokens/colors.css.
+     Owned by Olea, identical in every host theme, so the literal is the role
+     rather than a fallback for one. */
+  background: var(--olea-host-attention, #e0a94e);
+  color: #3b2e12;
+  font-size: 14px; /* ExamSession.jsx:75 — the one step above the ramp's body-lg */
+  font-weight: 600;
+}
+
+.olea-button-primary:hover,
+.olea-button.mod-cta:hover {
+  border-color: transparent;
+  color: #3b2e12;
+  filter: brightness(1.06);
+}
+
+.olea-button-quiet {
+  min-height: 26px;
+  padding: 0 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--olea-host-muted);
+  font-size: var(--olea-type-fine);
+}
+
+.olea-button-quiet:hover {
+  border-color: transparent;
+  color: var(--olea-host-brand, #8a9a63);
+}
+
+/* ---- The select ----
+
+   The kit draws no dropdown, so this is the kit's control language applied to
+   a control the kit never had to draw: the same border, radius, ink and face
+   as `.olea-button`, with the chevron built from two gradients so it follows
+   `color` rather than needing an image the host cannot re-ink. `appearance:
+   none` is what removes the OS chrome; without the chevron it would also
+   remove the only affordance saying the control opens, so the two belong
+   together. ---- */
+
+.olea-select {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 30px 0 11px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+  background-color: transparent;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    right 14px center,
+    right 9.5px center;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  color: var(--olea-host-text);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-label);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.olea-select:hover {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+}
+
+/* ============================================================
+   ---- The control system, applied to the surfaces the judgement named ----
+   ============================================================ */
+
+/* Registry: `Open` was "a real <button> inheriting host filled chrome, making
+   it the highest-contrast object in every row; kit draws it as quiet muted
+   text". `.olea-registry-row-restore` keeps its brand ink — it is the one row
+   action that reverses a withdrawal — and only loses the host's fill. */
+.olea-registry-root .olea-registry-row-action button {
+  min-height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--olea-radius-control);
+  background: transparent;
+  box-shadow: none;
+  color: var(--olea-host-muted);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-fine);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.olea-registry-root .olea-registry-row-action button:hover {
+  color: var(--olea-host-brand, #8a9a63);
+}
+
+.olea-registry-root .olea-registry-row-action button.olea-registry-row-restore {
+  color: var(--olea-host-brand, #8a9a63);
+}
+
+/* Explain-back: "no primary action styling — the build creates bare <button>s
+   and `.olea-explain-back-actions` sets only flex+gap". The accept action is
+   built first (`modal.ts:592`), the discard second (`:597`), so the kit's one
+   primary and one secondary map onto document order without the modal needing
+   to name them. */
+.olea-explain-back-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-control);
+  background: transparent;
+  box-shadow: none;
+  color: var(--olea-host-muted);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-body-lg);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.olea-explain-back-actions button:first-child {
+  border-color: transparent;
+  background: var(--olea-host-attention, #e0a94e);
+  color: #3b2e12;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.olea-explain-back-actions button:hover {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+  color: var(--olea-host-text);
+}
+
+.olea-explain-back-actions button:first-child:hover {
+  border-color: transparent;
+  color: #3b2e12;
+  filter: brightness(1.06);
+}
+
+/* Session builder: "an unstyled native <select> sits directly under the styled
+   budget chips — OS chrome against authored chrome, the loudest single element
+   on the screen". The element carries no class of its own
+   (`session-builder/view.ts:395`), so it is reached by tag inside its root;
+   nothing here adds a class that pane's own drift guard would have to cover.
+   The pane's accept/dismiss gate is NOT drawn here — `.olea-button-primary` is
+   the class for it, and the lane that owns `src/session-builder/**` adds the
+   row. */
+.olea-session-root select {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 30px 0 11px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+  background-color: transparent;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    right 14px center,
+    right 9.5px center;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  box-shadow: none;
+  color: var(--olea-host-text);
+  font-family: var(--olea-host-ui-font);
+  font-size: var(--olea-type-label);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.olea-session-root select:hover {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+}
+
+/* ---- Motion: the kit's own control timing, guarded ----
+
+   `docs/design/tokens/motion.css` declares exactly one control transition —
+   `--olea-transition-control`, background/border/colour at `--olea-duration`
+   (180ms) on `--olea-ease` — and its own header says why there is only one:
+   "Olea barely moves. Transitions are colour and border only — no bounce, no
+   slide-in, no scale on press." The judgement found motion "effectively
+   absent (one guarded 180ms transition, in bulk-review only)"; this is that
+   same transition, on the controls, guarded the same way. ---- */
+
+:root {
+  --olea-duration: 180ms; /* motion.css */
+  --olea-ease: cubic-bezier(0.2, 0.6, 0.35, 1); /* motion.css */
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .olea-button,
+  .olea-select,
+  .olea-registry-root .olea-registry-row-action button,
+  .olea-explain-back-actions button,
+  .olea-session-root select {
+    transition:
+      background-color var(--olea-duration) var(--olea-ease),
+      border-color var(--olea-duration) var(--olea-ease),
+      color var(--olea-duration) var(--olea-ease);
+  }
 }

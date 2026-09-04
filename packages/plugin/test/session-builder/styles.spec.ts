@@ -208,9 +208,55 @@ describe('the session section is a sidebar pane, like the gap view and the Today
     }
   });
 
-  it('uses no attention colour at all — principle 12 held in pixels, not only in prose', () => {
-    // A session builder that flags anything amber is one step from telling her
-    // she is behind, which `copy.ts` refuses in words.
-    expect(css).not.toContain('--olea-host-attention');
+  /**
+   * NARROWED by `[STY-1]` (`ol-l5og.18.11`), from "no attention colour at all"
+   * to "no attention colour on anything that reads a fact".
+   *
+   * **The original rule and why it was right.** A session builder that flags
+   * anything amber is one step from telling her she is behind, which
+   * `copy.ts` refuses in words. Every item row, every budget chip, every
+   * count on this pane is a reading, and principle 12 is held in pixels here
+   * as well as in prose.
+   *
+   * **Why it could not stay a blanket ban.** The kit paints this pane's
+   * primary action honey and nothing else:
+   * `docs/design/pass4-oracle-gap/ui_kits/olea-plugin/ExamSession.jsx:75`
+   * gives `Start this` `background: 'var(--olea-host-attention)'` with
+   * `color: 'var(--olea-honey-ink-strong)'`, while `Not now` on `:79` is a
+   * neutral bordered control and `Change what's in it` on `:82` is a quiet
+   * ghost. `Pass4Annotations.jsx:61` states the rule the whole kit set holds
+   * to: "The one honey on these surfaces is the primary action, exactly as
+   * everywhere else." The 2026-09-04 kit-fidelity judgement recorded this
+   * ban as the live blocker on drawing the accept/dismiss gate at all.
+   *
+   * A fill on the control she presses is not a flag on her material — it is
+   * the opposite reading of the same colour, and it is the reading every
+   * other Olea surface already uses it for (Today's `Start review`,
+   * `.olea-today-primary-action`). So the ban is narrowed to what it was
+   * actually protecting rather than lifted: attention may appear only inside
+   * a rule whose selector names a primary action, and a lane painting a row,
+   * a chip or a count with it still fails here.
+   */
+  it('paints attention only on a primary action, never on anything that reads a fact', () => {
+    const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    const offenders: string[] = [];
+    for (const match of withoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = (match[1] ?? '').trim();
+      const body = match[2] ?? '';
+      if (!body.includes('--olea-host-attention')) continue;
+      // The only permitted shape: a rule that IS the primary action. A
+      // declaration of the role itself on the root is permitted too, since
+      // the pane cannot paint a primary without the role being available.
+      const isPrimaryAction = /-primary\b|\.mod-cta/.test(selector);
+      const isRoleDeclaration =
+        /^\.olea-session-root$/.test(selector) && /--olea-host-attention\s*:/.test(body);
+      if (!isPrimaryAction && !isRoleDeclaration) offenders.push(selector);
+    }
+    expect(
+      offenders,
+      'attention (honey) on this pane is reserved for its single primary action — the kit paints ' +
+        'Start this with it and nothing else (ExamSession.jsx:75, Pass4Annotations.jsx:61). A row, ' +
+        'a chip or a count wearing it is the "you are behind" reading copy.ts refuses in words.',
+    ).toEqual([]);
   });
 });
