@@ -130,15 +130,20 @@ export async function gotoSimulator(page: Page, options: GotoSimulatorOptions = 
 }
 
 /**
- * Waits until the Today panel has finished a render pass: `.olea-today-count`
- * (a due total) or `.olea-today-note` (nothing due / unavailable / too early —
- * `today/view.ts`) becomes visible. Both selectors are mutually exclusive and
- * one is always present once `TodayView` has actually rendered its due
- * section, so waiting on their union survives the empty-pane gap every
- * `remountPane()` call opens (see this module's doc).
+ * Waits until the Today panel has finished a render pass: the due section
+ * (`.olea-today-due`, `today/view.ts`'s `renderDue`) always draws its label
+ * plus exactly one `.olea-today-note` child — the sentence, "nothing due", or
+ * "can't count" — once `TodayView` has actually rendered, so waiting on that
+ * note survives the empty-pane gap every `remountPane()` call opens (see this
+ * module's doc). **Scoped to `.olea-today-due`, not a bare `.olea-today-note`
+ * selector**, because HOME-3 (`[D-223]`, `ol-l5og.22`) moved the due count off
+ * its own `.olea-today-count` numeral onto the same `.olea-today-note` class
+ * the insights section below it also uses for its "too early" line — an
+ * unscoped selector can resolve to that section's note before the due
+ * section has rendered its own.
  */
 export async function waitForTodayRendered(page: Page): Promise<void> {
-  await expect(frame(page).locator('.olea-today-count, .olea-today-note').first()).toBeVisible();
+  await expect(frame(page).locator('.olea-today-due .olea-today-note').first()).toBeVisible();
   await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
 }
 
@@ -196,16 +201,25 @@ export async function waitForRemount(page: Page, before: string | null): Promise
   });
 }
 
-/** Reads `.olea-today-count`'s number, or `'none'` when `.olea-today-note` is showing instead (nothing due / unavailable). Call only after {@link waitForTodayRendered}. */
+/**
+ * Reads the due section's `.olea-today-note` sentence and returns its count,
+ * or `'none'` when the sentence reads "nothing due" or "can't count" instead
+ * of a real total. Call only after {@link waitForTodayRendered}.
+ *
+ * **Parses a sentence, not a numeral, since HOME-3** (`[D-223]`,
+ * `ol-l5og.22`) — the due total used to be its own `.olea-today-count` node;
+ * it is now folded into `today/copy.ts`'s `dueTodaySentence`, `"N due
+ * today"`, drawn at the same weight as the other two due-section states. This
+ * matches a leading integer rather than importing `dueTodaySentence` itself,
+ * so a copy change alone (not a structural one) still exercises the real
+ * rendered string end-to-end.
+ */
 export async function readDueCount(page: Page): Promise<number | 'none'> {
   await waitForTodayRendered(page);
-  const countEl = frame(page).locator('.olea-today-count');
-  if ((await countEl.count()) === 0) return 'none';
-  const text = (await countEl.first().textContent()) ?? '';
-  const n = Number(text.trim());
-  if (Number.isNaN(n))
-    throw new Error(`readDueCount: unparseable .olea-today-count text "${text}"`);
-  return n;
+  const note = frame(page).locator('.olea-today-due .olea-today-note').first();
+  const text = ((await note.textContent()) ?? '').trim();
+  const match = /^(\d+)\s+due today$/.exec(text);
+  return match === null ? 'none' : Number(match[1]);
 }
 
 /**
