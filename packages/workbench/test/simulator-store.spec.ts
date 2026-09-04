@@ -44,6 +44,10 @@ for (const backend of BACKENDS) {
       expect(await store.loadOverlay()).toEqual(new Map());
       expect(await store.loadPluginData()).toBeUndefined();
       expect(await store.loadClockOffsetMs()).toBeUndefined();
+      // `ol-3ux7.64.16` [WBX-13]: `undefined` before seeding has ever run —
+      // `controller.ts`'s `seedPersonaHistoryIfNeeded` reads this to decide
+      // whether a persona world's seed events still need laying in.
+      expect(await store.loadSeededWorldMarker()).toBeUndefined();
     });
 
     it('round-trips an overlay write', async () => {
@@ -71,10 +75,16 @@ for (const backend of BACKENDS) {
       expect(await store.loadClockOffsetMs()).toBe(86_400_000);
     });
 
-    it('resetAll clears the overlay, the plugin data and the clock offset together', async () => {
+    it('round-trips the seeded-world marker', async () => {
+      await store.saveSeededWorldMarker('persona:steady@2026-08-28');
+      expect(await store.loadSeededWorldMarker()).toBe('persona:steady@2026-08-28');
+    });
+
+    it('resetAll clears the overlay, the plugin data, the clock offset and the seeded-world marker together', async () => {
       await store.putOverlay('a.md', { bytes: new TextEncoder().encode('a') });
       await store.savePluginData({ deviceId: 'olea-abc123' });
       await store.saveClockOffsetMs(123_456);
+      await store.saveSeededWorldMarker('persona:steady@2026-08-28');
 
       await store.resetAll();
 
@@ -83,6 +93,10 @@ for (const backend of BACKENDS) {
       // Back to "never persisted", same as a brand-new store — see the
       // first test's own doc on why that is `undefined`, not `0`.
       expect(await store.loadClockOffsetMs()).toBeUndefined();
+      // `ol-3ux7.64.16` [WBX-13]: a reset is a genuine "first open" again for
+      // a persona world's seed events too, not just for the plugin's own
+      // state — `seedPersonaHistoryIfNeeded` must reseed after this.
+      expect(await store.loadSeededWorldMarker()).toBeUndefined();
     });
 
     it('loadOverlay returns a fresh snapshot — mutating the returned map never touches the store', async () => {

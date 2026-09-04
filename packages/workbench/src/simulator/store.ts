@@ -44,10 +44,28 @@ export interface SimulatorStore {
   saveClockOffsetMs(offsetMs: number): Promise<void>;
 
   /**
-   * Clears the overlay, the plugin data and the clock offset together, in one
-   * transaction where the backend supports one (`openIndexedDbStore` does) —
-   * `docs/dev/simulator-design.md` §3: "a reset clears both stores in one
-   * transaction, so the device id and the log are never out of step."
+   * Identifies which world's persona history has already been laid into the
+   * overlay by `SimulatorController`'s seeding step (`ol-3ux7.64.16`
+   * [WBX-13], `eval/data/persona-synthetic/worlds/README.md`'s "file-path
+   * convention" section) — `undefined` before seeding has ever run for the
+   * CURRENT world (never persisted, or cleared by `resetAll`). A world/build
+   * identity string (`world.ts`'s `descriptor.world` + `.asOf`), not a bare
+   * boolean: a rebuild that swaps which persona this dist carries must
+   * reseed even in a browser profile that never called Reset against the
+   * previous world.
+   */
+  loadSeededWorldMarker(): Promise<string | undefined>;
+  saveSeededWorldMarker(marker: string): Promise<void>;
+
+  /**
+   * Clears the overlay, the plugin data, the clock offset and the seeded-
+   * world marker together, in one transaction where the backend supports one
+   * (`openIndexedDbStore` does) — `docs/dev/simulator-design.md` §3: "a reset
+   * clears both stores in one transaction, so the device id and the log are
+   * never out of step." The seeded-world marker joins that same reset
+   * (`ol-3ux7.64.16` [WBX-13]) so a reset is also a genuine "first open"
+   * again for a persona world's seed events, not just for the plugin's own
+   * state.
    */
   resetAll(): Promise<void>;
 }
@@ -58,6 +76,7 @@ const OVERLAY_STORE_NAME = 'overlay';
 const META_STORE_NAME = 'meta';
 const META_KEY_PLUGIN_DATA = 'pluginData';
 const META_KEY_CLOCK_OFFSET_MS = 'clockOffsetMs';
+const META_KEY_SEEDED_WORLD_MARKER = 'seededWorldMarker';
 const DB_VERSION = 1;
 
 interface OverlayRow {
@@ -76,6 +95,7 @@ export function createMemoryStore(): SimulatorStore {
   const overlay = new Map<string, OverlayValue>();
   let pluginData: unknown;
   let clockOffsetMs: number | undefined;
+  let seededWorldMarker: string | undefined;
 
   return {
     backend: 'memory',
@@ -97,10 +117,17 @@ export function createMemoryStore(): SimulatorStore {
     async saveClockOffsetMs(offsetMs) {
       clockOffsetMs = offsetMs;
     },
+    async loadSeededWorldMarker() {
+      return seededWorldMarker;
+    },
+    async saveSeededWorldMarker(marker) {
+      seededWorldMarker = marker;
+    },
     async resetAll() {
       overlay.clear();
       pluginData = undefined;
       clockOffsetMs = undefined;
+      seededWorldMarker = undefined;
     },
   };
 }
@@ -194,6 +221,11 @@ export async function openIndexedDbStore(
       return typeof value === 'number' ? value : undefined;
     },
     saveClockOffsetMs: (offsetMs) => writeMeta(META_KEY_CLOCK_OFFSET_MS, offsetMs),
+    async loadSeededWorldMarker() {
+      const value = await readMeta(META_KEY_SEEDED_WORLD_MARKER);
+      return typeof value === 'string' ? value : undefined;
+    },
+    saveSeededWorldMarker: (marker) => writeMeta(META_KEY_SEEDED_WORLD_MARKER, marker),
     async resetAll() {
       const transaction = db.transaction([OVERLAY_STORE_NAME, META_STORE_NAME], 'readwrite');
       transaction.objectStore(OVERLAY_STORE_NAME).clear();

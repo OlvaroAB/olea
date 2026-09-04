@@ -26,6 +26,20 @@ export interface SimulatorWorldDescriptor {
   readonly label: string;
   /** `YYYY-MM-DD` — the snapshot day the simulated clock starts at on first open and after reset. */
   readonly asOf: string;
+  /**
+   * Persona worlds only (`ol-3ux7.64.15` [WBX-14]'s `world.json` shape,
+   * `eval/data/persona-synthetic/worlds/README.md`) — carries the device id
+   * `simulator-seed-events.json`'s records should be grouped and written
+   * under (`seed-events.ts`'s `personaDeviceId`), so a persona's lived
+   * history lands in the vault under the exact convention a real device's
+   * own review log uses (`packages/core/src/review-log/path.ts`,
+   * `reviewLogPath`). Untyped and unvalidated here — like `world` above,
+   * this lane only ever constructs a descriptor with no `streamSpec` at all
+   * (INV-3: no persona data in the public repo), so a malformed one can only
+   * ever arrive from a private build this module has no way to inspect the
+   * contents of; `seed-events.ts` extracts it defensively instead.
+   */
+  readonly streamSpec?: unknown;
 }
 
 export interface SimulatorWorldLoadResult {

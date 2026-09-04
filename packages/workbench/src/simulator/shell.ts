@@ -319,13 +319,26 @@ const SHELL_CSS = `
   font-size: 12px;
 }
 
-.wb-sim-strip-controls input[type="date"] {
-  background: var(--background-primary, #1e1e1e);
-  border: 1px solid var(--background-modifier-border, #3a3a3a);
-  border-radius: 4px;
+/* ---- term scrubber (ol-3ux7.64.16 [WBX-13]) ---- */
+/* Replaces the old input[type="date"] jump control this rule used to
+   style — see term-scrubber.ts's own doc for the DOM this styles. */
+
+.wb-sim-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-sim-scrubber input[type="range"] {
+  accent-color: var(--text-accent, #8a9a63);
+  width: 160px;
+}
+
+.wb-sim-scrub-date {
   color: var(--text-normal, #dadada);
-  font: inherit;
-  padding: 4px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 8ch;
 }
 
 .wb-sim-notice-host {

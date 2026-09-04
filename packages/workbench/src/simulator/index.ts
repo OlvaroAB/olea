@@ -21,6 +21,14 @@ export {
   type SimulatorTransport,
 } from './provenance-badge.js';
 export {
+  layOutSeedEventsByDay,
+  loadSimulatorSeedEvents,
+  personaDeviceId,
+  type SimulatorSeedEventRecord,
+  type SimulatorSeedEventsLoadResult,
+  writeSeedEventsIntoVault,
+} from './seed-events.js';
+export {
   createSimulatorShell,
   renderRibbonViews,
   ribbonLabel,
@@ -34,6 +42,16 @@ export {
   openSimulatorStore,
   type SimulatorStore,
 } from './store.js';
+export {
+  daysSinceAsOf,
+  renderTermScrubber,
+  SCRUBBER_MAX_DAYS,
+  SCRUBBER_TERM_WEEKS,
+  SIMULATOR_SCRUBBER_SELECTOR,
+  scrubberDateAt,
+  type TermScrubberElements,
+  type TermScrubberState,
+} from './term-scrubber.js';
 export {
   loadSimulatorWorld,
   parseWorldAsOf,

@@ -112,9 +112,15 @@ import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
 import { renderProvenanceBadge, type SimulatorTransport } from './provenance-badge.js';
+import {
+  loadSimulatorSeedEvents,
+  personaDeviceId,
+  writeSeedEventsIntoVault,
+} from './seed-events.js';
 import { renderRibbonViews, type SimulatorShellElements } from './shell.js';
 import { DEFAULT_SIMULATOR_DB_NAME, openSimulatorStore, type SimulatorStore } from './store.js';
-import { loadSimulatorWorld, parseWorldAsOf } from './world.js';
+import { renderTermScrubber, scrubberDateAt } from './term-scrubber.js';
+import { loadSimulatorWorld, parseWorldAsOf, type SimulatorWorldDescriptor } from './world.js';
 
 /**
  * Best-effort, never-throwing load of a bundled replay cassette from a plain
@@ -340,6 +346,43 @@ function formatSimulatedDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
+/** The seeded-world marker's identity — see `store.ts`'s `loadSeededWorldMarker` doc: a world/build identity, not a bare boolean, so a rebuild that swaps which persona this dist carries reseeds even in a browser profile that never called Reset. */
+function worldSeedMarker(descriptor: SimulatorWorldDescriptor): string {
+  return `${descriptor.world}@${descriptor.asOf}`;
+}
+
+/**
+ * The seed-events half of this bead (`ol-3ux7.64.16` [WBX-13], consuming
+ * `ol-3ux7.64.15` [WBX-14]'s contract — see `seed-events.ts`'s own doc).
+ * Called from `SimulatorController.create()` and again from `reset()` —
+ * both are the "first open or after Reset" moments the persona-worlds
+ * README names, and both start from a fresh `PersistentVaultSource` whose
+ * overlay this lane must plant history into BEFORE the plugin's first mount
+ * reads it. Idempotent via `store`'s seeded-world marker (not via checking
+ * "is the overlay empty", which the plugin's own cold-start ingestion writes
+ * into regardless — see `store.ts`'s own doc on why this needs its own
+ * marker): a world with no seed file at all (the fixture and real worlds,
+ * every persona world built before WBX-14) marks itself seeded on the first
+ * check and never fetches again until the next reset.
+ */
+async function seedPersonaHistoryIfNeeded(
+  descriptor: SimulatorWorldDescriptor,
+  vault: PersistentVaultSource,
+  store: SimulatorStore,
+  fetchFn: typeof fetch,
+): Promise<void> {
+  const deviceId = personaDeviceId(descriptor.streamSpec);
+  if (deviceId === undefined) return;
+  const marker = worldSeedMarker(descriptor);
+  if ((await store.loadSeededWorldMarker()) === marker) return;
+
+  const seedLoad = await loadSimulatorSeedEvents(fetchFn);
+  if (seedLoad.available && seedLoad.records.length > 0) {
+    await writeSeedEventsIntoVault(vault, seedLoad.records, deviceId);
+  }
+  await store.saveSeededWorldMarker(marker);
+}
+
 /**
  * Opens `viewType` if no leaf of that type exists anywhere, or reveals the
  * one that already does — the identical "or create one" shape every
@@ -495,6 +538,16 @@ export class SimulatorController {
     private readonly worldLabel: string,
     /** The world descriptor's `asOf`, parsed — the instant `reset()` and (via `create()`'s clock construction) a never-touched first mount return to, never `WORKBENCH_NOW` by name (WBX-12: the fixture world's `asOf` happens to equal `WORKBENCH_NOW`'s date, but a private/persona world's does not). */
     private readonly worldAsOf: Date,
+    /**
+     * The FULL world descriptor (`ol-3ux7.64.16` [WBX-13]) — `worldLabel`/
+     * `worldAsOf` above are the two fields every pre-WBX-13 caller needed;
+     * this bead's own two additions (`seedPersonaHistoryIfNeeded`'s
+     * `streamSpec`, and the scrubber's own `asOf` string, kept as the raw
+     * `YYYY-MM-DD` rather than re-derived from `worldAsOf`'s parsed `Date` to
+     * avoid a needless UTC round-trip) both need the descriptor whole rather
+     * than one more scalar field apiece.
+     */
+    private readonly worldDescriptor: SimulatorWorldDescriptor,
   ) {
     this.courseSetupSeenBridge = installCourseSetupSeenBridge(
       this.pluginDataHost,
@@ -516,6 +569,15 @@ export class SimulatorController {
     const store = await openSimulatorStore(dbName);
     const base: MemoryVaultSource = await loadFixtureVault();
     const vault = await PersistentVaultSource.create(base, store);
+    // Before the clock/mount: "first open" for a persona world's seed
+    // events (WBX-13 consuming WBX-14's contract) — see
+    // `seedPersonaHistoryIfNeeded`'s own doc.
+    await seedPersonaHistoryIfNeeded(
+      worldLoad.descriptor,
+      vault,
+      store,
+      globalThis.fetch.bind(globalThis),
+    );
     const clock = await createSimulatorClock(store, worldAsOf);
     const uninstallClock = clock.install();
     const pluginDataHost = createPluginDataHost(store);
@@ -541,7 +603,12 @@ export class SimulatorController {
       uninstallTransportBridge,
       worldLoad.descriptor.label,
       worldAsOf,
+      worldLoad.descriptor,
     );
+    // The term scrubber's visibility cutoff (`ol-3ux7.64.16` [WBX-13]) starts
+    // in step with the clock BEFORE anything mounts — see
+    // `syncVisibilityCutoff`'s own doc.
+    controller.syncVisibilityCutoff();
     // Set BEFORE `renderControls()`/`remountPane()` below — neither of those
     // touches the notice host on this path (`remountPane`'s own doc: it
     // deliberately never clears a notice a caller just set), so this survives
@@ -685,6 +752,7 @@ export class SimulatorController {
     }
 
     this.renderBadge();
+    this.refreshScrubber();
     // WBX-9's remount-complete signal: bumped once mount (and, for the
     // whole-plugin path, Home landing in the main pane and Today revealing
     // in the right sidebar) has fully resolved — the one settle condition
@@ -736,6 +804,36 @@ export class SimulatorController {
     });
   }
 
+  /**
+   * Keeps the term scrubber's handle and date label in step with the clock —
+   * called on every remount (`remountPane`'s own call site, alongside
+   * `renderBadge`) so `[data-sim-advance]` "moves the slider" exactly as this
+   * bead's brief asks, and so `[data-sim-reset]`/a committed scrub move the
+   * handle back to wherever the clock actually landed. `renderTermScrubber`
+   * is idempotent (`term-scrubber.ts`'s own doc) — this never rebuilds the
+   * DOM or re-attaches the listeners `renderControls()` wired once.
+   */
+  private refreshScrubber(): void {
+    renderTermScrubber(this.elements.controls, {
+      asOf: this.worldDescriptor.asOf,
+      current: formatSimulatedDate(this.clock.now()),
+    });
+  }
+
+  /**
+   * Keeps `this.vault`'s term-scrubber visibility cutoff (`persistent-
+   * vault.ts`'s own doc) in step with the clock's current day. Called
+   * everywhere the clock moves — `create()` (before the first mount),
+   * `advanceOneDay`, `jumpToDate` (the scrubber's own mechanism) and
+   * `reset()` (against the FRESH vault `reset()` just built) — so a review
+   * written today is never accidentally hidden by a cutoff left over from
+   * before the clock caught up to it, and so scrubbing back always hides
+   * exactly what the design doc calls "the future," never more or less.
+   */
+  private syncVisibilityCutoff(): void {
+    this.vault.setVisibilityCutoff(formatSimulatedDate(this.clock.now()));
+  }
+
   private setNotice(text: string): void {
     this.elements.notice.empty();
     if (text.length === 0) return;
@@ -764,13 +862,28 @@ export class SimulatorController {
       void this.advanceOneDay();
     });
 
-    this.elements.controls.createDiv({ cls: 'wb-sim-jump-label', text: 'Jump to date' });
-    const jump = this.elements.controls.createEl('input', {
-      attr: { type: 'date', 'data-sim-jump': 'true' },
+    // The term scrubber (`ol-3ux7.64.16` [WBX-13], design doc §4b) — replaces
+    // the bare `[data-sim-jump]` date input this control used to be. Built
+    // once here; `refreshScrubber()` (called from every `remountPane()`,
+    // alongside `renderBadge()`) keeps its handle and label in step with the
+    // clock without re-attaching these listeners.
+    const scrubber = renderTermScrubber(this.elements.controls, {
+      asOf: this.worldDescriptor.asOf,
+      current: this.worldDescriptor.asOf,
     });
-    jump.addEventListener('change', () => {
-      if (jump.value.length === 0) return;
-      void this.jumpToDate(jump.value);
+    // Live label update while dragging/keying through the slider — cheap,
+    // and gives immediate feedback for the date a release would jump to —
+    // but never itself a clock move: only `change` (fired on release, or
+    // once per discrete keyboard step) commits to a jump and a remount, the
+    // same "settle, don't spam remounts mid-drag" shape `[data-sim-advance]`
+    // and the old date input's own `change`-only wiring already used.
+    scrubber.input.addEventListener('input', () => {
+      scrubber.dateLabel.setText(
+        scrubberDateAt(this.worldDescriptor.asOf, Number(scrubber.input.value)),
+      );
+    });
+    scrubber.input.addEventListener('change', () => {
+      void this.scrubTo(Number(scrubber.input.value));
     });
 
     const rate = this.elements.controls.createEl('button', {
@@ -795,14 +908,31 @@ export class SimulatorController {
   /** `[data-sim-advance]`'s handler: steps the clock one day and re-mounts — the plugin's own onunload/onload. */
   async advanceOneDay(): Promise<void> {
     await this.clock.advanceDays(1);
+    this.syncVisibilityCutoff();
     await this.remountPane();
   }
 
-  /** `[data-sim-jump]`'s handler: `dateIso` is `YYYY-MM-DD`, interpreted as local midnight. */
+  /**
+   * The term scrubber's `change` handler (`ol-3ux7.64.16` [WBX-13]):
+   * `days` is whole days past the world's `asOf`, already clamped to
+   * `[0, SCRUBBER_MAX_DAYS]` by the native range input itself (its own
+   * `min`/`max` — `term-scrubber.ts`'s `renderTermScrubber`). Forward is
+   * `advanceOneDay` made continuous, by construction: both bottom out in
+   * `jumpToDate`, the same clock-move-then-remount mechanism. Backward
+   * relies on {@link syncVisibilityCutoff} (called inside `jumpToDate`)
+   * hiding, never deleting, any review-log record dated after the day this
+   * lands on — see `persistent-vault.ts`'s own doc.
+   */
+  async scrubTo(days: number): Promise<void> {
+    await this.jumpToDate(scrubberDateAt(this.worldDescriptor.asOf, days));
+  }
+
+  /** `jumpToDate`'s own `dateIso` is `YYYY-MM-DD`, interpreted as local midnight — the scrubber's (`scrubTo`) sole caller today, kept as its own method since "jump the clock to an arbitrary day and remount" is the reusable primitive, not the scrubber's slider math. */
   async jumpToDate(dateIso: string): Promise<void> {
     const asOf = new Date(`${dateIso}T00:00:00`);
     if (Number.isNaN(asOf.getTime())) return;
     await this.clock.jumpTo(asOf);
+    this.syncVisibilityCutoff();
     await this.remountPane();
   }
 
@@ -868,6 +998,22 @@ export class SimulatorController {
     await this.clock.jumpTo(this.worldAsOf);
     const freshBase = await loadFixtureVault();
     this.vault = await PersistentVaultSource.create(freshBase, this.store);
+    // `resetAll` clears the seeded-world marker along with the overlay
+    // (`store.ts`'s own doc) — a persona world's history is replanted here,
+    // into the SAME fresh vault this reset just built, before anything reads
+    // it (`seedPersonaHistoryIfNeeded`'s own doc: "first open or after
+    // Reset").
+    await seedPersonaHistoryIfNeeded(
+      this.worldDescriptor,
+      this.vault,
+      this.store,
+      globalThis.fetch.bind(globalThis),
+    );
+    // Back to the world's own asOf — unhides everything, since nothing is
+    // dated after the cutoff at asOf itself (the fresh overlay above has, at
+    // most, this world's own seed history up to asOf and whatever the
+    // plugin's cold-start writes next).
+    this.syncVisibilityCutoff();
     this.deviceId = await ensureDeviceId(this.pluginDataHost);
     // `resetAll` clears the plugin-data store this lives in — see its own doc.
     await seedSimulatorWorkerConfig(this.pluginDataHost);

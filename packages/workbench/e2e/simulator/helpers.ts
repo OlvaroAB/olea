@@ -183,6 +183,44 @@ export async function advanceDays(page: Page, days: number): Promise<void> {
 }
 
 /**
+ * The term scrubber (`ol-3ux7.64.16` [WBX-13], `term-scrubber.ts`) — a
+ * native `<input type="range">`. Playwright's `locator.fill()` refuses a
+ * range input, and dragging a real pointer across one is not a stable
+ * automation primitive, so {@link scrubTo} sets `.value` directly and
+ * dispatches the same `input`/`change` events a real drag-then-release (or a
+ * keyboard step) would raise — the same "drive the real control's own event,
+ * don't invent a shortcut" discipline every other helper in this file uses
+ * (`[data-sim-advance]`, `[data-sim-reset]`).
+ */
+export function scrubberLocator(page: Page): Locator {
+  return frame(page).locator('[data-sim-scrub]');
+}
+
+export function scrubberDateLocator(page: Page): Locator {
+  return frame(page).locator('[data-sim-scrub-date]');
+}
+
+/**
+ * Moves the scrubber to `days` past the world's `asOf` and waits for the
+ * remount it commits (`controller.ts`'s `scrubTo`, wired to the range
+ * input's `change` event) to finish. `days` is clamped by the control's own
+ * `min`/`max` exactly as a real drag would be — this helper does not
+ * pre-clamp, so a value outside the declared window is a deliberate way to
+ * exercise that clamping from a test.
+ */
+export async function scrubTo(page: Page, days: number): Promise<void> {
+  const before = await remountLocator(page).getAttribute('data-wb-remount');
+  await scrubberLocator(page).evaluate((el, value) => {
+    const input = el as HTMLInputElement;
+    input.value = String(value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, days);
+  await waitForRemount(page, before);
+  await waitForTodayRendered(page);
+}
+
+/**
  * `[data-sim-rate]` — writes exactly one review-log record for the first due
  * item, or rates nothing if none is due. Only the "rated" outcome remounts
  * (`controller.ts`'s `rateNextDue` returns early, before `remountPane()`,

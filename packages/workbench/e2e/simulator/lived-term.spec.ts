@@ -28,6 +28,9 @@ import {
   readDueCount,
   resetSimulator,
   SIMULATOR_STATE_ID,
+  scrubberDateLocator,
+  scrubberLocator,
+  scrubTo,
 } from './helpers.js';
 
 test.describe.configure({ mode: 'parallel' });
@@ -146,4 +149,116 @@ test('@auto-web:simulator/lived-term — a second day-advance shows no course-se
   // document, never inside `[data-wb-surface]` (`obsidian-shim`'s
   // `Modal.open()` doc) — matching `dismissCourseSetupModals`' own query.
   await expect(page.locator('[data-wb-modal-open]')).toHaveCount(0);
+});
+
+// `ol-3ux7.64.16` [WBX-13] — the term scrubber. `docs/dev/simulator-design.md`
+// §4b: bounded forward from asOf, forward is Advance made continuous,
+// backward hides (never deletes) a later day's review-log record and forward
+// restores it exactly.
+
+test('@auto-web:simulator/lived-term — the term scrubber bounds forward from asOf and scrubbing forward is Advance made continuous', async ({
+  page,
+}) => {
+  await gotoSimulator(page);
+  await resetSimulator(page);
+  const asOf = (await badgeDate(page).textContent()) ?? '';
+
+  const DAYS = 3;
+
+  // Reference: three sequential day-advances from a fresh reset.
+  await advanceDays(page, DAYS);
+  const badgeViaAdvance = (await badgeDate(page).textContent()) ?? '';
+  const dueViaAdvance = await readDueCount(page);
+  expect(badgeViaAdvance).not.toBe(asOf);
+
+  // The same three days, reached in one committed scrub from a fresh reset.
+  await resetSimulator(page);
+  await scrubTo(page, DAYS);
+
+  expect(await scrubberLocator(page).inputValue()).toBe(String(DAYS));
+  await expect(scrubberDateLocator(page)).toHaveText(badgeViaAdvance);
+  await expect(badgeDate(page)).toHaveText(badgeViaAdvance);
+  expect(await readDueCount(page)).toBe(dueViaAdvance);
+});
+
+test("@auto-web:simulator/lived-term — scrubbing backward hides a later day's review record, and scrubbing forward restores it exactly", async ({
+  page,
+}) => {
+  await gotoSimulator(page);
+  await resetSimulator(page);
+
+  // Visit the EARLY day first, before anything anywhere has been rated, so
+  // this reading is an honest baseline — not something computed after the
+  // fact from a day that might itself have drifted.
+  const EARLY_DAY = 1;
+  await scrubTo(page, EARLY_DAY);
+  const dueAtEarlyDayBeforeAnyRating = await readDueCount(page);
+  const overlayBeforeAnyRating = await overlayEntryCount(page);
+
+  // Move to a LATER day and rate — this writes a review-log record dated on
+  // the later day only.
+  const LATER_DAY = 3;
+  await scrubTo(page, LATER_DAY);
+  const dueAtLaterDayBeforeRating = await readDueCount(page);
+  if (dueAtLaterDayBeforeRating === 'none' || dueAtLaterDayBeforeRating === 0) {
+    throw new Error(
+      'fixture world has nothing due at this scrubbed day — this test needs a due item to rate',
+    );
+  }
+  await rateNextDue(page);
+  const dueAtLaterDayAfterRating = await readDueCount(page);
+  expect(dueAtLaterDayAfterRating).toBe(dueAtLaterDayBeforeRating - 1);
+  const overlayAfterRating = await overlayEntryCount(page);
+  expect(overlayAfterRating).toBeGreaterThan(overlayBeforeAnyRating);
+
+  // Scrub BACK to the early day — the later day's record is dated after it,
+  // so it is hidden: the early day's own due count is EXACTLY what it was
+  // before the later rating ever happened, as if the future had not
+  // occurred yet.
+  await scrubTo(page, EARLY_DAY);
+  expect(await readDueCount(page)).toBe(dueAtEarlyDayBeforeAnyRating);
+  // Never deleted: the overlay still holds the hidden record while it is
+  // hidden — only the READ side filtered it out.
+  expect(await overlayEntryCount(page)).toBe(overlayAfterRating);
+
+  // Scrub FORWARD again, past the later day — the record reappears exactly,
+  // proving the hide-then-show round trip lost and fabricated nothing.
+  await scrubTo(page, LATER_DAY);
+  expect(await readDueCount(page)).toBe(dueAtLaterDayAfterRating);
+  expect(await overlayEntryCount(page)).toBe(overlayAfterRating);
+});
+
+test('@auto-web:simulator/lived-term — reset returns the scrubber to asOf and unhides everything', async ({
+  page,
+}) => {
+  await gotoSimulator(page);
+  await resetSimulator(page);
+  const asOf = (await badgeDate(page).textContent()) ?? '';
+  expect(await scrubberLocator(page).inputValue()).toBe('0');
+  // Baseline recorded AT asOf, before this test moves anywhere — the only
+  // due count a later comparison at asOf may honestly be checked against
+  // (a due count recorded on a DIFFERENT day would drift for reasons that
+  // have nothing to do with reset, per the sibling scrub test's own doc).
+  const dueAtAsOfBaseline = await readDueCount(page);
+
+  await scrubTo(page, 2);
+  const before = await readDueCount(page);
+  if (before === 'none' || before === 0) {
+    throw new Error('fixture world has nothing due at this scrubbed day — this test needs one');
+  }
+  await rateNextDue(page);
+  // Scrub back — hides the record just rated, exercising the exact state
+  // reset must be able to clear.
+  await scrubTo(page, 1);
+
+  await resetSimulator(page);
+
+  expect(await scrubberLocator(page).inputValue()).toBe('0');
+  await expect(scrubberDateLocator(page)).toHaveText(asOf);
+  await expect(badgeDate(page)).toHaveText(asOf);
+  // "Unhides everything": the overlay reset alongside the clock, so there is
+  // nothing left for the cutoff — now back at asOf — to hide at all. Checked
+  // against the SAME day's own pre-test baseline, never against a count
+  // recorded on a different day.
+  expect(await readDueCount(page)).toBe(dueAtAsOfBaseline);
 });
