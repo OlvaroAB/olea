@@ -35,7 +35,7 @@
  * sized for `goldens.spec.ts`'s much shorter walks).
  */
 import { expect, type Page, test } from '@playwright/test';
-import { gotoSimulator, resetSimulator } from './helpers.js';
+import { dismissCourseSetupModals, gotoSimulator, resetSimulator } from './helpers.js';
 import {
   activeViewText,
   advanceWeeksViaDriver,
@@ -118,7 +118,14 @@ for (const week of TOUR_WEEKS) {
     const expectedSimulatedDate = expectedSimulatedDateISO(descriptor.asOf, week);
 
     await resetSimulator(page);
-    if (week > 0) await advanceWeeksViaDriver(page, week);
+    if (week > 0) {
+      await advanceWeeksViaDriver(page, week);
+      // WBX-18 (`ol-qm6u`): against a real-shaped vault, repeated `advanceOneDay()` remounts can
+      // re-surface already-confirmed `CourseSetupModal` proposals (`helpers.ts`'s own doc names
+      // the underlying persistence gap) — scaled with `week` since more day-advances give more
+      // chances for a re-proposal to stack.
+      await dismissCourseSetupModals(page, Math.max(20, week * 15));
+    }
 
     const viewTypes = await ribbonViewTypes(page);
     expect(viewTypes.length).toBeGreaterThan(0);

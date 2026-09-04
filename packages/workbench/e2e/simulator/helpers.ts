@@ -71,17 +71,40 @@ export interface GotoSimulatorOptions {
 /**
  * Clicks through any `CourseSetupModal` confirmation(s) the real plugin's
  * cold-start course-detection scan opened on this mount — see this module's
- * doc header. Only ever needed right after a genuine "fresh device" moment
- * (the real cold start, or right after `[data-sim-reset]` clears the shared
- * plugin-data blob WBX-9's seen-set lives in) — {@link advanceDays} and
- * {@link rateNextDue} no longer call this. Bounded (5 rounds, 150ms apart)
- * rather than polled to a stable "definitely none left" state: the fixture
- * vault has a small, fixed number of course-shaped folders, so this is
- * generous headroom over the real chain length, not a tight fit. In the top
+ * doc header. Originally documented as only ever needed right after a
+ * genuine "fresh device" moment (the real cold start, or right after
+ * `[data-sim-reset]` clears the shared plugin-data blob WBX-9's seen-set
+ * lives in), because {@link advanceDays} and {@link rateNextDue} — the OLD
+ * `SimulatorWalkDriver`'s own day-advance/rating methods — no longer need
+ * to call this.
+ *
+ * **WBX-18 finding (`ol-qm6u`):** that claim does NOT extend to the newer,
+ * raw driver path `advanceWeeksViaDriver` (`tour-helpers.ts`) drives via
+ * `window.__oleaSimulatorDriver.advanceOneDay()` — against the real world,
+ * once course attribution actually works (WBX-18's fix), a real vault's
+ * course-shaped folders can re-surface a "This looks like a course" proposal
+ * across a remount even after an earlier confirm, stacking several deep
+ * across several day-advances (observed: 7 stacked proposals for 2 distinct
+ * courses over 7 `advanceOneDay()` calls). This was invisible before WBX-18
+ * because the real world had zero course-shaped folders reachable by path,
+ * so zero proposals ever fired — a hidden defect in `courseSetupSeenCodes`'
+ * cross-remount persistence (`course-setup-bridge.ts`'s own doc already
+ * names this class of bug), not something this test helper can fix. The
+ * defensive fix here is at the test-infrastructure level only: call this
+ * again after any `advanceWeeksViaDriver` against a real-shaped vault, and
+ * widen the round bound so a real vault's proposal count does not exhaust
+ * it. The underlying persistence gap is filed separately (`ol-qm6u`'s
+ * discovered-from list), not fixed by widening this bound.
+ *
+ * Bounded (`rounds`, 150ms apart) rather than polled to a stable
+ * "definitely none left" state — the fixture vault's small, fixed course
+ * count needed only 5; a real vault's course count and its cross-remount
+ * re-proposals need more headroom, so callers driving a real-shaped vault
+ * across several day-advances should pass a larger `rounds`. In the top
  * document (`[data-wb-modal-host]`), never inside `[data-wb-surface]`.
  */
-export async function dismissCourseSetupModals(page: Page): Promise<void> {
-  for (let i = 0; i < 5; i += 1) {
+export async function dismissCourseSetupModals(page: Page, rounds = 5): Promise<void> {
+  for (let i = 0; i < rounds; i += 1) {
     await page.waitForTimeout(150);
     const confirmButton = page.locator('.olea-course-setup-confirm');
     if ((await confirmButton.count()) > 0) await confirmButton.first().click();

@@ -77,6 +77,17 @@ export const GROVE_INFERRED_DISCLAIMER =
 
 export const GROVE_EMPTY_COURSE = 'No concepts found here yet.';
 
+/**
+ * The screen-level empty state (WBX-18, `ol-qm6u`): no course was found ANYWHERE in the vault —
+ * `GroveViewState`'s `'model'` branch with zero `courses`, distinct from `GROVE_NO_SOURCE_*`
+ * (a known course with nothing registered for it). Never a bare title with nothing under it —
+ * same "never a bare, unexplained empty grid" principle F8.1's own designed empty state states
+ * for the per-course case, applied one level up.
+ */
+export const GROVE_NO_COURSES_HEADING = 'No courses found yet';
+export const GROVE_NO_COURSES_BODY =
+  "Olea hasn't found any course in your vault yet. Register an objectives document or a past paper for a course (F1.5) to see its grove here.";
+
 /** Plain-language label for a material gap (F4.10) — never a fourth olive noun (registry §6). */
 export const GROVE_MATERIAL_GAP_LABEL = 'No material yet';
 
@@ -178,6 +189,8 @@ export function allGroveStrings(): readonly string[] {
     GROVE_NO_SOURCE_BODY,
     GROVE_INFERRED_DISCLAIMER,
     GROVE_EMPTY_COURSE,
+    GROVE_NO_COURSES_HEADING,
+    GROVE_NO_COURSES_BODY,
     GROVE_MATERIAL_GAP_LABEL,
     GROVE_UNREADABLE_HEADING,
     GROVE_VOLUNTEER_SECTION_HEADING,

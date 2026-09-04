@@ -8,9 +8,16 @@
  * `advanceWeeksViaDriver` — a TIME control, never a stand-in for the rating gesture itself), then
  * repeats `today-review`'s own steps at week 1: open-today, revealed, rated, empty — named
  * `1--journey-week2-review--<step>.png`.
+ *
+ * **WBX-18 (`ol-qm6u`):** against a real-shaped vault, `advanceWeeksViaDriver`'s repeated
+ * `advanceOneDay()` remounts can re-surface `CourseSetupModal` proposals that were already
+ * confirmed on an earlier mount (`helpers.ts#dismissCourseSetupModals`'s own doc names the
+ * underlying persistence gap) — a stack of these otherwise sits in front of every later gesture
+ * and blocks it. `dismissCourseSetupModals` runs again here for that reason alone; it is not a
+ * stand-in for anything the journey itself needs to click through.
  */
 import { test } from '@playwright/test';
-import { gotoSimulator, resetSimulator } from '../helpers.js';
+import { dismissCourseSetupModals, gotoSimulator, resetSimulator } from '../helpers.js';
 import { advanceWeeksViaDriver, ribbonViewTypes } from '../tour-helpers.js';
 import {
   captureJourneyStep,
@@ -33,6 +40,7 @@ test(`@auto-web:simulator/journeys/week2-review ${WORLD}/${PERSONA} — advance 
   await gotoSimulator(page, { world: WORLD, persona: PERSONA });
   await resetSimulator(page);
   await advanceWeeksViaDriver(page, WEEK);
+  await dismissCourseSetupModals(page, 20);
 
   await captureJourneyStep(page, JOURNEY, WEEK, 'open-today');
 

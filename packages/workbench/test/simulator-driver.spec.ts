@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type OleaPlugin from '../../plugin/src/main.js';
 import type { MountedPlugin } from '../src/obsidian-shim/mount-plugin.js';
 import {
+  defaultExplainTopic,
   driverContest,
   driverExplain,
   driverOpenRegistry,
@@ -92,6 +93,36 @@ describe('driverExplain', () => {
       outcome: 'unavailable',
       reason: expect.stringContaining('olea-explain-back') as unknown as string,
     });
+  });
+});
+
+describe('defaultExplainTopic (WBX-18, ol-qm6u)', () => {
+  it('strips a real extension off an ordinary note', () => {
+    const mounted = fakeMountedPlugin({ getFiles: () => [{ path: 'coined-note.md' }] });
+    expect(defaultExplainTopic(mounted)).toBe('coined-note');
+  });
+
+  it('returns a pure hidden file unchanged, rather than collapsing it to an empty string', () => {
+    // The regression this guards: `.gitignore` has exactly one dot and nothing before it, so a
+    // naive `base.replace(/\.[^./]+$/, '')` treats the WHOLE name as the "extension" and strips
+    // it to '' — which then makes the topic modal's Continue button a silent no-op forever
+    // (`explain-back/modal.ts`'s `renderTopicPhase` returns early on an empty trimmed value).
+    // This surfaced for real once the vault-root fix (WBX-18) made a real dotfile the
+    // alphabetically-first file in the real world's manifest.
+    const mounted = fakeMountedPlugin({ getFiles: () => [{ path: '.gitignore' }] });
+    expect(defaultExplainTopic(mounted)).toBe('.gitignore');
+  });
+
+  it('still strips a real extension off a dotted-but-not-hidden name', () => {
+    const mounted = fakeMountedPlugin({ getFiles: () => [{ path: '.coined-config.bak' }] });
+    expect(defaultExplainTopic(mounted)).toBe('.coined-config');
+  });
+
+  it('takes only the basename, not the full path', () => {
+    const mounted = fakeMountedPlugin({
+      getFiles: () => [{ path: '01 Coined Course/coined-note.md' }],
+    });
+    expect(defaultExplainTopic(mounted)).toBe('coined-note');
   });
 });
 

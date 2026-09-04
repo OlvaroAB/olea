@@ -61,15 +61,23 @@ test(`@auto-web:simulator/journeys/explain-back ${WORLD}/${PERSONA} — explain 
   await gotoSimulator(page, { world: WORLD, persona: PERSONA });
   await resetSimulator(page);
 
-  // The same fallback `driverExplain` uses when no concept is named: the first vault file's
-  // basename. Read in the page and typed straight back into the modal — never logged.
+  // The same fallback `driverExplain`'s `defaultExplainTopic` uses when no concept is named: the
+  // first vault file's basename, extension stripped. Read in the page and typed straight back
+  // into the modal — never logged. Kept a deliberate duplicate rather than importing
+  // `defaultExplainTopic` (this file has no `MountedPlugin` to hand it, only the driver's
+  // string-only `listFilePaths()`), so this must stay byte-for-byte in step with that function —
+  // see its own WBX-18 (`ol-qm6u`) doc for why the extension strip requires at least one
+  // character before the final dot: a naive `base.replace(/\.[^./]+$/, '')` also matches a HIDDEN
+  // file's entire name (`.gitignore` has one dot and nothing before it), collapsing the topic to
+  // `''` and making the modal's Continue button a silent no-op forever.
   const topic = await page.evaluate(() => {
     const driver = window.__oleaSimulatorDriver;
     if (driver === undefined) throw new Error('explain-back journey: no simulator driver.');
     const [first] = driver.listFilePaths();
     if (first === undefined) throw new Error('explain-back journey: the vault has no files.');
     const base = first.split('/').pop() ?? first;
-    return base.replace(/\.[^./]+$/, '');
+    const withExtensionStripped = /^(.+)\.[^./]+$/.exec(base);
+    return withExtensionStripped === null ? base : (withExtensionStripped[1] ?? base);
   });
 
   const invoked = await page.evaluate(

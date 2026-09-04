@@ -58,6 +58,8 @@ import {
   GROVE_GROUND_STALL_NOTE,
   GROVE_INFERRED_DISCLAIMER,
   GROVE_MATERIAL_GAP_LABEL,
+  GROVE_NO_COURSES_BODY,
+  GROVE_NO_COURSES_HEADING,
   GROVE_NO_SOURCE_BODY,
   GROVE_NO_SOURCE_HEADING,
   GROVE_UNAVAILABLE,
@@ -169,6 +171,14 @@ export class GroveView extends ItemView {
 
     if (state.kind === 'unavailable') {
       root.createDiv({ cls: 'olea-grove-unavailable', text: GROVE_UNAVAILABLE });
+      return;
+    }
+
+    if (state.courses.length === 0) {
+      // WBX-18 (`ol-qm6u`): never a bare title with nothing under it — same principle F8.1's
+      // per-course `'no-registered-source'` empty state already applies, one level up.
+      root.createDiv({ cls: 'olea-grove-no-courses-heading', text: GROVE_NO_COURSES_HEADING });
+      root.createDiv({ cls: 'olea-grove-no-courses-body', text: GROVE_NO_COURSES_BODY });
       return;
     }
 
