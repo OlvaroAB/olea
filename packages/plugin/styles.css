@@ -1110,19 +1110,6 @@ button.olea-review-mcq-option:hover {
   gap: 4px;
 }
 
-/* Row dividers (ratified ladder form, `docs/design/pass5b-mastery-ratified`'s
-   `MasteryLadder`: `border-top` on every row but the first). STY-0i: this is
-   the one visual gap between the ladder here and the ratified ladder markup
-   that carries no ruling against it — unlike the kit's 18px per-row stage
-   glyph, which `[VIT-3]`/`ol-l5og.17` and the vocabulary registry's
-   "identical sprig geometry, only the pixel size changes" invariant already
-   supersede (the ladder keeps its 7px in-dot sprigs on purpose; this bead
-   does not reopen that). */
-.olea-today-mastery-ladder-row:not(:first-child) {
-  padding-top: 8px;
-  border-top: 1px solid var(--olea-host-line);
-}
-
 .olea-today-mastery-ladder-head {
   font-size: 11.5px;
   color: var(--olea-host-muted);
@@ -1172,22 +1159,9 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
-/* The section top-border is the existing section separator (unchanged); the
-   left accent bar + padding below is the kit's `InsightRow` treatment
-   (`Pass5dTrends.jsx`: `borderLeft: 2px solid var(--olea-host-brand),
-   paddingLeft: 14`), applied to the whole block (eyebrow label through the
-   scope footer) rather than re-nesting the DOM, since `view.ts` already
-   groups them under this one class. `--olea-host-brand` is already read
-   elsewhere in this section (`.olea-today-mastery-label`), so this adds no
-   new host-colour declaration. This section is reused verbatim for the
-   rhythm reading (`renderRhythmBody`), which the kit does not draw
-   separately but which is structurally the same "one observed reading"
-   shape, so the same accent is correct there too. */
 .olea-today-insights {
   padding-top: 16px;
-  padding-left: 12px;
   border-top: 1px solid var(--olea-host-line);
-  border-left: 2px solid var(--olea-host-brand);
 }
 
 .olea-today-insights-label {
