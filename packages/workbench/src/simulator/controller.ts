@@ -105,6 +105,7 @@ import {
 } from '../plugin-bridge.js';
 import { isoWithLocalOffset } from '../scenarios.js';
 import { GENERATION_CASSETTE_VERSION, type GenerationCassette } from '../synthetic-bridge.js';
+import { EmbedShardStore } from '../transport/embed-shards.js';
 import {
   createSimulatorTransport,
   type SimulatorTransportMiss,
@@ -246,9 +247,19 @@ async function createTransportBridge(options: {
       ? await loadReplayCassette(originalFetch)
       : undefined;
 
+  // WBX-16d: the real world's embedding cassette is bundled as shards under Pages' per-file cap
+  // (`dist/simulator-embeddings/`); replay and direct answer `retrieval.embed.v1` from them
+  // before treating the call as a miss. Built over the ORIGINAL fetch for the same reason the
+  // cassette load is (see this module's doc); an absent index is "nothing bundled", never a throw.
+  const embedShards =
+    options.mode === 'replay' || options.mode === 'direct'
+      ? new EmbedShardStore({ fetchFn: originalFetch })
+      : undefined;
+
   const transport = createSimulatorTransport({
     mode: options.mode,
     ...(cassette !== undefined ? { cassette } : {}),
+    ...(embedShards !== undefined ? { embedShards } : {}),
     ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
     ...(options.token !== undefined ? { token: options.token } : {}),
     httpRequest: rawHttpRequest,
