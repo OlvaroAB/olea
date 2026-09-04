@@ -51,9 +51,28 @@
  * reasoning string only. Nothing about the sentence's numbers or structure
  * changes — only the three id-shaped substrings a person would otherwise
  * read raw.
+ *
+ * **`GapRow.citations[].sourcePath` is a FOURTH leak — `ol-cph9`.** Added
+ * after this module's first three patches were written, so it went
+ * uncovered: `packages/plugin/src/gap/copy.ts`'s `pastPaperChipLabel` reads
+ * a citation's `sourcePath` straight off, extracting a filename the way R2
+ * intends for the real product — correct there, but over the synthetic
+ * corpus `sourcePath` is the SAME `syn:source:vantrel:past-paper-1`-shaped
+ * id `scope.sources[].sourcePath` carries (`packages/synthetic/src/corpus.ts`
+ * mints both from the one `SOURCE_DISPLAY_NAMES` map), so it needs the same
+ * `sourceDisplayName` patch `withScopeDisplayNames` already applies to that
+ * sibling field. `withRowDisplayNames` below now maps every citation's
+ * `sourcePath` alongside `conceptName`/`course`/`reasoning`, so a row handed
+ * to `GapView` never carries a raw citation id whichever field renders it.
  */
 
-import type { CoverageScope, GapCourseView, GapRow, GapViewModel } from '../oracle-bridge.js';
+import type {
+  CoverageScope,
+  EvidenceQuestionCitation,
+  GapCourseView,
+  GapRow,
+  GapViewModel,
+} from '../oracle-bridge.js';
 import {
   assessmentDisplayName,
   conceptDisplayName,
@@ -64,6 +83,11 @@ import {
 /** `text` with every occurrence of `from` replaced by `to` — `split`/`join` rather than a `RegExp`, so none of these ids' colons need escaping. */
 function replaceAll(text: string, from: string, to: string): string {
   return from.length === 0 ? text : text.split(from).join(to);
+}
+
+/** `ol-cph9`: one citation, its `sourcePath` mapped the same way `withScopeDisplayNames` maps `CoverageScopeSource.sourcePath` — the two fields share one id space over the synthetic corpus. */
+function withCitationDisplayName(citation: EvidenceQuestionCitation): EvidenceQuestionCitation {
+  return { ...citation, sourcePath: sourceDisplayName(citation.sourcePath) };
 }
 
 function withRowDisplayNames(row: GapRow): GapRow {
@@ -87,6 +111,7 @@ function withRowDisplayNames(row: GapRow): GapRow {
     conceptName: displayConceptName,
     course: displayCourse,
     reasoning,
+    citations: row.citations.map(withCitationDisplayName),
   };
 }
 
@@ -113,12 +138,13 @@ function withScopeDisplayNames(scope: CoverageScope): CoverageScope {
 }
 
 /**
- * `model`, with every `course`, `conceptName`, `reasoning` and
- * `scope.sources[].sourcePath` field replaced by (or, for `reasoning`,
- * scrubbed of) its raw synthetic id. Everything else — ids used as keys,
- * ranks, scores, citations, affordances — passes through untouched. Throws
- * if a course, concept, assessment or source id is not one `olea-synthetic`
- * minted (see `conceptDisplayName`/`courseDisplayName`/
+ * `model`, with every `course`, `conceptName`, `reasoning`,
+ * `scope.sources[].sourcePath` and (`ol-cph9`) `citations[].sourcePath`
+ * field replaced by (or, for `reasoning`, scrubbed of) its raw synthetic id.
+ * Everything else — ids used as keys, ranks, scores, counts derived from
+ * citations before this function runs, affordances — passes through
+ * untouched. Throws if a course, concept, assessment or source id is not one
+ * `olea-synthetic` minted (see `conceptDisplayName`/`courseDisplayName`/
  * `assessmentDisplayName`/`sourceDisplayName`): a caller feeding this a
  * fixture-vault-derived model (real note titles and paths, no `syn:` prefix)
  * is a wiring mistake, not a case to render around silently.

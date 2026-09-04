@@ -32,6 +32,7 @@ import {
   affordanceLabel,
   coverageScreenCopy,
   gapRowLine,
+  pastPaperChips,
   rankedCourseFraming,
   readinessNote,
   scopeSourceLine,
@@ -43,7 +44,19 @@ import {
 } from '../src/timeline-scenarios.js';
 import { buildTrendsViewModel, TRENDS_STATES } from '../src/trends-scenarios.js';
 
-/** Every string `GapView` actually puts in the DOM for one course, in render order — mirrors `view.ts`'s `renderCourse`/`renderRow` exactly (see this file's module doc). */
+/**
+ * Every string `GapView` actually puts in the DOM for one course, in render
+ * order — mirrors `view.ts`'s `renderCourse`/`renderRow` exactly (see this
+ * file's module doc).
+ *
+ * **`pastPaperChips(row)` (`ol-cph9`).** Added here alongside the rest of a
+ * row's strings — before this fix, this function never reconstructed the
+ * chip strip at all, which is exactly why this guard did not catch
+ * `pastPaperChipLabel` rendering a citation's raw `syn:source:…` `sourcePath`
+ * verbatim: the chip text simply never reached `expectNoSyntheticIds` in the
+ * first place. Every `GapRow` carries at least one citation (`GapRow`'s own
+ * doc), so this is never an empty addition.
+ */
 function renderedCourseStrings(course: GapCourseView): readonly string[] {
   const lines: string[] = [course.course];
   if (course.status === 'abstained') {
@@ -53,6 +66,7 @@ function renderedCourseStrings(course: GapCourseView): readonly string[] {
   lines.push(...rankedCourseFraming(course.rows));
   for (const row of course.rows) {
     lines.push(String(row.rank), row.conceptName, row.masteryState, gapRowLine(row));
+    lines.push(...pastPaperChips(row));
     const note = readinessNote(row);
     if (note !== null) lines.push(note);
     for (const affordance of row.affordances) lines.push(affordanceLabel(affordance));

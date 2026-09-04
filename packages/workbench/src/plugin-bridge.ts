@@ -47,6 +47,7 @@ export {
   coverageClosingLine,
   coverageScreenCopy,
   gapRowLine,
+  pastPaperChips,
   rankedCourseFraming,
   readinessNote,
   scopeSourceLine,

@@ -66,15 +66,15 @@
  * the entire point of it being separate from `view.ts`.
  */
 
-import type {
-  CoverageScope,
-  CoverageScopeSource,
-  EvidenceQuestionCitation,
-  GapAffordance,
-  GapCourseView,
-  GapRow,
-  SourceReadState,
-  VaultPath,
+import {
+  type CoverageScope,
+  type CoverageScopeSource,
+  type EvidenceQuestionCitation,
+  formatSourceCitation,
+  type GapAffordance,
+  type GapCourseView,
+  type GapRow,
+  type SourceReadState,
 } from 'olea-core';
 
 // ---------------------------------------------------------------------------
@@ -417,10 +417,23 @@ export function pastPapersLabel(distinctSourceCount: number): string {
 }
 
 /**
- * One past-paper citation's chip — its own filename (R2, verbatim; her
- * vault's own naming, not a derived slug) paired with the question label, so
- * the same paper cited on two questions still reads as one paper rather than
- * a repeated, unnamed source.
+ * One past-paper citation's chip — its own name (R2, verbatim; her vault's
+ * own naming, not a derived slug) paired with the question label, so the
+ * same paper cited on two questions still reads as one paper rather than a
+ * repeated, unnamed source.
+ *
+ * **Reuses `olea-core`'s `formatSourceCitation`** (`ol-cph9`) rather than a
+ * second, re-typed basename routine — the same call `registry/copy.ts` and
+ * `explain-back/modal.ts`'s `citationLabelFor` already make for every other
+ * source citation on this surface. Passing only `sourcePath` (no
+ * page/section/heading) makes it behave exactly as this chip always did over
+ * a real vault path: strip the folder, strip the extension, keep the name.
+ * Over an id shaped with neither a `/` nor a `.` — `packages/synthetic`'s
+ * coined `sourcePath`s, or a display name a caller has already substituted
+ * in (`packages/workbench/src/oracle/display-names.ts`) — the extraction is
+ * a no-op and the string passes through unchanged, so this chip renders
+ * whatever student-facing name the caller resolved rather than a raw id, the
+ * same way `scopeSourceLine` does for `CoverageScopeSource.sourcePath`.
  *
  * **Deliberately no invented date.** The kit's chip reads "June 2024 · Q3";
  * `Source` (`olea-core`) carries no sitting-date field, and there is no
@@ -430,9 +443,7 @@ export function pastPapersLabel(distinctSourceCount: number): string {
  * bead's `owns` (view/copy/provider) does not reach; filed separately.
  */
 export function pastPaperChipLabel(citation: EvidenceQuestionCitation): string {
-  const path: VaultPath = citation.sourcePath;
-  const file = path.slice(path.lastIndexOf('/') + 1);
-  const name = file.replace(/\.[^./]+$/, '');
+  const name = formatSourceCitation({ sourcePath: citation.sourcePath });
   return `${name} · ${citation.questionLabel}`;
 }
 

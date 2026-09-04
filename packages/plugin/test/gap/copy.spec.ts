@@ -502,6 +502,34 @@ describe('past-paper chips (pass5g, `[D-224]`) — named, never a bare count', (
     expect(pastPapersLabel(1)).toBe('Asked in 1 past paper:');
     expect(pastPapersLabel(3)).toBe('Asked in 3 past papers:');
   });
+
+  // `ol-cph9`: a source whose path is id-like (no folder, no extension —
+  // `packages/synthetic`'s coined `syn:source:…` ids, or a display name a
+  // caller has already substituted in) is not a filename to strip; it must
+  // reach the chip unchanged, exactly as `formatSourceCitation` already
+  // guarantees for `registry`/`explain-back`'s citations. This is the guard
+  // for the fix `ol-cph9` shipped: reusing that shared formatter rather than
+  // a plugin-local basename routine that could regress this case on its own.
+  it('a source whose path is id-like still renders its display name, not a mangled fragment', () => {
+    const citation = {
+      sourcePath: 'syn:source:vantrel:past-paper-1' as VaultPath,
+      questionLabel: 'Q1',
+      questionText: 'A question.',
+      provenance: { location: { page: 1, charRange: { start: 0, end: 1 } } },
+    } as GapRow['citations'][number];
+    expect(pastPaperChipLabel(citation)).toBe('syn:source:vantrel:past-paper-1 · Q1');
+
+    // The property this test actually guards: a caller (the workbench's
+    // synthetic-corpus display-name patch) that resolves the id to a
+    // student-facing name BEFORE this function runs gets that name back
+    // verbatim — the id-like shape never triggers a folder/extension strip
+    // that would mangle an already-human name.
+    const resolved = {
+      ...citation,
+      sourcePath: 'Vantrel: past paper 1' as VaultPath,
+    } as GapRow['citations'][number];
+    expect(pastPaperChipLabel(resolved)).toBe('Vantrel: past paper 1 · Q1');
+  });
 });
 
 // --------------------------------------------------------------------------

@@ -43,6 +43,7 @@
  * that note.
  */
 
+export type { EvidenceQuestionCitation } from '../../core/src/evidence-edge/types.js';
 export type {
   BuildGapViewInput,
   ConceptMaterialPresence,
