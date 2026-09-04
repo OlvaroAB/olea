@@ -310,11 +310,28 @@ export interface WorkspaceLeaf {
 /** A registered view's factory — `Plugin.registerView`'s second argument, matching real Obsidian's own signature exactly. */
 export type ViewFactory = (leaf: WorkspaceLeaf) => ItemView;
 
+/**
+ * Which single-pane pool a leaf belongs to (`ol-3ux7.64.14` [WBX-12]). Before
+ * this bead there was exactly one pool — `getRightLeaf` minted from the same
+ * pool `getLeaf('tab')` did (this file's own `git log` shows the alias) — and
+ * the simulator's Obsidian-shaped shell is what needed that to stop being
+ * true: `revealHomeView`'s main-pane landing and `revealTodayView`'s
+ * right-sidebar one only read as two different PLACES if the shim actually
+ * has two. `'main'` backs `Workspace.containerEl` (`getLeaf`); `'right'`
+ * backs `Workspace.rightContainerEl` (`getRightLeaf`) — see both getters'
+ * own docs. Never a THIRD pool: no split panes within either side (`@manual`,
+ * unchanged from before this bead).
+ */
+type LeafPool = 'main' | 'right';
+
 class RecordingWorkspaceLeaf implements WorkspaceLeaf {
   viewType: string | null = null;
   view: ItemView | null = null;
 
-  constructor(private readonly workspace: Workspace) {}
+  constructor(
+    private readonly workspace: Workspace,
+    readonly pool: LeafPool,
+  ) {}
 
   detach(): void {
     this.closeCurrentView();
@@ -354,6 +371,25 @@ class RecordingWorkspaceLeaf implements WorkspaceLeaf {
   }
 }
 
+/** One pool's DOM (`Workspace.dom`/`rightDom`) — a tab strip over whichever leaf in that pool was last revealed, plus the pane it paints into. */
+interface PoolDom {
+  readonly containerEl: HTMLElement;
+  readonly tabStripEl: HTMLElement;
+  readonly paneEl: HTMLElement;
+}
+
+/** Builds one pool's `PoolDom` — the same three-element shape `getLeaf`'s main pool and `getRightLeaf`'s right pool each get their own copy of (WBX-12). */
+function buildPoolDom(containerAttr: string, tabStripAttr: string, paneAttr: string): PoolDom {
+  const containerEl = document.createElement('div');
+  containerEl.setAttribute(containerAttr, 'true');
+  const tabStripEl = document.createElement('div');
+  tabStripEl.setAttribute(tabStripAttr, 'true');
+  const paneEl = document.createElement('div');
+  paneEl.setAttribute(paneAttr, 'true');
+  containerEl.append(tabStripEl, paneEl);
+  return { containerEl, tabStripEl, paneEl };
+}
+
 /**
  * Obsidian's `Workspace`, reduced to the members `registry/obsidian-ports.ts`
  * reads off it — not just `openRegistryEntryFor`'s three (find an existing
@@ -369,7 +405,24 @@ class RecordingWorkspaceLeaf implements WorkspaceLeaf {
  * `revealLeaf`/`detachLeavesOfType` now back a real single-pane DOM —
  * `containerEl` is a `[data-wb-tab-strip]` + `[data-wb-pane]` pair, mounted
  * by whichever leaf is revealed.** No split panes (`@manual`, see `index.ts`'s
- * head-of-file note): `getLeaf`/`getRightLeaf` mint from the same single pool.
+ * head-of-file note): each of the two pools below (`getLeaf`'s main pool,
+ * `getRightLeaf`'s right one) is its own single pane.
+ *
+ * **WBX-12 addition: `getRightLeaf` mints into a REAL second pool.** Before
+ * this bead `getRightLeaf(_split)` was a one-line `return this.getLeaf('tab')`
+ * — every "or create one" call in `packages/plugin/src/main.ts`
+ * (`revealTodayView`, `revealHomeView`, `revealGapView`, ...) landed in the
+ * SAME pane `getLeaf('tab')` did, so "Today opens in the right sidebar" and
+ * "Review opens as a main-pane tab" were indistinguishable here — both just
+ * meant "the one pane". The simulator's Obsidian-shaped shell
+ * (`docs/dev/simulator-design.md`, `simulator/shell.ts`) needed the two to be
+ * actually different DOM subtrees so Home (main pane) and Today (right
+ * sidebar) can sit on screen at once; `rightContainerEl` below is that second
+ * subtree. `getLeavesOfType`/`detachLeavesOfType` still search across BOTH
+ * pools (a leaf's pool is bookkeeping the plugin never asks about — every
+ * `revealXxxView` only ever asks "does a leaf of this TYPE exist anywhere"),
+ * so reusing an already-open leaf still works regardless of which pool
+ * created it.
  */
 export class Workspace {
   private readonly leaves: RecordingWorkspaceLeaf[] = [];
@@ -377,10 +430,11 @@ export class Workspace {
   private readonly viewFactories = new Map<string, ViewFactory>();
   private readonly eventHandlers = new Map<string, Set<(...args: never[]) => void>>();
   private activeLeaf: RecordingWorkspaceLeaf | null = null;
+  private activeRightLeaf: RecordingWorkspaceLeaf | null = null;
   private activeFile: TFile | null = null;
 
-  private dom: { containerEl: HTMLElement; tabStripEl: HTMLElement; paneEl: HTMLElement } | null =
-    null;
+  private dom: PoolDom | null = null;
+  private rightDom: PoolDom | null = null;
 
   /**
    * The single-pane host DOM: a tab strip over whichever leaf was last
@@ -400,17 +454,46 @@ export class Workspace {
     return this.ensureDom().containerEl;
   }
 
-  private ensureDom(): { containerEl: HTMLElement; tabStripEl: HTMLElement; paneEl: HTMLElement } {
-    if (this.dom !== null) return this.dom;
-    const containerEl = document.createElement('div');
-    containerEl.setAttribute('data-wb-workspace', 'true');
-    const tabStripEl = document.createElement('div');
-    tabStripEl.setAttribute('data-wb-tab-strip', 'true');
-    const paneEl = document.createElement('div');
-    paneEl.setAttribute('data-wb-pane', 'true');
-    containerEl.append(tabStripEl, paneEl);
-    this.dom = { containerEl, tabStripEl, paneEl };
+  /**
+   * WBX-12: the right sidebar's own single-pane host DOM — a SEPARATE
+   * `[data-wb-right-tab-strip]` + `[data-wb-right-pane]` pair from
+   * `containerEl`'s main-pool one, mounted wherever the simulator's right
+   * sidebar region lives (`simulator/shell.ts`). Lazily built, same reasoning
+   * as `containerEl`'s own doc.
+   */
+  get rightContainerEl(): HTMLElement {
+    return this.ensureRightDom().containerEl;
+  }
+
+  private ensureDom(): PoolDom {
+    if (this.dom === null) {
+      this.dom = buildPoolDom('data-wb-workspace', 'data-wb-tab-strip', 'data-wb-pane');
+    }
     return this.dom;
+  }
+
+  private ensureRightDom(): PoolDom {
+    if (this.rightDom === null) {
+      this.rightDom = buildPoolDom(
+        'data-wb-right-workspace',
+        'data-wb-right-tab-strip',
+        'data-wb-right-pane',
+      );
+    }
+    return this.rightDom;
+  }
+
+  private domFor(pool: LeafPool): PoolDom | null {
+    return pool === 'right' ? this.rightDom : this.dom;
+  }
+
+  private activeLeafFor(pool: LeafPool): RecordingWorkspaceLeaf | null {
+    return pool === 'right' ? this.activeRightLeaf : this.activeLeaf;
+  }
+
+  private setActiveLeafFor(pool: LeafPool, leaf: RecordingWorkspaceLeaf | null): void {
+    if (pool === 'right') this.activeRightLeaf = leaf;
+    else this.activeLeaf = leaf;
   }
 
   /** Not an Obsidian API name — `Plugin.registerView` (`index.ts`) delegates here. */
@@ -423,12 +506,22 @@ export class Workspace {
     return this.viewFactories.get(viewType);
   }
 
+  /**
+   * WBX-12: every view type `Plugin.registerView` has registered so far, in
+   * registration order — the simulator's left ribbon's own enumeration door
+   * (`simulator/shell.ts`'s module doc: "never a hand list"). Pure
+   * bookkeeping, no DOM.
+   */
+  registeredViewTypes(): readonly string[] {
+    return [...this.viewFactories.keys()];
+  }
+
   getLeavesOfType(viewType: string): WorkspaceLeaf[] {
     return this.leaves.filter((leaf) => leaf.viewType === viewType);
   }
 
   getLeaf(_kind: 'tab' | 'split' = 'tab'): WorkspaceLeaf {
-    const leaf = new RecordingWorkspaceLeaf(this);
+    const leaf = new RecordingWorkspaceLeaf(this, 'main');
     this.leaves.push(leaf);
     return leaf;
   }
@@ -436,12 +529,16 @@ export class Workspace {
   /**
    * Obsidian's sidebar-leaf minting (§4 gap table: `main.ts`'s
    * `revealTodayView`/`revealGapView`/etc all call this for their "or create
-   * one" half). `_split` is accepted for signature fidelity only — there is
-   * no separate right-sidebar pool here, same single leaf pool `getLeaf`
-   * draws from (no split panes, `@manual`).
+   * one" half). WBX-12: now mints into the REAL right-sidebar pool
+   * (`rightContainerEl`) — see this class's own doc for why that stopped
+   * being an alias of `getLeaf('tab')`. `_split` is still accepted for
+   * signature fidelity only: there is no split WITHIN the right sidebar
+   * either (no split panes, `@manual`, unchanged).
    */
   getRightLeaf(_split: boolean): WorkspaceLeaf | null {
-    return this.getLeaf('tab');
+    const leaf = new RecordingWorkspaceLeaf(this, 'right');
+    this.leaves.push(leaf);
+    return leaf;
   }
 
   /** §4 gap table. Detaches every leaf of `viewType` — each `detach()` closes its view and forgets the leaf, same teardown `WorkspaceLeaf.detach()` always does. */
@@ -455,44 +552,48 @@ export class Workspace {
   forgetLeaf(leaf: RecordingWorkspaceLeaf): void {
     const index = this.leaves.indexOf(leaf);
     if (index !== -1) this.leaves.splice(index, 1);
-    if (this.activeLeaf === leaf) this.activeLeaf = null;
-    this.renderTabStrip();
+    if (this.activeLeafFor(leaf.pool) === leaf) this.setActiveLeafFor(leaf.pool, null);
+    this.renderTabStrip(leaf.pool);
   }
 
   async revealLeaf(leaf: WorkspaceLeaf): Promise<void> {
     this.revealed.push(leaf);
     if (!(leaf instanceof RecordingWorkspaceLeaf)) return;
-    this.activeLeaf = leaf;
-    this.mountActiveLeaf();
+    this.setActiveLeafFor(leaf.pool, leaf);
+    this.mountActiveLeaf(leaf.pool);
   }
 
   /** Not an Obsidian API name — `RecordingWorkspaceLeaf.setViewState` calls this once its view has mounted, so an already-revealed leaf's pane updates without a second `revealLeaf` call. */
   onLeafViewMounted(leaf: RecordingWorkspaceLeaf): void {
-    this.renderTabStrip();
-    if (this.activeLeaf === leaf) this.mountActiveLeaf();
+    this.renderTabStrip(leaf.pool);
+    if (this.activeLeafFor(leaf.pool) === leaf) this.mountActiveLeaf(leaf.pool);
   }
 
-  /** No-op until something has actually asked for `containerEl` — see that getter's doc. Rendering into a pane nobody will ever look at is wasted DOM work, and (more importantly for this package) lets pure leaf bookkeeping run with no `document` at all. */
-  private mountActiveLeaf(): void {
-    if (this.dom === null) return;
-    this.renderTabStrip();
-    const { paneEl } = this.dom;
+  /** No-op until something has actually asked for that pool's `containerEl`/`rightContainerEl` — see those getters' docs. Rendering into a pane nobody will ever look at is wasted DOM work, and (more importantly for this package) lets pure leaf bookkeeping run with no `document` at all. */
+  private mountActiveLeaf(pool: LeafPool): void {
+    const dom = this.domFor(pool);
+    if (dom === null) return;
+    this.renderTabStrip(pool);
+    const active = this.activeLeafFor(pool);
+    const { paneEl } = dom;
     paneEl.replaceChildren();
-    if (this.activeLeaf?.view != null) paneEl.appendChild(this.activeLeaf.view.containerEl);
-    paneEl.setAttribute('data-wb-active-view-type', this.activeLeaf?.viewType ?? '');
+    if (active?.view != null) paneEl.appendChild(active.view.containerEl);
+    paneEl.setAttribute('data-wb-active-view-type', active?.viewType ?? '');
   }
 
-  private renderTabStrip(): void {
-    if (this.dom === null) return;
-    const { tabStripEl } = this.dom;
+  private renderTabStrip(pool: LeafPool): void {
+    const dom = this.domFor(pool);
+    if (dom === null) return;
+    const { tabStripEl } = dom;
     tabStripEl.replaceChildren();
-    for (const leaf of this.leaves) {
+    const active = this.activeLeafFor(pool);
+    for (const leaf of this.leaves.filter((candidate) => candidate.pool === pool)) {
       const tab = document.createElement('button');
       tab.type = 'button';
       tab.setAttribute('data-wb-tab', 'true');
       tab.setAttribute('data-wb-view-type', leaf.viewType ?? '');
       tab.textContent = leaf.view?.getDisplayText() ?? leaf.viewType ?? '(empty)';
-      if (leaf === this.activeLeaf) tab.setAttribute('data-wb-tab-active', 'true');
+      if (leaf === active) tab.setAttribute('data-wb-tab-active', 'true');
       tab.addEventListener('click', () => {
         void this.revealLeaf(leaf);
       });

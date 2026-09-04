@@ -12,7 +12,7 @@
  * `[data-sim-rate]`, `[data-sim-reset]`, a palette command) triggers
  * `SimulatorController.remountPane()`, which empties and rebuilds the pane
  * asynchronously. **`ol-3ux7.64.11` [WBX-9] closed the hook gap this doc used
- * to name here**: `SimulatorMountElements.root` now carries
+ * to name here**: `SimulatorShellElements.root` now carries
  * `[data-wb-remount]`, bumped once `remountPane()`'s mount (and, for the
  * whole-plugin path, the default Today view) has fully resolved
  * (`controller.ts`'s own doc). {@link waitForRemount} is the settle signal
@@ -126,7 +126,7 @@ export function noticeLocator(page: Page): Locator {
   return frame(page).locator('.wb-sim-notice');
 }
 
-/** `[data-wb-remount]` on the simulator root (`SimulatorMountElements.root`, `ol-3ux7.64.11` [WBX-9]) — see this module's own doc. */
+/** `[data-wb-remount]` on the simulator root (`SimulatorShellElements.root`, `ol-3ux7.64.11` [WBX-9]) — see this module's own doc. */
 export function remountLocator(page: Page): Locator {
   return frame(page).locator('[data-wb-remount]');
 }
@@ -200,15 +200,28 @@ export async function rateNextDue(page: Page): Promise<void> {
 }
 
 /**
- * Opens the whole plugin's command palette (`[data-wb-palette-toggle]`),
- * invokes `commandId` by clicking its `[data-wb-command-id]` button, and
- * waits for the workspace's active leaf to report `expectedViewType`
- * (`[data-wb-pane]`'s `data-wb-active-view-type` — `obsidian-shim/index.ts`).
+ * Opens the whole plugin's command palette (`[data-wb-palette-toggle]`,
+ * relocated into the ribbon by `controller.ts`'s `populateRibbon` since
+ * `ol-3ux7.64.14` [WBX-12] — still the SAME real button, so this locator is
+ * unaffected by where in the DOM it sits), invokes `commandId` by clicking
+ * its `[data-wb-command-id]` button, and waits for the RIGHT sidebar's
+ * active leaf to report `expectedViewType` (`[data-wb-right-pane]`'s
+ * `data-wb-active-view-type` — `obsidian-shim/index.ts`'s `Workspace`).
  * This is F9.S3's "commands are registered and reachable through the
  * palette... choosing one runs its callback" and "a registered view opens in
  * a leaf through the workspace", exercised together rather than as two
  * separate DOM interactions, since the palette click IS the callback
  * invocation this suite can observe from outside the plugin.
+ *
+ * `[data-wb-right-pane]`, not `[data-wb-pane]` (WBX-12): every command this
+ * suite invokes through this helper (`COMMAND_TODAY_OPEN`,
+ * `COMMAND_SESSION_BUILD`) drives a `revealXxxView` that calls
+ * `workspace.getRightLeaf`, which WBX-12 gave a REAL right-sidebar pool of
+ * its own — before that bead it aliased the main pool, so `[data-wb-pane]`
+ * was the only pane there was. The main pane now shows Home from the moment
+ * of mount (`controller.ts`'s `remountPane`), so asserting against
+ * `[data-wb-pane]` here would be asserting Home never left, not that the
+ * command opened its view.
  */
 export async function openCommandViaPalette(
   page: Page,
@@ -218,7 +231,7 @@ export async function openCommandViaPalette(
   await frame(page).locator('[data-wb-palette-toggle]').click();
   await expect(frame(page).locator('[data-wb-palette]')).toBeVisible();
   await frame(page).locator(`[data-wb-command-id="${commandId}"]`).click();
-  await expect(frame(page).locator('[data-wb-pane]')).toHaveAttribute(
+  await expect(frame(page).locator('[data-wb-right-pane]')).toHaveAttribute(
     'data-wb-active-view-type',
     expectedViewType,
   );

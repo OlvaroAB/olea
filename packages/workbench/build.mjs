@@ -445,6 +445,44 @@ async function copyGenerationCassette() {
 }
 
 /**
+ * `simulator-world.json` (`ol-3ux7.64.14` [WBX-12], `docs/dev/simulator-design.md`
+ * §7, F9.S6): the world descriptor the simulator route's badge reads instead
+ * of a hard-coded `'FIXTURE'` string. This public build only ever writes the
+ * fixture shape; the private build (`olea-service`'s `scripts/
+ * simulator-build.mjs`, WBX-3, outside this file's `owns`) writes the real/
+ * persona ones over its own `WB_DIST`.
+ *
+ * `asOf` is read out of `src/clock.ts`'s SOURCE TEXT by regex, not by
+ * `import`ing that module: this script is plain Node ESM with no TypeScript
+ * loader, and `WORKBENCH_NOW`'s value must not silently drift from what this
+ * file writes — a hard-coded date literal here would be exactly the kind of
+ * duplicate this project's CLAUDE.md warns against. A source file that
+ * renames or reshapes the constant fails this build loudly (a thrown error),
+ * not by quietly writing a stale date.
+ */
+const CLOCK_SOURCE = join(here, 'src', 'clock.ts');
+const WORKBENCH_NOW_PATTERN = /WORKBENCH_NOW = new Date\('([^']+)'\)/;
+
+async function writeSimulatorWorldDescriptor() {
+  const source = await readFile(CLOCK_SOURCE, 'utf8');
+  const match = source.match(WORKBENCH_NOW_PATTERN);
+  if (match === null) {
+    throw new Error(
+      `workbench: could not read WORKBENCH_NOW out of ${CLOCK_SOURCE} — simulator-world.json needs its date. ` +
+        'If that constant was renamed or reshaped, update WORKBENCH_NOW_PATTERN here to match.',
+    );
+  }
+  const asOf = match[1].slice(0, 10);
+  const descriptor = { world: 'fixture', label: 'FIXTURE', asOf };
+  await writeFile(
+    join(dist, 'simulator-world.json'),
+    `${JSON.stringify(descriptor, null, 2)}\n`,
+    'utf8',
+  );
+  console.log(`workbench: wrote dist/simulator-world.json (world=fixture, asOf=${asOf})`);
+}
+
+/**
  * `ol-ppxj.11` [HOST-1]: `cp(src, dest, { recursive: true })` into an ALREADY-
  * EXISTING `dest` throws EEXIST on this host — the same measured defect as
  * `ol-63et` (wrangler's mkdtemp/lstat), one level up the stack. Node's `fs.cp`
@@ -493,6 +531,7 @@ async function copyStatic() {
   await copyFixtureVault();
   await copyEmbeddingCassette();
   await copyGenerationCassette();
+  await writeSimulatorWorldDescriptor();
   await writeFile(
     join(dist, '_headers'),
     '/*\n  X-Robots-Tag: noindex\n  Referrer-Policy: no-referrer\n',

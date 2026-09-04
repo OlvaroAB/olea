@@ -51,6 +51,32 @@ describe('SimulatorClock', () => {
     expect(second.offsetMs()).toBe(first.offsetMs());
   });
 
+  it('with no persisted offset and an asOf given, now() starts at asOf rather than real time (ol-3ux7.64.14 [WBX-12])', async () => {
+    const asOf = new RealDate('2027-01-15T00:00:00.000Z');
+    const clock = await createSimulatorClock(createMemoryStore(), asOf);
+    expect(clock.now().getTime()).toBe(asOf.getTime());
+  });
+
+  it('an asOf argument is ignored once an offset has actually been persisted', async () => {
+    const store = createMemoryStore();
+    await (await createSimulatorClock(store)).advanceDays(2);
+
+    const asOf = new RealDate('2027-01-15T00:00:00.000Z');
+    const clock = await createSimulatorClock(store, asOf);
+    expect(clock.now().getTime()).not.toBe(asOf.getTime());
+    expect(await store.loadClockOffsetMs()).toBe(clock.offsetMs());
+  });
+
+  it('the asOf fallback is itself persisted, so a second clock over the same untouched store reads the same instant back', async () => {
+    const asOf = new RealDate('2027-01-15T00:00:00.000Z');
+    const store = createMemoryStore();
+    const first = await createSimulatorClock(store, asOf);
+    expect(first.now().getTime()).toBe(asOf.getTime());
+
+    const second = await createSimulatorClock(store);
+    expect(second.now().getTime()).toBe(asOf.getTime());
+  });
+
   it('jumpTo sets now() to exactly the given instant', async () => {
     const clock = await createSimulatorClock(createMemoryStore());
     const target = new RealDate('2027-06-01T12:00:00.000Z');

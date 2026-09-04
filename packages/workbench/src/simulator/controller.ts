@@ -78,11 +78,11 @@ import {
   type WorkerTaskTransport,
 } from 'olea-core';
 import { OLEA_COMMAND_PROCESS_NOTE_NOW } from '../../../plugin/src/commands/ids.js';
+import { VIEW_TYPE_OLEA_HOME } from '../../../plugin/src/home/view.js';
 import OleaPlugin from '../../../plugin/src/main.js';
 import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
 import type { HttpRequestFn } from '../../../plugin/src/worker/transport.js';
-import { WORKBENCH_NOW } from '../clock.js';
-import type { ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
+import type { App, ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
 import {
   createVaultInstrumentSource,
   ensureDeviceId,
@@ -112,7 +112,9 @@ import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
 import { renderProvenanceBadge, type SimulatorTransport } from './provenance-badge.js';
+import { renderRibbonViews, type SimulatorShellElements } from './shell.js';
 import { DEFAULT_SIMULATOR_DB_NAME, openSimulatorStore, type SimulatorStore } from './store.js';
+import { loadSimulatorWorld, parseWorldAsOf } from './world.js';
 
 /**
  * Best-effort, never-throwing load of a bundled replay cassette from a plain
@@ -265,15 +267,6 @@ async function seedSimulatorWorkerConfig(pluginDataHost: ObsidianDataHost): Prom
   await new ObsidianWorkerConfigStore(pluginDataHost).save(SIMULATOR_WORKER_CONFIG_PLACEHOLDER);
 }
 
-/**
- * The fixture world's snapshot instant — the same fixed instant every other
- * fixture-vault surface in this package treats as "now" for the un-lived
- * (scripted) states. Reset returns the simulator's clock to this instant
- * rather than to real wall time, so a reset-then-look-around always shows
- * the same due set a scripted `today-due` state would.
- */
-const FIXTURE_WORLD_ASOF = WORKBENCH_NOW;
-
 const RATE_GOOD: Rating = 'good';
 const EXCLUDE_PATHS = ['README.md'];
 
@@ -290,30 +283,20 @@ function missingWholePluginGlobals(): readonly string[] {
   return missing;
 }
 
-export interface SimulatorMountElements {
-  /**
-   * The stable wrapper around every element below — never emptied or
-   * replaced by `remountPane()`, unlike `pane`. Carries `[data-wb-remount]`
-   * (`ol-3ux7.64.11` [WBX-9]): a counter bumped once per `remountPane()` call,
-   * after the mount (and, for the whole-plugin path, the default Today view)
-   * has fully resolved. `e2e/simulator/helpers.ts`'s `waitForRemount` is the
-   * one settle signal every control helper needs, replacing the
-   * necessarily-approximate content waits (a badge date changing, a notice
-   * appearing) used before this bead.
-   */
-  readonly root: HTMLElement;
-  /** Where the whole plugin's chrome mounts — analogous to `main.ts`'s `host`. */
-  readonly pane: HTMLElement;
-  /** Where the day-advance/jump/reset/rate controls render. */
-  readonly controls: HTMLElement;
-  /** Where the always-on provenance badge renders. */
-  readonly badge: HTMLElement;
-  /** Where free-text notices ("rated X", "nothing due", a degraded-mount reason) render. */
-  readonly notice: HTMLElement;
-}
-
 export interface SimulatorControllerOptions {
-  readonly elements: SimulatorMountElements;
+  /**
+   * The Obsidian-shaped shell's elements (`ol-3ux7.64.14` [WBX-12],
+   * `./shell.js`'s `createSimulatorShell`) — `elements.root` is the stable
+   * wrapper around every other element, never emptied or replaced by
+   * `remountPane()`. It carries `[data-wb-remount]` (`ol-3ux7.64.11`
+   * [WBX-9]): a counter bumped once per `remountPane()` call, after the
+   * mount (and, for the whole-plugin path, Home landing in `main` and Today
+   * revealing in `right`) has fully resolved. `e2e/simulator/helpers.ts`'s
+   * `waitForRemount` is the one settle signal every control helper needs,
+   * replacing the necessarily-approximate content waits (a badge date
+   * changing, a notice appearing) used before WBX-9.
+   */
+  readonly elements: SimulatorShellElements;
   readonly scheduler?: Scheduler;
   readonly dbName?: string;
   /**
@@ -355,6 +338,34 @@ function makeSimpleLeaf(host: HTMLElement): WorkspaceLeaf {
 
 function formatSimulatedDate(now: Date): string {
   return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Opens `viewType` if no leaf of that type exists anywhere, or reveals the
+ * one that already does — the identical "or create one" shape every
+ * `revealXxxView` in `packages/plugin/src/main.ts` uses (`existing[0] ??
+ * workspace.getLeaf(...)`), used here for two callers that cannot reach
+ * those PRIVATE methods directly: {@link SimulatorController.remountPane}'s
+ * own Home landing (`revealHomeView` puts Home in the right sidebar in real
+ * Obsidian — this bead's own ask is the main pane instead, design doc §4/§7,
+ * F9.S3) and the ribbon's per-view buttons (`shell.ts`'s `renderRibbonViews`)
+ * — a ribbon icon opens/reveals its view via the real workspace primitives
+ * `Plugin.registerView` already wired, never a command id this lane would
+ * otherwise have to hand-map per view type.
+ *
+ * New leaves always land in the MAIN pool (`getLeaf('tab')`): that is the
+ * only choice available to a caller outside the plugin's own private reveal
+ * methods, and it is also what happens if the view already lives in the
+ * RIGHT pool — `getLeavesOfType` searches both, so an existing leaf is
+ * revealed wherever it actually is rather than being duplicated into main.
+ */
+async function openOrRevealView(app: App, viewType: string): Promise<void> {
+  const { workspace } = app;
+  const existing = workspace.getLeavesOfType(viewType);
+  const leaf = existing[0] ?? workspace.getLeaf('tab');
+  if (leaf === null || leaf === undefined) return;
+  if (existing.length === 0) await leaf.setViewState({ type: viewType, active: true });
+  await workspace.revealLeaf(leaf);
 }
 
 /**
@@ -466,11 +477,11 @@ export class SimulatorController {
   private beforeMountCourseSetupSeenCodes: ReadonlySet<string> = new Set();
   /** Installed once, for this controller's whole lifetime — see `course-setup-bridge.ts`'s own doc on why a per-remount poll cannot do this job. */
   private readonly courseSetupSeenBridge: CourseSetupSeenBridge;
-  /** Bumped once per `remountPane()` call, written onto `elements.root`'s `[data-wb-remount]` — see {@link SimulatorMountElements.root}'s own doc. */
+  /** Bumped once per `remountPane()` call, written onto `elements.root`'s `[data-wb-remount]` — see {@link SimulatorControllerOptions.elements}'s own doc. */
   private remountCount = 0;
 
   private constructor(
-    private readonly elements: SimulatorMountElements,
+    private readonly elements: SimulatorShellElements,
     private readonly scheduler: Scheduler,
     private store: SimulatorStore,
     private vault: PersistentVaultSource,
@@ -480,6 +491,10 @@ export class SimulatorController {
     private deviceId: string,
     private readonly transport: SimulatorTransport,
     private readonly uninstallTransportBridge: () => void,
+    /** The world descriptor's own display label (`world.ts`) — the badge reads this, never a hard-coded `'FIXTURE'` (`ol-3ux7.64.14` [WBX-12], design doc §7). */
+    private readonly worldLabel: string,
+    /** The world descriptor's `asOf`, parsed — the instant `reset()` and (via `create()`'s clock construction) a never-touched first mount return to, never `WORKBENCH_NOW` by name (WBX-12: the fixture world's `asOf` happens to equal `WORKBENCH_NOW`'s date, but a private/persona world's does not). */
+    private readonly worldAsOf: Date,
   ) {
     this.courseSetupSeenBridge = installCourseSetupSeenBridge(
       this.pluginDataHost,
@@ -490,10 +505,18 @@ export class SimulatorController {
   static async create(options: SimulatorControllerOptions): Promise<SimulatorController> {
     const dbName = options.dbName ?? DEFAULT_SIMULATOR_DB_NAME;
     const scheduler = options.scheduler ?? createFsrsScheduler();
+    // Read before anything else touches the clock — `worldAsOf` below feeds
+    // `createSimulatorClock`'s own fallback (design doc §3/§7, F9.S6: "on
+    // first open... the simulated date is the world's asOf, not real
+    // today"). Plain `fetch`: the transport bridge (a POST-only interceptor,
+    // see `installTransportBridge`'s own doc) is not installed yet, and this
+    // is a GET regardless.
+    const worldLoad = await loadSimulatorWorld(globalThis.fetch.bind(globalThis));
+    const worldAsOf = parseWorldAsOf(worldLoad.descriptor);
     const store = await openSimulatorStore(dbName);
     const base: MemoryVaultSource = await loadFixtureVault();
     const vault = await PersistentVaultSource.create(base, store);
-    const clock = await createSimulatorClock(store);
+    const clock = await createSimulatorClock(store, worldAsOf);
     const uninstallClock = clock.install();
     const pluginDataHost = createPluginDataHost(store);
     const deviceId = await ensureDeviceId(pluginDataHost);
@@ -516,7 +539,19 @@ export class SimulatorController {
       deviceId,
       transportMode,
       uninstallTransportBridge,
+      worldLoad.descriptor.label,
+      worldAsOf,
     );
+    // Set BEFORE `renderControls()`/`remountPane()` below — neither of those
+    // touches the notice host on this path (`remountPane`'s own doc: it
+    // deliberately never clears a notice a caller just set), so this survives
+    // the very first mount, matching every other "set then remount" call in
+    // this class (`rateNextDue`, `reset`).
+    if (worldLoad.fallback) {
+      controller.setNotice(
+        '/simulator-world.json could not be read — showing the built-in FIXTURE default.',
+      );
+    }
     controller.renderControls();
     await controller.remountPane();
     return controller;
@@ -594,7 +629,8 @@ export class SimulatorController {
    */
   private async remountPane(): Promise<void> {
     await this.closeCurrent();
-    this.elements.pane.empty();
+    this.elements.main.empty();
+    this.elements.right.empty();
     // WBX-9: read BEFORE `mountPlugin` below — the fresh `OleaPlugin`
     // instance's own cold-start scan can start proposing courses during
     // `onload()`, and this snapshot must reflect only what an EARLIER mount
@@ -610,10 +646,24 @@ export class SimulatorController {
         pluginData: this.pluginDataHost,
       });
       this.mountedPlugin = mounted;
-      this.elements.pane.appendChild(mounted.hostEl);
-      // Opens the same first screen the pre-WBX-2 single-view mount always
-      // gave — the real command, not a hand-built view, so a missing/renamed
-      // command surfaces as this throwing rather than a silently blank pane.
+      this.elements.main.appendChild(mounted.hostEl);
+      // WBX-12: a REAL second workspace pool, appended into the shell's own
+      // right-sidebar region — `obsidian-shim/index.ts`'s `Workspace.
+      // rightContainerEl`'s own doc explains why this stopped being the same
+      // DOM `mounted.hostEl` already carries (before this bead, `getRightLeaf`
+      // aliased `getLeaf('tab')`, so both lived in one pane).
+      this.elements.right.appendChild(mounted.app.workspace.rightContainerEl);
+
+      // Home lands in the MAIN pane (this bead's own ask — `revealHomeView`
+      // in `packages/plugin/src/main.ts` is PRIVATE and puts Home in the
+      // right sidebar in real Obsidian; `openOrRevealView`'s own doc explains
+      // why this calls the real workspace primitives directly instead).
+      // Today reveals in the RIGHT sidebar the way the plugin's own
+      // `revealTodayView` places it — the real command, not a hand-built
+      // view, so a missing/renamed command surfaces as this throwing rather
+      // than a silently blank pane. Order matters only for which one settles
+      // first; both coexist on screen once this finishes.
+      await openOrRevealView(mounted.app, VIEW_TYPE_OLEA_HOME);
       // Deliberately does NOT touch the notice: `rateNextDue`/`reset` call
       // `setNotice(...)` right before this remount, and that message
       // ("Rated 1 item…", "Reset to the fixture snapshot.") must survive it
@@ -621,30 +671,66 @@ export class SimulatorController {
       // (`ol-3ux7.64.10` [WBX-1b]): every remount wiped the message the
       // action that triggered it had just set.
       mounted.plugin.invokeCommand(OLEA_COMMAND_TODAY_OPEN);
+      this.populateRibbon(mounted);
       installSimulatorWalkDriver(this, mounted);
     } else {
       this.setDegradedNotice(missing);
       const deps = this.buildFallbackDeps();
-      const view = new TodayView(makeSimpleLeaf(this.elements.pane), deps);
-      this.elements.pane.appendChild(view.containerEl);
+      const view = new TodayView(makeSimpleLeaf(this.elements.main), deps);
+      this.elements.main.appendChild(view.containerEl);
       this.fallbackView = view;
       void view.onOpen();
       await settle();
+      this.elements.ribbonViews.empty();
     }
 
     this.renderBadge();
     // WBX-9's remount-complete signal: bumped once mount (and, for the
-    // whole-plugin path, the default Today view) has fully resolved — the
-    // one settle condition `e2e/simulator/helpers.ts`'s `waitForRemount`
-    // needs, in place of the approximate content waits used before this
-    // bead. See `SimulatorMountElements.root`'s own doc.
+    // whole-plugin path, Home landing in the main pane and Today revealing
+    // in the right sidebar) has fully resolved — the one settle condition
+    // `e2e/simulator/helpers.ts`'s `waitForRemount` needs, in place of the
+    // approximate content waits used before this bead. See
+    // `SimulatorControllerOptions.elements`'s own doc.
     this.remountCount += 1;
     this.elements.root.setAttribute('data-wb-remount', String(this.remountCount));
   }
 
+  /**
+   * (Re)builds the ribbon's per-view buttons from whatever THIS mount's
+   * plugin has registered so far (`Workspace.registeredViewTypes()` — never
+   * a hand list, `shell.ts`'s own doc) and relocates the plugin's own real
+   * `[data-wb-palette-toggle]` button into the ribbon's palette slot. Both
+   * are rebuilt every remount because `mounted` (and therefore its view
+   * registry and its `hostEl`'s own toggle button) is a brand-new instance
+   * each time — §3's "full onunload/onload" remount discipline.
+   *
+   * `ribbonPaletteSlot.empty()` FIRST is load-bearing, not tidiness: the
+   * slot is part of `elements.root`, which `remountPane()` never empties
+   * (unlike `elements.main`) — a moved-in button therefore survives the
+   * `elements.main.empty()` that clears out the REST of the old mount's
+   * `hostEl`, and without this line every remount would leave the previous
+   * mount's now-orphaned toggle button sitting here forever, accumulating
+   * one stale button per remount (caught by `e2e/simulator/shell.spec.ts`
+   * and the whole-plugin/goldens specs, which every started resolving
+   * `[data-wb-palette-toggle]` to more than one element after a reset or a
+   * day-advance).
+   */
+  private populateRibbon(mounted: MountedPlugin<OleaPlugin>): void {
+    renderRibbonViews(
+      this.elements.ribbonViews,
+      mounted.app.workspace.registeredViewTypes(),
+      (viewType) => {
+        void openOrRevealView(mounted.app, viewType);
+      },
+    );
+    this.elements.ribbonPaletteSlot.empty();
+    const paletteToggle = mounted.hostEl.querySelector<HTMLElement>('[data-wb-palette-toggle]');
+    if (paletteToggle !== null) this.elements.ribbonPaletteSlot.appendChild(paletteToggle);
+  }
+
   private renderBadge(): void {
     renderProvenanceBadge(this.elements.badge, {
-      world: 'FIXTURE',
+      world: this.worldLabel,
       simulatedDate: formatSimulatedDate(this.clock.now()),
       transport: this.transport,
     });
@@ -779,7 +865,7 @@ export class SimulatorController {
    */
   async reset(): Promise<void> {
     await this.store.resetAll();
-    await this.clock.jumpTo(FIXTURE_WORLD_ASOF);
+    await this.clock.jumpTo(this.worldAsOf);
     const freshBase = await loadFixtureVault();
     this.vault = await PersistentVaultSource.create(freshBase, this.store);
     this.deviceId = await ensureDeviceId(this.pluginDataHost);

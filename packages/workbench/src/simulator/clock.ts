@@ -79,14 +79,40 @@ function installSimulatorDateOverride(getOffsetMs: () => number): () => void {
   };
 }
 
-/** Builds a `SimulatorClock` whose offset is loaded from (and every change persisted to) `store`. */
-export async function createSimulatorClock(store: SimulatorStore): Promise<SimulatorClock> {
-  let offsetMs = await store.loadClockOffsetMs();
+/**
+ * Builds a `SimulatorClock` whose offset is loaded from (and every change
+ * persisted to) `store`.
+ *
+ * `asOf` (`ol-3ux7.64.14` [WBX-12]) is the world's snapshot day, used ONLY
+ * when `store` has never persisted an offset at all — `store.ts`'s own doc on
+ * why `loadClockOffsetMs` returns `undefined` rather than defaulting to `0`
+ * for exactly this distinction. Omitting it (every pre-WBX-12 caller, and
+ * every test in this file that does not pass it) preserves the old default:
+ * a never-touched clock reads real wall time. Passing it is what makes "on
+ * first open, the simulated date is the world's asOf, not real today" true
+ * (design doc §3 / F9.S6) — `SimulatorController.create` passes the world
+ * descriptor's `asOf` here.
+ */
+export async function createSimulatorClock(
+  store: SimulatorStore,
+  asOf?: Date,
+): Promise<SimulatorClock> {
+  const persisted = await store.loadClockOffsetMs();
+  let offsetMs =
+    persisted !== undefined ? persisted : asOf !== undefined ? asOf.getTime() - RealDate.now() : 0;
 
   async function setOffsetMs(next: number): Promise<void> {
     offsetMs = next;
     await store.saveClockOffsetMs(offsetMs);
   }
+
+  // Persist the `asOf` fallback the moment it is computed — never leave the
+  // offset "on the never-persisted default" once it has actually been
+  // decided, or a second `createSimulatorClock` over the same store before
+  // anything else touches the clock (e.g. a reload with nothing yet rated)
+  // would recompute a SECOND, slightly-later fallback instead of reading a
+  // stable value back.
+  if (persisted === undefined && asOf !== undefined) await setOffsetMs(offsetMs);
 
   return {
     now: () => new RealDate(RealDate.now() + offsetMs),

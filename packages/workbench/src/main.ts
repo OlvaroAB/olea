@@ -133,7 +133,7 @@ import {
   SESSION_STATES,
   type SessionScenario,
 } from './session-scenarios.js';
-import { SimulatorController } from './simulator/index.js';
+import { createSimulatorShell, SimulatorController } from './simulator/index.js';
 import {
   applyVariableSet,
   DEFAULT_VARIABLE_SET,
@@ -544,6 +544,47 @@ async function main(): Promise<void> {
   const host = frame.body;
   const inspector = requireEl('[data-wb-inspector]');
   const noticeHost = requireEl('[data-wb-notices]');
+  /**
+   * `ol-3ux7.64.14` [WBX-12]: the workbench's own left rail — David, opening
+   * the deployed simulator, saw its fixture-world prose and mode list
+   * wrapped around the simulator's bare Today panel. Queried by class, not
+   * `requireEl`/a `data-wb-*` hook: `public/index.html` is outside this
+   * bead's `owns` (WBX-3's file), and `.wb-sidebar` is the one stable
+   * existing selector that already names the whole thing. `render()`
+   * below hides it (and `inspector`'s own "bottom scenario caption" prose)
+   * for the simulator route ONLY, and restores both for every other route —
+   * so a null result here (the markup someday drops the class) degrades to
+   * "the sidebar stays visible on the simulator route too," never a thrown
+   * error blocking every other surface this file serves.
+   */
+  const sidebarEl = document.querySelector<HTMLElement>('.wb-sidebar');
+  /**
+   * `.wb`'s grid (`public/workbench.css`, outside this bead's `owns`) is
+   * `grid-template-columns: 300px minmax(0, 1fr)` with `.wb-sidebar` and
+   * `.wb-main` as its only two IN-FLOW grid items (`.wb-modal-host`/
+   * `.wb-notices` are `position: fixed`, so they never participate in grid
+   * placement at all) — both rely on plain DOM-order AUTO-PLACEMENT, never
+   * an explicit `grid-column`. Two bugs this caused, both found by
+   * screenshotting the route rather than by eye (a squeezed-but-populated
+   * pane still LOOKS like content, just not at the right size):
+   *
+   * 1. Setting `sidebarEl.hidden = true` removes it from grid placement
+   *    entirely (a `display: none` item is not a grid item), so `.wb-main`
+   *    — now the ONLY grid item — auto-places into the FIRST available
+   *    cell, column 1 (300px), not column 2 (the wide remainder).
+   * 2. Even pinned to column 2, column 1 (300px) stays reserved and empty —
+   *    an explicit grid TRACK keeps its declared size regardless of how
+   *    many items occupy it — leaving a blank 300px void where the sidebar
+   *    used to be, which is not "an Obsidian-shaped shell", it is a
+   *    workbench-shaped hole with a shell floating in the remainder.
+   *
+   * `render()` below sets this per route: both columns on the simulator
+   * route (the shell owns the whole width), column 2 only everywhere else
+   * (matching the grid's own original auto-placement, restated explicitly
+   * so leaving the simulator route does not depend on the DOM order this
+   * override no longer lets `.wb-main` fall back to on its own).
+   */
+  const mainEl = document.querySelector<HTMLElement>('.wb-main');
 
   // Both realms: the chrome's elements are created in this document, the view's
   // inside the frame's. See `obsidian-shim/dom.ts`.
@@ -950,6 +991,18 @@ async function main(): Promise<void> {
     document.documentElement.setAttribute('data-wb-state', state.id);
     document.documentElement.setAttribute('data-wb-route-surface', route.surface);
     document.documentElement.setAttribute('data-wb-persona', persona.id);
+    // `ol-3ux7.64.14` [WBX-12]: no workbench prose or mode list on the
+    // simulator route (`sidebarEl`'s own doc), and no bottom scenario
+    // caption either — the simulator draws its own Obsidian-shaped shell
+    // inside the host frame instead (`mountSimulator`). Every other route is
+    // unaffected: this restores both the moment the hash moves away.
+    const isSimulator = route.surface === 'simulator';
+    if (sidebarEl !== null) sidebarEl.hidden = isSimulator;
+    inspector.hidden = isSimulator;
+    // `mainEl`'s own doc: reclaim the sidebar's now-empty 300px grid track on
+    // the simulator route (the shell owns the whole width); everywhere else,
+    // restate the grid's own original auto-placement explicitly.
+    if (mainEl !== null) mainEl.style.gridColumn = isSimulator ? '1 / -1' : '2';
     if (walkStep !== undefined) {
       document.documentElement.setAttribute('data-wb-walk-step', String(walkStep.n));
       document.documentElement.setAttribute('data-wb-walk-status', walkStep.status);
@@ -1305,32 +1358,40 @@ async function main(): Promise<void> {
     }
 
     /**
-     * `#/simulator` (`ol-3ux7.64.10` [WBX-1b], `docs/dev/simulator-design.md`
-     * §3/§4). Unlike every other flat surface, this is not one of a scripted
-     * `WORKBENCH_NOW`-fixed state list — `SimulatorController` owns a
-     * dedicated, persisted `PersistentVaultSource` (never the shared `vault`
-     * every scripted state reads, which must stay pristine and fixed-clock),
-     * a page-level clock, and mounts the whole real `OleaPlugin` over both,
-     * live (its own `Plugin.loadData`/`saveData` reading the same persisted
-     * `plugin-data` host). This controller's mounts never join the generic
+     * `#/simulator` (`ol-3ux7.64.10` [WBX-1b], `ol-3ux7.64.14` [WBX-12],
+     * `docs/dev/simulator-design.md` §3/§4/§7). Unlike every other flat
+     * surface, this is not one of a scripted `WORKBENCH_NOW`-fixed state
+     * list — `SimulatorController` owns a dedicated, persisted
+     * `PersistentVaultSource` (never the shared `vault` every scripted state
+     * reads, which must stay pristine and fixed-clock), a page-level clock,
+     * and mounts the whole real `OleaPlugin` over both, live (its own
+     * `Plugin.loadData`/`saveData` reading the same persisted `plugin-data`
+     * host). This controller's mounts never join the generic
      * `mounted`/`onClose` lifecycle above — `SimulatorController.dispose`'s
      * own doc explains why — so nothing here needs an `onViewChange` bridge.
+     *
+     * WBX-12: the route's own Obsidian-shaped shell (`simulator/shell.ts`'s
+     * `createSimulatorShell`) replaces the ad hoc `wb-sim-root`/`wb-sim-pane`
+     * div soup this function used to build directly — those classes had no
+     * CSS anywhere reachable from inside the host iframe (`shell.ts`'s own
+     * module doc explains why), which is the "unstyled controls" half of
+     * what David saw. The workbench prose and mode list (the OTHER half) are
+     * hidden by `render()`'s own preamble (`sidebarEl`/`inspector.hidden`)
+     * for this route only, so nothing here needs to touch them.
      *
      * Reachability: this is `ol-3ux7.64.10`'s named production caller.
      */
     async function mountSimulator(): Promise<void> {
-      // `[data-wb-remount]` (`ol-3ux7.64.11` [WBX-9]) starts at `'0'` here and
-      // is bumped by `SimulatorController.remountPane` itself, once its mount
-      // (and, for the whole-plugin path, the default Today view) has fully
+      // `[data-wb-remount]` (`ol-3ux7.64.11` [WBX-9]) starts at `'0'` on
+      // `elements.root` and is bumped by `SimulatorController.remountPane`
+      // itself, once its mount (and, for the whole-plugin path, Home landing
+      // in the main pane and Today revealing in the right sidebar) has fully
       // resolved — the remount-complete signal `e2e/simulator/helpers.ts`'s
-      // `waitForRemount` waits on instead of a content-based heuristic. This
-      // wrapper, unlike `paneEl`, is never emptied by `remountPane()`, so the
-      // attribute survives every remount for a helper to read.
-      const rootEl = host.createDiv({ cls: 'wb-sim-root', attr: { 'data-wb-remount': '0' } });
-      const controlsEl = rootEl.createDiv({ cls: 'wb-sim-controls' });
-      const badgeEl = rootEl.createDiv({ cls: 'wb-sim-badge-host' });
-      const noticeEl = rootEl.createDiv({ cls: 'wb-sim-notice-host' });
-      const paneEl = rootEl.createDiv({ cls: 'wb-sim-pane' });
+      // `waitForRemount` waits on instead of a content-based heuristic.
+      // `elements.root`, unlike `elements.main`/`elements.right`, is never
+      // emptied by `remountPane()`, so the attribute survives every remount
+      // for a helper to read.
+      const elements = createSimulatorShell(host);
 
       // `record`'s own default base URL is same-origin `/__olea` (`simulator-serve.mjs`'s proxy,
       // which is necessarily what served this very page — there is no other same-origin
@@ -1343,31 +1404,13 @@ async function main(): Promise<void> {
             ? `${window.location.origin}/__olea`
             : '';
       simulatorController = await SimulatorController.create({
-        elements: {
-          root: rootEl,
-          pane: paneEl,
-          controls: controlsEl,
-          badge: badgeEl,
-          notice: noticeEl,
-        },
+        elements,
         transport: route.transportMode,
         // `exactOptionalPropertyTypes`: an absent base URL must be OMITTED, never `undefined`.
         ...(transportBaseUrl.length > 0 ? { transportBaseUrl } : {}),
       });
       if (run !== generation) return;
 
-      inspector.empty();
-      inspector.createDiv({
-        cls: 'wb-inspector-note',
-        text:
-          'F9 simulator (ol-3ux7.64.10 [WBX-1b]) — a persisted vault overlay (IndexedDB) and a ' +
-          'page-level clock, over the WHOLE real plugin: commands, palette, every registered ' +
-          'view (Today opens by default), the settings tab. What she does today changes ' +
-          'tomorrow: rate an item from the panel or start a real review, advance a day, reload ' +
-          '— the due set moves and the review is still there. A host missing `window`/' +
-          '`navigator` degrades to a Today-only fallback with a notice naming what is missing ' +
-          '(never silently) — see the pane.',
-      });
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 

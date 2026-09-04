@@ -36,10 +36,14 @@ for (const backend of BACKENDS) {
       store = await backend.create();
     });
 
-    it('has no overlay entries, no plugin data and a zero clock offset before anything is written', async () => {
+    it('has no overlay entries, no plugin data and an undefined (never-persisted) clock offset before anything is written', async () => {
+      // `ol-3ux7.64.14` [WBX-12]: `undefined`, not `0` — `clock.ts`'s
+      // `createSimulatorClock` reads this distinction to know whether a
+      // fresh mount should fall back to the world's `asOf` (never persisted)
+      // or trust a persisted `0` (a real session that jumped back to now).
       expect(await store.loadOverlay()).toEqual(new Map());
       expect(await store.loadPluginData()).toBeUndefined();
-      expect(await store.loadClockOffsetMs()).toBe(0);
+      expect(await store.loadClockOffsetMs()).toBeUndefined();
     });
 
     it('round-trips an overlay write', async () => {
@@ -76,7 +80,9 @@ for (const backend of BACKENDS) {
 
       expect(await store.loadOverlay()).toEqual(new Map());
       expect(await store.loadPluginData()).toBeUndefined();
-      expect(await store.loadClockOffsetMs()).toBe(0);
+      // Back to "never persisted", same as a brand-new store — see the
+      // first test's own doc on why that is `undefined`, not `0`.
+      expect(await store.loadClockOffsetMs()).toBeUndefined();
     });
 
     it('loadOverlay returns a fresh snapshot — mutating the returned map never touches the store', async () => {

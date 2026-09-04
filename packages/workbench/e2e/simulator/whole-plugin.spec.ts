@@ -71,8 +71,11 @@ test('@auto-web:simulator/whole-plugin — choosing a palette command opens its 
   await openCommandViaPalette(page, COMMAND_TODAY_OPEN, VIEW_TYPE_TODAY);
 
   await openCommandViaPalette(page, COMMAND_SESSION_BUILD, VIEW_TYPE_SESSION_BUILDER);
-  await expect(frame(page).locator('[data-wb-tab-active][data-wb-view-type]')).toHaveAttribute(
-    'data-wb-view-type',
-    VIEW_TYPE_SESSION_BUILDER,
-  );
+  // Scoped to the right sidebar's own tab strip (`ol-3ux7.64.14` [WBX-12]):
+  // Home is active in the MAIN pane's tab strip from the moment of mount
+  // (`controller.ts`'s `remountPane`), so an unscoped `[data-wb-tab-active]`
+  // would now match two elements — one per pool.
+  await expect(
+    frame(page).locator('[data-wb-right-tab-strip] [data-wb-tab-active][data-wb-view-type]'),
+  ).toHaveAttribute('data-wb-view-type', VIEW_TYPE_SESSION_BUILDER);
 });

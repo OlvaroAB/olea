@@ -7,11 +7,7 @@
  */
 
 export { createSimulatorClock, type SimulatorClock } from './clock.js';
-export {
-  SimulatorController,
-  type SimulatorControllerOptions,
-  type SimulatorMountElements,
-} from './controller.js';
+export { SimulatorController, type SimulatorControllerOptions } from './controller.js';
 export { ensureSimulatorDeviceId } from './device-id.js';
 export { type LiveDueQueue, loadLiveDueQueue } from './live-queue.js';
 export { PersistentVaultSource } from './persistent-vault.js';
@@ -25,6 +21,12 @@ export {
   type SimulatorTransport,
 } from './provenance-badge.js';
 export {
+  createSimulatorShell,
+  renderRibbonViews,
+  ribbonLabel,
+  type SimulatorShellElements,
+} from './shell.js';
+export {
   createMemoryStore,
   DEFAULT_SIMULATOR_DB_NAME,
   type OverlayValue,
@@ -32,3 +34,9 @@ export {
   openSimulatorStore,
   type SimulatorStore,
 } from './store.js';
+export {
+  loadSimulatorWorld,
+  parseWorldAsOf,
+  type SimulatorWorldDescriptor,
+  type SimulatorWorldLoadResult,
+} from './world.js';

@@ -32,8 +32,15 @@ export interface SimulatorStore {
   loadPluginData(): Promise<unknown>;
   savePluginData(data: unknown): Promise<void>;
 
-  /** Milliseconds added to the real wall clock; `0` until a session moves it. */
-  loadClockOffsetMs(): Promise<number>;
+  /**
+   * Milliseconds added to the real wall clock, or `undefined` when nothing
+   * has ever been persisted (`ol-3ux7.64.14` [WBX-12]) — distinct from a
+   * persisted `0`. `simulator/clock.ts`'s `createSimulatorClock` reads this
+   * distinction to decide whether a fresh mount should start at the world's
+   * `asOf` (never persisted) or at whatever a real session left behind
+   * (persisted, including a legitimate `0`).
+   */
+  loadClockOffsetMs(): Promise<number | undefined>;
   saveClockOffsetMs(offsetMs: number): Promise<void>;
 
   /**
@@ -68,7 +75,7 @@ interface MetaRow {
 export function createMemoryStore(): SimulatorStore {
   const overlay = new Map<string, OverlayValue>();
   let pluginData: unknown;
-  let clockOffsetMs = 0;
+  let clockOffsetMs: number | undefined;
 
   return {
     backend: 'memory',
@@ -93,7 +100,7 @@ export function createMemoryStore(): SimulatorStore {
     async resetAll() {
       overlay.clear();
       pluginData = undefined;
-      clockOffsetMs = 0;
+      clockOffsetMs = undefined;
     },
   };
 }
@@ -184,7 +191,7 @@ export async function openIndexedDbStore(
     savePluginData: (data) => writeMeta(META_KEY_PLUGIN_DATA, data),
     async loadClockOffsetMs() {
       const value = await readMeta(META_KEY_CLOCK_OFFSET_MS);
-      return typeof value === 'number' ? value : 0;
+      return typeof value === 'number' ? value : undefined;
     },
     saveClockOffsetMs: (offsetMs) => writeMeta(META_KEY_CLOCK_OFFSET_MS, offsetMs),
     async resetAll() {
