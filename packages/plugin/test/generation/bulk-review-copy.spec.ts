@@ -6,7 +6,11 @@
  * draft — in whichever of the two registers actually applies.
  */
 import { describe, expect, it } from 'vitest';
-import { sourceMarkerOrigin, sourceMarkerText } from '../../src/generation/bulk-review-copy.js';
+import {
+  bulkReviewCompletionTally,
+  sourceMarkerOrigin,
+  sourceMarkerText,
+} from '../../src/generation/bulk-review-copy.js';
 
 describe('sourceMarkerText', () => {
   it('names the note title as a plain "from your reading on X" pointer by default', () => {
@@ -42,6 +46,25 @@ describe('sourceMarkerText', () => {
       for (const vouchingWord of ['support', 'accurate', 'verified', 'confirmed']) {
         expect(text).not.toContain(vouchingWord);
       }
+    }
+  });
+});
+
+describe('bulkReviewCompletionTally ([STY-0e], ol-l5og.18.5; ol-2x4)', () => {
+  it('names only the outcomes that happened, in accepted/edited/rejected order', () => {
+    expect(bulkReviewCompletionTally({ accepted: 12, edited: 3, rejected: 5 })).toBe(
+      '12 accepted · 3 edited · 5 rejected.',
+    );
+  });
+
+  it('omits a zero-count outcome rather than reporting "0 edited"', () => {
+    expect(bulkReviewCompletionTally({ accepted: 4, edited: 0, rejected: 0 })).toBe('4 accepted.');
+  });
+
+  it("never mentions what remains, a due date, or a link to what she rejected (ol-2x4's rejections)", () => {
+    const text = bulkReviewCompletionTally({ accepted: 1, edited: 1, rejected: 1 }).toLowerCase();
+    for (const forbidden of ['remain', 'waiting', 'tomorrow', 'due', 'review the']) {
+      expect(text).not.toContain(forbidden);
     }
   });
 });

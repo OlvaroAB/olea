@@ -65,7 +65,13 @@
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import { REGISTRY_ENTRY_ACTION } from '../review/copy.js';
 import type { BulkReviewController } from './bulk-review.js';
-import { sourceMarkerText } from './bulk-review-copy.js';
+import {
+  BULK_REVIEW_COMPLETION_HEADING,
+  BULK_REVIEW_EMPTY_TEXT,
+  BULK_REVIEW_ITEM_TYPE_LABEL,
+  bulkReviewCompletionTally,
+  sourceMarkerText,
+} from './bulk-review-copy.js';
 import { BULK_REVIEW_HINTS, resolveBulkReviewKey } from './bulk-review-keymap.js';
 
 export const VIEW_TYPE_OLEA_BULK_REVIEW = 'olea-bulk-review';
@@ -95,6 +101,15 @@ export class BulkReviewView extends ItemView {
    */
   private readonly openSource: ((conceptKey: string) => void) | undefined;
   private controller: BulkReviewController | null = null;
+  /**
+   * `[STY-0e]`: how many drafts she has resolved THIS OPEN of the tab, by
+   * outcome — the receipt `bulkReviewCompletionTally` renders once the list
+   * empties. Reset to zero only by a fresh `onOpen` (a new controller, a new
+   * sitting); never persisted, because it describes this sitting only, not
+   * a standing count of anything (F6.7 — see that function's own doc for why
+   * this is the permitted category of count).
+   */
+  private counts = { accepted: 0, edited: 0, rejected: 0 };
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -168,13 +183,13 @@ export class BulkReviewView extends ItemView {
     if (draftId === null) return;
     switch (action.kind) {
       case 'keep':
-        await this.run((controller) => controller.accept(draftId));
+        await this.run('accepted', (controller) => controller.accept(draftId));
         break;
       case 'fix':
-        await this.run((controller) => controller.editBeforeSaving(draftId));
+        await this.run('edited', (controller) => controller.editBeforeSaving(draftId));
         break;
       case 'bin':
-        await this.run((controller) => controller.reject(draftId));
+        await this.run('rejected', (controller) => controller.reject(draftId));
         break;
     }
   }
@@ -235,12 +250,22 @@ export class BulkReviewView extends ItemView {
    * rather than losing her place after every key. A click that starts with
    * no row focused (`previousIndex` is `null`) restores nothing, which is
    * the pre-`[D-216]` behaviour unchanged for the mouse path.
+   *
+   * `[STY-0e]`: `kind`, when given, is this action's outcome for the
+   * session-local receipt (`this.counts`) `render` reads once the list
+   * empties — `undefined` for a caller with no single outcome to name
+   * (`acceptRemainder`'s own click handler counts its own result instead,
+   * since one call resolves many drafts at once).
    */
-  private async run(action: (controller: BulkReviewController) => Promise<void>): Promise<void> {
+  private async run(
+    kind: 'accepted' | 'edited' | 'rejected' | undefined,
+    action: (controller: BulkReviewController) => Promise<void>,
+  ): Promise<void> {
     const controller = this.controller;
     if (controller === null) return;
     const previousIndex = this.focusedRowIndex();
     await action(controller);
+    if (kind !== undefined) this.counts[kind]++;
     await controller.load();
     this.render();
     this.restoreFocus(previousIndex);
@@ -276,10 +301,19 @@ export class BulkReviewView extends ItemView {
 
     const vm = controller.getViewModel();
     if (vm.groups.length === 0) {
-      root.createEl('p', {
-        cls: 'olea-bulk-review-empty',
-        text: 'Nothing here to review right now.',
-      });
+      const resolvedAnything = this.counts.accepted + this.counts.edited + this.counts.rejected > 0;
+      // `[STY-0e]`: a receipt only where there is something to report — she
+      // opened the tab and resolved everything in it this sitting. Opening
+      // to an already-empty tab (the `bulk-review-empty` case) gets the
+      // plain honest-empty text unchanged, never a "0 accepted" tally.
+      if (resolvedAnything) {
+        this.renderCompletion(root);
+      } else {
+        root.createEl('p', {
+          cls: 'olea-bulk-review-empty',
+          text: BULK_REVIEW_EMPTY_TEXT,
+        });
+      }
       return;
     }
 
@@ -304,6 +338,26 @@ export class BulkReviewView extends ItemView {
     }
   }
 
+  /**
+   * `[STY-0e]` — Pass 2's completion state ("factual, brief, done"), as
+   * `ol-2x4` narrowed it: the tally and nothing else. No promise about when
+   * anything is next due (`ol-2x4` rejected the kit's own draft of that
+   * sentence as a scheduling claim the queue does not back) and no link
+   * back to what she rejected (rejected there too, as a pure kit addition
+   * absent from the brief).
+   */
+  private renderCompletion(root: HTMLElement): void {
+    const wrap = root.createDiv({ cls: 'olea-bulk-review-complete' });
+    wrap.createEl('h3', {
+      cls: 'olea-bulk-review-complete-heading',
+      text: BULK_REVIEW_COMPLETION_HEADING,
+    });
+    wrap.createDiv({
+      cls: 'olea-bulk-review-complete-tally',
+      text: bulkReviewCompletionTally(this.counts),
+    });
+  }
+
   /** The on-screen hint row for `[D-216]`'s four bindings — built from `bulk-review-keymap.ts`'s own `BULK_REVIEW_HINTS` so this row and `resolveBulkReviewKey` cannot drift apart (that module's own doc). Mirrors `review/view.ts`'s `hints` method's shape (keycap span + label span per entry). */
   private renderHints(root: HTMLElement): void {
     const row = root.createDiv({ cls: 'olea-bulk-review-hints' });
@@ -325,6 +379,8 @@ export class BulkReviewView extends ItemView {
       readonly stem: string;
       readonly conceptName: string;
       readonly conceptIds: readonly string[];
+      readonly correctAnswer: string;
+      readonly distractors: readonly string[];
     }[],
   ): void {
     const section = root.createDiv({ cls: 'olea-bulk-review-group' });
@@ -338,7 +394,14 @@ export class BulkReviewView extends ItemView {
       text: 'Accept the rest',
     });
     this.registerDomEvent(remainderBtn, 'click', () => {
-      void this.run((controller) => controller.acceptRemainder(sourcePath).then(() => undefined));
+      void this.run(undefined, async (controller) => {
+        const result = await controller.acceptRemainder(sourcePath);
+        // `[STY-0e]`: one call resolves many drafts, so it counts itself
+        // rather than fitting `run`'s single-outcome `kind` — only the ids
+        // that actually succeeded are receipted (`result.failed` stays
+        // pending and is still in the list on the next render).
+        this.counts.accepted += result.accepted.length;
+      });
     });
 
     const list = section.createDiv({ cls: 'olea-bulk-review-items' });
@@ -351,8 +414,33 @@ export class BulkReviewView extends ItemView {
         cls: 'olea-bulk-review-item',
         attr: { tabindex: '0', [ROW_DRAFT_ID_ATTR]: item.draftId },
       });
-      row.createDiv({ cls: 'olea-bulk-review-item-stem', text: item.stem });
-      row.createDiv({ cls: 'olea-bulk-review-item-concept', text: item.conceptName });
+      const body = row.createDiv({ cls: 'olea-bulk-review-item-body' });
+      // `[STY-0e]`: every real F3.3 draft is quiz-shaped today (this
+      // module's own `BulkReviewItemViewModel` doc) — Q&A/cloze marks would
+      // be unreachable by real data, so only the one type this cache ever
+      // produces gets one.
+      body.createDiv({ cls: 'olea-bulk-review-item-type', text: BULK_REVIEW_ITEM_TYPE_LABEL });
+      const content = body.createDiv({ cls: 'olea-bulk-review-item-content' });
+      content.createDiv({ cls: 'olea-bulk-review-item-stem', text: item.stem });
+      content.createDiv({ cls: 'olea-bulk-review-item-concept', text: item.conceptName });
+
+      // `[STY-0e]`: the pool she is actually judging — her answer isn't on
+      // trial here the way it is in review (F3.3's clearing-row/practice
+      // split, this file's own module doc); what she is checking is whether
+      // the drafted correct answer and its distractors are worth keeping.
+      // Absent, not empty, for a hypothetical draft with no distractors.
+      if (item.distractors.length > 0) {
+        const pool = content.createDiv({ cls: 'olea-bulk-review-item-pool' });
+        const correct = pool.createDiv({
+          cls: 'olea-bulk-review-item-option olea-bulk-review-item-option--correct',
+        });
+        correct.createSpan({ text: item.correctAnswer });
+        correct.createSpan({ cls: 'olea-bulk-review-item-option-mark', text: 'correct' });
+        for (const distractor of item.distractors) {
+          const option = pool.createDiv({ cls: 'olea-bulk-review-item-option' });
+          option.createSpan({ text: distractor });
+        }
+      }
 
       // `[D-216]` clause 2: the row's floor is a named origin in ordinary
       // words, always visible — rendered regardless of whether the
@@ -360,7 +448,7 @@ export class BulkReviewView extends ItemView {
       // it never claims the draft is supported by it. `[D-214]` / `ol-ymew`:
       // `sourceMarker` already carries the right register (reading vs. a
       // note she wrote), computed once per group in `render()` above.
-      const source = row.createDiv({ cls: 'olea-bulk-review-item-source' });
+      const source = content.createDiv({ cls: 'olea-bulk-review-item-source' });
       source.createSpan({ text: sourceMarker });
       // `[D-216]` clause 3/4: the passage stays one step away, opened on
       // request through the SAME affordance `review/view.ts` renders for an
@@ -380,30 +468,30 @@ export class BulkReviewView extends ItemView {
         this.registerDomEvent(peekBtn, 'click', () => openSource(conceptKey));
       }
 
-      const actions = row.createDiv({ cls: 'olea-bulk-review-item-actions' });
+      const actions = content.createDiv({ cls: 'olea-bulk-review-item-actions' });
 
       const acceptBtn = actions.createEl('button', {
-        cls: 'olea-bulk-review-action',
+        cls: 'olea-bulk-review-action olea-bulk-review-action--accept',
         text: 'Accept',
       });
       this.registerDomEvent(acceptBtn, 'click', () => {
-        void this.run((controller) => controller.accept(item.draftId));
+        void this.run('accepted', (controller) => controller.accept(item.draftId));
       });
 
       const editBtn = actions.createEl('button', {
-        cls: 'olea-bulk-review-action',
+        cls: 'olea-bulk-review-action olea-bulk-review-action--edit',
         text: 'Edit before saving',
       });
       this.registerDomEvent(editBtn, 'click', () => {
-        void this.run((controller) => controller.editBeforeSaving(item.draftId));
+        void this.run('edited', (controller) => controller.editBeforeSaving(item.draftId));
       });
 
       const rejectBtn = actions.createEl('button', {
-        cls: 'olea-bulk-review-action',
+        cls: 'olea-bulk-review-action olea-bulk-review-action--reject',
         text: 'Reject',
       });
       this.registerDomEvent(rejectBtn, 'click', () => {
-        void this.run((controller) => controller.reject(item.draftId));
+        void this.run('rejected', (controller) => controller.reject(item.draftId));
       });
     }
   }

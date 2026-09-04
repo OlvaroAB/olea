@@ -80,6 +80,21 @@ export interface BulkReviewItemViewModel {
    * field), never empty (`isDraftRecord` rejects an empty array).
    */
   readonly conceptIds: readonly string[];
+  /**
+   * `[STY-0e]` (`ol-l5og.18.5`): carried through from `DraftRecord.question`
+   * unchanged so `bulk-review-view.ts` can show the drafted item's own
+   * answer alongside its distractor pool — the same content the accepted
+   * instrument would show at first presentation, just visible up front
+   * here rather than behind a reveal, because the clearing row's whole
+   * point is judging a claim before it lands (F3.3). Every real draft this
+   * cache holds is quiz-shaped today (`types.ts`'s own doc on
+   * `DraftQuestion` — `draftQuizCardsForConcept` is the one generator
+   * feeding this cache), so `distractors` is never empty in production; a
+   * hypothetical future short-answer draft would carry it empty and the
+   * view renders no pool for that case rather than an empty one.
+   */
+  readonly correctAnswer: string;
+  readonly distractors: readonly string[];
 }
 
 export interface BulkReviewGroupViewModel {
@@ -168,6 +183,8 @@ export function buildBulkReviewGroups(
         conceptName: r.conceptName,
         createdAt: r.createdAt,
         conceptIds: r.conceptIds,
+        correctAnswer: r.question.correctAnswer,
+        distractors: r.question.distractors,
       })),
     });
   }

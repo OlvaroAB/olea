@@ -1,14 +1,15 @@
 /**
- * Regression guard for `ol-p6t03` (Q6.1/Q6.5), scoped to exactly what that bead
- * touched. Unlike `test/today/styles.spec.ts` and `test/gap/styles.spec.ts`, this
- * is NOT a drift guard over the whole surface — `bulk-review-view.ts` ships with no
- * authored styling at all (see `styles.css`'s "Bulk review triage" section header
- * for the argument), so there is no class-coverage set to check here. The one thing
- * that DOES need a permanent check is the one rule that section adds: without it,
- * the view's four buttons keep native Tab reachability but lose a visible ring the
- * moment the host resets a plain button's default outline — exactly the gap
- * `.olea-review-root :focus-visible` exists to close on the review tab, restated
- * here for a view with no other CSS to carry it.
+ * Regression guard for `ol-p6t03` (Q6.1/Q6.5) — the one rule the original,
+ * deliberately-unstyled section added: without it, the view's buttons keep
+ * native Tab reachability but lose a visible ring the moment the host resets
+ * a plain button's default outline. `[STY-0e]` (`ol-l5og.18.5`) gave the
+ * surface a real stylesheet, but this rule's own requirement — a visible
+ * ring on the branch-invariant accent, with a real fallback — is unchanged,
+ * so the check stays; only its accent read moved from an inline
+ * `var(--interactive-accent, #hex)` literal to the root's own
+ * `--olea-host-accent` indirection, matching every other one-off root in
+ * this file. A full class-coverage drift guard (`test/today/styles.spec.ts`'s
+ * shape) is a separate piece of work this bead did not add.
  */
 
 import { readFileSync } from 'node:fs';
@@ -32,11 +33,17 @@ describe('the bulk-review triage view restores a visible keyboard focus ring (ol
     expect(css).toMatch(/\.olea-bulk-review-root\s+:focus-visible\s*\{/);
   });
 
-  it('paints the ring with the branch-invariant accent, with a real fallback', () => {
+  it("paints the ring with the root's own accent variable", () => {
     const m = /\.olea-bulk-review-root\s+:focus-visible\s*\{([^}]*)\}/.exec(css);
     expect(m, 'the :focus-visible rule from the test above').not.toBeNull();
     const body = m?.[1] ?? '';
-    expect(body).toMatch(/outline:\s*2px solid var\(--interactive-accent,\s*#[0-9a-f]{6}\)/);
+    expect(body).toMatch(/outline:\s*2px solid var\(--olea-host-accent\)/);
+  });
+
+  it('declares --olea-host-accent on the root as the branch-invariant accent, with a real fallback', () => {
+    expect(css).toMatch(
+      /\.olea-bulk-review-root\s*\{[^}]*--olea-host-accent:\s*var\(--interactive-accent,\s*#[0-9a-f]{6}\)/,
+    );
   });
 
   it('every button the view builds is a real <button>, not a click-only div (native Tab reachability)', () => {

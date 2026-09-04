@@ -89,3 +89,49 @@ export function sourceMarkerText(
     ? `From a note you wrote, ${noteTitle}.`
     : `From your reading on ${noteTitle}.`;
 }
+
+/**
+ * `[STY-0e]` (`ol-l5og.18.5`) — the two remaining strings this view owns.
+ *
+ * **The empty state names what is here, never what is "waiting"
+ * (`bulk-review-view.ts`'s own module doc).** Shown whenever nothing is
+ * pending and nothing was resolved this sitting — the state the
+ * `bulk-review-empty` scenario captures before she has touched anything.
+ */
+export const BULK_REVIEW_EMPTY_TEXT = 'Nothing here to review right now.';
+
+/**
+ * **The completion state is a receipt, not a badge (F6.7).** F6.7 bans a
+ * standalone count of material she has *not yet met* — a debt with an
+ * implied target of zero. A tally of what she just decided is the opposite
+ * fact: material already met and already resolved, the same category F6.1
+ * permits for due work already hers. `ol-2x4`'s ruling on this exact screen
+ * (Pass 2's own completion state) rejected the kit's *"They first come up in
+ * tomorrow's review"* as a scheduling promise the queue (unbuilt) cannot
+ * back, and rejected *"Review the N you rejected"* as a pure kit addition
+ * absent from the brief — leaving, in the brief's own words, "the tally plus
+ * 'Factual, brief, done.'" This function is exactly that: only the
+ * non-zero outcomes, nothing else.
+ */
+export function bulkReviewCompletionTally(counts: {
+  readonly accepted: number;
+  readonly edited: number;
+  readonly rejected: number;
+}): string {
+  const parts: string[] = [];
+  if (counts.accepted > 0) parts.push(`${counts.accepted} accepted`);
+  if (counts.edited > 0) parts.push(`${counts.edited} edited`);
+  if (counts.rejected > 0) parts.push(`${counts.rejected} rejected`);
+  return `${parts.join(' · ')}.`;
+}
+
+export const BULK_REVIEW_COMPLETION_HEADING = 'Done.';
+
+/**
+ * The one item shape `draftQuizCardsForConcept` currently produces
+ * (`types.ts`'s own doc on `DraftQuestion`) — Q&A and cloze never reach this
+ * cache, so a type mark for either would be unreachable by real data.
+ * Kept as its own constant rather than a literal in the view so a second
+ * generator, when one exists, has one place to add its own label.
+ */
+export const BULK_REVIEW_ITEM_TYPE_LABEL = 'MCQ';
