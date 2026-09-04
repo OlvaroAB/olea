@@ -15,11 +15,13 @@ export const OLEA_COMMAND_CREATE_CARD = 'olea-create-card';
 export const OLEA_COMMAND_TODAY_OPEN = 'olea-today-open';
 /**
  * F7.7's "open Olea" (⌘⇧O). `ol-f77commands` left this unregistered because
- * it had no ruled destination; David's ruling settles it as another door to
- * the Today panel — see `register-commands.ts`'s module doc for the
- * reasoning. Kept as its own id, distinct from `OLEA_COMMAND_TODAY_OPEN`,
- * because it is a separate palette entry and a separate hotkey even though
- * both resolve to the same view.
+ * it had no ruled destination; David's ruling settled it as another door to
+ * the Today panel. **Amended by `[D-223]` (`ol-l5og.21` [HOME-2]): now opens
+ * Home**, the landing dashboard F6.10 ratifies — see `register-commands.ts`'s
+ * module doc for the reasoning. Kept as its own id, distinct from
+ * `OLEA_COMMAND_TODAY_OPEN` and `OLEA_COMMAND_HOME_OPEN`, because it is a
+ * separate palette entry and a separate hotkey even though it now resolves
+ * to the same view `OLEA_COMMAND_HOME_OPEN` does.
  */
 export const OLEA_COMMAND_OPEN = 'olea-open';
 /** `ol-2tyj`: opens the gap/coverage screen (F4.3, F4.5, F4.9, F4.10) — the first command-palette entry reaching `GapView`. */

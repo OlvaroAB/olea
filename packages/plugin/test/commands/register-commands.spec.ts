@@ -128,20 +128,28 @@ describe('buildOleaCommands', () => {
 
     expect(handlers.startReview).toHaveBeenCalledTimes(1);
     expect(handlers.createCard).toHaveBeenCalledTimes(1);
-    // "Open Olea" is David's ruling (ol-f77commands): another door onto the
-    // same Today panel, so it shares openToday rather than getting its own
-    // handler — asserted here as *two* calls to the one handler, not one
-    // call each to two different handlers.
-    expect(handlers.openToday).toHaveBeenCalledTimes(2);
+    expect(handlers.openToday).toHaveBeenCalledTimes(1);
     expect(handlers.openGap).toHaveBeenCalledTimes(1);
     expect(handlers.buildSession).toHaveBeenCalledTimes(1);
     expect(handlers.openBulkReview).toHaveBeenCalledTimes(1);
     expect(handlers.openRetrospective).toHaveBeenCalledTimes(1);
     expect(handlers.copyDiagnostics).toHaveBeenCalledTimes(1);
     expect(handlers.openRegistry).toHaveBeenCalledTimes(1);
-    expect(handlers.openHome).toHaveBeenCalledTimes(1);
+    // `[D-223]`: "Open Olea" now shares `openHome` rather than `openToday` —
+    // another door onto Home, asserted here as *two* calls to the one
+    // handler (once via OLEA_COMMAND_HOME_OPEN, once via OLEA_COMMAND_OPEN),
+    // not one call each to two different handlers.
+    expect(handlers.openHome).toHaveBeenCalledTimes(2);
     expect(handlers.openGrove).toHaveBeenCalledTimes(1);
     expect(handlers.openExplainBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Open Olea" falls back to `openToday` when no `openHome` handler is supplied (a caller that predates `[D-223]`)', () => {
+    const { openHome: _omitted, ...handlersWithoutHome } = fakeHandlers();
+    const commands = buildOleaCommands(handlersWithoutHome);
+    const byId = Object.fromEntries(commands.map((c) => [c.id, c]));
+    byId[OLEA_COMMAND_OPEN]?.callback?.();
+    expect(handlersWithoutHome.openToday).toHaveBeenCalledTimes(1);
   });
 
   it('"Explain something back" is registered once `[D-163]`\'s destination has a handler (ol-12gs) — historically absent while contextual AI had nowhere honest to go', () => {

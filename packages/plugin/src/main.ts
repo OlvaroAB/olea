@@ -1006,17 +1006,24 @@ export default class OleaPlugin extends Plugin {
       });
     });
 
-    // `ol-0r92.17` (F8.8, `[D-134]` Q1): Home hosts every standing
-    // retrospective offer, unfiltered — `retrospective/offer-card.ts`'s own
-    // doc names this exact shape. `openRetrospective` is supplied here
-    // (navigation), never by `createLocalHomeProvider` (data) — see
-    // `home/provider.ts`'s module doc for the split.
+    // `[D-223]` (F6.10, `ol-l5og.21` [HOME-2]): Home is now the landing
+    // dashboard — the composed session (F6.4, via the SAME session-builder
+    // provider `VIEW_TYPE_OLEA_SESSION` below uses) plus F8.1's per-course
+    // coverage strips (via the SAME grove provider `VIEW_TYPE_OLEA_GROVE`
+    // below uses), never a second computation of either. `scheduler` and
+    // `servedRelationEdges()` are the identical instance/thunk every other
+    // reader of them already shares — see `home/provider.ts`'s own module
+    // doc. `openRetrospective`/`openSessionBuilder`/`openGrove` are supplied
+    // here (navigation), never by `createLocalHomeProvider` (data) — the
+    // same split `ol-0r92.17` already drew for `openRetrospective`.
     this.registerView(VIEW_TYPE_OLEA_HOME, (leaf) => {
       const provider = createLocalHomeProvider({
         vault,
         deviceId,
         settingsHost: this,
         now: () => new Date(),
+        scheduler,
+        relations: () => this.servedRelationEdges(),
         // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
         // ingestion tick's fresh queue state and a later course-setup
         // confirmation both reach a Home leaf built before either happened —
@@ -1028,6 +1035,12 @@ export default class OleaPlugin extends Plugin {
         load: () => provider.load(),
         openRetrospective: () => {
           void this.revealRetrospectiveView();
+        },
+        openSessionBuilder: () => {
+          void this.revealSessionBuilderView(undefined);
+        },
+        openGrove: () => {
+          void this.revealGroveView();
         },
         dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
       });
@@ -2684,11 +2697,16 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * Opens Home (F8.8, `[D-134]` Q1, `ol-0r92.17`), or reveals the one
-   * already open, in the right sidebar — the same slot `TodayView` and
-   * `GapView` occupy, since this is a glance-and-return companion rather
-   * than a browse-and-edit tab (`RegistryView`'s own reasoning for its
-   * choice, the other way).
+   * Opens Home (F6.10, `[D-223]`, `ol-l5og.21` [HOME-2]), or reveals the one
+   * already open, in a main-pane tab — the same slot `RegistryView`/
+   * `GroveView` occupy, not the right sidebar this method used before
+   * `[D-223]`. Home was a glance-and-return companion when it hosted only
+   * the F8.8 standing offer; it is now the landing dashboard `[D-033]`'s
+   * front-door ruling attaches to, and a sidebar strip cannot carry F6.10's
+   * headline plus a row per running course at any honest width — the same
+   * "sidebar width forces a simplification the container chose, not the
+   * design" reasoning `revealGapView`'s own module doc already states for
+   * choosing a tab over a sidebar.
    *
    * Always refreshes on the way out (`ol-h3wy`'s pattern): a dismiss from
    * the grove, or an assessment that just passed, must not need a manual
@@ -2697,7 +2715,7 @@ export default class OleaPlugin extends Plugin {
   private async revealHomeView(): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_HOME);
-    const leaf = existing[0] ?? workspace.getRightLeaf(false);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
     if (leaf === null || leaf === undefined) return;
     if (existing.length === 0) {
       await leaf.setViewState({ type: VIEW_TYPE_OLEA_HOME, active: true });

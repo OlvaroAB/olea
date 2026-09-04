@@ -18,6 +18,17 @@
  * that need a front door — the oracle, explain-back — inherit a settled
  * answer instead of re-litigating it.
  *
+ * **Amended by `[D-223]` (F7.7, `ol-l5og.21` [HOME-2]): "open Olea" now
+ * opens Home, not the Today panel.** `[D-033]`'s own argument was never
+ * about which VIEW renders the answer — only that the product holds one
+ * answer, singular. `[D-223]` moves the composed session (F6.4) onto Home
+ * as its headline and rules Home the landing dashboard; ⌘⇧O follows that
+ * move so it still lands on the one door, and ⌥1 is unchanged (it still
+ * opens the Today panel, which now holds the session LIST rather than the
+ * landing itself). `OLEA_COMMAND_OPEN`'s callback below reads
+ * `handlers.openHome`, falling back to `handlers.openToday` only for a
+ * caller that predates this amendment.
+ *
  * **"Explain something back" now has a real destination (`[D-163]`,
  * `ol-12gs`).** The paragraph below described why it could not be given one
  * honestly before `[D-163]` named the surface — kept for the history, since
@@ -207,13 +218,16 @@ export function buildOleaCommands(handlers: OleaCommandHandlers): readonly OleaC
     },
     {
       id: OLEA_COMMAND_OPEN,
-      // Deliberately the same callback as OLEA_COMMAND_TODAY_OPEN, not a
-      // parallel handler: David's ruling makes "open Olea" and "open the
-      // Today panel" the same action reached by two doors, so the two
-      // commands share one destination rather than one drifting from the
-      // other over time.
+      // `[D-223]` (F7.7, `ol-l5og.21` [HOME-2]) repoints "open Olea" at
+      // Home rather than the Today panel — Home is now the landing screen
+      // `[D-033]`'s front-door ruling attaches to (the ruling itself was
+      // never about which VIEW answers, only that the answer is singular;
+      // see `home/view.ts`'s own module doc). `handlers.openHome` falls
+      // back to `handlers.openToday` only for a caller that predates this
+      // amendment and supplies no `openHome` handler at all — every real
+      // caller (`main.ts`) supplies both.
       name: 'Olea: Open Olea',
-      callback: handlers.openToday,
+      callback: handlers.openHome ?? handlers.openToday,
       hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'O' }],
     },
     {
