@@ -1,12 +1,25 @@
 /**
- * `@auto-web` — F6.1's front-door promise, from `features/F6-today.md`'s
- * "New and due are different numbers" and "The panel as a surface" blocks
- * (both previously `@manual` only):
+ * `@auto-web` — F6.1's "New and due are different numbers" and "The panel as
+ * a surface" blocks (both previously `@manual` only):
  *
  *   - "Start review is the one way in" — given items are due, exactly one
  *     primary action exists and it is the review entry point.
  *   - "all three things are on the panel at once" — the due count, the new
  *     count and that one action render together, and nothing else does.
+ *
+ * **This file's premise has narrowed, not moved off screen (`[D-223]`,
+ * `ol-l5og.22` [HOME-3]).** `[D-033]`'s "front door" ruling — one way in,
+ * reached through the composed session rather than around it — now attaches
+ * to Home (F6.10), which is where she lands and where a genuine "the one way
+ * in" claim belongs. What survives on Today is narrower and still true: this
+ * panel's own review button is F6's heading note's third named thing, "the
+ * review entry point," and `showsStartReviewAction`'s doc in `copy.ts` is
+ * explicit that the reason it must never disappear is now that one — an
+ * entry point with no action when nothing is due is a hole in the screen —
+ * rather than `[D-033]`'s front-door reasoning. This file's two tests below
+ * still hold at face value (one action, all three things together) because
+ * neither ever asserted Today was the product's only door; they asserted
+ * what is true on THIS panel, which `[D-223]` left unchanged.
  *
  * `today-due` is the only wired state with a non-zero, non-null due total
  * over the untouched fixture vault (`today-scenarios.ts`): every instrument
@@ -21,6 +34,12 @@
  * competing claim on screen — the mastery, scope, insights and rhythm
  * sections all render nothing here, which this file asserts rather than
  * assumes.
+ *
+ * **The due count is read off `.olea-today-note`, not a `.olea-today-count`
+ * element.** `[D-223]` folded the numeral into one plain sentence
+ * (`copy.ts`'s `dueTodaySentence`: `"${total} due today"`) under a
+ * `.olea-today-due-label` "Due" eyebrow — same file `today-panel.spec.ts`
+ * documents this for.
  */
 import { expect, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -45,11 +64,14 @@ test('today-due: due count, new count and the one action render together, and no
   await gotoState(page, 'today', 'today-due', 'obsidian-dark');
   const body = frame(page).locator('.olea-today-body');
 
-  // The due headline: a real, positive number (today-panel.spec.ts already
-  // covers `> 0`; this file's job is co-presence with the new line and the
-  // action, not the number itself).
-  const dueCount = await body.locator('.olea-today-count').textContent();
-  expect(Number(dueCount)).toBeGreaterThan(0);
+  // The due sentence: a real, positive number, stated in prose now rather
+  // than a separate numeral element (today-panel.spec.ts already covers the
+  // `> 0` claim in depth; this file's job is co-presence with the new line
+  // and the action, not the number itself).
+  const dueNote = (await body.locator('.olea-today-note').textContent())?.trim() ?? '';
+  const dueMatch = dueNote.match(/^(\d+) due today$/);
+  expect(dueMatch, `expected a "N due today" sentence, got "${dueNote}"`).not.toBeNull();
+  expect(Number(dueMatch?.[1])).toBeGreaterThan(0);
 
   // The new-count line: present, and it names "new" (copy.ts's
   // `newCountSentence` — singular/plural wording is that module's own

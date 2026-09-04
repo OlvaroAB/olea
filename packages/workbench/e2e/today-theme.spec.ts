@@ -95,12 +95,19 @@ for (const setId of REAL_THEME_SETS) {
       .evaluate((el) => getComputedStyle(el).backgroundColor);
     const groundLuminance = luminance(hostBodyBg);
 
-    // The header label and the due-count label paint no ground of their
-    // own, nor does `.olea-today-root`/`-header`/`-body` above them — they
-    // read against the host body's ground computed above.
+    // The header label and the due section's eyebrow paint no ground of
+    // their own, nor does `.olea-today-root`/`-header`/`-body` above them —
+    // they read against the host body's ground computed above.
+    // `.olea-today-due-label` ("Due") replaces the old
+    // `.olea-today-count-label` ("due today") as the label needing this
+    // check — `[D-223]` (`ol-l5og.22` [HOME-3]) removed the 34px
+    // `.olea-today-count` numeral this label used to sit beside and gave
+    // the due section the same eyebrow treatment mastery/scope/insights/
+    // rhythm already use (`--olea-host-brand`, same as `.olea-today-mastery-
+    // label`).
     const groundless = [
       frame(page).locator('.olea-today-header-label'),
-      frame(page).locator('.olea-today-count-label'),
+      frame(page).locator('.olea-today-due-label'),
     ];
     for (const label of groundless) {
       const color = await label.evaluate((el) => getComputedStyle(el).color);

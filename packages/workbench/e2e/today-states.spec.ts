@@ -24,6 +24,19 @@ async function recomputedRowText(page: Page): Promise<string> {
 }
 
 /**
+ * The leading number out of `.olea-today-note`'s "N due today" sentence —
+ * `[D-223]` (`ol-l5og.22` [HOME-3]) folded the old `.olea-today-count`
+ * numeral into this one prose sentence; see `today-panel.spec.ts`'s own
+ * module doc for the full before/after. Same helper that file defines for
+ * itself.
+ */
+async function dueNoteCount(page: Page): Promise<string> {
+  const noteText = (await frame(page).locator('.olea-today-note').textContent())?.trim() ?? '';
+  const match = noteText.match(/^(\d+) due today$/);
+  return match?.[1] ?? '';
+}
+
+/**
  * F6.6's own forbidden list, read directly off the manual scenario's wording
  * ("nothing about the re-entry screen implied it had expired or been
  * discarded"). Narrow on purpose, same discipline `today-voice.spec.ts`'s
@@ -48,7 +61,7 @@ test.describe('today-after-reentry (F6.6)', () => {
     page,
   }) => {
     await gotoState(page, 'today', 'today-after-reentry', 'obsidian-dark');
-    const countText = (await frame(page).locator('.olea-today-count').textContent())?.trim();
+    const countText = await dueNoteCount(page);
     expect(Number(countText)).toBeGreaterThan(0);
 
     // `refreshedAfterWrite: true` for this state (same family as
@@ -65,9 +78,7 @@ test.describe('today-after-reentry (F6.6)', () => {
     page,
   }) => {
     await gotoState(page, 'today', 'today-after-reentry', 'obsidian-dark');
-    const texts = await frame(page)
-      .locator('.olea-today-note, .olea-today-new, .olea-today-count-label')
-      .allTextContents();
+    const texts = await frame(page).locator('.olea-today-note, .olea-today-new').allTextContents();
     for (const text of texts) {
       expect(text, `"${text}" reads as if the remaining backlog were lost or expired`).not.toMatch(
         F6_6_FORBIDDEN_PATTERN,
@@ -81,7 +92,7 @@ test.describe('today-encouragement-off (F6.8)', () => {
     page,
   }) => {
     await gotoState(page, 'today', 'today-encouragement-off', 'obsidian-dark');
-    const countText = await frame(page).locator('.olea-today-count').textContent();
+    const countText = await dueNoteCount(page);
     expect(Number(countText)).toBeGreaterThan(0);
 
     // The rhythm-quiet finding — same composition `today-rhythm-quiet` uses.
@@ -101,7 +112,7 @@ test.describe('today-encouragement-off (F6.8)', () => {
     await gotoState(page, 'today', 'today-encouragement-off', 'obsidian-dark');
     const texts = await frame(page)
       .locator(
-        '.olea-today-note, .olea-today-new, .olea-today-insight-text, .olea-today-insight-scope, .olea-today-count-label',
+        '.olea-today-note, .olea-today-new, .olea-today-insight-text, .olea-today-insight-scope',
       )
       .allTextContents();
     expect(texts.length).toBeGreaterThan(0);
