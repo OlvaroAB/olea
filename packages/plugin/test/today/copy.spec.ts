@@ -14,6 +14,7 @@ import {
   allTodayStrings,
   conceptCountLabel,
   courseCountLabel,
+  DUE_LABEL,
   DUE_UNAVAILABLE,
   dueTodaySentence,
   earlyPullSentence,
@@ -145,6 +146,29 @@ describe('dueTodaySentence and courseCountLabel', () => {
     expect(dueTodaySentence(1)).toBe('1 due today');
     expect(dueTodaySentence(23)).toBe('23 due today');
     expect(courseCountLabel(12)).toBe('12');
+  });
+});
+
+describe('the due line is one plain sentence, never a numeral-plus-label pair (F6 heading / F6.1, [D-223], ol-l5og.22 [HOME-3])', () => {
+  // Scenario: features/F6-today.md, "F6 heading / F6.1 — the due count is
+  // never drawn as this panel's headline". Before this bead `view.ts` split
+  // `dueTodaySentence`'s own fact into a 34px numeral span plus a separate
+  // label span — a rendering choice this copy-level test cannot see, which
+  // is exactly why the fix also had to remove the two-span markup in
+  // `view.ts` (see `test/today/styles.spec.ts`, which asserts no class for
+  // either survives in `styles.css`). What this test can hold onto: none of
+  // the three due states is, or contains, a bare numeral a renderer could
+  // isolate and blow up on its own.
+  it('DUE_UNAVAILABLE, NOTHING_DUE and dueTodaySentence are each a single sentence, not a bare number', () => {
+    for (const text of [DUE_UNAVAILABLE, NOTHING_DUE, dueTodaySentence(8), dueTodaySentence(0)]) {
+      expect(text).not.toMatch(/^\d+$/);
+      expect(text.split('\n')).toHaveLength(1);
+    }
+  });
+
+  it("DUE_LABEL is the due section's eyebrow, matching the mastery/scope/insights/rhythm sections, and is in the tested corpus", () => {
+    expect(DUE_LABEL).toBe('Due');
+    expect(allTodayStrings()).toContain(DUE_LABEL);
   });
 });
 
@@ -815,16 +839,20 @@ describe('showsTermDatesPointer — the F7.2 quiet-pointer trigger ([D-147])', (
   });
 });
 
-describe('showsStartReviewAction — the front door does not disappear at zero (ol-h3wy)', () => {
+describe('showsStartReviewAction — the review entry point does not disappear at zero (ol-h3wy; reasoning updated by [D-223] / ol-l5og.22 [HOME-3])', () => {
   it('shows the action when there is a real, positive due count', () => {
     expect(showsStartReviewAction({ total: 3 })).toBe(true);
   });
 
-  it('still shows the action at a real, computed zero — the regression this bead fixes', () => {
+  it('still shows the action at a real, computed zero — the regression this bead fixes, unchanged by the headline moving to Home', () => {
     // Before ol-h3wy, `view.ts` rendered `NOTHING_DUE` and returned without
     // ever building the action button when `due.total === 0`. That made the
     // Today panel's one entry point vanish at exactly the moment David's
-    // ruling (`ol-f77commands`) made this panel Olea's front door.
+    // ruling (`ol-f77commands`) made this panel Olea's front door. `[D-223]`
+    // later moved front-door status itself to Home (F6.10) — the button's
+    // presence at zero due is unchanged (see F6-today.md's "F6 heading note"
+    // section), because the reason underneath survives the move: an entry
+    // point with no action at zero due is still a hole in the screen.
     expect(showsStartReviewAction({ total: 0 })).toBe(true);
   });
 

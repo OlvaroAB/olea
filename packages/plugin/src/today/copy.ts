@@ -1,6 +1,17 @@
 /**
  * Every user-facing string the Today panel can render (F6.1, P2-T09).
  *
+ * **This panel is no longer the landing screen (`[D-223]`, `ol-l5og.22`
+ * [HOME-3]).** Olea now opens on Home (F6.10), which carries the composed
+ * session as the one headline; this panel holds the session list she is
+ * working, the per-course answer (F6.4), and the review entry point — F6's
+ * own heading note, verbatim. Nothing F6.1 says about the due count changed;
+ * what changed is that this panel had been rendering that count as if it
+ * were the headline F6.1 always said belonged to the suggested session, and
+ * `[D-223]` gives that headline a real home. See `DUE_LABEL` and
+ * `dueTodaySentence`'s own docs for what moved on screen.
+ *
+
  * Kept in one module, away from the DOM, for the reason `docs`'s §8.2 record
  * keeps proving: **a design mock is not a spec, and its body copy is where
  * inventions hide.** The Pass 1 kit (`docs/design/pass1/ui_kits/olea-plugin/
@@ -85,6 +96,15 @@ export const TODAY_VIEW_TITLE = 'Today';
 /** Sits beside the sprig mark in the pane header. */
 export const TODAY_HEADER_LABEL = 'Olea';
 
+/**
+ * The due section's eyebrow (`[D-223]`, `ol-l5og.22` [HOME-3]) — the same
+ * small mono-caps treatment `MASTERY_LABEL`/`SCOPE_LABEL`/`INSIGHTS_LABEL`/
+ * `RHYTHM_LABEL` already use for their own sections, given to this one now
+ * that it is no longer set apart by a 34px numeral. See
+ * `showsStartReviewAction`'s doc for why the numeral had to go.
+ */
+export const DUE_LABEL = 'Due';
+
 /** The label beside the due count. Reads correctly at any number, including one. */
 export const DUE_TODAY_LABEL = 'due today';
 
@@ -121,6 +141,21 @@ export const START_REVIEW = 'Start review';
  * this does not put a new claim on screen, it just stops taking the one
  * button away.
  *
+ * **This was reasoned as "the front door never disappears"; it is now "the
+ * review entry point never disappears," and the difference is not just
+ * wording (`[D-223]`, `ol-l5og.22` [HOME-3]).** `[D-033]`'s front-door
+ * ruling — "the review view is reached through it, not around it" — now
+ * attaches to the composed session on **Home** (F6.10), which is where she
+ * lands and where `[D-033]`'s single-answer argument actually bites. Today
+ * is a surface she is worked *within*, reached from Home or `⌥1` (F7.7), and
+ * this button is F6's own heading note's third named thing: "the review
+ * entry point." The rule below is unchanged because the reason underneath it
+ * survives the move intact — a screen whose only action vanishes exactly
+ * when nothing is due is still a screen with a hole in it, whichever door she
+ * came in through. The due count itself moved out of headline weight for the
+ * same reason `DUE_LABEL` exists now (F6.1: "counts... are never the
+ * headline — the headline is the suggested session").
+ *
  * Deliberately **not** extended to `due === null` ("cannot count what's
  * due"). That is a different, harder claim than "zero due", and whether
  * offering a session against a vault Today itself could not read is honest
@@ -131,7 +166,21 @@ export function showsStartReviewAction(due: { readonly total: number } | null): 
   return due !== null;
 }
 
-/** `{n} due today`'s number half is rendered separately; this is the whole line for a screen reader. */
+/**
+ * The whole due line, at ordinary body weight — `8 due today`.
+ *
+ * **Rendered on screen now, not only read to a screen reader (`[D-223]`,
+ * `ol-l5og.22` [HOME-3]).** Before this bead the visible pane split this same
+ * fact into a 34px coloured numeral plus a separate label span — the RECHECK
+ * finding (`docs/design/RECHECK-passes-1-5-vs-rulings.md`) that a "N due
+ * today" numeral reads as this panel's headline, which F6.1 forbids
+ * outright: *"They are never the headline — the headline is the suggested
+ * session (F6.4)."* `[D-223]` gives that headline a home (Home's own
+ * composed-session headline, F6.10) and this function's return value is now
+ * what the pane actually draws for the due count: one sentence, the same
+ * visual weight as `NOTHING_DUE`/`DUE_UNAVAILABLE` beside it, so which of the
+ * three is true is the only thing that changes on screen.
+ */
 export function dueTodaySentence(total: number): string {
   return `${total} ${DUE_TODAY_LABEL}`;
 }
@@ -834,6 +883,7 @@ export function allTodayStrings(): readonly string[] {
   return [
     TODAY_VIEW_TITLE,
     TODAY_HEADER_LABEL,
+    DUE_LABEL,
     DUE_TODAY_LABEL,
     NOTHING_DUE,
     DUE_UNAVAILABLE,

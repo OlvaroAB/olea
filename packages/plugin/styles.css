@@ -956,8 +956,37 @@ button.olea-review-mcq-option:hover {
   padding: 18px 16px 16px;
 }
 
-/* The "nothing due" and "cannot count yet" lines. Same treatment: neither is
-   an error, and neither should read as one. */
+/* ---- The due section (`[D-223]`, `ol-l5og.22` [HOME-3]) ----
+
+   No headline rule lives here on purpose. `.olea-today-headline`/
+   `.olea-today-count`/`.olea-today-count-label` — a 34px coloured numeral
+   beside a label — drew the due total as this pane's headline, which F6.1
+   forbids outright ("counts... are never the headline") and which the
+   RECHECK finding flagged against this exact rendering. `[D-223]` moved the
+   real headline (the composed session) to Home (F6.10); removed here along
+   with the view code that drew it, never left as dead CSS — the same
+   discipline the ladder's own history note above states for the strip it
+   replaced. */
+
+.olea-today-due {
+  margin-bottom: 4px;
+}
+
+.olea-today-due-label {
+  font-family: var(--olea-host-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--olea-host-brand);
+  margin-bottom: 10px;
+}
+
+/* The "N due today", "nothing due" and "cannot count yet" lines. Same
+   treatment for all three: neither of the honest-absence states is an
+   error, and the positive count is no longer set apart from them either —
+   which of the three is true is the only thing that still changes on
+   screen. */
 .olea-today-note {
   font-size: 13px;
   line-height: 1.5;
@@ -965,34 +994,13 @@ button.olea-review-mcq-option:hover {
   margin-bottom: 18px;
 }
 
-.olea-today-headline {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-  margin-bottom: 16px;
-}
-
-.olea-today-count {
-  font-size: 34px;
-  line-height: 1;
-  font-weight: 500;
-  color: var(--olea-host-attention);
-}
-
-.olea-today-count-label {
-  font-size: 14px;
-  line-height: 1;
-  color: var(--olea-host-text);
-}
-
-/* How many of the due count she has never seen. Muted and small: it qualifies
-   the headline above it, it is not a second headline, and it must not compete
-   with the one attention colour on this pane. */
+/* How many of the due count she has never seen. Muted and small, directly
+   under the due sentence now that neither one is a headline. */
 .olea-today-new {
   font-size: 13px;
   line-height: 1.4;
   color: var(--olea-host-muted);
-  margin-top: -10px;
+  margin-top: -14px;
   margin-bottom: 16px;
 }
 

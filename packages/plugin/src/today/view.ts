@@ -9,6 +9,22 @@
  * runtime outside a real host, so the logic worth testing is deliberately
  * somewhere it can run.
  *
+ * **Not the landing screen (`[D-223]`, `ol-l5og.22` [HOME-3]).** Olea opens
+ * on Home now (F6.10), which carries the composed session as its one
+ * headline. This pane is the surface she is *in* while working the list:
+ * `renderDue` draws the session list she is working (the due queue) and the
+ * review entry point; nothing here composes or repeats Home's headline — see
+ * `renderDue`'s own doc for what specifically moved off this screen and why.
+ * F6.4's other named half, **the per-course answer** (the same ranking with
+ * the allocation set aside, for a course she has already chosen), has no
+ * rendering anywhere on this pane — `renderScope`/`renderMastery` below are
+ * F6.2's *reading* of where she stands per course, a different clause and a
+ * different computation, not F6.4's per-course session. Left unbuilt rather
+ * than approximated by relabelling F6.2's rows; a real per-course answer
+ * needs its own call into the session-builder provider with a course filter
+ * (the same provider `home/provider.ts` already calls unfiltered for its own
+ * headline) and its own bead — see this bead's close evidence.
+ *
  * **This pane does not force a theme branch, and that is why it needs none of
  * `review/view.ts`'s theme machinery.** F2.4's dark-by-default is written about
  * the *review session*, which takes the whole tab and renders dark in either
@@ -51,8 +67,9 @@ import type { DisputeSheet, TodayContestSupport } from './contest.js';
 import {
   conceptCountLabel,
   courseCountLabel,
-  DUE_TODAY_LABEL,
+  DUE_LABEL,
   DUE_UNAVAILABLE,
+  dueTodaySentence,
   earlyPullSentence,
   effortShareClause,
   INSIGHTS_LABEL,
@@ -718,40 +735,56 @@ export class TodayView extends ItemView {
     button.addEventListener('click', () => this.deps.termDatesAsk?.openSettings());
   }
 
+  /**
+   * The session list she is working (F6 heading note; `[D-223]`, `ol-l5og.22`
+   * [HOME-3]).
+   *
+   * **No headline treatment left here on purpose.** Before this bead the due
+   * total drew as a 34px `.olea-today-count` beside a small label — the exact
+   * shape F6.1 forbids ("counts... are never the headline — the headline is
+   * the suggested session") and the RECHECK finding this bead closes
+   * (`docs/design/RECHECK-passes-1-5-vs-rulings.md`). `[D-223]` gives that
+   * headline a home on Home's own composed session (F6.10); what is left here
+   * is the three states this section has always had — cannot count, nothing
+   * due, N due today — now drawn at the SAME visual weight as one another via
+   * one shared `.olea-today-note` treatment, under one `DUE_LABEL` eyebrow
+   * matching the mastery/scope/insights/rhythm sections below it. Which of
+   * the three is true is the only thing that still changes on screen.
+   */
   private renderDue(parent: HTMLElement, vm: TodayViewModel): void {
-    // `due === null` is "we cannot count yet", never a zero — see
-    // olea-core's today/panel.ts. The two states render differently on
-    // purpose, because they are different statements.
-    if (vm.due === null) {
-      parent.createDiv({ cls: 'olea-today-note', text: DUE_UNAVAILABLE });
-      return;
-    }
+    const section = parent.createDiv({ cls: 'olea-today-due' });
+    section.createDiv({ cls: 'olea-today-due-label', text: DUE_LABEL });
 
-    if (vm.due.total === 0) {
-      parent.createDiv({ cls: 'olea-today-note', text: NOTHING_DUE });
+    // `due === null` is "we cannot count yet", never a zero — see
+    // olea-core's today/panel.ts. The three states render at the same
+    // weight now, but they remain different statements.
+    if (vm.due === null) {
+      section.createDiv({ cls: 'olea-today-note', text: DUE_UNAVAILABLE });
+    } else if (vm.due.total === 0) {
+      section.createDiv({ cls: 'olea-today-note', text: NOTHING_DUE });
     } else {
-      const headline = parent.createDiv({ cls: 'olea-today-headline' });
-      headline.createSpan({ cls: 'olea-today-count', text: String(vm.due.total) });
-      headline.createSpan({ cls: 'olea-today-count-label', text: DUE_TODAY_LABEL });
+      section.createDiv({ cls: 'olea-today-note', text: dueTodaySentence(vm.due.total) });
 
       // How many of that count she has never seen (F6.1). Absent, not zeroed,
       // when none are — see `newCountSentence`.
       const newLine = newCountSentence(vm.due.newCount);
       if (newLine !== null) {
-        parent.createDiv({ cls: 'olea-today-new', text: newLine });
+        section.createDiv({ cls: 'olea-today-new', text: newLine });
       }
 
-      const list = parent.createDiv({ cls: 'olea-today-courses' });
+      // The list she is working (F6 heading note) — per-course rows, from
+      // her vault, never from `copy.ts`.
+      const list = section.createDiv({ cls: 'olea-today-courses' });
       for (const course of vm.due.courses) {
         this.renderCourseRow(list, course);
       }
     }
 
-    // Kept even at zero due (ol-h3wy): this panel is Olea's front door
-    // (David's ruling, `ol-f77commands`) — "the review view is reached
-    // through it, not around it" — and a front door with no action when
-    // nothing is due is a front door that disappears. `showsStartReviewAction`
-    // is the tested decision; see `copy.ts`.
+    // Kept even at zero due (ol-h3wy): this is the review entry point F6's
+    // heading note names (`[D-223]` moved "front door" status itself to
+    // Home — see `showsStartReviewAction`'s own doc in `copy.ts`), and an
+    // entry point with no action when nothing is due is an entry point that
+    // disappears. `showsStartReviewAction` is the tested decision.
     if (showsStartReviewAction(vm.due)) {
       const action = parent.createEl('button', {
         cls: 'olea-today-primary-action',
