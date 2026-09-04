@@ -315,3 +315,86 @@ export async function createHostFrame(
     },
   };
 }
+
+export interface ModalHostCascade {
+  /**
+   * Puts `theme-dark`/`theme-light` directly on `host` — an ordinary
+   * descendant-combinator match for `.theme-light .olea-explain-back` etc. in
+   * `plugin-styles.css`, since `host` really is an ancestor of whatever a
+   * `Modal` appends into it (`obsidian-shim/index.ts`'s `Modal.open()`). No
+   * shadow boundary, no scoping trick: unlike the theme sheet below, nothing
+   * about the plugin's own CSS or this class needs isolating from the chrome.
+   */
+  setMode(mode: 'dark' | 'light'): void;
+}
+
+/**
+ * `ol-96hn` [WBX-20]: gives a `Modal` (`obsidian-shim/index.ts`) real product
+ * CSS instead of `workbench.css`'s own generic `.wb-modal-host .modal-content
+ * button` fallback chrome. Real Obsidian overlays a `Modal` above the WHOLE
+ * app window, never one pane, which is why the shim mounts it at
+ * `[data-wb-modal-host]` — a SIBLING of `[data-wb-surface]`, in the TOP
+ * document — rather than inside the iframe `createHostFrame` above builds.
+ * That document never carried `plugin-styles.css` or a theme at all before
+ * this function, which is the whole bug: nothing an `.olea-explain-back` (or
+ * any other Modal-based view's) rule targets was ever present for it to match.
+ *
+ * **Deliberately narrower than `createHostFrame`'s cascade, and the narrowing
+ * is the point, not a shortcut:**
+ *
+ * - **Only the Obsidian baseline (`baselineHref`, i.e. `obsidian-default.css`
+ *   — see `themes/index.ts`'s `BASELINE_SHEET`), never a community theme.**
+ *   This file's own module doc above is *why* the iframe boundary exists at
+ *   all: a community theme's component rules sit on BARE ELEMENT selectors
+ *   that reach everything in whatever document they are loaded into —
+ *   `vendor/things/theme.css`'s `body:not(.default-font-color) strong` is the
+ *   one that hit the sidebar's own `<strong>` before `ol-mioe` put the
+ *   product in its own document. Loading a community theme into the TOP
+ *   document a second time, for the modal's sake, would reopen exactly that
+ *   regression against `.wb-sidebar`/`.wb-inspector`/`.wb-notices`, which
+ *   live in THIS document. `obsidian-default.css` carries no such rule —
+ *   verified before writing this: every selector in it is `.theme-dark { ... }`
+ *   / `.theme-light { ... }`, a custom-property declaration block, nothing
+ *   element-scoped (`test/modal-host-cascade.spec.ts` guards this staying
+ *   true) — so it is the only theme sheet safe to load here.
+ * - **The plugin's own stylesheet (`pluginStylesHref`) IS loaded in full**,
+ *   unlike the theme: every selector in `plugin-styles.css` is scoped under an
+ *   `.olea-*` class (or a class-qualified element selector, e.g.
+ *   `button.olea-review-mcq-option`) — verified by grep before writing this —
+ *   so it cannot reach `workbench.css`'s `.wb-*`-named chrome regardless of
+ *   which document it is loaded into.
+ * - **A Modal always renders in the Obsidian baseline's colours, never a
+ *   community theme's**, regardless of which `VariableSet` the iframe
+ *   currently shows (`themes/index.ts`). A known, documented gap rather than
+ *   a silent mismatch: nothing here claims a `Modal` under `things-dark`
+ *   looks like Things, only that it looks like real Obsidian in the current
+ *   light/dark branch. Filed as follow-up on `ol-96hn` if community-theme
+ *   fidelity inside a modal is ever needed.
+ *
+ * Called once from `main.ts`'s `main()`, mirroring `createHostFrame`'s own
+ * one-time setup; `setMode` is then called from `render()` next to
+ * `applyVariableSet(set, frame)`, passing the same `VariableSet.mode`, so the
+ * modal's branch tracks the iframe's.
+ */
+export async function loadModalHostCascade(
+  host: HTMLElement,
+  pluginStylesHref: string,
+  baselineHref: string,
+): Promise<ModalHostCascade> {
+  const doc = host.ownerDocument;
+  const baseline = styleNode(doc, baselineHref);
+  const plugin = styleNode(doc, pluginStylesHref);
+  // Cascade order matches `createHostFrame`'s: the baseline supplies
+  // Obsidian's own variables, the plugin's stylesheet maps them to its
+  // `--olea-host-*` roles second.
+  doc.head.appendChild(baseline.node);
+  doc.head.appendChild(plugin.node);
+  await Promise.all([baseline.ready, plugin.ready]);
+
+  return {
+    setMode(mode: 'dark' | 'light'): void {
+      host.classList.remove('theme-dark', 'theme-light');
+      host.classList.add(mode === 'dark' ? 'theme-dark' : 'theme-light');
+    },
+  };
+}

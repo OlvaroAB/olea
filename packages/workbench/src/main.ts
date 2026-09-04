@@ -65,7 +65,7 @@ import {
 } from './generate-scenarios.js';
 import { GroveView } from './grove-bridge.js';
 import { buildGroveScenario, findGroveState, GROVE_STATES } from './grove-scenarios.js';
-import { createHostFrame, type HostFrame } from './host-frame.js';
+import { createHostFrame, type HostFrame, loadModalHostCascade } from './host-frame.js';
 import { installObsidianDomHelpers } from './obsidian-shim/dom.js';
 import { Notice, type WorkspaceLeaf } from './obsidian-shim/index.js';
 import { buildFixtureOracle, type FixtureOracleResult } from './oracle/fixture-oracle.js';
@@ -136,8 +136,10 @@ import {
 import { createSimulatorShell, SimulatorController } from './simulator/index.js';
 import {
   applyVariableSet,
+  BASELINE_SHEET,
   DEFAULT_VARIABLE_SET,
   findVariableSet,
+  THEME_SHEET_HREF,
   VARIABLE_SETS,
 } from './themes/index.js';
 import {
@@ -542,6 +544,21 @@ async function main(): Promise<void> {
   }
   const frame = await createHostFrame(frameEl, PLUGIN_STYLES_HREF);
   const host = frame.body;
+  /**
+   * `ol-96hn` [WBX-20]: `[data-wb-modal-host]` (a sibling of the iframe, in
+   * THIS document — see `obsidian-shim/index.ts`'s `Modal.open()`) never
+   * carried the plugin's real stylesheet or Obsidian's theme variables, so
+   * every Modal-based view (`ExplainBackModal`, `CourseSetupModal`) rendered
+   * with only `workbench.css`'s generic fallback chrome. `setMode` below is
+   * called from `render()`, next to `applyVariableSet(set, frame)` — see
+   * `host-frame.ts`'s own doc for why this cascade is deliberately narrower
+   * than the iframe's (baseline only, never a community theme).
+   */
+  const modalHostCascade = await loadModalHostCascade(
+    requireEl('[data-wb-modal-host]'),
+    PLUGIN_STYLES_HREF,
+    THEME_SHEET_HREF[BASELINE_SHEET],
+  );
   const inspector = requireEl('[data-wb-inspector]');
   const noticeHost = requireEl('[data-wb-notices]');
   /**
@@ -1038,6 +1055,7 @@ async function main(): Promise<void> {
     host.removeAttribute('data-wb-detached');
     noticeHost.empty();
     await applyVariableSet(set, frame);
+    modalHostCascade.setMode(set.mode);
     if (run !== generation) return;
 
     for (const button of stateList.querySelectorAll<HTMLElement>('[data-wb-state-link]')) {
