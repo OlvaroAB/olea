@@ -1352,8 +1352,49 @@ button.olea-review-mcq-option:hover {
   --olea-host-brand: #677647;
 }
 
+/* [STY-0h] (`ol-l5og.18.8`): the "could not check" refusal family
+   (`docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/Pass5Refusal.jsx`
+   in `olea-service`, C4.7/`[D-089]`) — a SOLID edge on this pane's own wash
+   (established shapes, nothing drawn as found), never the dashed absence
+   edge `.olea-gap-material-block` below uses for a genuinely empty search
+   result. `view.ts`'s `renderUnavailable` doc explains the one structural
+   difference from the kit: there is no ranking left standing to strip above,
+   because the whole view failed to build. */
 .olea-gap-unavailable {
-  padding: 12px 0;
+  border: 1px solid var(--olea-host-line);
+  background: var(--olea-host-wash);
+  border-radius: 12px;
+  padding: 18px 20px 19px;
+  max-width: 560px;
+}
+
+.olea-gap-unavailable-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* `--olea-host-muted`, not `-faint` (`ol-nrrm`): the faint tier measured
+   sub-4.5:1 in every variable set this file's own contrast sweep covered,
+   and `styles-contrast.spec.ts` guards every text/icon `color` read of it
+   file-wide, not just within the review section. */
+.olea-gap-unavailable-mark {
+  display: flex;
+  color: var(--olea-host-muted);
+}
+
+.olea-gap-unavailable-mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+.olea-gap-unavailable-eyebrow-text {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
 }
 
 .olea-gap-unavailable-title {
@@ -1367,6 +1408,25 @@ button.olea-review-mcq-option:hover {
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--olea-host-muted);
+}
+
+/* The action the body text's "try again in a moment" now has behind it
+   (`view.ts`'s `renderUnavailable` doc) — plain, not the brand button, the
+   same restraint the kit's own anatomy sheet gives a refusal ("a refusal
+   asks for nothing" — this one action is hers to take, never a nudge). */
+.olea-gap-unavailable-retry {
+  margin-top: 14px;
+  font: 500 12.5px / 1 var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+  background: transparent;
+  border: 1px solid var(--olea-host-line-hover);
+  border-radius: 8px;
+  padding: 8px 13px;
+  cursor: pointer;
+}
+
+.olea-gap-unavailable-retry:hover {
+  background: var(--olea-host-elev);
 }
 
 .olea-gap-course {
@@ -2309,6 +2369,126 @@ button.olea-review-mcq-option:hover {
   font: 400 14px / 1.6 var(--olea-host-content-font);
   color: var(--olea-host-muted);
   margin: 4px 0 16px;
+}
+
+/* [STY-0h] (`ol-l5og.18.8`): the two-cue-coded refusal family
+   (`docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/Pass5Refusal.jsx`
+   in `olea-service`, C4.7/`[D-089]`) — `--absent` (retrieval ran, came back
+   thin: a DASHED edge, this system's mark for absence since Pass 3) and
+   `--weather` (the check didn't run at all: a SOLID edge on this modal's own
+   wash, established shapes, nothing drawn as found). `modal.ts`'s
+   `renderRefusedPhase` doc explains why `reason: 'unavailable'` gets neither
+   box — it is F7.8 degradation, not a C4.7 refusal. */
+.olea-explain-back-refusal-box {
+  border-radius: 12px;
+  padding: 16px 18px 17px;
+  margin: 4px 0 16px;
+}
+
+.olea-explain-back-refusal-box .olea-explain-back-refusal {
+  margin: 0;
+}
+
+.olea-explain-back-refusal-box--absent {
+  border: 1px dashed var(--olea-host-line-hover, var(--olea-host-line));
+}
+
+.olea-explain-back-refusal-box--weather {
+  border: 1px solid var(--olea-host-line);
+  /* `.olea-explain-back` declares no `--olea-host-wash` of its own (this
+     modal never needed an elevation wash before this box), so this reads
+     the host token directly with the same literal terminal fallback
+     `.olea-gap-root`'s own `--olea-host-wash` declaration uses. */
+  background: var(--background-modifier-hover, rgba(0, 0, 0, 0.035));
+}
+
+.olea-explain-back-refusal-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* `--olea-host-muted`, not `-faint` (`ol-nrrm`): sub-4.5:1 in every measured
+   variable set, and `styles-contrast.spec.ts` guards every text/icon
+   `color` read of it file-wide. */
+.olea-explain-back-refusal-eyebrow-mark {
+  display: flex;
+  color: var(--olea-host-muted);
+}
+
+.olea-explain-back-refusal-eyebrow-mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+.olea-explain-back-refusal-eyebrow-mark--dashed {
+  width: 22px;
+  height: 0;
+  border-top: 1px dashed var(--olea-host-line-hover, var(--olea-host-line));
+  flex: none;
+}
+
+.olea-explain-back-refusal-eyebrow-text {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+/* The found-list: C4.7's permitted content, drawn — which notes, at what
+   position, and nothing else. Read-only (see `modal.ts`'s own doc on why
+   this bead does not wire click-to-open). */
+.olea-explain-back-found-list {
+  margin-top: 6px;
+}
+
+.olea-explain-back-found-list-caption {
+  font-family: var(--olea-host-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin-bottom: 8px;
+}
+
+.olea-explain-back-found-list-rows {
+  border: 1px solid var(--olea-host-line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.olea-explain-back-found-list-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+}
+
+.olea-explain-back-found-list-row + .olea-explain-back-found-list-row {
+  border-top: 1px solid var(--olea-host-line);
+}
+
+.olea-explain-back-found-list-path {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  color: var(--olea-host-muted);
+}
+
+.olea-explain-back-found-list-text {
+  font: 400 12.5px / 1.5 var(--olea-host-ui-font);
+  color: var(--olea-host-text);
+}
+
+/* The one action a transient failure earns (kit anatomy sheet: "a refusal
+   asks for nothing" except here, where trying again is genuinely hers to
+   do) — the primary-tone pill the kit's `RefusalAction` draws, a border only,
+   never a fill, so it never competes with `EXPLAIN_BACK_ACCEPT_LABEL`'s own
+   weight elsewhere in this modal. */
+.olea-explain-back-refusal-retry {
+  border-color: var(--olea-host-line-hover, var(--olea-host-line));
+  font-weight: 500;
 }
 
 .olea-explain-back-outcome {
