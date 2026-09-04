@@ -99,3 +99,31 @@ export const EXPLAIN_BACK_SESSION_ENTRY_LABEL = 'Explain something back';
 export function explainBackDepthHeading(soloLevel: SoloLevel): string {
   return `You explained this ${explainBackDepthPhrase(soloLevel)}.`;
 }
+
+// ---------------------------------------------------------------------------
+// [STY-0h] (`ol-l5og.18.8`) — the two refusal families, told apart the way
+// `docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/Pass5Refusal.jsx`
+// (`olea-service`) draws them (C4.7, `[D-089]`). `./modal.ts`'s
+// `renderRefusedPhase` renders the FACT sentence from `../review/copy.ts`'s
+// `explainBackInsufficientNotesRefusal`/`EXPLAIN_BACK_CHECK_FAILED_REFUSAL` —
+// unchanged here — and reads these two eyebrows plus the found-list caption
+// to draw the edge, mark and evidence cues around it. The third reason,
+// `'unavailable'` (no Worker configured), is NOT one of these two: it is
+// F7.8's degradation posture, not a C4.7 refusal, so it takes neither eyebrow
+// (see `./modal.ts`'s own doc on that branch).
+// ---------------------------------------------------------------------------
+
+/** `reason: 'insufficient-notes'` — retrieval ran and came back too thin. */
+export const EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW = 'Nothing matched · what your notes returned';
+
+/** `reason: 'check-failed'` — the check itself did not run. */
+export const EXPLAIN_BACK_COULD_NOT_CHECK_EYEBROW = "Couldn't check · nothing was decided";
+
+/**
+ * The found-list caption (C4.7's permitted content: which notes, at what
+ * position — never a summary claim about the vault beyond them). Shown only
+ * when `prompt.sourceBlocks` is non-empty; an empty list renders no found-list
+ * at all rather than an empty one, the same "nothing to show" restraint
+ * `gap/copy.ts`'s coverage screen already holds.
+ */
+export const EXPLAIN_BACK_FOUND_LIST_CAPTION = 'What your notes returned';

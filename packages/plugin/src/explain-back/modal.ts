@@ -100,11 +100,14 @@ import {
   EXPLAIN_BACK_ACCEPT_LABEL,
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
   EXPLAIN_BACK_CITED_HEADING,
+  EXPLAIN_BACK_COULD_NOT_CHECK_EYEBROW,
   EXPLAIN_BACK_DISCARD_LABEL,
+  EXPLAIN_BACK_FOUND_LIST_CAPTION,
   EXPLAIN_BACK_GRADING_LABEL,
   EXPLAIN_BACK_MISCONCEPTION_HEADING,
   EXPLAIN_BACK_MISSED_HEADING,
   EXPLAIN_BACK_MODAL_TITLE,
+  EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
   EXPLAIN_BACK_QUESTION_LABEL,
   EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
@@ -235,6 +238,38 @@ type ModalState =
       /** `[D-217]`: the SOLO depth level `deps.recordSoloGradeAndReview` reported, if any — `null` renders no heading (see `renderAcceptedPhase`), never a placeholder. */
       readonly soloLevel: SoloLevel | null;
     };
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * The retry mark (`docs/design/pass5-refusal-trends-shell/ui_kits/olea-
+ * plugin/Pass5Kit.jsx`'s `RetryGlyph`, `olea-service`), reproduced
+ * coordinate-for-coordinate — the same "copied, not reinterpreted"
+ * discipline `sprig/render-sprig.ts` documents for its own SVG. Built via
+ * `createElementNS` rather than Obsidian's `setIcon`: `setIcon` has no
+ * export in the workbench's `obsidian-shim` (confirmed by a failed `esbuild`
+ * bundle), and `gap/view.ts` carries the identical helper for the same
+ * reason — small enough, and local enough to each file's own render method,
+ * that duplicating it beat adding a new cross-package module for one glyph.
+ */
+function renderRetryGlyph(container: HTMLElement): void {
+  const doc = container.ownerDocument;
+  const svg = doc.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', '13');
+  svg.setAttribute('height', '13');
+  svg.setAttribute('viewBox', '0 0 13 13');
+  for (const d of ['M11 6.5a4.5 4.5 0 1 1-1.5-3.35', 'M11.2 1.2v2.6H8.6']) {
+    const path = doc.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.3');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+  }
+  container.appendChild(svg);
+}
 
 export class ExplainBackModal extends Modal {
   private readonly deps: ExplainBackModalDeps;
@@ -665,6 +700,25 @@ export class ExplainBackModal extends Modal {
     }
   }
 
+  /**
+   * [STY-0h] (`ol-l5og.18.8`): the two `[D-089]`/C4.7 refusal reasons
+   * ('insufficient-notes', 'check-failed') render as the two-cue-coded family
+   * `docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/
+   * Pass5Refusal.jsx` (`olea-service`) draws — told apart by where the
+   * evidence goes (a found-list of what retrieval actually returned, or
+   * nothing at all), the edge (dashed absence vs. solid host wash) and the
+   * mark (a dashed rule vs. a retry glyph), never by a new colour.
+   *
+   * **`'unavailable'` is deliberately NOT drawn in either cue family.** It
+   * means no AI Worker is configured at all — F7.8's degradation posture
+   * (`AI_NOT_CONFIGURED_NOTICE`'s "honestly absent, not broken-looking"),
+   * not a check that ran and came back thin or a check that failed to run.
+   * Folding it into "couldn't check" would be the identical conflation C4.7
+   * forbids the other direction: a permanent, non-retryable absence wearing
+   * a transient refusal's clothes. It keeps the plain paragraph this surface
+   * always gave it, with no retry action, because retrying without a Worker
+   * fails the same way again.
+   */
   private renderRefusedPhase(
     root: HTMLElement,
     prompt: ResolvedPrompt,
@@ -672,17 +726,94 @@ export class ExplainBackModal extends Modal {
     reason: 'unavailable' | 'check-failed' | 'insufficient-notes',
   ): void {
     this.renderQuestion(root, prompt);
-    const text =
-      reason === 'unavailable'
-        ? EXPLAIN_WHY_UNAVAILABLE
-        : reason === 'check-failed'
-          ? EXPLAIN_BACK_CHECK_FAILED_REFUSAL
-          : explainBackInsufficientNotesRefusal(prompt.sourceBlocks.length);
-    root.createEl('p', { cls: 'olea-explain-back-refusal', text });
-    if (reason === 'check-failed') {
-      const button = root.createEl('button', { text: EXPLAIN_BACK_SUBMIT_LABEL });
-      button.addEventListener('click', () => void this.submitAnswer(prompt, answer));
+    if (reason === 'unavailable') {
+      root.createEl('p', { cls: 'olea-explain-back-refusal', text: EXPLAIN_WHY_UNAVAILABLE });
+      return;
     }
+    if (reason === 'insufficient-notes') {
+      this.renderNothingMatchedRefusal(root, prompt);
+      return;
+    }
+    this.renderCouldNotCheckRefusal(root, prompt, answer);
+  }
+
+  /**
+   * `reason: 'insufficient-notes'` — the search ran; what it returned does
+   * not reach far enough to grade against. Dashed edge (this system's mark
+   * for absence since Pass 3) and, whenever retrieval returned anything at
+   * all, the found-list itself: C4.7's permitted content, exactly what was
+   * returned and nothing claimed about the vault beyond it.
+   */
+  private renderNothingMatchedRefusal(root: HTMLElement, prompt: ResolvedPrompt): void {
+    const box = root.createDiv({
+      cls: 'olea-explain-back-refusal-box olea-explain-back-refusal-box--absent',
+    });
+    const eyebrow = box.createDiv({ cls: 'olea-explain-back-refusal-eyebrow' });
+    eyebrow.createSpan({ cls: 'olea-explain-back-refusal-eyebrow-mark--dashed' });
+    eyebrow.createSpan({
+      cls: 'olea-explain-back-refusal-eyebrow-text',
+      text: EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
+    });
+    box.createEl('p', {
+      cls: 'olea-explain-back-refusal',
+      text: explainBackInsufficientNotesRefusal(prompt.sourceBlocks.length),
+    });
+    if (prompt.sourceBlocks.length > 0) this.renderFoundList(box, prompt.sourceBlocks);
+  }
+
+  /**
+   * The found-list `renderNothingMatchedRefusal` shows when retrieval
+   * returned at least one block — read-only (the note path and the passage
+   * text itself, never a summary of it), same restraint the kit's own
+   * `FoundList` states: "checkable in one click" is the goal, opening the
+   * note itself is a follow-up this bead does not wire.
+   */
+  private renderFoundList(parent: HTMLElement, blocks: readonly ExplainBackSourceBlock[]): void {
+    const wrap = parent.createDiv({ cls: 'olea-explain-back-found-list' });
+    wrap.createDiv({
+      cls: 'olea-explain-back-found-list-caption',
+      text: EXPLAIN_BACK_FOUND_LIST_CAPTION,
+    });
+    const rows = wrap.createDiv({ cls: 'olea-explain-back-found-list-rows' });
+    for (const block of blocks) {
+      const row = rows.createDiv({ cls: 'olea-explain-back-found-list-row' });
+      row.createSpan({ cls: 'olea-explain-back-found-list-path', text: block.path });
+      row.createSpan({ cls: 'olea-explain-back-found-list-text', text: block.block.text });
+    }
+  }
+
+  /**
+   * `reason: 'check-failed'` — the check itself did not run, so nothing was
+   * decided either way. Solid edge on the host's own wash (established
+   * shapes, nothing drawn as found), a retry glyph rather than a dashed
+   * rule, and the one action a transient failure earns: try again, wired to
+   * the same `submitAnswer` the original attempt used, over the same
+   * `answer` so nothing she wrote is lost.
+   */
+  private renderCouldNotCheckRefusal(
+    root: HTMLElement,
+    prompt: ResolvedPrompt,
+    answer: string,
+  ): void {
+    const box = root.createDiv({
+      cls: 'olea-explain-back-refusal-box olea-explain-back-refusal-box--weather',
+    });
+    const eyebrow = box.createDiv({ cls: 'olea-explain-back-refusal-eyebrow' });
+    const mark = eyebrow.createSpan({ cls: 'olea-explain-back-refusal-eyebrow-mark' });
+    renderRetryGlyph(mark);
+    eyebrow.createSpan({
+      cls: 'olea-explain-back-refusal-eyebrow-text',
+      text: EXPLAIN_BACK_COULD_NOT_CHECK_EYEBROW,
+    });
+    box.createEl('p', {
+      cls: 'olea-explain-back-refusal',
+      text: EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
+    });
+    const button = box.createEl('button', {
+      cls: 'olea-explain-back-refusal-retry',
+      text: EXPLAIN_BACK_SUBMIT_LABEL,
+    });
+    button.addEventListener('click', () => void this.submitAnswer(prompt, answer));
   }
 
   private renderAcceptedPhase(

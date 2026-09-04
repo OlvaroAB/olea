@@ -219,7 +219,25 @@ export const SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL = 'Explain it back';
 // distinguishable in both directions — "an error-refusal states the true,
 // transient reason, never the insufficient-notes message" (C4.7).
 //
-// **No production caller renders either string yet.** `gradeExplainBack`
+// **UPDATE ([STY-0h] / `ol-l5og.18.8`): a production caller now renders both
+// strings, and the paragraph below is stale against it.** `ExplainBackModal`
+// (`../explain-back/modal.ts`) IS the Feynman-mode destination this
+// paragraph said did not exist — reachable via the F5.1 command, F2.12's
+// "Explain it back" accept, the session builder and Today (`main.ts`'s
+// `openExplainBackModal`, four call sites) — and its `submitAnswer` calls
+// `gradeExplainBackAttempt` (`../grading/wiring.ts`), the real
+// `gradeExplainBack`/`explain-back.judge.v1` pipeline this paragraph said
+// had "no wire-level refusal signal." `renderRefusedPhase` there imports
+// both strings and renders `EXPLAIN_BACK_CHECK_FAILED_REFUSAL` on a thrown,
+// non-`UnusableGradingInputError` failure and `explainBackInsufficientNotesRefusal`
+// on an empty reference answer or a caught `UnusableGradingInputError` — the
+// exact two-reason split this section documents. `ol-tka5` (verdict
+// persistence) is still open and still governs what an ACCEPTED grading
+// writes, which is a different question from whether a refusal renders;
+// nothing here waits on it.
+//
+// Original paragraph, for the historical record (no longer true): "No
+// production caller renders either string yet. `gradeExplainBack`
 // (`olea-core`'s grading pipeline) has no wire-level refusal signal at all —
 // every `JudgeCaller` response it models is a graded verdict — and the
 // review UI has no Feynman-mode destination to grade: `ol-tka5` (open,
@@ -228,7 +246,7 @@ export const SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL = 'Explain it back';
 // to build one ahead of that. Item 32's Done-when is scoped to
 // `packages/plugin/src/**/copy.ts` — the copy itself, not the wiring — so
 // these ship as real, vocabulary-checked text now rather than being invented
-// under time pressure later, the way `EXPLAIN_WHY_REFUSAL` had to be.
+// under time pressure later, the way `EXPLAIN_WHY_REFUSAL` had to be."
 
 /**
  * The transient half of `[D-089]`'s two-reason refusal: the folded grounding

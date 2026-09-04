@@ -44,6 +44,8 @@ import {
   COVERAGE_GAP_HEADING,
   coverageScreenCopy,
   GAP_UNAVAILABLE_BODY,
+  GAP_UNAVAILABLE_EYEBROW,
+  GAP_UNAVAILABLE_RETRY_LABEL,
   GAP_UNAVAILABLE_TITLE,
   GAP_VIEW_TITLE,
   gapRowLine,
@@ -58,6 +60,37 @@ import {
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_GAP = 'olea-gap';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * The retry mark (`docs/design/pass5-refusal-trends-shell/ui_kits/olea-
+ * plugin/Pass5Kit.jsx`'s `RetryGlyph`, `olea-service`), reproduced
+ * coordinate-for-coordinate, the same "copied, not reinterpreted" discipline
+ * `sprig/render-sprig.ts` documents for its own SVG. Built via
+ * `createElementNS` rather than Obsidian's `setIcon`: `setIcon` has no
+ * export in the workbench's `obsidian-shim` (confirmed by a failed
+ * `esbuild` bundle), and this view is one of the files that shim exists to
+ * let run under both hosts.
+ */
+function renderRetryGlyph(container: HTMLElement): void {
+  const doc = container.ownerDocument;
+  const svg = doc.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', '13');
+  svg.setAttribute('height', '13');
+  svg.setAttribute('viewBox', '0 0 13 13');
+  for (const d of ['M11 6.5a4.5 4.5 0 1 1-1.5-3.35', 'M11.2 1.2v2.6H8.6']) {
+    const path = doc.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.3');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+  }
+  container.appendChild(svg);
+}
 
 /**
  * What the view was handed.
@@ -126,15 +159,57 @@ export class GapView extends ItemView {
     root.empty();
 
     if (state.kind === 'unavailable') {
-      const box = root.createDiv({ cls: 'olea-gap-unavailable' });
-      box.createDiv({ cls: 'olea-gap-unavailable-title', text: GAP_UNAVAILABLE_TITLE });
-      box.createDiv({ cls: 'olea-gap-unavailable-body', text: GAP_UNAVAILABLE_BODY });
+      this.renderUnavailable(root);
       return;
     }
 
     const { model } = state;
     for (const course of model.courses) this.renderCourse(root, course);
     this.renderCoverage(root, model);
+  }
+
+  /**
+   * [STY-0h] (`ol-l5og.18.8`): this pane's "could not check" refusal, in the
+   * two-cue family `docs/design/pass5-refusal-trends-shell/ui_kits/olea-
+   * plugin/Pass5Refusal.jsx` draws in `olea-service` (C4.7, `[D-089]`) — a
+   * SOLID edge on the host's own wash (established shapes, nothing drawn as
+   * found) and a returning-arrow mark, never the dashed "absence" edge
+   * `.olea-gap-material-block` uses elsewhere on this same pane for a
+   * genuinely empty result. The two are different claims: a material gap
+   * says the search ran and found nothing; this says the search did not run
+   * at all, which is exactly why the kit tells them apart.
+   *
+   * **One structural difference from the kit, disclosed rather than faked.**
+   * The kit's could-not-check state is a strip ABOVE a ranking left standing
+   * — there, one concept's check failed and the rest of the screen is still
+   * true. Here the WHOLE view failed to build (`gap/provider.ts`'s
+   * `createLocalGapProvider` doc: "a vault it could not walk, an extraction
+   * pass that threw"), so there is no ranking underneath to leave intact —
+   * the pane empties because there is genuinely nothing else to show, not
+   * because this treatment forgot to draw it.
+   *
+   * The retry action is new: `GAP_UNAVAILABLE_BODY` has said "try again in a
+   * moment" since before this bead with nothing behind it to press
+   * (`ol-riwn`'s sibling defect on this surface) — this wires that sentence
+   * to the same `refresh()` a host already calls after her material
+   * changes, so a re-read costs one click rather than closing and reopening
+   * the tab.
+   */
+  private renderUnavailable(root: HTMLElement): void {
+    const box = root.createDiv({ cls: 'olea-gap-unavailable' });
+    const eyebrow = box.createDiv({ cls: 'olea-gap-unavailable-eyebrow' });
+    const mark = eyebrow.createSpan({ cls: 'olea-gap-unavailable-mark' });
+    renderRetryGlyph(mark);
+    eyebrow.createSpan({ cls: 'olea-gap-unavailable-eyebrow-text', text: GAP_UNAVAILABLE_EYEBROW });
+    box.createDiv({ cls: 'olea-gap-unavailable-title', text: GAP_UNAVAILABLE_TITLE });
+    box.createDiv({ cls: 'olea-gap-unavailable-body', text: GAP_UNAVAILABLE_BODY });
+    const retry = box.createEl('button', {
+      cls: 'olea-gap-unavailable-retry',
+      text: GAP_UNAVAILABLE_RETRY_LABEL,
+    });
+    retry.addEventListener('click', () => {
+      void this.refresh();
+    });
   }
 
   private renderCourse(parent: HTMLElement, course: GapCourseView): void {

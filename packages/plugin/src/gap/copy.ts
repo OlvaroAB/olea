@@ -108,6 +108,24 @@ export const GAP_UNAVAILABLE_TITLE = 'Olea could not read your sources just now.
 export const GAP_UNAVAILABLE_BODY =
   'So there is nothing here to show. This is not a claim that your materials cover everything — try again in a moment.';
 
+/**
+ * The one action the body text above already promises ("try again in a
+ * moment") and, until `[STY-0h]` (`ol-l5og.18.8`), had nowhere to press.
+ * Same word `explain-back/copy.ts`'s `EXPLAIN_BACK_DISCARD_LABEL` already
+ * uses for the identical "throw this attempt away, ask again" gesture — one
+ * fewer word for the vocabulary registry to carry two meanings of.
+ */
+export const GAP_UNAVAILABLE_RETRY_LABEL = 'Try again';
+
+/**
+ * The eyebrow above the two lines just above — same wording
+ * `pass5-refusal-trends-shell`'s `RefusalCouldNotCheck` uses in
+ * `olea-service`'s design kit for the identical "checked nothing, decided
+ * nothing" state, reused verbatim rather than re-paraphrased for a state
+ * this pane and that kit both mean the same thing by.
+ */
+export const GAP_UNAVAILABLE_EYEBROW = "Couldn't check · nothing was decided";
+
 // ---------------------------------------------------------------------------
 // F4.9 — the framing that governs every ranked surface
 // ---------------------------------------------------------------------------
@@ -507,6 +525,8 @@ export function allGapStrings(): readonly string[] {
     COVERAGE_GAP_HEADING,
     GAP_UNAVAILABLE_TITLE,
     GAP_UNAVAILABLE_BODY,
+    GAP_UNAVAILABLE_RETRY_LABEL,
+    GAP_UNAVAILABLE_EYEBROW,
     FULL_SYLLABUS_ADVICE,
     ...Object.values(AFFORDANCE_LABELS),
     ...Object.values(READ_STATE_LABELS),
