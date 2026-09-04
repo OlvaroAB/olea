@@ -77,9 +77,19 @@ import {
   type WorkerTaskRequest,
   type WorkerTaskTransport,
 } from 'olea-core';
-import { OLEA_COMMAND_PROCESS_NOTE_NOW } from '../../../plugin/src/commands/ids.js';
+import {
+  OLEA_COMMAND_EXPLAIN_BACK,
+  OLEA_COMMAND_PROCESS_NOTE_NOW,
+  OLEA_COMMAND_REGISTRY_OPEN,
+} from '../../../plugin/src/commands/ids.js';
+import {
+  EXPLAIN_BACK_ACCEPT_LABEL,
+  EXPLAIN_BACK_SUBMIT_LABEL,
+  EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
+} from '../../../plugin/src/explain-back/copy.js';
 import { VIEW_TYPE_OLEA_HOME } from '../../../plugin/src/home/view.js';
 import OleaPlugin from '../../../plugin/src/main.js';
+import { VIEW_TYPE_OLEA_REGISTRY } from '../../../plugin/src/registry/view.js';
 import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
 import type { HttpRequestFn } from '../../../plugin/src/worker/transport.js';
 import type { App, ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
@@ -458,6 +468,13 @@ declare global {
  * ({@link clearSimulatorWalkDriver}, from
  * {@link SimulatorController.closeCurrent}) — the same lifecycle
  * `mountedPlugin` already gets.
+ *
+ * **WBX-16c's four additions below** (`explain`, `contest`, `openRegistry`,
+ * `runCommand`) take exactly the path a real click takes — the plugin's own
+ * command registry (`Plugin.invokeCommand`, `obsidian-shim/index.ts`) and,
+ * for `explain`/`contest`, the actual rendered DOM the modal/view puts up —
+ * never a shortcut that calls a port or a capability object directly. See
+ * each function's own doc for the exact `file:line` sequence.
  */
 export interface SimulatorWalkDriver {
   /** Every note/PDF path currently in the vault (`Vault.getFiles()`, unfiltered — the caller picks which folder). */
@@ -477,11 +494,424 @@ export interface SimulatorWalkDriver {
   rateNextDue(): Promise<boolean>;
   /** The `[data-sim-reset]` button's own action, awaitable — see {@link SimulatorController.reset}. */
   reset(): Promise<void>;
+  /** See {@link driverExplain}'s own doc for the exact sequence. */
+  explain(text: string, conceptRef?: string): Promise<ExplainDriverOutcome>;
+  /** See {@link driverContest}'s own doc for the exact sequence. */
+  contest(target: 'review' | 'today'): Promise<ContestDriverOutcome>;
+  /** See {@link driverOpenRegistry}'s own doc for the exact sequence. */
+  openRegistry(): Promise<void>;
+  /**
+   * Invokes any command id the plugin's own `onload()` registered, through
+   * the identical `Plugin.invokeCommand` check-then-execute path every other
+   * entry here uses (`obsidian-shim/index.ts:1235`) — for the walk script's
+   * capability probe, so it never needs a bespoke driver entry per command
+   * id it wants to smoke-test. `Plugin.invokeCommand` already refuses (returns
+   * `false`, never throws) an id this plugin never registered, because its
+   * lookup is `this.commands.get(id)` against a map only `addCommand` ever
+   * populates — there is no separate allowlist to keep in sync.
+   */
+  runCommand(id: string): boolean;
+}
+
+/** {@link driverExplain}'s result — deliberately narrower than `ExplainBackModal`'s own three refusal reasons (`unavailable`/`check-failed`/`insufficient-notes`, `modal.ts`'s `ModalState`): all three read as `'unavailable'` here, with `reason` carrying whichever refusal sentence the modal actually rendered. */
+export interface ExplainDriverOutcome {
+  /**
+   * Never surfaced by `PendingExplainBackGrading`/`GroundedGrading`
+   * (`olea-core`'s `gradingPipeline.ts`) up to the modal, so this is always
+   * `undefined` today — kept in the shape for a caller that wants to log
+   * one once the pipeline threads a real id through, never fabricated here.
+   */
+  readonly taskId?: string;
+  /**
+   * `'graded'`: she reached "Keep this" and `renderAcceptedPhase` drew the
+   * SOLO depth heading (`modal.ts:576`, `.olea-explain-back-outcome`) — a
+   * level came back from `recordSoloGradeAndReview`. `'degraded'`: she still
+   * reached and clicked "Keep this", but no depth heading rendered — the
+   * correctness accept went through with no SOLO level (the common case in
+   * production today, per that dep's own doc). `'unavailable'`: the command
+   * itself was not invokable, or the modal refused at either the topic or
+   * the answer step.
+   */
+  readonly outcome: 'graded' | 'degraded' | 'unavailable';
+  /** The refusal paragraph's own text (`.olea-explain-back-refusal`), or a wiring-failure reason — never fabricated. */
+  readonly reason?: string;
+}
+
+/** {@link driverContest}'s result. */
+export interface ContestDriverOutcome {
+  /** `'recorded'`: the gesture was clicked through to a written dispute record, exactly as her own tap would. `'unavailable'`: no gesture (or, for `'today'`, no record button on an open sheet) was rendered to click. */
+  readonly outcome: 'recorded' | 'unavailable';
+  readonly reason?: string;
+}
+
+/** `document`-safe: this package's own Vitest suite runs under plain Node with no DOM at all (`obsidian-shim-whole-plugin.spec.ts`'s own doc) — reading back "no such element" here is the honest answer in that environment, and it is ALSO the honest answer in a real browser where the element genuinely never rendered. Never a thrown `ReferenceError` either way. Scoped to the modal host's own document (the TOP document — see `Modal`'s own doc in `obsidian-shim/index.ts` on why modals render there, never into the simulator's iframe). */
+function queryModalDom<T extends Element>(selector: string): T | null {
+  if (typeof document === 'undefined') return null;
+  return document.querySelector<T>(selector);
+}
+
+/**
+ * The simulator's OWN workspace/views render inside the iframe `shell.ts`'s
+ * `createSimulatorShell(host)` builds (`main.ts`'s `[data-wb-surface]`) —
+ * `controller.ts`'s own module doc: this script's DOM nodes are built
+ * against the top document's `document.createElement` and then ADOPTED into
+ * that iframe on `appendChild` (`elements.main.appendChild(mounted.hostEl)`
+ * in `remountPane`), so `TodayView`/`ReviewView`'s rendered contest gestures
+ * live in the IFRAME's document, never the top one `queryModalDom` above
+ * reads. `shellRoot` is `SimulatorControllerOptions.elements.root` — stable
+ * across every remount — and `.ownerDocument` is exactly that iframe
+ * document, however this controller is hosted. Same no-DOM safety as
+ * `queryModalDom`: a `null`/`undefined` `ownerDocument` (the Node test
+ * environment's mocked `shellRoot`) reads as "no such element", never a
+ * throw.
+ */
+function queryShellDom<T extends Element>(shellRoot: HTMLElement, selector: string): T | null {
+  const doc = shellRoot.ownerDocument;
+  if (doc === null || doc === undefined) return null;
+  return doc.querySelector<T>(selector);
+}
+
+function findButtonByLabel(root: ParentNode, label: string): HTMLButtonElement | null {
+  for (const button of root.querySelectorAll('button')) {
+    if (button.textContent?.trim() === label) return button;
+  }
+  return null;
+}
+
+/** How long any one of these driver entries waits for the plugin's own async work (a Worker round trip, a vault read) to land in the DOM before giving up loudly rather than hanging the walk script forever. */
+const DRIVER_POLL_TIMEOUT_MS = 20_000;
+
+/** Polls `check()` once per macrotask tick (the same `settle()` this module's own remount code already uses) until it returns non-`null` or `timeoutMs` elapses. */
+async function pollForDriver<T>(check: () => T | null, timeoutMs: number): Promise<T | null> {
+  const start = Date.now();
+  for (;;) {
+    const result = check();
+    if (result !== null) return result;
+    if (Date.now() - start >= timeoutMs) return null;
+    await settle();
+  }
+}
+
+/** Every driver entry below that needs the whole plugin throws this — clearly, never silently — the moment `mounted` is `null` (WBX-16c's own brief), rather than letting a `TypeError` on `mounted.plugin`/`mounted.app` stand in for it. */
+function requireMountedForDriver(
+  mounted: MountedPlugin<OleaPlugin> | null,
+  method: string,
+): MountedPlugin<OleaPlugin> {
+  if (mounted === null) {
+    throw new Error(
+      `__oleaSimulatorDriver.${method}(): the whole plugin is not mounted (degraded fallback ` +
+        'mode) — the real command registry/views this method drives through do not exist in ' +
+        'the single-view fallback mount (see this module\'s "Degraded fallback" doc).',
+    );
+  }
+  return mounted;
+}
+
+/**
+ * `conceptRef`'s fallback when {@link driverExplain} is called without one:
+ * the vault's own first file stands in for "the first available" thing to
+ * explain — matching {@link SimulatorWalkDriver.listFilePaths}'s own
+ * "unfiltered, caller picks" posture. Never returned in a driver result
+ * (INV-3: no vault content echoed back to a caller that might log it).
+ */
+function defaultExplainTopic(mounted: MountedPlugin<OleaPlugin>): string {
+  const [first] = mounted.app.vault.getFiles();
+  if (first === undefined) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): conceptRef was omitted and the vault has no files to ' +
+        'pick a default topic from.',
+    );
+  }
+  const base = first.path.split('/').pop() ?? first.path;
+  return base.replace(/\.[^./]+$/, '');
+}
+
+/**
+ * `explain(text, conceptRef?)` — the ON-DEMAND door onto `ExplainBackModal`
+ * (F5.1, `[D-163]`), driven exactly the way her own palette invocation and
+ * typing would:
+ *
+ * 1. `mounted.plugin.invokeCommand(OLEA_COMMAND_EXPLAIN_BACK)`
+ *    (`obsidian-shim/index.ts:1235`) — the same check-then-execute call the
+ *    palette's own click makes (`index.ts:1218`). Its registered `callback`
+ *    is `main.ts`'s `openExplainBack` handler (`main.ts:769`), which calls
+ *    the plugin's one construction point, `openExplainBackModal` (`main.ts:2369`),
+ *    with `{ kind: 'freeform' }` — the same seed every on-demand invocation
+ *    gets; there is no other seed this command can produce.
+ * 2. That seed opens on `ExplainBackModal`'s topic picker
+ *    (`explain-back/modal.ts:242` sets phase `'topic'`; `renderTopicPhase`,
+ *    `modal.ts:446-456`) — its `.olea-explain-back-topic` input is set to
+ *    `conceptRef` (or {@link defaultExplainTopic} when omitted) and its
+ *    `"${EXPLAIN_BACK_TOPIC_CONTINUE_LABEL}"` button is clicked, calling
+ *    `resolveTopicPrompt` (`modal.ts:273`) exactly as her own click would.
+ * 3. Waits for that to resolve into either the answer box
+ *    (`renderAnsweringPhase`, `modal.ts:463-474`) or an
+ *    `insufficient-notes` refusal (`modal.ts:279-296`) — both are real
+ *    outcomes of the SAME vault-backed retrieval her own click triggers.
+ * 4. On the answer box: sets `text` into `.olea-explain-back-answer` and
+ *    clicks `"${EXPLAIN_BACK_SUBMIT_LABEL}"`, calling `submitAnswer`
+ *    (`modal.ts:318`) — the real grading round trip
+ *    (`deps.grade`/`gradeExplainBackAttempt`, `main.ts:2234`).
+ * 5. On a graded verdict (`renderGradedPhase`, `modal.ts:476-544`): clicks
+ *    `"${EXPLAIN_BACK_ACCEPT_LABEL}"`, calling `acceptGrading`
+ *    (`modal.ts:351`) — the real accept/observe/SOLO-depth chain
+ *    (`acceptExplainBackGradingWithObservation`, `recordSoloGradeAndReview`).
+ * 6. Reads the outcome off `renderAcceptedPhase`'s own rendering
+ *    (`modal.ts:566-586`) and clicks "Done" to close — the same close her
+ *    own click would make.
+ *
+ * Every refusal along the way (command unavailable, topic refusal, grading
+ * refusal) short-circuits into `{ outcome: 'unavailable', reason }` rather
+ * than continuing to click through a state that was never reached.
+ */
+export async function driverExplain(
+  mounted: MountedPlugin<OleaPlugin> | null,
+  text: string,
+  conceptRef?: string,
+): Promise<ExplainDriverOutcome> {
+  const live = requireMountedForDriver(mounted, 'explain');
+
+  if (!live.plugin.invokeCommand(OLEA_COMMAND_EXPLAIN_BACK)) {
+    return {
+      outcome: 'unavailable',
+      reason: `${OLEA_COMMAND_EXPLAIN_BACK} is not registered (or hidden) right now`,
+    };
+  }
+
+  const root = await pollForDriver(
+    () => queryModalDom<HTMLElement>('.olea-explain-back'),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (root === null) {
+    throw new Error(
+      `__oleaSimulatorDriver.explain(): ${OLEA_COMMAND_EXPLAIN_BACK} was invoked but no ` +
+        '.olea-explain-back modal ever rendered (explain-back/modal.ts render(), ~L409).',
+    );
+  }
+
+  const topicInput = root.querySelector<HTMLInputElement>('.olea-explain-back-topic');
+  const continueButton = findButtonByLabel(root, EXPLAIN_BACK_TOPIC_CONTINUE_LABEL);
+  if (topicInput === null || continueButton === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): the freeform seed did not render its topic picker ' +
+        '(explain-back/modal.ts renderTopicPhase, ~L446).',
+    );
+  }
+  topicInput.value = conceptRef ?? defaultExplainTopic(live);
+  continueButton.click();
+
+  const afterTopic = await pollForDriver(
+    () =>
+      root.querySelector<HTMLElement>('.olea-explain-back-answer') ??
+      root.querySelector<HTMLElement>('.olea-explain-back-refusal'),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (afterTopic === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): timed out waiting for the topic to resolve into an ' +
+        'answer box or a refusal (explain-back/modal.ts resolveTopicPrompt, ~L273).',
+    );
+  }
+  if (afterTopic.matches('.olea-explain-back-refusal')) {
+    return { outcome: 'unavailable', reason: afterTopic.textContent ?? undefined };
+  }
+
+  const textarea = afterTopic as HTMLTextAreaElement;
+  textarea.value = text;
+  const submitButton = findButtonByLabel(root, EXPLAIN_BACK_SUBMIT_LABEL);
+  if (submitButton === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): the answer box rendered with no submit button ' +
+        '(explain-back/modal.ts renderAnsweringPhase, ~L463).',
+    );
+  }
+  submitButton.click();
+
+  const afterSubmit = await pollForDriver(
+    () =>
+      root.querySelector<HTMLElement>('.olea-explain-back-actions') ??
+      root.querySelector<HTMLElement>('.olea-explain-back-refusal'),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (afterSubmit === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): timed out waiting for a grading verdict or a refusal ' +
+        '(explain-back/modal.ts submitAnswer, ~L318).',
+    );
+  }
+  if (afterSubmit.matches('.olea-explain-back-refusal')) {
+    return { outcome: 'unavailable', reason: afterSubmit.textContent ?? undefined };
+  }
+
+  const acceptButton = findButtonByLabel(afterSubmit, EXPLAIN_BACK_ACCEPT_LABEL);
+  if (acceptButton === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): the graded phase rendered with no accept button ' +
+        '(explain-back/modal.ts renderGradedPhase, ~L536).',
+    );
+  }
+  acceptButton.click();
+
+  // `'Done'` is `renderAcceptedPhase`'s own inline literal (`modal.ts:584`),
+  // not one of `./copy.ts`'s exported labels — matched by text for the same
+  // reason `EXPLAIN_BACK_ACCEPT_LABEL` etc. are imported rather than
+  // retyped: never invent a string the modal itself does not render.
+  const doneButton = await pollForDriver(
+    () => findButtonByLabel(root, 'Done'),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (doneButton === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.explain(): timed out waiting for the accepted phase\'s "Done" ' +
+        'button (explain-back/modal.ts renderAcceptedPhase, ~L566).',
+    );
+  }
+  const outcome = root.querySelector('.olea-explain-back-outcome') !== null ? 'graded' : 'degraded';
+  doneButton.click();
+  return { outcome };
+}
+
+/**
+ * `contest(target)` — clicks the identical rendered gesture her own tap
+ * would, never `contestClaim`/`GradeContestPort.contestGrade` directly:
+ *
+ * - `'today'`: `.olea-today-contest-gesture` (`today/view.ts:452`,
+ *   `renderContestGesture`) opens the dispute sheet
+ *   (`openDisputeSheet`, `today/view.ts:462`); its own
+ *   `.olea-today-contest-record` button (`today/view.ts:496`, present only
+ *   when `DisputeSheet.gestureLabel` is non-`null`) is then clicked, calling
+ *   `recordDispute` (`today/view.ts:502`) — the real
+ *   `TodayContestSupport.contest` write (`today/contest.ts`).
+ * - `'review'`: `.olea-review-contest` (`review/view.ts:1268`) is clicked
+ *   directly — no sheet, one gesture — calling `handleContestGrade`
+ *   (`review/view.ts:833`), the real `ReviewSession.contestGrade`
+ *   (`review/session.ts:557`, which only fires in the `mcq-answered`
+ *   phase) and its `GradeContestPort.contestGrade` write (`review/contest.ts`).
+ *
+ * Both surfaces render inside the simulator's OWN iframe
+ * (`queryShellDom`'s own doc), never the modal's top-document host.
+ * `'unavailable'` (never a throw) is the honest outcome whenever the
+ * gesture — or, for `'today'`, the sheet's own record button — was never
+ * rendered to click; that is a real, walkable state (nothing due to
+ * contest right now), not a wiring failure.
+ */
+export async function driverContest(
+  mounted: MountedPlugin<OleaPlugin> | null,
+  shellRoot: HTMLElement,
+  target: 'review' | 'today',
+): Promise<ContestDriverOutcome> {
+  requireMountedForDriver(mounted, 'contest');
+
+  if (target === 'review') {
+    const gesture = queryShellDom<HTMLButtonElement>(shellRoot, '.olea-review-contest');
+    if (gesture === null) {
+      return {
+        outcome: 'unavailable',
+        reason:
+          'no .olea-review-contest gesture is rendered right now (review/session.ts ' +
+          'contestGrade() only fires in the mcq-answered phase — review/view.ts:1268)',
+      };
+    }
+    gesture.click();
+    const resolved = await pollForDriver(
+      () => (queryShellDom(shellRoot, '.olea-review-contest') === null ? true : null),
+      DRIVER_POLL_TIMEOUT_MS,
+    );
+    if (resolved === null) {
+      throw new Error(
+        "__oleaSimulatorDriver.contest('review'): timed out waiting for the contest gesture " +
+          'to resolve into a quarantine badge (review/view.ts handleContestGrade, ~L833).',
+      );
+    }
+    return { outcome: 'recorded' };
+  }
+
+  const gesture = queryShellDom<HTMLButtonElement>(shellRoot, '.olea-today-contest-gesture');
+  if (gesture === null) {
+    return {
+      outcome: 'unavailable',
+      reason:
+        'no .olea-today-contest-gesture is rendered on the Today panel right now ' +
+        '(today/view.ts renderContestGesture, ~L445)',
+    };
+  }
+  gesture.click();
+
+  const sheet = await pollForDriver(
+    () => queryShellDom<HTMLElement>(shellRoot, '.olea-today-contest-sheet'),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (sheet === null) {
+    throw new Error(
+      "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet to " +
+        'open after clicking the gesture (today/view.ts openDisputeSheet, ~L462).',
+    );
+  }
+  const record = sheet.querySelector<HTMLButtonElement>('.olea-today-contest-record');
+  if (record === null) {
+    return {
+      outcome: 'unavailable',
+      reason:
+        'the dispute sheet opened but rendered no record gesture — DisputeSheet.gestureLabel ' +
+        'is null for this claim (today/contest.ts)',
+    };
+  }
+  record.click();
+
+  const closed = await pollForDriver(
+    () => (queryShellDom(shellRoot, '.olea-today-contest-sheet') === null ? true : null),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (closed === null) {
+    throw new Error(
+      "__oleaSimulatorDriver.contest('today'): timed out waiting for the dispute sheet to " +
+        'close after recording (today/view.ts recordDispute, ~L502).',
+    );
+  }
+  return { outcome: 'recorded' };
+}
+
+/**
+ * `openRegistry()` — `mounted.plugin.invokeCommand(OLEA_COMMAND_REGISTRY_OPEN)`
+ * (`obsidian-shim/index.ts:1235`), whose registered `callback` is `main.ts`'s
+ * `openRegistry` handler (`main.ts:731`, `void this.revealRegistryView()`) —
+ * fire-and-forget, so this resolves only once
+ * `app.workspace.getLeavesOfType(VIEW_TYPE_OLEA_REGISTRY)` actually reports a
+ * leaf, the same "or create one" primitive `revealRegistryView`
+ * (`main.ts:2668`) itself uses.
+ */
+export async function driverOpenRegistry(mounted: MountedPlugin<OleaPlugin> | null): Promise<void> {
+  const live = requireMountedForDriver(mounted, 'openRegistry');
+
+  if (!live.plugin.invokeCommand(OLEA_COMMAND_REGISTRY_OPEN)) {
+    throw new Error(
+      `__oleaSimulatorDriver.openRegistry(): ${OLEA_COMMAND_REGISTRY_OPEN} is not registered ` +
+        'right now.',
+    );
+  }
+  const opened = await pollForDriver(
+    () => (live.app.workspace.getLeavesOfType(VIEW_TYPE_OLEA_REGISTRY).length > 0 ? true : null),
+    DRIVER_POLL_TIMEOUT_MS,
+  );
+  if (opened === null) {
+    throw new Error(
+      '__oleaSimulatorDriver.openRegistry(): timed out waiting for the registry view leaf ' +
+        `(${VIEW_TYPE_OLEA_REGISTRY}) to exist after invoking ${OLEA_COMMAND_REGISTRY_OPEN} ` +
+        '(main.ts revealRegistryView, ~L2668).',
+    );
+  }
+}
+
+/** `runCommand(id)` — see {@link SimulatorWalkDriver.runCommand}'s own doc. */
+export function driverRunCommand(mounted: MountedPlugin<OleaPlugin> | null, id: string): boolean {
+  const live = requireMountedForDriver(mounted, 'runCommand');
+  return live.plugin.invokeCommand(id);
 }
 
 function installSimulatorWalkDriver(
   controller: SimulatorController,
   mounted: MountedPlugin<OleaPlugin>,
+  shellRoot: HTMLElement,
 ): void {
   if (typeof window === 'undefined') return;
   window.__oleaSimulatorDriver = {
@@ -495,6 +925,10 @@ function installSimulatorWalkDriver(
     advanceOneDay: () => controller.advanceOneDay(),
     rateNextDue: () => controller.rateNextDue(),
     reset: () => controller.reset(),
+    explain: (text, conceptRef) => driverExplain(mounted, text, conceptRef),
+    contest: (target) => driverContest(mounted, shellRoot, target),
+    openRegistry: () => driverOpenRegistry(mounted),
+    runCommand: (id) => driverRunCommand(mounted, id),
   };
 }
 
@@ -739,7 +1173,7 @@ export class SimulatorController {
       // action that triggered it had just set.
       mounted.plugin.invokeCommand(OLEA_COMMAND_TODAY_OPEN);
       this.populateRibbon(mounted);
-      installSimulatorWalkDriver(this, mounted);
+      installSimulatorWalkDriver(this, mounted, this.elements.root);
     } else {
       this.setDegradedNotice(missing);
       const deps = this.buildFallbackDeps();
