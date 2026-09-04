@@ -49,11 +49,15 @@ test(`@auto-web:simulator/journeys/week2-review ${WORLD}/${PERSONA} — advance 
 
   const viewTypes = await ribbonViewTypes(page);
   if (!viewTypes.includes('olea-review')) {
-    throw new Error("week2-review journey: the ribbon does not list a registered 'olea-review' view.");
+    throw new Error(
+      "week2-review journey: the ribbon does not list a registered 'olea-review' view.",
+    );
   }
   await frame(page).locator('[data-wb-sim-ribbon-view="olea-review"]').click();
   await frame(page)
-    .locator('[data-wb-pane][data-wb-active-view-type="olea-review"], [data-wb-right-pane][data-wb-active-view-type="olea-review"]')
+    .locator(
+      '[data-wb-pane][data-wb-active-view-type="olea-review"], [data-wb-right-pane][data-wb-active-view-type="olea-review"]',
+    )
     .first()
     .waitFor({ state: 'attached', timeout: 15_000 });
 

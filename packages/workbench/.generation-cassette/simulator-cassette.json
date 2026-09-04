@@ -12,16 +12,12 @@
         "result": {
           "verdict": "incorrect",
           "feedback": "Your answer does not explain the date 2026-08-10; it discusses a causal process unrelated to the question.",
-          "missedPoints": [
-            "Identify that 2026-08-10 falls on a Monday."
-          ],
+          "missedPoints": ["Identify that 2026-08-10 falls on a Monday."],
           "citedIssues": [
             {
               "kind": "omission",
               "description": "The answer does not state that 2026-08-10 is a Monday.",
-              "sourceBlockIds": [
-                "00 Daily notes/2026-08-10.md#2#0"
-              ]
+              "sourceBlockIds": ["00 Daily notes/2026-08-10.md#2#0"]
             }
           ],
           "misconceptionCandidates": []

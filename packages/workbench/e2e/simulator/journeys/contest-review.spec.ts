@@ -55,7 +55,9 @@ test(`@auto-web:simulator/journeys/contest-review ${WORLD}/${PERSONA} — contes
   const kind = await firstRatableScreenKind(page);
   if (kind === 'mcq') {
     await frame(page).locator('.olea-review-mcq-option').first().click();
-    await frame(page).locator('.olea-review-mcq-feedback').waitFor({ state: 'visible', timeout: 10_000 });
+    await frame(page)
+      .locator('.olea-review-mcq-feedback')
+      .waitFor({ state: 'visible', timeout: 10_000 });
   }
 
   await captureJourneyStep(page, JOURNEY, WEEK, 'before');

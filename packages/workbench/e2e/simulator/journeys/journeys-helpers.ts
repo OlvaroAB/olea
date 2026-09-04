@@ -74,7 +74,8 @@ export async function driverExplain(
 ): Promise<{ outcome: string; reason?: string }> {
   return page.evaluate(async (t) => {
     const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
-    if (driver === undefined) throw new Error('driverExplain: window.__oleaSimulatorDriver is not installed.');
+    if (driver === undefined)
+      throw new Error('driverExplain: window.__oleaSimulatorDriver is not installed.');
     return driver.explain(t);
   }, text);
 }
@@ -85,7 +86,8 @@ export async function driverContest(
 ): Promise<{ outcome: string; reason?: string }> {
   return page.evaluate(async (t) => {
     const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
-    if (driver === undefined) throw new Error('driverContest: window.__oleaSimulatorDriver is not installed.');
+    if (driver === undefined)
+      throw new Error('driverContest: window.__oleaSimulatorDriver is not installed.');
     return driver.contest(t);
   }, target);
 }
@@ -93,7 +95,8 @@ export async function driverContest(
 export async function driverOpenRegistry(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const driver = (window as unknown as DriverWindow).__oleaSimulatorDriver;
-    if (driver === undefined) throw new Error('driverOpenRegistry: window.__oleaSimulatorDriver is not installed.');
+    if (driver === undefined)
+      throw new Error('driverOpenRegistry: window.__oleaSimulatorDriver is not installed.');
     await driver.openRegistry();
   });
 }
@@ -114,7 +117,10 @@ export async function reviewScreenKind(
   // waiting for it to actually be attached before branching avoids reading a transient,
   // still-rendering DOM state between one item's transition and the next (observed failure mode:
   // a bare read landing in the brief gap right after a re-render started).
-  await frame(page).locator('.olea-review-body').first().waitFor({ state: 'attached', timeout: 15_000 });
+  await frame(page)
+    .locator('.olea-review-body')
+    .first()
+    .waitFor({ state: 'attached', timeout: 15_000 });
   if ((await frame(page).locator('.olea-review-empty').count()) > 0) return 'empty';
   if ((await frame(page).locator('.olea-review-complete').count()) > 0) return 'complete';
   if ((await frame(page).locator('.olea-review-note-missing').count()) > 0) return 'note-missing';

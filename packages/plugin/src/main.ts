@@ -2356,7 +2356,7 @@ export default class OleaPlugin extends Plugin {
     readonly subjectConceptId: string | null;
     readonly context: ExplainBackPromptContext;
     readonly answer: string;
-  }): Promise<SoloLevel | void> {
+  }): Promise<SoloLevel | undefined> {
     if (this.grading === null) return;
     const outcome = await recordSoloGradeAndReview(
       {

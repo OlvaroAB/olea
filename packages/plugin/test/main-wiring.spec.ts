@@ -280,7 +280,7 @@ describe('the SOLO review-log write has a real production caller (ol-38kp)', () 
 
   it('exposes a production entry point that reaches recordSoloGradeAndReview through the composed grading wiring, guarded on this.grading', () => {
     expect(main).toMatch(
-      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| void> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*\(\) => new Date\(\),\s*\},\s*params,\s*\);/,
+      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| undefined> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*\(\) => new Date\(\),\s*\},\s*params,\s*\);/,
     );
   });
 

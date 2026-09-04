@@ -35,7 +35,12 @@
  */
 import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';
-import { captureJourneyStep, EXPLAIN_BACK_CHECK_FAILED_TEXT, PERSONA, WORLD } from './journeys-helpers.js';
+import {
+  captureJourneyStep,
+  EXPLAIN_BACK_CHECK_FAILED_TEXT,
+  PERSONA,
+  WORLD,
+} from './journeys-helpers.js';
 
 const JOURNEY = 'explain-back';
 const WEEK = 0;
