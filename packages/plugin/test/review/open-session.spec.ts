@@ -1098,3 +1098,90 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
     ).toBe(true);
   });
 });
+
+// Scenario: `features/F2-review.md` (olea-service), "Feature: F2.21 wiring" —
+// "the proposal is evaluated after a grade, for the concept just reviewed"
+// (@auto:plugin/review/session.spec covers the session half; this is the
+// composition half: that `openReviewSession` actually wires the reader, which
+// is the production caller F2.21's decision module had none of).
+describe('F2.21 — the strong-recall proposal is composed into every opened session (ol-v7r5.40)', () => {
+  /** Four distinct successful days on ONE instrument for Alpha, through the real writer. */
+  async function seedStrongRecall(vault: ReturnType<typeof memoryVault>): Promise<void> {
+    const days = ['2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09'];
+    for (const [index, day] of days.entries()) {
+      await appendReviewLogRecord(
+        vault,
+        {
+          timestamp: `${day}T09:00:00-04:00`,
+          instrumentId: 'seed-alpha-strong',
+          instrumentType: 'qa',
+          conceptIds: [unboundKey('Alpha')],
+          rating: 'good',
+          wasUnsure: false,
+          durationMs: null,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            instrumentTypesOffered: ['qa'],
+            planVersion: null,
+          },
+        },
+        { deviceId: DEVICE, generateEventId: () => `seed-alpha-strong-${index}` },
+      );
+    }
+  }
+
+  it('grading an item on a strongly-recalled, never-explained concept raises the offer — no stub anywhere in the chain', async () => {
+    const vault = studyVault();
+    await seedStrongRecall(vault);
+
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    const { session } = outcome;
+    await session.start();
+
+    // Drive to the Alpha item, whichever position the composition gave it.
+    let offer = session.getStrongRecallOffer();
+    for (let guard = 0; guard < 8 && offer === null; guard += 1) {
+      const vm = session.getViewModel();
+      if (vm.phase === 'complete' || vm.phase === 'empty') break;
+      await advancePastCurrentItem(session);
+      offer = session.getStrongRecallOffer();
+    }
+
+    expect(offer, 'expected the strong-recall proposal to reach the session').not.toBeNull();
+    expect(offer?.conceptId).toBe(unboundKey('Alpha'));
+    expect(offer?.promptText).toContain('explain it back');
+  });
+
+  it('a concept with no history at all raises nothing — the trigger is evidence-led, never a default', async () => {
+    const vault = studyVault();
+
+    const outcome = await open(vault);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    const { session } = outcome;
+    await session.start();
+
+    for (let guard = 0; guard < 8; guard += 1) {
+      const vm = session.getViewModel();
+      if (vm.phase === 'complete' || vm.phase === 'empty') break;
+      await advancePastCurrentItem(session);
+      expect(session.getStrongRecallOffer()).toBeNull();
+    }
+  });
+
+  it('never changes what is composed — the queue an opened session holds is identical with and without the seeded strong-recall history', async () => {
+    const plain = await open(studyVault());
+    const seeded = studyVault();
+    await seedStrongRecall(seeded);
+    const withHistory = await open(seeded);
+    if (!plain.ok || !withHistory.ok) throw new Error('expected two composed sessions');
+
+    // F2.21: "never through queue composition." The proposal rides on top of
+    // the same queue; it does not add, remove or reorder an item.
+    expect(withHistory.scheduledQueue.map((item) => item.instrument.instrumentId).sort()).toEqual(
+      plain.scheduledQueue.map((item) => item.instrument.instrumentId).sort(),
+    );
+  });
+});

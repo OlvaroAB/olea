@@ -71,7 +71,12 @@ describe('F2.16 lives in olea-core, and the plugin has no second copy', () => {
 
   it('the session reaches for core, by name', () => {
     const code = codeOf('session.ts');
-    expect(code).toMatch(/import\s*\{\s*mapMcqRating\s*\}\s*from\s*'olea-core'/);
+    // Named in the `olea-core` import list — not necessarily alone in it.
+    // `ol-v7r5.40` added `STRONG_RECALL_PROPOSAL_TRIGGER` beside it, which is
+    // the same discipline this suite is defending (reach for core's literal,
+    // never hand-type one), so pinning `mapMcqRating` as the SOLE import was
+    // asserting a coincidence rather than the rule.
+    expect(code).toMatch(/import\s*\{[^}]*\bmapMcqRating\b[^}]*\}\s*from\s*'olea-core'/);
   });
 
   it('the rating literals that remain are keyboard and layout order, not a decision', () => {

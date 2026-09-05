@@ -106,6 +106,7 @@ import {
   type FrozenReviewQueue,
 } from './queue-adapter.js';
 import { ReviewSession } from './session.js';
+import { createStrongRecallProposalReader } from './strong-recall-wiring.js';
 import type { ReviewQueueItem } from './types.js';
 
 /** The five side-effecting seams plus the clock, exactly as `ReviewSessionDeps` names them. */
@@ -400,6 +401,25 @@ export async function openReviewSession(
       // feature with an "un-greyed" gate, only a durability upgrade to an id
       // a real vault write already exists for.
       stampOnFirstSight: createStampOnFirstSightPort(input.vault, composed.recordsById),
+      // F2.21's third trigger (`ol-v7r5.40`): closes over the SAME
+      // `composed.entries` `buildSupportLevelHistoryLookup` and
+      // `liveSchedulingObservations` above already read — no third log read,
+      // and no vault walk. Always wired, unconditionally, same posture as
+      // `evaluateSchedulingObservationRouting` above: the decision is pure
+      // and synchronous, not an AI feature with an un-greying gate.
+      //
+      // Never queue composition (F2.21's own words): this changes nothing
+      // about `queue`, `scheduled`, `executed` or `composed` — only whether
+      // `ReviewSession` proposes an explain-back after a grade. The reader
+      // itself replays the scheduler once, on the first grade, and folds one
+      // concept at a time; see its module doc for the cost argument and for
+      // why the review being written right now is deliberately not in
+      // `entries`.
+      evaluateStrongRecallProposal: createStrongRecallProposalReader({
+        entries: composed.entries,
+        scheduler: input.scheduler,
+        now,
+      }),
     });
 
     return {

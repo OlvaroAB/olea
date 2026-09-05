@@ -7,7 +7,7 @@
  * cross-process or rendered-pixel parts.
  */
 import { type DisputeLogRecord, mapMcqRating } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GradeContestPort } from '../../src/review/contest.js';
 import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
 import {
@@ -1540,5 +1540,191 @@ describe('ol-0r92.43 — contestGrade on a still-pending MCQ draft keys by the m
 
     expect(draftAcceptPort.calls).toEqual([]);
     expect(gradeContestPort.contestCalls[0]?.instrumentId).toBe('inst-mcq-1');
+  });
+});
+
+// Feature: F2.21 wiring — features/F2-review.md (olea-service),
+// "the proposal is evaluated after a grade…", "it never competes with F2.12's
+// offer for the same instrument", "the offer and its unaccepted clearing are
+// logged through the existing pair…".
+describe('F2.21 — the strong-recall proposal, wired into the reveal-screen moment (ol-v7r5.40)', () => {
+  const proposalFor = (conceptId: string, promptText: string) => ({
+    shouldPropose: true as const,
+    conceptId,
+    trigger: 'strong-recall-proposal' as const,
+    reason: { kind: 'strong-recall' as const, successfulScoredDays: 4, strongRecallDays: 4 },
+    promptText,
+  });
+
+  it('raises the offer immediately after a grade, carrying the proposed concept and F2.21’s reason line', async () => {
+    const instrument = qaFixture({ instrumentId: 'inst-sr-1', conceptIds: ['concept-strong'] });
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(instrument)],
+        evaluateStrongRecallProposal: (input) =>
+          proposalFor(input.conceptIds[0] ?? '', 'strong recall offer text'),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    expect(session.getStrongRecallOffer()).toBeNull();
+    await session.rate('good');
+
+    expect(session.getStrongRecallOffer()).toEqual({
+      instrument,
+      conceptId: 'concept-strong',
+      promptText: 'strong recall offer text',
+    });
+  });
+
+  it('is evaluated for the concepts the graded instrument teaches, never for the vault', async () => {
+    const asked: (readonly string[])[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(qaFixture({ conceptIds: ['concept-a', 'concept-b'] }))],
+        evaluateStrongRecallProposal: (input) => {
+          asked.push(input.conceptIds);
+          return { shouldPropose: false, because: 'recall-not-yet-strong' };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(asked).toEqual([['concept-a', 'concept-b']]);
+    expect(session.getStrongRecallOffer()).toBeNull();
+  });
+
+  it('is suppressed when F2.12’s confusion offer has already fired for the same item — one offer, not two banners', async () => {
+    const evaluate = vi.fn(() => proposalFor('concept-strong', 'strong recall offer text'));
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(qaFixture({ conceptIds: ['concept-strong'] }))],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'confusion offer text',
+        }),
+        evaluateStrongRecallProposal: evaluate,
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()?.promptText).toBe('confusion offer text');
+    expect(session.getStrongRecallOffer()).toBeNull();
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it('co-exists with F5.3a’s offer — a different concept and a different destination make two real offers', async () => {
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(qaFixture({ conceptIds: ['concept-strong'] }))],
+        evaluateSchedulingObservationRouting: () => ({
+          shouldOffer: true,
+          neighbourConceptId: 'concept-neighbour',
+          promptText: 'reciprocal offer text',
+        }),
+        evaluateStrongRecallProposal: () => proposalFor('concept-strong', 'strong recall text'),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.getSchedulingObservationOffer()?.promptText).toBe('reciprocal offer text');
+    expect(session.getStrongRecallOffer()?.promptText).toBe('strong recall text');
+  });
+
+  it('an absent evaluator never offers — the same "simply cannot offer it" posture every optional port has', async () => {
+    const session = new ReviewSession(baseDeps({ queue: [queueItem(qaFixture())] }));
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.getStrongRecallOffer()).toBeNull();
+  });
+
+  it('resolving returns the offer once and clears it — "one available action," taken once', async () => {
+    const instrument = qaFixture({ conceptIds: ['concept-strong'] });
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(instrument)],
+        evaluateStrongRecallProposal: () => proposalFor('concept-strong', 'x'),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+
+    expect(session.resolveStrongRecallOffer()?.instrument.instrumentId).toBe(
+      instrument.instrumentId,
+    );
+    expect(session.resolveStrongRecallOffer()).toBeNull();
+    expect(session.getStrongRecallOffer()).toBeNull();
+  });
+
+  it('the offer record carries trigger strong-recall-proposal and names the PROPOSED concept, not every concept the instrument teaches', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offer = {
+      instrument: qaFixture({ instrumentId: 'inst-sr-9', conceptIds: ['concept-a', 'concept-b'] }),
+      conceptId: 'concept-b',
+      promptText: 'x',
+    };
+    const eventId = session.recordStrongRecallOfferShown(offer);
+
+    expect(explainBackOfferLog.offered).toEqual([
+      {
+        conceptIds: ['concept-b'],
+        trigger: 'strong-recall-proposal',
+        instrumentId: 'inst-sr-9',
+        eventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined).toEqual([]);
+  });
+
+  it('the paired decline answers the SAME event id — no new persisted shape, and no "declined" state (F2.14a)', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await session.start();
+
+    const offer = {
+      instrument: qaFixture({ instrumentId: 'inst-sr-9', conceptIds: ['concept-b'] }),
+      conceptId: 'concept-b',
+      promptText: 'x',
+    };
+    const offerEventId = session.recordStrongRecallOfferShown(offer);
+    session.recordStrongRecallOfferDeclined(offer, offerEventId);
+
+    expect(explainBackOfferLog.declined).toEqual([
+      {
+        conceptIds: ['concept-b'],
+        trigger: 'strong-recall-proposal',
+        instrumentId: 'inst-sr-9',
+        answers: offerEventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined[0]?.answers).toBe(explainBackOfferLog.offered[0]?.eventId);
+  });
+
+  it('with no offer-log port wired the banner still renders and nothing is written; a null event id is never a decline naming nothing', async () => {
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const unwired = new ReviewSession(baseDeps());
+    await unwired.start();
+    const offer = { instrument: qaFixture(), conceptId: 'concept-b', promptText: 'x' };
+    expect(unwired.recordStrongRecallOfferShown(offer)).toBeNull();
+
+    const wired = new ReviewSession(baseDeps({ explainBackOfferLog }));
+    await wired.start();
+    wired.recordStrongRecallOfferDeclined(offer, null);
+    expect(explainBackOfferLog.declined).toEqual([]);
   });
 });

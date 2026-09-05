@@ -818,7 +818,17 @@ export type { ConceptMasteryResult } from './mastery/rollup.js';
 // imports reaching past this barrel. The workbench does reach into
 // `core/src/mastery/rollup.js` directly, but that is dev tooling and not a
 // precedent for the shipped plugin.
-export { computeAllConceptMastery, masteryAtTimeForConceptIds } from './mastery/rollup.js';
+// `conceptVitalityInstruments` (`ol-v7r5.40`): the join between an already-run
+// `replaySchedulerStates` and `readVitality`'s fold, exported for the same
+// reason the vitality block below says nothing outside core should re-derive
+// vitality locally. `readConceptVitality` is deliberately NOT exported beside
+// it: it replays the whole log on every call, and F2.21's review-session
+// reader replays once per opened session and folds one concept per grade.
+export {
+  computeAllConceptMastery,
+  conceptVitalityInstruments,
+  masteryAtTimeForConceptIds,
+} from './mastery/rollup.js';
 // The sprig data (F2.3, F2.11, P4-T06) and the distribution F6.2's overview is
 // rendered from. Reachable only inside core until now; the Today panel is its
 // first consumer outside it (`ol-lohq`).

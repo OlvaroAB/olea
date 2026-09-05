@@ -22,8 +22,9 @@ import type {
   McqRating,
   Scheduler,
   SchedulingObservationDecision,
+  StrongRecallProposalDecision,
 } from 'olea-core';
-import { mapMcqRating } from 'olea-core';
+import { mapMcqRating, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
@@ -161,6 +162,26 @@ export interface ReviewSessionDeps {
     readonly conceptIds: readonly string[];
   }) => SchedulingObservationDecision;
   /**
+   * F2.21's third trigger for the SAME on-demand offer (`ol-v7r5.40`,
+   * `[D-076]` round 3): is the concept the just-graded instrument teaches
+   * one she is quietly good at, with no depth evidence on record? Composed
+   * at `./strong-recall-wiring.ts`'s `createStrongRecallProposalReader`,
+   * closed over the review log `../review/open-session.ts` already read to
+   * compose this session — exactly the same "per-vault state closed over
+   * here, not threaded from `main.ts`" reason
+   * `evaluateSchedulingObservationRouting` just above gives, and for the
+   * heavier reason too: this decision needs the concept's whole-log mastery
+   * rollup and its vitality reading, neither of which this class holds or
+   * should learn to compute.
+   *
+   * Optional and absent by default, same "simply cannot offer it" posture
+   * every other optional port here has — an absent evaluator reads as "never
+   * offer."
+   */
+  readonly evaluateStrongRecallProposal?: (input: {
+    readonly conceptIds: readonly string[];
+  }) => StrongRecallProposalDecision;
+  /**
    * The kind-general grade-write producer for F5.3a/C5.11's scheduling
    * observation (`[D-185]`, `ol-0r92.41`) — NOT to be confused with
    * `evaluateSchedulingObservationRouting` just above, which reads an
@@ -254,6 +275,22 @@ export interface PendingSchedulingObservationOffer {
   readonly promptText: string;
 }
 
+/**
+ * F2.21's pending offer (`ol-v7r5.40`) — the instrument that was JUST rated
+ * (same caveat as the two above), which of its concepts the proposal is
+ * about, and F2.21's own *"says why it is asking"* line.
+ *
+ * `conceptId` is carried because an instrument may be evidence for several
+ * concepts (D-031) and the proposal is about exactly one of them: it is what
+ * the offer record names, and what a reader of that record needs in order to
+ * tell this offer from the same instrument's F2.12 one.
+ */
+export interface PendingStrongRecallOffer {
+  readonly instrument: ReviewInstrument;
+  readonly conceptId: string;
+  readonly promptText: string;
+}
+
 type InternalPhase =
   | 'loading'
   | 'empty'
@@ -288,6 +325,8 @@ export class ReviewSession {
   private pendingConfusionOffer: PendingConfusionRoutingOffer | null = null;
   /** F5.3a / R7's third trigger (`ol-0r92.11`) — set by `logAndAdvance` after every graded review, cleared by `resolveSchedulingObservationOffer`. */
   private pendingSchedulingObservationOffer: PendingSchedulingObservationOffer | null = null;
+  /** F2.21's third trigger (`ol-v7r5.40`) — set by `logAndAdvance` after every graded review, cleared by `resolveStrongRecallOffer`. */
+  private pendingStrongRecallOffer: PendingStrongRecallOffer | null = null;
 
   constructor(private readonly deps: ReviewSessionDeps) {
     this.items = [...deps.queue];
@@ -787,6 +826,75 @@ export class ReviewSession {
     });
   }
 
+  /**
+   * F2.21's offer for the caller to render, or `null` when none is pending
+   * (`ol-v7r5.40`). Same "read after every render, not inside
+   * `ReviewViewModel`'s phase union" posture the two offers above have —
+   * this offer is about the instrument that was JUST rated.
+   */
+  getStrongRecallOffer(): PendingStrongRecallOffer | null {
+    return this.pendingStrongRecallOffer;
+  }
+
+  /**
+   * The one available action for F2.21's offer, mirroring
+   * `resolveConfusionRoutingOffer` exactly: resolves the just-offered
+   * instrument and clears the pending offer, nothing more. Returns `null`
+   * without touching anything when there is nothing pending.
+   *
+   * The destination is `ExplainBackModal` seeded from the offer's own
+   * instrument, exactly as F2.12's is — unlike F5.3a's offer, this one is
+   * about a concept the graded instrument already teaches, so the seed is
+   * never invented.
+   */
+  resolveStrongRecallOffer(): PendingStrongRecallOffer | null {
+    const offer = this.pendingStrongRecallOffer;
+    if (offer === null) return null;
+    this.pendingStrongRecallOffer = null;
+    return offer;
+  }
+
+  /**
+   * The D7.1 write for an F2.21 offer the instant it reaches the surface —
+   * mirrors `recordExplainBackOfferShown` exactly, except the concept named
+   * is the one the PROPOSAL is about (`offer.conceptId`, one of the
+   * instrument's several under D-031) and the trigger is the literal
+   * `olea-core`'s decision module names,
+   * {@link STRONG_RECALL_PROPOSAL_TRIGGER}, never hand-typed here.
+   *
+   * **No persisted schema change**: `strong-recall-proposal` has been a
+   * member of `olea-contracts`' `explainBackOfferTrigger` since
+   * `[D-178 / LOG-3]`; this is the first writer of it.
+   */
+  recordStrongRecallOfferShown(offer: PendingStrongRecallOffer): string | null {
+    if (this.deps.explainBackOfferLog === undefined) return null;
+    return this.deps.explainBackOfferLog.recordOffered({
+      conceptIds: [offer.conceptId],
+      trigger: STRONG_RECALL_PROPOSAL_TRIGGER,
+      instrumentId: offer.instrument.instrumentId,
+    });
+  }
+
+  /**
+   * The paired write for an F2.21 offer that left the surface unaccepted —
+   * mirrors `recordExplainBackOfferDeclined` exactly, with the same
+   * concept/trigger substitution `recordStrongRecallOfferShown` documents.
+   * `manner` is `'not-taken'`, written by the port: F2.14a rules there is no
+   * dismiss control and declining is not a state.
+   */
+  recordStrongRecallOfferDeclined(
+    offer: PendingStrongRecallOffer,
+    offerEventId: string | null,
+  ): void {
+    if (this.deps.explainBackOfferLog === undefined || offerEventId === null) return;
+    this.deps.explainBackOfferLog.recordDeclined({
+      conceptIds: [offer.conceptId],
+      trigger: STRONG_RECALL_PROPOSAL_TRIGGER,
+      instrumentId: offer.instrument.instrumentId,
+      answers: offerEventId,
+    });
+  }
+
   async skipMissingNote(): Promise<void> {
     if (this.phase !== 'note-missing') return;
     this.index += 1;
@@ -1087,6 +1195,34 @@ export class ReviewSession {
           instrument: stamped.instrument,
           neighbourConceptId: schedulingObservationDecision.neighbourConceptId,
           promptText: schedulingObservationDecision.promptText,
+        }
+      : null;
+
+    // F2.21's third trigger (`ol-v7r5.40`): the same reveal-screen moment,
+    // for the concept(s) the instrument just rated is evidence for. Not
+    // gated on `rating` — like F5.3a above and unlike F2.12, because this
+    // trigger is about accumulated evidence across spaced days, not about
+    // this answer.
+    //
+    // **Suppressed when F2.12 has already fired for this same item.** They
+    // are the same offer — the same action, the same `ExplainBackModal`
+    // seeded from the same instrument — which F2.21 itself says, calling
+    // itself "the same offer shape as F2.12's … triggered from the opposite
+    // side of the evidence." Two banners would be one offer shown twice. No
+    // such suppression against F5.3a's offer: that one's destination is a
+    // DIFFERENT concept, so the two are genuinely two offers, and they
+    // already co-exist by test.
+    const strongRecallDecision =
+      this.pendingConfusionOffer === null
+        ? this.deps.evaluateStrongRecallProposal?.({
+            conceptIds: stamped.instrument.conceptIds,
+          })
+        : undefined;
+    this.pendingStrongRecallOffer = strongRecallDecision?.shouldPropose
+      ? {
+          instrument: stamped.instrument,
+          conceptId: strongRecallDecision.conceptId,
+          promptText: strongRecallDecision.promptText,
         }
       : null;
 

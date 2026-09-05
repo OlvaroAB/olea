@@ -102,6 +102,7 @@ import {
 import type {
   PendingConfusionRoutingOffer,
   PendingSchedulingObservationOffer,
+  PendingStrongRecallOffer,
   ReviewSession,
   ReviewViewModel,
   SessionCompleteSummary,
@@ -167,6 +168,26 @@ interface SchedulingObservationBannerState {
    * The event id `ReviewSession.recordSchedulingObservationOfferShown`
    * returned when this offer arrived — held so a later decline can name it
    * via `answers`. `null` when no `explainBackOfferLog` port is wired.
+   */
+  readonly offerEventId: string | null;
+}
+
+/**
+ * F2.21's strong-recall banner state (`ol-v7r5.40`) — the F2.12 shape again
+ * (`ConfusionBannerState`'s own doc), with `conceptId` standing in for which
+ * of the instrument's several concepts (D-031) the proposal is about. Unlike
+ * F5.3a's, the destination here is the offer's OWN instrument, because the
+ * concept proposed on is one that instrument already teaches.
+ */
+interface StrongRecallBannerState {
+  readonly instrument: ReviewInstrument;
+  readonly conceptId: string;
+  readonly promptText: string;
+  readonly presentedWithInstrumentId: string | null;
+  /**
+   * The event id `ReviewSession.recordStrongRecallOfferShown` returned when
+   * this offer arrived — held so a later decline can name it via `answers`.
+   * `null` when no `explainBackOfferLog` port is wired.
    */
   readonly offerEventId: string | null;
 }
@@ -288,6 +309,7 @@ export class ReviewView extends ItemView {
   private explainWhyPanel: ExplainWhyPanelState | null = null;
   private confusionBanner: ConfusionBannerState | null = null;
   private schedulingObservationBanner: SchedulingObservationBannerState | null = null;
+  private strongRecallBanner: StrongRecallBannerState | null = null;
 
   /**
    * `onReviewActivity` fires whenever her due counts may have moved, which is
@@ -576,6 +598,8 @@ export class ReviewView extends ItemView {
     this.renderConfusionRoutingBanner();
     this.syncSchedulingObservationOffer(this.session);
     this.renderSchedulingObservationBanner();
+    this.syncStrongRecallOffer(this.session);
+    this.renderStrongRecallBanner();
     this.renderHeadingOfferBannerIfAny(this.session);
     const vm = this.session.getViewModel();
     // Every path that changes the queue ends in a `render()`, so this is the one
@@ -1094,6 +1118,102 @@ export class ReviewView extends ItemView {
     )?.instrument;
     if (destination !== undefined) this.openExplainBack?.(destination);
 
+    this.render();
+  }
+
+  // ---- F2.21 strong-recall offer (`ol-v7r5.40`) ----
+
+  /**
+   * The F2.21 mirror of `syncConfusionRoutingOffer` — same offer-arrives /
+   * clears-unaccepted structure, same D7.1 pairing discipline, over
+   * `session.getStrongRecallOffer()` and
+   * `recordStrongRecallOfferShown`/`recordStrongRecallOfferDeclined`. See
+   * that method's own doc for why the banner clears itself once she moves
+   * past the instrument it arrived with rather than carrying a dismiss
+   * control (F2.14a: declining changes nothing and is not a state).
+   */
+  private syncStrongRecallOffer(session: ReviewSession): void {
+    const offer: PendingStrongRecallOffer | null = session.getStrongRecallOffer();
+    const currentInstrumentId = session.currentItem?.instrument.instrumentId ?? null;
+
+    if (
+      offer !== null &&
+      offer.instrument.instrumentId !== this.strongRecallBanner?.instrument.instrumentId
+    ) {
+      this.strongRecallBanner = {
+        instrument: offer.instrument,
+        conceptId: offer.conceptId,
+        promptText: offer.promptText,
+        presentedWithInstrumentId: currentInstrumentId,
+        offerEventId: session.recordStrongRecallOfferShown(offer),
+      };
+      return;
+    }
+    if (
+      this.strongRecallBanner !== null &&
+      this.strongRecallBanner.presentedWithInstrumentId !== currentInstrumentId
+    ) {
+      session.recordStrongRecallOfferDeclined(
+        {
+          instrument: this.strongRecallBanner.instrument,
+          conceptId: this.strongRecallBanner.conceptId,
+          promptText: this.strongRecallBanner.promptText,
+        },
+        this.strongRecallBanner.offerEventId,
+      );
+      this.strongRecallBanner = null;
+    }
+  }
+
+  /**
+   * **No new surface.** F2.21: *"the same offer shape as F2.12's 'You've
+   * missed this four times… want to explain it back?'"* — so this draws
+   * F2.12's own card classes rather than a fourth banner style, and
+   * `styles.css` gains nothing. The extra `olea-review-strong-recall-*`
+   * classes carry no rules at all; they exist so a test and a workbench tour
+   * can tell which of the two triggers produced the card on screen, which the
+   * shared classes alone cannot answer.
+   *
+   * One action, no dismiss control, same label F2.12's card carries — the
+   * offer is the same offer.
+   */
+  private renderStrongRecallBanner(): void {
+    const state = this.strongRecallBanner;
+    if (state === null) return;
+
+    const banner = this.contentEl.createDiv({
+      cls: 'olea-review-confusion-banner olea-review-strong-recall-banner',
+    });
+    banner.createEl('p', {
+      cls: 'olea-review-confusion-prompt olea-review-strong-recall-prompt',
+      text: state.promptText,
+    });
+
+    const btn = banner.createEl('button', {
+      cls: 'olea-review-primary-action',
+      attr: { [FOCUSABLE_ATTR]: 'true' },
+    });
+    btn.createSpan({ text: 'Explain it back' });
+    this.registerDomEvent(btn, 'click', () => this.handleAcceptStrongRecallOffer());
+  }
+
+  /**
+   * The banner's one action, mirroring `handleAcceptConfusionOffer` exactly
+   * — including the destination, which is the offer's OWN instrument
+   * (`ExplainBackModal`'s only seed shape, and here always a real one: the
+   * proposed concept is one that instrument teaches, so nothing is invented
+   * the way F5.3a's neighbour lookup has to be).
+   *
+   * **Never through `recordStrongRecallOfferDeclined`** — same "accepting is
+   * not a decline" posture the other two handlers document.
+   */
+  private handleAcceptStrongRecallOffer(): void {
+    const session = this.session;
+    const pending = this.strongRecallBanner;
+    if (session === null || pending === null) return;
+    session.resolveStrongRecallOffer();
+    this.strongRecallBanner = null;
+    this.openExplainBack?.(pending.instrument);
     this.render();
   }
 
