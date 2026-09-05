@@ -526,6 +526,27 @@ export {
 // "has no card" coverage window, and the wiring seam this stops short of.
 export { detectHeadingOffers, isQuestionShapedHeading } from './heading-offer/detect.js';
 export type { HeadingOfferCandidate, HeadingQuestionRule } from './heading-offer/types.js';
+export type {
+  DocumentLedger,
+  DocumentLedgerRow,
+  InstrumentLocations,
+  SessionLedger,
+  SessionLedgerItem,
+} from './history/index.js';
+// The History ledger projections ([D-102], `ol-0r92.53`) — read-only folds
+// over the review log into the per-document and per-session shapes. No view,
+// command or registered surface reads these yet: [D-102]'s contract clause is
+// unwritten and no user-visible affordance may exist without one. They land
+// first so the clause is ratified against a shape known to be derivable, and
+// so the two facts the log CANNOT supply (a document path on any event; any
+// session identity at all) are visible in code rather than discovered during
+// the build. See history/types.ts's module doc.
+export {
+  documentPathOf,
+  foldDocumentLedger,
+  foldSessionLedgers,
+  ledgerInstrumentId,
+} from './history/index.js';
 export {
   backoffDelayMs,
   classifyHeadroom,
