@@ -18,6 +18,18 @@
  * golden suite captures, the product's own scrollHeight fits inside the pane.
  * It fails when a card grows, when the workbench chrome takes more room, or
  * when someone changes the viewport without re-checking either.
+ *
+ * KNOWN RED, DELIBERATELY (`ol-qgac`, re-measured 2026-09-05): `bulk-review/
+ * bulk-review-two-groups` and `bulk-review/bulk-review-empty` fail here and
+ * are left failing. The cause (`ol-gzfh`) is `.olea-bulk-review-root` in
+ * `packages/plugin/styles.css` missing `box-sizing: border-box` alongside its
+ * `height: 100%` and fixed vertical padding — a CONSTANT ~48px overflow
+ * beyond whatever container height the root is given, present even on the
+ * near-empty state. No viewport override in `TALL_STATE_VIEWPORTS` can close
+ * this gap: raising the viewport grows root's container by the same amount
+ * it grows root, so the fixed padding overflow reproduces at every size. Do
+ * not "fix" this file by adding a bulk-review override — fix `ol-gzfh`
+ * instead, in `packages/plugin/styles.css`, which this file does not own.
  */
 import { expect, test } from '@playwright/test';
 import {

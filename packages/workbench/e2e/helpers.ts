@@ -202,24 +202,39 @@ export type Surface =
  * states left out below all fit the default pane unaided.
  */
 export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; height: number }>> = {
-  // Oracle — all 10 states measure the same (779px real content): the host
-  // pane renders the identical real GapView/world per persona regardless of
-  // which plan-refresh regime the inspector (outside the pane) is reporting.
-  'oracle-ranked': { width: 1280, height: 1120 },
-  'oracle-abstained': { width: 1280, height: 1120 },
-  'gap-mastery': { width: 1280, height: 1120 },
-  'gap-coverage': { width: 1280, height: 1120 },
-  'gap-material': { width: 1280, height: 1120 },
-  'coverage-unreadable-source': { width: 1280, height: 1120 },
-  'plan-fresh': { width: 1280, height: 1120 },
-  'plan-stale-offline': { width: 1280, height: 1120 },
-  'plan-expired-offline': { width: 1280, height: 1120 },
-  'oracle-struggling': { width: 1280, height: 1120 },
-  // Timeline — all 4 states measure the same (761px real content).
-  'timeline-steady': { width: 1280, height: 1120 },
-  'timeline-struggler': { width: 1280, height: 1120 },
-  'timeline-lapsed-returner': { width: 1280, height: 1120 },
-  'timeline-crammer': { width: 1280, height: 1120 },
+  // Oracle — all 10 states measure the same (RE-MEASURED 2026-09-05,
+  // `ol-qgac`: 1287px real content, up from the 779px this table originally
+  // carried). The growth is `[D-224]`/its build `ol-l5og.18.3` (STY-0c):
+  // GapView moved from a sidebar-hosted ranked list to full-tab per-concept
+  // detail pages (`main.ts`'s `revealGapView` now opens via
+  // `workspace.getLeaf('tab')`, the same door `revealReviewView` uses for
+  // F2.2), carrying the corrected kit's non-dismissible counterweight block,
+  // named past-paper chip rows and larger stage marks. This is the SAME
+  // "full-tab page, bump the viewport rather than fight it" treatment
+  // session's states already get below — not an exemption, because the
+  // point of this table is still "the golden must capture the whole page",
+  // and a full tab is exactly as entitled to be tall as a review session is.
+  // The host pane renders the identical real GapView/world per persona
+  // regardless of which plan-refresh regime the inspector (outside the pane)
+  // is reporting.
+  'oracle-ranked': { width: 1280, height: 1640 },
+  'oracle-abstained': { width: 1280, height: 1640 },
+  'gap-mastery': { width: 1280, height: 1640 },
+  'gap-coverage': { width: 1280, height: 1640 },
+  'gap-material': { width: 1280, height: 1640 },
+  'coverage-unreadable-source': { width: 1280, height: 1640 },
+  'plan-fresh': { width: 1280, height: 1640 },
+  'plan-stale-offline': { width: 1280, height: 1640 },
+  'plan-expired-offline': { width: 1280, height: 1640 },
+  'oracle-struggling': { width: 1280, height: 1640 },
+  // Timeline — all 4 states measure the same (RE-MEASURED 2026-09-05,
+  // `ol-qgac`: 1244px real content, up from 761px). Same cause as oracle
+  // above: `timeline-scenarios.ts` renders "time as an axis over the real
+  // GapView", so `[D-224]`'s full-tab restructuring grew this group too.
+  'timeline-steady': { width: 1280, height: 1600 },
+  'timeline-struggler': { width: 1280, height: 1600 },
+  'timeline-lapsed-returner': { width: 1280, height: 1600 },
+  'timeline-crammer': { width: 1280, height: 1600 },
   // Trends — 908/1310/705px real content; `trends-healthy`,
   // `trends-course-behind-neutralised` and `trends-cramming-neutralised` fit
   // the default pane unaided and are deliberately absent.
@@ -249,11 +264,16 @@ export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; heigh
  * ~448px walk-mode pane unaided). Steps 7 and 8 mount the FIXTURE oracle
  * (`oracle-fixture`, D-041) over the real fixture vault rather than the
  * synthetic corpus the flat `oracle` surface uses, and need far more room
- * than flat oracle does — 3086px, not 779px. Step 10 (timeline, 761px), step
- * 11 (session, 2744px — session-exam-eve-90, the tallest screen in the app)
- * and step 12 (trends, 1310px) match their flat-surface equivalents. Each
- * entry is `measured need + walk-mode overhead + margin`, rounded up and
- * verified by `pane-fit.spec.ts`'s own walk-step loop.
+ * than flat oracle does — 3086px, not 779px. Step 11 (session, 2744px —
+ * session-exam-eve-90, the tallest screen in the app) and step 12 (trends,
+ * 1310px) match their flat-surface equivalents. Each entry is `measured need
+ * + walk-mode overhead + margin`, rounded up and verified by
+ * `pane-fit.spec.ts`'s own walk-step loop.
+ *
+ * Step 10 (timeline) RE-MEASURED 2026-09-05 (`ol-qgac`): 1244px, up from
+ * 761px, for the same `[D-224]` full-tab GapView restructuring that grew the
+ * flat `timeline`/`oracle` surfaces above — step 10 renders the same
+ * `timeline` content, just inside walk mode's own (taller) chrome overhead.
  *
  * Step 1 (ol-7kyo, WBF-5): the note view's own content needs ~474px and the
  * default-viewport pane only offers ~448px — a PRE-EXISTING 26px overflow
@@ -277,7 +297,7 @@ export const WALK_STEP_VIEWPORTS: Partial<Record<number, { width: number; height
   1: { width: 1280, height: 950 },
   7: { width: 1280, height: 3650 },
   8: { width: 1280, height: 3650 },
-  10: { width: 1280, height: 1250 },
+  10: { width: 1280, height: 1740 },
   11: { width: 1280, height: 3300 },
   12: { width: 1280, height: 1820 },
 };
