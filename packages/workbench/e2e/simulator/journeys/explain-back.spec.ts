@@ -25,21 +25,18 @@
  * `SIMULATOR_CASSETTE` doc), bundled into `dist/simulator-cassette.json` by
  * `copySimulatorCassette` and fetched by `simulator/controller.ts`'s `loadReplayCassette`.
  *
- * **That recorded entry currently MISSES on every zero-spend replay, so this journey's
- * `verdict`/`accepted` goldens capture the refusal phase, not the graded one — diagnosed on
- * `ol-0j02` [WBX-28], discovered from and blocking `ol-l5og.18.19` [STY-9].** The recording ran
- * with real retrieval embeddings live (`WB_SIM_TRANSPORT=record` against a spend-authorized
- * proxy); pure replay has no bundled embeddings for the fixture world, so `olea-core`'s
- * `retrieve()` degrades to keyword-only and selects a different `sourceBlocks` set (this vault's
- * root `README.md` also matches the topic string in keyword search), which never hashes to the
- * recorded entry. Fixing this needs either a re-record or a bundled fixture embedding cassette
- * (both spend-bearing) — see `ol-0j02` for the exact commands and cost estimate. **A cassette
- * miss renders `EXPLAIN_BACK_CHECK_FAILED_TEXT`** (per F9.S5's "a journey step never skips a
- * cassette miss" scenario), which is what currently happens here — this journey's own assertion
- * below handles both outcomes rather than assuming one, exactly as F9.S5 requires; on a refusal
- * the "accepted" step is the refusal still on screen (there is nothing to accept), never a
- * skipped capture. Once `ol-0j02` lands a working recording, this comment's "currently MISSES"
- * paragraph should be removed rather than left to rot next to a fix that supersedes it.
+ * **Zero-spend replay reaches the graded phase** (`ol-0j02` [WBX-28], unblocking
+ * `ol-l5og.18.19` [STY-9]): the SAME `simulator-cassette.json` also bundles the `retrieval.embed.v1`
+ * responses this journey's grounding step needs — real, legitimately-recorded vectors for the
+ * fixture vault's corpus, re-packaged as ordinary `GenerationCassetteEntry` rows keyed by
+ * `(taskId, payloadHash)` exactly like the judge entry, so `ReplayTransport.send`'s existing
+ * "falls through to the cassette lookup" path for an embed request with no `embedShards` answer
+ * (`transport/index.ts`'s own module doc) serves them with zero network. With those bundled,
+ * `olea-core`'s `retrieve()` selects the SAME `sourceBlocks` set pure replay and the original
+ * recording both now agree on, so the judge request hashes to the one recorded entry instead of
+ * degrading to a keyword-only set that never matched it. This journey's own assertion below still
+ * handles both outcomes rather than assuming one (F9.S5's "a journey step never skips a cassette
+ * miss") — a future fixture-vault edit that changes the corpus would still need a re-record.
  */
 import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';
