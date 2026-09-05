@@ -24,7 +24,7 @@
  * asked for.
  */
 import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
-import { provisionalConceptKey } from 'olea-core';
+import { checkRoutingReachesSelection, provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
@@ -102,6 +102,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [],
     });
     // Nothing was created — the folder-less path never reaches the home-note step.
     expect(await vault.list()).toEqual([]);
@@ -125,6 +126,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
 
     const pending = await cache.listPending();
@@ -249,6 +251,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       skippedDuplicate: 1,
       skippedRouting: 0,
+      routingObservations: [],
     });
   });
 
@@ -295,6 +298,7 @@ describe('runGenerationSweep', () => {
       refused: 1,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
     expect(await cache.list()).toEqual([]);
 
@@ -338,6 +342,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [],
     });
   });
 });
@@ -369,6 +374,7 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
 
     const pending = await cache.listPending();
@@ -513,6 +519,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 1,
+      routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: false }],
     });
     expect(await cache.list()).toEqual([]);
   });
@@ -556,6 +563,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 0,
+      routingObservations: [{ consulted: true, kind: 'category', deficit: 2, generated: true }],
     });
   });
 
@@ -609,6 +617,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       skippedDuplicate: 0,
       skippedRouting: 1,
+      routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: false }],
     });
   });
 });
@@ -709,5 +718,116 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
 
     expect(seenRequest?.purpose).toBe('readiness');
     expect(seenRequest && 'registerHint' in seenRequest).toBe(false);
+  });
+});
+
+// `[MOM-8.1 / BD-1]` (`ol-3ux7.5.57.9.1`) — component register row 2.2's second
+// health check, run against the REAL sweep's own observations rather than a
+// hand-built fixture. The point of the check is that it can go red, so the
+// bypass case is asserted here as a fact about `runGenerationSweep`, not only
+// about `checkRoutingReachesSelection` in isolation (that unit's own suite is
+// `packages/core/src/checks/routing-consumption.spec.ts`).
+describe('the row 2.2 health check reads the sweep it actually ran (`[MOM-8.1 / BD-1]`)', () => {
+  const COURSE_FOLDER_NOTE = '01 Courses/COGS214/Lecture 3.md';
+  const CONCEPT_NOTE = '01 Courses/COGS214/Working memory.md';
+  const conceptKey = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
+
+  function classifiedConcept(): ConceptRecord {
+    return {
+      key: conceptKey,
+      name: 'Working memory',
+      tier: 2,
+      courses: ['COGS214'],
+      sourcePaths: [CONCEPT_NOTE],
+    };
+  }
+
+  const classifier: KnowledgeKindClassifierPort = {
+    async classify() {
+      return { kind: 'category', confidence: 0.9 };
+    },
+  };
+
+  it('goes RED when the sweep runs with routing omitted — the bypass the check exists to catch', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+      // no `routing` — the pre-`ol-tz7v` unconditional-draft reading
+    });
+
+    const verdict = checkRoutingReachesSelection(report.routingObservations);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.measured.bypassed).toBe(1);
+    expect(verdict.measured.consulted).toBe(0);
+  });
+
+  it('goes GREEN when the same sweep consults routing, and the label reaches the verdict', async () => {
+    const vault = new MemoryVaultSource({
+      [CONCEPT_NOTE]: '---\ntopic: [Working memory]\ncourse: COGS214\n---\n\nA short-term store.\n',
+    });
+    const cache = createVaultDraftCacheStore(vault);
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [classifiedConcept()],
+      draftForConcept: async () => groundedResponse('Working memory'),
+      routing: { classifier },
+    });
+
+    const verdict = checkRoutingReachesSelection(report.routingObservations);
+    expect(verdict.ok).toBe(true);
+    expect(verdict.measured.bypassed).toBe(0);
+    expect(report.routingObservations[0]?.kind).toBe('category');
+  });
+
+  it('carries no vault content into the observations — labels and numbers only (INV-3)', async () => {
+    const vault = new MemoryVaultSource({
+      [CONCEPT_NOTE]: '---\ntopic: [Working memory]\ncourse: COGS214\n---\n\nA short-term store.\n',
+    });
+    const cache = createVaultDraftCacheStore(vault);
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [classifiedConcept()],
+      draftForConcept: async () => groundedResponse('Working memory'),
+      routing: { classifier },
+    });
+
+    const serialised = JSON.stringify(report.routingObservations);
+    expect(serialised).not.toContain('Working memory');
+    expect(serialised).not.toContain(conceptKey);
+    expect(serialised).not.toContain('COGS214');
+    expect(serialised).not.toContain(CONCEPT_NOTE);
+  });
+
+  it('leaves the vault untouched beyond what the sweep already wrote (INV-2)', async () => {
+    const source = '---\ntopic: [Working memory]\ncourse: COGS214\n---\n\nA short-term store.\n';
+    const vault = new MemoryVaultSource({ [CONCEPT_NOTE]: source });
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [classifiedConcept()],
+      draftForConcept: async () => groundedResponse('Working memory'),
+      routing: { classifier },
+    });
+
+    // Observing routing is a read, never a write: the source note comes back
+    // byte-identical, and nothing new appears outside the draft cache.
+    expect(await vault.read(CONCEPT_NOTE)).toBe(source);
+    const written = (await vault.list()).filter((path) => path !== CONCEPT_NOTE);
+    expect(written.every((path) => path.startsWith('.olea/'))).toBe(true);
   });
 });

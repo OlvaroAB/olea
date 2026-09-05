@@ -53,6 +53,17 @@ export type {
   ThematicBreakBlock,
 } from './block/types.js';
 export { isLossless } from './block/types.js';
+// `[MOM-8.1 / BD-1]` (`ol-3ux7.5.57.9.1`): component register row 2.2's second
+// health check — "does the classification reach SELECTION?", as distinct from
+// CHK-2's question about the table's own shape. Exported from the root (most
+// of `./checks/` is reached through that directory's own barrel instead)
+// because its observation type is a field of `GenerationSweepReport` in the
+// plugin package — the selection path that produces the readings.
+export {
+  checkRoutingReachesSelection,
+  type RoutingSelectionMeasured,
+  type RoutingSelectionObservation,
+} from './checks/routing-consumption.js';
 export type { ConceptKeyInput, ConceptKeySource } from './concept/concept-key.js';
 // The provisional concept-key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`).
 // See `./concept/concept-key.js`'s module doc for what this derivation can

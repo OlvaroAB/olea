@@ -91,7 +91,13 @@
  * for the request-shaping half this consultation feeds.
  */
 
-import type { ConceptRecord, ExtractedUnit, InstrumentCitation, VaultSource } from 'olea-core';
+import type {
+  ConceptRecord,
+  ExtractedUnit,
+  InstrumentCitation,
+  RoutingSelectionObservation,
+  VaultSource,
+} from 'olea-core';
 import { courseFromPath, DEFAULT_COURSES_FOLDER } from 'olea-core';
 import type {
   DraftQuizCardsDeps,
@@ -193,6 +199,20 @@ export interface GenerationSweepReport {
   readonly skippedDuplicate: number;
   /** Concepts routing (`deps.routing`) determined do not currently warrant this sweep's one generation capability — never drafted, never cached, so re-consulted next sweep. Always `0` when `deps.routing` is absent. */
   readonly skippedRouting: number;
+  /**
+   * `[MOM-8.1 / BD-1]` (`ol-3ux7.5.57.9.1`) — component register row 2.2's
+   * "does the classification reach selection?" health check reads this.
+   * One entry per candidate that reached the selection point this sweep
+   * (cache-deduped candidates never got there, so they are absent), in the
+   * order selection considered them. Content-free by construction (INV-3):
+   * a knowledge-kind label, a deficit, two booleans — never a concept name,
+   * key, course code or path. Fed to `olea-core`'s
+   * `checkRoutingReachesSelection` (`checks/routing-consumption.ts`), which
+   * goes red when `consulted` is `false` (routing bypassed) or when a zero
+   * deficit was generated for anyway (routing overruled). Empty when the
+   * sweep considered nothing — which that check reads as red, not green.
+   */
+  readonly routingObservations: readonly RoutingSelectionObservation[];
 }
 
 const ZERO_REPORT: GenerationSweepReport = {
@@ -201,6 +221,7 @@ const ZERO_REPORT: GenerationSweepReport = {
   refused: 0,
   skippedDuplicate: 0,
   skippedRouting: 0,
+  routingObservations: [],
 };
 
 function defaultGenerateDraftId(
@@ -294,6 +315,11 @@ export async function runGenerationSweep(
     return inventoryPromise;
   };
 
+  // `[MOM-8.1 / BD-1]`: what selection actually did, one entry per candidate
+  // that reached the routing consultation point — see
+  // `GenerationSweepReport.routingObservations`.
+  const routingObservations: RoutingSelectionObservation[] = [];
+
   let attempted = 0;
   let drafted = 0;
   let refused = 0;
@@ -334,10 +360,27 @@ export async function runGenerationSweep(
         const classification = await classifyForRouting(routing, deps.vault, candidate);
         const inventory = (await getInventory()).get(candidate.key) ?? EMPTY_INVENTORY;
         const decision = decideConceptRouting(classification, inventory);
-        if (quizDeficit(decision) === 0) {
+        const deficit = quizDeficit(decision);
+        // `[MOM-8.1 / BD-1]`: the label only, never `candidate.name`/`.key`
+        // (INV-3) — `checkRoutingReachesSelection`'s own doc states the same
+        // constraint from the reading end.
+        routingObservations.push({
+          consulted: true,
+          kind:
+            decision.classification.status === 'classified' ? decision.classification.kind : null,
+          deficit,
+          generated: deficit !== 0,
+        });
+        if (deficit === 0) {
           skippedRouting += 1;
           continue;
         }
+      } else {
+        // Routing bypassed for this candidate — the sweep is about to spend
+        // its generative capability without consulting component 2.2 at all.
+        // Recorded rather than left absent, so the health check can go RED on
+        // it instead of merely seeing a shorter list.
+        routingObservations.push({ consulted: false, kind: null, deficit: null, generated: true });
       }
 
       attempted += 1;
@@ -431,5 +474,5 @@ export async function runGenerationSweep(
     }
   }
 
-  return { attempted, drafted, refused, skippedDuplicate, skippedRouting };
+  return { attempted, drafted, refused, skippedDuplicate, skippedRouting, routingObservations };
 }

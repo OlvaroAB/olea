@@ -90,6 +90,11 @@ export {
   type RhythmTwinCase,
 } from './rhythm-neutralised-twin.js';
 export {
+  checkRoutingReachesSelection,
+  type RoutingSelectionMeasured,
+  type RoutingSelectionObservation,
+} from './routing-consumption.js';
+export {
   checkScheduleFreshnessNeutralisedTwin,
   type ScheduleFreshnessNeutralisedTwinMeasured,
   type ScheduleFreshnessTwinCase,
