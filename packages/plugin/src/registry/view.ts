@@ -87,6 +87,25 @@
  * construction. No affordance here touches the note — not even a link that
  * opens it — because the only thing that clears this state is her own next
  * edit, on her own time; its copy lives in `./copy.ts` too.
+ *
+ * **`ol-l5og.18.17` [STY-7] reaches the opened panel (frame 02) with the
+ * same finish `ol-l5og.18.1` already gave the closed row.** `renderColumnHeader`
+ * adds frame 01's own `CONCEPT / MASTERY / INSTRUMENTS` header row above the
+ * list; `renderDetailHeader` restates the concept and its mastery pair at
+ * the top of the opened panel, in the kit's own eyebrow/label register
+ * (`conceptEyebrowLine`/`masteryStatedLine`, `./copy.ts`); `renderActions`'s
+ * rename/withdraw buttons and every source/edit/withdraw button in
+ * `renderInstrumentRow` now carry `.olea-button`/`.olea-button-quiet`
+ * (`styles.css`'s control system) instead of the host's default filled
+ * chrome; and `renderInstrumentRow` replaces the single bulleted string per
+ * instrument with four real columns (kind, the note/heading it lives at,
+ * its sources, its actions) — never the kit's own "question text" or
+ * "schedule state" columns, which have no clause or data field behind them
+ * here (that method's own doc has the fuller argument). **Still no split,
+ * no merge, no lineage badge, and no display-name note** — this bead's own
+ * brief lists both of the latter as kit elements with no clause or existing
+ * copy behind them, not elements to build; unchanged from this file's own
+ * position above.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -100,6 +119,7 @@ import {
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   aliasesLine,
+  conceptEyebrowLine,
   coursesLine,
   DUPLICATE_TITLE_LABEL,
   duplicateTitleLine,
@@ -110,6 +130,8 @@ import {
   INSTRUMENTS_SECTION_HEADING,
   instrumentLabel,
   instrumentMixLine,
+  instrumentReferenceLabel,
+  masteryStatedLine,
   NO_INSTRUMENTS_LINE,
   NOTE_OFFER_ACCEPT_ACTION,
   NOTE_OFFER_DECLINE_ACTION,
@@ -118,6 +140,9 @@ import {
   OPEN_SOURCE_LOCATION_ACTION,
   REGISTRY_ALL_FILTER_LABEL,
   REGISTRY_CLOSE_ACTION,
+  REGISTRY_COLUMN_CONCEPT_LABEL,
+  REGISTRY_COLUMN_INSTRUMENTS_LABEL,
+  REGISTRY_COLUMN_MASTERY_LABEL,
   REGISTRY_EMPTY_LINE,
   REGISTRY_FILTER_EMPTY_LINE,
   REGISTRY_NEEDS_TENDING_FILTER_LABEL,
@@ -465,6 +490,7 @@ export class RegistryView extends ItemView {
     }
 
     const list = root.createDiv({ cls: 'olea-registry-list' });
+    this.renderColumnHeader(list);
     for (const entry of visible) this.renderConcept(list, entry);
 
     if (hadFocus) this.focusableControls()[0]?.focus();
@@ -522,6 +548,22 @@ export class RegistryView extends ItemView {
     );
   }
 
+  /**
+   * `ol-l5og.18.17` [STY-7], fix item 4: frame 01's column-header row —
+   * `CONCEPT / MASTERY / INSTRUMENTS` over the un-labelled action column —
+   * rendered once above the list rather than per row. Shares
+   * `renderCompactRow`'s own four-column grid (via `.olea-registry-colhead`'s
+   * CSS, not a repeated inline template here) so its cells line up with the
+   * columns underneath without this method needing to know their widths.
+   */
+  private renderColumnHeader(root: HTMLElement): void {
+    const head = root.createDiv({ cls: 'olea-registry-colhead' });
+    head.createDiv({ cls: 'olea-registry-colhead-cell', text: REGISTRY_COLUMN_CONCEPT_LABEL });
+    head.createDiv({ cls: 'olea-registry-colhead-cell', text: REGISTRY_COLUMN_MASTERY_LABEL });
+    head.createDiv({ cls: 'olea-registry-colhead-cell', text: REGISTRY_COLUMN_INSTRUMENTS_LABEL });
+    head.createDiv({ cls: 'olea-registry-colhead-cell' });
+  }
+
   private renderConcept(root: HTMLElement, entry: RegistryConceptEntry): void {
     const row = root.createDiv({ cls: 'olea-registry-row' });
     row.dataset.oleaConceptKey = entry.key;
@@ -532,10 +574,32 @@ export class RegistryView extends ItemView {
 
     if (this.expanded.has(entry.key)) {
       const detail = row.createDiv({ cls: 'olea-registry-detail' });
+      this.renderDetailHeader(detail, entry);
       this.renderActions(detail, entry);
       this.renderSourceLocations(detail, entry.sourceLocations);
       this.renderInstruments(detail, entry);
     }
+  }
+
+  /**
+   * `ol-l5og.18.17` [STY-7], fix item 3: the opened panel's own eyebrow (the
+   * concept and its courses) and mastery-pair line — the kit's frame 02
+   * sheet header, restated here from facts the closed row already carries
+   * (`conceptEyebrowLine`, `masteryStatedLine`) rather than new data. **No
+   * display-name note and no disabled "Split..." affordance** — both are
+   * kit elements this bead's brief lists rather than builds; see this
+   * feature's own scenario note in `features/F8-concepts-scope.md` for why.
+   */
+  private renderDetailHeader(root: HTMLElement, entry: RegistryConceptEntry): void {
+    const header = root.createDiv({ cls: 'olea-registry-detail-header' });
+    header.createDiv({
+      cls: 'olea-registry-detail-eyebrow',
+      text: conceptEyebrowLine(entry.displayName, entry.courses),
+    });
+    header.createDiv({
+      cls: 'olea-registry-detail-mastery',
+      text: masteryStatedLine(MASTERY_DISPLAY[entry.mastery.state].label, entry.vitality),
+    });
   }
 
   /**
@@ -773,7 +837,10 @@ export class RegistryView extends ItemView {
     const list = section.createEl('ul');
     for (const location of locations) {
       const item = list.createEl('li');
-      const button = item.createEl('button', { text: sourceLocationLabel(location) });
+      const button = item.createEl('button', {
+        cls: 'olea-button-quiet',
+        text: sourceLocationLabel(location),
+      });
       button.addEventListener('click', () => {
         void this.deps.openSourceLocation(location);
       });
@@ -817,12 +884,17 @@ export class RegistryView extends ItemView {
       value: entry.displayName,
       attr: { 'aria-label': RENAME_ACTION },
     });
-    const renameButton = actions.createEl('button', { text: RENAME_ACTION });
+    // `.olea-button` (bordered secondary) for Rename — the kit's own `.btn` on
+    // "Rename this concept"; `.olea-button-quiet` for Withdraw/Restore just
+    // below — the kit's `.btn.quiet` on "Prune this concept" (this surface's
+    // ratified `Withdraw`/`Restore` verbs, F8.5).
+    const renameButton = actions.createEl('button', { cls: 'olea-button', text: RENAME_ACTION });
     renameButton.addEventListener('click', () => {
       void this.deps.rename(entry, renameInput.value).then(() => this.refresh());
     });
 
     const withdrawButton = actions.createEl('button', {
+      cls: 'olea-button-quiet',
       text: entry.pruned ? RESTORE_CONCEPT_ACTION : WITHDRAW_CONCEPT_ACTION,
     });
     withdrawButton.addEventListener('click', () => {
@@ -850,62 +922,102 @@ export class RegistryView extends ItemView {
       return;
     }
 
-    const list = section.createEl('ul');
-    for (const instrument of entry.instruments) {
-      const item = list.createEl('li', { cls: 'olea-registry-instrument-row' });
-      item.dataset.oleaInstrumentId = instrument.instrumentId;
-      if (instrument.pruned) item.addClass('olea-registry-instrument-withdrawn');
+    const list = section.createEl('ul', { cls: 'olea-registry-instrument-list' });
+    for (const instrument of entry.instruments) this.renderInstrumentRow(list, instrument);
+  }
 
-      const label = instrument.heading
-        ? `${instrumentLabel(instrument.instrumentType)} — ${instrument.noteTitle} (${instrument.heading})`
-        : `${instrumentLabel(instrument.instrumentType)} — ${instrument.noteTitle}`;
-      item.createSpan({ text: label });
-      if (instrument.pruned) {
-        item.createSpan({ cls: 'olea-registry-withdrawn-badge', text: ` ${WITHDRAWN_LABEL}` });
-      }
+  /**
+   * `ol-l5og.18.17` [STY-7], fix item 1: one instrument as a four-column
+   * table row — kind, the note/heading it lives at, its source-location
+   * actions, and its edit/withdraw actions — replacing the single bulleted
+   * string per instrument the third kit-fidelity sweep found
+   * (`docs/design/dsn3-registry/registry-surface.html` frame 02's `.irow`).
+   *
+   * **The kit's "question text" and "schedule state" columns are not
+   * reproduced.** F8.4 hands an instrument's own content to Obsidian
+   * ("Olea does not build a text editor for them") and
+   * `RegistryInstrumentSummary` carries no due-date/review-count field, so
+   * neither has a clause or a data field behind it here — the third column
+   * is the real per-instrument fact this registry already holds (its
+   * sources) rather than an invented one. See this feature's own scenario
+   * note in `features/F8-concepts-scope.md` for the fuller argument.
+   *
+   * An instrument's explain-back history, when it has one, is a
+   * variable-length list rather than a single fact, so it still renders in
+   * full below the row's four columns (`renderExplainBackHistory`), never
+   * folded into one of the four cells.
+   */
+  private renderInstrumentRow(list: HTMLElement, instrument: RegistryInstrumentSummary): void {
+    const item = list.createEl('li', { cls: 'olea-registry-instrument-row' });
+    item.dataset.oleaInstrumentId = instrument.instrumentId;
+    if (instrument.pruned) item.addClass('olea-registry-instrument-withdrawn');
 
-      this.renderExplainBackHistory(item, instrument.explainBackHistory);
+    const grid = item.createDiv({ cls: 'olea-registry-instrument-grid' });
 
-      const editButton = item.createEl('button', { text: EDIT_INSTRUMENT_ACTION });
-      editButton.addEventListener('click', () => {
-        void this.deps.editInstrument(instrument);
-      });
+    grid.createDiv({
+      cls: 'olea-registry-instrument-kind',
+      text: instrumentLabel(instrument.instrumentType),
+    });
 
-      for (const location of instrument.sourceLocations) {
-        const openButton = item.createEl('button', {
-          text: OPEN_SOURCE_LOCATION_ACTION,
-          // Every button in this loop shares the same visible text, which
-          // collapses to one indistinguishable accessible name when an
-          // instrument has more than one source location (`sourceLocations`
-          // is `readonly RegistrySourceLocation[]`, `../../core/registry/types.ts`).
-          // `sourceLocationLabel` — already used verbatim as the concept-level
-          // button's own text a few lines up in `renderSourceLocations` — says
-          // which location this one opens without adding any new copy.
-          attr: {
-            'aria-label': `${OPEN_SOURCE_LOCATION_ACTION}: ${sourceLocationLabel(location)}`,
-          },
-        });
-        openButton.addEventListener('click', () => {
-          void this.deps.openSourceLocation(location);
-        });
-      }
-
-      const withdrawButton = item.createEl('button', {
-        text: instrument.pruned ? RESTORE_INSTRUMENT_ACTION : WITHDRAW_INSTRUMENT_ACTION,
-      });
-      withdrawButton.addEventListener('click', () => {
-        // `ol-l5og.14`: same withdraw-only announcement as the concept-grain
-        // action above, reusing `WITHDRAWN_LABEL` (already rendered as this
-        // row's badge once `instrument.pruned` is true) — no new copy coined.
-        const wasPruned = instrument.pruned;
-        const action = instrument.pruned
-          ? this.deps.restoreInstrument(instrument)
-          : this.deps.withdrawInstrument(instrument);
-        void action.then(() => {
-          void this.refresh();
-          if (!wasPruned) this.announce(WITHDRAWN_LABEL);
-        });
+    const referenceCell = grid.createDiv({ cls: 'olea-registry-instrument-reference' });
+    referenceCell.createSpan({
+      text: instrumentReferenceLabel(instrument.noteTitle, instrument.heading),
+    });
+    if (instrument.pruned) {
+      referenceCell.createSpan({
+        cls: 'olea-registry-withdrawn-badge',
+        text: ` ${WITHDRAWN_LABEL}`,
       });
     }
+
+    const sourcesCell = grid.createDiv({ cls: 'olea-registry-instrument-sources' });
+    for (const location of instrument.sourceLocations) {
+      const openButton = sourcesCell.createEl('button', {
+        cls: 'olea-button-quiet',
+        text: OPEN_SOURCE_LOCATION_ACTION,
+        // Every button in this loop shares the same visible text, which
+        // collapses to one indistinguishable accessible name when an
+        // instrument has more than one source location (`sourceLocations`
+        // is `readonly RegistrySourceLocation[]`, `../../core/registry/types.ts`).
+        // `sourceLocationLabel` — already used verbatim as the concept-level
+        // button's own text a few lines up in `renderSourceLocations` — says
+        // which location this one opens without adding any new copy.
+        attr: {
+          'aria-label': `${OPEN_SOURCE_LOCATION_ACTION}: ${sourceLocationLabel(location)}`,
+        },
+      });
+      openButton.addEventListener('click', () => {
+        void this.deps.openSourceLocation(location);
+      });
+    }
+
+    const actionsCell = grid.createDiv({ cls: 'olea-registry-instrument-actions' });
+    const editButton = actionsCell.createEl('button', {
+      cls: 'olea-button-quiet',
+      text: EDIT_INSTRUMENT_ACTION,
+    });
+    editButton.addEventListener('click', () => {
+      void this.deps.editInstrument(instrument);
+    });
+
+    const withdrawButton = actionsCell.createEl('button', {
+      cls: 'olea-button-quiet',
+      text: instrument.pruned ? RESTORE_INSTRUMENT_ACTION : WITHDRAW_INSTRUMENT_ACTION,
+    });
+    withdrawButton.addEventListener('click', () => {
+      // `ol-l5og.14`: same withdraw-only announcement as the concept-grain
+      // action above, reusing `WITHDRAWN_LABEL` (already rendered as this
+      // row's badge once `instrument.pruned` is true) — no new copy coined.
+      const wasPruned = instrument.pruned;
+      const action = instrument.pruned
+        ? this.deps.restoreInstrument(instrument)
+        : this.deps.withdrawInstrument(instrument);
+      void action.then(() => {
+        void this.refresh();
+        if (!wasPruned) this.announce(WITHDRAWN_LABEL);
+      });
+    });
+
+    this.renderExplainBackHistory(item, instrument.explainBackHistory);
   }
 }

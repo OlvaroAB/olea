@@ -3,6 +3,7 @@ import type { RegistryInstrumentSummary } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   aliasesLine,
+  conceptEyebrowLine,
   coursesLine,
   DUPLICATE_TITLE_LABEL,
   duplicateTitleLine,
@@ -13,6 +14,7 @@ import {
   explainBackLine,
   instrumentLabel,
   instrumentMixLine,
+  instrumentReferenceLabel,
   masteryStatedLine,
   NOTE_OFFER_ACCEPT_ACTION,
   NOTE_OFFER_DECLINE_ACTION,
@@ -20,6 +22,9 @@ import {
   NOTHING_BUILT_YET_LABEL,
   REGISTRY_ALL_FILTER_LABEL,
   REGISTRY_CLOSE_ACTION,
+  REGISTRY_COLUMN_CONCEPT_LABEL,
+  REGISTRY_COLUMN_INSTRUMENTS_LABEL,
+  REGISTRY_COLUMN_MASTERY_LABEL,
   REGISTRY_FILTER_EMPTY_LINE,
   REGISTRY_NEEDS_TENDING_FILTER_LABEL,
   REGISTRY_NOTHING_BUILT_FILTER_LABEL,
@@ -201,6 +206,38 @@ describe('coursesLine', () => {
 
   it('lists every course, verbatim, M:N', () => {
     expect(coursesLine(['TESTC101', 'TESTC202'])).toBe('courses: TESTC101, TESTC202');
+  });
+});
+
+describe('conceptEyebrowLine', () => {
+  it("joins the display name and its courses with the kit's own separator", () => {
+    expect(conceptEyebrowLine('Interference theory', ['TESTC101', 'TESTC202'])).toBe(
+      'Interference theory · TESTC101 · TESTC202',
+    );
+  });
+
+  it('is just the name when the concept carries no course association', () => {
+    expect(conceptEyebrowLine('Interference theory', [])).toBe('Interference theory');
+  });
+});
+
+describe('instrumentReferenceLabel', () => {
+  it('is the note title alone when no heading is known', () => {
+    expect(instrumentReferenceLabel('Exposition Summary', null)).toBe('Exposition Summary');
+  });
+
+  it('appends the heading in parentheses when known', () => {
+    expect(instrumentReferenceLabel('Exposition Summary', 'How is texture kept even?')).toBe(
+      'Exposition Summary (How is texture kept even?)',
+    );
+  });
+});
+
+describe('registry column-header labels', () => {
+  it("are the kit's own three column names, frame 01", () => {
+    expect(REGISTRY_COLUMN_CONCEPT_LABEL).toBe('Concept');
+    expect(REGISTRY_COLUMN_MASTERY_LABEL).toBe('Mastery');
+    expect(REGISTRY_COLUMN_INSTRUMENTS_LABEL).toBe('Instruments');
   });
 });
 

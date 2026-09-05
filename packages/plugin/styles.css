@@ -3789,6 +3789,30 @@ button.olea-review-mcq-option:hover {
   flex-direction: column;
 }
 
+/* `ol-l5og.18.17` [STY-7], fix item 4: frame 01's own column-header row
+   (`CONCEPT / MASTERY / INSTRUMENTS`, over the un-labelled action column),
+   rendered once above the list (`view.ts`'s `renderColumnHeader`). Shares
+   `.olea-registry-row-compact`'s own grid-template-columns so the labels
+   line up with the cells beneath them — kept identical on purpose rather
+   than each rule guessing at the other's widths. */
+.olea-registry-colhead {
+  display: grid;
+  grid-template-columns: 1fr 130px 160px 84px;
+  gap: 14px;
+  padding: 0 0 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-registry-colhead-cell {
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
 .olea-registry-row {
   border-bottom: 1px solid var(--olea-host-line);
   padding: 10px 0;
@@ -3889,9 +3913,16 @@ button.olea-review-mcq-option:hover {
    aliases, withdrawn note) — visible whether or not the row is open; see
    `renderStandingFacts`'s own doc for why these stay outside the detail gate. ---- */
 
+/* `ol-l5og.18.17` [STY-7], fix item 5: the third kit-fidelity sweep found a
+   standing-fact sentence taking a full third line on every row that fires
+   it (8 of 8 rows in one steady capture). Content is contract-driven
+   (F8.4, `[D-203]`); the fix here is presentational — a `max-width` so a
+   long fact wraps onto two narrower lines rather than spanning the row's
+   full width like a banner. */
 .olea-registry-aliases,
 .olea-registry-explain-back {
   margin-top: 6px;
+  max-width: 640px;
   font-size: 11.5px;
   color: var(--olea-host-muted);
 }
@@ -3900,6 +3931,7 @@ button.olea-review-mcq-option:hover {
 .olea-registry-duplicate-title,
 .olea-registry-thin-note {
   margin-top: 6px;
+  max-width: 640px;
   font-size: 11.5px;
   color: var(--olea-host-muted);
 }
@@ -3947,6 +3979,30 @@ button.olea-review-mcq-option:hover {
   border-top: 1px solid var(--olea-host-line);
 }
 
+/* `ol-l5og.18.17` [STY-7], fix item 3: the opened panel's own eyebrow and
+   mastery-pair line (`view.ts`'s `renderDetailHeader`) — the kit's frame 02
+   sheet header, restated here from facts the closed row already carries. No
+   display-name note and no disabled "Split..." affordance are drawn beside
+   it — both are kit elements this bead's brief lists rather than builds. */
+.olea-registry-detail-header {
+  margin-bottom: 10px;
+}
+
+.olea-registry-detail-eyebrow {
+  font-family: var(--olea-host-mono);
+  font-size: var(--olea-type-eyebrow);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+  margin-bottom: 4px;
+}
+
+.olea-registry-detail-mastery {
+  font-size: 12.5px;
+  color: var(--olea-host-text);
+}
+
 .olea-registry-concept-actions {
   display: flex;
   align-items: center;
@@ -3977,6 +4033,12 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
+.olea-registry-instrument-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 .olea-registry-instrument-row {
   padding: 8px 0;
   border-top: 1px solid var(--olea-host-line);
@@ -3996,6 +4058,50 @@ button.olea-review-mcq-option:hover {
 
 .olea-registry-instrument-withdrawn {
   color: var(--olea-host-muted);
+}
+
+/* `ol-l5og.18.17` [STY-7], fix item 1: one instrument as four real columns
+   (`view.ts`'s `renderInstrumentRow`) — kind, the note/heading it lives at,
+   its source-location actions, and its edit/withdraw actions — replacing
+   the single bulleted string per instrument the third kit-fidelity sweep
+   found. The kit's own "question text"/"schedule state" columns are not
+   reproduced (see that method's own doc for why); the third column here is
+   the real per-instrument fact this registry already holds instead. */
+.olea-registry-instrument-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr 120px 190px;
+  gap: 10px;
+  align-items: start;
+}
+
+.olea-registry-instrument-kind {
+  font-family: var(--olea-host-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-registry-instrument-reference {
+  min-width: 0;
+  color: var(--olea-host-text);
+}
+
+.olea-registry-instrument-sources,
+.olea-registry-instrument-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* Overrides `.olea-registry-instrument-row button`'s own margin above —
+   these two cells already space their buttons with `gap`, so the older
+   margin-based spacing would double up. Equal specificity to that rule;
+   wins on file order (declared after it). */
+.olea-registry-instrument-sources button,
+.olea-registry-instrument-actions button {
+  margin: 0;
 }
 
 .olea-registry-explain-back-history {
@@ -5185,10 +5291,37 @@ button.olea-review-mcq-option:hover {
 
 .olea-registry-root .olea-registry-row-mastery-stage {
   color: var(--olea-host-muted);
+  /* `ol-l5og.18.17` [STY-7], fix item 7: the third sweep still read this as
+     "near-full text strength" after the colour-only fix above — italic
+     recedes further for the same contrast-budget reason `.olea-registry-
+     row-mix-quiet` below already states, rather than reaching for
+     `--olea-host-faint` (below the measured text floor). */
+  font-style: italic;
 }
 
 .olea-registry-root .olea-registry-row-mix-quiet {
   font-style: italic;
+}
+
+/* `ol-l5og.18.17` [STY-7], fix item 7 (continued): "too early to say" is the
+   non-tending vitality reading, named in the same sweep line as the stage
+   word above. `:not(.is-tending)` keeps the one honey mark this row is
+   allowed (`.olea-registry-row-mastery-vitality.is-tending`, above) at full
+   strength — only the recessive reading recedes. */
+.olea-registry-root .olea-registry-row-mastery-vitality:not(.is-tending) {
+  font-style: italic;
+}
+
+/* `ol-l5og.18.17` [STY-7], fix item 6: "TOO SHORT TO DRAFT renders as a
+   boxed mono chip at higher contrast than the concept name beside it; the
+   kit keeps that class of fact in the quiet mix column." Overrides the
+   shared badge box (border/background) above for this one badge only —
+   `.olea-registry-withdrawn-badge`/`-duplicate-title-badge` keep their box,
+   since neither was named by this finding. */
+.olea-registry-root .olea-registry-thin-note-badge {
+  border-color: transparent;
+  background: transparent;
+  padding-left: 0;
 }
 
 /* ============================================================

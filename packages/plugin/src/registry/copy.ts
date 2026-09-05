@@ -102,6 +102,18 @@ export function coursesLine(courses: readonly string[]): string {
   return `${noun}: ${courses.join(', ')}`;
 }
 
+/**
+ * `ol-l5og.18.17` [STY-7]: the opened detail panel's own eyebrow line — the
+ * kit's frame 02 header ("Interference theory · COGS214 · PSYC231", name
+ * then courses, `·`-joined). The closed row already states the same two
+ * facts separately (`h3` plus `.olea-registry-courses`); this restates them
+ * together at the top of the opened panel, matching the kit's own sheet
+ * header rather than assuming the panel is read right below its own row.
+ */
+export function conceptEyebrowLine(displayName: string, courses: readonly string[]): string {
+  return courses.length === 0 ? displayName : `${displayName} · ${courses.join(' · ')}`;
+}
+
 /** Display-only alias note (F8.4's rename) — states the fact of a prior name, never a claim about why it changed. */
 export function aliasesLine(aliases: readonly string[]): string | null {
   if (aliases.length === 0) return null;
@@ -345,6 +357,28 @@ export function thinNoteLine(wordCount: number): string {
 
 export const INSTRUMENTS_SECTION_HEADING = 'Instruments';
 export const NO_INSTRUMENTS_LINE = 'No instruments yet for this concept.';
+
+/**
+ * `ol-l5og.18.17` [STY-7]: the closed list's column-header row (kit frame
+ * 01's `colhead` — `CONCEPT / MASTERY / INSTRUMENTS`, over the un-labelled
+ * action column). Rendered once above the list, never per row.
+ */
+export const REGISTRY_COLUMN_CONCEPT_LABEL = 'Concept';
+export const REGISTRY_COLUMN_MASTERY_LABEL = 'Mastery';
+export const REGISTRY_COLUMN_INSTRUMENTS_LABEL = 'Instruments';
+
+/**
+ * `ol-l5og.18.17` [STY-7]: one instrument row's reference cell — the note
+ * (and heading, when known) it lives at, never its content. F8.4's own
+ * words: "editing an instrument hands off to Obsidian... Olea does not
+ * build a text editor for them" — so this is deliberately the same fact
+ * `instrumentLabel` was already concatenated with inline in `view.ts`,
+ * pulled out here so the four-column table renders it as its own cell
+ * rather than folding it into the kind label.
+ */
+export function instrumentReferenceLabel(noteTitle: string, heading: string | null): string {
+  return heading === null ? noteTitle : `${noteTitle} (${heading})`;
+}
 
 /** `[D-171]`'s section heading for a concept's or instrument's list of vault locations it was derived from — never a citation string, always a place to go. */
 export const SOURCE_LOCATIONS_HEADING = 'Sources';
