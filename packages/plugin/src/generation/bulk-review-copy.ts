@@ -135,3 +135,17 @@ export const BULK_REVIEW_COMPLETION_HEADING = 'Done.';
  * generator, when one exists, has one place to add its own label.
  */
 export const BULK_REVIEW_ITEM_TYPE_LABEL = 'MCQ';
+
+/**
+ * `[STY-6]` (`ol-l5og.18.15`) — the document header's right slot when nothing
+ * in this document has been resolved this sitting.
+ *
+ * The kit's own header carries this sentence (`TriageStates.jsx`'s
+ * `TriageHeader` right slot) and BRIEF.md calls it the surface's central
+ * promise. It is not an invention of the styling lane: F3.3 states the same
+ * fact as a guarantee — drafts "are held in the cache and enter the deck and
+ * **her notes** only on acceptance" — so this string is that clause read back
+ * to her at the one screen where a whole document's drafts are in front of
+ * her at once. It is a statement, never a control.
+ */
+export const BULK_REVIEW_DECK_REASSURANCE = 'Nothing is in your deck yet.';

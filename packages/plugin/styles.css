@@ -3216,39 +3216,54 @@ button.olea-review-mcq-option:hover {
   margin-top: 32px;
 }
 
+/* `[STY-6]`: the kit's `TriageHeader` — course eyebrow over the document's
+   own title on the left, one statement of where its drafts stand on the
+   right, the batch action last. F3.3 makes the DOCUMENT the unit of this
+   surface ("clear a document's drafts in one sitting"), which is why the
+   identity sits at the head of the group and not only inside each row. */
 .olea-bulk-review-group-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 12px;
+  align-items: flex-end;
+  gap: 16px;
+  padding-bottom: 14px;
   margin-bottom: 2px;
   border-bottom: 1px solid var(--olea-host-line);
 }
 
+.olea-bulk-review-group-identity {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
 .olea-bulk-review-group-course {
-  flex: none;
   font: 500 10px / 1 var(--olea-host-mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--olea-host-brand);
 }
 
-.olea-bulk-review-group-dot {
-  flex: none;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--olea-host-faint);
-}
-
 .olea-bulk-review-group-note {
-  flex: 1;
   min-width: 0;
-  font: 500 15px / 1.3 var(--olea-host-content-font);
+  font: 500 19px / 1.25 var(--olea-host-question-font);
   color: var(--olea-host-text);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* F6.7: what she has MET and resolved, or F3.3's own guarantee before she
+   has resolved anything — never a total, a remainder or a denominator. The
+   kit's `12 of 34` is not built; `bulk-review-view.ts`'s module doc carries
+   the argument. */
+.olea-bulk-review-group-progress {
+  flex: none;
+  font: 400 11.5px / 1 var(--olea-host-mono);
+  /* The kit sets this slot on its faintest ink; `ol-nrrm`'s 4.5:1 floor puts
+     real sentences on `--olea-host-muted`, and this one is a sentence. */
+  color: var(--olea-host-muted);
 }
 
 .olea-bulk-review-remainder {
@@ -3288,9 +3303,11 @@ button.olea-review-mcq-option:hover {
   border-bottom: none;
 }
 
-.olea-bulk-review-item:hover,
-.olea-bulk-review-item:focus-within {
-  background: var(--olea-host-elev);
+/* `[STY-6]`: hover is a hint that a row can be opened, never the open state
+   itself — the focused tier below owns `--olea-host-elev`, and two rows
+   wearing one ground is what made every row read as expanded. */
+.olea-bulk-review-item--pending:hover {
+  background: color-mix(in srgb, var(--olea-host-text) 3%, transparent);
 }
 
 .olea-bulk-review-item-body {
@@ -3444,6 +3461,166 @@ button.olea-review-mcq-option:hover {
 .olea-bulk-review-complete-tally {
   font: 500 13px / 1 var(--olea-host-mono);
   color: var(--olea-host-muted);
+}
+
+/* ---- `[STY-6]` (`ol-l5og.18.15`) The three densities ----
+
+   Kit: `pass2-triage-ingestion/ui_kits/olea-plugin/TriageParts.jsx` —
+   `TriageSettled` (dimmed, one line, the outcome she chose), `TriagePending`
+   (one line, waiting its turn) and `TriageFocus` (the only row with body
+   detail, an olive draft gutter and a full action row). `[STY-0e]` built
+   every row at focused density and disclosed this tier model as a follow-up;
+   this is it.
+
+   The tier is a CLASS the view toggles, never a re-render, and every row's
+   full content is always in the DOM — see `bulk-review-view.ts`'s module doc
+   for why (a re-render from a `focusin` handler destroys the button under a
+   click). One deliberate departure from the kit: a pending row KEEPS its
+   keep/fix/bin controls, where the kit's has none, so a mouse user never has
+   to focus a row before she can act on it. What collapses is the distractor
+   pool, the concept line and the action row's weight — never `[D-216]`'s
+   named origin, which clause 2 makes always-visible on every live row. ---- */
+
+/* A document she has finished clearing keeps its header and its settled
+   rows for the rest of the sitting — it is the record of a finished document
+   rather than a group still awaiting review, which is why it wears its own
+   class. Panel chrome matched to `.olea-bulk-review-group`'s own (`[STY-1]`'s
+   panel section further down this file) so the two read as one list. */
+.olea-bulk-review-cleared {
+  border: 1px solid var(--olea-host-line);
+  border-radius: var(--olea-radius-panel, 12px);
+  background: var(--olea-host-elev);
+  padding: 0 18px 14px;
+}
+
+.olea-bulk-review-cleared + .olea-bulk-review-group,
+.olea-bulk-review-group + .olea-bulk-review-cleared,
+.olea-bulk-review-cleared + .olea-bulk-review-cleared {
+  margin-top: 18px;
+}
+
+/* Settled — what she already decided in this document, this sitting. Not a
+   control: F3.3's "retained in full, never deleted" is what makes a decision
+   reversible, and it is reversible in the log rather than by a button this
+   list would have to invent. */
+.olea-bulk-review-settled {
+  display: flex;
+  flex-direction: column;
+  opacity: 0.5;
+}
+
+.olea-bulk-review-settled-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--olea-host-line);
+}
+
+.olea-bulk-review-settled-stem {
+  flex: 1;
+  min-width: 0;
+  font: 400 13px / 1.4 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olea-bulk-review-settled-state {
+  flex: none;
+  font: 400 10px / 1 var(--olea-host-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.olea-bulk-review-settled-state--accepted {
+  color: var(--olea-host-accept);
+}
+
+.olea-bulk-review-settled-state--edited {
+  color: var(--olea-host-attention);
+}
+
+.olea-bulk-review-settled-state--rejected {
+  color: var(--olea-host-reject);
+}
+
+/* Pending — one line, no body detail competing for the eye. */
+.olea-bulk-review-item--pending {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-type {
+  padding-top: 0;
+  align-self: center;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-content {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-stem {
+  flex: 1;
+  min-width: 12ch;
+  font: 400 13.5px / 1.4 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-concept,
+.olea-bulk-review-item--pending .olea-bulk-review-item-pool {
+  display: none;
+}
+
+/* `[D-216]` clause 2/3: the named origin and its one-step source peek both
+   stay on a pending row. The clamp is on the SENTENCE, never on the row —
+   clipping the container would take the peek button off screen entirely,
+   which is the grey-out-by-accident this view's module doc rules out. */
+.olea-bulk-review-item--pending .olea-bulk-review-item-source {
+  flex: none;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-source > span {
+  max-width: 30ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-item-actions {
+  flex: none;
+}
+
+.olea-bulk-review-item--pending .olea-bulk-review-action {
+  min-height: 26px;
+  padding: 0 9px;
+  border-color: var(--olea-host-line);
+  background: transparent;
+  font-size: 11.5px;
+}
+
+/* Focused — the one open row, on the kit's olive draft gutter. */
+.olea-bulk-review-item--focused {
+  padding-top: 20px;
+  padding-bottom: 18px;
+  margin-left: -12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--olea-host-brand);
+  border-radius: 0 10px 10px 0;
+  background: var(--olea-host-elev);
+}
+
+.olea-bulk-review-item--focused .olea-bulk-review-item-type {
+  color: var(--olea-host-brand);
 }
 
 /* ---- Motion — calm control transitions only, guarded (sweep: "no motion
