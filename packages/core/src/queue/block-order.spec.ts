@@ -518,3 +518,70 @@ describe('applyCourseBlocking — the pure reordering pass, in isolation', () =>
     expect(applyCourseBlocking({ items: [], candidatesById, now: NOW })).toEqual([]);
   });
 });
+
+describe("C7.10's prerequisite reader — ordering inside a tie band (MOM-8.2, ol-3ux7.5.57.9.2)", () => {
+  // Two instruments, one course, identically overdue by the same whole day —
+  // an exact `[D-113]` tie band, where overdue-first is indifferent. The
+  // dependent's instrument arrives first.
+  const overdue = addDays(NOW, -3);
+  const candidates: readonly QueueCandidate[] = [
+    candidate({
+      instrumentId: 'dependent-item',
+      conceptIds: ['key-beta'],
+      state: stateDue(overdue),
+    }),
+    candidate({
+      instrumentId: 'prerequisite-item',
+      conceptIds: ['key-alpha'],
+      state: stateDue(overdue),
+    }),
+  ];
+  const prerequisiteConceptKeys = new Map([['key-beta', new Set(['key-alpha'])]]);
+
+  it('meets the prerequisite first, and leaves the order untouched without the edge', () => {
+    const withEdge = compose({ candidates, suspended: new Set(), prerequisiteConceptKeys });
+    const withoutEdge = compose({ candidates, suspended: new Set() });
+
+    expect(idsOf(withoutEdge)).toEqual(['dependent-item', 'prerequisite-item']);
+    expect(idsOf(withEdge)).toEqual(['prerequisite-item', 'dependent-item']);
+    // The edge is what changed the order — remove the reader and these two
+    // read identically, which is exactly what `checkRelationReaderFires`
+    // grades as `readerFired` for `prerequisite`.
+    expect(idsOf(withEdge)).not.toEqual(idsOf(withoutEdge));
+  });
+
+  it('never promotes a prerequisite past a genuinely more overdue item', () => {
+    const staggered: readonly QueueCandidate[] = [
+      candidate({
+        instrumentId: 'dependent-item',
+        conceptIds: ['key-beta'],
+        state: stateDue(addDays(NOW, -9)),
+      }),
+      candidate({
+        instrumentId: 'prerequisite-item',
+        conceptIds: ['key-alpha'],
+        state: stateDue(addDays(NOW, -1)),
+      }),
+    ];
+    const result = compose({
+      candidates: staggered,
+      suspended: new Set(),
+      prerequisiteConceptKeys,
+    });
+    // [D-113]'s overdue-first total order wins: the edge may only reorder
+    // within an exact tie band, never across one.
+    expect(idsOf(result)).toEqual(['dependent-item', 'prerequisite-item']);
+  });
+
+  it('applyCourseBlocking itself is a no-op with an empty prerequisite map', () => {
+    const composed = compose({ candidates, suspended: new Set() });
+    const byId = new Map(candidates.map((c) => [c.instrumentId, c]));
+    const reordered = applyCourseBlocking({
+      items: composed.items,
+      candidatesById: byId,
+      now: NOW,
+      prerequisiteConceptKeys: new Map(),
+    });
+    expect(reordered.map((item) => item.instrumentId)).toEqual(idsOf(composed));
+  });
+});

@@ -83,6 +83,7 @@
  * states for its version, and `block-order.spec.ts` pins it for this one.
  */
 
+import { orderByPrerequisite } from '../concept/prerequisite-order.js';
 import { daysBetween } from '../dates.js';
 import {
   withinBlockAssessmentProximity,
@@ -116,6 +117,8 @@ export interface ApplyCourseBlockingInput {
   readonly now: Date;
   /** F2.19 — see `ComposeQueueInput.relatedConceptKeys`. */
   readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** C7.10's `prerequisite` reader — see `ComposeQueueInput.prerequisiteConceptKeys`. */
+  readonly prerequisiteConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
   /** F2.19 — see `ComposeQueueInput.assessmentContext`. */
   readonly assessmentContext?: ReadonlyMap<VaultPath, QueueAssessmentContext>;
   /** `[D-149]` (`ol-v7r5.22`) — see `ComposeQueueInput.arrivalDays`. */
@@ -196,6 +199,7 @@ function groupingScore(
 function withinBlockOrderForQueue(
   bucket: readonly Placed[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  prerequisiteConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, QueueAssessmentContext> | undefined,
   arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   conceptSourcePaths: ReadonlyMap<string, readonly VaultPath[]> | undefined,
@@ -234,7 +238,20 @@ function withinBlockOrderForQueue(
       // Stable: equal scores (including the all-zero no-signal case) leave
       // the band in the order it already held.
       scored.sort((a, b) => b.score - a.score);
-      result.push(...scored.map((s) => s.p));
+      // C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`):
+      // "what should be solid before this is attempted". Applied LAST and
+      // only here, inside an exact `overdueDays` tie band, so `[D-113]`'s
+      // overdue-first total order stays structurally unoverridable — see
+      // `../concept/prerequisite-order.ts`'s module doc. Stable and a
+      // provable no-op with no edges, so it cannot disturb the F2.19 order
+      // above except where an edge genuinely says one item comes first.
+      result.push(
+        ...orderByPrerequisite(
+          scored.map((s) => s.p),
+          (p) => p.conceptKey,
+          prerequisiteConceptKeys,
+        ),
+      );
     }
     i = j;
   }
@@ -258,6 +275,7 @@ export function applyCourseBlocking(input: ApplyCourseBlockingInput): readonly Q
     candidatesById,
     now,
     relatedConceptKeys,
+    prerequisiteConceptKeys,
     assessmentContext,
     arrivalDays,
     conceptSourcePaths,
@@ -286,6 +304,7 @@ export function applyCourseBlocking(input: ApplyCourseBlockingInput): readonly Q
       withinBlockOrderForQueue(
         bucket,
         relatedConceptKeys,
+        prerequisiteConceptKeys,
         assessmentContext,
         arrivalDays,
         conceptSourcePaths,

@@ -304,6 +304,17 @@ export interface ComposeQueueInput {
    */
   readonly relatedConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
   /**
+   * C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`): the
+   * dependent's `conceptKey` → the `conceptKey`s that should be solid before
+   * it, produced by `../concept/prerequisite-order.js`'s
+   * `resolvePrerequisiteConceptKeys`. Applied strictly inside an exact
+   * overdue tie band, so `[D-113]`'s overdue-first total order is never
+   * overridden — see that module's doc for the whole argument.
+   * **Optional and safe to omit entirely**: an omitted or empty map is a
+   * byte-for-byte no-op, pinned in `block-order.spec.ts`.
+   */
+  readonly prerequisiteConceptKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
    * F2.19 (`ol-ua0i`): F1.7's per-assessment date and resolved scope, keyed
    * by the exact `VaultPath` a candidate's own `targetAssessmentPath` names
    * — see {@link QueueAssessmentContext}. **Optional and safe to omit

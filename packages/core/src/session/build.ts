@@ -68,6 +68,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import type { AssessmentConceptContext } from '../assessment/scope-concept-keys.js';
 import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
 import type { AssessmentRecord } from '../assessment/types.js';
+import { resolvePrerequisiteConceptKeys } from '../concept/prerequisite-order.js';
 import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
@@ -353,6 +354,16 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     input.relations ?? [],
     instruments.concepts,
   );
+  // C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`): the same
+  // already-produced enumeration and the same already-threaded `relations`
+  // list, resolved a second way — the corpus stage's `prerequisite` edges
+  // become an ordering INSIDE an exact overdue tie band. Empty in, empty out,
+  // and an empty map is a proven no-op in `block-order.ts`, so this is
+  // unconditional for the same reason the resolver above is.
+  const { prerequisiteConceptKeys } = resolvePrerequisiteConceptKeys(
+    input.relations ?? [],
+    instruments.concepts,
+  );
   const { assessmentContext } = resolveAssessmentGroupingContext(
     input.assessments ?? [],
     instruments.concepts,
@@ -385,6 +396,7 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     ...(input.formatPreference !== undefined ? { formatPreference: input.formatPreference } : {}),
     ...(input.dedupeByConcept !== undefined ? { dedupeByConcept: input.dedupeByConcept } : {}),
     relatedConceptKeys,
+    prerequisiteConceptKeys,
     assessmentContext,
     conceptSourcePaths,
     arrivalDays,
