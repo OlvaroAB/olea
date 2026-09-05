@@ -4172,6 +4172,15 @@ button.olea-review-mcq-option:hover {
    section is that pass, ported from `docs/design/pass5b-mastery-ratified`'s
    Candidate E (`Pass5bCoverage.jsx`, the ratified grove kit, `[D-054]`).
 
+   `ol-l5og.18.18` (STY-8) added the `'inferred'`-branch card treatment
+   (`.olea-grove-inferred*`), the growing/ground/no-material split
+   (`.olea-grove-coverage-split`) and the offer card's own divider
+   (`.olea-grove-offers`) — see `grove/view.ts`'s own module doc for the full
+   fix list. Its fourth fix, the stage label's mono/uppercase-to-lowercase-
+   body-face correction, was already landed by a prior cross-cutting pass —
+   `.olea-grove-root .olea-grove-stage-label` in "The design system" section
+   below (`ol-l5og.18.11`) — verified via `git blame`, not touched again here.
+
    NOT joined to the shared `:is(.olea-review-root, .olea-today-root,
    .olea-gap-root, .olea-session-root)` host-reads block further up this
    file, deliberately: `test/today/styles.spec.ts`, `test/gap/
@@ -4313,6 +4322,44 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
+/* `ol-l5og.18.18` (STY-8), fix item 1: the panel the `'inferred'` branch's
+   disclosure sentence and name cards sit inside (`renderInferred`,
+   `grove/view.ts`). The kit authored no frame for this branch — this borrows
+   the pane's own "Olea has something to say before the grid" idiom
+   (`.olea-grove-unreadable`'s bordered box, below) rather than inventing a
+   new one. */
+.olea-grove-inferred {
+  padding: 12px 14px;
+  border: 1px solid var(--olea-host-line);
+  border-radius: 8px;
+}
+
+.olea-grove-inferred .olea-grove-disclaimer {
+  margin-bottom: 0;
+}
+
+.olea-grove-inferred .olea-grove-empty {
+  margin-top: 10px;
+}
+
+/* One card per Olea-found name, in the kit's own card treatment
+   (`.olea-grove-cell-planted`'s wash/radius, below) minus the header sprig
+   and the footer stage — this branch's concepts are `GroveVolunteerCell`s
+   with no `state` field to put in either. */
+.olea-grove-inferred-concepts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.olea-grove-inferred-cell {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--olea-host-wash);
+}
+
 /* F8.3: the count and the denominator's source, side by side — never
    painted as an alert or a progress colour; this is provenance, like the
    gap view's own `.olea-gap-scope` line. */
@@ -4327,6 +4374,13 @@ button.olea-review-mcq-option:hover {
 }
 
 .olea-grove-summary-line {
+  color: var(--olea-host-muted);
+}
+
+/* `ol-l5og.18.18` (STY-8), fix item 2: the kit's own growing/ground/no-
+   material split (`groveCoverageSplitLine`) — same provenance tone as
+   `.olea-grove-summary-line`, never a progress colour. */
+.olea-grove-coverage-split {
   color: var(--olea-host-muted);
 }
 
@@ -4530,15 +4584,6 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-text);
 }
 
-/* The bare-list rendering the `'inferred'` branch uses (F8.1 scenario 3) —
-   no card, no border, since this is Olea's own guess, never the grove
-   grid. */
-.olea-grove-concepts .olea-grove-concept {
-  padding: 3px 0;
-  font-size: 12.5px;
-  color: var(--olea-host-text);
-}
-
 /* ---- The legend (`renderLegend`) ---- */
 .olea-grove-legend {
   display: flex;
@@ -4581,12 +4626,30 @@ button.olea-review-mcq-option:hover {
   );
 }
 
-/* ---- The standing offer card (F8.8/D-134 Q1/Q10) ---- */
+/* ---- The standing offer card (F8.8/D-134 Q1/Q10) ----
+
+   `ol-l5og.18.18` (STY-8), fix item 3: `.olea-grove-offers` wraps this
+   course's offer card(s) (`renderCourse`, `grove/view.ts`) in the same
+   divider-and-spacing treatment `.olea-grove-volunteers` already uses for
+   its own "clearly a new section, not a continuation of the grid above"
+   break. Previously the card sat straight in the course box with only a
+   14px margin, reading as a stray row hugging the concept grid rather than
+   a separate offer — the kit draws no continuous grid split by an unrelated
+   card. */
+.olea-grove-offers {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--olea-host-line);
+}
+
 .olea-grove-offer {
-  margin-top: 14px;
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--olea-host-wash);
+}
+
+.olea-grove-offer + .olea-grove-offer {
+  margin-top: 10px;
 }
 
 .olea-grove-offer-line {

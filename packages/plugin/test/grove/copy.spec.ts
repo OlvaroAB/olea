@@ -12,6 +12,7 @@ import {
   GROVE_INFERRED_DISCLAIMER,
   GROVE_MATERIAL_GAP_LABEL,
   GROVE_VIEW_TITLE,
+  groveCoverageSplitLine,
   grovePapersLabel,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
@@ -47,6 +48,13 @@ const PAPERS_LABELS: readonly string[] = [
   grovePapersLabel(6, 6),
 ];
 
+/** Representative `groveCoverageSplitLine` outputs (`ol-l5og.18.18`, STY-8, fix item 2) — same "sweep a templated function's output" convention as the others above, including the all-zero and no-ground-no-gap edge cases. */
+const COVERAGE_SPLITS: readonly string[] = [
+  groveCoverageSplitLine(0, 0, 0),
+  groveCoverageSplitLine(1, 0, 0),
+  groveCoverageSplitLine(4, 3, 2),
+];
+
 /** Every string this module can put in front of her, across representative summaries — the sweep target for F8.3's ban, matching `gap/copy.ts`'s own convention. */
 function everyProducibleString(): readonly string[] {
   return [
@@ -54,6 +62,7 @@ function everyProducibleString(): readonly string[] {
     ...SUMMARIES.map(groveSummaryLine),
     ...SHRINK_RECEIPTS,
     ...PAPERS_LABELS,
+    ...COVERAGE_SPLITS,
   ];
 }
 
@@ -84,6 +93,11 @@ describe('grove copy — F8.3 no scalar', () => {
     const line = groveSummaryLine(SUMMARIES[2] as GroveCourseSummary);
     expect(line).toContain('3 of 7 built');
     expect(line).toContain('2 registered sources');
+  });
+
+  it('the coverage split (`ol-l5og.18.18`, STY-8) names growing, ground and no-material as three separate counts, never a quotient', () => {
+    expect(groveCoverageSplitLine(4, 3, 2)).toBe('4 growing, 3 ground, 2 no material yet.');
+    expect(groveCoverageSplitLine(0, 0, 0)).toBe('0 growing, 0 ground, 0 no material yet.');
   });
 
   it('the papers label (`ol-l5og.18.2`) names the count and the registered denominator separately — never their quotient', () => {

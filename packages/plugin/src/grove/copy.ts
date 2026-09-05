@@ -45,6 +45,11 @@
  * own per-install state — `./provider.ts` and `./view.ts` are outside this
  * module's own `owns` set, so that wiring is follow-up work, named here so
  * it is not lost (see this bead's close notes).
+ *
+ * **The coverage split (`ol-l5og.18.18`, STY-8, fix item 2).**
+ * `groveCoverageSplitLine` is a second templated line, rendered beside
+ * `groveSummaryLine`'s own count on a `'declared'` course — see its own doc
+ * for what it does and does not port from the kit.
  */
 
 import type {
@@ -151,6 +156,32 @@ export function groveSummaryLine(summary: GroveCourseSummary): string {
     `${summary.builtCount} of ${summary.denominatorCount} built, ` +
     `from ${summary.denominatorSourcePaths.length} registered ${sourceNoun}.`
   );
+}
+
+/**
+ * `ol-l5og.18.18` (STY-8), fix item 2 — the kit's own `growing / ground / no
+ * material` three-way split (`Pass5bCoverage.jsx`'s `CandEGrove` header line:
+ * "`{PLANTED_TOTAL}` have something growing · `{GROUND_TOTAL}` are ground,
+ * waiting on Olea · `{NOMATERIAL_TOTAL}` have no material of yours yet").
+ * **Only the presentational half of that fix** — the three counts are already
+ * on `GroveCourseModel`'s `'declared'` branch (`cells.length -
+ * summary.builtCount` for ground, `materialGaps.length` for the third), so
+ * this is a render, not a new computation. **The kit's other half, a week
+ * counter, is NOT ported here** — no field anywhere on `GroveCourseModel`,
+ * `GroveCourseSummary` or the pipeline that builds them carries "which week
+ * of the course this is," and no such computation exists elsewhere in this
+ * codebase to reuse (checked: no `WeekContext`/`courseWeek` helper exists).
+ * That is a data gap, not a styling one — same shape as the per-syllabus-unit
+ * grouping `grove/view.ts`'s own module doc already declines to fabricate.
+ * Three counts side by side, never their quotient — same F8.3 shape
+ * `groveSummaryLine` already uses, just split three ways instead of two.
+ */
+export function groveCoverageSplitLine(
+  growingCount: number,
+  groundCount: number,
+  materialGapCount: number,
+): string {
+  return `${growingCount} growing, ${groundCount} ground, ${materialGapCount} no material yet.`;
 }
 
 /**

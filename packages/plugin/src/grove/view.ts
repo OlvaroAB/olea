@@ -43,6 +43,21 @@
  * mark** — a disclosed `MAT-2` deferral, same as `../sprig/render-sprig.ts`
  * already states for the sprig's own `wilt` overlay.
  *
+ * **The third design-fidelity pass (`ol-l5og.18.18`, STY-8).** Four fixes,
+ * `renderInferred`/`renderCourse`/`renderDeclared` below carry the detail:
+ * (1) the `'inferred'` branch gets its own drawn card treatment — the kit
+ * authored none, so this bead designed one rather than leaving the bare name
+ * list pass 3 photographed in the real world; (2) the declared summary gains
+ * the kit's growing/ground/no-material split (the week-counter half of that
+ * same kit line stays unbuilt — no field for it exists); (3) the offer
+ * card(s) get their own divider-and-spacing wrapper, matching
+ * `.olea-grove-volunteers`'s own "clearly a new section" treatment, so they
+ * no longer read as a stray row of the concept grid; (4) the stage label
+ * drops its mono/uppercase treatment for the kit's lowercase body-face one
+ * (`.olea-grove-stage-label` in `styles.css` — no `view.ts` change needed).
+ * Per-syllabus-unit grouping and the vitality/tending wash remain unbuilt
+ * for the reasons already stated above — unchanged by this pass.
+ *
  * **No test file for this module and none is expected** — `obsidian` has no
  * runtime outside a real host; the honesty properties are asserted against
  * `./copy.ts` and `./provider.ts` under Vitest instead (same convention
@@ -83,6 +98,7 @@ import {
   GROVE_VIEW_TITLE,
   GROVE_VOLUNTEER_SECTION_HEADING,
   GROVE_VOLUNTEER_SECTION_NOTE,
+  groveCoverageSplitLine,
   grovePapersLabel,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
@@ -229,16 +245,18 @@ export class GroveView extends ItemView {
         // F8.1 scenario 3: the `grove` label and its denominator claim are
         // withheld entirely for this course — no cell grid, no summary line,
         // only the disclaimer and what Olea has actually found.
-        box.createDiv({ cls: 'olea-grove-disclaimer', text: GROVE_INFERRED_DISCLAIMER });
-        if (section.model.concepts.length === 0) {
-          box.createDiv({ cls: 'olea-grove-empty', text: GROVE_EMPTY_COURSE });
-        } else {
-          const list = box.createDiv({ cls: 'olea-grove-concepts' });
-          for (const concept of section.model.concepts) {
-            const el = list.createDiv({ cls: 'olea-grove-concept' });
-            el.createSpan({ cls: 'olea-grove-concept-name', text: concept.conceptName });
-          }
-        }
+        //
+        // `ol-l5og.18.18` (STY-8), fix item 1: the kit authored no frame for
+        // this branch, so this draws one rather than a bare name list — the
+        // disclaimer sits inside the same bordered-panel idiom the pane
+        // already uses for "Olea has something to say before the grid"
+        // (`.olea-grove-unreadable`), and each name renders in the kit's own
+        // card treatment (`.olea-grove-cell-planted`'s wash/radius) minus the
+        // header sprig and the footer stage — this branch's `concepts` carry
+        // no `state` at all (`GroveVolunteerCell`, not `GroveCell`), so there
+        // is nothing honest to put in a footer. No legend entry either: this
+        // card draws no mark a legend would need to explain.
+        this.renderInferred(box, section.model);
         break;
       case 'declared':
         this.renderDeclared(
@@ -250,7 +268,38 @@ export class GroveView extends ItemView {
         break;
     }
 
-    for (const card of section.offerCards) this.renderOfferCard(box, card);
+    // `ol-l5og.18.18` (STY-8), fix item 3: one shared divider-and-spacing
+    // wrapper for this course's offer card(s), same shape
+    // `.olea-grove-volunteers` already uses for its own "clearly a new
+    // section, not a continuation of the grid above" break — previously each
+    // card rendered straight into `box` with only a small margin, which read
+    // as a stray row inside (or immediately hugging) the concept grid rather
+    // than a separate offer.
+    if (section.offerCards.length > 0) {
+      const offersBox = box.createDiv({ cls: 'olea-grove-offers' });
+      for (const card of section.offerCards) this.renderOfferCard(offersBox, card);
+    }
+  }
+
+  /**
+   * F8.1 scenario 3 / `ol-l5og.18.18` (STY-8) fix item 1 — see the call
+   * site's comment for what this deliberately does and does not draw.
+   */
+  private renderInferred(
+    parent: HTMLElement,
+    model: Extract<GroveCourseModel, { readonly status: 'inferred' }>,
+  ): void {
+    const panel = parent.createDiv({ cls: 'olea-grove-inferred' });
+    panel.createDiv({ cls: 'olea-grove-disclaimer', text: GROVE_INFERRED_DISCLAIMER });
+    if (model.concepts.length === 0) {
+      panel.createDiv({ cls: 'olea-grove-empty', text: GROVE_EMPTY_COURSE });
+      return;
+    }
+    const list = panel.createDiv({ cls: 'olea-grove-inferred-concepts' });
+    for (const concept of model.concepts) {
+      const el = list.createDiv({ cls: 'olea-grove-inferred-cell' });
+      el.createSpan({ cls: 'olea-grove-concept-name', text: concept.conceptName });
+    }
   }
 
   private renderDeclared(
@@ -265,6 +314,20 @@ export class GroveView extends ItemView {
     summaryEl.createSpan({
       cls: 'olea-grove-summary-line',
       text: groveSummaryLine(model.summary),
+    });
+    // `ol-l5og.18.18` (STY-8), fix item 2: the kit's own growing/ground/no-
+    // material three-way split — see `groveCoverageSplitLine`'s own doc for
+    // why the week counter half of this same kit line is NOT ported here.
+    // `model.summary.builtCount` already IS the "growing" count (its own
+    // doc: every `cells` entry whose `state !== 'ground'`); the ground count
+    // is the remainder of `cells`.
+    summaryEl.createSpan({
+      cls: 'olea-grove-coverage-split',
+      text: groveCoverageSplitLine(
+        model.summary.builtCount,
+        model.cells.length - model.summary.builtCount,
+        model.materialGaps.length,
+      ),
     });
     // `[D-184]`, F8.1, `ol-v7r5.32`: "the same honesty runs in reverse" —
     // rendered ONCE, beside the count above, only when `./provider.ts`
