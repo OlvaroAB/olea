@@ -3152,6 +3152,7 @@ button.olea-review-mcq-option:hover {
   flex-direction: column;
   overflow-y: auto;
   padding: 26px 40px 22px;
+  box-sizing: border-box;
   outline: none;
 }
 
