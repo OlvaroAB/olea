@@ -219,6 +219,18 @@ class VaultAdapterShim {
 type VaultEventName = 'create' | 'modify' | 'delete' | 'rename';
 
 /**
+ * True for a dot-prefixed top-level path (`.olea/reviews/…`, `.obsidian/…`)
+ * — the same "first segment starts with `.`" test `dot-folder-walk.ts` uses
+ * on the real `ObsidianSource` side. Real Obsidian's own vault index never
+ * surfaces these through `getFiles()` or its `create`/`modify`/`delete`/
+ * `rename` events (`ol-3ux7.64.21`); `Vault` below uses this to match that
+ * split rather than the plugin growing a filter Obsidian never needs.
+ */
+function isDotPath(path: string): boolean {
+  return path.split('/')[0]?.startsWith('.') ?? false;
+}
+
+/**
  * Obsidian's `Vault`, over an injected `ShimVaultSource` (§4: "`App.vault` as
  * Obsidian `Vault`"). The one real design choice: Obsidian's `getFileByPath`/
  * `getFiles` are SYNCHRONOUS, but every `ShimVaultSource` method is async (it
@@ -272,18 +284,29 @@ export class Vault {
     this.unsubscribeSource = null;
   }
 
+  /**
+   * A dot-prefixed path (`.olea/…`) is still tracked in `filesByPath` here —
+   * `getFileByPath` must keep resolving it, or `ObsidianSource.read`/`.write`/
+   * `.exists` (all TFile-based, and the only mechanism the plugin has for
+   * `.olea/` content — review logs, drafts, misconceptions) would silently
+   * lose data on every write after the first. What changes is that a
+   * dot-path event is never `emit`-ted — real Obsidian's own `create`/
+   * `modify`/`delete` events never fire for one (`ol-3ux7.64.21`), which is
+   * what stops e.g. the keyword-index watcher from reindexing a review log.
+   */
   private handleSourceEvent(event: ShimVaultEvent): void {
+    const dotPath = isDotPath(event.path);
     if (event.kind === 'delete') {
       const file = this.filesByPath.get(event.path);
       this.filesByPath.delete(event.path);
-      if (file !== undefined) this.emit('delete', file);
+      if (file !== undefined && !dotPath) this.emit('delete', file);
       return;
     }
     const existing = this.filesByPath.get(event.path);
     const file = existing ?? new TFile(event.path);
     if (existing !== undefined) existing.stat.mtime = Date.now();
     this.filesByPath.set(event.path, file);
-    this.emit(event.kind, file);
+    if (!dotPath) this.emit(event.kind, file);
   }
 
   private emit(kind: 'create' | 'modify' | 'delete', file: TFile): void {
@@ -305,8 +328,16 @@ export class Vault {
     return null;
   }
 
+  /**
+   * Excludes dot-prefixed paths (`.olea/…`) — real Obsidian's `getFiles()`
+   * never returns one (`ol-3ux7.64.21`, and the same fact `dot-folder-walk.ts`
+   * already documents on the `ObsidianSource` side: `Vault.getFiles()` "never
+   * returns dot-prefixed paths at all, a real Obsidian host limitation").
+   * They stay in `filesByPath` itself (see `handleSourceEvent`'s doc) — only
+   * this enumeration view hides them, matching the split real Obsidian draws.
+   */
   getFiles(): TFile[] {
-    return [...this.filesByPath.values()];
+    return [...this.filesByPath.values()].filter((file) => !isDotPath(file.path));
   }
 
   /** `ObsidianSource.read` deliberately never uses `cachedRead` (its own doc: "always goes to disk") — so `cachedRead` is not declared here at all, per this package's own minimal-shim rule (`index.ts`'s module doc): nothing calls it. */

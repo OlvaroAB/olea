@@ -176,6 +176,52 @@ describe('Vault (over an injected ShimVaultSource)', () => {
     await expect(source.exists('.olea/reviews/device-a.jsonl')).resolves.toBe(false);
   });
 
+  it('a dot-path (.olea/…) never surfaces as a TFile via getFiles() and never fires create/modify/delete — matching real Obsidian (ol-3ux7.64.21)', async () => {
+    const source = createTestVaultSource({
+      '.olea/reviews/device-a.jsonl': '{}',
+      'ordinary.md': 'content',
+    });
+    const vault = new Vault(source);
+    await vault.ready();
+
+    // Seeded at construction: getFiles() must already exclude it, same as
+    // a fresh mount that reuses persisted .olea/ content from a prior day.
+    expect(vault.getFiles().map((file) => file.path)).toEqual(['ordinary.md']);
+
+    const seen: string[] = [];
+    vault.on('create', (file) => seen.push(`create:${file.path}`));
+    vault.on('modify', (file) => seen.push(`modify:${file.path}`));
+    vault.on('delete', (file) => seen.push(`delete:${file.path}`));
+
+    // A second "rating" appending to the same review-log path (create, then
+    // modify) must not grow getFiles() and must not emit either event — the
+    // old behaviour (pre-ol-3ux7.64.21) tracked every written path in
+    // filesByPath and emitted for it unconditionally, which is exactly what
+    // made a review rating look like a plugin-visible vault change.
+    await vault.create('.olea/reviews/device-b.jsonl', '{"a":1}\n');
+    await vault.modify(
+      vault.getFileByPath('.olea/reviews/device-b.jsonl') as TFile,
+      '{"a":1}\n{"b":2}\n',
+    );
+    await source.delete('.olea/reviews/device-a.jsonl');
+
+    expect(vault.getFiles().map((file) => file.path)).toEqual(['ordinary.md']);
+    expect(seen).toEqual([]);
+
+    // Read/write correctness through the TFile-based API (what
+    // ObsidianSource.read/.write/.exists — the plugin's only mechanism for
+    // .olea/ content — actually calls) must still work: getFileByPath keeps
+    // resolving a dot-path so a second write appends rather than silently
+    // overwriting.
+    const file = vault.getFileByPath('.olea/reviews/device-b.jsonl');
+    expect(file).toBeInstanceOf(TFile);
+    expect(await vault.read(file as TFile)).toBe('{"a":1}\n{"b":2}\n');
+
+    // An ordinary file is unaffected: still tracked, still emits.
+    await vault.create('ordinary2.md', 'x');
+    expect(seen).toEqual(['create:ordinary2.md']);
+  });
+
   it('dispose() unsubscribes from the source — a watch fired after dispose never reaches a listener', async () => {
     const source = createTestVaultSource();
     const vault = new Vault(source);
