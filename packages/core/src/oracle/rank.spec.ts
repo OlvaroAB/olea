@@ -78,13 +78,14 @@ function masteryResult(conceptId: string, state: MasteryState): ConceptMasteryRe
     state,
     evidence: {
       scoredEventCount: state === 'seed' ? 0 : 5,
+      scoredSuccessCount: state === 'seed' ? 0 : 4,
       explainBackAttempts: 0,
       tiersPracticed: { recognition: false, recall: state !== 'seed', explanation: false },
+      gradedExplainBackCount: state === 'tree' ? 1 : 0,
       recognitionOnly: false,
-      recentWindowSize: state === 'seed' ? 0 : 5,
-      recentSuccessRate: state === 'seed' ? null : 0.8,
-      recentDistinctDays: state === 'seed' ? 0 : 3,
-      recentRecallSuccess: state === 'tree',
+      successfulScoredDays: state === 'seed' ? 0 : 3,
+      deepestSoloLevel: state === 'tree' ? 'relational' : null,
+      depthGateCleared: state === 'tree',
     },
   };
 }

@@ -9,7 +9,7 @@
  * `oracle/fixture-oracle.ts` used to rely on. See the generator script's own
  * module doc for the full argument and the spread this produces:
  *
- *   - Imbrication (concept-prov1:05 Zettelkasten/Imbrication.md) -> tree, 6 event(s)
+ *   - Imbrication (concept-prov1:05 Zettelkasten/Imbrication.md) -> tree, 7 event(s)
  *   - Hummocky stratification (concept-prov1:05 Zettelkasten/Hummocky stratification.md) -> seed, 0 event(s)
  *   - Bioturbation (concept-prov1:05 Zettelkasten/Bioturbation.md) -> sapling, 5 event(s)
  *   - Paraconformity (concept-prov1:05 Zettelkasten/Paraconformity.md) -> sprout, 10 event(s)
@@ -19,6 +19,15 @@
  * `computeConceptMastery` at generation time (see `assertExpectedState` in
  * the generator) — this file cannot silently drift from the state the module
  * doc above claims for it.
+ *
+ * HAND-PATCHED ONCE, 2026-09-05 (`MAT-6` / `ol-95vv.7`): the depth gate means
+ * `tree` is reachable only through a graded explain-back, so Imbrication's
+ * story gained one (event `:6`). The generator's own STORIES list carries the
+ * same event and would emit exactly this — but the generator cannot currently
+ * RUN: `extractConcepts` no longer returns a concept for
+ * `05 Zettelkasten/Imbrication.md`, so it dies on its own
+ * "no concept extracted" guard, a breakage that predates this change (checked
+ * on a clean tree). Filed as its own bead; regenerate once that is fixed.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -136,6 +145,35 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       yieldRank: null,
       instrumentTypesOffered: ['qa'],
       planVersion: null,
+    },
+  },
+  {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'wb-fixture-oracle:imbrication:6',
+    timestamp: '2026-08-24T09:00:00+00:00',
+    instrumentId: 'wb-fixture-oracle:imbrication:explain-back',
+    instrumentType: 'explain-back',
+    conceptIds: ['concept-prov1:05 Zettelkasten/Imbrication.md'],
+    rating: null,
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['explain-back'],
+      planVersion: null,
+    },
+    explainBackGrade: {
+      soloLevel: 'relational',
+      contentRef: 'wb-fixture-oracle:imbrication:grade:6',
+      revisionOf: null,
+      artifactProvenance: {
+        taskId: 'explain-back-grade',
+        promptVersion: 'wb-fixture-oracle',
+        modelId: 'wb-fixture-oracle',
+      },
     },
   },
   {
@@ -374,7 +412,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     instrumentId: 'wb-fixture-oracle:paraconformity',
     instrumentType: 'qa',
     conceptIds: ['concept-prov1:05 Zettelkasten/Paraconformity.md'],
-    rating: 'hard',
+    rating: 'again',
     wasUnsure: false,
     durationMs: null,
     selectionContext: {
@@ -412,7 +450,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     instrumentId: 'wb-fixture-oracle:paraconformity',
     instrumentType: 'qa',
     conceptIds: ['concept-prov1:05 Zettelkasten/Paraconformity.md'],
-    rating: 'hard',
+    rating: 'again',
     wasUnsure: false,
     durationMs: null,
     selectionContext: {

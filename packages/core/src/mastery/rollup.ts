@@ -1,6 +1,6 @@
 /**
- * C5.4 — the mastery rollup: concept mastery as a pure projection of the
- * review log (P4-T06, R7, §7.1, R3).
+ * C5.4 — the mastery rollup: growth stage as a pure projection of the whole
+ * review log (P4-T06, R3, R7, R9, §7.1; rebuilt for `MAT-6` / `ol-95vv.7`).
  *
  * ## What "rollup" means here, and what it deliberately does not mean
  *
@@ -15,157 +15,109 @@
  * rollup over child *concepts* would be inventing a second, un-contracted
  * kind of aggregation on top of the one the knowledge model actually names.
  * So "children" below means **the review events that are evidence for a
- * concept**, and "parent" means **the concept**. A concept whose evidence
- * disagrees sharply (some instruments strong, some failing) is exactly the
- * "children disagree" case this module has to get right — see this file's
- * spec for that scenario.
+ * concept**, and "parent" means **the concept**.
  *
- * ## Why a weighted recency window, not `min`, not a continuous decay curve
+ * ## THE HIGH-WATER MARK — why there is no window and no rate any more
  *
- * Three shapes were on the table (per this task's brief):
+ * **Growth stage is the strongest evidence she has EVER produced for the
+ * concept, over the whole log.** R3, in its own words: *"seed · sprout ·
+ * sapling · tree records the best she has ever demonstrated on the concept,
+ * over the whole history. It is a high-water mark: it never regresses, no
+ * implementation may express decay by lowering it, and nothing later — a
+ * lapse, a fresh misconception, a pruning (F8.5) — takes back a
+ * demonstration that actually happened."* The knowledge model's §8 test 4
+ * states the failure directly: *"if a growth stage has ever fallen for any
+ * concept ... R3 has been implemented backwards."*
  *
- * - **`min` over instruments** — rejected. R7 states evidence is *weighted*,
- *   not that the weakest instrument governs the whole concept. A concept
- *   drilled reliably by three cards and only patchily by a fourth is not "as
- *   bad as its worst card" — F2.11's `sprout`, "practised, recall is not
- *   holding yet," is a statement about a *rate*, which `min` cannot express
- *   (it can only ever say "at least one full miss exists").
- * - **A continuous decay curve (half-life weighting)** — rejected for v0.9.
- *   R3 explicitly reserves forgetting-curve modelling to FSRS, at the
- *   instrument level ("do not run FSRS at concept level" — a decay curve
- *   *is* a forgetting model). Nothing in the knowledge model or the amendment
- *   states a half-life, a weighting function, or even that mastery should
- *   decay with elapsed wall-clock time at all — inventing one would be
- *   inventing authority the contract does not carry. See "recency and
- *   forgetting", below, for the stronger architectural reason this also had
- *   to be rejected regardless of the contract question.
- * - **A weighted recent-evidence rate, bucketed into the five named states**
- *   — adopted. R7's own language is a rate ("recalled *more often than
- *   not*, and recently"), and F2.11's five words read as a rate's five
- *   buckets: no evidence · mixed · mostly-recalled-recently ·
- *   reliable-across-spaced-attempts · produced-or-explained-at-least-once.
- *   A bounded recent-evidence window is the simplest shape that can express
- *   "recently" without a wall-clock dependency (below), is auditable event
- *   by event, and needs no unjustified decay constant.
+ * This module previously bucketed a **recent windowed success rate** — the
+ * superseded model the component register's row 3.1 named as such. It could
+ * and did fall back from `tree` to `sprout` when enough failures entered the
+ * window, which is exactly the behaviour the clause above forbids; the
+ * monotonicity health check (`../checks/mastery-stage-health.ts`, CHK-2) was
+ * built against the ratified target and left red for that reason. The three
+ * sliding-window constants (`recentWindowSize`, `highSuccessRate`,
+ * `minSpacedDays`, the last surviving as the declared spacing gate below)
+ * are gone with the window.
  *
- * ## Recency and forgetting: what enters, and what deliberately does not
+ * **Every predicate this fold reads is monotone in the log.** "At least one
+ * scored event exists", "successes fell on at least N distinct days", "a
+ * graded explain-back ever reached the depth threshold": each can only turn
+ * from false to true as events are appended, never back. The stage is the
+ * maximum of the stages those predicates unlock, so replaying any prefix of
+ * a log prefix-by-prefix produces a non-decreasing sequence **by
+ * construction**, not by a check that happens to pass. That is the property
+ * `checkMasteryMonotonicity` asserts and `scripts/harness/mastery-checks.mjs`
+ * (in `olea-service`) runs.
  *
- * **Recency enters as a window over the evidence sequence, not over
- * wall-clock time.** `computeConceptMastery` takes no `now`. "Recent" means
- * "at the end of this concept's own evidence, in the log" — the last
- * `recentWindowSize` scored events — never "within N real days of whenever
- * this function happens to run." This is not a stylistic choice; it is
- * required by this task's own rebuild-from-log-equivalence property. §7.1
- * says mastery is "deterministically recomputed from the event log" — if
- * recency were wall-clock-relative, projecting the *same* log at two
- * different real moments would produce two different mastery states with no
- * new event between them, which is not a deterministic function of the log
- * any more. A pure function of `entries` alone is what makes "project,
- * discard, re-project" provably identical regardless of when either
- * projection happens to run.
+ * ## Decay is vitality's job, and it is a different function
  *
- * **Forgetting (the FSRS sense — retrievability decaying between reviews) is
- * not modelled here at all.** R3 assigns that to the scheduler, per
- * instrument, where lapse history actually lives (`../scheduler/`). This
- * module never asks "how stale is this evidence in real time"; it only asks
- * "what does the tail of what actually happened say." Consequence, stated
- * plainly: a concept she has not touched in six months reads exactly as it
- * did the day she stopped — mastery here moves only on new events, never on
- * elapsed time alone. That is a deliberate reading of an authority-silent
- * question (the contract never says mastery should decay by itself), and it
- * is the reading consistent with R3 and with §7.1's purity requirement; it
- * is recorded as a Class B default in this task's report, reversible if
- * David wants wall-clock staleness surfaced later (e.g. as a *separate*,
- * explicitly time-stamped "evidence is N days old" fact alongside the state,
- * never folded into the state itself without a new decision).
+ * Nothing here models forgetting. R3 assigns that to the scheduler, per
+ * instrument, and to the **vitality** axis — *"an overlay on the stage, never
+ * a demotion: a `tree` whose recall has faded reads as needing tending and
+ * stays a `tree`."* `readConceptVitality` / `readAllConceptVitality`, below,
+ * are that axis's own functions; they take a `now` and a holding cut, which
+ * `computeConceptMastery` deliberately does not (see "Purity", below).
+ * `[D-116]` / F2.11 binds every *consumer*: any surface rendering a growth
+ * stage renders vitality alongside.
  *
- * ## The four growth stages, as evidence rules (F2.11, R7, D-049)
+ * ## The four growth stages, as evidence rules (F2.11, R7, `[D-049]`)
  *
- * **Renamed and re-bucketed from the retired five-state ordinal (D-048,
- * D-049; `VOC-1`/`ol-7efk`).** The old `shaky` (rate at or below
- * `MID_SUCCESS_RATE`) and `coming` (rate between the two thresholds) were
- * two bands of one thing the new vocabulary names once: `sprout`,
- * "practised, recall is not holding yet." Collapsing them retires
- * `midSuccessRate` — there is no longer a second threshold to place between
- * "no evidence" and "eligible for `sapling`". Nothing about the `sapling` /
- * `tree` boundary or the spacing check changes; only the two lowest bands
- * merge into one, because the ratified vocabulary has one word where the old
- * ordinal had two.
+ * 1. **`seed`** — no evidence at all: no scored review, and no graded
+ *    explain-back. An explain-back *attempt* with no verdict on it is
+ *    recorded (`explainBackAttempts`) but is not evidence about what she
+ *    knows — R7's word is success, not attempt — so it does not lift `seed`.
+ * 2. **`sprout`** — "practised; recall is not holding yet" (vocabulary
+ *    registry §1). Any scored review event exists, whatever its outcome.
+ *    This is the floor once evidence exists: a run of outright misses reads
+ *    as `sprout`, not as a fifth, worse word the product does not have.
+ * 3. **`sapling`** — "recalled reliably across spaced attempts". Successful
+ *    scored reviews fell on at least `MIN_SPACED_RETRIEVAL_DAYS` distinct
+ *    calendar days. R7 as amended by `[D-145]`: *"recall evidence must
+ *    spread across at least `MIN_SPACED_RETRIEVAL_DAYS` (declared, default
+ *    3) distinct calendar days — a good streak crammed into one sitting
+ *    stays `sprout`"* (Karpicke & Roediger 2008; N-037). Recognition-tier
+ *    evidence counts toward this — R7: *"a concept may reach `sapling` on
+ *    any evidence mix"* — and `sapling` is the ceiling it can reach.
+ * 4. **`tree`** — a graded explain-back for this concept ever reached the
+ *    **depth threshold** (`DEPTH_GATE_SOLO_LEVEL`, below). R7: *"`tree` is
+ *    reachable only through an explain-back graded at sufficient depth —
+ *    separate ideas integrated under a principle, rather than listed
+ *    alongside one another — and recall alone can never reach it."*
  *
- * **`computeConceptMastery` still computes one axis, not two.** F2.11 (D-049)
- * also ratifies a separate `vitality` reading — `holding` / `needs tending` /
- * `too early to say`, fluctuating, never a demotion — but that axis is not
- * modelled by `computeConceptMastery`: no field on `ConceptMasteryResult`
- * carries it, and the `state` that function returns is the growth-stage axis
- * only. It stays that way deliberately, not as a gap: `computeConceptMastery`
- * is a pure function of `entries` alone with no clock (see "Purity and
- * rebuildability" below), which is exactly what growth stage's high-water-mark
- * contract needs; vitality is a *current* reading and needs `now`, so folding
- * it in would make growth stage's own purity claim a lie by association.
- * `readConceptVitality` / `readAllConceptVitality`, below, are vitality's own
- * functions for that reason — register join 1-2 (`[D-087]`, `ol-95vv.1`):
- * they replay `../session/replay.ts`'s scheduler states (3.2's per-instrument
- * retrievability) into `./vitality.ts`'s `readVitality` fold (3.1's vitality
- * bucketing, already built by `ol-1bjz`/`VIT-1`), so a caller with a log, a
- * scheduler and an instant gets a per-concept vitality reading without
- * assembling `VitalityInstrument[]` by hand.
+ * **`tree` does not additionally require `sapling`.** The stage is the
+ * high-water mark of evidence *strength*, and R7 orders the tiers
+ * recognition < recall < explanation; making the strongest demonstration she
+ * has produced wait on a weaker one she has not would be a cap on depth of
+ * exactly the kind `[D-080]` removed (knowledge model §3.1, "Size does not
+ * cap the depth gate"). Monotonicity holds either way — this reading is
+ * chosen because it is the one the clause states.
  *
- * 1. **`seed`** — no scored evidence at all for this concept.
- * 2. **`sprout`** — some scored evidence exists and either the recent
- *    success rate is below `HIGH_SUCCESS_RATE`, or it clears that bar but
- *    not yet across enough distinct days (see below). This is also the
- *    floor once *any* evidence exists — the vocabulary has no state below
- *    `sprout` other than `seed`, so a run of outright misses still reads as
- *    `sprout`, not as a fifth, worse word the product does not have.
- * 3. **`sapling`** — recent success rate at or above `HIGH_SUCCESS_RATE`,
- *    **and** spread across at least `minSpacedDays` distinct calendar days
- *    within that same recent window ("recalled reliably *across spaced
- *    attempts*" — R7). A good streak crammed into one sitting stays
- *    `sprout`, not `sapling`. This is also the ceiling for any concept whose
- *    scored evidence is recognition-only (MCQ) — R7's named rule and this
- *    task's named test.
- * 4. **`tree`** — everything `sapling` requires, **and** the recent window
- *    contains at least one *recall* success: a Q&A or cloze review she
- *    answered without failing (`rating !== 'again'`). Recognition (MCQ)
- *    never counts, however many times it succeeds — R7 in its own words:
- *    "recognising a definition among four options five times is not the
- *    same knowledge as producing it once."
+ * ## The depth gate reads the verdict; it never asks a model for a stage
  *
- * ## Explain-back: recorded, not yet scored — a contract gap, not a choice
- *
- * The review log can carry an `instrumentType: 'explain-back'` review event,
- * but `rating` is `null` for it by schema (F2.16 — explain-back "produces no
- * rating"), and **the record has no field of any kind for the grading
- * verdict** (omissions/errors/confusions) that P4-T02's grading pipeline is
- * meant to produce. R7 says the top state requires "at least one *recent
- * recall or explanation success*" — the word is success, not attempt, and
- * an attempt with an unknown outcome is not evidence of success. So an
- * explain-back review event is counted here (`explainBackAttempts`,
- * `tiersPracticed.explanation`) but never enters the scored evidence
- * `recognitionOnly` and the success-rate window are computed over — it is
- * neither a recognition success nor a recall success, so it does **not**,
- * on its own, lift a recognition-only concept's cap or satisfy the `tree`
- * gate — only a recall success does today. **This is a contract
- * silence this module had to resolve, not a modelling preference**: once
- * P4-T02 wires a real per-attempt outcome into the log (or into transient
- * D-008 context), the honest fix is to let a *successful* explain-back also
- * satisfy the gate, matching a recall success. Filed as a follow-up rather
- * than guessed at here, because widening what counts as "success" for
- * `tree` is exactly the kind of threshold this project reserves for a
- * decision bead, never a lane's silent call.
+ * R9 — *"a model grades an answer; the state holds the estimate"* — is
+ * structural here, not a convention. The only thing this fold reads off a
+ * graded explain-back is `explainBackGrade.soloLevel`, a five-value SOLO
+ * verdict about one answer that `packages/contracts/src/review-log.ts` makes
+ * unrepresentable as a mastery estimate. The arithmetic — which level clears
+ * the gate, and therefore which stage she is at — is entirely this module's.
+ * Supersession is a read-time chronological fact (GLOSSARY SOLO rule 3), and
+ * a high-water mark needs no ordering to resolve it at all: the gate asks
+ * whether the deepest verdict *ever* recorded cleared the threshold, so a
+ * later shallower attempt cannot take a stage back, per R3.
  *
  * ## Purity and rebuildability
  *
- * Every export here is a pure function of its `entries` argument (and the
- * explicit `conceptId`/options it is given) — no clock, no I/O, no module
- * state. `entries` is assumed already at the current schema version (v4):
- * this module never reads `schemaVersion` itself, matching every other
- * log-folding module in core (`../today/streak.ts`, `../review-log/suspension.ts`)
- * — the caller reads the log through `../review-log/parse.ts` (which
- * migrates through `upgrade.ts` before anything downstream sees a record)
- * and hands the result here. That is what makes "discard the projection and
- * recompute it from the log" the whole rebuild story: there is no cache
- * inside this module for a rebuild to disagree with.
+ * Every export here except the vitality pair is a pure function of its
+ * `entries` argument (and the explicit `conceptId`/options it is given) — no
+ * clock, no I/O, no module state. `entries` is assumed already at the current
+ * schema version (v5): this module never reads `schemaVersion` itself,
+ * matching every other log-folding module in core (`../today/streak.ts`,
+ * `../review-log/suspension.ts`) — the caller reads the log through
+ * `../review-log/parse.ts` (which migrates through `upgrade.ts` before
+ * anything downstream sees a record) and hands the result here. That is what
+ * makes "discard the projection and recompute it from the log" the whole
+ * rebuild story: there is no cache inside this module for a rebuild to
+ * disagree with.
  */
 
 import type {
@@ -175,8 +127,8 @@ import type {
   Rating,
   ReviewLogEntry,
   ReviewLogRecord,
+  SoloLevel,
 } from 'olea-contracts';
-import { compareByInstantThenEventId } from '../review-log/merge.js';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
@@ -198,71 +150,103 @@ export function evidenceTierOf(instrumentType: InstrumentType): EvidenceTier {
   }
 }
 
+/** SOLO levels weakest to strongest — `contracts/review-log.ts`'s `soloLevel` enum, in order. */
+const SOLO_LEVEL_ORDER: readonly SoloLevel[] = [
+  'prestructural',
+  'unistructural',
+  'multistructural',
+  'relational',
+  'extended-abstract',
+];
+
+function soloRank(level: SoloLevel): number {
+  return SOLO_LEVEL_ORDER.indexOf(level);
+}
+
 /**
- * Tunable parameters for `computeConceptMastery`. Every default below is
- * **provisional** (Class B, this task's report) — v0.9 has never had a real
- * review logged against it, so none of these can be, or should be, tuned
- * from data yet, and `eval/CLAUDE.md` forbids tuning any threshold from
- * synthetic data even once that changes. Ratifying them needs a real
- * semester of her review log, read against how the states actually felt to
- * her, and goes through a decision bead like every other threshold that
- * decides what she sees.
+ * **THE DEPTH THRESHOLD — declared, not fitted** (component register row 3.1;
+ * `MAT-6`/`ol-95vv.7`). The SOLO level a graded explain-back must reach for
+ * the concept to clear the depth gate into `tree`.
+ *
+ * **Why `relational`, in plain English.** R7 states the gate in words, and
+ * the words name a specific SOLO level: *"separate ideas integrated under a
+ * principle, rather than listed alongside one another."* "Listed alongside
+ * one another" is SOLO **multistructural**; "integrated under a principle" is
+ * SOLO **relational**. The threshold is therefore read off the clause rather
+ * than chosen — the first level at which the clause's description becomes
+ * true. `extended-abstract` (transferring the principle to a new domain)
+ * would set the bar above what R7 asks for; `multistructural` is the state
+ * R7 explicitly contrasts the gate against.
+ *
+ * This is a **declared** constant in the register's sense: defensible in
+ * plain English, never fitted against a corpus. No review corpus could fit
+ * it — the verdict it thresholds is defined over free text a ratings corpus
+ * does not contain (row 3.1's own amendment says exactly this).
+ *
+ * **Boundary note.** Row 3.1 assigns the depth threshold and the depth gate
+ * to the service and the fold over the local event log to the client, and
+ * whether a now-declared constant may move client-side is the standing
+ * question `[BND-5]` (`ol-3ux7.3`) — **not re-decided here**. The number
+ * ships in the client fold, as `minSpacedDays` already did, and
+ * `MasteryRollupOptions.depthGate` lets a service-side caller hand its own.
+ */
+export const DEPTH_GATE_SOLO_LEVEL: SoloLevel = 'relational';
+
+/**
+ * **THE SPACING GATE — declared, `[D-145]` / `ol-2zfj.30`.** Distinct
+ * calendar days that successful scored reviews must fall on before a concept
+ * reads as `sapling`. R7 names both the constant and its value: *"recall
+ * evidence must spread across at least `MIN_SPACED_RETRIEVAL_DAYS`
+ * (declared, default 3) distinct calendar days — a good streak crammed into
+ * one sitting stays `sprout`."* Correct answers produced in a single sitting
+ * are evidence of restudy, not of durable retrieval (Karpicke & Roediger
+ * 2008; N-037, `docs/research/learning-science-bibliography.md:61-62`). Three
+ * is the smallest number that is unambiguously more than "she reviewed it a
+ * few times just now".
+ *
+ * This is **not** one of the superseded model's sliding-window constants: it
+ * counts distinct days over the WHOLE log, which is monotone, where the old
+ * `minSpacedDays` counted them inside a sliding window, which was not.
+ */
+export const MIN_SPACED_RETRIEVAL_DAYS = 3;
+
+/**
+ * Tunable parameters for `computeConceptMastery`. Both defaults are
+ * **declared** — argued in plain English where the constant is defined above,
+ * never fitted from data (`eval/CLAUDE.md` forbids tuning any threshold from
+ * synthetic data, and row 3.1 records that neither of these is answerable
+ * from a review corpus at all). Moving either is a decision bead.
  */
 export interface MasteryRollupOptions {
   /**
-   * How many of a concept's most recent *scored* events (recall or
-   * recognition; explain-back is never scored — see module doc) form the
-   * evidence window the success rate and the spacing check are computed
-   * over. Default 5 — chosen only as "a handful of attempts", not measured.
+   * Distinct calendar days successful scored reviews must fall on for
+   * `sapling`. Defaults to `MIN_SPACED_RETRIEVAL_DAYS` (3, `[D-145]`).
    */
-  readonly recentWindowSize?: number;
+  readonly minSpacedRetrievalDays?: number;
   /**
-   * Recent success rate at or above this is eligible for `sapling` (subject
-   * to the spacing check); below it, the concept stays `sprout`. Default
-   * 0.8 — unmeasured. (The old `midSuccessRate` threshold, which split
-   * `sprout`'s predecessor bands `shaky`/`coming`, retired with D-049 — the
-   * ratified vocabulary has one word there, not two.)
+   * The SOLO level a graded explain-back must reach to clear the depth gate
+   * into `tree`. Defaults to `DEPTH_GATE_SOLO_LEVEL` (`relational`, R7).
    */
-  readonly highSuccessRate?: number;
-  /**
-   * Minimum distinct calendar days within the recent window required to
-   * confirm `sapling` instead of leaving a high-success but single-sitting
-   * run at `sprout`. Default 3 — unmeasured; the smallest number that is
-   * unambiguously more than "she reviewed it a few times just now."
-   */
-  readonly minSpacedDays?: number;
+  readonly depthGate?: SoloLevel;
 }
 
-const DEFAULT_RECENT_WINDOW_SIZE = 5;
-const DEFAULT_HIGH_SUCCESS_RATE = 0.8;
-const DEFAULT_MIN_SPACED_DAYS = 3;
-
 interface ResolvedOptions {
-  readonly recentWindowSize: number;
-  readonly highSuccessRate: number;
-  readonly minSpacedDays: number;
+  readonly minSpacedRetrievalDays: number;
+  readonly depthGate: SoloLevel;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
-  const recentWindowSize = options?.recentWindowSize ?? DEFAULT_RECENT_WINDOW_SIZE;
-  const highSuccessRate = options?.highSuccessRate ?? DEFAULT_HIGH_SUCCESS_RATE;
-  const minSpacedDays = options?.minSpacedDays ?? DEFAULT_MIN_SPACED_DAYS;
-  if (!Number.isInteger(recentWindowSize) || recentWindowSize < 1) {
+  const minSpacedRetrievalDays = options?.minSpacedRetrievalDays ?? MIN_SPACED_RETRIEVAL_DAYS;
+  const depthGate = options?.depthGate ?? DEPTH_GATE_SOLO_LEVEL;
+  if (!Number.isInteger(minSpacedRetrievalDays) || minSpacedRetrievalDays < 1) {
     throw new Error(
-      `computeConceptMastery: recentWindowSize must be a positive integer, got ${recentWindowSize}`,
+      `computeConceptMastery: minSpacedRetrievalDays must be a positive integer, got ${minSpacedRetrievalDays}`,
     );
   }
-  if (!Number.isInteger(minSpacedDays) || minSpacedDays < 1) {
-    throw new Error(
-      `computeConceptMastery: minSpacedDays must be a positive integer, got ${minSpacedDays}`,
-    );
+  if (soloRank(depthGate) < 0) {
+    throw new Error(`computeConceptMastery: depthGate must be a SOLO level, got ${depthGate}`);
   }
-  if (!(highSuccessRate >= 0 && highSuccessRate <= 1)) {
-    throw new Error(
-      `computeConceptMastery: highSuccessRate must be within [0, 1], got ${highSuccessRate}`,
-    );
-  }
-  return { recentWindowSize, highSuccessRate, minSpacedDays };
+  return { minSpacedRetrievalDays, depthGate };
 }
 
 /**
@@ -280,20 +264,30 @@ function isSuccessRating(rating: Rating | null): boolean {
 export interface ConceptMasteryEvidence {
   /** Total scored (recall or recognition) review events for this concept, across the whole log. */
   readonly scoredEventCount: number;
-  /** Explain-back review events for this concept. Recorded; never scored — see module doc. */
+  /**
+   * How many of those scored events succeeded (a rating other than `again`).
+   * Part of the honest "what practice produced this state" line, and the only
+   * place a caller can read how her practice is *going* off this axis: the
+   * stage itself is a high-water mark and cannot fall, so it can never say
+   * "this is going badly right now". That question belongs to vitality
+   * (`readConceptVitality`); this count is the evidence beneath the stage,
+   * never a rate the stage is bucketed from.
+   */
+  readonly scoredSuccessCount: number;
+  /** Explain-back review events for this concept, graded or not. */
   readonly explainBackAttempts: number;
+  /** Explain-back review events for this concept that carry an `explainBackGrade`. */
+  readonly gradedExplainBackCount: number;
   /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated. */
   readonly tiersPracticed: Readonly<Record<EvidenceTier, boolean>>;
-  /** True when every scored event is recognition (MCQ) — the state can never exceed `sapling`. */
+  /** True when every scored event is recognition (MCQ) — such a concept can never exceed `sapling`. */
   readonly recognitionOnly: boolean;
-  /** Size of the recent-evidence window actually used (capped by how much scored evidence exists). */
-  readonly recentWindowSize: number;
-  /** Successes ÷ window size over the recent window; `null` when there is no scored evidence. */
-  readonly recentSuccessRate: number | null;
-  /** Distinct calendar days the recent window's events fall on. */
-  readonly recentDistinctDays: number;
-  /** At least one recall (Q&A/cloze) success inside the recent window — the `tree` gate. */
-  readonly recentRecallSuccess: boolean;
+  /** Distinct calendar days, over the WHOLE log, on which a scored review succeeded — the spacing gate's input. */
+  readonly successfulScoredDays: number;
+  /** The deepest SOLO verdict ever recorded for this concept; `null` when none was. */
+  readonly deepestSoloLevel: SoloLevel | null;
+  /** `deepestSoloLevel` reached the depth threshold — the `tree` gate, R7. */
+  readonly depthGateCleared: boolean;
 }
 
 /** One concept's rolled-up mastery: the state, and the evidence it was read from. */
@@ -303,74 +297,83 @@ export interface ConceptMasteryResult {
   readonly evidence: ConceptMasteryEvidence;
 }
 
-interface ScoredEvent {
-  readonly instant: number;
-  readonly eventId: string;
-  readonly instrumentType: InstrumentType;
-  readonly success: boolean;
-  readonly day: string | null;
-}
-
 /**
- * Folds `entries` into every review event that is evidence for `conceptId`
+ * Folds `entries` into the evidence facts for `conceptId`
  * (D-031/`ol-t3sd`: many-to-many, so one event is evidence for every concept
  * its `conceptIds` names — this reads that list, never a singular field).
  * Suspend/unsuspend events are excluded, matching `../today/streak.ts`:
  * stopping study of something is not evidence about what she knows.
+ *
+ * **No sort.** Every fact below is a count, a set or a maximum over the whole
+ * log — all order-independent by construction, which is what a high-water
+ * mark means. The superseded model needed `../review-log/merge.ts`'s total
+ * order to decide which events were "recent"; nothing here does, so trailing
+ * that dependency would be claiming a determinism this fold gets for free.
  */
-function conceptScoredEvents(
+function conceptEvidence(
   entries: readonly ReviewLogEntry[],
   conceptId: string,
-): {
-  scored: readonly ScoredEvent[];
-  explainBackAttempts: number;
-  tiersPracticed: Record<EvidenceTier, boolean>;
-} {
-  const scoredEntries: ReviewLogRecord[] = [];
-  let explainBackAttempts = 0;
+): ConceptMasteryEvidence {
   const tiersPracticed: Record<EvidenceTier, boolean> = {
     recognition: false,
     recall: false,
     explanation: false,
   };
+  const successDays = new Set<string>();
+  let scoredEventCount = 0;
+  let scoredSuccessCount = 0;
+  let recognitionScoredCount = 0;
+  let explainBackAttempts = 0;
+  let gradedExplainBackCount = 0;
+  let deepestSoloLevel: SoloLevel | null = null;
 
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
     if (!entry.conceptIds.includes(conceptId)) continue;
 
-    const tier = evidenceTierOf(entry.instrumentType);
-    tiersPracticed[tier] = true;
+    const record: ReviewLogRecord = entry;
+    tiersPracticed[evidenceTierOf(record.instrumentType)] = true;
 
-    if (entry.instrumentType === 'explain-back') {
+    if (record.instrumentType === 'explain-back') {
       explainBackAttempts += 1;
+      const grade = record.explainBackGrade;
+      if (grade !== undefined) {
+        gradedExplainBackCount += 1;
+        if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
+          deepestSoloLevel = grade.soloLevel;
+        }
+      }
       continue;
     }
 
-    scoredEntries.push(entry);
+    scoredEventCount += 1;
+    if (record.instrumentType === 'mcq') recognitionScoredCount += 1;
+    if (isSuccessRating(record.rating)) {
+      scoredSuccessCount += 1;
+      const day = calendarDayOfTimestamp(record.timestamp);
+      if (day !== null) successDays.add(day);
+    }
   }
 
-  // Ordered via `../review-log/merge.ts`'s shared `compareByInstantThenEventId`
-  // — this used to be a private copy of that tiebreak (`ol-y3ne`) that would
-  // have silently fallen behind if the ruled order ever moved again, exactly
-  // as `session/replay.ts` once did (`ol-2jod.15`). One comparator now, not two.
-  scoredEntries.sort(compareByInstantThenEventId);
-
-  const scored: ScoredEvent[] = scoredEntries.map((entry) => ({
-    instant: Date.parse(entry.timestamp),
-    eventId: entry.eventId,
-    instrumentType: entry.instrumentType,
-    success: isSuccessRating(entry.rating),
-    day: calendarDayOfTimestamp(entry.timestamp),
-  }));
-
-  return { scored, explainBackAttempts, tiersPracticed };
+  return {
+    scoredEventCount,
+    scoredSuccessCount,
+    explainBackAttempts,
+    gradedExplainBackCount,
+    tiersPracticed,
+    recognitionOnly: scoredEventCount > 0 && recognitionScoredCount === scoredEventCount,
+    successfulScoredDays: successDays.size,
+    deepestSoloLevel,
+    depthGateCleared: false,
+  };
 }
 
 /**
- * Rolls up one concept's mastery from the review log — the pure C5.4
- * projection. Same `entries` and `conceptId` always give the same answer;
- * nothing is written, nothing is cached, nothing consults a clock. See this
- * module's doc for the full argument.
+ * Rolls up one concept's growth stage from the review log — the pure C5.4
+ * projection, a high-water mark over the whole log. Same `entries` and
+ * `conceptId` always give the same answer; nothing is written, nothing is
+ * cached, nothing consults a clock. See this module's doc for the full
+ * argument, and `readConceptVitality` below for the other axis.
  */
 export function computeConceptMastery(
   entries: readonly ReviewLogEntry[],
@@ -380,78 +383,23 @@ export function computeConceptMastery(
   if (conceptId.length === 0) {
     throw new Error('computeConceptMastery: conceptId must be non-empty');
   }
-  const { recentWindowSize, highSuccessRate, minSpacedDays } = resolveOptions(options);
-  const { scored, explainBackAttempts, tiersPracticed } = conceptScoredEvents(entries, conceptId);
+  const { minSpacedRetrievalDays, depthGate } = resolveOptions(options);
+  const facts = conceptEvidence(entries, conceptId);
 
-  const recognitionOnly = scored.length > 0 && scored.every((e) => e.instrumentType === 'mcq');
+  const depthGateCleared =
+    facts.deepestSoloLevel !== null && soloRank(facts.deepestSoloLevel) >= soloRank(depthGate);
+  const evidence: ConceptMasteryEvidence = { ...facts, depthGateCleared };
 
-  if (scored.length === 0) {
-    return {
-      conceptId,
-      state: 'seed',
-      evidence: {
-        scoredEventCount: 0,
-        explainBackAttempts,
-        tiersPracticed,
-        recognitionOnly: false,
-        recentWindowSize: 0,
-        recentSuccessRate: null,
-        recentDistinctDays: 0,
-        recentRecallSuccess: false,
-      },
-    };
-  }
+  // The high-water mark: the strongest stage any monotone predicate unlocks.
+  // Each predicate can only turn from false to true as events are appended,
+  // so the stage can only rise — R3's "no implementation may express decay by
+  // lowering it", held by construction rather than by a later check.
+  let state: MasteryState = 'seed';
+  if (evidence.scoredEventCount > 0 || evidence.gradedExplainBackCount > 0) state = 'sprout';
+  if (evidence.successfulScoredDays >= minSpacedRetrievalDays) state = 'sapling';
+  if (depthGateCleared) state = 'tree';
 
-  const windowSize = Math.min(recentWindowSize, scored.length);
-  const window = scored.slice(scored.length - windowSize);
-
-  const successes = window.filter((e) => e.success).length;
-  const recentSuccessRate = successes / window.length;
-
-  const recentDistinctDays = new Set(
-    window.map((e) => e.day).filter((d): d is string => d !== null),
-  ).size;
-
-  const recentRecallSuccess = window.some((e) => e.instrumentType !== 'mcq' && e.success);
-
-  let state: MasteryState;
-  if (recentSuccessRate < highSuccessRate) {
-    state = 'sprout';
-  } else if (recentDistinctDays < minSpacedDays) {
-    // A high recent rate crammed into too few sessions stays `sprout`,
-    // never `sapling` — R7's "across spaced attempts", read literally.
-    state = 'sprout';
-  } else if (recentRecallSuccess) {
-    state = 'tree';
-  } else {
-    state = 'sapling';
-  }
-
-  // Belt-and-suspenders, and this task's named acceptance test: a concept
-  // whose *entire* scored history is recognition-only can never read as
-  // `tree`, however this branch's arithmetic came out. Mechanically this is
-  // already implied by `recentRecallSuccess` being false whenever
-  // `recognitionOnly` is true over the full history and the window is a
-  // suffix of it, but the rule is asserted directly rather than left to
-  // follow from that coincidence.
-  if (recognitionOnly && state === 'tree') {
-    state = 'sapling';
-  }
-
-  return {
-    conceptId,
-    state,
-    evidence: {
-      scoredEventCount: scored.length,
-      explainBackAttempts,
-      tiersPracticed,
-      recognitionOnly,
-      recentWindowSize: windowSize,
-      recentSuccessRate,
-      recentDistinctDays,
-      recentRecallSuccess,
-    },
-  };
+  return { conceptId, state, evidence };
 }
 
 /** Every concept id at least one `kind: 'review'` entry in `entries` names. */

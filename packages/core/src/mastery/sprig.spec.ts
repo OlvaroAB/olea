@@ -32,6 +32,28 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   };
 }
 
+/** A graded explain-back for `conceptId` at `relational` — the depth gate into `tree` (R7, MAT-6). */
+function gradedExplainBack(conceptId: string, eventId: string, day: string): ReviewLogRecord {
+  return review({
+    eventId,
+    timestamp: `${day}T09:00:00-04:00`,
+    conceptIds: [conceptId],
+    instrumentId: `explain-back:${conceptId}`,
+    instrumentType: 'explain-back',
+    rating: null,
+    explainBackGrade: {
+      soloLevel: 'relational',
+      contentRef: 'content-ref-placeholder',
+      revisionOf: null,
+      artifactProvenance: {
+        taskId: 'explain-back-grade',
+        promptVersion: 'v0',
+        modelId: 'model-placeholder',
+      },
+    },
+  });
+}
+
 describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
   it('an empty set of concepts is an all-zero distribution', () => {
     const dist = masteryDistribution([], []);
@@ -49,7 +71,8 @@ describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
         rating: 'good',
       }),
     );
-    const dist = masteryDistribution(entries, ['concept-a', 'concept-never-studied']);
+    const withDepth = [...entries, gradedExplainBack('concept-a', 'a-eb', '2026-01-06')];
+    const dist = masteryDistribution(withDepth, ['concept-a', 'concept-never-studied']);
     expect(dist.total).toBe(2);
     expect(dist.counts.seed).toBe(1);
     expect(dist.counts.tree).toBe(1);
@@ -74,10 +97,11 @@ describe('masteryDistribution — the Today mastery overview (F6.2)', () => {
         }),
       ),
       review({ eventId: 'c0', conceptIds: ['concept-c'], instrumentType: 'mcq', rating: 'good' }),
+      gradedExplainBack('concept-a', 'a-eb', '2026-01-06'),
     ];
     const dist = masteryDistribution(entries, ['concept-a', 'concept-b', 'concept-c']);
     expect(dist.total).toBe(3);
-    expect(dist.counts.tree).toBe(1); // concept-a: spaced recall success
+    expect(dist.counts.tree).toBe(1); // concept-a: spaced recall plus a graded explain-back
     // concept-b (all misses) and concept-c (one successful MCQ, one
     // session — high recent rate, but the spacing gate holds it below
     // `sapling`) both read `sprout`: the ratified vocabulary has one word
@@ -147,8 +171,10 @@ describe('masteryVitalityByStage — `[VIT-2]` (`ol-a3hv`)', () => {
         instrumentId: 'qa:concept-b:1',
         rating: 'again',
       }),
+      gradedExplainBack('concept-a', 'a-eb', '2026-01-06'),
     ];
-    // concept-a reaches `tree`; concept-b (a single miss) reads `sprout`.
+    // concept-a reaches `tree` (spaced recall plus a graded explain-back at
+    // the depth threshold); concept-b (a single miss) reads `sprout`.
     const scheduler = stubScheduler({ 'qa:concept-a:1': 0.2, 'qa:concept-b:1': 0.99 });
     const result = masteryVitalityByStage(entries, ['concept-a', 'concept-b'], {
       scheduler,

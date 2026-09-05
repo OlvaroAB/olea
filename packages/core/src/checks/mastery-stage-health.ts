@@ -11,23 +11,28 @@
  * same "check compares, a harness runs" split every other file in this
  * directory follows.
  *
- * ## The monotonicity check is expected to fail against today's shipped model
+ * ## The monotonicity check now passes, and what it is still FOR
  *
- * Row 3.1's own text, amended under `[D-115]`, describes the TARGET growth
- * stage as "the strongest evidence she has ever produced over the whole
- * log ... a four-value monotonic ordinal — no window, no rate." The row's
- * State column separately says the shipped model is **superseded**:
- * `computeConceptMastery` buckets a *recent windowed success rate*
- * (`recentWindowSize`, default 5), which can and does fall back to `sprout`
- * after a run of high-success events is followed by enough failures to drop
- * the window's rate below `highSuccessRate` — see `rollup.ts`'s own module
- * doc, "Recency and forgetting". A monotonic-ordinal check run against a
- * rate-windowed implementation is not a check that might fail; it is a check
- * that names a real, already-known gap between the shipped code and the
- * ratified target. This module states that gap once here rather than
- * leaving a reader to discover it from a red run with no explanation — same
- * discipline `algorithm-checks.mjs`'s `diagnoseFlatFactors` follows for row
- * 3.3's real-material FAIL.
+ * Until `MAT-6` (`ol-95vv.7`, 2026-09-05) this section said the monotonicity
+ * check was expected to fail: `computeConceptMastery` bucketed a recent
+ * windowed success rate and could fall back from `tree` to `sprout` when
+ * enough failures entered the window, which row 3.1's State column named as
+ * the "superseded model". That model is gone. The rollup is now a high-water
+ * mark over the whole log, every predicate it reads is monotone, and this
+ * check runs GREEN — `scripts/harness/mastery-checks.mjs` in `olea-service`
+ * is the run of record.
+ *
+ * That does not make the check redundant, and it is worth saying why, because
+ * a green property test is the easiest kind to quietly delete. Monotonicity
+ * is a **contract clause with no compiler behind it** (knowledge model R3:
+ * "no implementation may express decay by lowering it"; §8 test 4: "if a
+ * growth stage has ever fallen for any concept ... R3 has been implemented
+ * backwards"). Nothing in the type system stops a future caller adding a
+ * decay term, a recency weight or a "current state" rollup that reintroduces
+ * exactly the regression this check was built to catch — it caught it once
+ * already. This is the standing guard against that recurrence, and it must
+ * still be able to come back "no": `mastery-stage-health.spec.ts` pins that
+ * by feeding it a regressing sequence and asserting it fails.
  */
 import type { CheckVerdict } from './types.js';
 

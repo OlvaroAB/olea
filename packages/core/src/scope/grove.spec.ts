@@ -42,13 +42,14 @@ function presence(
 
 const EVIDENCE: ConceptMasteryEvidence = {
   scoredEventCount: 0,
+  scoredSuccessCount: 0,
   explainBackAttempts: 0,
   tiersPracticed: { recognition: false, recall: false, explanation: false },
+  gradedExplainBackCount: 0,
   recognitionOnly: false,
-  recentWindowSize: 0,
-  recentSuccessRate: null,
-  recentDistinctDays: 0,
-  recentRecallSuccess: false,
+  successfulScoredDays: 0,
+  deepestSoloLevel: null,
+  depthGateCleared: false,
 };
 
 function mastery(conceptId: string, state: ConceptMasteryResult['state']): ConceptMasteryResult {

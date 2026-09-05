@@ -24,17 +24,18 @@ function mastery(
     state: 'sprout',
     evidence: {
       scoredEventCount: 5,
+      scoredSuccessCount: 4,
       explainBackAttempts: 0,
       tiersPracticed: {
         recognition: tiers.recognition ?? false,
         recall: tiers.recall ?? false,
         explanation: tiers.explanation ?? false,
       },
+      gradedExplainBackCount: 0,
       recognitionOnly,
-      recentWindowSize: 5,
-      recentSuccessRate: 0.8,
-      recentDistinctDays: 3,
-      recentRecallSuccess: false,
+      successfulScoredDays: 3,
+      deepestSoloLevel: null,
+      depthGateCleared: false,
     },
   };
 }

@@ -26,7 +26,9 @@ describe('buildFixtureOracle — real mastery over the fixture vault’s own his
 
     const expected: Record<string, MasteryState> = {
       // Highest raw yield (`factors.preMasteryScore`), and solid — the "not
-      // uniformly bad news" half of ol-0v9n's spread. See
+      // uniformly bad news" half of ol-0v9n's spread. Reaches `tree` through
+      // a graded explain-back at the declared depth threshold, the only route
+      // there (`MAT-6`/`ol-95vv.7`, R7). See
       // `oracle/fixture-oracle-history.ts`'s module doc for why this
       // legitimately does NOT mean this concept displays at rank 1: mastery
       // correctly discounts a concept she already knows.
@@ -35,8 +37,10 @@ describe('buildFixtureOracle — real mastery over the fixture vault’s own his
       'Hummocky stratification': 'seed',
       // Recognition-only (MCQ) practice, capped below `tree` by C5.4's own rule.
       Bioturbation: 'sapling',
-      // Lowest raw yield, ten attempts, still weak on the recent window — the
-      // effort-imbalance half of ol-0v9n's spread.
+      // Lowest raw yield, ten attempts, successes on only two distinct days —
+      // one short of the declared spacing gate, so it has never yet been
+      // "recalled reliably across spaced attempts". The effort-imbalance half
+      // of ol-0v9n's spread.
       Paraconformity: 'sprout',
     };
 

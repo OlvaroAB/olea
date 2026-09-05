@@ -50,13 +50,14 @@ function mastery(scoredEventCount: number): ConceptMasteryResult {
     state: scoredEventCount > 0 ? 'sprout' : 'seed',
     evidence: {
       scoredEventCount,
+      scoredSuccessCount: scoredEventCount,
       explainBackAttempts: 0,
       tiersPracticed: { recognition: false, recall: scoredEventCount > 0, explanation: false },
+      gradedExplainBackCount: 0,
       recognitionOnly: false,
-      recentWindowSize: scoredEventCount,
-      recentSuccessRate: scoredEventCount > 0 ? 0.8 : null,
-      recentDistinctDays: scoredEventCount > 0 ? 1 : 0,
-      recentRecallSuccess: false,
+      successfulScoredDays: scoredEventCount > 0 ? 1 : 0,
+      deepestSoloLevel: null,
+      depthGateCleared: false,
     },
   };
 }

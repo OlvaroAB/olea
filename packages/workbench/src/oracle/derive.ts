@@ -172,6 +172,23 @@ function conceptsInAbstainedCourses(ranking: RankOracleResult): ReadonlySet<stri
  * still "look done," which is exactly the failure mode this checks for.
  * Called from `oracle/derive.spec.ts`, not from production code — an
  * assertion is a test's job.
+ *
+ * **It compares the EVIDENCE, not the stage bucket — `MAT-6`/`ol-95vv.7`.**
+ * This function used to count concepts at `sapling` or above. That stopped
+ * discriminating the moment the growth stage became what the contract
+ * actually ratifies: a **high-water mark** that never falls (knowledge model
+ * R3). A struggler reviews her hard course *more*, so she clears the spacing
+ * gate on it sooner than a comfortable student clears hers, and every concept
+ * in both groups ends the term at the same stage — measured on this world:
+ * struggling 4/4 at `sapling`, other 4/4 at `sapling`. That is not a
+ * flattened pipeline, it is the axis answering the question it was designed
+ * for; "how is this going right now" is **vitality's** question, and the
+ * stage is forbidden from expressing it (§8 test 4). So the defence moved one
+ * level down, to the scored evidence the stage was read from: the share of
+ * her scored reviews that succeeded. On the same world that reads 0.32-0.42
+ * for the struggling course against 0.82-1.00 for the others — a wide,
+ * non-knife-edge margin, and flipping the comparison below still turns the
+ * test red (the N-013 mutation the original doc records).
  */
 export function strugglingCourseReadsWorse(
   world: SyntheticWorld,
@@ -179,26 +196,25 @@ export function strugglingCourseReadsWorse(
 ): boolean {
   const strugglingCourses = new Set(world.stream.groundTruth.strugglingCourseIds);
   if (strugglingCourses.size === 0) return true; // nothing declared to check
-  const ADVANCED: ReadonlySet<string> = new Set(['sapling', 'tree']);
 
-  let strugglingAdvanced = 0;
-  let strugglingTotal = 0;
-  let otherAdvanced = 0;
-  let otherTotal = 0;
+  let strugglingSuccesses = 0;
+  let strugglingScored = 0;
+  let otherSuccesses = 0;
+  let otherScored = 0;
   for (const concept of CONCEPTS) {
     const result = mastery.get(concept.conceptId);
     if (result === undefined) continue;
-    const advanced = ADVANCED.has(result.state) ? 1 : 0;
+    const { scoredEventCount, scoredSuccessCount } = result.evidence;
     if (strugglingCourses.has(concept.courseId)) {
-      strugglingTotal += 1;
-      strugglingAdvanced += advanced;
+      strugglingScored += scoredEventCount;
+      strugglingSuccesses += scoredSuccessCount;
     } else {
-      otherTotal += 1;
-      otherAdvanced += advanced;
+      otherScored += scoredEventCount;
+      otherSuccesses += scoredSuccessCount;
     }
   }
-  if (strugglingTotal === 0 || otherTotal === 0) return true; // nothing to compare
-  return strugglingAdvanced / strugglingTotal < otherAdvanced / otherTotal;
+  if (strugglingScored === 0 || otherScored === 0) return true; // nothing to compare
+  return strugglingSuccesses / strugglingScored < otherSuccesses / otherScored;
 }
 
 /**

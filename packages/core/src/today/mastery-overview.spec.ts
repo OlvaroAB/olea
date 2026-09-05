@@ -215,12 +215,30 @@ describe('buildMasteryOverview', () => {
     });
 
     it('a tree that needs tending is drawn as a tree', () => {
-      // Three spaced recall (qa) successes reach `tree` (R7); the scheduler
-      // then reports this instrument's retrievability below the holding cut.
+      // Three spaced recall (qa) successes reach `sapling`; the graded
+      // explain-back clears the depth gate into `tree` (R7, MAT-6). The
+      // scheduler then reports the qa instrument's retrievability below the
+      // holding cut — explain-back is explanation-tier and never enters the
+      // vitality fold at all (`[D-087]`).
       const entries = [
         review('a', '2026-08-01', 'e1'),
         review('a', '2026-08-04', 'e2'),
         review('a', '2026-08-09', 'e3'),
+        review('a', '2026-08-10', 'e4', {
+          instrumentId: 'explain-back:a',
+          instrumentType: 'explain-back',
+          rating: null,
+          explainBackGrade: {
+            soloLevel: 'relational',
+            contentRef: 'content-ref-placeholder',
+            revisionOf: null,
+            artifactProvenance: {
+              taskId: 'explain-back-grade',
+              promptVersion: 'v0',
+              modelId: 'model-placeholder',
+            },
+          },
+        }),
       ];
       const scheduler = stubScheduler({ 'qa:a:1': 0.5 });
 

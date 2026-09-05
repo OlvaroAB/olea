@@ -161,6 +161,11 @@ const STORIES = [
       { date: '2026-07-02', instrumentType: 'qa', rating: 'good' },
       { date: '2026-07-20', instrumentType: 'qa', rating: 'good' },
       { date: '2026-08-10', instrumentType: 'qa', rating: 'easy' },
+      // The depth gate (`MAT-6`/`ol-95vv.7`, R7): spaced recall alone reaches
+      // `sapling` and stops. `tree` is reachable ONLY through an explain-back
+      // graded at or above the declared depth threshold (`relational`), so the
+      // one concept in this spread that is meant to read `tree` carries one.
+      { date: '2026-08-24', instrumentType: 'explain-back', soloLevel: 'relational' },
     ],
   },
   {
@@ -192,9 +197,16 @@ const STORIES = [
       { date: '2026-06-23', instrumentType: 'qa', rating: 'hard' },
       { date: '2026-06-30', instrumentType: 'qa', rating: 'again' },
       { date: '2026-07-10', instrumentType: 'qa', rating: 'again' },
-      { date: '2026-07-21', instrumentType: 'qa', rating: 'hard' },
+      // `MAT-6`: successes on only TWO distinct days, one short of the
+      // declared spacing gate (`MIN_SPACED_RETRIEVAL_DAYS`, 3) — which is what
+      // keeps this concept at `sprout` under the high-water-mark model. It
+      // used to succeed on four days and rely on the retired recent-window
+      // rate to hold it down; a high-water mark has no such mechanism, and
+      // "ten attempts, mostly failing, never yet reliable across spaced
+      // attempts" is the honest shape of the story this row is telling.
+      { date: '2026-07-21', instrumentType: 'qa', rating: 'again' },
       { date: '2026-08-05', instrumentType: 'qa', rating: 'again' },
-      { date: '2026-08-20', instrumentType: 'qa', rating: 'hard' },
+      { date: '2026-08-20', instrumentType: 'qa', rating: 'again' },
     ],
   },
 ];
@@ -213,15 +225,20 @@ function buildRecords(conceptKey, notePath, events) {
   const slug = slugOf(notePath);
   const instrumentId = `wb-fixture-oracle:${slug}`;
   return events.map((event, index) => {
+    const isExplainBack = event.instrumentType === 'explain-back';
     const record = {
       schemaVersion: 5,
       kind: 'review',
       eventId: `wb-fixture-oracle:${slug}:${String(index)}`,
       timestamp: `${event.date}T09:00:00+00:00`,
-      instrumentId,
+      // An explain-back rides its own instrument id — one instrument is one
+      // instrument type, and the qa id above is already taken.
+      instrumentId: isExplainBack ? `${instrumentId}:explain-back` : instrumentId,
       instrumentType: event.instrumentType,
       conceptIds: [conceptKey],
-      rating: event.rating,
+      // F2.16: an explain-back produces no rating. Its verdict rides
+      // `explainBackGrade` instead (`contracts/review-log.ts`).
+      rating: isExplainBack ? null : event.rating,
       wasUnsure: false,
       durationMs: null,
       selectionContext: {
@@ -231,6 +248,22 @@ function buildRecords(conceptKey, notePath, events) {
         instrumentTypesOffered: [event.instrumentType],
         planVersion: null,
       },
+      ...(isExplainBack
+        ? {
+            explainBackGrade: {
+              soloLevel: event.soloLevel,
+              // An opaque placeholder id, never text — the content store this
+              // points into holds nothing for a synthetic fixture (D-005).
+              contentRef: `wb-fixture-oracle:${slug}:grade:${String(index)}`,
+              revisionOf: null,
+              artifactProvenance: {
+                taskId: 'explain-back-grade',
+                promptVersion: 'wb-fixture-oracle',
+                modelId: 'wb-fixture-oracle',
+              },
+            },
+          }
+        : {}),
     };
     // Throws with the zod issue list on any shape mistake — the same
     // schema `parseReviewLog` validates a real vault's log lines against.

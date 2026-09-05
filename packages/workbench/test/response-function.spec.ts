@@ -54,20 +54,22 @@ function reviewEntry(input: {
   };
 }
 
-describe('claim: mastery falls after a wrong and recovers more slowly than it fell', () => {
-  it('one lapse demotes the state in a single event; regaining it needs more events than that', () => {
-    // recentWindowSize=4 (below default 5) makes the arithmetic exact and
-    // legible: reach 'tree' with 4 correct qa reviews on 4 distinct days,
-    // demote it with exactly ONE wrong review, then count how many
-    // subsequent correct reviews (on new distinct days) it takes to regain
-    // 'tree'. See the module doc's worked derivation in the task report.
-    const options = { recentWindowSize: 4 };
+describe('claim REFUTED by the ratified model: the growth stage does not fall after a wrong', () => {
+  it('one lapse, then a run of them, never lowers a stage already earned — the high-water mark (R3, MAT-6)', () => {
+    // This suite's original claim was "mastery falls after a wrong and
+    // recovers more slowly than it fell". It was true of the superseded
+    // windowed-rate rollup and is FORBIDDEN of the ratified one: the growth
+    // stage is a high-water mark, and the knowledge model's §8 test 4 says
+    // plainly that a stage which has ever fallen means R3 was implemented
+    // backwards. Decay is vitality's axis, not this one — so the claim is
+    // kept, inverted, and still written so it CAN fail (a rollup that
+    // regressed would turn every assertion below red).
     const days = [
       '2027-01-01',
       '2027-01-02',
       '2027-01-03',
       '2027-01-04',
-      '2027-01-05', // the lapse
+      '2027-01-05', // the first lapse
       '2027-01-06',
       '2027-01-07',
       '2027-01-08',
@@ -79,8 +81,11 @@ describe('claim: mastery falls after a wrong and recovers more slowly than it fe
       eventCounter += 1;
       return `evt-${eventCounter}`;
     };
+    const stageOf = () =>
+      computeAllConceptMastery(entries, [CONCEPT_A]).get(CONCEPT_A)?.state ?? 'seed';
 
-    for (let i = 0; i < 4; i += 1) {
+    // Three spaced recall successes clear the declared spacing gate.
+    for (let i = 0; i < 3; i += 1) {
       entries.push(
         reviewEntry({
           eventId: nextId(),
@@ -90,41 +95,30 @@ describe('claim: mastery falls after a wrong and recovers more slowly than it fe
         }),
       );
     }
-    let mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-    expect(mastery.get(CONCEPT_A)?.state).toBe('tree');
+    expect(stageOf()).toBe('sapling');
 
-    // The fall: one wrong review, one event.
-    entries.push(
-      reviewEntry({
-        eventId: nextId(),
-        conceptId: CONCEPT_A,
-        day: days[4] as string,
-        rating: 'again',
-      }),
-    );
-    mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-    expect(mastery.get(CONCEPT_A)?.state).not.toBe('tree');
-    expect(mastery.get(CONCEPT_A)?.state).toBe('sprout');
-
-    // The recovery: keep adding correct reviews on new days until 'tree'
-    // returns, and assert that took MORE than the one event the fall took.
-    let recoveredAfter = 0;
-    for (let i = 5; i < days.length; i += 1) {
+    // Every subsequent event is a lapse, on a new day each time. Under the
+    // superseded model this walked the stage back to `sprout`; under the
+    // ratified one it cannot move at all.
+    const stages: string[] = [];
+    for (let i = 3; i < days.length; i += 1) {
       entries.push(
         reviewEntry({
           eventId: nextId(),
           conceptId: CONCEPT_A,
           day: days[i] as string,
-          rating: 'good',
+          rating: 'again',
         }),
       );
-      recoveredAfter += 1;
-      mastery = computeAllConceptMastery(entries, [CONCEPT_A], options);
-      if (mastery.get(CONCEPT_A)?.state === 'tree') break;
+      stages.push(stageOf());
     }
-    expect(mastery.get(CONCEPT_A)?.state).toBe('tree');
-    expect(recoveredAfter).toBeGreaterThan(1); // recovery took more events than the one-event fall
-    expect(recoveredAfter).toBe(4); // exactly the window size, on this construction
+    expect(stages.every((stage) => stage === 'sapling')).toBe(true);
+
+    // And the evidence beneath the stage still records what happened — the
+    // reading did not become blind, it moved to the axis that carries it.
+    const evidence = computeAllConceptMastery(entries, [CONCEPT_A]).get(CONCEPT_A)?.evidence;
+    expect(evidence?.scoredEventCount).toBe(days.length);
+    expect(evidence?.scoredSuccessCount).toBe(3);
   });
 });
 
@@ -133,11 +127,12 @@ describe('claim: a concept failed three times outranks one passed three times (e
     // Three events each, on three distinct days each — the minimum evidence
     // count that can even distinguish two growth stages under the ratified
     // four-stage vocabulary (D-049; `VOC-1`/`ol-7efk`): `sapling` requires
-    // `minSpacedDays` (3) distinct days, so a 2-event "equal evidence"
-    // construction (this test's pre-D-049 shape) can no longer land on
-    // different stages — both would read `sprout` regardless of outcome,
-    // because the retired `shaky`/`coming` split this test originally
-    // exploited is exactly what D-049 merged into `sprout`'s single bucket.
+    // successes on `MIN_SPACED_RETRIEVAL_DAYS` (3) distinct days, so a
+    // 2-event "equal evidence" construction (this test's pre-D-049 shape) can
+    // no longer land on different stages — both would read `sprout`
+    // regardless of outcome, because the retired `shaky`/`coming` split this
+    // test originally exploited is exactly what D-049 merged into `sprout`'s
+    // single bucket.
     const entriesA: ReviewLogEntry[] = [
       reviewEntry({ eventId: 'a1', conceptId: CONCEPT_A, day: '2027-01-01', rating: 'again' }),
       reviewEntry({ eventId: 'a2', conceptId: CONCEPT_A, day: '2027-01-02', rating: 'again' }),
@@ -150,10 +145,10 @@ describe('claim: a concept failed three times outranks one passed three times (e
     ];
     const mastery = computeAllConceptMastery([...entriesA, ...entriesB], [CONCEPT_A, CONCEPT_B]);
     expect(mastery.get(CONCEPT_A)?.state).toBe('sprout'); // three failures: the floor once evidence exists
-    // Three qa passes across three distinct days clears both the success-rate
-    // and spacing gates, and a qa success is recall-tier — so this reaches
-    // the top stage, not merely `sapling`.
-    expect(mastery.get(CONCEPT_B)?.state).toBe('tree');
+    // Three qa passes across three distinct days clear the declared spacing
+    // gate, so this reads `sapling`. It cannot read `tree`: `tree` is behind
+    // the depth gate and only a graded explain-back opens it (R7, MAT-6).
+    expect(mastery.get(CONCEPT_B)?.state).toBe('sapling');
 
     const course = 'syn:course:test';
     const assessmentPath = 'syn:assessment:test:midterm';

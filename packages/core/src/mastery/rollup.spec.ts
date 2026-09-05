@@ -11,7 +11,7 @@
 //
 // Concept and instrument ids below are structural placeholders
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
-import type { ReviewLogEntry, ReviewLogRecord, SuspendLogRecord } from 'olea-contracts';
+import type { ReviewLogEntry, ReviewLogRecord, SoloLevel, SuspendLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
@@ -22,7 +22,9 @@ import {
   computeConceptMastery,
   conceptIdsInLog,
   conceptVitalityInstruments,
+  DEPTH_GATE_SOLO_LEVEL,
   evidenceTierOf,
+  MIN_SPACED_RETRIEVAL_DAYS,
   masteryAtTimeForConceptIds,
   readAllConceptVitality,
   readConceptVitality,
@@ -65,6 +67,34 @@ function onConsecutiveDays(
   });
 }
 
+/**
+ * A graded explain-back review event for `concept-a` — R9's SOLO verdict as
+ * the log actually carries it (`explainBackGrade`, `contracts/review-log.ts`),
+ * with `rating: null` per F2.16. Structural placeholders throughout (INV-3).
+ */
+function gradedExplainBack(
+  soloLevel: SoloLevel,
+  overrides: Partial<ReviewLogRecord> = {},
+): ReviewLogRecord {
+  return review({
+    eventId: `eb-${soloLevel}`,
+    instrumentId: 'explain-back:concept-a',
+    instrumentType: 'explain-back',
+    rating: null,
+    explainBackGrade: {
+      soloLevel,
+      contentRef: 'content-ref-placeholder',
+      revisionOf: null,
+      artifactProvenance: {
+        taskId: 'explain-back-grade',
+        promptVersion: 'v0',
+        modelId: 'model-placeholder',
+      },
+    },
+    ...overrides,
+  });
+}
+
 describe('evidenceTierOf — R7 tiers', () => {
   it('mcq is recognition, qa/cloze are recall, explain-back is explanation', () => {
     expect(evidenceTierOf('mcq')).toBe('recognition');
@@ -100,7 +130,7 @@ describe('computeConceptMastery — recognition-only concept caps at sapling (na
     expect(result.evidence.recognitionOnly).toBe(true);
   });
 
-  it('a single mixed-in recall success lifts the same concept past the cap', () => {
+  it('a mixed-in recall success clears `recognitionOnly` but still cannot reach `tree` (MAT-6: only the depth gate can)', () => {
     const mcq = onConsecutiveDays('2026-01-01', 19, () => ({
       instrumentType: 'mcq',
       instrumentId: 'mcq:concept-a:1',
@@ -115,12 +145,12 @@ describe('computeConceptMastery — recognition-only concept caps at sapling (na
     });
     const result = computeConceptMastery([...mcq, recall], 'concept-a');
     expect(result.evidence.recognitionOnly).toBe(false);
-    expect(result.state).toBe('tree');
+    expect(result.state).toBe('sapling');
   });
 });
 
-describe('computeConceptMastery — explain-back is recorded, never scored (contract silence)', () => {
-  it('explain-back attempts alone do not reach past seed — no success signal exists to act on', () => {
+describe('computeConceptMastery — an UNGRADED explain-back is recorded, never counted (R7: success, not attempt)', () => {
+  it('explain-back attempts with no verdict do not reach past seed — no success signal exists to act on', () => {
     const entries = [
       review({
         eventId: 'e1',
@@ -142,15 +172,14 @@ describe('computeConceptMastery — explain-back is recorded, never scored (cont
     expect(result.evidence.tiersPracticed.explanation).toBe(true);
   });
 
-  it('explain-back attempts do not by themselves satisfy the `tree` gate even alongside solid recall evidence', () => {
+  it('an ungraded explain-back does not satisfy the depth gate even alongside solid recall evidence', () => {
     const recall = onConsecutiveDays('2026-01-01', 5, () => ({
       instrumentType: 'qa',
       rating: 'good',
     }));
-    // Recall alone already reaches `tree` (see the dedicated test below); this
-    // asserts explain-back's presence changes nothing about *how* that happens
-    // — it is recorded, not counted, per this module's documented reading of
-    // R7's "success", not "attempt".
+    // Recall alone reaches `sapling` and stops there (see the dedicated test
+    // below); this asserts an UNGRADED explain-back's presence changes nothing
+    // — it is recorded, not counted, per R7's "success", not "attempt".
     const withExplainBack = [
       ...recall,
       review({
@@ -168,18 +197,23 @@ describe('computeConceptMastery — explain-back is recorded, never scored (cont
   });
 });
 
-describe('computeConceptMastery — recall success reaches `tree` (R7: recognition alone cannot)', () => {
-  it('spaced, reliable Q&A recall reaches tree', () => {
+// Scenario: features/F2-review.md — "R3 / R7 / R9 — Growth stage is monotonic,
+// vitality is three-valued, and the model never holds the estimate" →
+// "`tree` reachable only through a graded explain-back, never through recall
+// alone", tagged `@auto:core/mastery/rollup.spec` (this file).
+describe('computeConceptMastery — the spacing gate and the depth gate (MAT-6, R7)', () => {
+  it('spaced, reliable Q&A recall reaches `sapling` and stops there — recall alone never reaches `tree`', () => {
     const entries = onConsecutiveDays('2026-01-01', 5, () => ({
       instrumentType: 'qa',
       rating: 'good',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.state).toBe('tree');
-    expect(result.evidence.recentRecallSuccess).toBe(true);
+    expect(result.state).toBe('sapling');
+    expect(result.evidence.successfulScoredDays).toBe(5);
+    expect(result.evidence.depthGateCleared).toBe(false);
   });
 
-  it('a high-success run crammed into one sitting is `sprout`, not `sapling` or `tree`', () => {
+  it('a high-success run crammed into one sitting is `sprout` — the spacing gate, `[D-145]`', () => {
     const entries = Array.from({ length: 5 }, (_, i) =>
       review({
         eventId: `c${i}`,
@@ -190,22 +224,108 @@ describe('computeConceptMastery — recall success reaches `tree` (R7: recogniti
     );
     const result = computeConceptMastery(entries, 'concept-a');
     expect(result.state).toBe('sprout');
-    expect(result.evidence.recentDistinctDays).toBe(1);
+    expect(result.evidence.successfulScoredDays).toBe(1);
+  });
+
+  it('a graded explain-back at the depth threshold reaches `tree`, with no recall evidence at all', () => {
+    const result = computeConceptMastery([gradedExplainBack('relational')], 'concept-a');
+    expect(result.state).toBe('tree');
+    expect(result.evidence.deepestSoloLevel).toBe('relational');
+    expect(result.evidence.depthGateCleared).toBe(true);
+    expect(result.evidence.gradedExplainBackCount).toBe(1);
+  });
+
+  it('a graded explain-back BELOW the depth threshold does not open the gate', () => {
+    for (const level of ['prestructural', 'unistructural', 'multistructural'] as const) {
+      const result = computeConceptMastery([gradedExplainBack(level)], 'concept-a');
+      expect(result.evidence.depthGateCleared).toBe(false);
+      expect(result.state).toBe('sprout');
+    }
+  });
+
+  it('`extended-abstract` clears the gate too — the threshold is a floor, not an equality', () => {
+    const result = computeConceptMastery([gradedExplainBack('extended-abstract')], 'concept-a');
+    expect(result.state).toBe('tree');
+  });
+
+  it('the deepest verdict EVER recorded governs — a later shallower attempt never takes the stage back', () => {
+    const deepThenShallow = [
+      gradedExplainBack('relational', { eventId: 'g1', timestamp: '2026-01-01T09:00:00-04:00' }),
+      gradedExplainBack('unistructural', {
+        eventId: 'g2',
+        timestamp: '2026-02-01T09:00:00-04:00',
+      }),
+    ];
+    const result = computeConceptMastery(deepThenShallow, 'concept-a');
+    expect(result.evidence.deepestSoloLevel).toBe('relational');
+    expect(result.state).toBe('tree');
+  });
+});
+
+// Scenario: features/F2-review.md — "no code path lowers a growth stage" /
+// "a lapse, a fresh misconception, or a pruning never takes back a stage
+// already earned", tagged `@auto:core/mastery/rollup.spec` (this file). This
+// is the in-repo twin of `olea-service`'s `scripts/harness/mastery-checks.mjs`
+// monotonicity run (CHK-2, `ol-3ux7.15`), which drives the same property
+// through `checkMasteryMonotonicity`.
+describe('computeConceptMastery — the high-water mark never falls (R3, knowledge model §8 test 4)', () => {
+  const rank = (state: string) => ['seed', 'sprout', 'sapling', 'tree'].indexOf(state);
+
+  it('a concept at `tree` stays `tree` through a run of lapses', () => {
+    const earned = [
+      ...onConsecutiveDays('2026-01-01', 3, () => ({ instrumentType: 'qa', rating: 'good' })),
+      gradedExplainBack('relational', { eventId: 'g', timestamp: '2026-01-04T09:00:00-04:00' }),
+    ];
+    expect(computeConceptMastery(earned, 'concept-a').state).toBe('tree');
+
+    const thenLapses = [
+      ...earned,
+      ...onConsecutiveDays('2026-02-01', 6, (_d, i) => ({
+        eventId: `lapse-${i}`,
+        instrumentType: 'qa',
+        rating: 'again',
+      })),
+    ];
+    expect(computeConceptMastery(thenLapses, 'concept-a').state).toBe('tree');
+  });
+
+  it('replaying any prefix, prefix by prefix, never lowers the stage', () => {
+    const log = [
+      ...onConsecutiveDays('2026-01-01', 3, () => ({ instrumentType: 'qa', rating: 'good' })),
+      ...onConsecutiveDays('2026-01-10', 4, (_d, i) => ({
+        eventId: `bad-${i}`,
+        instrumentType: 'qa',
+        rating: 'again',
+      })),
+      gradedExplainBack('relational', { eventId: 'g', timestamp: '2026-02-01T09:00:00-04:00' }),
+      ...onConsecutiveDays('2026-03-01', 3, (_d, i) => ({
+        eventId: `worse-${i}`,
+        instrumentType: 'mcq',
+        instrumentId: 'mcq:concept-a:1',
+        rating: 'again',
+      })),
+    ];
+    const sequence = log.map(
+      (_, i) => computeConceptMastery(log.slice(0, i + 1), 'concept-a').state,
+    );
+    expect(sequence).toContain('tree'); // the property is not vacuous — the stage does move
+    for (let i = 1; i < sequence.length; i += 1) {
+      expect(rank(sequence[i] as string)).toBeGreaterThanOrEqual(rank(sequence[i - 1] as string));
+    }
   });
 });
 
 describe('computeConceptMastery — a concept whose evidence disagrees sharply', () => {
   it('an even mix of hits and misses across several instruments reads as sprout', () => {
-    // Exactly the default window size worth of evidence (4 <= 5), split
-    // evenly, so the 50% boundary is unambiguous rather than an artefact of
-    // which end of the window got trimmed.
+    // Four events, evenly split: two successes on two distinct days, one day
+    // short of the spacing gate, so the concept sits at the `sprout` floor.
     const entries = onConsecutiveDays('2026-01-01', 4, (_day, i) => ({
       instrumentType: i % 2 === 0 ? 'qa' : 'mcq',
       instrumentId: i % 2 === 0 ? 'qa:concept-a:1' : 'mcq:concept-a:1',
       rating: i % 2 === 0 ? 'good' : 'again',
     }));
     const result = computeConceptMastery(entries, 'concept-a');
-    expect(result.evidence.recentSuccessRate).toBeCloseTo(0.5, 5);
+    expect(result.evidence.successfulScoredDays).toBe(2);
     expect(result.state).toBe('sprout');
   });
 
@@ -216,27 +336,39 @@ describe('computeConceptMastery — a concept whose evidence disagrees sharply',
   });
 });
 
-describe('computeConceptMastery — options are honoured and validated', () => {
-  it('a narrower recent window changes which events are read', () => {
-    // Five fails then five successes, spread over ten days: a window of 5
-    // sees only the recent successes; a window of 10 sees the mixed whole.
-    const entries = onConsecutiveDays('2026-01-01', 10, (_day, i) => ({
-      rating: i < 5 ? 'again' : 'good',
+describe('computeConceptMastery — the two declared constants are honoured and validated (MAT-6)', () => {
+  it('the shipped defaults are the declared ones: 3 spaced days, and `relational` on the depth gate', () => {
+    expect(MIN_SPACED_RETRIEVAL_DAYS).toBe(3);
+    expect(DEPTH_GATE_SOLO_LEVEL).toBe('relational');
+  });
+
+  it('a stricter spacing gate holds the same log at `sprout`', () => {
+    const entries = onConsecutiveDays('2026-01-01', 3, () => ({
+      instrumentType: 'qa',
+      rating: 'good',
     }));
-    const narrow = computeConceptMastery(entries, 'concept-a', { recentWindowSize: 5 });
-    const wide = computeConceptMastery(entries, 'concept-a', { recentWindowSize: 10 });
-    expect(narrow.evidence.recentSuccessRate).toBe(1);
-    expect(wide.evidence.recentSuccessRate).toBe(0.5);
-    expect(wide.state).toBe('sprout');
+    expect(computeConceptMastery(entries, 'concept-a').state).toBe('sapling');
+    expect(computeConceptMastery(entries, 'concept-a', { minSpacedRetrievalDays: 4 }).state).toBe(
+      'sprout',
+    );
   });
 
-  it('rejects a non-positive recentWindowSize', () => {
-    expect(() => computeConceptMastery([], 'concept-a', { recentWindowSize: 0 })).toThrow();
+  it('a stricter depth gate holds a `relational` verdict short of `tree`', () => {
+    const entries = [gradedExplainBack('relational')];
+    expect(computeConceptMastery(entries, 'concept-a').state).toBe('tree');
+    expect(
+      computeConceptMastery(entries, 'concept-a', { depthGate: 'extended-abstract' }).state,
+    ).toBe('sprout');
   });
 
-  it('rejects a highSuccessRate outside [0, 1]', () => {
-    expect(() => computeConceptMastery([], 'concept-a', { highSuccessRate: 1.5 })).toThrow();
-    expect(() => computeConceptMastery([], 'concept-a', { highSuccessRate: -0.1 })).toThrow();
+  it('rejects a non-positive minSpacedRetrievalDays', () => {
+    expect(() => computeConceptMastery([], 'concept-a', { minSpacedRetrievalDays: 0 })).toThrow();
+  });
+
+  it('rejects a depthGate that is not a SOLO level', () => {
+    expect(() =>
+      computeConceptMastery([], 'concept-a', { depthGate: 'tree' as unknown as SoloLevel }),
+    ).toThrow();
   });
 
   it('rejects an empty conceptId', () => {
@@ -299,22 +431,17 @@ describe('rebuild-from-log equivalence and idempotent replay (this task N-013 re
   });
 });
 
-describe("shares review-log/merge.ts's total order (ol-y3ne)", () => {
+describe('the high-water fold needs no event order at all (ol-y3ne, revisited by MAT-6)', () => {
   // This module used to keep its own private `byInstantThenEventId`
-  // comparator, duplicating the ruled fold total order that lives in
-  // `../review-log/merge.ts` (`ol-egov.20`). There is now exactly one
-  // comparator — `compareByInstantThenEventId`, imported by this module's
-  // internal fold — and these tests prove agreement directly, not just
-  // assert it, mirroring `session/replay.spec.ts`'s equivalent block for
-  // `ol-2jod.15` (the earlier module that made the same mistake).
-  //
-  // `computeConceptMastery` never exposes its internal event order, so the
-  // probe here is a `recentWindowSize: 1` window: with exactly one event in
-  // the window, the result depends entirely on which event this module
-  // treats as *last* — a directly observable stand-in for "whose order did
-  // the fold use".
+  // comparator, duplicating the ruled fold total order in
+  // `../review-log/merge.ts` (`ol-egov.20`, `ol-y3ne`), then imported the
+  // shared one. MAT-6 removed the need for either: every fact the growth
+  // stage reads is a count, a set or a maximum over the WHOLE log, so which
+  // event is "last" cannot change the answer. These tests prove that
+  // directly — the fold agrees with the ruled order because it is
+  // indifferent to order, not because it re-implements it.
 
-  it('same-instant tiebreak by eventId agrees with mergeReviewLogRecords, regardless of input order', () => {
+  it('agrees with mergeReviewLogRecords by being indifferent to the order entries arrive in', () => {
     const instant = '2026-01-10T09:00:00-04:00';
     const bbb = review({ eventId: 'bbb', timestamp: instant, rating: 'again' });
     const aaa = review({ eventId: 'aaa', timestamp: instant, rating: 'easy' });
@@ -322,30 +449,22 @@ describe("shares review-log/merge.ts's total order (ol-y3ne)", () => {
     const mergedOrder = mergeReviewLogRecords([bbb, aaa]).records.map((r) => r.eventId);
     expect(mergedOrder).toEqual(['aaa', 'bbb']);
 
-    // 'bbb' ('again', a failure) sorts last per the shared order, so a
-    // one-event window sees a failure whichever order the two entries were
-    // supplied to computeConceptMastery in.
-    const forwards = computeConceptMastery([bbb, aaa], 'concept-a', { recentWindowSize: 1 });
-    const backwards = computeConceptMastery([aaa, bbb], 'concept-a', { recentWindowSize: 1 });
-    expect(forwards.evidence.recentSuccessRate).toBe(0);
-    expect(backwards.evidence.recentSuccessRate).toBe(0);
+    const forwards = computeConceptMastery([bbb, aaa], 'concept-a');
+    const backwards = computeConceptMastery([aaa, bbb], 'concept-a');
     expect(forwards).toEqual(backwards);
   });
 
-  it("the window's trailing slice lands on the same event mergeReviewLogRecords sorts last, over scrambled input", () => {
+  it('a scrambled log reads exactly as its merge-ordered self does', () => {
     const e1 = review({ eventId: 'e1', timestamp: '2026-01-10T09:00:00-04:00', rating: 'good' });
     const e2 = review({ eventId: 'e2', timestamp: '2026-01-11T09:00:00-04:00', rating: 'again' });
     const e3 = review({ eventId: 'e3', timestamp: '2026-01-12T09:00:00-04:00', rating: 'good' });
     const scrambled = [e3, e1, e2];
 
-    const mergedOrder = mergeReviewLogRecords(scrambled).records.map((r) => r.eventId);
-    expect(mergedOrder).toEqual(['e1', 'e2', 'e3']);
-
-    // e3 (a success) sorts last, so a one-event window reads a success —
-    // whatever order the same three entries were handed to
-    // computeConceptMastery in.
-    const result = computeConceptMastery(scrambled, 'concept-a', { recentWindowSize: 1 });
-    expect(result.evidence.recentSuccessRate).toBe(1);
+    const merged = mergeReviewLogRecords(scrambled).records;
+    expect(merged.map((r) => r.eventId)).toEqual(['e1', 'e2', 'e3']);
+    expect(computeConceptMastery(scrambled, 'concept-a')).toEqual(
+      computeConceptMastery(merged, 'concept-a'),
+    );
   });
 });
 
@@ -373,7 +492,7 @@ describe('computeAllConceptMastery', () => {
       ...onConsecutiveDays('2026-01-01', 4, () => ({ conceptIds: ['concept-b'], rating: 'again' })),
     ];
     const all = computeAllConceptMastery(entries);
-    expect(all.get('concept-a')?.state).toBe('tree');
+    expect(all.get('concept-a')?.state).toBe('sapling');
     expect(all.get('concept-b')?.state).toBe('sprout');
   });
 
@@ -393,7 +512,7 @@ describe('masteryAtTimeForConceptIds — the value a future writer stamps (ol-g6
       rating: 'good',
     }));
     const value = masteryAtTimeForConceptIds(entries, ['concept-a']);
-    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'tree' } });
+    expect(value).toEqual({ attribution: 'per-concept', byConcept: { 'concept-a': 'sapling' } });
   });
 
   it('excludes the not-yet-appended event by construction — it only ever sees what the caller passes', () => {
