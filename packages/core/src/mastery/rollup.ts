@@ -116,8 +116,15 @@
  * `../review-log/parse.ts` (which migrates through `upgrade.ts` before
  * anything downstream sees a record) and hands the result here. That is what
  * makes "discard the projection and recompute it from the log" the whole
- * rebuild story: there is no cache inside this module for a rebuild to
- * disagree with.
+ * rebuild story.
+ *
+ * **One exception, added by `MAT-6a` / `ol-95vv.9`:** a `WeakMap`, keyed by
+ * `entries`' own array identity, memoises a single pass that groups records
+ * by concept id (see `indexEntries`, below `conceptEvidence`). It holds no
+ * state a rebuild could disagree with — a different log is a different
+ * array and a cold cache entry — it only avoids re-scanning the same array
+ * once per concept when a caller folds many concepts over one log, which is
+ * every batch caller in this file.
  */
 
 import type {
@@ -298,6 +305,93 @@ export interface ConceptMasteryResult {
 }
 
 /**
+ * **THE SINGLE-PASS INDEX — `MAT-6a` / `ol-95vv.9`, the fix for the
+ * whole-log-per-concept blowup MAT-6 introduced.**
+ *
+ * `conceptEvidence` (below) and `conceptVitalityInstruments` used to scan
+ * the *entire* `entries` array once per concept id — correct, since the
+ * high-water mark genuinely needs the whole log, but a caller folding many
+ * concepts over the same log (`computeAllConceptMastery`,
+ * `readAllConceptVitality`, and the retrospective's own per-concept loop
+ * over an already-computed vitality map) turned that into an O(concepts ×
+ * log length) rescan. Measured on the real vault: the retrospective view's
+ * mount went from 149-348ms to 7.6-23.4s at some weeks (`ol-95vv.9`).
+ *
+ * The fix is a single pass that buckets every `kind: 'review'` entry by
+ * every concept it is evidence for (D-031's many-to-many `conceptIds`), plus
+ * the first-seen instrument type per concept (`conceptVitalityInstruments`'s
+ * own tie-break, preserved exactly). Grouped-by-concept entries are still
+ * folded through the SAME per-concept logic below — this changes only which
+ * array is iterated, never the arithmetic, so the high-water-mark result for
+ * any one concept is unchanged.
+ *
+ * **Cached in a `WeakMap` keyed by the `entries` array's own identity.**
+ * This does not weaken the "no cache inside this module" purity claim the
+ * module doc makes elsewhere: the index is a pure function of `entries`'
+ * *content*, and the cache can only ever be hit by the exact same array
+ * reference — a different log (even one that differs by a single appended
+ * event) is a different array, hits a cold cache, and gets a fresh index.
+ * There is nothing here for a rebuild to disagree with; it is memoisation of
+ * a pure computation, not state. It exists because every caller in this
+ * codebase passes the *same* `entries` reference into several of these
+ * functions back to back for one view-open (the retrospective provider,
+ * `computeAllConceptMastery`, `readAllConceptVitality`) — the case a WeakMap
+ * on array identity is built for.
+ */
+interface ReviewLogEntryIndex {
+  /** Every `kind: 'review'` record naming a given concept id, in log order. */
+  readonly recordsByConcept: ReadonlyMap<string, readonly ReviewLogRecord[]>;
+  /**
+   * Per concept, every instrument's type, first-seen order —
+   * `conceptVitalityInstruments`'s exact prior per-concept scan, batched.
+   */
+  readonly instrumentTypesByConcept: ReadonlyMap<string, ReadonlyMap<string, InstrumentType>>;
+  /** `conceptIdsInLog`'s result — every concept id at least one entry names, sorted. */
+  readonly conceptIds: readonly string[];
+}
+
+const entryIndexCache = new WeakMap<readonly ReviewLogEntry[], ReviewLogEntryIndex>();
+
+function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
+  const cached = entryIndexCache.get(entries);
+  if (cached !== undefined) return cached;
+
+  const recordsByConcept = new Map<string, ReviewLogRecord[]>();
+  const instrumentTypesByConcept = new Map<string, Map<string, InstrumentType>>();
+  const conceptIdSet = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.kind !== 'review') continue;
+    const record: ReviewLogRecord = entry;
+    for (const conceptId of record.conceptIds) {
+      conceptIdSet.add(conceptId);
+
+      const records = recordsByConcept.get(conceptId);
+      if (records === undefined) recordsByConcept.set(conceptId, [record]);
+      else records.push(record);
+
+      let types = instrumentTypesByConcept.get(conceptId);
+      if (types === undefined) {
+        types = new Map<string, InstrumentType>();
+        instrumentTypesByConcept.set(conceptId, types);
+      }
+      // First-seen type wins — `conceptVitalityInstruments`'s own tie-break,
+      // preserved verbatim: an instrument's type does not change across its
+      // own review events.
+      if (!types.has(record.instrumentId)) types.set(record.instrumentId, record.instrumentType);
+    }
+  }
+
+  const index: ReviewLogEntryIndex = {
+    recordsByConcept,
+    instrumentTypesByConcept,
+    conceptIds: [...conceptIdSet].sort(),
+  };
+  entryIndexCache.set(entries, index);
+  return index;
+}
+
+/**
  * Folds `entries` into the evidence facts for `conceptId`
  * (D-031/`ol-t3sd`: many-to-many, so one event is evidence for every concept
  * its `conceptIds` names — this reads that list, never a singular field).
@@ -309,6 +403,10 @@ export interface ConceptMasteryResult {
  * mark means. The superseded model needed `../review-log/merge.ts`'s total
  * order to decide which events were "recent"; nothing here does, so trailing
  * that dependency would be claiming a determinism this fold gets for free.
+ *
+ * Reads `entries` through `indexEntries`'s single-pass, cached grouping
+ * rather than scanning `entries` itself — see that function's doc for why
+ * this is still a pure fold over `entries` and `conceptId` alone.
  */
 function conceptEvidence(
   entries: readonly ReviewLogEntry[],
@@ -327,11 +425,8 @@ function conceptEvidence(
   let gradedExplainBackCount = 0;
   let deepestSoloLevel: SoloLevel | null = null;
 
-  for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
-
-    const record: ReviewLogRecord = entry;
+  const records = indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
+  for (const record of records) {
     tiersPracticed[evidenceTierOf(record.instrumentType)] = true;
 
     if (record.instrumentType === 'explain-back') {
@@ -404,12 +499,7 @@ export function computeConceptMastery(
 
 /** Every concept id at least one `kind: 'review'` entry in `entries` names. */
 export function conceptIdsInLog(entries: readonly ReviewLogEntry[]): readonly string[] {
-  const ids = new Set<string>();
-  for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
-    for (const id of entry.conceptIds) ids.add(id);
-  }
-  return [...ids].sort();
+  return indexEntries(entries).conceptIds;
 }
 
 /**
@@ -480,22 +570,18 @@ export function masteryAtTimeForConceptIds(
  * All instrument types are included, recognition-tier ones too — `vitality.ts`
  * applies R3's filter itself and documents that the filter belongs there, not
  * in the caller.
+ *
+ * Reads `entries` through `indexEntries`'s single-pass, cached grouping
+ * (same one `conceptEvidence` uses) rather than scanning `entries` itself per
+ * call — the fix for the O(concepts × log length) rescan `ol-95vv.9` found.
  */
 export function conceptVitalityInstruments(
   entries: readonly ReviewLogEntry[],
   conceptId: string,
   replayed: ReplayResult,
 ): readonly VitalityInstrument[] {
-  const types = new Map<string, InstrumentType>();
-  for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
-    // First-seen type wins. An instrument's type does not change across its
-    // own review events; this is a defensive tie-break, not a modelled case.
-    if (!types.has(entry.instrumentId)) {
-      types.set(entry.instrumentId, entry.instrumentType);
-    }
-  }
+  const types = indexEntries(entries).instrumentTypesByConcept.get(conceptId);
+  if (types === undefined) return [];
 
   return [...types.entries()].map(([instrumentId, instrumentType]) => ({
     instrumentId,
