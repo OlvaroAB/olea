@@ -1642,6 +1642,24 @@ export {
   REENTRY_ABSENCE_THRESHOLD_DAYS,
   REENTRY_SIZE_FLOOR_MINUTES,
 } from './study-session/reentry.js';
+// F2.21's strong-recall trigger (`ol-v7r5.1 / MSTG-2`; foundation item 18,
+// `[D-076]`, round 3) — the third condition that PROPOSES the on-demand
+// explain-back, never a scheduled item. See strong-recall-proposal.ts's module
+// doc for why the proposal shape carries nothing a composer could rank.
+export type {
+  NoProposalReason,
+  StrongRecallNoProposal,
+  StrongRecallProposal,
+  StrongRecallProposalDecision,
+  StrongRecallProposalInput,
+  StrongRecallReason,
+} from './study-session/strong-recall-proposal.js';
+export {
+  evaluateStrongRecallProposal,
+  STRONG_RECALL_MARGIN_DAYS,
+  STRONG_RECALL_PROPOSAL_TRIGGER,
+  strongRecallPromptLine,
+} from './study-session/strong-recall-proposal.js';
 export type { SupportLevelPresentation } from './study-session/support-level-chooser.js';
 export {
   chooseSupportLevel,
