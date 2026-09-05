@@ -204,6 +204,16 @@ export type {
   NoteOfferVerdict,
 } from './concept/note-offer.js';
 export { noteOfferEligible } from './concept/note-offer.js';
+// C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`): resolves the
+// corpus stage's `prerequisite` edges into a dependent→prerequisites map and
+// orders a set by it, inside an exact overdue tie band only. See
+// `./concept/prerequisite-order.js`'s module doc for why that placement is
+// what keeps `[D-113]`'s overdue-first total order unoverridable.
+export type { PrerequisiteConceptKeysResolution } from './concept/prerequisite-order.js';
+export {
+  orderByPrerequisite,
+  resolvePrerequisiteConceptKeys,
+} from './concept/prerequisite-order.js';
 export type {
   ConceptPassage,
   ConceptReadBudget,
