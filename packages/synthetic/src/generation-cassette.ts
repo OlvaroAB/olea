@@ -93,8 +93,32 @@ export interface GenerationCassetteEntry {
   readonly promptVersion: string;
   readonly modelId: string;
   readonly payloadHash: string;
-  /** The `POST /v1/task` response this entry replays — never the request payload (D-005: no content persisted beyond what replay itself requires; see `cassette.mjs`'s own module doc for where the request lives, gitignored, Node-side only). */
+  /** The `POST /v1/task` response this entry replays. */
   readonly response: GenerationTaskResponse;
+  /**
+   * The request body, OPTIONAL and opt-in — present only on entries recorded
+   * by `olea-service`'s `scripts/harness/cassette.mjs` with request-body
+   * persistence turned on, which that file refuses for any cassette path
+   * outside the private, gitignored `.olea-harness/` home
+   * (`ol-3ux7.5.54` [XM-P2]; its D-005/C6 module-doc section carries the
+   * argument). **Nothing that writes a cassette destined for a public
+   * artifact may set it** — this package's own precompute pass
+   * (`packages/workbench/scripts/precompute-generation.mjs`) writes a
+   * cassette that is bundled inline into a workbench build published to a
+   * public Pages URL, and that path is exactly what the service-side guard
+   * refuses.
+   *
+   * Additive by construction: `readGenerationCassette` below validates the
+   * four key fields plus `response` and carries every entry through
+   * unchanged, so an entry with this field and an entry without it are both
+   * valid at the SAME `GENERATION_CASSETTE_VERSION`. There is no migration
+   * and no reader that must know which kind it holds — a consumer that wants
+   * the body checks for it, re-hashes it against `payloadHash`, and falls
+   * back when it is absent or does not match
+   * (`olea-service/scripts/harness/frontier-reference.mjs` is the worked
+   * example).
+   */
+  readonly payload?: unknown;
 }
 
 export interface GenerationCassette {
