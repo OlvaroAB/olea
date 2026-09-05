@@ -23,15 +23,23 @@
  * it in `packages/workbench/.generation-cassette/simulator-cassette.json` — a small, TRACKED
  * exception to that directory's usual "reproducible, so gitignored" rule (see `build.mjs`'s
  * `SIMULATOR_CASSETTE` doc), bundled into `dist/simulator-cassette.json` by
- * `copySimulatorCassette` and fetched by `simulator/controller.ts`'s `loadReplayCassette`. So the
- * fixture world now renders a GRADED verdict at this step, same as any other world with a
- * recording — this journey's `verdict`/`accepted` goldens capture that graded phase
- * (`.olea-explain-back-actions`), not the refusal. **A cassette miss still renders
- * `EXPLAIN_BACK_CHECK_FAILED_TEXT`** (per F9.S5's "a journey step never skips a cassette miss"
- * scenario) for any OTHER payload this cassette holds no entry for — this journey's own assertion
+ * `copySimulatorCassette` and fetched by `simulator/controller.ts`'s `loadReplayCassette`.
+ *
+ * **That recorded entry currently MISSES on every zero-spend replay, so this journey's
+ * `verdict`/`accepted` goldens capture the refusal phase, not the graded one — diagnosed on
+ * `ol-0j02` [WBX-28], discovered from and blocking `ol-l5og.18.19` [STY-9].** The recording ran
+ * with real retrieval embeddings live (`WB_SIM_TRANSPORT=record` against a spend-authorized
+ * proxy); pure replay has no bundled embeddings for the fixture world, so `olea-core`'s
+ * `retrieve()` degrades to keyword-only and selects a different `sourceBlocks` set (this vault's
+ * root `README.md` also matches the topic string in keyword search), which never hashes to the
+ * recorded entry. Fixing this needs either a re-record or a bundled fixture embedding cassette
+ * (both spend-bearing) — see `ol-0j02` for the exact commands and cost estimate. **A cassette
+ * miss renders `EXPLAIN_BACK_CHECK_FAILED_TEXT`** (per F9.S5's "a journey step never skips a
+ * cassette miss" scenario), which is what currently happens here — this journey's own assertion
  * below handles both outcomes rather than assuming one, exactly as F9.S5 requires; on a refusal
  * the "accepted" step is the refusal still on screen (there is nothing to accept), never a
- * skipped capture.
+ * skipped capture. Once `ol-0j02` lands a working recording, this comment's "currently MISSES"
+ * paragraph should be removed rather than left to rot next to a fix that supersedes it.
  */
 import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';
