@@ -21,13 +21,30 @@
  */
 
 import type { Rating } from 'olea-contracts';
-import type { Scheduler, VaultSource } from 'olea-core';
-import { appendReviewLogRecord, appendSuspendRecord } from 'olea-core';
+import type {
+  Scheduler,
+  SchedulerState,
+  UnconsumedSchedulingObservation,
+  VaultSource,
+} from 'olea-core';
+import {
+  appendReviewLogRecord,
+  appendSuspendRecord,
+  CONFUSION_ROUTING_LAPSE_THRESHOLD,
+  evaluateConfusionRouting,
+  evaluateSchedulingObservationRouting,
+} from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
+import { FIXTURE_ORACLE_HISTORY } from './oracle/fixture-oracle-history.js';
 import type { PersonaHistory } from './persona/history.js';
 import { NO_PERSONA_HISTORY } from './persona/history.js';
-import type { ReviewInstrument, ReviewQueueItem, ReviewSessionDeps } from './plugin-bridge.js';
+import {
+  createStrongRecallProposalReader,
+  type ReviewInstrument,
+  type ReviewQueueItem,
+  type ReviewSessionDeps,
+} from './plugin-bridge.js';
 import type { WorkbenchQueue } from './queue/derive.js';
 
 /** Fixed instant every scenario runs at, so FSRS previews never move. Defined in `./clock.ts`. */
@@ -80,6 +97,39 @@ export const REVIEW_STATES: readonly WorkbenchState[] = [
     label: 'Q&A · reveal',
     group: 'card',
     note: 'Space to reveal. The four intervals are real FSRS output for this item, not sample text.',
+  },
+  {
+    id: 'confusion-routing-banner',
+    label: 'Q&A · reveal, with the confusion-routing banner',
+    group: 'card',
+    note:
+      "F2.12's confusion-routing banner (ol-h2bx), on the reveal screen of the item after " +
+      'the one it fired for. Wired for real (`evaluateConfusionRouting`, `olea-core`) — the ' +
+      'one item in the queue carries a real, scheduler-produced prior state one lapse below ' +
+      'CONFUSION_ROUTING_LAPSE_THRESHOLD, so grading it Again crosses the line ' +
+      '(ol-v7r5.41).',
+  },
+  {
+    id: 'scheduling-observation-banner',
+    label: 'Q&A · reveal, with the scheduling-observation banner',
+    group: 'card',
+    note:
+      "F5.3a / R7's reciprocal-prompt banner (ol-0r92.11), on the reveal screen of the item " +
+      'after the one it fired for. Wired for real (`evaluateSchedulingObservationRouting`, ' +
+      "`olea-core`), against a hand-built `liveObservations` map naming the graded item's own " +
+      'concept as a live neighbour — production instead replays this off the whole review log, ' +
+      'which this scenario has no vault log of its own to read (ol-v7r5.41).',
+  },
+  {
+    id: 'strong-recall-banner',
+    label: 'Q&A · reveal, with the strong-recall banner (F2.21)',
+    group: 'card',
+    note:
+      "F2.21's strong-recall banner (ol-v7r5.40), on the reveal screen of the item after the " +
+      'one it fired for. Wired for real (`createStrongRecallProposalReader`, the same reader ' +
+      "`open-session.ts` composes in production), closed over `fixture-oracle-history.ts`'s " +
+      'one story written to clear the predicate (sapling, holding, four distinct spaced ' +
+      'recall-tier days, no graded explain-back) — see that file and ol-v7r5.41.',
   },
   {
     id: 'cloze-front',
@@ -170,7 +220,88 @@ function mcqLetter(instrument: ReviewInstrument, correct: boolean): string {
   return 'abcdefghij'[index === -1 ? 0 : index] ?? 'a';
 }
 
+/**
+ * The keystrokes that reveal (if applicable) and grade `instrument` at
+ * `rating` — generalised over Q&A/cloze (reveal, then a rating digit) and mcq
+ * (an option letter, then Space to commit via `mcqNext`) for
+ * `strong-recall-banner`, the one state that cannot promise in advance which
+ * kind the composer will hand it (see that case's own comment). `rating` is
+ * honoured for Q&A/cloze; for mcq it only decides correct-vs-wrong
+ * (`mcqLetter`), since MCQ ratings are derived from correctness (F2.16), not
+ * chosen directly — fine here because none of the three third-trigger
+ * evaluators gate on today's rating or instrument kind.
+ */
+function gradeKeysFor(instrument: ReviewInstrument, rating: Rating): readonly string[] {
+  if (instrument.type === 'mcq') {
+    return [mcqLetter(instrument, rating !== 'again'), ' '];
+  }
+  const ratingKey = String(['again', 'hard', 'good', 'easy'].indexOf(rating) + 1);
+  return [' ', ratingKey];
+}
+
 const RATE_GOOD: Rating = 'good';
+
+/**
+ * `confusion-routing-banner`'s one narrow exception to "the composer decides
+ * `priorState`" (see `BuildScenarioOptions.queue`'s doc): a real prior
+ * `SchedulerState` carrying exactly `lapses` recorded lapses, produced by
+ * replaying that many `again` ratings through the SAME `Scheduler` the
+ * scenario runs against — never a hand-typed FSRS state. F2.12's trigger
+ * (`ol-h2bx`) reads `SchedulerState.lapses` straight off whatever
+ * `Scheduler.schedule` returns for the grade she is about to give
+ * (`session.ts`'s `logAndAdvance`), so the item needs to already be one grade
+ * below `CONFUSION_ROUTING_LAPSE_THRESHOLD` for that grade to cross it.
+ */
+function buildPriorStateWithLapses(
+  scheduler: Scheduler,
+  instrumentId: string,
+  lapses: number,
+): SchedulerState {
+  if (lapses < 1) {
+    throw new Error('workbench: buildPriorStateWithLapses requires lapses >= 1');
+  }
+  // `SchedulerState.lapses` counts an Again rating FROM a `review` state only
+  // (its own doc) — the very first rating of a never-reviewed instrument
+  // moves it from "new" into "review" without counting as a lapse (measured:
+  // three chained `again` calls from `null` yield `lapses: 2`, not 3). So
+  // reaching `lapses` needs `lapses + 1` chained calls, not `lapses`.
+  const dayMs = 24 * 60 * 60 * 1000;
+  let state: SchedulerState | null = null;
+  let at = new Date(WORKBENCH_NOW.getTime() - (lapses + 2) * 7 * dayMs);
+  for (let i = 0; i < lapses + 1; i += 1) {
+    state = scheduler.schedule({ instrumentId, state, rating: 'again', now: at }).state;
+    at = new Date(at.getTime() + 7 * dayMs);
+  }
+  if (state === null || state.lapses !== lapses) {
+    throw new Error(
+      `workbench: buildPriorStateWithLapses(${String(lapses)}) produced lapses=` +
+        `${String(state?.lapses)} — the scheduler's own "again from review" rule moved`,
+    );
+  }
+  return state;
+}
+
+/**
+ * F2.21's fixture concept for the `strong-recall-banner` golden
+ * (`ol-v7r5.41`): the one story in `fixture-oracle-history.ts` written to
+ * clear `evaluateStrongRecallProposal`'s predicate (sapling, holding, at
+ * least four distinct successful recall-tier days, no graded explain-back) —
+ * see that file's own module doc for why this is a real but oracle-unranked
+ * MUSTH104 concept (Appoggiatura) rather than a reshaped GEOL204 one. Read
+ * off the generated history by its own instrument-id prefix rather than
+ * hand-typed, so a regeneration that changes the concept's derived key
+ * cannot silently desync this constant from the data it names.
+ */
+function findStrongRecallFixtureConceptId(): string | undefined {
+  for (const entry of FIXTURE_ORACLE_HISTORY) {
+    if (entry.kind !== 'review') continue;
+    if (!entry.instrumentId.startsWith('wb-fixture-oracle:appoggiatura')) continue;
+    return entry.conceptIds[0];
+  }
+  return undefined;
+}
+
+const STRONG_RECALL_FIXTURE_CONCEPT_ID = findStrongRecallFixtureConceptId();
 
 export interface BuildScenarioOptions {
   readonly vault: VaultSource;
@@ -179,7 +310,14 @@ export interface BuildScenarioOptions {
    * The composed session, bucketed by instrument type
    * (`queue/derive.ts`). Whole `ReviewQueueItem`s: `priorState` and
    * `selectionContext` arrive decided by the composer, and nothing in this file
-   * may construct either.
+   * may construct either — with one narrow, documented exception:
+   * `confusion-routing-banner`'s trigger item carries a prior state produced by
+   * the SAME real `Scheduler` this file already threads through (never a
+   * hand-typed FSRS state), because no composed item is guaranteed to already
+   * sit one lapse below `CONFUSION_ROUTING_LAPSE_THRESHOLD` the way F2.10's
+   * `heading-offer-banner` state is already its own documented departure from
+   * "everything here is real content, real keystrokes" for the same kind of
+   * reason (`ol-v7r5.41`). See `buildPriorStateWithLapses`.
    */
   readonly queue: WorkbenchQueue;
   readonly stateId: string;
@@ -358,6 +496,118 @@ export function buildScenario(options: BuildScenarioOptions): Scenario {
 
     case 'qa-reveal':
       return { deps: { ...base, queue: single(qa) }, keys: [' '], logged };
+
+    case 'confusion-routing-banner': {
+      // See `BuildScenarioOptions.queue`'s doc and `buildPriorStateWithLapses`
+      // for why this is the one state that overrides a composed item's own
+      // `priorState`. `qa` grades Again once more, crossing
+      // `CONFUSION_ROUTING_LAPSE_THRESHOLD`; `cloze` is a real, untouched
+      // second item so the reveal screen the banner is captured on belongs to
+      // the NEXT item, matching production (the banner is scoped to the item
+      // presented alongside it, never the one that triggered it).
+      const priorState = buildPriorStateWithLapses(
+        scheduler,
+        qa.instrument.instrumentId,
+        CONFUSION_ROUTING_LAPSE_THRESHOLD - 1,
+      );
+      const triggerItem: ReviewQueueItem = { ...qa, priorState };
+      return {
+        deps: { ...base, evaluateConfusionRouting, queue: [triggerItem, cloze] },
+        keys: [' ', '1', ' '],
+        logged,
+      };
+    }
+
+    case 'scheduling-observation-banner': {
+      // F5.3a / R7 (`ol-0r92.11`): the trigger reads only the just-graded
+      // instrument's own `conceptIds` against a live-observation map — see
+      // `packages/plugin/test/review/session.spec.ts`'s own fixture for the
+      // minimal shape this mirrors. Production replays this map off the
+      // whole review log (`open-session.ts`'s `liveSchedulingObservations`);
+      // this scenario has no vault log of its own to replay, so it hands the
+      // evaluator a hand-built map naming `qa`'s own first concept as a live
+      // neighbour instead — no composed field is overridden, only the
+      // evaluator's own auxiliary input.
+      const neighbourConceptId = qa.instrument.conceptIds[0];
+      if (neighbourConceptId === undefined) {
+        throw new Error(
+          'workbench: scheduling-observation-banner needs an instrument with at least one ' +
+            'concept id',
+        );
+      }
+      const liveObservations = new Map<string, UnconsumedSchedulingObservation>([
+        [
+          neighbourConceptId,
+          {
+            neighbourConceptId,
+            subjectConceptIds: ['wb-fixture-scheduling-observation:subject'],
+            sourceEventId: 'wb-fixture-scheduling-observation:0',
+            observedAt: isoWithLocalOffset(WORKBENCH_NOW),
+          },
+        ],
+      ]);
+      return {
+        deps: {
+          ...base,
+          evaluateSchedulingObservationRouting: (input) =>
+            evaluateSchedulingObservationRouting({ ...input, liveObservations }),
+          queue: [qa, cloze],
+        },
+        keys: [' ', '3', ' '],
+        logged,
+      };
+    }
+
+    case 'strong-recall-banner': {
+      // F2.21 (`ol-v7r5.40`/`ol-v7r5.41`): the trigger reads the whole review
+      // log's mastery+vitality for the just-graded instrument's concept.
+      // `createStrongRecallProposalReader` is the SAME reader
+      // `open-session.ts` composes in production, closed here over
+      // `FIXTURE_ORACLE_HISTORY` instead of a real vault log this scenario
+      // does not have. `target` is the REAL composed item for the one
+      // fixture concept that history was written to make eligible — nothing
+      // about the item itself is overridden.
+      if (STRONG_RECALL_FIXTURE_CONCEPT_ID === undefined) {
+        throw new Error(
+          'workbench: fixture-oracle-history.ts carries no strong-recall-eligible story — see ol-v7r5.41',
+        );
+      }
+      const target = [...queue.qa, ...queue.cloze, ...queue.mcq].find((item) =>
+        item.instrument.conceptIds.includes(STRONG_RECALL_FIXTURE_CONCEPT_ID),
+      );
+      if (target === undefined) {
+        throw new Error(
+          'workbench: no composed queue item is evidence for the F2.21 strong-recall fixture ' +
+            'concept — has the fixture vault or its extraction changed? See ol-v7r5.41',
+        );
+      }
+      // Which pool `deriveWorkbenchQueue` actually resolved this concept to
+      // (qa, cloze, or — if it composed no recall-tier instrument due right
+      // now, e.g. under a loaded persona whose borrowed history happens to
+      // leave only the mcq one due — its recognition-only mcq one) is a due-
+      // state fact this file does not control and must not fabricate around;
+      // `gradeKeysFor` below drives whichever real screen this item actually
+      // presents. F2.21's decision itself does not care which instrument
+      // grades right now (`evaluateStrongRecallProposal` reads only the
+      // whole-log rollup), so this never changes whether the banner fires.
+      const nextItem = target.instrument.instrumentId === qa.instrument.instrumentId ? cloze : qa;
+      return {
+        deps: {
+          ...base,
+          evaluateStrongRecallProposal: createStrongRecallProposalReader({
+            entries: FIXTURE_ORACLE_HISTORY,
+            scheduler,
+            now: WORKBENCH_NOW,
+          }),
+          queue: [target, nextItem],
+        },
+        // The trailing space reveals `nextItem`, which is always `qa` or
+        // `cloze` (never mcq) — safe regardless of what `target` turned out
+        // to be.
+        keys: [...gradeKeysFor(target.instrument, RATE_GOOD), ' '],
+        logged,
+      };
+    }
 
     case 'cloze-front':
       return { deps: { ...base, queue: single(cloze) }, keys: [], logged };

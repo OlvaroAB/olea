@@ -13,6 +13,7 @@
  *   - Hummocky stratification (concept-prov1:05 Zettelkasten/Hummocky stratification.md) -> seed, 0 event(s)
  *   - Bioturbation (concept-prov1:05 Zettelkasten/Bioturbation.md) -> sapling, 5 event(s)
  *   - Paraconformity (concept-prov1:05 Zettelkasten/Paraconformity.md) -> sprout, 10 event(s)
+ *   - Appoggiatura (concept-prov1:05 Zettelkasten/Appoggiatura.md) -> sapling, 4 event(s)
  *
  * Every record here is validated against `olea-contracts`' `reviewLogEntry`
  * schema and its intended C5.4 state is checked against
@@ -442,6 +443,82 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     instrumentType: 'qa',
     conceptIds: ['concept-prov1:05 Zettelkasten/Paraconformity.md'],
     rating: 'again',
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  },
+  {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'wb-fixture-oracle:appoggiatura:0',
+    timestamp: '2026-06-03T09:00:00+00:00',
+    instrumentId: 'wb-fixture-oracle:appoggiatura',
+    instrumentType: 'qa',
+    conceptIds: ['concept-prov1:05 Zettelkasten/Appoggiatura.md'],
+    rating: 'good',
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  },
+  {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'wb-fixture-oracle:appoggiatura:1',
+    timestamp: '2026-06-20T09:00:00+00:00',
+    instrumentId: 'wb-fixture-oracle:appoggiatura',
+    instrumentType: 'qa',
+    conceptIds: ['concept-prov1:05 Zettelkasten/Appoggiatura.md'],
+    rating: 'good',
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  },
+  {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'wb-fixture-oracle:appoggiatura:2',
+    timestamp: '2026-07-10T09:00:00+00:00',
+    instrumentId: 'wb-fixture-oracle:appoggiatura',
+    instrumentType: 'qa',
+    conceptIds: ['concept-prov1:05 Zettelkasten/Appoggiatura.md'],
+    rating: 'good',
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  },
+  {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'wb-fixture-oracle:appoggiatura:3',
+    timestamp: '2026-08-01T09:00:00+00:00',
+    instrumentId: 'wb-fixture-oracle:appoggiatura',
+    instrumentType: 'qa',
+    conceptIds: ['concept-prov1:05 Zettelkasten/Appoggiatura.md'],
+    rating: 'good',
     wasUnsure: false,
     durationMs: null,
     selectionContext: {

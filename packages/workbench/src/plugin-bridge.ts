@@ -82,6 +82,13 @@ export { previewSingleInterval, QA_CLOZE_RATING_ORDER } from '../../plugin/src/r
 export { adaptReviewQueue } from '../../plugin/src/review/queue-adapter.js';
 export type { ReviewSessionDeps, ReviewViewModel } from '../../plugin/src/review/session.js';
 export { ReviewSession } from '../../plugin/src/review/session.js';
+// F2.21's third trigger (`ol-v7r5.40`) — the SAME reader `open-session.ts`
+// composes in production, closed over a review log instead of re-deriving
+// mastery/vitality here. `scenarios.ts`'s `strong-recall-banner` state is the
+// only caller (`ol-v7r5.41`): it has no vault log of its own to read
+// `composed.entries` from, so it closes this over `FIXTURE_ORACLE_HISTORY`
+// instead. Obsidian-free, same posture as `ReviewSession` above.
+export { createStrongRecallProposalReader } from '../../plugin/src/review/strong-recall-wiring.js';
 export type {
   ClozeCard,
   McqItem,

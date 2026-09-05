@@ -65,7 +65,7 @@
 // same convention `node-pipeline.mjs`'s module doc explains in full.
 //
 // ================================================================================================
-// THE SPREAD, AND WHY THESE FOUR SHAPES
+// THE SPREAD, AND WHY THESE FOUR SHAPES (PLUS A FIFTH, OFF TO THE SIDE)
 // ================================================================================================
 // The fixture vault's oracle ranks exactly four concepts today (all under
 // GEOL204 — MUSTH104 abstains; `buildFixtureOracle` over the checked-in
@@ -109,6 +109,49 @@
 // (`packages/core/src/mastery/rollup.ts`), and this script's own
 // `assertExpectedState` calls that exact rollup function to prove each story
 // produces the state it claims, rather than asserting it by eye.
+//
+// ================================================================================================
+// THE FIFTH STORY: APPOGGIATURA, FOR F2.21's STRONG-RECALL BANNER (`ol-v7r5.41`)
+// ================================================================================================
+// `ol-v7r5.40` wired F2.21's strong-recall proposal (`evaluateStrongRecallProposal`,
+// `packages/core/src/study-session/strong-recall-proposal.ts`) into the review
+// session, but no fixture concept could ever trigger it: the predicate needs
+// `sapling` + `holding` vitality + `successfulScoredDays >= 4` + no graded
+// explain-back, and measuring all four stories above through the real reader
+// (`packages/plugin/src/review/strong-recall-wiring.ts`) found none of them
+// is that shape — Imbrication already has depth evidence (`tree`), Paraconformity
+// never reaches `sapling`, Hummocky stratification has no evidence at all, and
+// Bioturbation's vitality can NEVER read `holding` regardless of how recent its
+// events are: `mcq` is recognition-tier, and recognition-tier instruments are
+// EXCLUDED from the vitality fold entirely (`packages/core/src/mastery/
+// vitality.ts`'s `isRecallTier` — "mcq is out because it is recognition-tier").
+//
+// Reshaping one of the four GEOL204 stories to fit was rejected: each is
+// already asserted by name in `test/fixture-oracle-history.spec.ts` and
+// rendered on the oracle walkthrough's own goldens, so changing one changes
+// evidence other, concurrently-owned lanes' goldens already depend on — the
+// module doc above already flags this file as shared. Appoggiatura
+// (`05 Zettelkasten/Appoggiatura.md`) is instead a genuinely different, real,
+// tier-1 fixture concept (bound via its own note, cited by two MUSTH104
+// notes) that is NOT one of the four the oracle ranks: MUSTH104 abstains from
+// ranking entirely (`composeOracleRanking` reports `status: 'abstained'`,
+// `reason: 'no-evidence'` — its assessments carry zero evidence edges,
+// independent of review history), so adding this story changes nothing
+// `buildFixtureOracle` produces — `conceptCount`/`instrumentCount` come from
+// extraction and enumeration, never from this history, and the abstain
+// `detail` string is unaffected (measured directly, not assumed).
+//
+// Four spaced `qa` (recall-tier) successes, no explain-back at all: `sapling`
+// (the spacing-gate ceiling, not the recognition-only one — this concept's
+// scored evidence is never `recognitionOnly`), and — confirmed by a
+// unit-level probe in `packages/workbench/test/fixture-oracle-history-
+// strong-recall.spec.ts` that runs `evaluateStrongRecallProposal` through the
+// real reader over exactly this story — `holding` vitality even many months
+// after the last event, because FSRS stability after four spaced successes
+// decays slowly. That probe is the "confirm with the real reader" half of
+// `ol-v7r5.41`'s scope; `assertStrongRecallEligible` below is the half this
+// generator can check without a clock or a scheduler (stage, recognition mix,
+// day count, depth evidence).
 
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -217,6 +260,23 @@ const STORIES = [
       { date: '2026-08-20', instrumentType: 'qa', rating: 'again' },
     ],
   },
+  {
+    // The fifth story — see "THE FIFTH STORY" above for why Appoggiatura, a
+    // real MUSTH104 concept the oracle never ranks, rather than reshaping one
+    // of the four GEOL204 stories above. Four spaced `qa` (recall-tier)
+    // successes, no explain-back: `sapling`, never `recognitionOnly`, four
+    // distinct successful days — the exact shape F2.21's strong-recall
+    // predicate needs (`ol-v7r5.41`).
+    notePath: '05 Zettelkasten/Appoggiatura.md',
+    expectedState: 'sapling',
+    expectedStrongRecallEligible: true,
+    events: [
+      { date: '2026-06-03', instrumentType: 'qa', rating: 'good' },
+      { date: '2026-06-20', instrumentType: 'qa', rating: 'good' },
+      { date: '2026-07-10', instrumentType: 'qa', rating: 'good' },
+      { date: '2026-08-01', instrumentType: 'qa', rating: 'good' },
+    ],
+  },
 ];
 
 function slugOf(notePath) {
@@ -290,6 +350,47 @@ function assertExpectedState(conceptKey, notePath, records, expectedState) {
   }
 }
 
+/**
+ * The half of F2.21's eligibility `assertExpectedState` above cannot check —
+ * everything `computeConceptMastery` reports with no clock and no scheduler:
+ * the stage is `sapling` (checked again here so a future story marked
+ * eligible without also being `sapling` fails loudly rather than silently),
+ * the evidence is never `recognitionOnly`, at least four distinct days
+ * succeeded, and no depth evidence exists at all. What this does NOT check —
+ * the `holding` vitality reading, which needs a clock and the real FSRS
+ * scheduler — is `ol-v7r5.41`'s other half, confirmed by a unit-level probe
+ * in `packages/workbench/test/fixture-oracle-history-strong-recall.spec.ts`
+ * that runs the real reader (`strong-recall-wiring.ts`) over the generated
+ * output this script writes.
+ */
+function assertStrongRecallEligible(conceptKey, notePath, records) {
+  const { state, evidence } = computeConceptMastery(records, conceptKey);
+  if (state !== 'sapling') {
+    throw new Error(
+      `generate-fixture-oracle-history.mjs: ${notePath} is marked strong-recall-eligible but ` +
+        `computeConceptMastery says '${state}', not 'sapling'.`,
+    );
+  }
+  if (evidence.recognitionOnly) {
+    throw new Error(
+      `generate-fixture-oracle-history.mjs: ${notePath} is marked strong-recall-eligible but ` +
+        'its scored evidence is recognitionOnly (mcq) — F2.21 needs recall evidence.',
+    );
+  }
+  if (evidence.successfulScoredDays < 4) {
+    throw new Error(
+      `generate-fixture-oracle-history.mjs: ${notePath} is marked strong-recall-eligible but ` +
+        `successfulScoredDays is ${String(evidence.successfulScoredDays)}, not >= 4.`,
+    );
+  }
+  if (evidence.depthGateCleared || evidence.gradedExplainBackCount > 0) {
+    throw new Error(
+      `generate-fixture-oracle-history.mjs: ${notePath} is marked strong-recall-eligible but ` +
+        'carries depth evidence (a graded explain-back) — F2.21 needs none.',
+    );
+  }
+}
+
 async function main() {
   const vault = new FolderSource(fixtureVaultDir);
   const concepts = await extractConcepts(vault, { includeTier3: true });
@@ -337,6 +438,9 @@ async function main() {
     }
     const records = buildRecords(concept.key, story.notePath, story.events);
     assertExpectedState(concept.key, story.notePath, records, story.expectedState);
+    if (story.expectedStrongRecallEligible === true) {
+      assertStrongRecallEligible(concept.key, story.notePath, records);
+    }
     allRecords.push(...records);
     storySummaries.push(
       ` *   - ${concept.name} (${concept.key}) -> ${story.expectedState}, ${String(story.events.length)} event(s)`,
