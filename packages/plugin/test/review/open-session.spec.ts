@@ -575,12 +575,16 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     if (record?.kind !== 'review') return;
 
     // The falsifiable claim: `sprout` (only the 2 PRIOR distinct days — short
-    // of `minSpacedDays`), not `tree` (3 distinct days INCLUDING the
-    // just-written rating's day, which is what a caller that folded its own
-    // event into the slice would compute — the spacing gate opens, the
-    // recent window is all recall successes, and the state jumps straight
-    // past `sapling` to `tree`). A regression that reorders the read and the
-    // append above turns this into `tree` and this assertion goes red.
+    // of `minSpacedRetrievalDays`, 3), not `sapling` (3 distinct days
+    // INCLUDING the just-written rating's day, which is what a caller that
+    // folded its own event into the slice would compute — the spacing gate
+    // crosses `MIN_SPACED_RETRIEVAL_DAYS` a day early). A regression that
+    // reorders the read and the append above turns this into `sapling` and
+    // this assertion goes red. (`tree` is not in play either way: nothing
+    // here ever grades an explain-back, and under the high-water-mark model
+    // `tree` is reachable only by clearing the depth gate — see
+    // `packages/core/src/mastery/rollup.ts`'s module doc, R7/`[D-145]`, MAT-6
+    // / `ol-95vv.7`.)
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
       byConcept: { [unboundKey('Alpha')]: 'sprout' },

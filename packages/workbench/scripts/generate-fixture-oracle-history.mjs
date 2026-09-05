@@ -50,6 +50,14 @@
 // Run once, from packages/workbench/:
 //
 //   node scripts/generate-fixture-oracle-history.mjs
+//   pnpm exec biome format --write src/oracle/fixture-oracle-history.ts
+//
+// The second line matters: this script writes `JSON.stringify` output
+// (double-quoted, one array element per line), and the committed file is
+// biome-formatted (single-quoted, compact arrays). Skipping the format step
+// makes every regeneration look like it drifted from the committed file even
+// when the DATA is unchanged — diff the post-format output, never the raw
+// generator output, when checking this file against what's committed.
 //
 // Requires `packages/core` and `packages/contracts` already built
 // (`pnpm --filter olea-core --filter olea-contracts build`) — this is a plain
@@ -285,9 +293,34 @@ function assertExpectedState(conceptKey, notePath, records, expectedState) {
 async function main() {
   const vault = new FolderSource(fixtureVaultDir);
   const concepts = await extractConcepts(vault, { includeTier3: true });
+  // A story names a concept by the note that anchors its identity —
+  // `boundNotePath` (tier 1's Zettelkasten match, or tier 3's mint-on-mention).
+  // That is NOT the same field as `sourcePaths`: `sourcePaths` is the material
+  // that CITES a concept (its `topic:` taggers, plus — since the F1.3
+  // course-attribution widening, `ol-2zfj.33` — any course-folder note that
+  // plainly wikilinks it), and per `extract.ts`'s own `keyFor` doc a bound
+  // concept's `sourcePaths` deliberately never contains the bound note's own
+  // path. Before that widening, a Zettelkasten note with no `topic:` citation
+  // anywhere surfaced only as a TIER 3 mint, whose `sourcePaths` IS `[boundNotePath]`
+  // (self-referencing) — which is what let this script's original
+  // sourcePaths-keyed lookup happen to match all four of this file's targets.
+  // The widening promoted them to tier 1 (they're now reachable via a
+  // course-folder wikilink), which is a legitimate, understood identity
+  // change, not a regression — see `ol-kohr`. Fixing the lookup to key on
+  // `boundNotePath` first makes it correct for either tier, rather than
+  // correct by accident of which tier a concept happens to land in today.
   const byNotePath = new Map();
   for (const concept of concepts) {
-    for (const path of concept.sourcePaths) byNotePath.set(path, concept);
+    if (concept.boundNotePath !== undefined) {
+      byNotePath.set(concept.boundNotePath, concept);
+    } else {
+      // A tier-2 concept has no bound note of its own; fall back to the
+      // citing material so a future story targeting one of those paths still
+      // resolves. Never overwrites a bound-note match.
+      for (const path of concept.sourcePaths) {
+        if (!byNotePath.has(path)) byNotePath.set(path, concept);
+      }
+    }
   }
 
   const allRecords = [];
@@ -297,8 +330,9 @@ async function main() {
     if (concept === undefined) {
       throw new Error(
         `generate-fixture-oracle-history.mjs: no concept extracted for ${story.notePath} — ` +
-          'has the fixture vault changed? This script targets real, current concept keys and ' +
-          'must not fall back to a guessed one.',
+          'has the fixture vault changed, or does no concept bind to (or cite) this note ' +
+          'path any more? This script targets real, current concept keys and must not fall ' +
+          'back to a guessed one.',
       );
     }
     const records = buildRecords(concept.key, story.notePath, story.events);

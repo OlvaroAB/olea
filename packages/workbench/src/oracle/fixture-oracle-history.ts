@@ -19,15 +19,6 @@
  * `computeConceptMastery` at generation time (see `assertExpectedState` in
  * the generator) — this file cannot silently drift from the state the module
  * doc above claims for it.
- *
- * HAND-PATCHED ONCE, 2026-09-05 (`MAT-6` / `ol-95vv.7`): the depth gate means
- * `tree` is reachable only through a graded explain-back, so Imbrication's
- * story gained one (event `:6`). The generator's own STORIES list carries the
- * same event and would emit exactly this — but the generator cannot currently
- * RUN: `extractConcepts` no longer returns a concept for
- * `05 Zettelkasten/Imbrication.md`, so it dies on its own
- * "no concept extracted" guard, a breakage that predates this change (checked
- * on a clean tree). Filed as its own bead; regenerate once that is fixed.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
