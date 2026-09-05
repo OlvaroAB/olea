@@ -180,15 +180,64 @@ export async function ribbonViewTypes(page: Page): Promise<string[]> {
   return types;
 }
 
-/** Clicks the ribbon button for `viewType` and waits for it to become the active view in whichever pane it landed in. */
+/**
+ * View-mount wait budget for {@link openViewSurface}. Deliberately its OWN constant, separate
+ * from `REMOUNT_TIMEOUT_MS` (`./helpers.ts`, 20_000ms) — that one covers the simulator PANE's
+ * own remount signal (`[data-wb-remount]`, bumped by day-advance/reset/rate), a different DOM
+ * lifecycle event than "this specific view type finished becoming the active view after a ribbon
+ * click", which is what this wait is actually for.
+ *
+ * Measured 2026-09-05 (ol-shjr, discovered off a stale real-world tour run): a temporary
+ * per-view timing pass against a freshly built `--world real` dist (514-file vault) found the
+ * retrospective view's mount taking 149-348ms at weeks 0/1 and 177ms at week 8, but 23,454ms at
+ * week 2 and 7,610ms at week 4 — every other view stayed under ~2.1s at every week sampled. No
+ * console error and no `body[data-wb-error]` accompanied any of the slow mounts in any run: the
+ * view mounts successfully, just very slowly at some weeks. That correlates with the same day's
+ * mastery-fold rewrite ([WBX-15]'s retrospective provider, `packages/plugin/src/retrospective/`,
+ * is the view's only caller of `packages/core/src/mastery`'s fold on the view-open path) scanning
+ * the whole review log rather than a bounded window — filed separately as a plugin/core
+ * performance finding (ol-shjr's own notes), not fixed here: this file owns the tour, not the
+ * views it opens. 60s gives ~2.5x margin over the worst run observed above without eating
+ * meaningfully into the per-test 600s budget (`tour.spec.ts`'s own module doc) — only one view in
+ * nine is ever near this ceiling, so a single generous constant costs the other eight nothing.
+ */
+const VIEW_MOUNT_TIMEOUT_MS = 60_000;
+
+/**
+ * Clicks the ribbon button for `viewType` and waits for it to become the active view in whichever
+ * pane it landed in. A genuinely slow (but non-crashing) mount is waited out — see
+ * {@link VIEW_MOUNT_TIMEOUT_MS}'s own doc. If the wait still times out, this checks for the
+ * app's fatal-error banner (`main.ts`'s `void main().catch(...)`, `body[data-wb-error]` — same
+ * locator `tour.spec.ts`'s `captureAndCheck` already asserts against) so a real crash reads as
+ * "the app raised a fatal error", not as an opaque, unexplained timeout (ol-shjr: "fail loudly,
+ * not hang").
+ */
 export async function openViewSurface(page: Page, viewType: string): Promise<void> {
   await frame(page).locator(`[data-wb-sim-ribbon-view="${viewType}"]`).click();
-  await frame(page)
+  const pane = frame(page)
     .locator(
       `[data-wb-pane][data-wb-active-view-type="${viewType}"], [data-wb-right-pane][data-wb-active-view-type="${viewType}"]`,
     )
-    .first()
-    .waitFor({ state: 'attached', timeout: 15_000 });
+    .first();
+  try {
+    await pane.waitFor({ state: 'attached', timeout: VIEW_MOUNT_TIMEOUT_MS });
+  } catch (waitError) {
+    const crashed = (await page.locator('body[data-wb-error]').count()) > 0;
+    if (crashed) {
+      throw new Error(
+        `openViewSurface(${viewType}): the app raised a fatal error while this view was mounting ` +
+          `(body[data-wb-error] is set — see main.ts's ".wb-fatal" banner in a screenshot/trace ` +
+          'for the message).',
+      );
+    }
+    throw new Error(
+      `openViewSurface(${viewType}): did not become the active view within ` +
+        `${String(VIEW_MOUNT_TIMEOUT_MS)}ms and no crash was detected (no body[data-wb-error]) — ` +
+        "a genuinely slow render, not a hang. See VIEW_MOUNT_TIMEOUT_MS's own doc (ol-shjr) for " +
+        'the measurements this budget is sized against.',
+      { cause: waitError },
+    );
+  }
 }
 
 /**
