@@ -52,8 +52,14 @@ test('grove-declared: the summary states count and denominator source, never a r
   await gotoState(page, 'grove', 'grove-declared', 'obsidian-dark');
   const course = groveRoot(page).locator('.olea-grove-course').first();
 
+  // `ol-l5og.18.2` [STY-0b] registered a second source (the past paper) on
+  // this SAME `grove-declared` fixture so it could also exercise
+  // `pastPaperCitationCount` — `denominatorSourcePaths` (`packages/core/src/
+  // scope/grove.ts`) counts both `'objectives'` and `'past-paper'` roles
+  // toward F8.1's denominator, so two registered sources is the correct,
+  // current count (`groveSummaryLine`, `packages/plugin/src/grove/copy.ts`).
   await expect(course.locator('.olea-grove-summary-line')).toHaveText(
-    '1 of 2 built, from 1 registered source.',
+    '1 of 2 built, from 2 registered sources.',
   );
   await expect(course.locator('.olea-grove-material-gap-label')).toHaveText('No material yet');
   const volunteers = course.locator('.olea-grove-volunteers');

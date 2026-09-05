@@ -72,11 +72,16 @@ test('explain-back-graded-feedback: a graded answer renders feedback, missed poi
   await expect(panel(page).locator('.olea-explain-back-feedback')).toContainText(
     'effect on half-life is missing',
   );
-  const missedHeading = panel(page).locator('.olea-explain-back-heading', {
+  // `[STY-0d]` (`ol-l5og.18.4`): the missed/cited headings moved from the flat
+  // `.olea-explain-back-heading` class into the two edge-differentiated
+  // regions' own `.olea-explain-back-region-head` — only the misconception
+  // heading below kept the old class (`renderGradedPhase` still renders it
+  // directly, not via `renderRegion`).
+  const missedHeading = panel(page).locator('.olea-explain-back-region-head', {
     hasText: "What your notes cover that this didn't",
   });
   await expect(missedHeading).toBeVisible();
-  const citedHeading = panel(page).locator('.olea-explain-back-heading', {
+  const citedHeading = panel(page).locator('.olea-explain-back-region-head', {
     hasText: 'From your notes',
   });
   await expect(citedHeading).toBeVisible();

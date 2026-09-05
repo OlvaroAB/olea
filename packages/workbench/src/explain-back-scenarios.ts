@@ -160,6 +160,20 @@ function flaggedGrading(): PendingExplainBackGrading {
           description: 'Nothing said about the effect on reaction half-life',
           sourceBlockIds: ['syn-block-2'],
         },
+        // `[STY-0d]` (`ol-l5og.18.4`) split the old flat `citedIssues` list
+        // (all shown under `EXPLAIN_BACK_CITED_HEADING`, "From your notes")
+        // into two kind-routed regions: `'omission'` now joins the missed-
+        // points region above, and only `'error'`/`'confusion'` route to
+        // "From your notes" (`renderGradedRegions`, `./modal.ts`). This
+        // second entry restores this scenario's own documented intent (see
+        // this file's `EXPLAIN_BACK_STATES` note above) of exercising that
+        // heading — an `'omission'`-only fixture no longer does, post-split.
+        {
+          kind: 'error',
+          description:
+            'States the alpha mechanism only regulates the rate constant, not the half-life',
+          sourceBlockIds: ['syn-block-1'],
+        },
       ],
       misconceptionCandidates: [
         {
