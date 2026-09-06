@@ -177,14 +177,17 @@ export const TASK_IDS = {
    * `TranscriptionCaller`, feeding `GradeExplainBackInput.studentAnswer`
    * (`gradingPipeline.ts`) — no new grading input shape.
    *
-   * **Reserved, not yet routed** — the same status `retrieval.rerank.v1` and
-   * `retrieval.embed.v1` once had, for a different reason: `whisper-large-v3-turbo`
-   * carries no `NEURON_PRICING` row and no measured output ceiling in
-   * `olea-service/src/modelCeilings.ts` (`ol-91sr`'s standing "measure before
-   * pinning" rule). The service-side dispatch exists
-   * (`olea-service/src/audioDispatch.ts`) but is deliberately not wired into
-   * `POST /v1/task` — that wiring is the pin-completion act `ol-91sr` gates,
-   * not a client-side concern.
+   * **Routed and priced** (`ol-3ux7.29`): `whisper-large-v3-turbo` carries a
+   * `NEURON_PRICING` row (46.63 neurons/audio-minute,
+   * `olea-service/src/harness/neurons.ts`), and the service-side dispatch
+   * (`olea-service/src/audioDispatch.ts`) is wired into `POST /v1/task`
+   * (`olea-service/src/index.ts:381-392`). What `ol-91sr`'s standing
+   * "measure before pinning" rule still has open here is narrower than
+   * pricing: the output ceiling in `olea-service/src/modelCeilings.ts` stays
+   * `unmeasured`, because the live probe
+   * (`olea-service/scripts/harness/measure-audio-ceiling.mjs`) needs a
+   * deployed target carrying this route before it can make its first real
+   * call.
    */
   AUDIO_TRANSCRIBE: 'audio.transcribe.v1',
   /**
@@ -197,9 +200,10 @@ export const TASK_IDS = {
    * `[D-153]` (`ol-egov.53`) ruled MINT once both measurement halves closed,
    * on the corrected ~10.7% boilerplate-adjusted visual-need figure.
    *
-   * **Reserved and routed, not yet functional — mirrors `audio.transcribe.v1`'s
-   * own reserve-then-route shape (`ol-p4t01`/`ol-3ux7.29`), built by
-   * `ol-3ux7.33`.** Unlike that task, this one IS a standard chat-completion
+   * **Reserved and routed, not yet functional — echoes the reserve-then-route
+   * shape `audio.transcribe.v1` once had (`ol-p4t01`), since completed by
+   * `ol-3ux7.29`. Built by `ol-3ux7.33`.** Unlike that task, this one IS a
+   * standard chat-completion
    * `TaskDefinition` (`olea-service/src/tasks/registry.ts`) — Slot V's
    * pinned model (`@cf/meta/llama-4-scout-17b-16e-instruct`) is reached
    * through the same call shape every Slot G/J/O task uses, so no new port
