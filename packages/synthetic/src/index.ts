@@ -110,8 +110,33 @@ export {
 } from './measures.js';
 export type { StreamPair } from './pairs.js';
 export { behaviourDelta, nullPair, plantedPair, specDelta } from './pairs.js';
-export type { Behaviour, Blackout, Persona, PersonaId, PlantedPattern } from './personas.js';
-export { PERSONA_IDS, PERSONAS } from './personas.js';
+export type {
+  Behaviour,
+  Blackout,
+  CharacterId,
+  Persona,
+  PersonaId,
+  PlantedPattern,
+  TwinId,
+} from './personas.js';
+export {
+  CHARACTER_IDS,
+  CHARACTERS,
+  PERSONA_IDS,
+  PERSONAS,
+  TWIN_IDS,
+  TWINS,
+} from './personas.js';
+export {
+  characterIdOfTwin,
+  deriveTwin,
+  hasTwin,
+  isTwinId,
+  neutralise,
+  neutralisedFields,
+  TWIN_SUFFIX,
+  twinIdFor,
+} from './planted.js';
 export type { SyntheticProvenance, WorldProvenance } from './provenance.js';
 export {
   assertNoSyntheticRecords,

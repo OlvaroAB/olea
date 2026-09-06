@@ -38,10 +38,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { PersonaId, SyntheticStream } from '../src/index.js';
+import type { Behaviour, CharacterId, PersonaId, SyntheticStream, TwinId } from '../src/index.js';
 import {
+  CHARACTER_IDS,
+  CHARACTERS,
   COURSE_QUORBIN,
   COURSE_VANTREL,
+  characterIdOfTwin,
   courseOfConcept,
   disputeEvents,
   dueStateCounts,
@@ -51,18 +54,25 @@ import {
   explainBackOfferEvents,
   explainBackRecords,
   generateStream,
+  hasTwin,
   instrumentShareWhenBothOffered,
   lapseRateByCourse,
   maxGapDays,
   medianExamProximity,
+  neutralise,
+  neutralisedFields,
+  PERSONA_IDS,
   PERSONAS,
   recurringFailureConceptIds,
   reviewCountByCourse,
   reviewsOf,
   reviewsPerActiveDay,
   streamSpec,
+  TWIN_IDS,
+  TWINS,
   timeShareByCourse,
   topDayShare,
+  twinIdFor,
 } from '../src/index.js';
 
 const SEEDS = ['persona-a', 'persona-b', 'persona-c', 'persona-d'] as const;
@@ -439,4 +449,99 @@ describe('the control is genuinely neutral', () => {
       }
     }
   });
+});
+
+/**
+ * The registered twins (`[D-233]` / `ol-egov.120`,
+ * `findings/moment-validation-preregistration.md` §6 in the service repo).
+ *
+ * The falsifiability suite above already proves the `planted.neutralise`
+ * override removes each pattern. What these assert is the thing that override
+ * alone never could: that the override is REGISTERED as a runnable persona id,
+ * derived by one shared function, differing from its character in exactly the
+ * dials it names and in nothing else. That is what makes a twin a
+ * counterfactual rather than a second fixture — and what stops the behavioural
+ * twin drifting from the textual twin the corpus-authoring instrument renders
+ * from the identical `neutralise()` call.
+ */
+describe('every character with a planted pattern has a registered twin, and no one else does', () => {
+  it('the seven characters that plant something each have a `<id>-twin`', () => {
+    const expected = CHARACTER_IDS.filter((id) => hasTwin(CHARACTERS[id])).map(twinIdFor);
+    expect([...TWIN_IDS].sort()).toEqual([...expected].sort());
+    expect(TWIN_IDS).toHaveLength(7);
+  });
+
+  it('the control and the two floor cases have none — a twin identical to its character isolates nothing', () => {
+    for (const id of ['steady-reviewer', 'empty-history', 'single-session'] as const) {
+      expect(hasTwin(CHARACTERS[id]), `${id} should plant nothing`).toBe(false);
+      expect(PERSONA_IDS).not.toContain(twinIdFor(id));
+    }
+  });
+
+  it('no twin is itself given a twin, and every twin names a registered character', () => {
+    for (const twinId of TWIN_IDS) {
+      expect(hasTwin(TWINS[twinId]), `${twinId} must plant nothing of its own`).toBe(false);
+      const characterId = characterIdOfTwin(twinId);
+      expect(characterId).not.toBeNull();
+      expect(CHARACTER_IDS).toContain(characterId as CharacterId);
+    }
+  });
+
+  it('PERSONAS is exactly the characters plus the twins, and every id is self-consistent', () => {
+    expect(PERSONA_IDS).toHaveLength(CHARACTER_IDS.length + TWIN_IDS.length);
+    for (const id of PERSONA_IDS) {
+      expect(PERSONAS[id].id, `${id} must carry its own id`).toBe(id);
+    }
+  });
+});
+
+describe('a twin differs from its character in exactly the neutralised dials', () => {
+  for (const twinId of TWIN_IDS) {
+    const characterId = characterIdOfTwin(twinId) as CharacterId;
+    it(`${twinId}: only ${neutralisedFields(CHARACTERS[characterId]).join(', ')} moved`, () => {
+      const character = CHARACTERS[characterId];
+      const twin = TWINS[twinId as TwinId];
+      const expectedFields = new Set<string>(neutralisedFields(character).map(String));
+
+      const differing = (Object.keys(character.behaviour) as (keyof Behaviour)[]).filter(
+        (field) =>
+          JSON.stringify(character.behaviour[field]) !== JSON.stringify(twin.behaviour[field]),
+      );
+      // Every dial the neutralisation names must actually MOVE — an override
+      // that restates a value the character already holds would register a twin
+      // that isolates nothing while looking like it isolates something.
+      expect(
+        new Set(differing.map(String)),
+        'the fields that differ must be exactly the neutralised ones',
+      ).toEqual(expectedFields);
+      for (const field of expectedFields) {
+        expect(twin.behaviour[field as keyof Behaviour]).toEqual(
+          character.planted.neutralise[field as keyof Behaviour],
+        );
+      }
+      // And the derivation is the shared one, not a second copy of it.
+      expect(twin.behaviour).toEqual(neutralise(character));
+    });
+  }
+});
+
+describe('the registered twin id drives the neutralised behaviour, not merely a name', () => {
+  // One seed rather than four: the four-seed sweep above already establishes
+  // that the override breaks each claim on every draw. What is under test here
+  // is that running the TWIN ID reaches those same dials, which one draw
+  // settles — and a third four-seed pass would triple this file's runtime to
+  // re-prove something it already knows.
+  const SEED = SEEDS[0];
+  for (const [persona, claims] of Object.entries(CLAIMS) as [CharacterId, readonly Claim[]][]) {
+    const twinId = twinIdFor(persona) as PersonaId;
+    for (const claim of claims) {
+      it(`${twinId}: "${claim.name}" does not hold`, () => {
+        expect(
+          claim.holds(asPersona(twinId, SEED), control(SEED)),
+          `${twinId}: the claim still held, so the registered twin is not running ` +
+            `${JSON.stringify(PERSONAS[persona].planted.neutralise)}.`,
+        ).toBe(false);
+      });
+    }
+  }
 });

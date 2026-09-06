@@ -20,6 +20,19 @@
  * seed differing by exactly one knob — and a null pair is the same spec under
  * two seeds. See `./pairs.ts`.
  *
+ * ## Characters and twins (`[D-233]`)
+ *
+ * The ten `persona(...)` blocks below are **characters**. Seven of them plant
+ * something a twin could remove, and each of those seven carries a registered
+ * **pre-registered neutralised twin** — `<id>-twin` — derived by
+ * `./planted.ts`'s `deriveTwin` from that same `planted.neutralise` override.
+ * The derivation is in `./planted.ts` rather than here because the private
+ * repo's corpus-authoring instrument renders the twin's *character sheet* from
+ * the identical function: one source of truth, so a text twin and a
+ * behavioural twin cannot drift apart. The control and the two floor cases
+ * plant nothing and deliberately have no twin — a twin identical to its
+ * character isolates nothing.
+ *
  * ## Nothing here is a threshold
  *
  * Every number below is a *generator input* — it describes the fiction being
@@ -30,9 +43,15 @@
  * `synthetic-provisional` there.
  */
 
+import { deriveTwin, hasTwin, twinIdFor } from './planted.js';
 import { COURSE_VANTREL } from './vocabulary.js';
 
-export type PersonaId =
+/**
+ * The ten **characters** — the personas that are authored, each with its own
+ * dials and its own planted pattern. `[D-233]`: a persona is a character, not
+ * a set of independent samplers.
+ */
+export type CharacterId =
   | 'steady-reviewer'
   | 'crammer'
   | 'instrument-skipper'
@@ -43,6 +62,29 @@ export type PersonaId =
   | 'single-session'
   | 'explain-back-decliner'
   | 'contest-heavy';
+
+/**
+ * The seven **pre-registered neutralised twins** (`[D-233]` / `ol-egov.120`),
+ * one per character that plants something a twin could remove. Listed
+ * explicitly rather than derived as a template literal type because the set is
+ * a *registration*, not a naming convention: `steady-reviewer` (the control)
+ * and the two floor cases deliberately have none, and `./planted.ts`'s
+ * `deriveTwin` refuses to mint one for them. `test/personas.spec.ts` asserts
+ * this union and the runtime registry agree in both directions, so adding a
+ * planted pattern to a character without adding its twin here fails a test
+ * rather than silently shrinking the run set.
+ */
+export type TwinId =
+  | 'crammer-twin'
+  | 'instrument-skipper-twin'
+  | 'lapsed-returner-twin'
+  | 'struggler-twin'
+  | 'lopsided-effort-twin'
+  | 'explain-back-decliner-twin'
+  | 'contest-heavy-twin';
+
+/** A character or one of the registered twins. */
+export type PersonaId = CharacterId | TwinId;
 
 /** A stretch of days on which no event of any kind is emitted. */
 export interface Blackout {
@@ -262,14 +304,15 @@ export interface Persona {
 }
 
 function persona(
-  id: PersonaId,
+  id: CharacterId,
   overrides: Partial<Behaviour>,
   planted: PlantedPattern,
-): [PersonaId, Persona] {
+): [CharacterId, Persona] {
   return [id, { id, behaviour: { ...NEUTRAL, ...overrides }, planted }];
 }
 
-export const PERSONAS: Readonly<Record<PersonaId, Persona>> = Object.fromEntries([
+/** The ten authored characters. Twins are derived from these, never written twice. */
+export const CHARACTERS: Readonly<Record<CharacterId, Persona>> = Object.fromEntries([
   persona(
     'steady-reviewer',
     {},
@@ -495,6 +538,46 @@ export const PERSONAS: Readonly<Record<PersonaId, Persona>> = Object.fromEntries
       neutralise: { contestChance: 0 },
     },
   ),
-]) as Readonly<Record<PersonaId, Persona>>;
+]) as Readonly<Record<CharacterId, Persona>>;
 
+/** The ten character ids, in declaration order. */
+export const CHARACTER_IDS = Object.keys(CHARACTERS) as readonly CharacterId[];
+
+/**
+ * The registered twins (`[D-233]`), **derived** from the characters by
+ * `./planted.ts`'s `deriveTwin` — the same pure function the private repo's
+ * `scripts/harness/persona-authoring.mjs` calls to render a twin's character
+ * sheet, so the behavioural twin and the text twin cannot disagree.
+ *
+ * Registering them as ordinary `PersonaId`s is what lets the persona runner
+ * emit a twin WORLD. Before this, the twins existed only as text and
+ * `persona-world.mjs` refused `crammer-twin`/`struggler-twin`/
+ * `explain-back-decliner-twin` by name, so the pre-registration's declared
+ * six-persona-run first cycle could only ever be three
+ * (`findings/moment-dry-run-2026-09-06.md`, third run).
+ */
+export const TWINS: Readonly<Record<TwinId, Persona>> = Object.fromEntries(
+  CHARACTER_IDS.filter((id) => hasTwin(CHARACTERS[id])).map((id) => [
+    twinIdFor(id),
+    deriveTwin(CHARACTERS[id]),
+  ]),
+) as Readonly<Record<TwinId, Persona>>;
+
+/** The seven twin ids, in their characters' declaration order. */
+export const TWIN_IDS = Object.keys(TWINS) as readonly TwinId[];
+
+/**
+ * Every runnable persona: the ten characters and the seven twins.
+ *
+ * **Consumers that mean "a character" must say `CHARACTERS`/`CHARACTER_IDS`.**
+ * The corpus-authoring instrument does exactly that — it walks characters and
+ * emits each one's own prompts plus its twin's in the same pass, so walking all
+ * seventeen here would author every twin twice.
+ */
+export const PERSONAS: Readonly<Record<PersonaId, Persona>> = {
+  ...CHARACTERS,
+  ...TWINS,
+};
+
+/** All seventeen ids: the ten characters, then the seven twins. */
 export const PERSONA_IDS = Object.keys(PERSONAS) as readonly PersonaId[];
