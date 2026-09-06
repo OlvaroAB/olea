@@ -121,6 +121,12 @@ import {
   loadCourseSetupSeenCodes,
 } from './course-setup-bridge.js';
 import { seedSimulatorDrafts } from './draft-seed.js';
+import {
+  buildFrontierSurfaceModels,
+  type FrontierBundle,
+  loadFrontierSurfaces,
+  renderFrontierSurfaces,
+} from './frontier-surfaces.js';
 import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
@@ -1318,6 +1324,16 @@ export class SimulatorController {
     private readonly worldManifest: SimulatorWorldManifest | null,
     /** The manifest row this mount resolved to (`world.ts`'s `resolveWorldEntry`), or `null` when there is no manifest — carries the `base` every per-world dist file is fetched under. */
     private readonly worldEntry: SimulatorWorldManifestEntry | null,
+    /**
+     * The replayed frontier term this dist carries, or `null` for every dist
+     * that carries none — which is every public build and every private build
+     * not made with `simulator-build.mjs --frontier-run`
+     * (`ol-3ux7.5.57.14.8` [MOM-10i], F9 scenario set below). `null` is what
+     * keeps the frontier panel a frontier-build-only affordance:
+     * `renderFrontierPanel` draws nothing at all without it, so the public
+     * simulator's main pane is byte-for-byte what it was.
+     */
+    private readonly frontier: FrontierBundle | null,
   ) {
     this.courseSetupSeenBridge = installCourseSetupSeenBridge(
       this.pluginDataHost,
@@ -1346,6 +1362,11 @@ export class SimulatorController {
     );
     const worldBase = worldEntry?.base ?? '/';
     const worldLoad = await loadSimulatorWorld(fetchFn, worldBase);
+    // MOM-10i: the replayed frontier term, if this dist carries one. A plain
+    // static GET like every other per-world dist file above, best-effort and
+    // never throwing — `null` everywhere else, which is the whole of the
+    // public build's guarantee that nothing below changes for it.
+    const frontier = await loadFrontierSurfaces(fetchFn, worldBase);
     const worldAsOf = parseWorldAsOf(worldLoad.descriptor);
     const store = await openSimulatorStore(dbName);
     // Before the vault is built: a persisted overlay belonging to ANOTHER
@@ -1403,6 +1424,7 @@ export class SimulatorController {
       worldLoad.descriptor,
       worldManifest,
       worldEntry,
+      frontier,
     );
     // The term scrubber's visibility cutoff (`ol-3ux7.64.16` [WBX-13]) starts
     // in step with the clock BEFORE anything mounts — see
@@ -1502,6 +1524,13 @@ export class SimulatorController {
     await this.closeCurrent();
     this.elements.main.empty();
     this.elements.right.empty();
+    // MOM-10i: the frontier panel is rendered BEFORE the plugin mounts, so it
+    // is the first thing in the main pane rather than something appended
+    // under a mounted view's own scroll container. It is rebuilt on every
+    // remount for the same reason the badge and the scrubber are: the clock
+    // has moved, and these surfaces move with it (`frontier-surfaces.ts`'s
+    // own SCRUB-BACK note).
+    this.renderFrontierPanel();
     // WBX-9: read BEFORE `mountPlugin` below — the fresh `OleaPlugin`
     // instance's own cold-start scan can start proposing courses during
     // `onload()`, and this snapshot must reflect only what an EARLIER mount
@@ -1598,6 +1627,25 @@ export class SimulatorController {
     this.elements.ribbonPaletteSlot.empty();
     const paletteToggle = mounted.hostEl.querySelector<HTMLElement>('[data-wb-palette-toggle]');
     if (paletteToggle !== null) this.elements.ribbonPaletteSlot.appendChild(paletteToggle);
+  }
+
+  /**
+   * Draws the replayed frontier term's surfaces at the clock's current day
+   * (`ol-3ux7.5.57.14.8` [MOM-10i]). A no-op for every dist that carries no
+   * frontier index — see the `frontier` constructor field's own doc.
+   *
+   * The MODELS are built here, per remount, rather than once at create():
+   * `buildFrontierSurfaceModels` filters to the items that had arrived by the
+   * walked day, which is exactly what makes the scrubber move these surfaces
+   * with the term.
+   */
+  private renderFrontierPanel(): void {
+    if (this.frontier === null) return;
+    renderFrontierSurfaces(
+      this.elements.main,
+      this.worldLabel,
+      buildFrontierSurfaceModels(this.frontier, formatSimulatedDate(this.clock.now())),
+    );
   }
 
   private renderBadge(): void {
