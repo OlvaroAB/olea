@@ -132,8 +132,24 @@ import {
 } from './seed-events.js';
 import { renderRibbonViews, type SimulatorShellElements } from './shell.js';
 import { DEFAULT_SIMULATOR_DB_NAME, openSimulatorStore, type SimulatorStore } from './store.js';
-import { renderTermScrubber, scrubberDateAt } from './term-scrubber.js';
-import { loadSimulatorWorld, parseWorldAsOf, type SimulatorWorldDescriptor } from './world.js';
+import {
+  renderTermScrubber,
+  SCRUBBER_MAX_DAYS,
+  scrubberDateAt,
+  scrubberMinDays,
+} from './term-scrubber.js';
+import {
+  loadSimulatorWorld,
+  loadSimulatorWorldManifest,
+  parseWorldAsOf,
+  personaTermStart,
+  requestedWorldId,
+  resolveWorldEntry,
+  type SimulatorWorldDescriptor,
+  type SimulatorWorldManifest,
+  type SimulatorWorldManifestEntry,
+} from './world.js';
+import { loadWorldVault } from './world-vault.js';
 
 /**
  * Best-effort, never-throwing load of a bundled replay cassette from a plain
@@ -573,17 +589,46 @@ async function seedPersonaHistoryIfNeeded(
   vault: PersistentVaultSource,
   store: SimulatorStore,
   fetchFn: typeof fetch,
+  base = '/',
 ): Promise<void> {
-  const deviceId = personaDeviceId(descriptor.streamSpec);
-  if (deviceId === undefined) return;
   const marker = worldSeedMarker(descriptor);
   if ((await store.loadSeededWorldMarker()) === marker) return;
-
-  const seedLoad = await loadSimulatorSeedEvents(fetchFn);
-  if (seedLoad.available && seedLoad.records.length > 0) {
-    await writeSeedEventsIntoVault(vault, seedLoad.records, deviceId);
+  const deviceId = personaDeviceId(descriptor.streamSpec);
+  if (deviceId !== undefined) {
+    const seedLoad = await loadSimulatorSeedEvents(fetchFn, base);
+    if (seedLoad.available && seedLoad.records.length > 0) {
+      await writeSeedEventsIntoVault(vault, seedLoad.records, deviceId);
+    }
   }
+  // Saved for EVERY world, not just a seeded one (`ol-3ux7.5.57.13`
+  // [MOM-9b]): the marker is now also how `create()` recognises that this
+  // browser profile's persisted overlay belongs to a DIFFERENT world than the
+  // one being mounted — see `clearOverlayOnWorldSwitch`. A world with no seed
+  // events still needs to be identifiable for that, and marking it costs one
+  // string.
   await store.saveSeededWorldMarker(marker);
+}
+
+/**
+ * A world switch inside one dist (`ol-3ux7.5.57.13` [MOM-9b], F9.S17) reuses
+ * the SAME browser-persisted store — one IndexedDB database per origin, and a
+ * multi-world dist is one origin. The overlay in it holds the previous
+ * world's seeded history and whatever the plugin wrote over it, so mounting
+ * world B on top of world A's overlay would mix two students' review logs
+ * under one badge. When the stored world marker names a different world,
+ * clear the store BEFORE `PersistentVaultSource.create` replays the overlay
+ * onto the base — a world switch is a reset, deliberately and visibly, rather
+ * than a merge nobody could later untangle. Same-world reopens are untouched
+ * (equal marker, or no marker at all on a first-ever open).
+ */
+async function clearOverlayOnWorldSwitch(
+  descriptor: SimulatorWorldDescriptor,
+  store: SimulatorStore,
+): Promise<boolean> {
+  const stored = await store.loadSeededWorldMarker();
+  if (stored === undefined || stored === worldSeedMarker(descriptor)) return false;
+  await store.resetAll();
+  return true;
 }
 
 /**
@@ -1262,6 +1307,17 @@ export class SimulatorController {
      * than one more scalar field apiece.
      */
     private readonly worldDescriptor: SimulatorWorldDescriptor,
+    /**
+     * The multi-world manifest this dist carries, or `null` for every
+     * ordinary single-world dist — which is every PUBLIC build, since only
+     * `olea-service/scripts/simulator-build.mjs` ever writes one
+     * (`ol-3ux7.5.57.13` [MOM-9b], F9.S17). `null` is what keeps the world
+     * selector a private-build-only affordance: `renderControls` draws it
+     * only when a manifest lists more than one world.
+     */
+    private readonly worldManifest: SimulatorWorldManifest | null,
+    /** The manifest row this mount resolved to (`world.ts`'s `resolveWorldEntry`), or `null` when there is no manifest — carries the `base` every per-world dist file is fetched under. */
+    private readonly worldEntry: SimulatorWorldManifestEntry | null,
   ) {
     this.courseSetupSeenBridge = installCourseSetupSeenBridge(
       this.pluginDataHost,
@@ -1278,20 +1334,35 @@ export class SimulatorController {
     // today"). Plain `fetch`: the transport bridge (a POST-only interceptor,
     // see `installTransportBridge`'s own doc) is not installed yet, and this
     // is a GET regardless.
-    const worldLoad = await loadSimulatorWorld(globalThis.fetch.bind(globalThis));
+    const fetchFn = globalThis.fetch.bind(globalThis);
+    // The multi-world manifest, and which of its worlds `?world=` asks for
+    // (`ol-3ux7.5.57.13` [MOM-9b], F9.S17). `null` for every single-world
+    // dist — public builds included — and `worldBase` is then `'/'`, the
+    // exact path every fetch below already used.
+    const worldManifest = await loadSimulatorWorldManifest(fetchFn);
+    const worldEntry = resolveWorldEntry(
+      worldManifest,
+      requestedWorldId(typeof location === 'undefined' ? '' : location.search),
+    );
+    const worldBase = worldEntry?.base ?? '/';
+    const worldLoad = await loadSimulatorWorld(fetchFn, worldBase);
     const worldAsOf = parseWorldAsOf(worldLoad.descriptor);
     const store = await openSimulatorStore(dbName);
-    const base: MemoryVaultSource = await loadFixtureVault();
+    // Before the vault is built: a persisted overlay belonging to ANOTHER
+    // world is cleared rather than replayed under this one's badge — see
+    // `clearOverlayOnWorldSwitch`'s own doc.
+    const switched = await clearOverlayOnWorldSwitch(worldLoad.descriptor, store);
+    // The dist's primary world still loads through the public
+    // `loadFixtureVault` — an unchanged call on an unchanged module. Only a
+    // CARRIED world (a non-root base, which only a private multi-world dist
+    // can produce) takes `world-vault.ts`'s loader; see its own doc.
+    const base: MemoryVaultSource =
+      worldBase === '/' ? await loadFixtureVault() : await loadWorldVault(worldBase);
     const vault = await PersistentVaultSource.create(base, store);
     // Before the clock/mount: "first open" for a persona world's seed
     // events (WBX-13 consuming WBX-14's contract) — see
     // `seedPersonaHistoryIfNeeded`'s own doc.
-    await seedPersonaHistoryIfNeeded(
-      worldLoad.descriptor,
-      vault,
-      store,
-      globalThis.fetch.bind(globalThis),
-    );
+    await seedPersonaHistoryIfNeeded(worldLoad.descriptor, vault, store, fetchFn, worldBase);
     const clock = await createSimulatorClock(store, worldAsOf);
     const uninstallClock = clock.install();
     const pluginDataHost = createPluginDataHost(store);
@@ -1330,11 +1401,14 @@ export class SimulatorController {
       worldLoad.descriptor.label,
       worldAsOf,
       worldLoad.descriptor,
+      worldManifest,
+      worldEntry,
     );
     // The term scrubber's visibility cutoff (`ol-3ux7.64.16` [WBX-13]) starts
     // in step with the clock BEFORE anything mounts — see
     // `syncVisibilityCutoff`'s own doc.
     controller.syncVisibilityCutoff();
+    await controller.syncVisibleReviewDays();
     // Set BEFORE `renderControls()`/`remountPane()` below — neither of those
     // touches the notice host on this path (`remountPane`'s own doc: it
     // deliberately never clears a notice a caller just set), so this survives
@@ -1342,7 +1416,11 @@ export class SimulatorController {
     // this class (`rateNextDue`, `reset`).
     if (worldLoad.fallback) {
       controller.setNotice(
-        '/simulator-world.json could not be read — showing the built-in FIXTURE default.',
+        `${worldBase}simulator-world.json could not be read — showing the built-in FIXTURE default.`,
+      );
+    } else if (switched) {
+      controller.setNotice(
+        `Switched to ${worldLoad.descriptor.label} — the previous world's persisted state was cleared, because one browser profile cannot hold two worlds' histories at once.`,
       );
     }
     controller.renderControls();
@@ -1543,7 +1621,29 @@ export class SimulatorController {
     renderTermScrubber(this.elements.controls, {
       asOf: this.worldDescriptor.asOf,
       current: formatSimulatedDate(this.clock.now()),
+      termStart: personaTermStart(this.worldDescriptor.streamSpec),
     });
+  }
+
+  /** Where this mount's per-world dist files live — `'/'` for a single-world dist (every public build), the manifest row's own base for a carried world. */
+  private get worldBase(): string {
+    return this.worldEntry?.base ?? '/';
+  }
+
+  /**
+   * Publishes the number of review-log DAY FILES currently visible under the
+   * scrubber's cutoff onto the strip, as `data-sim-visible-review-days`
+   * (`ol-3ux7.5.57.13` [MOM-9b], F9.S17). A COUNT and nothing else — no path,
+   * no title, no record — so the private tour's `--scrub-back` smoke can
+   * watch the seeded term open up day by day without reading, reporting or
+   * screenshotting one byte of a world's material (D-005, INV-3). A data
+   * attribute rather than rendered text on purpose: this is instrumentation
+   * for a dev tool's own smoke, not an affordance anyone is meant to read off
+   * the page.
+   */
+  private async syncVisibleReviewDays(): Promise<void> {
+    const days = await this.vault.visibleReviewLogDayCount();
+    this.elements.controls.setAttr('data-sim-visible-review-days', String(days));
   }
 
   /**
@@ -1629,12 +1729,56 @@ export class SimulatorController {
     reset.addEventListener('click', () => {
       void this.reset();
     });
+
+    this.renderWorldSelector();
+  }
+
+  /**
+   * The world selector (`ol-3ux7.5.57.13` [MOM-9b], F9.S17) — rendered beside
+   * the provenance badge, and ONLY when this dist carries a multi-world
+   * manifest listing more than one world. That condition is the whole of the
+   * private-build gate: `loadSimulatorWorldManifest` returns `null` for every
+   * dist without a `/simulator-worlds.json`, and only
+   * `olea-service/scripts/simulator-build.mjs` — asked explicitly for extra
+   * worlds — ever writes one. The public workbench build therefore renders
+   * exactly the strip it renders today, with no dead control and no branch it
+   * can take.
+   *
+   * Switching RELOADS the page with `?world=<id>` rather than swapping worlds
+   * in place. Deliberate: a world is a vault, a clock origin, a seeded
+   * history and a persisted overlay, and `create()` is the one place that
+   * composes all four in the right order (including
+   * `clearOverlayOnWorldSwitch`). A full reload reuses that path instead of
+   * inventing a second, subtly different one whose divergence would show up
+   * as one world's history under another world's badge — the exact failure
+   * `simulator-world.json` was added to stop.
+   */
+  private renderWorldSelector(): void {
+    const manifest = this.worldManifest;
+    if (manifest === null || manifest.worlds.length < 2) return;
+    const currentId = this.worldEntry?.id ?? manifest.defaultWorld;
+    const select = this.elements.badge.createEl('select', {
+      cls: 'wb-sim-world-select',
+      attr: { 'data-sim-world': 'true', 'aria-label': 'Simulator world' },
+    });
+    for (const entry of manifest.worlds) {
+      const option = select.createEl('option', { text: entry.label });
+      option.value = entry.id;
+      if (entry.id === currentId) option.selected = true;
+    }
+    select.addEventListener('change', () => {
+      if (typeof location === 'undefined') return;
+      const next = new URL(location.href);
+      next.searchParams.set('world', select.value);
+      location.assign(next.toString());
+    });
   }
 
   /** `[data-sim-advance]`'s handler: steps the clock one day and re-mounts — the plugin's own onunload/onload. */
   async advanceOneDay(): Promise<void> {
     await this.clock.advanceDays(1);
     this.syncVisibilityCutoff();
+    await this.syncVisibleReviewDays();
     await this.remountPane();
   }
 
@@ -1660,7 +1804,17 @@ export class SimulatorController {
    * lands on — see `persistent-vault.ts`'s own doc.
    */
   async scrubTo(days: number): Promise<void> {
-    await this.jumpToDate(scrubberDateAt(this.worldDescriptor.asOf, days));
+    // Clamped here as well as by the native range input's own min/max: the
+    // slider's `min` is now world-dependent (negative for a seeded persona
+    // world — `term-scrubber.ts`'s `scrubberMinDays`), and this method is
+    // also reachable from `SimulatorWalkDriver`, which passes a number
+    // directly rather than through the input.
+    const minDays = scrubberMinDays(
+      this.worldDescriptor.asOf,
+      personaTermStart(this.worldDescriptor.streamSpec),
+    );
+    const clamped = Math.min(Math.max(days, minDays), SCRUBBER_MAX_DAYS);
+    await this.jumpToDate(scrubberDateAt(this.worldDescriptor.asOf, clamped));
   }
 
   /** `jumpToDate`'s own `dateIso` is `YYYY-MM-DD`, interpreted as local midnight — the scrubber's (`scrubTo`) sole caller today, kept as its own method since "jump the clock to an arbitrary day and remount" is the reusable primitive, not the scrubber's slider math. */
@@ -1669,6 +1823,7 @@ export class SimulatorController {
     if (Number.isNaN(asOf.getTime())) return;
     await this.clock.jumpTo(asOf);
     this.syncVisibilityCutoff();
+    await this.syncVisibleReviewDays();
     await this.remountPane();
   }
 
@@ -1732,7 +1887,8 @@ export class SimulatorController {
   async reset(): Promise<void> {
     await this.store.resetAll();
     await this.clock.jumpTo(this.worldAsOf);
-    const freshBase = await loadFixtureVault();
+    const freshBase =
+      this.worldBase === '/' ? await loadFixtureVault() : await loadWorldVault(this.worldBase);
     this.vault = await PersistentVaultSource.create(freshBase, this.store);
     // `resetAll` clears the seeded-world marker along with the overlay
     // (`store.ts`'s own doc) — a persona world's history is replanted here,
@@ -1744,12 +1900,14 @@ export class SimulatorController {
       this.vault,
       this.store,
       globalThis.fetch.bind(globalThis),
+      this.worldBase,
     );
     // Back to the world's own asOf — unhides everything, since nothing is
     // dated after the cutoff at asOf itself (the fresh overlay above has, at
     // most, this world's own seed history up to asOf and whatever the
     // plugin's cold-start writes next).
     this.syncVisibilityCutoff();
+    await this.syncVisibleReviewDays();
     this.deviceId = await ensureDeviceId(this.pluginDataHost);
     // `resetAll` clears the plugin-data store this lives in — see its own doc.
     await seedSimulatorWorkerConfig(this.pluginDataHost);

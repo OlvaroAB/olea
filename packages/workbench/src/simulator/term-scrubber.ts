@@ -53,6 +53,23 @@ export function scrubberDateAt(asOfIso: string, days: number): string {
 export const SCRUBBER_MAX_DAYS = SCRUBBER_TERM_WEEKS * 7;
 
 /**
+ * The scrubber's own LOWER bound, in whole days relative to `asOf` — `0` for
+ * every world that declares no term start (the public build's own two:
+ * fixture and real), and a NEGATIVE offset for a seeded persona world whose
+ * `termStartIso` precedes `asOf`. Clamped at `0` rather than trusted: a
+ * declared start on or after `asOf` is a malformed descriptor this lane never
+ * writes, and inverting the slider's own bounds is a worse failure than
+ * ignoring the field.
+ */
+export function scrubberMinDays(asOfIso: string, termStartIso?: string): number {
+  if (termStartIso === undefined) return 0;
+  const start = parseIsoDay(termStartIso);
+  const asOf = parseIsoDay(asOfIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(asOf.getTime())) return 0;
+  return Math.min(0, Math.round((start.getTime() - asOf.getTime()) / DAY_MS));
+}
+
+/**
  * The offset (whole days, clamped to `[0, SCRUBBER_MAX_DAYS]`) between
  * `asOfIso` and `currentIso` — the inverse of {@link scrubberDateAt}, used to
  * position the handle from the clock's own current day. Clamped rather than
@@ -62,11 +79,11 @@ export const SCRUBBER_MAX_DAYS = SCRUBBER_TERM_WEEKS * 7;
  * `[min, max]` regardless of what `.value` is set to — clamping here keeps
  * the DISPLAYED date in sync with whatever the slider will actually show.
  */
-export function daysSinceAsOf(asOfIso: string, currentIso: string): number {
+export function daysSinceAsOf(asOfIso: string, currentIso: string, minDays = 0): number {
   const raw = Math.round(
     (parseIsoDay(currentIso).getTime() - parseIsoDay(asOfIso).getTime()) / DAY_MS,
   );
-  return Math.min(Math.max(raw, 0), SCRUBBER_MAX_DAYS);
+  return Math.min(Math.max(raw, minDays), SCRUBBER_MAX_DAYS);
 }
 
 export interface TermScrubberState {
@@ -74,6 +91,14 @@ export interface TermScrubberState {
   readonly asOf: string;
   /** `YYYY-MM-DD` — the simulator clock's current day; where the handle sits. */
   readonly current: string;
+  /**
+   * `YYYY-MM-DD` — the world's DECLARED term start (`world.ts`'s
+   * `personaTermStart`), or `undefined` for a world that declares none. See
+   * {@link scrubberMinDays} and this module's own doc: present only for a
+   * seeded persona world, and the only thing that gives the slider any
+   * backward reach at all.
+   */
+  readonly termStart?: string | undefined;
 }
 
 export interface TermScrubberElements {
@@ -112,7 +137,9 @@ export function renderTermScrubber(
     throw new Error('renderTermScrubber: scrubber DOM is missing an expected child');
   }
 
-  const clampedDays = daysSinceAsOf(state.asOf, state.current);
+  const minDays = scrubberMinDays(state.asOf, state.termStart);
+  const clampedDays = daysSinceAsOf(state.asOf, state.current, minDays);
+  input.min = String(minDays);
   input.max = String(SCRUBBER_MAX_DAYS);
   input.value = String(clampedDays);
   dateLabel.setText(scrubberDateAt(state.asOf, clampedDays));

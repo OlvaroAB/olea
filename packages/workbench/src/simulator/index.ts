@@ -49,12 +49,20 @@ export {
   SCRUBBER_TERM_WEEKS,
   SIMULATOR_SCRUBBER_SELECTOR,
   scrubberDateAt,
+  scrubberMinDays,
   type TermScrubberElements,
   type TermScrubberState,
 } from './term-scrubber.js';
 export {
   loadSimulatorWorld,
+  loadSimulatorWorldManifest,
   parseWorldAsOf,
+  personaTermStart,
+  requestedWorldId,
+  resolveWorldEntry,
   type SimulatorWorldDescriptor,
   type SimulatorWorldLoadResult,
+  type SimulatorWorldManifest,
+  type SimulatorWorldManifestEntry,
 } from './world.js';
+export { loadWorldVault } from './world-vault.js';

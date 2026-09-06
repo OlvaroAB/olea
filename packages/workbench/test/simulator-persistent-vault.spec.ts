@@ -160,3 +160,78 @@ describe('PersistentVaultSource', () => {
     });
   });
 });
+
+/**
+ * Scrubbing a seeded persona world BACK through its own term
+ * (`ol-3ux7.5.57.13` [MOM-9b], F9.S17). The mechanism is entirely the cutoff
+ * above — this suite is about the property the scrub-back feature actually
+ * rests on: as the cutoff walks forward day by day, the number of visible
+ * review-log day files never decreases and ends at the full seeded set, and
+ * not one byte of the seeded history (or of the world's authored notes) is
+ * rewritten at any position.
+ */
+describe('PersistentVaultSource — windowing a seeded term day by day', () => {
+  const DEVICE = 'sim-persona-000000000000';
+  const seededDays = ['2026-05-04', '2026-05-18', '2026-06-15', '2026-07-20', '2026-08-28'];
+
+  async function seededVault() {
+    const store = createMemoryStore();
+    const vault = await PersistentVaultSource.create(
+      freshBase(new Map([['01 Courses/vantrel/note.md', encode('material')]])),
+      store,
+    );
+    for (const day of seededDays) {
+      await vault.write(
+        `.olea/reviews/${day}.${DEVICE}.jsonl`,
+        `{"timestamp":"${day}T09:00:00Z"}\n`,
+      );
+    }
+    return { store, vault };
+  }
+
+  it('shows more of the term the further forward the cutoff walks, and never fewer', async () => {
+    const { vault } = await seededVault();
+    const counts: number[] = [];
+    for (const day of [...seededDays, '2026-12-18']) {
+      vault.setVisibilityCutoff(day);
+      counts.push(await vault.visibleReviewLogDayCount());
+    }
+    expect(counts).toEqual([1, 2, 3, 4, 5, 5]);
+    for (let i = 1; i < counts.length; i += 1) {
+      expect(counts[i]).toBeGreaterThanOrEqual(counts[i - 1] as number);
+    }
+  });
+
+  it('hides the later days at an earlier cutoff and restores every one of them at asOf', async () => {
+    const { vault } = await seededVault();
+    vault.setVisibilityCutoff('2026-06-15');
+    expect(await vault.exists(`.olea/reviews/2026-08-28.${DEVICE}.jsonl`)).toBe(false);
+    await expect(vault.read(`.olea/reviews/2026-08-28.${DEVICE}.jsonl`)).rejects.toThrow();
+
+    vault.setVisibilityCutoff('2026-08-28');
+    expect(await vault.exists(`.olea/reviews/2026-08-28.${DEVICE}.jsonl`)).toBe(true);
+    expect(await vault.read(`.olea/reviews/2026-08-28.${DEVICE}.jsonl`)).toBe(
+      '{"timestamp":"2026-08-28T09:00:00Z"}\n',
+    );
+  });
+
+  it('never rewrites the overlay while windowing — the same bytes are stored at every cutoff', async () => {
+    const { store, vault } = await seededVault();
+    const before = await store.loadOverlay();
+    for (const day of ['2026-05-04', '2026-07-20', '2026-08-28']) {
+      vault.setVisibilityCutoff(day);
+      await vault.visibleReviewLogDayCount();
+    }
+    const after = await store.loadOverlay();
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+  });
+
+  it("leaves the world's authored notes visible at every cutoff, including term start", async () => {
+    const { vault } = await seededVault();
+    for (const day of ['2026-05-04', '2026-08-28']) {
+      vault.setVisibilityCutoff(day);
+      expect(await vault.exists('01 Courses/vantrel/note.md')).toBe(true);
+      expect(await vault.read('01 Courses/vantrel/note.md')).toBe('material');
+    }
+  });
+});

@@ -77,6 +77,121 @@ function isWorldDescriptor(value: unknown): value is SimulatorWorldDescriptor {
 }
 
 /** `descriptor.asOf` (`YYYY-MM-DD`) as local midnight — the same convention `SimulatorController.jumpToDate` already uses for a typed date from a string. */
+/**
+ * `descriptor.streamSpec.startDate` (`YYYY-MM-DD`) — the world's DECLARED
+ * term start, or `undefined` when it declares none. Defensive in exactly the
+ * way `seed-events.ts`'s `personaDeviceId` is, and for the same reason:
+ * `streamSpec` is deliberately untyped (this lane never constructs one), so a
+ * malformed shape must read as "no declaration" rather than throw. Only a
+ * seeded persona world carries this — the public fixture and the real
+ * snapshot both declare nothing, which is what keeps the term scrubber's
+ * backward reach (`term-scrubber.ts`'s `scrubberMinDays`, F9.S17) a
+ * private-build-only affordance rather than a behaviour change to the public
+ * build.
+ */
+export function personaTermStart(streamSpec: unknown): string | undefined {
+  if (typeof streamSpec !== 'object' || streamSpec === null) return undefined;
+  const startDate = (streamSpec as { startDate?: unknown }).startDate;
+  return typeof startDate === 'string' && ASOF_PATTERN.test(startDate) ? startDate : undefined;
+}
+
+/**
+ * One row of `/simulator-worlds.json` — the multi-world manifest a PRIVATE
+ * build writes when it was asked to carry more than one world
+ * (`olea-service/scripts/simulator-build.mjs`, F9.S17). The public build
+ * writes no such file at all, which is what makes the world selector a
+ * private-build-only affordance.
+ */
+export interface SimulatorWorldManifestEntry {
+  /** The world id the selector and the `?world=` query parameter name — `'real'`, or a persona world id. */
+  readonly id: string;
+  /** The badge label this world's own descriptor carries, for the selector's option text. */
+  readonly label: string;
+  /**
+   * Where this world's `simulator-world.json`, `simulator-seed-events.json`
+   * and `vault/` sit, as an absolute path prefix ending in `/` — `'/'` for
+   * the dist's own primary world, `'/worlds/<id>/'` for a carried one.
+   */
+  readonly base: string;
+  /** `true` when this row carries the real snapshot — read by the private target guard, never by the page. */
+  readonly real?: boolean;
+}
+
+export interface SimulatorWorldManifest {
+  /** The id of the world served from the dist root when no `?world=` names another. */
+  readonly defaultWorld: string;
+  readonly worlds: readonly SimulatorWorldManifestEntry[];
+}
+
+function isManifestEntry(value: unknown): value is SimulatorWorldManifestEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.label === 'string' &&
+    typeof candidate.base === 'string' &&
+    candidate.base.startsWith('/') &&
+    candidate.base.endsWith('/')
+  );
+}
+
+/**
+ * Best-effort, never-throwing load of `/simulator-worlds.json` — the same
+ * "a missing dist file means the feature is simply not present" discipline
+ * {@link loadSimulatorWorld} and `seed-events.ts` already keep. Returns
+ * `null` for every ordinary (single-world) dist, which is every public build
+ * and every private build that was not asked to carry a second world.
+ */
+export async function loadSimulatorWorldManifest(
+  fetchFn: typeof fetch,
+): Promise<SimulatorWorldManifest | null> {
+  try {
+    const response = await fetchFn('/simulator-worlds.json');
+    if (!response.ok) return null;
+    const raw: unknown = await response.json();
+    if (typeof raw !== 'object' || raw === null) return null;
+    const candidate = raw as Record<string, unknown>;
+    if (!Array.isArray(candidate.worlds)) return null;
+    const worlds = candidate.worlds.filter(isManifestEntry);
+    const first = worlds[0];
+    if (first === undefined) return null;
+    const defaultWorld =
+      typeof candidate.defaultWorld === 'string' ? candidate.defaultWorld : first.id;
+    return { defaultWorld, worlds };
+  } catch {
+    return null;
+  }
+}
+
+/** The `?world=<id>` query parameter, or `undefined` — a plain search parameter, so it survives the workbench's own hash routing untouched. */
+export function requestedWorldId(search: string): string | undefined {
+  try {
+    const value = new URLSearchParams(search).get('world');
+    return value !== null && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The manifest row `?world=` names, or the default row, or `null` when there
+ * is no manifest (or the requested id is not one it lists — an unknown id
+ * falls back to the default rather than 404ing the whole mount). `null` means
+ * "load from the dist root exactly as before", so every single-world dist
+ * takes a code path this feature did not change.
+ */
+export function resolveWorldEntry(
+  manifest: SimulatorWorldManifest | null,
+  requestedId: string | undefined,
+): SimulatorWorldManifestEntry | null {
+  if (manifest === null) return null;
+  const requested =
+    requestedId === undefined
+      ? undefined
+      : manifest.worlds.find((entry) => entry.id === requestedId);
+  return requested ?? manifest.worlds.find((entry) => entry.id === manifest.defaultWorld) ?? null;
+}
+
 export function parseWorldAsOf(descriptor: SimulatorWorldDescriptor): Date {
   return new Date(`${descriptor.asOf}T00:00:00`);
 }
@@ -91,9 +206,12 @@ export function parseWorldAsOf(descriptor: SimulatorWorldDescriptor): Date {
  * `fetch` works, but naming it explicitly keeps the call site honest about
  * which one it means.
  */
-export async function loadSimulatorWorld(fetchFn: typeof fetch): Promise<SimulatorWorldLoadResult> {
+export async function loadSimulatorWorld(
+  fetchFn: typeof fetch,
+  base = '/',
+): Promise<SimulatorWorldLoadResult> {
   try {
-    const response = await fetchFn('/simulator-world.json');
+    const response = await fetchFn(`${base}simulator-world.json`);
     if (!response.ok) return { descriptor: fallbackDescriptor(), fallback: true };
     const raw: unknown = await response.json();
     if (!isWorldDescriptor(raw)) return { descriptor: fallbackDescriptor(), fallback: true };

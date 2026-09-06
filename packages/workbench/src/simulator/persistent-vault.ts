@@ -143,6 +143,23 @@ export class PersistentVaultSource implements VaultSource {
     await this.base.delete(path);
   }
 
+  /**
+   * How many `.olea/reviews/` DAY FILES are currently visible under the term
+   * scrubber's cutoff — a COUNT, never a path and never a record
+   * (`olea-service/CLAUDE.md`'s D-005 rule: never log content). Added for
+   * `ol-3ux7.5.57.13` [MOM-9b] / F9.S17 so the day-by-day windowing that
+   * scrubbing back into a seeded persona term produces is observable — by a
+   * unit test, and by the private tour's `--scrub-back` smoke, which reads it
+   * off the strip's own `data-sim-visible-review-days` attribute
+   * (`SimulatorController.syncVisibleReviewDays`). Without it the whole
+   * mechanism is only assertable through whatever a view happens to render,
+   * which is neither stable nor privacy-safe to report.
+   */
+  async visibleReviewLogDayCount(): Promise<number> {
+    const paths = await this.list();
+    return paths.filter((path) => reviewLogDayOf(path) !== null).length;
+  }
+
   watch(handler: (event: VaultEvent) => void): Unsubscribe {
     return this.base.watch(handler);
   }

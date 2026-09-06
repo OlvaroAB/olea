@@ -67,9 +67,10 @@ function isSeedEventRecord(value: unknown): value is SimulatorSeedEventRecord {
  */
 export async function loadSimulatorSeedEvents(
   fetchFn: typeof fetch,
+  base = '/',
 ): Promise<SimulatorSeedEventsLoadResult> {
   try {
-    const response = await fetchFn('/simulator-seed-events.json');
+    const response = await fetchFn(`${base}simulator-seed-events.json`);
     if (!response.ok) return { records: [], available: false };
     const raw: unknown = await response.json();
     if (!Array.isArray(raw)) return { records: [], available: false };
