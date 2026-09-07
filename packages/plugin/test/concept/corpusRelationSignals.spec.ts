@@ -1,5 +1,6 @@
 /**
- * `gatherCorpusRelationVaultContext` tests (`[EXT-11]`, `ol-kw4a`).
+ * `gatherCorpusRelationVaultContext` tests (`[EXT-11]`, `ol-kw4a`; passage-text
+ * widening `ol-2zfj.64` [REL-5]).
  *
  * A minimal `VaultSource` fake — no `obsidian` import.
  */
@@ -21,7 +22,11 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { gatherCorpusRelationVaultContext } from '../../src/concept/corpusRelationSignals.js';
+import {
+  gatherCorpusRelationVaultContext,
+  RELATIONS_ENDPOINT_CHAR_BUDGET,
+  sectionPassageText,
+} from '../../src/concept/corpusRelationSignals.js';
 
 class MemoryVault implements VaultSource {
   constructor(private readonly files: Record<string, string>) {}
@@ -61,14 +66,70 @@ function concept(name: string, sourcePath: VaultPath, range: [number, number]): 
 }
 
 describe('gatherCorpusRelationVaultContext — passage text', () => {
-  it('resolves each concept passage text by slicing its anchor sourcePath at charRange', async () => {
-    const vault = new MemoryVault({ 'Note.md': '0123456789Type I error is a false positive.' });
-    const c = concept('Type I error', 'Note.md', [10, 43]);
+  it(
+    'widens to the whole note when the anchor sits in a note with no heading structure ' +
+      '(no section boundary to key on — `ol-2zfj.64` [REL-5])',
+    async () => {
+      const note = '0123456789Type I error is a false positive.';
+      const vault = new MemoryVault({ 'Note.md': note });
+      const c = concept('Type I error', 'Note.md', [10, 43]);
 
-    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
 
-    expect(passageTextByName.get('Type I error')).toBe('Type I error is a false positive.');
-  });
+      expect(passageTextByName.get('Type I error')).toBe(note);
+    },
+  );
+
+  it(
+    'widens the anchor block to its own SECTION (nearest enclosing heading) rather than a ' +
+      "sibling section's material — `ol-2zfj.64` [REL-5]",
+    async () => {
+      const note = [
+        '# Errors',
+        '',
+        '## Type I',
+        '',
+        'A Type I error is a false positive.',
+        '',
+        '## Type II',
+        '',
+        'A Type II error is a false negative.',
+        '',
+      ].join('\n');
+      const anchorStart = note.indexOf('A Type I error');
+      const anchorEnd = anchorStart + 'A Type I error is a false positive.'.length;
+      const vault = new MemoryVault({ 'Note.md': note });
+      const c = concept('Type I error', 'Note.md', [anchorStart, anchorEnd]);
+
+      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+
+      const passage = passageTextByName.get('Type I error');
+      expect(passage).toContain('## Type I');
+      expect(passage).toContain('A Type I error is a false positive.');
+      expect(passage).not.toContain('Type II');
+    },
+  );
+
+  it(
+    'bounds the widened section to `RELATIONS_ENDPOINT_CHAR_BUDGET` characters, always keeping ' +
+      "the anchor's own text intact — `ol-2zfj.64` [REL-5]",
+    async () => {
+      const filler = 'x'.repeat(RELATIONS_ENDPOINT_CHAR_BUDGET * 2);
+      const anchorText = 'A Type I error is a false positive.';
+      const note = ['# Errors', '', filler, '', anchorText, '', filler, ''].join('\n');
+      const anchorStart = note.indexOf(anchorText);
+      const anchorEnd = anchorStart + anchorText.length;
+      const vault = new MemoryVault({ 'Note.md': note });
+      const c = concept('Type I error', 'Note.md', [anchorStart, anchorEnd]);
+
+      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+
+      const passage = passageTextByName.get('Type I error');
+      expect(passage).toBeDefined();
+      expect((passage ?? '').length).toBeLessThanOrEqual(RELATIONS_ENDPOINT_CHAR_BUDGET);
+      expect(passage).toContain(anchorText);
+    },
+  );
 
   it('reads each unique file only once, even when several concepts share an anchor path', async () => {
     let reads = 0;
@@ -98,6 +159,34 @@ describe('gatherCorpusRelationVaultContext — passage text', () => {
     const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
 
     expect(passageTextByName.get('Ghost concept')).toBe('');
+  });
+});
+
+describe('sectionPassageText — the standalone widener (`ol-2zfj.64` [REL-5])', () => {
+  it('degrades to the bare charRange slice when nothing in the note contains it exactly', () => {
+    // A hand-built charRange that straddles two blocks — not the "one anchor is one block"
+    // shape `../read.js` guarantees in production — so there is no section to widen to.
+    const note = '# Heading\n\nFirst paragraph.\n\nSecond paragraph.\n';
+    const start = note.indexOf('paragraph.') - 20;
+    const end = note.indexOf('Second') + 6;
+
+    const result = sectionPassageText(note, { start, end });
+
+    expect(result).toBe(note.slice(start, end));
+  });
+
+  it('accepts a caller-supplied budget rather than always using the module default', () => {
+    const anchorText = 'A Type I error is a false positive.';
+    const note = ['# Errors', '', 'x'.repeat(500), '', anchorText, '', 'y'.repeat(500), ''].join(
+      '\n',
+    );
+    const start = note.indexOf(anchorText);
+    const end = start + anchorText.length;
+
+    const result = sectionPassageText(note, { start, end }, 100);
+
+    expect(result.length).toBeLessThanOrEqual(100);
+    expect(result).toContain(anchorText);
   });
 });
 

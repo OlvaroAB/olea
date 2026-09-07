@@ -6,6 +6,19 @@
  * mostly the same set of files, so this module does the vault work in one
  * pass rather than three.
  *
+ * **`ol-2zfj.64` [REL-5]: passage text is now the anchor's SECTION, not its
+ * bare block.** `gatherCorpusRelationVaultContext`'s `passageTextByName`
+ * used to be a plain `content.slice(charRange.start, charRange.end)` — the
+ * one anchor block, and nothing else. The pre-flight judge contrast
+ * measured that this loses 41 of 49 real edges against a whole-note
+ * baseline (`findings/frontier-loop-preflight-2026-09-07.md` S3,
+ * `olea-service`). `sectionPassageText` (below) widens it to the anchor's
+ * nearest enclosing heading and its own content, or the whole note when
+ * there is no heading to key on, bounded by the declared
+ * `RELATIONS_ENDPOINT_CHAR_BUDGET` — see that constant's own doc for where
+ * the number comes from.
+ *
+
  * **All three register-row-1.2a-named signals are wired, plus a fourth from
  * outside that row.** Component register row 1.2a names three
  * nomination-signal sources: assessment-document co-occurrence,
@@ -98,12 +111,16 @@
  */
 
 import {
+  buildOutline,
   type CorpusConcept,
   cosineSimilarity,
   type EmbeddingCacheEngine,
   hashText,
   type MisconceptionRecord,
   type NominationSignal,
+  type OutlineNode,
+  type ParsedDocument,
+  parseDocument,
   registerSources,
   type VaultPath,
   type VaultSource,
@@ -149,6 +166,192 @@ function conceptMentioned(text: string, concept: CorpusConcept): boolean {
   return (
     mentionsTerm(text, concept.name) || concept.aliases.some((alias) => mentionsTerm(text, alias))
   );
+}
+
+/**
+ * `ol-2zfj.64` [REL-5]. **Declared, never fitted** (the component register's
+ * declared/derived line): the per-endpoint character budget for a relations
+ * candidate's `sourceChunks` entry.
+ *
+ * Replaces the bare anchor-block slice (`content.slice(charRange.start,
+ * charRange.end)`) that production sent until this bead — measured, in the
+ * pre-flight judge contrast, to lose 41 of 49 real edges against a whole-note
+ * baseline (`findings/frontier-loop-preflight-2026-09-07.md` S3,
+ * `olea-service`). `sectionPassageText` below now carries the anchor's own
+ * SECTION (its nearest enclosing heading's material, or the whole note when
+ * there is no heading structure to key on) instead of the bare block, and
+ * this budget is what keeps that section from becoming a second whole-note
+ * payload for her longest notes.
+ *
+ * **Where 4000 comes from, in plain English.** The demand model's own
+ * measured note-size distribution (`docs/Olea_ai_workload_and_cost_model.md`,
+ * "What the demand model has no line for" §1, `olea-service`;
+ * `findings/demand-model-authoring-rate.md`) puts a typical new note's
+ * *median* under ~210 bytes and its *mean* at ~2 KB, with a long tail running
+ * to ~26.5 KB. 4000 characters is roughly double that mean — generous enough
+ * that an ordinary lecture section fits whole, without also being large
+ * enough to reproduce the 1.5 MB whole-note payload the harness's own
+ * `RELATIONS_CHUNKS_PER_ENDPOINT` doc (`olea-service`,
+ * `scripts/harness/playback-extraction.mjs`) named as the failure mode this
+ * bound exists to avoid. It is a plain-English generosity call, not a number
+ * swept or scored against an eval set — nothing here was fitted.
+ */
+export const RELATIONS_ENDPOINT_CHAR_BUDGET = 4000;
+
+/**
+ * The block in `doc.blocks` whose own `[start, end)` contains `charRange` —
+ * the concept's own anchor block, when `charRange` was produced by
+ * `../read.js`'s own convention (every anchor a concept gets IS one block's
+ * real `[start, end)`, per that module's doc). `-1` when nothing contains
+ * it — a hand-built or since-stale `charRange` — so the caller can degrade
+ * to the bare slice rather than guessing at a section.
+ */
+function blockIndexContaining(
+  doc: ParsedDocument,
+  charRange: { readonly start: number; readonly end: number },
+): number {
+  return doc.blocks.findIndex((b) => b.start <= charRange.start && b.end >= charRange.end);
+}
+
+/**
+ * The heading node whose OWN material `blockIndex` belongs to, or `undefined`
+ * when `blockIndex` sits before every heading (or the note has none at all).
+ *
+ * **Deliberately NOT `../read.js`'s `sectionsByBlockIndex` convention.** That
+ * function labels a block for citation and specifically wants a heading's own
+ * block tagged with its PARENT's heading (so a citation never reads a heading
+ * as if it were content one level inside itself). This function instead picks
+ * the section to WIDEN a passage to — and when the anchor block IS a heading
+ * (a concept whose own anchor is a lecture heading, `../read.js`'s "her
+ * lecture headings are question-shaped" case), the material that actually
+ * explains it is that heading's OWN content, not its parent's. So a heading
+ * match returns ITSELF here, not its parent.
+ */
+function findEnclosingNode(
+  nodes: readonly OutlineNode[],
+  blockIndex: number,
+): OutlineNode | undefined {
+  for (const node of nodes) {
+    if (node.index === blockIndex) return node;
+    if (node.contentIndices.includes(blockIndex)) return node;
+    const found = findEnclosingNode(node.children, blockIndex);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** The char span covering every block named in `indices` — `undefined` for an empty or all-missing list. */
+function blockRangeOf(
+  doc: ParsedDocument,
+  indices: readonly number[],
+): { start: number; end: number } | undefined {
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const i of indices) {
+    const block = doc.blocks[i];
+    if (block === undefined) continue;
+    start = Math.min(start, block.start);
+    end = Math.max(end, block.end);
+  }
+  return start <= end ? { start, end } : undefined;
+}
+
+/**
+ * Truncates `[sectionStart, sectionEnd)` to at most `budget` characters,
+ * centred on the anchor's own `charRange` — the anchor is never dropped, and
+ * never itself truncated unless it alone exceeds the budget (an edge case,
+ * not the ordinary path). Context is taken symmetrically from both sides of
+ * the anchor and clipped to the section's own bounds; if one side runs out
+ * of room first, the leftover budget is handed to the other side rather than
+ * left unused.
+ */
+function boundAroundAnchor(
+  content: string,
+  section: { readonly start: number; readonly end: number },
+  anchor: { readonly start: number; readonly end: number },
+  budget: number,
+): string {
+  if (section.end - section.start <= budget) {
+    return content.slice(section.start, section.end);
+  }
+  const anchorLen = anchor.end - anchor.start;
+  if (anchorLen >= budget) {
+    return content.slice(anchor.start, anchor.start + budget);
+  }
+  const remaining = budget - anchorLen;
+  const half = Math.floor(remaining / 2);
+  let start = Math.max(section.start, anchor.start - half);
+  let end = Math.min(section.end, anchor.end + (remaining - half));
+  let shortfall = budget - (end - start);
+  if (shortfall > 0) {
+    const extendEnd = Math.min(section.end - end, shortfall);
+    end += extendEnd;
+    shortfall -= extendEnd;
+  }
+  if (shortfall > 0) {
+    const extendStart = Math.min(start - section.start, shortfall);
+    start -= extendStart;
+  }
+  return content.slice(start, end);
+}
+
+/**
+ * `ol-2zfj.64` [REL-5]. The anchor block's own passage text, widened to its
+ * SURROUNDING SECTION and bounded by `budget` — the fix this bead makes for
+ * the payload production actually sends (`WorkerCorpusRelationVerdict.
+ * toWireEndpoint`, `packages/plugin/src/concept/
+ * workerCorpusRelationVerdict.ts`, still `sourceChunks: [passageText]`, ONE
+ * entry; only what that one entry carries changes here).
+ *
+ * "Section" is the anchor's nearest enclosing heading's own material — the
+ * heading line plus the content directly under it, NOT nested subsections
+ * (`findEnclosingNode`'s contract) — or, when the anchor sits before any
+ * heading or the note has none at all, the WHOLE note. Either way the result
+ * is then bounded to `budget` characters, always keeping the anchor's own
+ * `charRange` intact (`boundAroundAnchor`).
+ *
+ * Degrades to the bare `charRange` slice — production's PRE-bead behaviour —
+ * whenever the note no longer parses the way `charRange` implies (a stale
+ * offset, a hand-built range in a test): honest degradation over a guess,
+ * the same posture this module already takes for an unreadable anchor file.
+ */
+export function sectionPassageText(
+  content: string,
+  charRange: { readonly start: number; readonly end: number },
+  budget: number = RELATIONS_ENDPOINT_CHAR_BUDGET,
+): string {
+  const doc = parseDocument(content);
+  const blockIndex = blockIndexContaining(doc, charRange);
+  if (blockIndex === -1) {
+    return content.slice(charRange.start, charRange.end);
+  }
+
+  const roots = buildOutline(doc);
+  const node = findEnclosingNode(roots, blockIndex);
+
+  let section: { start: number; end: number };
+  if (node !== undefined) {
+    section = blockRangeOf(doc, [node.index, ...node.contentIndices]) ?? {
+      start: charRange.start,
+      end: charRange.end,
+    };
+  } else {
+    const first = doc.blocks[0];
+    const last = doc.blocks[doc.blocks.length - 1];
+    section =
+      first !== undefined && last !== undefined
+        ? { start: first.start, end: last.end }
+        : { start: charRange.start, end: charRange.end };
+  }
+
+  // Defensive floor: whatever the outline math produced, it must at least
+  // cover the anchor itself.
+  section = {
+    start: Math.min(section.start, charRange.start),
+    end: Math.max(section.end, charRange.end),
+  };
+
+  return boundAroundAnchor(content, section, charRange, budget);
 }
 
 export interface AssessmentCooccurrenceOptions {
@@ -393,10 +596,14 @@ export async function gatherCorpusRelationVaultContext(
     // `charRange` is optional (`../../core/src/extract/types.js`, `ol-2zfj.54`); every anchor a
     // concept actually gets is one block's real `[start, end)` (see the module doc above), so
     // this is never absent in practice — but a nomination signal degrades honestly rather than
-    // throwing if it ever is, by falling back to the whole passage's text.
+    // throwing if it ever is, by falling back to the whole passage's text (bounded, same as the
+    // ordinary path below — see `RELATIONS_ENDPOINT_CHAR_BUDGET`'s own doc for why an unbounded
+    // whole note was never the fix).
     const charRange = concept.anchor.location.charRange;
     const passageText =
-      charRange !== undefined ? content.slice(charRange.start, charRange.end) : content;
+      charRange !== undefined
+        ? sectionPassageText(content, charRange)
+        : content.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
     passageTextByName.set(concept.name, passageText);
 
     for (const target of wikilinkTargets(content)) {
