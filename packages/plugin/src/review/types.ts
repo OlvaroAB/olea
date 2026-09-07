@@ -15,7 +15,7 @@
  */
 
 import type { InstrumentType, Rating, SelectionContextV4 } from 'olea-contracts';
-import type { SchedulerState, SupportLevelPresentation } from 'olea-core';
+import type { QueueItemReason, SchedulerState, SupportLevelPresentation } from 'olea-core';
 
 /** The three instrument types the review view actually renders (F2.14: `explain-back` is never queued/rated here — F2.12/F5 territory, not this bead). */
 export type ReviewInstrumentType = Extract<InstrumentType, 'qa' | 'cloze' | 'mcq'>;
@@ -126,6 +126,13 @@ export interface ReviewQueueItem {
   readonly priorState: SchedulerState | null;
   /** D7.1's "why was this offered" record — passed straight through to the review-log write. */
   readonly selectionContext: SelectionContextV4;
+  /**
+   * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: `QueueItem.dedupeReason`
+   * (`olea-core`), passed straight through — never derived here. `undefined`
+   * for the ordinary case; `'recall-overdue'` is what `copy.ts`'s
+   * `dedupeReasonLine` renders a sentence for.
+   */
+  readonly dedupeReason?: QueueItemReason;
 }
 
 export type { Rating, SelectionContextV4 };

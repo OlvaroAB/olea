@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import {
   actionKeycap,
   CLOZE_BLANK,
+  dedupeReasonLine,
   EXPLAIN_BACK_CHECK_FAILED_REFUSAL,
   EXPLAIN_WHY_REFUSAL,
   EXPLAIN_WHY_UNAVAILABLE,
@@ -51,6 +52,35 @@ describe('formatCourseList', () => {
     expect(formatCourseList(['MUSTH104', 'GEOL204'])).toBe('MUSTH104 and GEOL204');
     expect(formatCourseList(['A', 'B', 'C'])).toBe('A, B and C');
     expect(formatCourseList(['A', 'B', 'C', 'D'])).toBe('A, B, C and D');
+  });
+});
+
+describe('dedupeReasonLine — [D-240] item 5 (ol-egov.130, ol-2zfj.67 SESS-6)', () => {
+  it("renders a sentence for 'recall-overdue'", () => {
+    const line = dedupeReasonLine('recall-overdue');
+    expect(line).not.toBeNull();
+    expect(line).toContain('Recall');
+    expect(line).toContain("concept's turn");
+    expect(line).toContain('answer choices');
+  });
+
+  it("renders nothing for 'format-match' — F4.8's base rule already has its own sentence", () => {
+    expect(dedupeReasonLine('format-match')).toBeNull();
+  });
+
+  it('renders nothing for undefined — never a reason for something that did not happen', () => {
+    expect(dedupeReasonLine(undefined)).toBeNull();
+  });
+
+  it('names the concept, the assessment and the answer-choices distinction — vocabulary-registry words only', () => {
+    const line = dedupeReasonLine('recall-overdue') ?? '';
+    // Plain instrument-format words `formatPreferenceLine` (session-builder/copy.ts)
+    // already uses for the identical F4.8 distinction — no olive noun for either.
+    expect(line).toMatch(/multiple-choice/i);
+    expect(line).toMatch(/next assessment/i);
+    // Never the forbidden harvest word, and never a bare percentage/quotient (V6).
+    expect(line.toLowerCase()).not.toContain('yield');
+    expect(line).not.toMatch(/\d+%/);
   });
 });
 

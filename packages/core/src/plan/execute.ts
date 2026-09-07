@@ -80,7 +80,12 @@
 
 import type { SelectionContextV4, StudyPlanEnvelope } from 'olea-contracts';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
-import type { ComposedQueue, DeferredInstrument, QueueItem } from '../queue/types.js';
+import type {
+  ComposedQueue,
+  DeferredInstrument,
+  QueueItem,
+  QueueItemReason,
+} from '../queue/types.js';
 import type { SchedulerState } from '../scheduler/types.js';
 
 /**
@@ -110,6 +115,16 @@ export interface PlannedQueueItem {
    * asks.
    */
   readonly planWeight: number | null;
+  /**
+   * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: `item`'s own
+   * `QueueItem.dedupeReason` (`queue/types.ts`), threaded through by name
+   * rather than by spread — see this function's explicit field list — so a
+   * future `QueueItem` addition does not silently reach here for free, the
+   * same discipline `queue-adapter.ts`'s own module doc already states this
+   * function follows. `undefined` for the ordinary case, exactly as on
+   * `QueueItem` itself.
+   */
+  readonly dedupeReason?: QueueItemReason;
 }
 
 export interface ExecutedQueue {
@@ -226,6 +241,7 @@ export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
         priorState: item.priorState,
         selectionContext,
         planWeight: entry === null ? null : entry.weight,
+        ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
       } satisfies PlannedQueueItem,
     };
   });

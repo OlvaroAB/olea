@@ -248,6 +248,29 @@ describe('executeStudyPlan — C5.5: offline execution against the cached plan',
   });
 });
 
+describe('executeStudyPlan — [D-240] item 5: QueueItem.dedupeReason threads through by name (ol-egov.130, ol-2zfj.67 SESS-6)', () => {
+  it('carries dedupeReason onto the executed item when the composed queue set one', () => {
+    const withReason: QueueItem = {
+      ...item('i-ranked', ['concept-alpha']),
+      dedupeReason: 'recall-overdue',
+    };
+    const executed = executeStudyPlan({
+      queue: queue([withReason]),
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+    expect(executed.items[0]?.dedupeReason).toBe('recall-overdue');
+  });
+
+  it('omits dedupeReason (never a fabricated value) when the composed queue item carried none', () => {
+    const executed = executeStudyPlan({
+      queue: queue([item('i-ranked', ['concept-alpha'])]),
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+    expect(executed.items[0]?.dedupeReason).toBeUndefined();
+    expect('dedupeReason' in (executed.items[0] ?? {})).toBe(false);
+  });
+});
+
 describe('executeStudyPlan — joins and edge cases', () => {
   it('takes the strongest of a multi-concept instrument’s planned entries', () => {
     const executed = executeStudyPlan({

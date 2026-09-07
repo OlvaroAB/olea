@@ -199,6 +199,31 @@ export type QueueSelectionContext = Pick<
   'dueState' | 'examProximity' | 'yieldRank' | 'instrumentTypesOffered'
 >;
 
+/**
+ * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: why THIS instrument
+ * won its concept's dedupe slot, when a rule decided the winner rather than
+ * plain FSRS order — computed once, in `queue/compose.ts`, from which
+ * instrument type actually lost the slot to this one (never re-derived from
+ * the override logic a second time, so a reason can never disagree with the
+ * outcome it explains).
+ *
+ * `'format-match'` — this instrument matches her nearest assessment's format
+ * (F4.8) and a recall-tier instrument (`qa`/`cloze`) on the same concept lost
+ * the slot to it — F2.17/F4.8's base rule, unchanged by `[D-240]`.
+ *
+ * `'recall-overdue'` — the reverse: this recall-tier instrument reached
+ * `[D-240]` item 2's own-interval bound (`./compose.js`'s
+ * `isOverdueByOwnInterval`) and took the slot back from the format-matched
+ * instrument, which reviews late instead. This is the value the reason
+ * surface renders a sentence for (`ol-egov.130` item 5).
+ *
+ * There is no third value for "plain FSRS order decided, no preference in
+ * force" — that is the ordinary case and {@link QueueItem.dedupeReason} is
+ * `undefined` for it, the same "state the absence" discipline this module's
+ * other optional fields already follow.
+ */
+export type QueueItemReason = 'format-match' | 'recall-overdue';
+
 /** One instrument the queue is offering this session, in presentation order. */
 export interface QueueItem {
   readonly instrumentId: string;
@@ -222,6 +247,14 @@ export interface QueueItem {
   readonly priorState: SchedulerState | null;
   /** What the queue knew when it chose this item (D7.1). */
   readonly selectionContext: QueueSelectionContext;
+  /**
+   * `undefined` whenever no format preference was in force, or this
+   * instrument's win had no real competitor to explain (see
+   * {@link QueueItemReason}'s own doc). Non-persisted — D7.1's review-log
+   * write does not carry it; it exists only for the reason surface to render
+   * from the composed session in hand.
+   */
+  readonly dedupeReason?: QueueItemReason;
 }
 
 /**

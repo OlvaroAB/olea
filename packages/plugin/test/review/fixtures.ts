@@ -76,7 +76,9 @@ export function mcqFixture(overrides: Partial<McqItem> = {}): McqItem {
 
 export function queueItem(
   instrument: QaCard | ClozeCard | McqItem,
-  overrides: Partial<Pick<ReviewQueueItem, 'priorState' | 'selectionContext'>> = {},
+  overrides: Partial<
+    Pick<ReviewQueueItem, 'priorState' | 'selectionContext' | 'dedupeReason'>
+  > = {},
 ): ReviewQueueItem {
   return {
     instrument,

@@ -572,6 +572,101 @@ describe('F2.17 amendment — [D-240] item 2: format preference may not defer an
   });
 });
 
+describe('[D-240] item 5 — QueueItem.dedupeReason (ol-egov.130, ol-2zfj.67 SESS-6)', () => {
+  // Same one-concept, mcq-vs-qa shape the item 2 amendment block above uses —
+  // repeated locally rather than reaching into that `describe`'s closure, so
+  // this block states its own fixture rather than depending on another
+  // block's private helper.
+  function recallAndMatched(qaScheduledDays: number, qaDaysLate: number) {
+    return [
+      candidate({
+        instrumentId: 'qa-card',
+        instrumentType: 'qa',
+        conceptIds: ['action-potential'],
+        state: stateDue(addDays(NOW, -qaDaysLate), qaScheduledDays),
+      }),
+      candidate({
+        instrumentId: 'mcq-item',
+        instrumentType: 'mcq',
+        conceptIds: ['action-potential'],
+        state: stateDue(addDays(NOW, -1)),
+      }),
+    ];
+  }
+
+  const reasonFor = (
+    result: { items: readonly { instrumentId: string; dedupeReason?: string }[] },
+    instrumentId: string,
+  ) => result.items.find((item) => item.instrumentId === instrumentId)?.dedupeReason;
+
+  it("carries 'recall-overdue' on the recall instrument once it beats an overdue-bound format match", () => {
+    const result = compose({
+      candidates: recallAndMatched(2, 2), // at the bound — see the item 2 block above
+      formatPreference: ['mcq'],
+    });
+    expect(reasonFor(result, 'qa-card')).toBe('recall-overdue');
+  });
+
+  it("carries 'format-match' on the matched instrument for the ordinary, pre-D-240 win", () => {
+    const result = compose({
+      candidates: recallAndMatched(5, 2), // below the bound — mcq wins ordinarily
+      formatPreference: ['mcq'],
+    });
+    expect(reasonFor(result, 'mcq-item')).toBe('format-match');
+  });
+
+  it("still carries 'format-match' under the 'today' baseline arm, which never applies the override", () => {
+    // Same overdue shape that flips the winner under 'interval-bound' — but
+    // 'today' never runs the override, so mcq wins by ordinary preference and
+    // the reason is the base rule's, not the amendment's.
+    const result = compose({
+      candidates: recallAndMatched(2, 2),
+      formatPreference: ['mcq'],
+      servingPolicy: 'today',
+    });
+    expect(reasonFor(result, 'mcq-item')).toBe('format-match');
+  });
+
+  it('is undefined for both items once dedupe is off — nothing was beaten to explain', () => {
+    const result = compose({
+      candidates: recallAndMatched(2, 2),
+      formatPreference: ['mcq'],
+      dedupeByConcept: false,
+    });
+    expect(reasonFor(result, 'qa-card')).toBeUndefined();
+    expect(reasonFor(result, 'mcq-item')).toBeUndefined();
+  });
+
+  it('is undefined with no format preference in force — plain FSRS order decided, nothing to explain', () => {
+    const result = compose({ candidates: recallAndMatched(2, 2) });
+    expect(reasonFor(result, 'qa-card')).toBeUndefined();
+  });
+
+  it('is undefined under preference-off, the same reason an empty preference gives undefined', () => {
+    const result = compose({
+      candidates: recallAndMatched(5, 2),
+      formatPreference: ['mcq'],
+      servingPolicy: 'preference-off',
+    });
+    expect(reasonFor(result, 'qa-card')).toBeUndefined();
+  });
+
+  it('is undefined for a concept with no real competitor — a lone instrument has no dedupe decision to explain', () => {
+    const result = compose({
+      candidates: [
+        candidate({
+          instrumentId: 'lone-mcq',
+          instrumentType: 'mcq',
+          conceptIds: ['solo-concept'],
+          state: stateDue(addDays(NOW, -1)),
+        }),
+      ],
+      formatPreference: ['mcq'],
+    });
+    expect(reasonFor(result, 'lone-mcq')).toBeUndefined();
+  });
+});
+
 describe('F2.17 — what dedupe held back returns unpenalised at the next session', () => {
   /**
    * Two real sessions a day apart, with the real FSRS scheduler advancing the

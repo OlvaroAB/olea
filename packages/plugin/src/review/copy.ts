@@ -35,7 +35,7 @@
  */
 
 import type { Rating } from 'olea-contracts';
-import type { AcceptedExplainBackGrading } from 'olea-core';
+import type { AcceptedExplainBackGrading, QueueItemReason } from 'olea-core';
 import { type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
 import type { SessionCompleteSummary } from './session.js';
 import type { ClozeCard, QaCard } from './types.js';
@@ -349,6 +349,37 @@ export function questionText(instrument: QaCard | ClozeCard): string {
   return instrument.type === 'qa'
     ? instrument.question
     : `${instrument.before}${CLOZE_BLANK}${instrument.after}`;
+}
+
+// ---------------------------------------------------------------------------
+// `[D-240]` item 5 — the reason surface for a dedupe decision
+// ---------------------------------------------------------------------------
+
+/**
+ * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: the sentence for
+ * `'recall-overdue'` — the one value this function ever writes prose for.
+ * Worded against `docs/Olea_vocabulary_registry.md` (private repo): `recall`
+ * is §1's ratified vitality word, `concept` is the contracted unit (C7), and
+ * "multiple-choice"/"answer choices" are the plain instrument-format words
+ * `session-builder/copy.ts`'s own `formatPreferenceLine` already uses for
+ * the identical F4.8 format — no olive noun exists or is needed for either.
+ *
+ * `null` for `'format-match'` and for `undefined` — the ordinary cases,
+ * where either no preference was in force or nothing lost its slot to this
+ * instrument, and F4.9's "never a reason for something that did not happen"
+ * rule (`readinessNote`'s own precedent, `gap/copy.ts`) applies here too.
+ * `'format-match'` gets no sentence of its own because F4.8's own base rule
+ * — the matched instrument coming first — is already what
+ * `formatPreferenceLine` states; this function exists only for the case
+ * `[D-240]` item 2 ADDED, not the one that predates it.
+ */
+export function dedupeReasonLine(dedupeReason: QueueItemReason | undefined): string | null {
+  if (dedupeReason !== 'recall-overdue') return null;
+  return (
+    "Multiple-choice has been taking this concept's turn because it matches your next assessment. " +
+    "Recall takes it today instead, because it hasn't been asked without the answer choices for as " +
+    'long as its own review interval allows.'
+  );
 }
 
 // ---------------------------------------------------------------------------

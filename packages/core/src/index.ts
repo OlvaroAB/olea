@@ -1117,6 +1117,7 @@ export type {
   QueueCandidate,
   QueueFilter,
   QueueItem,
+  QueueItemReason,
   QueueSelectionContext,
 } from './queue/types.js';
 export { buildRegistryModel } from './registry/build.js';

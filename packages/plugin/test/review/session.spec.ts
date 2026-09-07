@@ -93,6 +93,45 @@ describe('F2.2 — nothing is ratable before reveal, reveal unlocks all four', (
   });
 });
 
+// `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: `ReviewQueueItem.dedupeReason`
+// reaches the `'front'` view model verbatim, and only that phase — see
+// `ReviewViewModel`'s own doc for why `'reveal'` does not carry it.
+describe('front carries dedupeReason — [D-240] item 5', () => {
+  it("threads 'recall-overdue' through to the front phase", async () => {
+    const item = queueItem(qaFixture(), { dedupeReason: 'recall-overdue' });
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('front');
+    if (vm.phase === 'front') expect(vm.dedupeReason).toBe('recall-overdue');
+  });
+
+  it('is absent (never fabricated) when the queue item carried no reason', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('front');
+    if (vm.phase === 'front') {
+      expect(vm.dedupeReason).toBeUndefined();
+      expect(Object.hasOwn(vm, 'dedupeReason')).toBe(false);
+    }
+  });
+
+  it('does not carry onto the reveal phase — asked once, never argued a second time', async () => {
+    const item = queueItem(qaFixture(), { dedupeReason: 'recall-overdue' });
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+    session.reveal();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('reveal');
+    expect(Object.hasOwn(vm, 'dedupeReason')).toBe(false);
+  });
+});
+
 describe('F2.2 — advancing is immediate', () => {
   it('rating an item immediately presents the next one', async () => {
     const items = [

@@ -20,6 +20,7 @@ import type {
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
   McqRating,
+  QueueItemReason,
   Scheduler,
   SchedulingObservationDecision,
   StrongRecallProposalDecision,
@@ -71,6 +72,15 @@ export type ReviewViewModel =
       readonly phase: 'front';
       readonly instrument: QaCard | ClozeCard;
       readonly progress: ReviewProgress;
+      /**
+       * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: this item's
+       * own `ReviewQueueItem.dedupeReason`, passed straight through so
+       * `copy.ts`'s `dedupeReasonLine` can render its sentence on the one
+       * screen she is actually asked to answer — never on `'reveal'` (she has
+       * already been asked by then) or on an `mcq-open`/`mcq-answered` item
+       * (never recall-tier, so never this reason).
+       */
+      readonly dedupeReason?: QueueItemReason;
     }
   | {
       readonly phase: 'reveal';
@@ -412,6 +422,7 @@ export class ReviewSession {
           phase: 'front',
           instrument: this.requireQaOrCloze(item),
           progress: this.progress(),
+          ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
         };
       }
       case 'reveal': {

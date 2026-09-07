@@ -446,6 +446,7 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
       ),
       priorState: item.priorState,
       selectionContext: toSelectionContext(item),
+      ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
     });
   }
 
@@ -502,6 +503,7 @@ export function adaptExecutedReviewQueue(
       ),
       priorState: item.priorState,
       selectionContext: item.selectionContext,
+      ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
     });
   }
 

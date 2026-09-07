@@ -560,6 +560,55 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
   });
 });
 
+// `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: both adapters carry
+// `QueueItem.dedupeReason`/`PlannedQueueItem.dedupeReason` through verbatim —
+// same "read straight off the queue, never derived here" discipline this
+// file's other pass-through fields already follow.
+describe('both adapters carry dedupeReason through verbatim ([D-240] item 5)', () => {
+  it('adaptReviewQueue carries dedupeReason when the composed item set one, and omits it otherwise', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const [first, ...rest] = session.queue.items;
+    if (first === undefined) throw new Error('expected a composed item');
+
+    const items = adaptReviewQueue({
+      queue: { items: [{ ...first, dedupeReason: 'recall-overdue' }, ...rest], deferred: [] },
+      recordsById: session.recordsById,
+    });
+    const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
+    expect(adapted?.dedupeReason).toBe('recall-overdue');
+    // Never fabricated for an item the queue set nothing on.
+    for (const item of items.slice(1)) {
+      expect(item.dedupeReason).toBeUndefined();
+      expect(Object.hasOwn(item, 'dedupeReason')).toBe(false);
+    }
+  });
+
+  it('adaptExecutedReviewQueue carries the same field through PlannedQueueItem', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const [first, ...rest] = session.queue.items;
+    if (first === undefined) throw new Error('expected a composed item');
+
+    const executed = executeStudyPlan({
+      queue: { items: [{ ...first, dedupeReason: 'format-match' }, ...rest], deferred: [] },
+      plan: null,
+    });
+    const items = adaptExecutedReviewQueue({
+      items: executed.items,
+      recordsById: session.recordsById,
+    });
+    const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
+    expect(adapted?.dedupeReason).toBe('format-match');
+  });
+});
+
 // [SUPP-3] (`ol-lpl4`): row 3.9's chooser input, built from raw review-log
 // entries and threaded through both adapters — the live queue's equivalent of
 // `study-session/build.ts`'s composition-time wiring ([SUPP-2], `ol-95vv.4`).

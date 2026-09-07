@@ -395,6 +395,14 @@ declares nothing at all. See the header.
   color: var(--olea-host-muted);
 }
 
+/* `[D-240]` item 5 (ol-egov.130, ol-2zfj.67 SESS-6): the recall-overdue reason
+   sentence, shown only on the card-front screen. `.olea-prose` already sets
+   a safe text color/size; this rule is spacing only. */
+.olea-review-dedupe-reason {
+  margin-bottom: 18px;
+  max-width: 560px;
+}
+
 .olea-review-question {
   font-family: var(--olea-host-question-font);
   font-weight: 500;

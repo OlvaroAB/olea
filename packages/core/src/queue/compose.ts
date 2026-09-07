@@ -104,6 +104,19 @@
  * preference does. The final-week relaxation (`dedupeByConcept: false`) is
  * untouched by any of this — with dedupe off, nothing is deferred by
  * anything, preference or interval, and both instruments are offered.
+ *
+ * ## `[D-240]` item 5 — the reason a winning item's own dedupe decision goes on `QueueItem.dedupeReason`
+ *
+ * When a preference-in-force dedupe decided a concept's winner over a real
+ * competitor, the winning `QueueItem` carries which side of that decision it
+ * was on — `'format-match'` (F2.17/F4.8's base rule) or `'recall-overdue'`
+ * (item 2's override, above) — computed by {@link dedupeReasonFor} from what
+ * the finished `deferred` list actually lost to it, never by re-running
+ * {@link dedupeRank}. `undefined` for the ordinary case (no preference in
+ * force, or nothing lost a slot to this instrument). Non-persisted:
+ * `packages/plugin/src/review/copy.ts`'s `dedupeReasonLine` is the reason
+ * surface that turns `'recall-overdue'` into the sentence
+ * `ol-egov.130` item 5 asks for.
  */
 
 import { daysBetween } from '../dates.js';
@@ -118,6 +131,7 @@ import type {
   QueueCandidate,
   QueueFilter,
   QueueItem,
+  QueueItemReason,
   QueueSelectionContext,
   QueueServingPolicy,
 } from './types.js';
@@ -328,6 +342,44 @@ function instrumentTypesOfferedFor(
 }
 
 /**
+ * `[D-240]` item 5 (`ol-egov.130`), `ol-2zfj.67` [SESS-6]: why `winnerType`
+ * won its concept's dedupe slot, derived from `beatenTypes` — every
+ * instrument type that was actually deferred behind it — rather than by
+ * re-running `dedupeRank`'s override logic a second time. Deriving it from
+ * the outcome, not the rule, means a reason can never disagree with what the
+ * composed queue actually did: under ordinary `preferenceRank` ordering a
+ * non-preferred recall-tier type cannot outrank a preference-matched one
+ * (see {@link dedupeRank}'s own doc), so `winnerType` beating a
+ * preference-matched `beatenTypes` member is only possible when `dedupeRank`'s
+ * `-1` override fired.
+ *
+ * `undefined` when no preference was in force at all, or when nothing that
+ * lost a slot to this instrument was of the OTHER kind the two reasons care
+ * about — the ordinary "plain FSRS order decided" case, same "state the
+ * absence" discipline every other optional field on `QueueItem` follows.
+ */
+function dedupeReasonFor(
+  winnerType: SchedulableInstrumentType,
+  beatenTypes: ReadonlySet<SchedulableInstrumentType>,
+  formatPreference: readonly SchedulableInstrumentType[],
+): QueueItemReason | undefined {
+  if (formatPreference.length === 0 || beatenTypes.size === 0) return undefined;
+  if (
+    isRecallTier(winnerType) &&
+    [...beatenTypes].some((type) => preferenceRank(type, formatPreference) === 0)
+  ) {
+    return 'recall-overdue';
+  }
+  if (
+    preferenceRank(winnerType, formatPreference) === 0 &&
+    [...beatenTypes].some((type) => isRecallTier(type))
+  ) {
+    return 'format-match';
+  }
+  return undefined;
+}
+
+/**
  * Compose one review session.
  *
  * Pure: same inputs, same output, always. No clock (`now` is an argument), no
@@ -446,12 +498,39 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     });
   }
 
+  // `[D-240]` item 5: attach `dedupeReason` to every item something was
+  // actually deferred behind, from the finished `deferred` list — a second
+  // pass over data the loop above already produced, never a re-derivation of
+  // `winnerByConcept`/`dedupeRank`. `eligibleTypeById` looks up a deferred
+  // instrument's own type, which `DeferredInstrument` itself does not carry.
+  const eligibleTypeById = new Map(
+    eligible.map((e) => [e.candidate.instrumentId, e.candidate.instrumentType]),
+  );
+  const beatenTypesByWinner = new Map<string, Set<SchedulableInstrumentType>>();
+  for (const entry of deferred) {
+    const beatenType = eligibleTypeById.get(entry.instrumentId);
+    if (beatenType === undefined) continue; // unreachable: every deferred id came from `eligible`
+    const set = beatenTypesByWinner.get(entry.deferredBehind);
+    if (set === undefined) beatenTypesByWinner.set(entry.deferredBehind, new Set([beatenType]));
+    else set.add(beatenType);
+  }
+  const itemsWithReason: QueueItem[] = items.map((item) => {
+    const beatenTypes = beatenTypesByWinner.get(item.instrumentId);
+    if (beatenTypes === undefined) return item;
+    const dedupeReason = dedupeReasonFor(
+      item.instrumentType,
+      beatenTypes,
+      effectiveFormatPreference,
+    );
+    return dedupeReason === undefined ? item : { ...item, dedupeReason };
+  });
+
   // 6. F2.18/F2.19 (`ol-ua0i`): reorder the already-decided offer list into
   //    course blocks, refined by within-block grouping. Cannot add, drop or
   //    re-dedupe anything — see `block-order.ts` and this file's module doc.
   const candidatesById = new Map(candidates.map((c) => [c.instrumentId, c]));
   const blocked = applyCourseBlocking({
-    items,
+    items: itemsWithReason,
     candidatesById,
     now,
     ...(relatedConceptKeys !== undefined ? { relatedConceptKeys } : {}),

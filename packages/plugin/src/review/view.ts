@@ -67,9 +67,11 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import type { QueueItemReason } from 'olea-core';
 import { ReviewActivityNotifier } from './activity.js';
 import {
   actionKeycap,
+  dedupeReasonLine,
   EXPLAIN_WHY_REFUSAL,
   mcqFeedbackSentence,
   mcqOptionKeycap,
@@ -624,7 +626,7 @@ export class ReviewView extends ItemView {
       case 'front': {
         const screen = this.currentScreen(vm);
         this.renderHeader(vm.progress, screen, vm.instrument);
-        this.renderFront(vm.instrument, screen);
+        this.renderFront(vm.instrument, screen, vm.dedupeReason);
         break;
       }
       case 'reveal': {
@@ -1281,9 +1283,20 @@ export class ReviewView extends ItemView {
    * hand-typed literal here could drift from the header's the same way the
    * MCQ hint row's stale `optionCount` comment above once did.
    */
-  private renderFront(instrument: QaCard | ClozeCard, screen: ReviewScreen): void {
+  private renderFront(
+    instrument: QaCard | ClozeCard,
+    screen: ReviewScreen,
+    dedupeReason?: QueueItemReason,
+  ): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
+    // `[D-240]` item 5 (`ol-egov.130`, `ol-2zfj.67` [SESS-6]): `null` for every
+    // reason but `'recall-overdue'` — see `copy.ts`'s `dedupeReasonLine` for
+    // why `'format-match'` gets no sentence of its own here.
+    const reasonLine = dedupeReasonLine(dedupeReason);
+    if (reasonLine !== null) {
+      body.createDiv({ cls: 'olea-prose olea-review-dedupe-reason', text: reasonLine });
+    }
     body.createEl('h2', { cls: 'olea-review-question', text: questionText(instrument) });
     body.createDiv({ cls: 'olea-review-divider' });
     this.hints(body, screen);
