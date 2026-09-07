@@ -42,6 +42,7 @@
 
 import type { SelectionContextV4 } from 'olea-contracts';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
+import type { ServingPolicy } from '../scheduler/serving.js';
 import type { SchedulerState } from '../scheduler/types.js';
 import type { CalendarDay } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
@@ -290,8 +291,13 @@ export interface DeferredInstrument {
  * F2.17's per-session dedupe may interact, named for `[SESS-4]`'s three-arm
  * harness sweep to select. See `ComposeQueueInput.servingPolicy`'s own doc
  * for what each value does.
+ *
+ * **This name is an alias, not a second definition** (`ol-2zfj.71`
+ * [SESS-7]): the type is `../scheduler/serving.ts`'s `ServingPolicy`, which
+ * the study-session composer selects its arm with too, so the two composers
+ * cannot drift onto different vocabularies for one rule.
  */
-export type QueueServingPolicy = 'today' | 'interval-bound' | 'preference-off';
+export type QueueServingPolicy = ServingPolicy;
 
 /** What `composeQueue` needs. Pure inputs only — `now` is passed, never read. */
 export interface ComposeQueueInput {

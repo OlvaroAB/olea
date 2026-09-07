@@ -15,8 +15,16 @@ import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
+import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
+import {
+  DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER,
+  firstIntervalDaysAfterGood,
+} from '../scheduler/serving.js';
+import type { SchedulerState } from '../scheduler/types.js';
 import type { McqInstrumentRecord, QaInstrumentRecord } from '../session/types.js';
 import type { SessionSupportOutcome, SupportLadderTier } from '../support-level/types.js';
+import type { CalendarDay } from '../today/calendar-day.js';
+import { shiftCalendarDay } from '../today/calendar-day.js';
 import type { VaultPath } from '../vault/types.js';
 import { buildStudySession, type SupportLevelHistoryLookup } from './build.js';
 import {
@@ -1367,5 +1375,185 @@ describe('the fill is pure', () => {
       JSON.stringify(buildStudySession(input)),
     );
     expect(JSON.stringify(rows)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-240]` item 2 on this composer — `ol-2zfj.71` [SESS-7]
+// Scenarios: `../../../../olea-service/features/F2-review.md`, the "F2.17
+// amendment" block's [SESS-7] scenarios — @auto:core/study-session/build.spec
+// ---------------------------------------------------------------------------
+
+describe('[SESS-7] — the serving rule on the study-session composer ([D-240] item 2)', () => {
+  /** The course-B pre-flight shape: 23 concepts, each with an MCQ matching the quiz format and a recall card. */
+  const CONCEPTS = Array.from({ length: 23 }, (_, index) => `B${index + 1}`);
+  const ARRIVED = '2026-08-05'; // Weeks before AS_OF — every concept's material is long since here.
+  const SITTINGS = 6;
+
+  const preflightRows = rankedRows(
+    CONCEPTS.map((conceptName, index) => ({
+      conceptName,
+      gapScore: 100 - index,
+      assessmentFormat: 'mcq' as const,
+    })),
+  );
+  // MCQ first in vault order too, so nothing in the result can be an artefact
+  // of the enumeration happening to favour the recall card.
+  const preflightInstruments = buildConceptInstrumentIndex(
+    CONCEPTS.flatMap((c) => [mcq(`${c}-mcq`, [c]), qa(`${c}-qa`, [c])]),
+  );
+  const arrivalDays = new Map(CONCEPTS.map((c) => [c, ARRIVED]));
+
+  function stateDueOn(day: CalendarDay, scheduledDays = 3): SchedulerState {
+    return {
+      schemaVersion: 1,
+      due: `${day}T09:00:00.000Z`,
+      stability: 3,
+      difficulty: 5,
+      scheduledDays,
+      learningStepIndex: 0,
+      reps: 2,
+      lapses: 0,
+      learningState: 'review',
+      lastReview: `${shiftCalendarDay(day, -scheduledDays)}T09:00:00.000Z`,
+    };
+  }
+
+  /**
+   * Six sittings on six consecutive days, each composing a session and then
+   * rating everything it served `good` through the REAL scheduler — so the
+   * second sitting sees the state the first one earned, exactly as the term
+   * loop does. Returns what each sitting served.
+   */
+  function sixSittings(servingPolicy: 'today' | 'interval-bound' | 'preference-off') {
+    const scheduler = createFsrsScheduler();
+    // Every MCQ is in her rotation and due; every recall card has never once
+    // been asked — the null state `[D-240]` item 2's ratified reading covers.
+    const states = new Map<string, SchedulerState>(
+      CONCEPTS.map((c) => [`${c}-mcq`, stateDueOn(AS_OF)] as const),
+    );
+    const served: string[][] = [];
+    for (let day = 0; day < SITTINGS; day += 1) {
+      const asOf = shiftCalendarDay(AS_OF, day);
+      const session = buildStudySession({
+        rows: preflightRows,
+        instruments: preflightInstruments,
+        // 23 concepts x 60s = exactly one instrument per concept per sitting.
+        budgetMinutes: CONCEPTS.length,
+        durations: flatDurations(60),
+        asOf,
+        assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+        arrivalDays,
+        schedulerStates: new Map(states),
+        servingPolicy,
+      });
+      served.push(session.items.map((item) => item.instrumentId));
+      for (const item of session.items) {
+        const { state } = scheduler.schedule({
+          instrumentId: item.instrumentId,
+          state: states.get(item.instrumentId) ?? null,
+          rating: 'good',
+          now: new Date(`${asOf}T09:00:00.000Z`),
+        });
+        states.set(item.instrumentId, state);
+      }
+    }
+    return served;
+  }
+
+  it("serves every concept's never-asked recall card within its first interval", () => {
+    const served = sixSittings('interval-bound');
+    // Sitting one: every one of the 23 concepts is practised with its recall
+    // card, not its MCQ. The first interval is 3 days
+    // (`firstIntervalDaysAfterGood`), so "within its first interval" is
+    // satisfied on the very first sitting — the material arrived weeks ago
+    // and the card has been waiting ever since.
+    expect(served[0]).toEqual(CONCEPTS.map((c) => `${c}-qa`));
+    expect(served[0]).toHaveLength(CONCEPTS.length);
+    // And every concept met its recall card at least once inside the window
+    // the pre-flight measured, which is the property that was false before.
+    const everServed = new Set(served.flat());
+    for (const c of CONCEPTS) expect(everServed.has(`${c}-qa`)).toBe(true);
+  });
+
+  it("reproduces the pre-flight defect under the pre-amendment arm, so the sweep's arms differ", () => {
+    // `today` is the un-amended rule: format preference defers the recall
+    // card unconditionally, and since a card that is never served never earns
+    // an interval, it is deferred for ever. Not one recall card in six
+    // sittings — the exact shape `ol-3ux7.5.57.14.21` diagnosed, and the
+    // reason the three arms were byte-identical while the flag was inert.
+    const served = sixSittings('today');
+    expect(served[0]).toEqual(CONCEPTS.map((c) => `${c}-mcq`));
+    expect(served.flat().some((id) => id.endsWith('-qa'))).toBe(false);
+  });
+
+  it('ignores the format preference entirely under preference-off', () => {
+    // Vault order puts the recall card first here, so this arm is
+    // distinguishable from both of the others: `today` would move the MCQ
+    // ahead of it, and with no arrival day and no state the interval bound
+    // has nothing to say either.
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([qa('a-qa', ['A']), mcq('a-mcq', ['A'])]);
+    const input = {
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+    } as const;
+
+    expect(
+      buildStudySession({ ...input, servingPolicy: 'preference-off' }).items.map(
+        (i) => i.instrumentId,
+      ),
+    ).toEqual(['a-qa', 'a-mcq']);
+    expect(
+      buildStudySession({ ...input, servingPolicy: 'today' }).items.map((i) => i.instrumentId),
+    ).toEqual(['a-mcq', 'a-qa']);
+  });
+
+  it('leaves a concept with no arrival day exactly as it was', () => {
+    // The no-op posture both composers take for an absent `arrivalDays`: with
+    // no day to measure the wait from, F2.17's un-amended preference rule
+    // stays in charge rather than the composer guessing.
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+    });
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a-mcq', 'a-qa']);
+  });
+
+  it('applies the same rule the queue applies, from the same function', () => {
+    // Not a behavioural assertion but a structural one, and it is the point
+    // of the bead: `orderedForFormat` and `dedupeRank` both delegate to
+    // `recallOutranksFormatPreference`, so a change to the rule cannot land
+    // on one composer and not the other. Asserted by agreeing on the boundary
+    // case rather than by inspecting source: material arrived exactly the
+    // first interval ago flips both, one day short flips neither.
+    const bound = firstIntervalDaysAfterGood() * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER;
+    const atBound = shiftCalendarDay(AS_OF, -bound);
+    const insideBound = shiftCalendarDay(AS_OF, -(bound - 1));
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const at = (arrived: string) =>
+      buildStudySession({
+        rows,
+        instruments: index,
+        budgetMinutes: 20,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+        arrivalDays: new Map([['A', arrived]]),
+      }).items.map((i) => i.instrumentId);
+
+    expect(at(atBound)).toEqual(['a-qa', 'a-mcq']);
+    expect(at(insideBound)).toEqual(['a-mcq', 'a-qa']);
   });
 });

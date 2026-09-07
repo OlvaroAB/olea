@@ -16,6 +16,7 @@ import type { Rating } from 'olea-contracts';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { addDays } from '../dates.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
+import { firstIntervalDaysAfterGood } from '../scheduler/serving.js';
 import type { SchedulerState } from '../scheduler/types.js';
 import { composeQueue, DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER } from './compose.js';
 import type { ComposeQueueInput, QueueCandidate } from './types.js';
@@ -544,6 +545,88 @@ describe('F2.17 amendment — [D-240] item 2: format preference may not defer an
       deferredBehind: 'mcq-item-2',
     });
     expect(idsOf(result).sort()).toEqual(['mcq-item-2', 'qa-card']);
+  });
+
+  // `[SESS-7]` (`ol-2zfj.71`), `[D-240]` item 2's ratified null-state reading:
+  // a recall card never yet asked waits the interval a first good answer
+  // would have earned it — read from the scheduler
+  // (`firstIntervalDaysAfterGood`), measured from the day its concept's
+  // material arrived (ARRIVE-1's `arrivalDays`). This is the population the
+  // course-B pre-flight found stuck: with no state there is no interval, so
+  // before this the override could never fire for a card that had never once
+  // won a slot.
+  describe('[SESS-7] — a recall card never yet asked', () => {
+    const FIRST_INTERVAL = firstIntervalDaysAfterGood();
+
+    /** The stuck shape: a never-reviewed Q&A card and a due, preference-matched MCQ on one concept. */
+    function neverReviewedRecallAndMatched() {
+      return [
+        candidate({
+          instrumentId: 'qa-card',
+          instrumentType: 'qa',
+          conceptIds: ['action-potential'],
+          state: null,
+        }),
+        candidate({
+          instrumentId: 'mcq-item',
+          instrumentType: 'mcq',
+          conceptIds: ['action-potential'],
+          state: stateDue(addDays(NOW, -1)),
+        }),
+      ];
+    }
+
+    /** `arrivalDays` putting the concept's material `daysAgo` days before `NOW`. */
+    function arrivedDaysAgo(daysAgo: number): ReadonlyMap<string, string> {
+      return new Map([['action-potential', addDays(NOW, -daysAgo).toISOString().slice(0, 10)]]);
+    }
+
+    it("is served once it has waited the scheduler's first interval", () => {
+      const result = compose({
+        candidates: neverReviewedRecallAndMatched(),
+        formatPreference: ['mcq'],
+        arrivalDays: arrivedDaysAgo(FIRST_INTERVAL * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER),
+      });
+      expect(idsOf(result)).toEqual(['qa-card']);
+      expect(result.deferred).toEqual([
+        { instrumentId: 'mcq-item', conceptIds: ['action-potential'], deferredBehind: 'qa-card' },
+      ]);
+      // And the reason surface still says which side of the decision won —
+      // [SESS-6]'s `dedupeReason`, derived from the outcome, unchanged by
+      // this bead.
+      expect(result.items[0]?.dedupeReason).toBe('recall-overdue');
+    });
+
+    it('is still deferred inside that first interval', () => {
+      const result = compose({
+        candidates: neverReviewedRecallAndMatched(),
+        formatPreference: ['mcq'],
+        arrivalDays: arrivedDaysAgo(FIRST_INTERVAL * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER - 1),
+      });
+      expect(idsOf(result)).toEqual(['mcq-item']);
+      expect(result.deferred.map((d) => d.instrumentId)).toEqual(['qa-card']);
+    });
+
+    it('composes exactly as before on a concept with no known arrival day', () => {
+      // No `arrivalDays` at all: the wait is unknowable, so F2.17's
+      // un-amended preference rule stays in charge rather than the composer
+      // guessing in either direction.
+      const result = compose({
+        candidates: neverReviewedRecallAndMatched(),
+        formatPreference: ['mcq'],
+      });
+      expect(idsOf(result)).toEqual(['mcq-item']);
+    });
+
+    it('is untouched by the pre-amendment arm', () => {
+      const result = compose({
+        candidates: neverReviewedRecallAndMatched(),
+        formatPreference: ['mcq'],
+        arrivalDays: arrivedDaysAgo(FIRST_INTERVAL * 10),
+        servingPolicy: 'today',
+      });
+      expect(idsOf(result)).toEqual(['mcq-item']);
+    });
   });
 
   it('the multiplier is a single named, declared constant — [D-240] item 3', () => {

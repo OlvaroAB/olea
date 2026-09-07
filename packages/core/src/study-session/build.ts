@@ -110,6 +110,9 @@ import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import { assessmentFormatOf } from '../gap/readiness.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
+import type { ServingPolicy } from '../scheduler/serving.js';
+import { recallOutranksFormatPreference } from '../scheduler/serving.js';
+import type { SchedulerState } from '../scheduler/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import type { SelfAssessmentFeeling } from '../support-level/self-assessment.js';
 import type { SessionSupportOutcome, SupportLadderTier } from '../support-level/types.js';
@@ -433,6 +436,40 @@ export interface BuildStudySessionInput {
    * behaves the same as an absent map for that one item.
    */
   readonly obligationClasses?: ReadonlyMap<string, ObligationClass>;
+  /**
+   * `[D-240]` item 2 (`ol-2zfj.71` [SESS-7]): every instrument's replayed FSRS
+   * state, keyed by `instrumentId` — `ReplayResult.states` folded to its
+   * `state` — for the one thing this module asks of it, whether format
+   * preference may still defer a concept's recall card (see
+   * {@link orderedForFormat} and `../scheduler/serving.ts`). An instrument
+   * absent from the map is "never reviewed", exactly as `ReplayResult` means
+   * absence, and the map itself may be omitted: then every instrument reads as
+   * never reviewed, which is a no-op unless {@link arrivalDays} is supplied
+   * too. `buildComposedStudySession` always supplies it from its own `replay`.
+   *
+   * It is **not** a scheduling input. Nothing here schedules, rates or writes
+   * state; this module reads `due`/`scheduledDays` to answer an ordering
+   * question and nothing else.
+   */
+  readonly schedulerStates?: ReadonlyMap<string, SchedulerState>;
+  /**
+   * ARRIVE-1's arrival day per `conceptKey` — the day a concept's material
+   * arrived. Read here only by `[D-240]` item 2's never-reviewed branch (the
+   * wait a card never yet asked is measured from; see
+   * `../scheduler/serving.ts`). Omitted, or missing an entry, is "no signal"
+   * and never day zero — the same no-op posture `composeSessionRows` takes for
+   * the identical map, which is where `buildComposedStudySession` passes it
+   * from.
+   */
+  readonly arrivalDays?: ReadonlyMap<string, CalendarDay>;
+  /**
+   * `[D-240]` item 2/4: which serving rule this fill applies — see
+   * `../scheduler/serving.ts`'s `ServingPolicy`. Defaults to
+   * `'interval-bound'`, the amended rule, identically to `composeQueue`'s own
+   * default, so a caller that says nothing gets the contract's behaviour on
+   * either path.
+   */
+  readonly servingPolicy?: ServingPolicy;
 }
 
 const SECONDS_PER_MINUTE = 60;
@@ -616,23 +653,65 @@ function typesMatching(format: AssessmentFormat): readonly SchedulableInstrument
 }
 
 /**
- * One row's instruments, preferred format first, the enumeration's own order
- * within each half. A stable partition, not a sort — the vault order
- * `enumerateVaultInstruments` guarantees survives inside both halves.
+ * One row's instruments in fill order: the ones format preference may no
+ * longer defer first (`[D-240]` item 2), then the preferred format, then the
+ * enumeration's own order. A stable partition, not a sort — the vault order
+ * `enumerateVaultInstruments` guarantees survives inside every part.
+ *
+ * ## `[D-240]` item 2 (`ol-egov.130`), `ol-2zfj.71` [SESS-7]
+ *
+ * This is the study-session composer's analogue of `../queue/compose.ts`'s
+ * `dedupeRank`: the fill takes one instrument per row per pass, so whichever
+ * instrument this function puts first is the one that concept is practised
+ * with in a session that has room for only one — a de-facto per-concept
+ * dedupe with format preference on top, which is exactly the arbitration
+ * F2.17 governs. Before [SESS-7] it applied preference unbounded, so a
+ * concept's recall card could be deferred for ever while its MCQ was served
+ * every session; the pre-flight found that on a real course, and readiness
+ * (C5.6, recall-tier only) stayed at zero while the mastery label climbed.
+ *
+ * **The rule is not restated here.** `recallOutranksFormatPreference`
+ * (`../scheduler/serving.ts`) is the one implementation, shared with the
+ * queue composer — see that module's doc for the bound, the never-reviewed
+ * case, and why one rule may not have two homes (C5.7's principle, applied to
+ * serving).
+ *
+ * `'preference-off'` returns the records untouched, which is what "as if no
+ * preference were supplied" means on this path — the same thing an
+ * `'unknown'` format has always done.
  */
 function orderedForFormat(
   records: readonly VaultInstrumentRecord[],
   format: AssessmentFormat,
+  servingPolicy: ServingPolicy,
+  schedulerStates: ReadonlyMap<string, SchedulerState> | undefined,
+  arrivalDay: CalendarDay | null,
+  now: Date,
 ): readonly VaultInstrumentRecord[] {
+  if (servingPolicy === 'preference-off') return records;
   const preferred = typesMatching(format);
   if (preferred.length === 0) return records;
+  const undeferrable: VaultInstrumentRecord[] = [];
   const first: VaultInstrumentRecord[] = [];
   const rest: VaultInstrumentRecord[] = [];
   for (const record of records) {
-    if (preferred.includes(record.instrumentType)) first.push(record);
+    if (
+      recallOutranksFormatPreference(
+        {
+          instrumentType: record.instrumentType,
+          state: schedulerStates?.get(record.instrumentId) ?? null,
+          arrivalDay,
+        },
+        now,
+        servingPolicy,
+        preferred.length > 0,
+      )
+    ) {
+      undeferrable.push(record);
+    } else if (preferred.includes(record.instrumentType)) first.push(record);
     else rest.push(record);
   }
-  return [...first, ...rest];
+  return [...undeferrable, ...first, ...rest];
 }
 
 function formatMatchOf(
@@ -677,6 +756,14 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   const ordered = fillOrder(rows, input.focusConceptName, order);
   const nextAssessment = nextAssessmentOf(ordered, input.assessments, asOf);
   const formatPreference: AssessmentFormat = nextAssessment?.format ?? 'unknown';
+  // `[D-240]` item 2 (`ol-2zfj.71` [SESS-7]): same default as `composeQueue`'s,
+  // so the two composers apply the same rule unless a caller (the harness's
+  // three-arm sweep) selects otherwise. `asOfInstant` is the session's own day
+  // as an instant — this module is handed a calendar day, and the shared rule
+  // measures in `dates.ts`'s UTC-normalised whole days, so the two meet at UTC
+  // midnight of `asOf` and no time-of-day enters the answer.
+  const servingPolicy: ServingPolicy = input.servingPolicy ?? 'interval-bound';
+  const asOfInstant = new Date(`${asOf}T00:00:00.000Z`);
   const budgetSeconds = budgetMinutes * SECONDS_PER_MINUTE;
 
   // F2.14a (`[D-126]`): priced here, never selected — see the module doc's
@@ -696,7 +783,14 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     // indexes `VaultInstrumentRecord.conceptIds`, which `session/enumerate.ts`
     // now mints as the opaque key; a display-name lookup here would silently
     // find nothing for every row.
-    records: orderedForFormat(instruments.instrumentsFor(row.conceptKey), formatPreference),
+    records: orderedForFormat(
+      instruments.instrumentsFor(row.conceptKey),
+      formatPreference,
+      servingPolicy,
+      input.schedulerStates,
+      input.arrivalDays?.get(row.conceptKey) ?? null,
+      asOfInstant,
+    ),
     at: 0,
     chose: false,
     /** Set when a row still had instruments left that the remaining budget could not take. */

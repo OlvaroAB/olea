@@ -280,6 +280,7 @@ import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
 import type { OracleMasteryState } from '../oracle/types.js';
+import type { SchedulerState } from '../scheduler/types.js';
 import type { ReplayResult } from '../session/replay.js';
 import {
   type CalendarDay,
@@ -1067,8 +1068,12 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
 export interface BuildComposedStudySessionInput
   // `obligationClasses` is omitted for the same reason `order`/`rows` are:
   // it is derived from `composeSessionRows` below, never a caller input —
-  // see `buildComposedStudySession`'s own override of it.
-  extends Omit<BuildStudySessionInput, 'order' | 'rows' | 'obligationClasses'> {
+  // see `buildComposedStudySession`'s own override of it. `schedulerStates`
+  // ([SESS-7], `[D-240]` item 2) is omitted for exactly that reason too: this
+  // input already carries `replay`, and the fill's map is that replay folded
+  // to its states, so a caller able to pass a second, possibly-disagreeing one
+  // is a defect surface rather than a feature.
+  extends Omit<BuildStudySessionInput, 'order' | 'rows' | 'obligationClasses' | 'schedulerStates'> {
   readonly rows: readonly GapRow[];
   /** `replaySchedulerStates(entries, scheduler)` — see `ComposeSessionRowsInput.replay`. */
   readonly replay: ReplayResult;
@@ -1131,6 +1136,20 @@ export interface ComposedStudySession {
 }
 
 /**
+ * `ReplayResult.states` folded to the `instrumentId -> SchedulerState` map
+ * `buildStudySession`'s serving rule takes ([SESS-7], `[D-240]` item 2).
+ * Absence stays absence: an instrument never rated is missing from `replay`
+ * and stays missing here, which the rule reads as "never reviewed".
+ */
+function schedulerStatesOf(replay: ReplayResult): ReadonlyMap<string, SchedulerState> {
+  const states = new Map<string, SchedulerState>();
+  for (const [instrumentId, replayed] of replay.states) {
+    states.set(instrumentId, replayed.state);
+  }
+  return states;
+}
+
+/**
  * `composeSessionRows` + `buildStudySession(order: 'given')` — the whole
  * SESS-1 layer, end to end. This is what a production caller wants; the two
  * halves stay separately exported for testing and for a caller that needs
@@ -1181,6 +1200,11 @@ export function buildComposedStudySession(
     // Derived from the composition just run, not a caller input — see
     // `BuildComposedStudySessionInput`'s Omit and its comment above.
     obligationClasses: composed.obligationClasses,
+    // [SESS-7] (`[D-240]` item 2): the same `replay` this composition already
+    // classified obligations from, folded to the per-instrument states the
+    // fill's serving rule reads — never a second read of the log, and never a
+    // second scheduler.
+    schedulerStates: schedulerStatesOf(input.replay),
   });
 
   return {

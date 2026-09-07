@@ -88,9 +88,20 @@
  * late instead — the same "defers, never drops" accounting, with the roles
  * swapped. Concept-level, and it needs no new number of its own: the bound is
  * `SchedulerState.scheduledDays`, the interval the scheduler already computed
- * for that instrument. See {@link isOverdueByOwnInterval} for the exact
- * arithmetic and {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER}'s doc for the
- * multiplier's own pre-commitment.
+ * for that instrument — or, for an instrument never yet reviewed, the
+ * interval the scheduler would assign after a first good answer, measured
+ * from the day its concept's material arrived (`[D-240]` item 2's ratified
+ * null-state reading).
+ *
+ * **The rule itself is not in this file.** It lives in
+ * `../scheduler/serving.ts` (`recallOutranksFormatPreference`,
+ * `hasWaitedItsOwnInterval`, `firstIntervalDaysAfterGood` and
+ * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER}), because this package has two
+ * production composers and one serving rule: the study-session composer
+ * (`../study-session/build.ts`'s `orderedForFormat`, reached from the session
+ * builder and the Home screen) calls exactly the same function. `ol-2zfj.71`
+ * [SESS-7] is the bead; that module's doc carries the C5.7 argument for why a
+ * second implementation was the defect rather than a convenience.
  *
  * This only ever fires where a preference exists to defer against
  * (`formatPreference.length > 0`) — with no preference, dedupe already runs
@@ -123,6 +134,8 @@ import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { isRecallTier } from '../mastery/vitality.js';
 import { isInstrumentSuspended } from '../review-log/suspension.js';
+import { recallOutranksFormatPreference } from '../scheduler/serving.js';
+import type { CalendarDay } from '../today/calendar-day.js';
 import { applyCourseBlocking } from './block-order.js';
 import type {
   ComposedQueue,
@@ -137,22 +150,13 @@ import type {
 } from './types.js';
 
 /**
- * `[D-240]` item 3 (`ol-egov.130`), pre-committed in
- * `findings/precommitment-dedupe-interval.md` (private repo; `[D-194]`
- * bucket two, bead `ol-egov.131` / `[SESS-5]`): the multiplier on a
- * recall-tier instrument's own scheduled interval past which format
- * preference (F2.17/F4.8) may no longer defer it — see
- * {@link isOverdueByOwnInterval}.
- *
- * **Declared, not derived** (component register's line, `[BND-4]`/`[D-191]`):
- * defensible in one plain-English sentence — *"a deferral may cost at most
- * one more wait of the length the scheduler already chose for this item"* —
- * never fitted against a corpus, so it is safe to ship in this public client
- * package. It moves only on her lived outcomes, by the pre-commitment file's
- * own trigger/prediction/moved-enough terms, in a change that shows this
- * comment updated alongside it — never ad hoc.
+ * `[D-240]` item 3's multiplier, re-exported under the name `[SESS-3]` gave
+ * it and the specs and harness cite it by. It is **defined once**, in
+ * `../scheduler/serving.ts` alongside the rule it bounds — see that module's
+ * own doc for the declared-not-derived argument and the pre-commitment, and
+ * this file's `[D-240]` section below for why the rule left this file.
  */
-export const DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER = 1;
+export { DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER } from '../scheduler/serving.js';
 
 /** `dueState` for an instrument the queue is offering. Never `'early'` in v1 — see `dueStateOf`. */
 type OfferedDueState = Exclude<QueueSelectionContext['dueState'], 'early'>;
@@ -266,49 +270,69 @@ function preferenceRank(
 }
 
 /**
- * `[D-240]` item 2: has `candidate`'s own lateness reached
- * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER} times its own scheduled
- * interval — the bound past which format preference may no longer defer it?
+ * The earliest day any of `candidate`'s concepts' material arrived
+ * (ARRIVE-1's `arrivalDays`, keyed by concept), which is the first day this
+ * instrument could have been served at all — what
+ * `recallOutranksFormatPreference`'s never-reviewed branch measures its wait
+ * from. `null` when no map was supplied or none of its concepts is in it: no
+ * signal, never day zero.
  *
- * Reads `state.scheduledDays` verbatim — "the interval, in whole days, that
- * produced `due` from `lastReview`" (`SchedulerState`'s own doc) — so this is
- * the instrument's own interval, never a second one recomputed or threaded in
- * from elsewhere. `false` for a candidate with no prior state (never
- * reviewed: nothing to be overdue against) and for one not yet due at all —
- * mirrors `dueStateOf`'s own `daysLate` arithmetic rather than restating it
- * differently.
+ * Earliest rather than latest because an instrument evidencing several
+ * concepts (`ol-t3sd`'s concept SET) has been available since the first of
+ * them arrived — the same "in her order, decide over the set" reading the
+ * dedupe pass itself takes.
  */
-function isOverdueByOwnInterval(candidate: QueueCandidate, now: Date): boolean {
-  if (candidate.state === null) return false;
-  const daysLate = daysBetween(new Date(candidate.state.due), now);
-  if (daysLate <= 0) return false;
-  return daysLate >= candidate.state.scheduledDays * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER;
+function earliestArrivalDayOf(
+  candidate: QueueCandidate,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+): CalendarDay | null {
+  if (arrivalDays === undefined) return null;
+  let earliest: CalendarDay | null = null;
+  for (const conceptId of candidate.conceptIds) {
+    const day = arrivalDays.get(conceptId);
+    if (day === undefined) continue;
+    if (earliest === null || day < earliest) earliest = day;
+  }
+  return earliest;
 }
 
 /**
  * The rank a candidate competes with for its concept's dedupe slot — lower
  * wins. Ordinarily `preferenceRank`, exactly as F2.17 always defined it.
  *
- * `[D-240]` item 2's override: under `'interval-bound'` serving, with a
- * preference actually in force (`formatPreference.length > 0` — see this
- * file's module doc for why an empty preference is excluded), a recall-tier
- * instrument that has reached its own overdue bound outranks every
+ * `[D-240]` item 2's override is `recallOutranksFormatPreference`
+ * (`../scheduler/serving.ts`) — **the one implementation of that rule, shared
+ * with the study-session composer** (`ol-2zfj.71` [SESS-7]); see that
+ * module's doc for the bound, the never-reviewed case and why it lives
+ * neither here nor there. When it fires, the candidate outranks every
  * preference-matched type unconditionally, by returning a rank below every
  * value `preferenceRank` can produce (which is `>= 0`). Two such candidates
- * on the same concept — both recall-tier and both overdue — fall back to
- * `order` (plain FSRS order) in the caller's sort, same as an ordinary tie.
+ * on the same concept — both recall-tier and both past the bound — fall back
+ * to `order` (plain FSRS order) in the caller's sort, same as an ordinary
+ * tie.
+ *
+ * `arrivalDay` is the concept-arrival day the shared rule's never-reviewed
+ * branch measures from (ARRIVE-1); `undefined`/`null` there is a no-op, so a
+ * caller supplying no `arrivalDays` map composes exactly as before.
  */
 function dedupeRank(
   candidate: QueueCandidate,
   formatPreference: readonly SchedulableInstrumentType[],
   now: Date,
   servingPolicy: QueueServingPolicy,
+  arrivalDay: CalendarDay | null,
 ): number {
   if (
-    servingPolicy === 'interval-bound' &&
-    formatPreference.length > 0 &&
-    isRecallTier(candidate.instrumentType) &&
-    isOverdueByOwnInterval(candidate, now)
+    recallOutranksFormatPreference(
+      {
+        instrumentType: candidate.instrumentType,
+        state: candidate.state,
+        arrivalDay,
+      },
+      now,
+      servingPolicy,
+      formatPreference.length > 0,
+    )
   ) {
     return -1;
   }
@@ -449,7 +473,13 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
       .map((entry, order) => ({
         entry,
         order,
-        rank: dedupeRank(entry.candidate, effectiveFormatPreference, now, servingPolicy),
+        rank: dedupeRank(
+          entry.candidate,
+          effectiveFormatPreference,
+          now,
+          servingPolicy,
+          earliestArrivalDayOf(entry.candidate, arrivalDays),
+        ),
       }))
       .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.order - b.order));
 

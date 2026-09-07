@@ -1456,6 +1456,20 @@ export {
   type RecurringWeekday,
 } from './schedule/recurrence.js';
 export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
+// `[D-240]` item 2's serving rule (`ol-2zfj.71` [SESS-7]) — ONE
+// implementation, called by both session composers. Exported because the
+// harness's three-arm sweep selects the policy by name and because
+// `DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER` is cited by the pre-commitment; the
+// predicates themselves are exported so a caller can ask the question without
+// composing a session (nothing does yet — the composers are the callers).
+export {
+  DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER,
+  firstIntervalDaysAfterGood,
+  hasWaitedItsOwnInterval,
+  type RecallServingCandidate,
+  recallOutranksFormatPreference,
+  type ServingPolicy,
+} from './scheduler/serving.js';
 export type {
   // The recall-probability half of the port (`VIT-1`, `ol-1bjz`). Exported
   // here rather than left as a deep import because every out-of-package caller
