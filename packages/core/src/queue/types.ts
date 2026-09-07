@@ -252,6 +252,14 @@ export interface DeferredInstrument {
   readonly deferredBehind: string;
 }
 
+/**
+ * `[D-240]` item 2/4: the three ways `ComposeQueueInput.formatPreference` and
+ * F2.17's per-session dedupe may interact, named for `[SESS-4]`'s three-arm
+ * harness sweep to select. See `ComposeQueueInput.servingPolicy`'s own doc
+ * for what each value does.
+ */
+export type QueueServingPolicy = 'today' | 'interval-bound' | 'preference-off';
+
 /** What `composeQueue` needs. Pure inputs only — `now` is passed, never read. */
 export interface ComposeQueueInput {
   /** Every schedulable instrument in scope, in whatever order the caller has. */
@@ -294,6 +302,32 @@ export interface ComposeQueueInput {
    * named relaxation and nothing more.
    */
   readonly dedupeByConcept?: boolean;
+  /**
+   * `[D-240]` item 2 (`ol-egov.130`), `[SESS-4]`'s three-arm sweep name: which
+   * of three ways `formatPreference` and F2.17's dedupe interact.
+   *
+   *   - `'today'` — pre-amendment behaviour: format preference wins a
+   *     concept's slot outright, however overdue the instrument it defers.
+   *     Kept so the sweep can replay the un-amended arm on the real composer.
+   *   - `'interval-bound'` (the default) — the amendment: format preference
+   *     may not defer a concept's recall-tier instrument once THAT
+   *     instrument is overdue by at least
+   *     `DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER` (`compose.ts`) times its own
+   *     scheduled interval; past that bound the recall instrument takes the
+   *     slot and the matched kind reviews late instead. See `compose.ts`'s
+   *     module doc for the full rule and `isOverdueByOwnInterval` for the
+   *     arithmetic.
+   *   - `'preference-off'` — `formatPreference` is ignored entirely, as if
+   *     omitted; dedupe runs on plain FSRS order alone. Unchanged by this
+   *     amendment, named here only so the sweep can select it explicitly
+   *     rather than the caller having to remember to pass `formatPreference:
+   *     []` instead.
+   *
+   * Orthogonal to `dedupeByConcept`: the final-week relaxation
+   * (`dedupeByConcept: false`) lifts the cap entirely regardless of
+   * `servingPolicy`, so nothing here changes that rule.
+   */
+  readonly servingPolicy?: QueueServingPolicy;
   /**
    * F2.19 (`ol-ua0i`): C7.10 relation adjacency, keyed by `conceptKey`, each
    * value the set of OTHER `conceptKey`s it connects to — the identical shape

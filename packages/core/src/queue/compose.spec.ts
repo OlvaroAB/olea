@@ -17,24 +17,27 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { addDays } from '../dates.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { SchedulerState } from '../scheduler/types.js';
-import { composeQueue } from './compose.js';
+import { composeQueue, DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER } from './compose.js';
 import type { ComposeQueueInput, QueueCandidate } from './types.js';
 
 const NOW = new Date('2026-08-10T09:00:00.000Z');
 
 /**
- * A scheduler state due at `due`. Every other field is a plausible constant:
- * composition reads `due` and nothing else, and this test asserting on
- * stability or difficulty would be asserting on the FSRS library, not on the
- * queue.
+ * A scheduler state due at `due`, with an interval of `scheduledDays` (default
+ * 1 — the value every pre-existing test in this file implicitly assumed
+ * before `[D-240]` item 2 gave `scheduledDays` a second meaning: composition
+ * reads it, not just `due`). Every other field is a plausible constant:
+ * composition reads `due` and `scheduledDays` and nothing else, and this test
+ * asserting on stability or difficulty would be asserting on the FSRS
+ * library, not on the queue.
  */
-function stateDue(due: Date): SchedulerState {
+function stateDue(due: Date, scheduledDays = 1): SchedulerState {
   return {
     schemaVersion: 1,
     due: due.toISOString(),
     stability: 3,
     difficulty: 5,
-    scheduledDays: 1,
+    scheduledDays,
     learningStepIndex: 0,
     reps: 2,
     lapses: 0,
@@ -415,6 +418,157 @@ describe('F2.17 — per-session concept dedupe', () => {
     const result = compose({ candidates: twoOnOneConcept, dedupeByConcept: false });
     expect(idsOf(result)).toEqual(['mcq-item', 'qa-card']);
     expect(result.deferred).toEqual([]);
+  });
+});
+
+describe('F2.17 amendment — [D-240] item 2: format preference may not defer an overdue recall instrument', () => {
+  // One concept, an MCQ matching the assessment-format preference and a Q&A
+  // (recall-tier) card. `scheduledDays` is set explicitly on the Q&A card in
+  // every test below rather than left at the fixture default, precisely
+  // because whether it has reached its own interval is what each scenario
+  // varies. Feature file: `features/F2-review.md`'s "F2.17 amendment" block.
+  function recallAndMatched(qaScheduledDays: number, qaDaysLate: number) {
+    return [
+      candidate({
+        instrumentId: 'qa-card',
+        instrumentType: 'qa',
+        conceptIds: ['action-potential'],
+        state: stateDue(addDays(NOW, -qaDaysLate), qaScheduledDays),
+      }),
+      candidate({
+        instrumentId: 'mcq-item',
+        instrumentType: 'mcq',
+        conceptIds: ['action-potential'],
+        state: stateDue(addDays(NOW, -1)),
+      }),
+    ];
+  }
+
+  it('matched kind wins while the recall instrument is late by less than its interval', () => {
+    // Interval 5 days, late by 2: below the bound.
+    const result = compose({
+      candidates: recallAndMatched(5, 2),
+      formatPreference: ['mcq'],
+    });
+    expect(idsOf(result)).toEqual(['mcq-item']);
+    expect(result.deferred).toEqual([
+      { instrumentId: 'qa-card', conceptIds: ['action-potential'], deferredBehind: 'mcq-item' },
+    ]);
+  });
+
+  it('the recall instrument wins once overdue by an interval, and the matched kind reviews late', () => {
+    // Interval 2 days, late by exactly 2: at the bound (>=, not >).
+    const result = compose({
+      candidates: recallAndMatched(2, 2),
+      formatPreference: ['mcq'],
+    });
+    expect(idsOf(result)).toEqual(['qa-card']);
+    expect(result.deferred).toEqual([
+      { instrumentId: 'mcq-item', conceptIds: ['action-potential'], deferredBehind: 'qa-card' },
+    ]);
+  });
+
+  it('the final-week relaxation still serves both, untouched by the interval bound', () => {
+    const result = compose({
+      candidates: recallAndMatched(2, 2),
+      formatPreference: ['mcq'],
+      dedupeByConcept: false,
+    });
+    // Plain FSRS order, both offered: no choice is made once the cap is off,
+    // so there is nothing for the interval bound to govern.
+    expect(idsOf(result)).toEqual(['qa-card', 'mcq-item']);
+    expect(result.deferred).toEqual([]);
+  });
+
+  it('format preference off is unchanged by the interval bound', () => {
+    // Same shape as the "matched kind wins" case above (qa not yet overdue),
+    // but with a preference that would otherwise hand the slot to `mcq-item`.
+    // `servingPolicy: 'preference-off'` ignores it, so plain FSRS order
+    // decides — and `qa-card` is FSRS-earlier here, so it wins instead of
+    // the type `formatPreference` names, proving the preference was truly
+    // ignored rather than coincidentally satisfied.
+    const result = compose({
+      candidates: recallAndMatched(5, 2),
+      formatPreference: ['mcq'],
+      servingPolicy: 'preference-off',
+    });
+    expect(idsOf(result)).toEqual(['qa-card']);
+    expect(result.deferred).toEqual([
+      { instrumentId: 'mcq-item', conceptIds: ['action-potential'], deferredBehind: 'qa-card' },
+    ]);
+  });
+
+  it('the pre-amendment arm (today) never applies the interval bound, however overdue', () => {
+    // Same overdue shape that flips the winner under 'interval-bound' above;
+    // 'today' is the sweep's baseline arm and must reproduce the old,
+    // preference-always-wins behaviour exactly.
+    const result = compose({
+      candidates: recallAndMatched(2, 2),
+      formatPreference: ['mcq'],
+      servingPolicy: 'today',
+    });
+    expect(idsOf(result)).toEqual(['mcq-item']);
+  });
+
+  it('an overdue probe on one concept moves nothing on another — concept-level, not global', () => {
+    const result = compose({
+      candidates: [
+        ...recallAndMatched(2, 2), // action-potential: qa overdue, wins
+        candidate({
+          instrumentId: 'qa-card-2',
+          instrumentType: 'qa',
+          conceptIds: ['osmosis'],
+          state: stateDue(addDays(NOW, -1), 5), // late 1 of 5: nowhere near overdue
+        }),
+        candidate({
+          instrumentId: 'mcq-item-2',
+          instrumentType: 'mcq',
+          conceptIds: ['osmosis'],
+          state: stateDue(addDays(NOW, -2)),
+        }),
+      ],
+      formatPreference: ['mcq'],
+    });
+    // action-potential: the amendment fires, qa wins, mcq deferred.
+    expect(result.deferred).toContainEqual({
+      instrumentId: 'mcq-item',
+      conceptIds: ['action-potential'],
+      deferredBehind: 'qa-card',
+    });
+    // osmosis: ordinary preference-wins behaviour, entirely unaffected by the
+    // other concept's overdue probe — this is the property naming it
+    // "concept-level" asks for.
+    expect(result.deferred).toContainEqual({
+      instrumentId: 'qa-card-2',
+      conceptIds: ['osmosis'],
+      deferredBehind: 'mcq-item-2',
+    });
+    expect(idsOf(result).sort()).toEqual(['mcq-item-2', 'qa-card']);
+  });
+
+  it('the multiplier is a single named, declared constant — [D-240] item 3', () => {
+    // Named and exported, not an inline literal at the call site — a reader
+    // (or the harness) can cite `DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER` rather
+    // than a bare `1`. Value pinned per the pre-commitment
+    // (`findings/precommitment-dedupe-interval.md`, private repo): it moves
+    // only via that document, never by editing this number ad hoc.
+    expect(DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER).toBe(1);
+
+    // And it is genuinely load-bearing in the arithmetic, not a decoration:
+    // one day short of `scheduledDays * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER`
+    // still defers to the matched kind; reaching it flips the winner. Same
+    // shape as the two tests above, stated here as one boundary probe.
+    const oneShort = compose({
+      candidates: recallAndMatched(3, 3 * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER - 1),
+      formatPreference: ['mcq'],
+    });
+    expect(idsOf(oneShort)).toEqual(['mcq-item']);
+
+    const atBound = compose({
+      candidates: recallAndMatched(3, 3 * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER),
+      formatPreference: ['mcq'],
+    });
+    expect(idsOf(atBound)).toEqual(['qa-card']);
   });
 });
 

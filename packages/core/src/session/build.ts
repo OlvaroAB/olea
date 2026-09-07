@@ -74,7 +74,12 @@ import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { composeQueue } from '../queue/compose.js';
-import type { ComposedQueue, QueueCandidate, QueueFilter } from '../queue/types.js';
+import type {
+  ComposedQueue,
+  QueueCandidate,
+  QueueFilter,
+  QueueServingPolicy,
+} from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import type { Scheduler } from '../scheduler/types.js';
 import { type CalendarDay, calendarDayFromLocalDate } from '../today/calendar-day.js';
@@ -116,6 +121,15 @@ export interface BuildReviewSessionInput {
   readonly formatPreference?: readonly SchedulableInstrumentType[];
   /** F2.17's per-session dedupe. Defaults to `true`, as `composeQueue` does. */
   readonly dedupeByConcept?: boolean;
+  /**
+   * `[D-240]` items 2/4: how `formatPreference` and per-session dedupe
+   * interact — `'today'` (pre-amendment), `'interval-bound'` (the amendment,
+   * and this input's default) or `'preference-off'`. Passed straight through
+   * to `composeQueue`; see `QueueServingPolicy`'s own doc for what each value
+   * does. This is the flag `[SESS-4]`'s harness sweep sets to run all three
+   * arms against the real composer.
+   */
+  readonly servingPolicy?: QueueServingPolicy;
   /**
    * `part-of` edges available at composition time (C7.9; register row 3.7;
    * `./containment.js`). Omitted means none, which is a real no-op, not a
@@ -395,6 +409,7 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     ...(input.filter !== undefined ? { filter: input.filter } : {}),
     ...(input.formatPreference !== undefined ? { formatPreference: input.formatPreference } : {}),
     ...(input.dedupeByConcept !== undefined ? { dedupeByConcept: input.dedupeByConcept } : {}),
+    ...(input.servingPolicy !== undefined ? { servingPolicy: input.servingPolicy } : {}),
     relatedConceptKeys,
     prerequisiteConceptKeys,
     assessmentContext,

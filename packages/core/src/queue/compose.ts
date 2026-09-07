@@ -75,10 +75,40 @@
  * instrument that took its slot, and the deferred instrument's scheduler state
  * is untouched, so the next session offers it as an ordinary due item — later
  * than it wanted, which is exactly what F2.17 says FSRS tolerates by design.
+ *
+ * ## `[D-240]` item 2 — format preference may not defer a recall instrument past its own interval
+ *
+ * Amendment, ruled on brief 62 (`ol-egov.130`): format preference may still
+ * prefer the assessment-matched instrument (F4.8), but it may not defer a
+ * concept's recall-tier instrument (`qa`/`cloze`, R3's tier filter,
+ * `isRecallTier`) once THAT instrument is overdue by at least
+ * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER} times its own scheduled
+ * interval. Past that bound, the recall-tier instrument takes the concept's
+ * slot outright and the matched (e.g. `mcq`) kind is the one that reviews
+ * late instead — the same "defers, never drops" accounting, with the roles
+ * swapped. Concept-level, and it needs no new number of its own: the bound is
+ * `SchedulerState.scheduledDays`, the interval the scheduler already computed
+ * for that instrument. See {@link isOverdueByOwnInterval} for the exact
+ * arithmetic and {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER}'s doc for the
+ * multiplier's own pre-commitment.
+ *
+ * This only ever fires where a preference exists to defer against
+ * (`formatPreference.length > 0`) — with no preference, dedupe already runs
+ * on plain FSRS order (the un-amended base rule above), which `[D-240]` item
+ * 2 does not touch. It is also gated on `ComposeQueueInput.servingPolicy`:
+ * `'interval-bound'` (the default) is this amended rule; `'today'` is the
+ * pre-amendment behaviour, kept so the harness's three-arm sweep
+ * (`[D-240]` item 4) can replay the un-amended arm on the real composer;
+ * `'preference-off'` ignores `formatPreference` entirely (as if it were
+ * omitted), which makes the override moot for the same reason an empty
+ * preference does. The final-week relaxation (`dedupeByConcept: false`) is
+ * untouched by any of this — with dedupe off, nothing is deferred by
+ * anything, preference or interval, and both instruments are offered.
  */
 
 import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
+import { isRecallTier } from '../mastery/vitality.js';
 import { isInstrumentSuspended } from '../review-log/suspension.js';
 import { applyCourseBlocking } from './block-order.js';
 import type {
@@ -89,7 +119,26 @@ import type {
   QueueFilter,
   QueueItem,
   QueueSelectionContext,
+  QueueServingPolicy,
 } from './types.js';
+
+/**
+ * `[D-240]` item 3 (`ol-egov.130`), pre-committed in
+ * `findings/precommitment-dedupe-interval.md` (private repo; `[D-194]`
+ * bucket two, bead `ol-egov.131` / `[SESS-5]`): the multiplier on a
+ * recall-tier instrument's own scheduled interval past which format
+ * preference (F2.17/F4.8) may no longer defer it — see
+ * {@link isOverdueByOwnInterval}.
+ *
+ * **Declared, not derived** (component register's line, `[BND-4]`/`[D-191]`):
+ * defensible in one plain-English sentence — *"a deferral may cost at most
+ * one more wait of the length the scheduler already chose for this item"* —
+ * never fitted against a corpus, so it is safe to ship in this public client
+ * package. It moves only on her lived outcomes, by the pre-commitment file's
+ * own trigger/prediction/moved-enough terms, in a change that shows this
+ * comment updated alongside it — never ad hoc.
+ */
+export const DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER = 1;
 
 /** `dueState` for an instrument the queue is offering. Never `'early'` in v1 — see `dueStateOf`. */
 type OfferedDueState = Exclude<QueueSelectionContext['dueState'], 'early'>;
@@ -203,6 +252,56 @@ function preferenceRank(
 }
 
 /**
+ * `[D-240]` item 2: has `candidate`'s own lateness reached
+ * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER} times its own scheduled
+ * interval — the bound past which format preference may no longer defer it?
+ *
+ * Reads `state.scheduledDays` verbatim — "the interval, in whole days, that
+ * produced `due` from `lastReview`" (`SchedulerState`'s own doc) — so this is
+ * the instrument's own interval, never a second one recomputed or threaded in
+ * from elsewhere. `false` for a candidate with no prior state (never
+ * reviewed: nothing to be overdue against) and for one not yet due at all —
+ * mirrors `dueStateOf`'s own `daysLate` arithmetic rather than restating it
+ * differently.
+ */
+function isOverdueByOwnInterval(candidate: QueueCandidate, now: Date): boolean {
+  if (candidate.state === null) return false;
+  const daysLate = daysBetween(new Date(candidate.state.due), now);
+  if (daysLate <= 0) return false;
+  return daysLate >= candidate.state.scheduledDays * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER;
+}
+
+/**
+ * The rank a candidate competes with for its concept's dedupe slot — lower
+ * wins. Ordinarily `preferenceRank`, exactly as F2.17 always defined it.
+ *
+ * `[D-240]` item 2's override: under `'interval-bound'` serving, with a
+ * preference actually in force (`formatPreference.length > 0` — see this
+ * file's module doc for why an empty preference is excluded), a recall-tier
+ * instrument that has reached its own overdue bound outranks every
+ * preference-matched type unconditionally, by returning a rank below every
+ * value `preferenceRank` can produce (which is `>= 0`). Two such candidates
+ * on the same concept — both recall-tier and both overdue — fall back to
+ * `order` (plain FSRS order) in the caller's sort, same as an ordinary tie.
+ */
+function dedupeRank(
+  candidate: QueueCandidate,
+  formatPreference: readonly SchedulableInstrumentType[],
+  now: Date,
+  servingPolicy: QueueServingPolicy,
+): number {
+  if (
+    servingPolicy === 'interval-bound' &&
+    formatPreference.length > 0 &&
+    isRecallTier(candidate.instrumentType) &&
+    isOverdueByOwnInterval(candidate, now)
+  ) {
+    return -1;
+  }
+  return preferenceRank(candidate.instrumentType, formatPreference);
+}
+
+/**
  * D7.1's `instrumentTypesOffered` for one offered item: every type the queue
  * could have offered instead of it — that is, the types of every eligible
  * instrument sharing at least one concept with it, **in queue order**.
@@ -242,12 +341,20 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
     filter,
     formatPreference = [],
     dedupeByConcept = true,
+    servingPolicy = 'interval-bound',
     relatedConceptKeys,
     prerequisiteConceptKeys,
     assessmentContext,
     arrivalDays,
     conceptSourcePaths,
   } = input;
+
+  // `[D-240]` item 2, `'preference-off'` arm: ignore `formatPreference`
+  // entirely, as if it were never supplied — see the module doc. Computed
+  // once, up front, so every use below (the preference sort AND the
+  // interval-bound override, which itself checks
+  // `formatPreference.length > 0`) sees the same effective preference.
+  const effectiveFormatPreference = servingPolicy === 'preference-off' ? [] : formatPreference;
 
   // 1–3. Filter (F2.5), drop suspended (F2.6), keep only what is due.
   const allowedConcepts = passingConceptIds(candidates, filter);
@@ -290,7 +397,7 @@ export function composeQueue(input: ComposeQueueInput): ComposedQueue {
       .map((entry, order) => ({
         entry,
         order,
-        rank: preferenceRank(entry.candidate.instrumentType, formatPreference),
+        rank: dedupeRank(entry.candidate, effectiveFormatPreference, now, servingPolicy),
       }))
       .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.order - b.order));
 

@@ -155,6 +155,14 @@ describe('F2.17 dedupe is over the concept SET, not a single id', () => {
         }),
       ],
       formatPreference: ['mcq'],
+      // This test is about the SET-valued dedupe key (`ol-t3sd`), not about
+      // `[D-240]` item 2's interval bound — `qa-both` is deliberately 5 days
+      // overdue against a 1-day fixture interval so a reader cannot mistake
+      // this for that rule. `servingPolicy: 'today'` pins the pre-amendment
+      // preference-always-wins behaviour this test actually exercises; the
+      // amended behaviour on this exact shape is covered in
+      // `compose.spec.ts`'s "`[D-240]` item 2" block.
+      servingPolicy: 'today',
     });
     // `mcq-alpha` outranks `qa-both` on alpha, so it wins; `qa-both` then finds
     // alpha taken and is deferred, taking beta with it — beta gets nothing this
@@ -209,7 +217,18 @@ describe('F2.17 dedupe is over the concept SET, not a single id', () => {
     // Prefer cloze: `cloze-both` is reached first, claims alpha and beta
     // together, and both single-concept instruments are deferred behind it.
     // Two items become one — the same corpus, the same day, one preference.
-    const preferCloze = compose({ candidates, formatPreference: ['cloze'] });
+    //
+    // `servingPolicy: 'today'` pins pre-`[D-240]` behaviour: this fixture's
+    // `qa-alpha`/`qa-beta` are both recall-tier AND both overdue by their
+    // 1-day fixture interval, so under the amended default they would win
+    // their own concepts outright regardless of `cloze-both`'s preference —
+    // a real instance of the amendment, just not what THIS test (the
+    // SET-valued key, `ol-t3sd`) is about.
+    const preferCloze = compose({
+      candidates,
+      formatPreference: ['cloze'],
+      servingPolicy: 'today',
+    });
     expect(idsOf(preferCloze)).toEqual(['cloze-both']);
     expect(preferCloze.items.length).toBeLessThan(plain.items.length);
 
