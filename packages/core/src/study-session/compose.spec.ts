@@ -23,7 +23,7 @@ import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import type { OracleMasteryState } from '../oracle/types.js';
 import type { ReplayResult } from '../session/replay.js';
-import type { QaInstrumentRecord } from '../session/types.js';
+import type { McqInstrumentRecord, QaInstrumentRecord } from '../session/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { buildStudySession } from './build.js';
 import {
@@ -1775,5 +1775,258 @@ describe('F2.19 production resolvers: relatedConceptKeys/assessmentContext resol
       'Charlie',
       'Bravo',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [SESS-9] (`ol-2zfj.77`) — allocation's per-course share is honoured before
+// the cross-course fill. Scenarios: features/F2-review.md (olea-service), the
+// "SESS-9" block.
+// ---------------------------------------------------------------------------
+
+function mcqRecord(instrumentId: string, conceptIds: readonly string[]): McqInstrumentRecord {
+  return {
+    instrumentId,
+    instrumentType: 'mcq',
+    conceptIds,
+    courses: ['CRS101'],
+    notePath: `05 Zettelkasten/${instrumentId}.md` as VaultPath,
+    noteTitle: instrumentId,
+    noteUid: null,
+    blockId: null,
+    heading: null,
+    ordinal: 1,
+    mcq: {
+      type: 'mcq',
+      id: instrumentId,
+      predecessor: null,
+      stem: 'Which?',
+      answer: 'This one.',
+      distractors: ['a', 'b', 'c'],
+      feedback: null,
+      raw: '```mcq\n```',
+      span: { start: 0, end: 10 },
+      fence: '```',
+      terminator: '\n',
+    },
+  };
+}
+
+/** Recall costs four times recognition — the shape the pre-flight measured, where the override serves the expensive instrument the selection priced at the cheap one. */
+function typedDurations(seconds: Readonly<Record<'qa' | 'cloze' | 'mcq', number>>): DurationModel {
+  const estimates = (['qa', 'cloze', 'mcq'] as const).map((instrumentType) => ({
+    instrumentType,
+    seconds: seconds[instrumentType],
+    source: 'assumed' as const,
+    sampleCount: 0,
+  }));
+  return {
+    estimates,
+    basis: 'assumed',
+    totalSampleCount: 0,
+    secondsFor: (instrumentType) =>
+      instrumentType === 'explain-back' ? 0 : seconds[instrumentType],
+    sourceFor: () => 'assumed',
+  };
+}
+
+describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
+  // The pre-flight's own shape, at fixture scale: two courses whose concepts
+  // hold an overdue recall-tier instrument (which `[D-240]` item 2 serves
+  // ahead of the preference-matched MCQ, at four times the cost the selection
+  // priced) and one course whose concepts hold only a due MCQ, with a budget
+  // too small to serve every row.
+  const RECALL_SECONDS = 100;
+  const RECOGNITION_SECONDS = 25;
+  const BUDGET_MINUTES = 10;
+  const BUDGET_SECONDS = BUDGET_MINUTES * 60;
+
+  const QUIZ_PATH = '02 Assignments/quiz.md' as VaultPath;
+  // A Quiz puts the format preference on MCQ for the whole session — which is
+  // what `recallOutranksFormatPreference` needs something to override.
+  const assessments: readonly AssessmentRecord[] = [
+    {
+      path: QUIZ_PATH,
+      course: 'ALPHA',
+      type: 'Quiz',
+      weight: 20,
+      weightRaw: '20',
+      due: '2026-12-01',
+      status: 'upcoming',
+    },
+  ];
+
+  function threeCourseFixture() {
+    const overdueCourses = ['ALPHA', 'BRAVO'] as const;
+    const specs: RowSpec[] = [];
+    const records: (QaInstrumentRecord | McqInstrumentRecord)[] = [];
+    const replayEntries: Record<string, { lastReviewedDay: string; dueDay: string }> = {};
+
+    for (const course of overdueCourses) {
+      for (let i = 1; i <= 4; i += 1) {
+        const key = `${course}-${i}`;
+        specs.push({ conceptName: key, course, gapScore: 9, masteryState: 'sprout' });
+        records.push(qa(`${key}-recall`, [key]), mcqRecord(`${key}-mcq`, [key]));
+        // Due 2026-09-01, 13 days before AS_OF, against the fixture's own
+        // 10-day `scheduledDays` — past its own interval, so `[D-240]` item 2
+        // lifts it over the preference-matched MCQ.
+        replayEntries[`${key}-recall`] = { lastReviewedDay: '2026-08-20', dueDay: '2026-09-01' };
+        replayEntries[`${key}-mcq`] = { lastReviewedDay: '2026-08-20', dueDay: '2026-09-01' };
+      }
+    }
+    // CHARLIE: only recognition instruments, all due.
+    for (let i = 1; i <= 8; i += 1) {
+      const key = `CHARLIE-${i}`;
+      specs.push({ conceptName: key, course: 'CHARLIE', gapScore: 9, masteryState: 'sprout' });
+      records.push(mcqRecord(`${key}-mcq`, [key]));
+      replayEntries[`${key}-mcq`] = { lastReviewedDay: '2026-08-20', dueDay: '2026-09-01' };
+    }
+
+    return {
+      rows: rows(specs),
+      instruments: buildConceptInstrumentIndex(records),
+      replay: replay(replayEntries),
+      durations: typedDurations({
+        qa: RECALL_SECONDS,
+        cloze: RECALL_SECONDS,
+        mcq: RECOGNITION_SECONDS,
+      }),
+    };
+  }
+
+  const allocation: readonly StudyPlanAllocationEntry[] = [
+    {
+      courseId: 'ALPHA',
+      share: 0.4,
+      minBlockSeconds: 60,
+      contributions: [{ name: 'risk', value: 0.5 }],
+      reason: 'ALPHA gets its share.',
+    },
+    {
+      courseId: 'BRAVO',
+      share: 0.3,
+      minBlockSeconds: 60,
+      contributions: [{ name: 'risk', value: 0.5 }],
+      reason: 'BRAVO gets its share.',
+    },
+    {
+      courseId: 'CHARLIE',
+      share: 0.3,
+      minBlockSeconds: 60,
+      contributions: [{ name: 'risk', value: 0.5 }],
+      reason: 'CHARLIE gets its share.',
+    },
+  ];
+
+  function secondsByCourse(items: readonly { course: string; estimatedSeconds: number }[]) {
+    const out = new Map<string, number>();
+    for (const item of items) {
+      out.set(item.course, (out.get(item.course) ?? 0) + item.estimatedSeconds);
+    }
+    return out;
+  }
+
+  it('a course with a share and due rows is never served zero while another exceeds its share', () => {
+    const fixture = threeCourseFixture();
+    const composed = buildComposedStudySession({
+      ...fixture,
+      budgetMinutes: BUDGET_MINUTES,
+      asOf: AS_OF,
+      assessments,
+      allocation,
+      servingPolicy: 'interval-bound',
+    });
+
+    const served = secondsByCourse(composed.model.items);
+    // Its rows were selected — this is the fill, not the selection.
+    expect(composed.model.items.filter((item) => item.course === 'CHARLIE').length).toBeGreaterThan(
+      0,
+    );
+    expect(served.get('CHARLIE') ?? 0).toBeGreaterThan(0);
+    // And the two ahead of it did not take the whole budget on the way there.
+    expect(served.get('ALPHA') ?? 0).toBeLessThan(BUDGET_SECONDS);
+  });
+
+  it('no course is served less than its share, up to the one item its share could not fund', () => {
+    const fixture = threeCourseFixture();
+    const composed = buildComposedStudySession({
+      ...fixture,
+      budgetMinutes: BUDGET_MINUTES,
+      asOf: AS_OF,
+      assessments,
+      allocation,
+      servingPolicy: 'interval-bound',
+    });
+
+    const served = secondsByCourse(composed.model.items);
+    for (const entry of allocation) {
+      const shareSeconds = BUDGET_SECONDS * entry.share;
+      // The promise is a FLOOR, not an equality. One item's length is the
+      // tolerance below it because instruments are indivisible — a course
+      // whose next instrument would cross its share waits for the
+      // cross-course pass rather than spending into another course's
+      // seconds. There is deliberately no ceiling: seconds no course could
+      // use are spent by whoever can (the test below), and the session
+      // target itself is hers to outrun (`[D-091]`).
+      expect(served.get(entry.courseId) ?? 0).toBeGreaterThanOrEqual(shareSeconds - RECALL_SECONDS);
+    }
+    // The defect this bead fixed, stated as the number it produced: before
+    // the share pass the two courses holding overdue recall instruments took
+    // the entire budget in one flat walk and CHARLIE's block was reached with
+    // nothing left.
+    expect(served.get('CHARLIE') ?? 0).toBeGreaterThan(0);
+  });
+
+  it('seconds a course cannot use are still spent on the others — the share bounds the first pass, never the session', () => {
+    const fixture = threeCourseFixture();
+    // DELTA holds a third of the session and has no servable instrument at
+    // all, so its seconds must fall to the courses that can use them.
+    const withEmptyCourse = buildComposedStudySession({
+      rows: [
+        ...fixture.rows,
+        ...rows([{ conceptName: 'DELTA-1', course: 'DELTA', gapScore: 9, masteryState: 'sprout' }]),
+      ],
+      instruments: fixture.instruments,
+      replay: fixture.replay,
+      durations: fixture.durations,
+      budgetMinutes: BUDGET_MINUTES,
+      asOf: AS_OF,
+      assessments,
+      allocation: [
+        ...allocation.map((entry) => ({ ...entry, share: entry.share * 0.7 })),
+        {
+          courseId: 'DELTA',
+          share: 0.3,
+          minBlockSeconds: 60,
+          contributions: [{ name: 'risk', value: 0.5 }],
+          reason: 'DELTA gets its share.',
+        },
+      ],
+      servingPolicy: 'interval-bound',
+    });
+
+    expect(withEmptyCourse.model.items.some((item) => item.course === 'DELTA')).toBe(false);
+    // The session still reaches its declared target rather than stopping
+    // 30% short because one course could spend nothing.
+    expect(withEmptyCourse.model.plannedSeconds).toBeGreaterThanOrEqual(BUDGET_SECONDS);
+  });
+
+  it("the [D-240] override and F2.17's cap are unchanged by the share", () => {
+    const fixture = threeCourseFixture();
+    const composed = buildComposedStudySession({
+      ...fixture,
+      budgetMinutes: BUDGET_MINUTES,
+      asOf: AS_OF,
+      assessments,
+      allocation,
+      servingPolicy: 'interval-bound',
+    });
+
+    const alphaFirst = composed.model.items.filter((item) => item.conceptName === 'ALPHA-1');
+    // The override: the overdue recall instrument, not the preference-matched
+    // MCQ, is what that concept was served.
+    expect(alphaFirst[0]?.instrumentType).toBe('qa');
+    // F2.17's cap: once, outside any final week.
+    expect(alphaFirst).toHaveLength(1);
   });
 });

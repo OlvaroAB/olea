@@ -938,6 +938,18 @@ export interface ComposeSessionRowsResult {
    * aggregate, never here.
    */
   readonly obligationClasses: ReadonlyMap<string, ObligationClass>;
+  /**
+   * [SESS-9] (`ol-2zfj.77`, C5.5/C5.6): the seconds each course's share
+   * converts to against this composition's own budget — A2.5's conversion
+   * where a real `allocation` was supplied, this module's interim
+   * proportional policy plus its local floor-forcing where it was not, in
+   * both cases the exact map the selection above was capped by. Returned so
+   * `buildStudySession`'s fill can honour the same seconds the selection did,
+   * rather than the share stopping at concept selection and the instrument
+   * fill spending one flat session-wide total — see `./build.ts`'s module doc,
+   * "Allocation's share is honoured before the cross-course fill".
+   */
+  readonly courseSeconds: ReadonlyMap<string, number>;
 }
 
 /**
@@ -1062,7 +1074,14 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     orderedBlocks.map((c) => [c.row.conceptKey, c.klass]),
   );
 
-  return { orderedRows, overflow, courseShares: shares, forcedCourses: forced, obligationClasses };
+  return {
+    orderedRows,
+    overflow,
+    courseShares: shares,
+    forcedCourses: forced,
+    obligationClasses,
+    courseSeconds: budgets,
+  };
 }
 
 export interface BuildComposedStudySessionInput
@@ -1072,8 +1091,16 @@ export interface BuildComposedStudySessionInput
   // ([SESS-7], `[D-240]` item 2) is omitted for exactly that reason too: this
   // input already carries `replay`, and the fill's map is that replay folded
   // to its states, so a caller able to pass a second, possibly-disagreeing one
-  // is a defect surface rather than a feature.
-  extends Omit<BuildStudySessionInput, 'order' | 'rows' | 'obligationClasses' | 'schedulerStates'> {
+  // is a defect surface rather than a feature. `courseBudgetSeconds`
+  // ([SESS-9], `ol-2zfj.77`) joins them on the same argument: this input
+  // already carries `allocation`, and the fill's per-course seconds are that
+  // allocation converted by A2.5's rule, so a caller able to pass a second,
+  // possibly-disagreeing set of seconds could silently compose against a share
+  // the selection above never used.
+  extends Omit<
+    BuildStudySessionInput,
+    'order' | 'rows' | 'obligationClasses' | 'schedulerStates' | 'courseBudgetSeconds'
+  > {
   readonly rows: readonly GapRow[];
   /** `replaySchedulerStates(entries, scheduler)` — see `ComposeSessionRowsInput.replay`. */
   readonly replay: ReplayResult;
@@ -1205,6 +1232,13 @@ export function buildComposedStudySession(
     // fill's serving rule reads — never a second read of the log, and never a
     // second scheduler.
     schedulerStates: schedulerStatesOf(input.replay),
+    // [SESS-9] (`ol-2zfj.77`): the seconds the selection above was capped by,
+    // handed to the fill so C5.5's "fills each course's seconds from that
+    // course's own ranking" is true of the instruments served and not only of
+    // the concepts selected. Derived from the composition just run, never a
+    // caller input — the same reason `obligationClasses` and `schedulerStates`
+    // are omitted from `BuildComposedStudySessionInput`.
+    courseBudgetSeconds: composed.courseSeconds,
   });
 
   return {

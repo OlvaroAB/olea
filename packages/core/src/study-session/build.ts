@@ -99,6 +99,37 @@
  * said the opposite, and was stale against `[D-091]`; both are now
  * corrected). The fill stops when a whole pass adds nothing.
  *
+ * ## Allocation's share is honoured before the cross-course fill (`[SESS-9]`)
+ *
+ * `ol-2zfj.77`, C5.5/C5.6. The fill above runs **twice** when a caller
+ * supplies {@link BuildStudySessionInput.courseBudgetSeconds}: a **share
+ * pass**, in which an item that would take a course past its own allocated
+ * seconds waits (its first item always fits, so a share always funds
+ * something), and then the ordinary **cross-course pass** over whatever of
+ * the session's target is left. C5.6 decides how much each course
+ * gets and C5.5 converts that share into seconds; before this the seconds
+ * reached only the concept SELECTION (`./compose.ts`'s per-course caps, priced
+ * per concept at its *cheapest* instrument) and were then discarded — this
+ * fill walked one flat course-blocked list against a single session-wide
+ * total. That is sound only while the instrument served is the one the
+ * selection priced. Under `[D-240]` item 2 it is not: the overdue recall
+ * instrument takes the concept's slot, costs more than the recognition item
+ * the selection costed, and the leading course blocks overspend until the
+ * budget is gone before the last block is reached at all. The pre-flight
+ * measured a course at a 19% share and 19 ranking rows served **zero** items
+ * for three consecutive sittings while the two ahead of it took about twice
+ * their shares (`findings/frontier-loop-preflight2-2026-09-07.md`, private
+ * repo).
+ *
+ * Two properties are worth stating because they are what make this safe:
+ * honouring the share **costs the session no time** — the share bounds the
+ * first pass, not the session, so seconds a course cannot use are still spent
+ * by the second pass on whoever can; and it is **orthogonal to both rules
+ * above it** — `[D-240]`'s override still decides which instrument a concept
+ * offers first, F2.17's cap still decides how many, and this decides how much
+ * of the session a course receives. Three questions, three rules, no rule
+ * standing in for another.
+ *
  * Breadth before depth is a **judgement, and a reversible one**: "drawing on
  * the highest-priority gaps" (F4.6, plural) reads as covering several rather
  * than exhausting one, and twenty minutes on one concept is a session she could
@@ -509,9 +540,42 @@ export interface BuildStudySessionInput {
    * either path.
    */
   readonly servingPolicy?: ServingPolicy;
+  /**
+   * [SESS-9] (`ol-2zfj.77`, C5.5/C5.6): allocation's own seconds per course —
+   * A2.5's contracted share-to-seconds conversion, already computed by
+   * `composeSessionRows` (`./compose.ts`'s `courseSeconds`), never re-derived
+   * here. C5.5 is explicit that composition "converts each course's carried
+   * share into seconds against her session budget, then fills each course's
+   * seconds from that course's own ranking", and this is the input that makes
+   * the second half of that sentence true of the INSTRUMENT fill rather than
+   * only of the concept selection above it.
+   *
+   * **Omitted entirely is today's single-budget fill**, and that is the right
+   * default rather than a degradation: every plain `buildStudySession` caller
+   * is single-course by construction (see {@link rows}), where a per-course
+   * bound is the session bound. `buildComposedStudySession` always supplies
+   * it from the composition it just ran. A course absent from the map is
+   * unbounded — "no signal", the same posture {@link arrivalDays} and
+   * {@link schedulerStates} take, never a zero share.
+   *
+   * Denominated against `budgetMinutes`; F2.14a's accepted explain-backs are
+   * netted off proportionally inside the fill, so a session that already
+   * spent part of its target on explain-back does not hand the fill a set of
+   * course seconds that sums past what is left.
+   */
+  readonly courseBudgetSeconds?: ReadonlyMap<string, number>;
 }
 
 const SECONDS_PER_MINUTE = 60;
+
+/**
+ * How many times [SESS-9]'s share pass may widen every course's bound by its
+ * share of the seconds still unspent before the fill falls through to its
+ * final, unbounded pass. A guard against a pathological input, never a tuning
+ * knob: each round either adds an item or stops, so the ordinary session
+ * settles in one or two.
+ */
+const MAX_SHARE_REDISTRIBUTION_ROUNDS = 8;
 
 /**
  * How much more of the session's budget a `'coarse'` concept's slot costs
@@ -841,6 +905,20 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   const explainBackSeconds = totalExplainBackSeconds(explainBackItems);
   const candidateBudgetSeconds = Math.max(0, budgetSeconds - explainBackSeconds);
 
+  // [SESS-9]: the allocation's course seconds, scaled by whatever share of
+  // the declared target the candidate fill actually has left after F2.14a
+  // above — the same netting the session bound already gets, applied to the
+  // per-course bounds so the two are denominated in the same seconds.
+  const courseBudgetSeconds: ReadonlyMap<string, number> | null =
+    input.courseBudgetSeconds === undefined
+      ? null
+      : new Map(
+          [...input.courseBudgetSeconds].map(([course, seconds]) => [
+            course,
+            budgetSeconds > 0 ? seconds * (candidateBudgetSeconds / budgetSeconds) : 0,
+          ]),
+        );
+
   // F2.17's final week, resolved once per course rather than once per row —
   // `courseNextAssessmentDays` is a plain scan of `input.assessments`, and
   // every row in a course shares the same answer. `[HARD-2b]`'s fix: this is
@@ -884,91 +962,170 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   const chosenInstrumentIds = new Set<string>();
   const items: StudySessionItem[] = [];
   let candidatePlannedSeconds = 0;
+  /** Seconds this fill has already committed to each course — the quantity the share pass bounds. */
+  const spentByCourse = new Map<string, number>();
 
-  for (;;) {
-    let addedThisPass = false;
-    for (const queue of queues) {
-      // F2.17's per-concept cap, made explicit (`[HARD-2b]`): a row that
-      // already won this session's one slot for its concept takes no more of
-      // them, unless the final-week relaxation lifted the cap for its
-      // course. Checked before anything else in the pass, so a capped row
-      // can never be marked budget-blocked either.
-      if (queue.chose && !queue.finalWeek) continue;
-      let taken = false;
-      let sawUnaffordable = false;
-      // Walk from where this row left off. Instruments already in the session
-      // (chosen for a higher-ranked concept the same note names) are consumed
-      // silently — F2.17's dedupe, over the concept SET, applied to a session
-      // instead of a queue.
-      while (queue.at < queue.records.length) {
-        const record = queue.records[queue.at];
-        if (record === undefined) break;
-        if (chosenInstrumentIds.has(record.instrumentId)) {
+  /**
+   * One fill, run to exhaustion. `courseCapSeconds` is [SESS-9]'s share pass:
+   * a course may be offered nothing further once it has reached its own
+   * allocated seconds, so no course spends past its share while another
+   * course with a share and servable rows is still empty. `null` is the
+   * cross-course pass — the flat walk this fill always was, bounded only by
+   * the session's own target.
+   *
+   * `markBlocked` is set only on the LAST pass to run: a row the share pass
+   * could not afford is not "did not fit" if the cross-course pass then
+   * serves it, and `leftOut` must describe the finished session rather than
+   * an intermediate state of it.
+   */
+  function runFill(
+    courseCapSeconds: ReadonlyMap<string, number> | null,
+    markBlocked: boolean,
+  ): void {
+    for (;;) {
+      let addedThisPass = false;
+      for (const queue of queues) {
+        // F2.17's per-concept cap, made explicit (`[HARD-2b]`): a row that
+        // already won this session's one slot for its concept takes no more of
+        // them, unless the final-week relaxation lifted the cap for its
+        // course. Checked before anything else in the pass, so a capped row
+        // can never be marked budget-blocked either.
+        if (queue.chose && !queue.finalWeek) continue;
+        let taken = false;
+        let sawUnaffordable = false;
+        // Walk from where this row left off. Instruments already in the session
+        // (chosen for a higher-ranked concept the same note names) are consumed
+        // silently — F2.17's dedupe, over the concept SET, applied to a session
+        // instead of a queue.
+        while (queue.at < queue.records.length) {
+          const record = queue.records[queue.at];
+          if (record === undefined) break;
+          if (chosenInstrumentIds.has(record.instrumentId)) {
+            queue.at += 1;
+            continue;
+          }
+          // `[D-091]` (component register §3.7): the budget is a declared
+          // target, never a cap, and she is "always free to outrun" it. Once
+          // the running total has REACHED the target nothing further is taken;
+          // until then, the next instrument is taken regardless of its own
+          // length, so the fill rounds up to the item that crosses the line
+          // rather than refusing it (`ol-zji3` [BUD-1]). Measured against
+          // `candidateBudgetSeconds`, not `budgetSeconds` — F2.14a already
+          // spent `explainBackSeconds` of the declared target before this loop
+          // started.
+          if (candidatePlannedSeconds >= candidateBudgetSeconds) {
+            // Do NOT advance `at`: this instrument is still a candidate if a
+            // later pass has room, and skipping past it would drop it silently.
+            sawUnaffordable = true;
+            break;
+          }
+          const sizeBand = queue.row.conceptSize?.band ?? 'fine';
+          const seconds = Math.round(
+            durations.secondsFor(record.instrumentType) * CONCEPT_SIZE_SECONDS_MULTIPLIER[sizeBand],
+          );
+          // [SESS-9] (`ol-2zfj.77`, C5.5/C5.6): this course's own allocated
+          // seconds, on the share pass. It does NOT read like the session
+          // target above, and the difference is deliberate: the session target
+          // is hers to outrun (`[D-091]`), while a course's share is what the
+          // OTHER courses are owed, so an item that would take a course past
+          // its share waits for the cross-course pass rather than rounding up
+          // into someone else's seconds.
+          //
+          // One exception, and it is C5.6's own argument: a course's FIRST item
+          // is always affordable. A share that cannot fund a single instrument
+          // — a small share against a long recall card — would otherwise serve
+          // that course nothing at all, which is the failure this pass exists
+          // to end, not a fairness it enforces ("a floor whose window total
+          // cannot fund one real retrieval session is not a floor, it is an
+          // ornament"). `undefined` for a course the allocation does not name
+          // is no bound at all, the same no-signal posture every optional input
+          // on this path takes.
+          if (courseCapSeconds !== null) {
+            const cap = courseCapSeconds.get(queue.row.course);
+            const alreadySpent = spentByCourse.get(queue.row.course) ?? 0;
+            if (cap !== undefined && alreadySpent > 0 && alreadySpent + seconds > cap) {
+              sawUnaffordable = true;
+              break;
+            }
+          }
           queue.at += 1;
-          continue;
-        }
-        // `[D-091]` (component register §3.7): the budget is a declared
-        // target, never a cap, and she is "always free to outrun" it. Once
-        // the running total has REACHED the target nothing further is taken;
-        // until then, the next instrument is taken regardless of its own
-        // length, so the fill rounds up to the item that crosses the line
-        // rather than refusing it (`ol-zji3` [BUD-1]). Measured against
-        // `candidateBudgetSeconds`, not `budgetSeconds` — F2.14a already
-        // spent `explainBackSeconds` of the declared target before this loop
-        // started.
-        if (candidatePlannedSeconds >= candidateBudgetSeconds) {
-          // Do NOT advance `at`: this instrument is still a candidate if a
-          // later pass has room, and skipping past it would drop it silently.
-          sawUnaffordable = true;
+          chosenInstrumentIds.add(record.instrumentId);
+          candidatePlannedSeconds += seconds;
+          spentByCourse.set(queue.row.course, (spentByCourse.get(queue.row.course) ?? 0) + seconds);
+          // Row 3.9's chooser ([SUPP-2]): computed only when a caller supplied
+          // history to compute it from, and only for a tier the ladder scores
+          // at all — see `supportLadderTierFor` and `SupportLevelHistoryLookup`.
+          const supportTier = supportLadderTierFor(record.instrumentType);
+          const supportLevel: SupportLevelPresentation | undefined =
+            supportTier === null || input.supportHistory === undefined
+              ? undefined
+              : chooseSupportLevel(
+                  input.supportHistory.outcomesFor(queue.row.conceptKey, supportTier),
+                  input.supportSelfAssessment ?? null,
+                );
+          // SESS-2 (F6.7, `ol-y237`): threaded through verbatim, never
+          // re-derived — see `StudySessionItem.obligationClass`'s doc.
+          const obligationClass = input.obligationClasses?.get(queue.row.conceptKey);
+          items.push({
+            position: items.length + 1,
+            instrumentId: record.instrumentId,
+            instrumentType: record.instrumentType,
+            notePath: record.notePath,
+            noteTitle: record.noteTitle,
+            conceptName: queue.row.conceptName,
+            course: queue.row.course,
+            gapClass: queue.row.gapClass,
+            gapRank: queue.row.rank,
+            gapScore: queue.row.gapScore,
+            estimatedSeconds: seconds,
+            durationSource: durations.sourceFor(record.instrumentType),
+            formatMatch: formatMatchOf(record.instrumentType, formatPreference),
+            ...(supportLevel !== undefined ? { supportLevel } : {}),
+            ...(obligationClass !== undefined ? { obligationClass } : {}),
+          });
+          queue.chose = true;
+          taken = true;
           break;
         }
-        const sizeBand = queue.row.conceptSize?.band ?? 'fine';
-        const seconds = Math.round(
-          durations.secondsFor(record.instrumentType) * CONCEPT_SIZE_SECONDS_MULTIPLIER[sizeBand],
-        );
-        queue.at += 1;
-        chosenInstrumentIds.add(record.instrumentId);
-        candidatePlannedSeconds += seconds;
-        // Row 3.9's chooser ([SUPP-2]): computed only when a caller supplied
-        // history to compute it from, and only for a tier the ladder scores
-        // at all — see `supportLadderTierFor` and `SupportLevelHistoryLookup`.
-        const supportTier = supportLadderTierFor(record.instrumentType);
-        const supportLevel: SupportLevelPresentation | undefined =
-          supportTier === null || input.supportHistory === undefined
-            ? undefined
-            : chooseSupportLevel(
-                input.supportHistory.outcomesFor(queue.row.conceptKey, supportTier),
-                input.supportSelfAssessment ?? null,
-              );
-        // SESS-2 (F6.7, `ol-y237`): threaded through verbatim, never
-        // re-derived — see `StudySessionItem.obligationClass`'s doc.
-        const obligationClass = input.obligationClasses?.get(queue.row.conceptKey);
-        items.push({
-          position: items.length + 1,
-          instrumentId: record.instrumentId,
-          instrumentType: record.instrumentType,
-          notePath: record.notePath,
-          noteTitle: record.noteTitle,
-          conceptName: queue.row.conceptName,
-          course: queue.row.course,
-          gapClass: queue.row.gapClass,
-          gapRank: queue.row.rank,
-          gapScore: queue.row.gapScore,
-          estimatedSeconds: seconds,
-          durationSource: durations.sourceFor(record.instrumentType),
-          formatMatch: formatMatchOf(record.instrumentType, formatPreference),
-          ...(supportLevel !== undefined ? { supportLevel } : {}),
-          ...(obligationClass !== undefined ? { obligationClass } : {}),
-        });
-        queue.chose = true;
-        taken = true;
-        break;
+        if (taken) addedThisPass = true;
+        else if (sawUnaffordable && markBlocked) queue.blockedByBudget = true;
       }
-      if (taken) addedThisPass = true;
-      else if (sawUnaffordable) queue.blockedByBudget = true;
+      if (!addedThisPass) break;
     }
-    if (!addedThisPass) break;
   }
+
+  // [SESS-9]: the share pass first — C5.5's "fills each course's seconds from
+  // that course's own ranking" — and then, while seconds are left over,
+  // C5.5's own redistribution rule: "a dry queue redistributes its remaining
+  // seconds under the same plan's shares". Each round widens every course's
+  // bound by its share of what is still unspent, so a course that could not
+  // use its seconds funds the others in proportion to their shares rather
+  // than in the order the blocks happen to sit. The final, unbounded pass is
+  // what keeps `[D-091]`'s "target, never a cap" true of the session as a
+  // whole. Honouring the share therefore costs the session no time.
+  //
+  // With no allocation supplied there is only that last pass, which is
+  // byte-identical to this fill before [SESS-9].
+  if (courseBudgetSeconds !== null) {
+    let caps = courseBudgetSeconds;
+    const shareTotal = [...courseBudgetSeconds.values()].reduce((n, v) => n + v, 0);
+    // Bounded because every round either adds seconds or stops; the count is
+    // a guard against a pathological input, never a tuning knob.
+    for (let round = 0; round < MAX_SHARE_REDISTRIBUTION_ROUNDS; round += 1) {
+      const spentBefore = candidatePlannedSeconds;
+      runFill(caps, false);
+      if (candidatePlannedSeconds === spentBefore && round > 0) break;
+      const remaining = candidateBudgetSeconds - candidatePlannedSeconds;
+      if (remaining <= 0 || shareTotal <= 0) break;
+      caps = new Map(
+        [...courseBudgetSeconds].map(([course, seconds]) => [
+          course,
+          (spentByCourse.get(course) ?? 0) + remaining * (seconds / shareTotal),
+        ]),
+      );
+    }
+  }
+  runFill(null, true);
 
   const leftOut: StudySessionOmission[] = [];
   let leftOutInstrumentCount = 0;

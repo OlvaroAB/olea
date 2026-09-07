@@ -1732,3 +1732,67 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
     expect(at(insideBound)).toEqual(['a-mcq', 'a-qa']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// [SESS-9] (`ol-2zfj.77`) — the per-course seconds are an OPTIONAL input, and
+// omitting them is the flat fill this module always ran. Scenarios:
+// features/F2-review.md (olea-service), the "SESS-9" block.
+// ---------------------------------------------------------------------------
+
+describe('[SESS-9] the per-course share pass is reachable only through an allocation a caller supplied', () => {
+  const twoCourseRows = rankedRows([
+    { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+    { conceptName: 'A2', course: 'ALPHA', gapScore: 8 },
+    { conceptName: 'B1', course: 'BRAVO', gapScore: 7 },
+  ]);
+  const index = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('a2', ['A2']), qa('b1', ['B1'])]);
+
+  it('omitting courseBudgetSeconds fills one flat budget, exactly as before', () => {
+    const session = buildStudySession({
+      rows: twoCourseRows,
+      instruments: index,
+      budgetMinutes: 2,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+    });
+
+    // 120s target, 60s an item: the flat walk takes the rows in the order it
+    // was handed until the target is reached.
+    expect(session.items.map((item) => item.instrumentId)).toEqual(['a1', 'a2']);
+  });
+
+  it('supplying it bounds the first pass by course, then spends the remainder across courses', () => {
+    const session = buildStudySession({
+      rows: twoCourseRows,
+      instruments: index,
+      budgetMinutes: 2,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      // ALPHA holds half the session and BRAVO half: one 60s item each in the
+      // share pass, and only then does ALPHA's second row compete for what is
+      // left. Without this, BRAVO's block is reached with the budget gone.
+      courseBudgetSeconds: new Map([
+        ['ALPHA', 60],
+        ['BRAVO', 60],
+      ]),
+    });
+
+    expect(session.items.map((item) => item.instrumentId)).toEqual(['a1', 'b1']);
+  });
+
+  it('a course the map does not name is unbounded, never a zero share', () => {
+    const session = buildStudySession({
+      rows: twoCourseRows,
+      instruments: index,
+      budgetMinutes: 3,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      courseBudgetSeconds: new Map([['ALPHA', 60]]),
+    });
+
+    expect(session.items.map((item) => item.course)).toContain('BRAVO');
+  });
+});
