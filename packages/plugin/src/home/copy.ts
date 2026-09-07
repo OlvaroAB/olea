@@ -63,14 +63,28 @@ export const DISMISS_OFFER_ACTION = 'Not now';
 export const HOME_OFFER_EYEBROW = "Today's session";
 
 /**
- * The composed-session card's one action (F4.6's own destination): opens the
- * session builder, where the full F4.9 reasoning, the countdown and the
- * left-out lines already live — Home renders the headline and the two F4.9
- * framing sentences (via `../session-builder/copy.ts#sessionFraming`) and
- * points here for the rest, rather than re-rendering that whole screen a
- * second time on the landing surface.
+ * The composed-session card's one action. **Amended by `[D-243]`
+ * (`ol-egov.132.7` [SESS-8.7]):** this used to open the session-builder
+ * screen for the full F4.9 reasoning, the countdown and the left-out lines;
+ * F4.6/F6.10 as amended rule "there is no builder screen to pass through" —
+ * Start now sits the composed session directly, and everything that used to
+ * live only on the builder screen (the reasoning, the countdown, the
+ * left-out lines) renders right here on Home instead, via the same
+ * `../session-builder/copy.ts` functions this module already imports for the
+ * headline.
  */
 export const HOME_START_ACTION = 'Start';
+
+/**
+ * F4.6's third steering input ("a stated interest — the thing she feels like
+ * doing today"), shown beside the sentence naming it
+ * (`../session-builder/copy.ts#focusLine`, never re-worded here) whenever
+ * the gap view's `build-session` affordance has pre-filled one. The one new
+ * control that pre-fill needs on Home that it never needed on the
+ * session-builder screen: a way to drop it without leaving Home, now that
+ * Home is where she steers rather than a second screen (`[D-243]`).
+ */
+export const HOME_CLEAR_FOCUS_ACTION = 'Clear';
 
 /** `HomePanel`'s own title (kit verbatim, `Pass7Home.jsx`'s `"Where each course stands"`). */
 export const HOME_COURSES_PANEL_TITLE = 'Where each course stands';
@@ -133,6 +147,7 @@ export function allHomeStrings(): readonly string[] {
     DISMISS_OFFER_ACTION,
     HOME_OFFER_EYEBROW,
     HOME_START_ACTION,
+    HOME_CLEAR_FOCUS_ACTION,
     HOME_COURSES_PANEL_TITLE,
     HOME_COURSES_PANEL_NOTE,
     HOME_OPEN_TERM_ACTION,

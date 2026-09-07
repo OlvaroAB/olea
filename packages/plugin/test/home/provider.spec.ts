@@ -86,9 +86,17 @@ function dashboard(state: HomeViewState) {
   return state;
 }
 
+/**
+ * `[D-243]` (`ol-egov.132.7` [SESS-8.7]): `load` now takes F4.6's three
+ * steering inputs as a `SessionBuilderRequest` rather than composing
+ * unsteered — this is the ordinary, unset-everything request every test in
+ * this file that is not itself exercising steering uses.
+ */
+const DEFAULT_REQUEST = { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES };
+
 describe('createLocalHomeProvider — load, no assignments Base configured', () => {
   it('is a dashboard with no courses and an unavailable session, rather than an error', async () => {
-    const state = await provider(fixtureVault(), new FakeDataHost()).load();
+    const state = await provider(fixtureVault(), new FakeDataHost()).load(DEFAULT_REQUEST);
     const { session, courses } = dashboard(state);
     expect(session).toEqual({ kind: 'unavailable' });
     expect(courses).toEqual([]);
@@ -105,7 +113,9 @@ describe('createLocalHomeProvider — F6.10 per-course quiet-line selection', ()
       '02 Assignments/Quiz 3.md':
         '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-08-25\nstatus: done\n---\n\n# Quiz 3\n',
     });
-    const { courses } = dashboard(await provider(vault, hostWithBasePath(BASE_PATH)).load());
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
 
     const testc101Rows = courses.filter((row) => row.course === 'TESTC101');
     // F6.10 never renders more than one line per course, so this course
@@ -121,7 +131,9 @@ describe('createLocalHomeProvider — F6.10 per-course quiet-line selection', ()
       '02 Assignments/Quiz 1.md':
         '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-08-10\nstatus: done\n---\n\n# Quiz 1\n',
     });
-    const { courses } = dashboard(await provider(vault, hostWithBasePath(BASE_PATH)).load());
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
     const row = courses.find((r) => r.course === 'TESTC101');
     expect(row?.quiet?.kind).toBe('retrospective-offer');
     if (row?.quiet?.kind === 'retrospective-offer') {
@@ -134,7 +146,9 @@ describe('createLocalHomeProvider — F6.10 per-course quiet-line selection', ()
       '02 Assignments/Quiz 1.md':
         '---\nclass: TESTC202\ntype: Quiz\nweight: 10\ndue: 2026-09-20\nstatus: pending\n---\n\n# Quiz 1\n',
     });
-    const { courses } = dashboard(await provider(vault, hostWithBasePath(BASE_PATH)).load());
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
     const row = courses.find((r) => r.course === 'TESTC202');
     expect(row?.marks).toBeUndefined();
     expect(row?.quiet?.kind).toBe('set-up-waiting');
@@ -149,13 +163,17 @@ describe('createLocalHomeProvider — dismiss', () => {
     });
     const home = provider(vault, hostWithBasePath(BASE_PATH));
 
-    const before = dashboard(await home.load()).courses.find((r) => r.course === 'TESTC101');
+    const before = dashboard(await home.load(DEFAULT_REQUEST)).courses.find(
+      (r) => r.course === 'TESTC101',
+    );
     expect(before?.quiet?.kind).toBe('retrospective-offer');
     if (before?.quiet?.kind !== 'retrospective-offer') throw new Error('expected an offer');
 
     await home.dismiss(before.quiet.assessmentPath);
 
-    const after = dashboard(await home.load()).courses.find((r) => r.course === 'TESTC101');
+    const after = dashboard(await home.load(DEFAULT_REQUEST)).courses.find(
+      (r) => r.course === 'TESTC101',
+    );
     expect(after?.quiet?.kind).not.toBe('retrospective-offer');
   });
 });
@@ -261,7 +279,9 @@ describe("createLocalHomeProvider — the cached plan's real allocation reaches 
       allocationEntry('TESTC101', 1),
       allocationEntry('TESTC202', 0),
     ]);
-    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH), () => plan).load();
+    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH), () => plan).load(
+      DEFAULT_REQUEST,
+    );
     const courses = coursesOf(sessionModel(state));
     expect(courses.has('TESTC101')).toBe(true);
     expect(courses.has('TESTC202')).toBe(false);
@@ -272,16 +292,56 @@ describe("createLocalHomeProvider — the cached plan's real allocation reaches 
       allocationEntry('TESTC101', 0),
       allocationEntry('TESTC202', 1),
     ]);
-    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH), () => plan).load();
+    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH), () => plan).load(
+      DEFAULT_REQUEST,
+    );
     const courses = coursesOf(sessionModel(state));
     expect(courses.has('TESTC202')).toBe(true);
     expect(courses.has('TESTC101')).toBe(false);
   });
 
   it('with no `plan` thunk supplied at all, both courses share the headline session — the interim proportional split, unchanged from before this bead', async () => {
-    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH)).load();
+    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH)).load(
+      DEFAULT_REQUEST,
+    );
     const courses = coursesOf(sessionModel(state));
     expect(courses.has('TESTC101')).toBe(true);
     expect(courses.has('TESTC202')).toBe(true);
+  });
+});
+
+// `[D-243]` (`ol-egov.132.7` [SESS-8.7]): F4.6's three steering inputs now
+// reach Home through the same `SessionBuilderRequest` shape the
+// session-builder screen always used — this suite proves `request` actually
+// changes what `createLocalHomeProvider` composes, the same "the same
+// composer Start will sit" property `features/F6-today.md`'s "The start
+// gate" section states as a scenario.
+describe('createLocalHomeProvider — F4.6 steering inputs reach the headline session (ol-egov.132.7 [SESS-8.7], F4.6, F6.10/[D-243])', () => {
+  it('a course-or-topic restriction changes which course the headline session draws from', async () => {
+    const home = provider(twoCourseVault(), hostWithBasePath(BASE_PATH));
+
+    const unsteered = coursesOf(sessionModel(await home.load(DEFAULT_REQUEST)));
+    expect(unsteered.has('TESTC101')).toBe(true);
+    expect(unsteered.has('TESTC202')).toBe(true);
+
+    const steered = coursesOf(
+      await home
+        .load({
+          budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,
+          courseOrTopic: { kind: 'course', label: 'TESTC101' },
+        })
+        .then(sessionModel),
+    );
+    expect(steered.has('TESTC101')).toBe(true);
+    expect(steered.has('TESTC202')).toBe(false);
+  });
+
+  it('a different budget changes how many instruments the headline session holds', async () => {
+    const home = provider(twoCourseVault(), hostWithBasePath(BASE_PATH));
+
+    const wide = sessionModel(await home.load({ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES }));
+    const narrow = sessionModel(await home.load({ budgetMinutes: 5 }));
+
+    expect(narrow.model.items.length).toBeLessThan(wide.model.items.length);
   });
 });

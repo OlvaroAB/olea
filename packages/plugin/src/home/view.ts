@@ -1,6 +1,7 @@
 /**
  * `HomeView` — the landing dashboard (F6.10, `[D-223]`, `ol-l5og.21`
- * [HOME-2]).
+ * [HOME-2]; steering and the start gate `[D-243]`, `ol-egov.132.7`
+ * [SESS-8.7]).
  *
  * **`[D-223]` supersedes this view's own predecessor scope.** `ol-0r92.17`
  * scoped `HomeView` to exactly F8.8's standing retrospective offer and
@@ -15,18 +16,73 @@
  * duplicated — Today keeps rendering the same composition as a worked
  * list, `ol-l5og.22` [HOME-3]'s own scope).
  *
+ * **`[D-243]`: the entry is Home, and there is no builder screen to pass
+ * through.** F4.6 as amended: *"The three steering inputs sit inline on
+ * Home, beside the composed session ... and Start on Home sits that session
+ * ... The session builder is therefore a panel, not a destination."* F6.10
+ * as amended: *"Home carries F4.6's three steering inputs inline, beside
+ * that headline, and Start sits the composed session directly rather than
+ * opening a builder."* Three consequences, each landed below:
+ *
+ *  1. **Start opens the session, not a session-assembly screen.**
+ *     {@link HomeViewDeps.startSession} replaces the old
+ *     `openSessionBuilder` — `main.ts` wires it to the review surface she
+ *     actually answers from (`revealReviewView`), the "existing session
+ *     opener" the bead's own brief names as the fallback ahead of rows
+ *     `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`) landing the shared
+ *     holder's production callers. **This view deliberately does NOT enter
+ *     `packages/plugin/src/session/holder.ts`'s shared
+ *     `SittingState<ComposedStudySession>` itself** — see this file's own
+ *     "What Start does NOT yet do" note below for why that would mean
+ *     freezing a fabricated object, which is worse than not freezing one.
+ *  2. **The three steering inputs render inline, beside the headline**, via
+ *     `../session-builder/view.ts`'s exported `renderSteeringControls` — the
+ *     same rendering `SessionBuilderView` itself now calls for its own
+ *     shrunk panel, imported rather than re-typed a second time (see that
+ *     module's own doc, "What is shared with Home"). `refresh()` holds the
+ *     three inputs as sticky local state, the identical pattern
+ *     `SessionBuilderView` always used, and supplies them to `./provider.ts`
+ *     on every load so the headline she sees is the composition Start will
+ *     sit.
+ *  3. **The reasoning that used to live only on the builder screen now
+ *     renders here too.** Before `[D-243]`, "Start"/"Why these" both opened
+ *     the builder for F4.9's full reasoning, the countdown, F6.7's by-source
+ *     lines and the focus-concept line — Home drew only the two
+ *     `sessionFraming()` sentences and pointed at that screen for the rest.
+ *     With no screen left to point at, every remaining line
+ *     `sessionScreenCopy`/`reentryScreenCopy` produce for this composition
+ *     renders in the reason block below, so pressing Start loses her no
+ *     information she could reach before.
+ *
  * **The composed-session headline is rendered, never recomputed.** `./
  * provider.ts` calls `../session-builder/provider.ts`'s own
  * `createLocalSessionBuilderProvider` — the exact module that already owns
  * F4.6/F4.7/F4.8's ranking, allocation and duration-estimate chain — and
  * this file renders its `SessionBuilderState` through
- * `../session-builder/copy.ts`'s own pure functions
- * (`sessionSummaryLine`/`sessionFraming`/`emptySessionLines`/
- * `reentryEmptyLines`/`reentryScreenCopy`), imported rather than
+ * `../session-builder/copy.ts`'s own pure functions, imported rather than
  * reimplemented. F6.4's "an implementation holding a single sorted list...
  * has invented [the allocation rule] and hidden it" is exactly the mistake
  * this avoids: nothing in this file ranks a concept, allocates a course
  * share, or drafts a reason sentence of its own.
+ *
+ * **What Start does NOT yet do, and why (reachability, `[D-072]` clause
+ * 5).** The design note (`docs/dev/one-assembly-path.md` §3a/§3b, private
+ * repo) calls for Start to be the freeze point on the shared holder — enter
+ * it with the composed session, one `decideRebuild` call, recompose before
+ * entering, never during. `../session-builder/provider.ts` deliberately
+ * drops `courseShares`/`forcedCourses`/`obligationClasses`/`overflow` when
+ * it builds the `SessionBuilderState` this view (and the holder's own
+ * `ComposedStudySession` type) would need (`provider.ts`'s own comment at
+ * its `composed.overflow`/`courseShares`/`forcedCourses` line: "deliberately
+ * dropped") — so Home has no honest source for the object the holder's type
+ * requires, and entering it with a fabricated one would freeze something
+ * worse than not freezing at all. Start therefore opens the review surface
+ * directly, unrelated to the holder, exactly the way it always has; wiring
+ * the holder is `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`)'s job, once
+ * the composed session's full shape reaches a surface that can enter it
+ * correctly. Disclosed, not hidden: until then, the review surface Start
+ * opens still composes independently and does not yet reflect what Home's
+ * steering inputs just composed.
  *
  * **The per-course coverage strip is a REDUCED-size read of the same grove
  * `GroveView` already renders**, not a second computation: `./provider.ts`
@@ -94,7 +150,10 @@
  * never edited in place (`docs/design/CLAUDE.md`), so this view's classes
  * reproduce its layout, hierarchy and states using this plugin's own tokens
  * and its own existing mark vocabulary (the sprig, the grove's dashed/dotted
- * split) rather than a second component library.
+ * split) rather than a second component library. `[D-243]`'s own steering
+ * row reuses `../session-builder/view.ts`'s existing
+ * `olea-session-budgets`/`olea-session-select` classes verbatim (via
+ * `renderSteeringControls`), so no new class is introduced for it here.
  *
  * **No test file for this module and none is expected** — `obsidian` has no
  * runtime outside a real host; the honesty properties are asserted against
@@ -105,21 +164,28 @@
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { GroveDeclaredState, VaultPath } from 'olea-core';
 import { renderFirstReadReadout } from '../course-setup/confirmation-view.js';
+import { EXPLAIN_BACK_SESSION_ENTRY_LABEL } from '../explain-back/copy.js';
 import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import {
+  type CourseOrTopicOption,
+  DEFAULT_SESSION_BUDGET_MINUTES,
   emptySessionLines,
-  REENTRY_STILL_AVAILABLE_LINE,
   reentryEmptyLines,
+  reentryScreenCopy,
   SESSION_UNAVAILABLE_BODY,
   SESSION_UNAVAILABLE_TITLE,
-  SESSION_WHY_THESE_LABEL,
-  sessionFraming,
+  sessionScreenCopy,
   sessionSummaryLine,
 } from '../session-builder/copy.js';
-import type { SessionBuilderState } from '../session-builder/view.js';
+import {
+  renderSteeringControls,
+  type SessionBuilderRequest,
+  type SessionBuilderState,
+} from '../session-builder/view.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   DISMISS_OFFER_ACTION,
+  HOME_CLEAR_FOCUS_ACTION,
   HOME_COURSES_PANEL_NOTE,
   HOME_COURSES_PANEL_TITLE,
   HOME_NO_MAP_DRAWN,
@@ -181,24 +247,53 @@ export type HomeViewState =
   | { readonly kind: 'unavailable' };
 
 export interface HomeViewDeps {
-  /** Loads the view state. Async because it reads the vault. */
-  readonly load: () => Promise<HomeViewState>;
+  /**
+   * Loads the view state. Async because it reads the vault. Takes F4.6's
+   * three steering inputs (`[D-243]`) — `./view.ts` holds them as sticky
+   * local state (the same pattern `../session-builder/view.ts` always used)
+   * and supplies them on every call.
+   */
+  readonly load: (request: SessionBuilderRequest) => Promise<HomeViewState>;
   /** Opens the retrospective's own dedicated view (F8.8, `[D-134]` Q10). */
   readonly openRetrospective: () => void;
-  /** F4.6/F6.4: opens the session builder, where the full reasoning lives. */
-  readonly openSessionBuilder: () => void;
+  /**
+   * `[D-243]`: Start sits the composed session directly — see this file's
+   * own module doc, points 1 and "What Start does NOT yet do", for exactly
+   * what this does and does not do today.
+   */
+  readonly startSession: () => void | Promise<void>;
   /** F8.1: opens the course grove — F6.10's "Open the term" link. */
   readonly openGrove: () => void;
   /** `[D-134]` Q1's other ending — the offer's own dismiss, without opening. */
   readonly dismiss: (assessmentPath: VaultPath) => Promise<void>;
+  /**
+   * `[D-163]` (`ol-12gs`)'s "session assembly F4.6" entry point onto
+   * `ExplainBackModal`, relocated here from the (now-shrunk)
+   * `SessionBuilderView` — that screen no longer renders the composed
+   * session, so it is no longer where this door can reasonably live; F6.4
+   * already names Home as the "reachable caller" for its own suggestion
+   * entry, and this is the same door. Optional on the same "main.ts supplies
+   * a handler" terms every other cross-package callback in this plugin
+   * uses.
+   */
+  readonly openExplainBack?: () => void;
 }
 
 export class HomeView extends ItemView {
   private readonly deps: HomeViewDeps;
+  /** F4.6's first steering input — sticky across a course/topic or focus-concept change, the same reasoning `../session-builder/view.ts` always gave its own identical field. */
+  private budgetMinutes: number;
+  /** F4.6's third steering input ("a stated interest"), the gap view's pre-fill (`[D-243]`: "a pre-fill of a steering input on Home, never a second entry"). */
+  private focusConceptName: string | undefined;
+  /** F4.6's second steering input. */
+  private courseOrTopic: CourseOrTopicOption | undefined;
 
   constructor(leaf: WorkspaceLeaf, deps: HomeViewDeps) {
     super(leaf);
     this.deps = deps;
+    this.budgetMinutes = DEFAULT_SESSION_BUDGET_MINUTES;
+    this.focusConceptName = undefined;
+    this.courseOrTopic = undefined;
   }
 
   override getViewType(): string {
@@ -222,9 +317,28 @@ export class HomeView extends ItemView {
     this.contentEl.empty();
   }
 
-  /** Re-reads and redraws. Public so a host can refresh after a dismiss, or after her material changes — same convention every other view in this plugin sets. */
+  /** Re-reads and redraws, over the current steering inputs. Public so a host can refresh after a dismiss, or after her material changes — same convention every other view in this plugin sets. */
   async refresh(): Promise<void> {
-    this.render(await this.deps.load());
+    const request: SessionBuilderRequest = {
+      budgetMinutes: this.budgetMinutes,
+      ...(this.focusConceptName !== undefined ? { focusConceptName: this.focusConceptName } : {}),
+      ...(this.courseOrTopic !== undefined ? { courseOrTopic: this.courseOrTopic } : {}),
+    };
+    this.render(await this.deps.load(request));
+  }
+
+  /**
+   * Points Home's steering at one concept — the gap view's `build-session`
+   * affordance (F4.4) used to seed `SessionBuilderView` directly; `main.ts`
+   * now seeds this instead (`[D-243]`: "the gap view may still hand a
+   * course or topic into those inputs — that is a pre-fill of a steering
+   * input on Home, never a second entry and never a second assembly").
+   * Public so a host can call it right after revealing this leaf, same
+   * shape `SessionBuilderView.setFocusConcept` always had.
+   */
+  async setFocusConcept(conceptName: string | undefined): Promise<void> {
+    this.focusConceptName = conceptName;
+    await this.refresh();
   }
 
   private render(state: HomeViewState): void {
@@ -246,12 +360,12 @@ export class HomeView extends ItemView {
   }
 
   /**
-   * F6.4/F6.10's headline. Every sentence here comes from `../session-
-   * builder/copy.ts` — see this file's own module doc for why. `Start` and
-   * `Why these` both open the same session-builder view (F4.6's own ruled
-   * destination): two doors onto one screen, the same shape
-   * `commands/register-commands.ts` already documents for "Open Today" and
-   * "Open Olea".
+   * F6.4/F6.10's headline plus F4.6's three steering inputs, inline beside
+   * it (`[D-243]`). Every sentence here comes from `../session-
+   * builder/copy.ts` — see this file's own module doc for why. `Start` sits
+   * the composed session directly; there is no second button pointing at a
+   * builder screen any more (F4.6: "there is no builder screen to pass
+   * through").
    */
   private renderOffer(root: HTMLElement, session: SessionBuilderState): void {
     // `.olea-card`: the shared panel primitive (border, radius, elevated
@@ -266,6 +380,38 @@ export class HomeView extends ItemView {
       text: HOME_OFFER_EYEBROW,
     });
 
+    // Plain, unclassed wrapper `div`s — every visible chrome here comes from
+    // classes `../session-builder/view.ts`'s own styles.css section (or this
+    // file's existing `.olea-fine`/`.olea-button*` primitives) already
+    // style, so this bead needs no new class and no new styles.css rule.
+    const steering = card.createDiv();
+    renderSteeringControls(steering, {
+      budgetMinutes: this.budgetMinutes,
+      onBudgetChange: (minutes) => {
+        this.budgetMinutes = minutes;
+        void this.refresh();
+      },
+      ...(session.kind !== 'unavailable' && session.courseOrTopicOptions !== undefined
+        ? { courseOrTopicOptions: session.courseOrTopicOptions }
+        : {}),
+      courseOrTopic: this.courseOrTopic,
+      onCourseOrTopicChange: (option) => {
+        this.courseOrTopic = option;
+        void this.refresh();
+      },
+    });
+    if (this.focusConceptName !== undefined) {
+      const chip = steering.createDiv();
+      chip.createSpan({ cls: 'olea-fine', text: this.focusConceptName });
+      const clear = chip.createEl('button', {
+        cls: 'olea-button olea-button-quiet',
+        text: HOME_CLEAR_FOCUS_ACTION,
+      });
+      clear.addEventListener('click', () => {
+        void this.setFocusConcept(undefined);
+      });
+    }
+
     if (session.kind === 'unavailable') {
       card.createDiv({ cls: 'olea-home-offer-title', text: SESSION_UNAVAILABLE_TITLE });
       card.createDiv({
@@ -277,6 +423,18 @@ export class HomeView extends ItemView {
 
     const items = session.kind === 'reentry' ? session.view.items : session.model.items;
     const modelLike = session.kind === 'reentry' ? session.view : session.model;
+    // Every line `copy.ts` produces for this composition — the summary
+    // (handled separately below, drawn as the title), F4.9's framing, the
+    // countdown, F6.7's by-source lines, the focus line, the duration-basis
+    // line and (ordinary sessions only) the left-out lines. Before `[D-243]`
+    // only `sessionFraming()`'s two sentences rendered here; the rest lived
+    // on the builder screen "Why these" opened. With no screen left to open,
+    // every one of them renders below instead, so Start loses her nothing
+    // she could reach before.
+    const allLines =
+      session.kind === 'reentry'
+        ? reentryScreenCopy(session.view)
+        : sessionScreenCopy(session.model);
 
     if (items.length === 0) {
       // F6.10: "content is never manufactured to avoid [reading empty]" — when
@@ -293,35 +451,41 @@ export class HomeView extends ItemView {
       return;
     }
 
-    card.createDiv({ cls: 'olea-home-offer-title', text: sessionSummaryLine(modelLike) });
+    const summaryLine = sessionSummaryLine(modelLike);
+    card.createDiv({ cls: 'olea-home-offer-title', text: summaryLine });
 
+    // Everything else `copy.ts` produced for this composition, in its own
+    // order — F4.9's framing (`sessionFraming`), F6.6's "still available"
+    // line, F6.7's by-source lines, the focus line, the countdown, the
+    // format-preference line, the duration-basis line and (ordinary sessions
+    // only) the left-out lines are all already IN `allLines`
+    // (`sessionScreenCopy`/`reentryScreenCopy` push every one of them), so
+    // this loop draws each without re-deriving or re-ordering any of them.
     const reason = card.createDiv({ cls: 'olea-home-offer-reason' });
-    for (const line of sessionFraming()) {
+    for (const line of allLines) {
+      if (line === summaryLine) continue;
       reason.createDiv({ cls: 'olea-prose olea-home-offer-reason-line', text: line });
-    }
-    if (session.kind === 'reentry') {
-      // F6.6: "no remark about the gap" — this line states only that
-      // everything else is still scheduled, never how long she was away.
-      reason.createDiv({
-        cls: 'olea-prose olea-home-offer-reason-line',
-        text: REENTRY_STILL_AVAILABLE_LINE,
-      });
     }
 
     const actions = card.createDiv({ cls: 'olea-home-offer-actions' });
     // `.olea-button-primary`/`.olea-button-quiet` alone fully determine each
-    // button's chrome — no `-start`/`-why` modifier class, same reasoning as
-    // the card above.
+    // button's chrome — no `-start`/`-explain` modifier class, same
+    // reasoning as the card above.
     const start = actions.createEl('button', {
       cls: 'olea-button olea-button-primary',
       text: HOME_START_ACTION,
     });
-    start.addEventListener('click', () => this.deps.openSessionBuilder());
-    const why = actions.createEl('button', {
-      cls: 'olea-button olea-button-quiet',
-      text: SESSION_WHY_THESE_LABEL,
+    start.addEventListener('click', () => {
+      void this.deps.startSession();
     });
-    why.addEventListener('click', () => this.deps.openSessionBuilder());
+    const openExplainBack = this.deps.openExplainBack;
+    if (openExplainBack) {
+      const explain = actions.createEl('button', {
+        cls: 'olea-button olea-button-quiet',
+        text: EXPLAIN_BACK_SESSION_ENTRY_LABEL,
+      });
+      explain.addEventListener('click', () => openExplainBack());
+    }
   }
 
   /** F6.10's "one row per running course... term-at-a-glance" — see this file's own module doc for why the row of strips is the whole composition. */

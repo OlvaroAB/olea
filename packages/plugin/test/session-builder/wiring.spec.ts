@@ -2,6 +2,16 @@
  * Scenario: `features/F4-oracle.md`, "the build-session affordance actually
  * builds a session" — @auto:plugin/session-builder/wiring.spec
  *
+ * **Amended by `[D-243]` (`ol-egov.132.7` [SESS-8.7]).** Both doors this file
+ * checks — the palette command and the gap view's `build-session` affordance
+ * — used to open `SessionBuilderView` directly; F4.6 as amended rules "there
+ * is no builder screen to pass through", so both now open `HomeView`
+ * instead (the gap view's door seeding Home's own `setFocusConcept`). This
+ * file's assertions were rewritten to match; `features/F6-today.md`'s "The
+ * start gate" section carries the fuller scenario set this same amendment
+ * adds, including the "no navigation target left" scenario the last
+ * `describe` block below is for.
+ *
  * The same instrument, and the same reasoning, as `test/main-wiring.spec.ts`:
  * `main.ts` imports `obsidian`, whose `package.json` `main` is `""`, so it
  * cannot be loaded under Vitest at all — and the defect this bead repairs is
@@ -54,21 +64,25 @@ describe('the session builder is registered, not merely written (ol-p5t06b)', ()
     );
   });
 
-  it('reveals an existing leaf rather than stacking a second one, same shape as the gap view', () => {
-    expect(main).toMatch(/getLeavesOfType\(VIEW_TYPE_OLEA_SESSION\)/);
-  });
+  // `[D-243]`: there is no `revealSessionBuilderView` any more to reuse a
+  // leaf — the view type is still registered (see the test above) but
+  // nothing in the product reveals one; see the "no longer a navigation
+  // target" `describe` block below.
 
-  it('the command palette entry opens it, unfocused', () => {
-    expect(main).toMatch(
-      /buildSession:\s*\(\)\s*=>\s*\{\s*void this\.revealSessionBuilderView\(undefined\);/,
-    );
+  // `[D-243]`: the palette command's door used to open `SessionBuilderView`
+  // directly (`revealSessionBuilderView(undefined)`); it opens Home now.
+  it('the command palette entry opens Home, unfocused ([D-243])', () => {
+    expect(main).toMatch(/buildSession:\s*\(\)\s*=>\s*\{\s*void this\.revealHomeView\(\);/);
   });
 });
 
 describe('the build-session affordance is no longer an inert label', () => {
-  it('the gap view is constructed with a buildSession handler that reaches the session builder', () => {
+  // `[D-243]`: the gap view's door used to seed `SessionBuilderView` directly;
+  // it seeds Home's own steering instead — "a pre-fill of a steering input
+  // on Home, never a second entry" (F4.6 as amended).
+  it('the gap view is constructed with a buildSession handler that reaches Home ([D-243])', () => {
     expect(main).toMatch(
-      /buildSession:\s*\(row\)\s*=>\s*\{\s*void this\.revealSessionBuilderView\(row\.conceptName\);/,
+      /buildSession:\s*\(row\)\s*=>\s*\{\s*void this\.revealHomeView\(row\.conceptName\);/,
     );
   });
 
@@ -81,9 +95,29 @@ describe('the build-session affordance is no longer an inert label', () => {
     expect(gapView).not.toMatch(/affordance === 'draft-cards'/);
   });
 
-  it('the seed reaches the view through setFocusConcept, so a second row rebuilds the open pane', () => {
-    expect(main).toMatch(/view instanceof SessionBuilderView/);
+  it('the seed reaches Home through setFocusConcept, so a second row rebuilds the open pane ([D-243])', () => {
+    expect(main).toMatch(/view instanceof HomeView/);
     expect(main).toMatch(/setFocusConcept\(conceptName\)/);
+  });
+});
+
+// `[D-243]` (`ol-egov.132.7` [SESS-8.7]): the session-builder view "stops
+// being a destination (no command or navigation target of its own that
+// leads anywhere but Home)" — `features/F6-today.md`'s "The start gate"
+// scenario of the same name. `VIEW_TYPE_OLEA_SESSION` stays registered (a
+// saved workspace layout may still reference it) but nothing in the product
+// chooses to open it.
+describe('the session-builder view is no longer a navigation target ([D-243])', () => {
+  it('the view type is still registered, so a saved workspace layout does not error', () => {
+    expect(main).toMatch(/registerView\(\s*VIEW_TYPE_OLEA_SESSION/);
+  });
+
+  it('nothing in main.ts calls revealSessionBuilderView any more — it is gone, not merely unused', () => {
+    expect(main).not.toMatch(/revealSessionBuilderView/);
+  });
+
+  it("Home's own Start action opens the review surface directly, never the session builder", () => {
+    expect(main).toMatch(/startSession:\s*\(\)\s*=>\s*\{\s*void this\.revealReviewView\(\);/);
   });
 });
 

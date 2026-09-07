@@ -4,13 +4,20 @@
  * `test/gap/styles.spec.ts` and `test/today/styles.spec.ts` run for their own
  * panes.
  *
- * `view.ts` emits one dynamic class suffix, `olea-session-item-<formatMatch>`,
- * built from a template literal, so the exact-match regex on single-quoted
- * `cls: '...'` literals would find only the static prefix. This file matches
- * template literals too and enumerates that suffix's real value set from
- * `olea-core`'s own `SessionFormatMatch` vocabulary rather than guessing it, so
- * the check fails if a fourth match state is ever added and the stylesheet is
- * not updated to match.
+ * **`[D-243]` (`ol-egov.132.7` [SESS-8.7]) shrank the view to F4.6's three
+ * steering inputs** — the item list, the countdown and every other
+ * session-content class (including the `olea-session-item-<formatMatch>`
+ * dynamic suffix this file used to enumerate from `olea-core`'s
+ * `SessionFormatMatch` vocabulary) moved to `../home/view.ts`, which now
+ * calls `renderSteeringControls` (exported from `session-builder/view.ts`)
+ * rather than re-typing the same markup — see that function's own module
+ * doc. `view.ts` itself emits no dynamic class template any more, so the
+ * template-literal matching this file used to need is gone too; a future
+ * dynamic suffix reintroduces the same shape this file used to have.
+ * `styles.css` still carries the now-orphaned session-content rules
+ * (`.olea-session-item`, `.olea-session-headline`, etc.) — this file's
+ * "every EMITTED class has a rule" check is one-directional and does not
+ * flag unused CSS, the same posture it always had toward extra rules.
  *
  * `ol-0r92.8` moved the seven `--olea-host-*` reads this pane shares with
  * `.olea-review-root`, `.olea-today-root` and `.olea-gap-root` (bg, text,
@@ -28,7 +35,6 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { SessionFormatMatch } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 
 const cssPath = fileURLToPath(new URL('../../styles.css', import.meta.url));
@@ -97,14 +103,12 @@ function sharedHostReadsBlock(): string {
 
 const sharedCss = sharedHostReadsBlock();
 
-/** Every `SessionFormatMatch` value, read from the real vocabulary rather than hard-coded. */
-const FORMAT_MATCHES: readonly SessionFormatMatch[] = [
-  'preferred-format',
-  'other-format',
-  'no-preference',
-];
-
-/** Every static `cls:`/`addClass` string, plus every dynamic template's static prefix expanded over its real value set. */
+/**
+ * Every static `cls:`/`addClass` string. No dynamic-template handling is
+ * needed since `[D-243]`'s shrink — see this file's own module doc; a lane
+ * reintroducing a `cls: \`...\${...}\`` template here should reintroduce the
+ * matching this function used to carry, not silently under-count.
+ */
 function classesEmittedByView(): readonly string[] {
   const found = new Set<string>();
 
@@ -115,26 +119,6 @@ function classesEmittedByView(): readonly string[] {
   for (const match of viewCode.matchAll(/addClass\('([^']+)'\)/g)) {
     const cls = match[1];
     if (cls !== undefined && cls !== '') found.add(cls);
-  }
-
-  for (const match of viewCode.matchAll(/cls:\s*`([^`]+)`/g)) {
-    const template = match[1] ?? '';
-    const staticPart = template.split('${')[0] ?? '';
-    const tokens = staticPart
-      .trim()
-      .split(/\s+/)
-      .filter((t) => t !== '');
-    const prefix = tokens[tokens.length - 1];
-    for (const token of tokens.slice(0, -1)) found.add(token);
-    if (prefix === undefined) continue;
-
-    if (template.includes('item.formatMatch')) {
-      for (const cls of FORMAT_MATCHES) found.add(`${prefix}${cls}`);
-    } else {
-      throw new Error(
-        `session-builder/styles.spec.ts: unrecognised dynamic cls template: ${template}`,
-      );
-    }
   }
 
   return [...found].sort();
@@ -152,11 +136,16 @@ function classesStyled(): ReadonlySet<string> {
 }
 
 describe('styles.css covers the session builder', () => {
-  it('finds the classes the view emits, static and dynamic alike', () => {
+  it('finds the classes the view emits', () => {
     const emitted = classesEmittedByView();
     expect(emitted).toContain('olea-session-root');
-    expect(emitted).toContain('olea-session-item-preferred-format');
     expect(emitted).toContain('olea-session-budget-active');
+    expect(emitted).toContain('olea-session-select');
+  });
+
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: describing the literal source pattern this test checks for, not building a template.
+  it("carries no dynamic cls: `...${...}` template — [D-243]'s shrink removed the last one", () => {
+    expect(viewCode).not.toMatch(/cls:\s*`[^`]*\$\{/);
   });
 
   it('every class the view emits has a rule', () => {

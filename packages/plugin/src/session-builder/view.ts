@@ -1,158 +1,107 @@
 /**
- * `SessionBuilderView` — the time-bounded session screen (F4.6, F4.7, F4.8,
- * F4.9; `ol-p5t06b` [P5-T06b]), and F6.6's re-entry-after-absence surface
- * (`ol-v7r5.18`, discovered from `ol-blwb` / `[BKLG-1]`).
+ * `SessionBuilderView` — F4.6's three steering inputs (`ol-p5t06b` [P5-T06b];
+ * STEER-2 `ol-ijms`), rendered as a panel rather than a screen since
+ * `[D-243]` (`ol-egov.135`, `ol-egov.132.7` [SESS-8.7]).
  *
- * **STEER-2 (`ol-ijms`), the "course or topic" half of F4.6's three
- * first-class steering inputs.** `[D-076]` round 2 ("Can she steer it?")
- * names three inputs on this one assembly path: the time she has (already
- * surfaced — the budget buttons below), a course or topic to work on (new
- * here), and a stated interest (already surfaced — {@link setFocusConcept}'s
- * sticky lift from the gap view). `SessionSteeringRequest`
- * (`olea-core`'s `study-session/compose.ts`) has carried `courses`/
- * `conceptIds` end to end since STEER-1 (`ol-imqy`); this bead is only the
- * missing UI: a single-select control offering every course and every named
- * concept ("topic", F2.5's word for it) the vault currently has, resolved by
- * `./provider.js` into the exact filter `composeSessionRows` expects. See
- * {@link CourseOrTopicOption}'s own doc for why the resolution happens in the
- * provider rather than here.
+ * **`[D-243]` supersedes this view's own prior scope.** Before this bead the
+ * whole session — the headline, the ranked item list, the countdown, F4.9's
+ * "why these" reasoning, F6.7's by-source lines and the explain-back door —
+ * rendered here, and Home opened this screen to show any of it. F4.6 as
+ * amended reads: *"The entry is Home. The three steering inputs sit inline
+ * on Home, beside the composed session ... and Start on Home sits that
+ * session — there is no builder screen to pass through ... The session
+ * builder is therefore a panel, not a destination: what was a view of its
+ * own is the steering panel Home embeds."* F6.10 as amended says the same
+ * thing from Home's side: "Home carries F4.6's three steering inputs inline,
+ * beside that headline, and Start sits the composed session directly rather
+ * than opening a builder." So every rendering decision below follows one
+ * rule: if it is one of the three steering inputs (the time she has, a
+ * course or topic, a stated interest), it stays; if it is part of the
+ * SESSION itself (what F6.4's "one answer" renders), it moved to
+ * `../home/view.ts`, which is the only place F6.4's headline is drawn now.
  *
- * **Thin by design, and here that is a safety property.** Everything this
- * screen *decides* is in `olea-core`'s `study-session/` — which instruments are
- * offered, in what order, at what estimated cost, and what was left out and
- * why. Everything it *says* is in `./copy.ts`. What is left here is DOM and one
- * piece of state (the chosen budget), which is exactly the split `gap/view.ts`
- * holds and for the same reason (`ol-09kf`).
+ * **Reachability: this view is no longer a navigation target.** `main.ts`'s
+ * palette command and the gap view's `build-session` affordance (F4.4) used
+ * to call `revealSessionBuilderView`; both now call `revealHomeView`
+ * instead (the gap view's call seeds Home's own `setFocusConcept`, the
+ * pre-fill F4.6 still names: "the gap view may still hand a course or topic
+ * into those inputs — that is a pre-fill of a steering input on Home, never
+ * a second entry"). `VIEW_TYPE_OLEA_SESSION` stays registered so a saved
+ * Obsidian workspace layout that still references it does not error on
+ * reopen; nothing in this plugin chooses to open it any more.
+ * `features/F6-today.md`'s "The start gate" section carries the scenario set
+ * for both halves of this change.
  *
- * So there is no test file for this module and none is expected — `obsidian`
- * has no runtime outside a real host (its `package.json` `main` is empty, so it
- * cannot even be imported under Vitest). `test/session-builder/copy.spec.ts` is
- * where the honesty properties are asserted, and `test/main-wiring.spec.ts` is
- * where its reachability is.
+ * **What is shared with Home, and why it lives here rather than in a third
+ * file.** {@link renderSteeringControls} is the one rendering of F4.6's
+ * budget buttons and course-or-topic select — `../home/view.ts` calls it
+ * directly rather than re-typing the same DOM/class vocabulary a second
+ * time, which is exactly the "two wordings of one promise drift; one string
+ * cannot" argument `./copy.ts` already makes for its own strings, applied to
+ * markup. It stays a plain, `obsidian`-free DOM builder (parent element in,
+ * nothing out) so both this view's own `render()` and Home's `renderOffer`
+ * can call it against their own `contentEl` subtree.
  *
- * **RBLD-2 (`ol-e228`), component register row 3.6.** This view holds no
- * `SittingState` itself, even though it is the surface that decides *when* a
- * sitting begins and ends. The freeze the rebuild controller (`olea-core`'s
- * `queue/rebuild-controller.ts`) provides is only worth holding somewhere that
- * can also cheaply tell whether a between-sittings trigger fired, and this
- * file has no vault or review-log access to do that (the thin-view rule
- * above) — `./provider.js` does, so `deps.load` is where the `SittingState`
- * actually lives, closed over once per leaf. What this view DOES own, per the
- * bead: the two lifecycle edges deciding when a sitting starts and ends —
- * every `load` call from `refresh`/`setFocusConcept`/a budget click IS "she
- * asked for a session" (`load`'s own controller always honours an explicit
- * ask), and `onClose` below is "she finished or abandoned" via
- * `deps.endSitting`.
- *
- * **The one rule this file must not break.** It renders `sessionScreenCopy`'s
- * result for an ordinary session and `reentryScreenCopy`'s result for a
- * re-entry one (`SessionBuilderState`'s `'reentry'` branch) — session or no
- * session, focused or not, re-entry or not. Those two functions are what emit
- * the F4.9 framing, the left-out lines (ordinary only — see `reentryScreenCopy`'s
- * own doc for why a re-entry render must never reach `leftOutLines`) and F6.6's
- * always-available line, and neither has a branch that produces a bare list of
- * cards. A card list written here directly, or a summary line assembled in this
- * file, would be a claim nothing can assert on.
+ * **Still thin, still untestable directly, for the same reason as before.**
+ * `obsidian` has no runtime outside a real host, so there is no test file
+ * for this module and none is expected; `test/session-builder/copy.spec.ts`
+ * covers the strings `renderSteeringControls` renders verbatim, and
+ * `test/session-builder/wiring.spec.ts`/`test/home/provider.spec.ts` cover
+ * this bead's own reachability and composition claims (see the feature
+ * file's scenario tags).
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type {
-  ReentryStudySessionView,
-  SessionAssessmentCountdown,
-  StudySessionItem,
-  StudySessionModel,
-} from 'olea-core';
-import { EXPLAIN_BACK_SESSION_ENTRY_LABEL } from '../explain-back/copy.js';
+import type { ReentryStudySessionView, StudySessionModel } from 'olea-core';
 import {
-  assessmentName,
   budgetOptionLabel,
   COURSE_OR_TOPIC_ALL_LABEL,
   COURSE_OR_TOPIC_COURSE_GROUP_LABEL,
   COURSE_OR_TOPIC_LABEL,
   COURSE_OR_TOPIC_TOPIC_GROUP_LABEL,
   type CourseOrTopicOption,
-  countdownLine,
   courseOrTopicNotFoundLine,
   DEFAULT_SESSION_BUDGET_MINUTES,
-  daysOutLabel,
-  emptySessionLines,
-  instrumentGroupHeading,
-  minutesLabel,
-  reentryEmptyLines,
-  reentryScreenCopy,
   SESSION_BUDGET_OPTIONS,
-  SESSION_EMPTY_EYEBROW,
-  SESSION_EYEBROW_LABEL,
-  SESSION_NEXT_ASSESSMENT_LABEL,
-  SESSION_UNAVAILABLE_BODY,
-  SESSION_UNAVAILABLE_TITLE,
   SESSION_VIEW_TITLE,
-  SESSION_WHY_THESE_LABEL,
-  sessionFraming,
-  sessionScreenCopy,
-  sessionSummaryLine,
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_SESSION = 'olea-session-builder';
 
 /**
- * What the view was handed. Three states, for the reason `GapViewState`'s own
- * doc gives: "we could not read your vault" and "there is nothing to build"
- * are different sentences — and F6.6 (`ol-v7r5.18`) adds a third that is
- * neither: `'reentry'` carries `ReentryStudySessionView`, not
- * `StudySessionModel`, so a re-entry render is structurally unable to reach
- * `leftOutInstrumentCount`/`consideredRowCount` (`olea-core`'s
- * `ReentryStudySessionView` doc) — the same reason `composeReentrySession`
- * gives that type its own shape rather than a flag on the ordinary one.
- *
- * The two buildable states also carry `courseOrTopicOptions` (STEER-2): every
- * course and every named concept the provider's vault walk currently knows
- * about, freshly computed on every `load()` — never stale, and never gated on
- * whether a filter is actually applied this time. `'unavailable'` carries
- * none: there is no vault reading behind it to offer options from.
- *
- * **Optional, not required**, even on the two buildable states — a `deps`
- * built by a caller that predates STEER-2 (the workbench's own
- * `session-scenarios.ts` `load`, which composes `StudySessionModel` directly
- * against a hand-built world with no course/topic enumeration to offer) still
- * satisfies this type. `renderCourseOrTopicControls` reads an absent list as
- * "nothing to offer" and renders no control at all, never a filter silently
- * narrowed to zero options.
+ * What a caller's `load()` reports. Still carries the full composed session
+ * shape (`'model'`/`'reentry'`) rather than being narrowed to just
+ * `courseOrTopicOptions`, because `../home/provider.ts` — the one production
+ * caller left that actually reads the session, not just the options — is
+ * this exact type. This view now reads only `courseOrTopicOptions` off it
+ * (see {@link SessionBuilderView.render}'s own comment for why).
  */
 export type SessionBuilderState =
   | {
       readonly kind: 'model';
       readonly model: StudySessionModel;
       readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
-      /** `[D-162]`: set exactly when this session replaces one that just ended because its own composition went stale — `copy.ts`'s `sittingStaleReasonLine`, ready to render as-is. Absent on an ordinary build. */
       readonly staleReasonLine?: string;
     }
   | {
       readonly kind: 'reentry';
       readonly view: ReentryStudySessionView;
       readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
-      /** See the `'model'` branch's own doc. */
       readonly staleReasonLine?: string;
     }
   | { readonly kind: 'unavailable' };
 
-/** What the view asks for when it (re)builds. */
+/** What a caller asks for when it (re)builds — F4.6's three steering inputs, unchanged in shape by `[D-243]`: only where they render moved. */
 export interface SessionBuilderRequest {
   readonly budgetMinutes: number;
-  /** The concept the gap view's `build-session` affordance named, if any. Omitted means "build from the whole ranking". */
+  /** The concept the gap view's `build-session` affordance named, if any — F4.6's "stated interest". Omitted means "build from the whole ranking". */
   readonly focusConceptName?: string;
-  /**
-   * STEER-2 (F4.6): the "course or topic" steering input, chosen from the
-   * PREVIOUS `load()`'s `courseOrTopicOptions` (or unset, on the very first
-   * call). Omitted means no restriction — the same "undefined means no
-   * restriction" default `SessionSteeringRequest.courses`/`conceptIds`
-   * document.
-   */
+  /** F4.6's "course or topic to work on", chosen from the PREVIOUS `load()`'s `courseOrTopicOptions` (or unset, on the very first call). Omitted means no restriction. */
   readonly courseOrTopic?: CourseOrTopicOption;
 }
 
 export interface SessionBuilderViewDeps {
-  /** Builds a session. Async because it reads the vault and runs the oracle chain. */
+  /** Builds a session. Async because it reads the vault and runs the oracle chain. This view only reads `courseOrTopicOptions` off the result — the composed session itself is Home's to render. */
   readonly load: (request: SessionBuilderRequest) => Promise<SessionBuilderState>;
   /** Overrides `SESSION_BUDGET_OPTIONS` — the budgets are a Class B default, reversible from the outside. */
   readonly budgetOptions?: readonly number[];
@@ -160,34 +109,124 @@ export interface SessionBuilderViewDeps {
   /**
    * RBLD-2 (`ol-e228`), component register row 3.6: tells `load`'s own
    * rebuild controller that she finished or navigated away, so the freeze it
-   * holds across `load` calls (`./provider.js`'s `SittingState`) releases —
-   * the next `load` is free to recompute rather than reuse. `onClose` is this
-   * surface's operational reading of "she finished" (`rebuild-controller.ts`'s
-   * own doc offers "opening the view vs. closing it" as the two candidates;
-   * there is no explicit finish/abandon affordance on this screen to read
-   * instead — F4.6/F4.7/F4.8 name none). Optional so a `deps` that predates
-   * this wiring (a test double, say) still satisfies the interface.
+   * holds across `load` calls (`./provider.js`'s `SittingState`) releases.
+   * Kept even though this view no longer shows a session, because
+   * `./provider.js`'s per-leaf sitting is unchanged by `[D-243]` — only what
+   * this view DRAWS from it did.
    */
   readonly endSitting?: () => void;
   /**
-   * F4.6 session assembly / F6.4 Today's suggestion — two of `[D-163]`'s four
-   * ruled entry points onto `ExplainBackModal` (`ol-12gs`), both converging
-   * on THIS screen: `today/copy.ts`'s own module doc names this view as
-   * F6.4's reachable caller ("the suggested session's screen... is the
-   * reachable caller"), and F4.6 is this screen's own clause. Optional on the
-   * same "main.ts supplies a handler" terms every other cross-package
-   * callback in this plugin uses — this module never imports
-   * `explain-back/modal.ts` or any grading/retrieval wiring itself.
+   * `[D-163]` (`ol-12gs`)'s "session assembly F4.6" door onto
+   * `ExplainBackModal`, forwarded (never called) by
+   * `../session-builder/provider.ts` from its own
+   * `CreateLocalSessionBuilderProviderDeps.openExplainBack` — kept on this
+   * interface purely so that pass-through still typechecks. **`[D-243]`
+   * moved the actual affordance to `../home/view.ts`'s own
+   * `HomeViewDeps.openExplainBack`**, since this view no longer renders the
+   * composed session that door explains; this field is unused by
+   * `SessionBuilderView.render` below.
    */
   readonly openExplainBack?: () => void;
+}
+
+/**
+ * F4.6's three steering inputs (`[D-243]`), rendered against `parent`.
+ * Shared verbatim by this view's own {@link SessionBuilderView.render} and
+ * by `../home/view.ts`'s inline embed — see this module's own doc, "What is
+ * shared with Home". Pure DOM: no `this`, no `obsidian` type beyond the
+ * `HTMLElement`/`HTMLSelectElement` globals every `.js` runtime already has.
+ *
+ * The "stated interest" input (F4.6's third) is read-only here on purpose —
+ * it is a PRE-FILL the gap view hands in (`SessionBuilderRequest.
+ * focusConceptName`), never a free-text control this panel itself offers,
+ * so this function only ever needs a way to show it and a way to clear it.
+ * `deps.focusConceptName`/`deps.onClearFocusConcept` are both optional so a
+ * caller with nothing to show renders no chip, never an empty one.
+ */
+export interface SteeringControlsDeps {
+  readonly budgetMinutes: number;
+  readonly budgetOptions?: readonly number[];
+  readonly onBudgetChange: (minutes: number) => void;
+  readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
+  readonly courseOrTopic: CourseOrTopicOption | undefined;
+  readonly onCourseOrTopicChange: (option: CourseOrTopicOption | undefined) => void;
+}
+
+export function renderSteeringControls(parent: HTMLElement, deps: SteeringControlsDeps): void {
+  const bar = parent.createDiv({ cls: 'olea-session-budgets' });
+  for (const minutes of deps.budgetOptions ?? SESSION_BUDGET_OPTIONS) {
+    const button = bar.createSpan({
+      cls: 'olea-session-budget',
+      text: budgetOptionLabel(minutes),
+    });
+    // `addClass` rather than a ternary inside `cls:` — `test/session-builder/
+    // styles.spec.ts` reads the class names out of this file's source, and a
+    // class hidden inside a conditional expression is one the drift guard
+    // cannot see.
+    if (minutes === deps.budgetMinutes) button.addClass('olea-session-budget-active');
+    button.addEventListener('click', () => deps.onBudgetChange(minutes));
+  }
+
+  const options = deps.courseOrTopicOptions;
+  // A caller that never offers options (see `SessionBuilderState`'s own doc)
+  // gets no control at all, rather than an empty, useless select.
+  if (options === undefined || options.length === 0) return;
+
+  const notFound = courseOrTopicNotFoundLine(deps.courseOrTopic, options);
+  if (notFound !== null) parent.createDiv({ text: notFound });
+
+  // `value` is set as a plain DOM property below rather than through
+  // `createEl`'s own info object — `packages/workbench`'s
+  // `OleaShimDomElementInfo` (its own stand-in for Obsidian's real
+  // `DomElementInfo`) does not declare one, and `HTMLOptionElement.value` is
+  // a standard lib.dom property either shim leaves untouched.
+  const select = parent.createEl('select', {
+    cls: 'olea-session-select',
+    attr: { 'aria-label': COURSE_OR_TOPIC_LABEL },
+  });
+  const allOption = select.createEl('option', { text: COURSE_OR_TOPIC_ALL_LABEL });
+  allOption.value = '';
+
+  const courses = options.filter((option) => option.kind === 'course');
+  if (courses.length > 0) {
+    const group = select.createEl('optgroup', {
+      attr: { label: COURSE_OR_TOPIC_COURSE_GROUP_LABEL },
+    });
+    for (const option of courses) {
+      const el = group.createEl('option', { text: option.label });
+      el.value = JSON.stringify(option);
+    }
+  }
+
+  const topics = options.filter((option) => option.kind === 'topic');
+  if (topics.length > 0) {
+    const group = select.createEl('optgroup', {
+      attr: { label: COURSE_OR_TOPIC_TOPIC_GROUP_LABEL },
+    });
+    for (const option of topics) {
+      const el = group.createEl('option', { text: option.label });
+      el.value = JSON.stringify(option);
+    }
+  }
+
+  // Matches an option's `value` only when the current choice is still among
+  // the options just built; a stale choice (the vault changed under her)
+  // leaves the select on "everything" — `notFound` above is what says so.
+  select.value = deps.courseOrTopic === undefined ? '' : JSON.stringify(deps.courseOrTopic);
+
+  select.addEventListener('change', () => {
+    deps.onCourseOrTopicChange(
+      select.value === '' ? undefined : (JSON.parse(select.value) as CourseOrTopicOption),
+    );
+  });
 }
 
 export class SessionBuilderView extends ItemView {
   private readonly deps: SessionBuilderViewDeps;
   private budgetMinutes: number;
   private focusConceptName: string | undefined;
-  /** STEER-2: her current course-or-topic choice, sticky across a budget change for the same reason `focusConceptName` is (see {@link refresh}'s own doc). Only {@link renderCourseOrTopicControls}'s `change` listener sets it. */
   private courseOrTopic: CourseOrTopicOption | undefined;
+  private courseOrTopicOptions: readonly CourseOrTopicOption[] | undefined;
 
   constructor(leaf: WorkspaceLeaf, deps: SessionBuilderViewDeps) {
     super(leaf);
@@ -195,6 +234,7 @@ export class SessionBuilderView extends ItemView {
     this.budgetMinutes = deps.defaultBudgetMinutes ?? DEFAULT_SESSION_BUDGET_MINUTES;
     this.focusConceptName = undefined;
     this.courseOrTopic = undefined;
+    this.courseOrTopicOptions = undefined;
   }
 
   override getViewType(): string {
@@ -222,14 +262,11 @@ export class SessionBuilderView extends ItemView {
   }
 
   /**
-   * Rebuilds and redraws.
-   *
-   * `focusConceptName` and `courseOrTopic` are both *sticky* across a budget
-   * change on purpose: she asked to start from a concept, or to narrow to a
-   * course or topic, then asked for more time, and dropping the first request
-   * because of the second would be the surface quietly deciding it knew
-   * better. {@link setFocusConcept} and {@link renderCourseOrTopicControls}'s
-   * `change` listener are the only things that change them.
+   * Rebuilds `courseOrTopicOptions` and redraws. Still calls `deps.load`
+   * with the full `SessionBuilderRequest` (a course/topic choice may change
+   * which options a later composition should offer), even though this view
+   * only reads `courseOrTopicOptions` off what comes back — the composed
+   * session itself is Home's to render (`[D-243]`).
    */
   async refresh(): Promise<void> {
     const request: SessionBuilderRequest = {
@@ -237,329 +274,36 @@ export class SessionBuilderView extends ItemView {
       ...(this.focusConceptName !== undefined ? { focusConceptName: this.focusConceptName } : {}),
       ...(this.courseOrTopic !== undefined ? { courseOrTopic: this.courseOrTopic } : {}),
     };
-    this.render(await this.deps.load(request));
+    const state = await this.deps.load(request);
+    this.courseOrTopicOptions =
+      state.kind === 'unavailable' ? undefined : state.courseOrTopicOptions;
+    this.render();
   }
 
-  /** Points this view at one concept — the gap view's `build-session` affordance. Public so `main.ts` can seed a leaf it is about to reveal. */
+  /** Points this panel at one concept — the gap view's `build-session` affordance used to seed this view directly; `main.ts` now seeds `../home/view.ts`'s own `setFocusConcept` instead (`[D-243]`). Kept here so a caller that still holds a leaf of this type (a saved workspace layout) does not break. */
   async setFocusConcept(conceptName: string | undefined): Promise<void> {
     this.focusConceptName = conceptName;
     await this.refresh();
   }
 
-  private render(state: SessionBuilderState): void {
+  private render(): void {
     const root = this.contentEl;
     root.empty();
-
-    this.renderBudgetControls(root);
-    this.renderCourseOrTopicControls(root, state);
-    this.renderExplainBackEntry(root);
-
-    if (state.kind === 'unavailable') {
-      const box = root.createDiv({ cls: 'olea-session-unavailable' });
-      box.createDiv({ cls: 'olea-session-unavailable-title', text: SESSION_UNAVAILABLE_TITLE });
-      box.createDiv({ cls: 'olea-session-unavailable-body', text: SESSION_UNAVAILABLE_BODY });
-      return;
-    }
-
-    // `[D-162]`: when this build replaces one that just ended because its
-    // own composition went stale, say so before the ordinary copy — the
-    // same "cite by path, never quote" precedent every other line here
-    // follows, sourced entirely from `copy.ts`.
-    if (state.staleReasonLine !== undefined) {
-      root.createDiv({ cls: 'olea-session-stale-reason', text: state.staleReasonLine });
-    }
-
-    // Every sentence on this screen comes from `copy.ts` — `sessionScreenCopy`
-    // for an ordinary session, `reentryScreenCopy` for F6.6's re-entry one
-    // (never the same function: see that function's own doc for why
-    // `leftOutLines` must never run over a re-entry view). Neither branch of
-    // this loop may gain a sibling that writes a sentence of its own — what
-    // follows only sorts these SAME strings into one of three containers by
-    // which pure function of the SAME model already produced each one; it
-    // computes no sentence `copy.ts` did not.
-    const lines =
-      state.kind === 'reentry' ? reentryScreenCopy(state.view) : sessionScreenCopy(state.model);
-    const items = state.kind === 'reentry' ? state.view.items : state.model.items;
-    const modelLike = state.kind === 'reentry' ? state.view : state.model;
-
-    // The headline (kit: `ExamSession.jsx`'s bold serif sentence naming the
-    // plan) is `sessionSummaryLine`'s existing string, called again here only
-    // to know which element of `lines` it is — never a re-wording of it, and
-    // `null` (no headline) exactly when `lines` itself carries none
-    // (`sessionScreenCopy`/`reentryScreenCopy` both push it only `if
-    // (items.length > 0)`).
-    const summaryLine = items.length > 0 ? sessionSummaryLine(modelLike) : null;
-
-    // The honest-empty pair (kit: `Pass5dEmpties.jsx`'s `EmptyNothingToBuild`/
-    // `EmptyRankedNothing`) — `emptySessionLines`/`reentryEmptyLines` return
-    // these same two sentences only when `items.length === 0`, so this set is
-    // empty whenever `summaryLine` is not, and the two blocks below never
-    // compete for the same line.
-    const emptyLines = new Set(
-      state.kind === 'reentry' ? reentryEmptyLines(state.view) : emptySessionLines(state.model),
-    );
-    if (emptyLines.size > 0) {
-      const empty = root.createDiv({ cls: 'olea-session-empty' });
-      empty.createDiv({ cls: 'olea-session-empty-eyebrow', text: SESSION_EMPTY_EYEBROW });
-      for (const line of lines) {
-        if (emptyLines.has(line)) empty.createDiv({ cls: 'olea-session-empty-line', text: line });
-      }
-    }
-
-    // F4.9's framing (kit: the "Why these" reasoning box) gets that box only
-    // once a session actually has items to reason about — the honest-empty
-    // family above draws no such box for a state with nothing built, so on
-    // an empty screen these two sentences fall through to the plain flow
-    // below unchanged, exactly as they always have.
-    const framingLines = new Set(sessionFraming());
-
-    // STY-4 (`ol-l5og.18.13`; kit: `ExamSession.jsx`'s bordered `SessionBuilder`
-    // card): the headline, the composition table and the "Why these" box move
-    // inside one card, in the SAME relative order the kit draws them (items
-    // before the reasoning box) — once a session actually has items. The
-    // honest-empty family above stays a bare pane, matching `Pass5dEmpties.jsx`,
-    // which draws no card either. No "Start this"/"Not now" gate is drawn here
-    // — see the module doc and `features/F4-oracle.md`'s own scenario for why.
-    if (summaryLine !== null) {
-      const card = root.createDiv({ cls: 'olea-session-card' });
-      const header = card.createDiv({ cls: 'olea-session-card-header' });
-      header.createSpan({ cls: 'olea-session-card-eyebrow', text: SESSION_EYEBROW_LABEL });
-      header.createSpan({ cls: 'olea-session-card-spacer' });
-      const daysUntil = modelLike.nextAssessment?.daysUntil ?? null;
-      if (daysUntil !== null) {
-        header.createSpan({ cls: 'olea-session-card-days', text: daysOutLabel(daysUntil) });
-      }
-
-      card.createDiv({ cls: 'olea-session-headline', text: summaryLine });
-
-      const list = card.createDiv({ cls: 'olea-session-items' });
-      this.renderItemGroups(list, items);
-
-      const framingPresent = lines.filter((line) => framingLines.has(line));
-      if (framingPresent.length > 0) {
-        const why = card.createDiv({ cls: 'olea-session-why' });
-        why.createDiv({ cls: 'olea-session-why-label', text: SESSION_WHY_THESE_LABEL });
-        for (const line of framingPresent) {
-          why.createDiv({ cls: 'olea-session-why-line', text: line });
-        }
-      }
-    }
-
-    // Everything else `copy.ts` produced for this render — F6.7's by-source
-    // lines, the focus line, the format-preference line, the duration-basis
-    // line and the left-out lines — stays plain, below the card (or below the
-    // honest-empty pair). Wording and relative order are both unchanged; the
-    // one substitution is the countdown SENTENCE (`countdownLine`), replaced
-    // by the numeral block the kit's own `Countdown` component draws (STY-4)
-    // wherever there is a number to draw it from — the same underlying fact,
-    // never a second computation of it — falling back to the sentence
-    // verbatim whenever `daysUntil` cannot be read.
-    const countdownText = countdownLine(modelLike);
-    const copy = root.createDiv({ cls: 'olea-session-copy' });
-    for (const line of lines) {
-      if (line === summaryLine) continue;
-      if (emptyLines.has(line)) continue;
-      if (items.length > 0 && framingLines.has(line)) continue;
-      if (countdownText !== null && line === countdownText) {
-        this.renderNextAssessment(copy, modelLike.nextAssessment, countdownText);
-        continue;
-      }
-      copy.createDiv({ cls: 'olea-session-line', text: line });
-    }
-  }
-
-  /**
-   * STY-4: one heading per run of CONSECUTIVE same-`instrumentType` items
-   * (kit: `ExamSession.jsx`'s `PLAN` rows, already grouped by kind). Groups
-   * by adjacency only — `items` keeps `StudySessionItem.position`'s own
-   * order throughout; this never re-sorts or merges items across a run.
-   */
-  private renderItemGroups(parent: HTMLElement, items: readonly StudySessionItem[]): void {
-    let index = 0;
-    while (index < items.length) {
-      const current = items[index];
-      if (current === undefined) break;
-      let end = index + 1;
-      while (end < items.length && items[end]?.instrumentType === current.instrumentType) {
-        end += 1;
-      }
-      const group = items.slice(index, end);
-      parent.createDiv({
-        cls: 'olea-session-group-heading',
-        text: instrumentGroupHeading(current.instrumentType, group.length),
-      });
-      for (const item of group) this.renderItem(parent, item);
-      index = end;
-    }
-  }
-
-  /**
-   * STY-4 (kit: `ExamSession.jsx`'s separate `Countdown` component). Every
-   * field comes straight off `next` — the numeral is `daysUntil` verbatim and
-   * the date is `due` verbatim (`SessionAssessmentCountdown.due`'s own doc:
-   * "Never reformatted here — R1/R2") — so this draws no fact `countdownLine`
-   * did not already state, only in the kit's own shape. Falls back to
-   * `fallbackLine`, `countdownLine`'s existing sentence, whenever there is no
-   * number to draw (no assessment, or an unreadable date) — never rendering
-   * both for the same fact.
-   */
-  private renderNextAssessment(
-    parent: HTMLElement,
-    next: SessionAssessmentCountdown | null,
-    fallbackLine: string,
-  ): void {
-    if (next === null || next.daysUntil === null) {
-      parent.createDiv({ cls: 'olea-session-line', text: fallbackLine });
-      return;
-    }
-    const block = parent.createDiv({ cls: 'olea-session-countdown' });
-    block.createDiv({
-      cls: 'olea-session-countdown-eyebrow',
-      text: SESSION_NEXT_ASSESSMENT_LABEL,
-    });
-    block.createDiv({ cls: 'olea-session-countdown-name', text: assessmentName(next) });
-    const row = block.createDiv({ cls: 'olea-session-countdown-row' });
-    row.createSpan({ cls: 'olea-session-countdown-days', text: String(next.daysUntil) });
-    row.createSpan({
-      cls: 'olea-session-countdown-unit',
-      text: next.daysUntil === 1 ? 'day' : 'days',
-    });
-    row.createSpan({ cls: 'olea-session-countdown-spacer' });
-    if (next.due !== null) {
-      row.createSpan({ cls: 'olea-session-countdown-date', text: next.due });
-    }
-    if (next.type !== null) {
-      block.createDiv({ cls: 'olea-session-countdown-format', text: next.type });
-    }
-  }
-
-  private renderBudgetControls(parent: HTMLElement): void {
-    const bar = parent.createDiv({ cls: 'olea-session-budgets' });
-    for (const minutes of this.deps.budgetOptions ?? SESSION_BUDGET_OPTIONS) {
-      const button = bar.createSpan({
-        cls: 'olea-session-budget',
-        text: budgetOptionLabel(minutes),
-      });
-      // `addClass` rather than a ternary inside `cls:` — `test/session-builder/
-      // styles.spec.ts` reads the class names out of this file's source, and a
-      // class hidden inside a conditional expression is one the drift guard
-      // cannot see (the same reason `gap/view.ts` keeps its dynamic classes in
-      // a template literal rather than a ternary).
-      if (minutes === this.budgetMinutes) button.addClass('olea-session-budget-active');
-      button.addEventListener('click', () => {
+    renderSteeringControls(root, {
+      budgetMinutes: this.budgetMinutes,
+      ...(this.deps.budgetOptions !== undefined ? { budgetOptions: this.deps.budgetOptions } : {}),
+      onBudgetChange: (minutes) => {
         this.budgetMinutes = minutes;
         void this.refresh();
-      });
-    }
-  }
-
-  /**
-   * STEER-2 (F4.6): the "course or topic" steering control. One `<select>`,
-   * an "everything" default plus every course and every topic
-   * `state.courseOrTopicOptions` currently names, grouped. Skipped for
-   * `'unavailable'` — there is no vault-derived option list to offer, the
-   * same reason `renderBudgetControls`' sibling controls still render (they
-   * do not depend on `state`) while this one, which does, cannot.
-   *
-   * STY-4 (`ol-l5og.18.13`): now carries `olea-session-select`, styled in this
-   * pane's own `styles.css` section — STY-0f's own doc named this the
-   * follow-up rather than a blocker, and file ownership now covers
-   * `styles.css` too, so the bare host `<select>` this control used to render
-   * (the loudest unstyled element on the screen, per the fidelity judgment)
-   * gets the same chrome the budget buttons carry.
-   */
-  private renderCourseOrTopicControls(parent: HTMLElement, state: SessionBuilderState): void {
-    if (state.kind === 'unavailable') return;
-    const options = state.courseOrTopicOptions;
-    // A `deps.load` that never offers options (see `SessionBuilderState`'s
-    // own doc) gets no control at all, rather than an empty, useless select.
-    if (options === undefined || options.length === 0) return;
-
-    const notFound = courseOrTopicNotFoundLine(this.courseOrTopic, options);
-    if (notFound !== null) parent.createDiv({ text: notFound });
-
-    // `value` is set as a plain DOM property below rather than through
-    // `createEl`'s own info object — `packages/workbench`'s
-    // `OleaShimDomElementInfo` (its own stand-in for Obsidian's real
-    // `DomElementInfo`, outside this bead's file ownership) does not declare
-    // one, and `HTMLOptionElement.value` is a standard lib.dom property
-    // either shim leaves untouched.
-    const select = parent.createEl('select', {
-      cls: 'olea-session-select',
-      attr: { 'aria-label': COURSE_OR_TOPIC_LABEL },
+      },
+      ...(this.courseOrTopicOptions !== undefined
+        ? { courseOrTopicOptions: this.courseOrTopicOptions }
+        : {}),
+      courseOrTopic: this.courseOrTopic,
+      onCourseOrTopicChange: (option) => {
+        this.courseOrTopic = option;
+        void this.refresh();
+      },
     });
-    const allOption = select.createEl('option', { text: COURSE_OR_TOPIC_ALL_LABEL });
-    allOption.value = '';
-
-    const courses = options.filter((option) => option.kind === 'course');
-    if (courses.length > 0) {
-      const group = select.createEl('optgroup', {
-        attr: { label: COURSE_OR_TOPIC_COURSE_GROUP_LABEL },
-      });
-      for (const option of courses) {
-        const el = group.createEl('option', { text: option.label });
-        el.value = JSON.stringify(option);
-      }
-    }
-
-    const topics = options.filter((option) => option.kind === 'topic');
-    if (topics.length > 0) {
-      const group = select.createEl('optgroup', {
-        attr: { label: COURSE_OR_TOPIC_TOPIC_GROUP_LABEL },
-      });
-      for (const option of topics) {
-        const el = group.createEl('option', { text: option.label });
-        el.value = JSON.stringify(option);
-      }
-    }
-
-    // Matches an option's `value` only when `this.courseOrTopic` is still
-    // among the options just built; a stale choice (the vault changed under
-    // her) leaves the select on "everything" — `notFound` above is what says
-    // so, rather than the select silently pretending nothing was ever asked.
-    select.value = this.courseOrTopic === undefined ? '' : JSON.stringify(this.courseOrTopic);
-
-    select.addEventListener('change', () => {
-      this.courseOrTopic =
-        select.value === '' ? undefined : (JSON.parse(select.value) as CourseOrTopicOption);
-      void this.refresh();
-    });
-  }
-
-  /**
-   * F4.6 / F6.4, `[D-163]` (`ol-12gs`): the session-builder/Today-suggestion
-   * door onto `ExplainBackModal` — see `SessionBuilderViewDeps.openExplainBack`'s
-   * own doc for why both clauses converge on this one screen. Rendered
-   * standing, independent of `state`, the same way F2.20's "available help"
-   * posture keeps F2.7's own on-demand channel reachable regardless of
-   * queue state — never gated on whether a session was actually built.
-   */
-  private renderExplainBackEntry(parent: HTMLElement): void {
-    const openExplainBack = this.deps.openExplainBack;
-    if (!openExplainBack) return;
-    const button = parent.createEl('button', {
-      cls: 'olea-session-explain-back',
-      text: EXPLAIN_BACK_SESSION_ENTRY_LABEL,
-    });
-    button.addEventListener('click', () => openExplainBack());
-  }
-
-  /**
-   * STY-4: restyled as a compact table row — position, concept, course and
-   * note title unchanged in content, but the instrument kind no longer
-   * repeats here (it is the group heading above, `renderItemGroups`) and the
-   * minutes get their own right-aligned column (kit: `ExamSession.jsx`'s
-   * `p.mins` column), rather than a "kind · about N min" subtitle line.
-   */
-  private renderItem(parent: HTMLElement, item: StudySessionItem): void {
-    const el = parent.createDiv({
-      cls: `olea-session-item olea-session-item-${item.formatMatch}`,
-    });
-    el.createSpan({ cls: 'olea-session-position', text: String(item.position) });
-    el.createSpan({ cls: 'olea-session-concept', text: item.conceptName });
-    el.createSpan({ cls: 'olea-session-minutes', text: minutesLabel(item.estimatedSeconds) });
-    const meta = el.createDiv({ cls: 'olea-session-item-meta' });
-    meta.createSpan({ cls: 'olea-session-course', text: item.course });
-    meta.createSpan({ cls: 'olea-session-note', text: item.noteTitle });
   }
 }

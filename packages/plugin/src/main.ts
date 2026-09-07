@@ -700,11 +700,14 @@ export default class OleaPlugin extends Plugin {
       openGap: () => {
         void this.revealGapView();
       },
-      // `ol-p5t06b`: the palette's own door onto the session builder, built
+      // `ol-p5t06b`, amended by `[D-243]` (`ol-egov.132.7` [SESS-8.7]): the
+      // palette's own door onto session assembly used to open the (now
+      // shrunk) session-builder screen; F4.6 rules "there is no builder
+      // screen to pass through" — this opens Home instead, unfocused, built
       // from the whole ranking. The gap view's `build-session` affordance is
-      // the other door, and seeds a concept — see `revealSessionBuilderView`.
+      // the other door, and seeds a concept — see `revealHomeView`.
       buildSession: () => {
-        void this.revealSessionBuilderView(undefined);
+        void this.revealHomeView();
       },
       // `ol-jie3`: F3.3's bulk-review triage path.
       openBulkReview: () => {
@@ -907,10 +910,15 @@ export default class OleaPlugin extends Plugin {
             now: () => new Date(),
             // `ol-p5t06b`: the `'build-session'` affordance has been a label
             // with nothing behind it since P5-T06a. This is what it does —
-            // open the session builder seeded with the row's concept, so
-            // "Build a session from this" is literally about *this*.
+            // open Home seeded with the row's concept as F4.6's stated-
+            // interest steering input, so "Build a session from this" is
+            // literally about *this*. Amended by `[D-243]`
+            // (`ol-egov.132.7` [SESS-8.7]): this used to open the
+            // session-builder screen directly; F4.6 rules that a pre-fill
+            // from the gap view is "a pre-fill of a steering input on Home,
+            // never a second entry" — see `revealHomeView`.
             buildSession: (row) => {
-              void this.revealSessionBuilderView(row.conceptName);
+              void this.revealHomeView(row.conceptName);
             },
           }),
         ),
@@ -1021,9 +1029,17 @@ export default class OleaPlugin extends Plugin {
     // below uses), never a second computation of either. `scheduler` and
     // `servedRelationEdges()` are the identical instance/thunk every other
     // reader of them already shares — see `home/provider.ts`'s own module
-    // doc. `openRetrospective`/`openSessionBuilder`/`openGrove` are supplied
-    // here (navigation), never by `createLocalHomeProvider` (data) — the
-    // same split `ol-0r92.17` already drew for `openRetrospective`.
+    // doc. `openRetrospective`/`startSession`/`openGrove`/`openExplainBack`
+    // are supplied here (navigation), never by `createLocalHomeProvider`
+    // (data) — the same split `ol-0r92.17` already drew for
+    // `openRetrospective`.
+    //
+    // `[D-243]` (`ol-egov.132.7` [SESS-8.7]): `openSessionBuilder` is gone —
+    // `startSession` replaces it, wired to the review surface she actually
+    // answers from (`revealReviewView`, the same door `startReview`/the Today
+    // button already use) rather than to a session-assembly screen. See
+    // `home/view.ts`'s own module doc, "What Start does NOT yet do", for why
+    // this does not yet also enter `session/holder.ts`'s shared sitting.
     this.registerView(VIEW_TYPE_OLEA_HOME, (leaf) => {
       const provider = createLocalHomeProvider({
         vault,
@@ -1044,17 +1060,23 @@ export default class OleaPlugin extends Plugin {
         firstRead: () => this.firstReadFolderViewsFor(this.tickedCourseFolders),
       });
       return new HomeView(leaf, {
-        load: () => provider.load(),
+        load: (request) => provider.load(request),
         openRetrospective: () => {
           void this.revealRetrospectiveView();
         },
-        openSessionBuilder: () => {
-          void this.revealSessionBuilderView(undefined);
+        startSession: () => {
+          void this.revealReviewView();
         },
         openGrove: () => {
           void this.revealGroveView();
         },
         dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
+        // F4.6 / F6.4, `[D-163]` (`ol-12gs`): relocated from the (now
+        // shrunk) session-builder screen — see `HomeViewDeps.openExplainBack`'s
+        // own doc for why.
+        openExplainBack: () => {
+          this.openExplainBackModal({ kind: 'freeform' });
+        },
       });
     });
 
@@ -2633,34 +2655,9 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * Opens the session builder (`ol-p5t06b`, F4.6) in the right sidebar, or
-   * reveals the one already there — the same reuse-don't-stack shape as
-   * `revealGapView` and `revealTodayView`, for the same reason.
-   *
-   * `conceptName` is the gap view's `'build-session'` affordance seeding the
-   * view; the palette command passes `undefined` and gets the whole ranking.
-   * The seed is applied through `SessionBuilderView.setFocusConcept`, which
-   * refreshes — so pressing the affordance on a *second* row rebuilds the open
-   * pane around that row instead of leaving her looking at the first one's
-   * session, which is exactly the staleness `ol-h3wy` is about.
-   */
-  private async revealSessionBuilderView(conceptName: string | undefined): Promise<void> {
-    const { workspace } = this.app;
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_SESSION);
-    const leaf = existing[0] ?? workspace.getRightLeaf(false);
-    if (leaf === null || leaf === undefined) return;
-    if (existing.length === 0) {
-      await leaf.setViewState({ type: VIEW_TYPE_OLEA_SESSION, active: true });
-    }
-    await workspace.revealLeaf(leaf);
-    const view = leaf.view;
-    if (view instanceof SessionBuilderView) await view.setFocusConcept(conceptName);
-  }
-
-  /**
    * Opens F3.3's bulk-review triage path (`ol-jie3`) in the right sidebar,
    * or reveals the one already there — the same reuse-don't-stack shape as
-   * `revealGapView`/`revealTodayView`/`revealSessionBuilderView`, for the
+   * `revealGapView`/`revealTodayView`/`revealHomeView`, for the
    * same reason: a command that stacks panes is a command she stops
    * pressing.
    *
@@ -2744,8 +2741,17 @@ export default class OleaPlugin extends Plugin {
    * Always refreshes on the way out (`ol-h3wy`'s pattern): a dismiss from
    * the grove, or an assessment that just passed, must not need a manual
    * reload to show here.
+   *
+   * `conceptName` is the gap view's `'build-session'` affordance pre-filling
+   * F4.6's stated-interest steering input (`[D-243]`, `ol-egov.132.7`
+   * [SESS-8.7]) — the palette command passes nothing and gets the whole
+   * ranking. The seed is applied through `HomeView.setFocusConcept`, which
+   * refreshes — so pressing the affordance on a *second* row rebuilds the
+   * open pane around that row instead of leaving her looking at the first
+   * one's session, the same reasoning `revealSessionBuilderView` (retired by
+   * this ruling) always gave for its own identical seed.
    */
-  private async revealHomeView(): Promise<void> {
+  private async revealHomeView(conceptName?: string): Promise<void> {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_HOME);
     const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
@@ -2755,6 +2761,10 @@ export default class OleaPlugin extends Plugin {
     }
     await workspace.revealLeaf(leaf);
     await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_HOME);
+    if (conceptName !== undefined) {
+      const view = leaf.view;
+      if (view instanceof HomeView) await view.setFocusConcept(conceptName);
+    }
   }
 
   /**

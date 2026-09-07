@@ -70,8 +70,8 @@ import {
   type RetrospectiveOfferEventLog,
 } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
-import { DEFAULT_SESSION_BUDGET_MINUTES } from '../session-builder/copy.js';
 import { createLocalSessionBuilderProvider } from '../session-builder/provider.js';
+import type { SessionBuilderRequest } from '../session-builder/view.js';
 import { HOME_SET_UP_WAITING, homeScopeGrewLine } from './copy.js';
 import {
   type HomeScopeSnapshot,
@@ -118,9 +118,16 @@ export interface CreateLocalHomeProviderDeps {
   readonly firstRead?: () => readonly FirstReadFolderView[];
 }
 
-/** The data half of `HomeViewDeps` — `main.ts` adds the three navigation callbacks at the construction site. */
+/**
+ * The data half of `HomeViewDeps` — `main.ts` adds the navigation callbacks
+ * at the construction site. `load` now takes F4.6's three steering inputs
+ * (`[D-243]`, `ol-egov.132.7` [SESS-8.7]) — `./view.ts` holds them as sticky
+ * local state, the same way `../session-builder/view.ts` always did, and
+ * supplies them here on every render so the headline Home shows is the same
+ * composition Start will sit.
+ */
 export interface HomeDataDeps {
-  readonly load: () => Promise<HomeViewState>;
+  readonly load: (request: SessionBuilderRequest) => Promise<HomeViewState>;
   readonly dismiss: (assessmentPath: VaultPath) => Promise<void>;
 }
 
@@ -237,7 +244,7 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
   });
 
   return {
-    async load(): Promise<HomeViewState> {
+    async load(request: SessionBuilderRequest): Promise<HomeViewState> {
       // `ol-ppa9` (F1.4/`[D-213]`): read fresh every call, never cached —
       // see `./view.ts`'s own module doc.
       const firstReadFolders = deps.firstRead?.() ?? [];
@@ -248,9 +255,12 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
       try {
         // F6.4's headline and F8.1's per-course maps are independent reads of
         // the same vault — paid concurrently, the same reasoning every other
-        // multi-read provider in this plugin already gives.
+        // multi-read provider in this plugin already gives. `request` is
+        // `[D-243]`'s three steering inputs, supplied by `./view.ts`'s own
+        // sticky state — the same shape `../session-builder/provider.ts`
+        // always fed its own composer, never a second one Home invents.
         const [session, grove] = await Promise.all([
-          sessionProvider.load({ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES }),
+          sessionProvider.load(request),
           groveProvider.load(),
         ]);
         const courses =
