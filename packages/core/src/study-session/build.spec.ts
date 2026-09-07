@@ -629,10 +629,13 @@ describe("F2.17's per-concept cap, made explicit (`[HARD-2b]`)", () => {
 
     // CRS101's concept is inside its own course's final week and gets both
     // instruments; CRS202's concept is nowhere near its own and gets one.
-    // Order: pass 1 offers every row its first instrument (near1, far1);
-    // pass 2 offers Near its second only because Near's course is in its
-    // final week — Far is capped and sits out the pass entirely.
-    expect(session.items.map((i) => i.instrumentId)).toEqual(['near1', 'far1', 'near2']);
+    // Selection order (pass 1 offers every row its first instrument — near1,
+    // far1; pass 2 offers Near its second only because Near's course is in
+    // its final week) would read `near1, far1, near2`, but F2.18 groups the
+    // FINAL served order into course blocks (`ol-egov.132.10` [SESS-10]):
+    // CRS101's near1/near2 stay together, in the order they were selected,
+    // ahead of CRS202's far1 — CRS101 was served first.
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['near1', 'near2', 'far1']);
   });
 
   it('the [D-240] recall override still wins inside the final week: format preference is decided per instrument, the cap is decided per concept', () => {
@@ -1794,5 +1797,112 @@ describe('[SESS-9] the per-course share pass is reachable only through an alloca
     });
 
     expect(session.items.map((item) => item.course)).toContain('BRAVO');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [SESS-10] (`ol-egov.132.10`) — F2.18's course blocks used to be broken by
+// the share pass and its redistribution rounds (`[SESS-9]`), each of which
+// re-walks the same course-blocked `queues` from wherever it left off, so a
+// course funded across more than one pass had its items land at each pass's
+// boundary rather than together. Scenario: features/F2-review.md
+// (olea-service), the "F2.18 — Course blocks survive the share and
+// redistribution passes" block.
+// ---------------------------------------------------------------------------
+
+describe('[SESS-10] F2.18 course blocks survive the share and redistribution passes', () => {
+  it('a session funded across the share pass, its redistribution and the final pass keeps one block per course', () => {
+    const rows = rankedRows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'A2', course: 'ALPHA', gapScore: 8 },
+      { conceptName: 'A3', course: 'ALPHA', gapScore: 7 },
+      { conceptName: 'B1', course: 'BRAVO', gapScore: 9 },
+      { conceptName: 'B2', course: 'BRAVO', gapScore: 8 },
+      { conceptName: 'C1', course: 'CHARLIE', gapScore: 9 },
+      { conceptName: 'C2', course: 'CHARLIE', gapScore: 8 },
+    ]);
+    const index = buildConceptInstrumentIndex([
+      qa('a1', ['A1']),
+      qa('a2', ['A2']),
+      qa('a3', ['A3']),
+      qa('b1', ['B1']),
+      qa('b2', ['B2']),
+      qa('c1', ['C1']),
+      qa('c2', ['C2']),
+    ]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      // 420s target: exactly enough for all 7 60s items once redistribution
+      // finishes, so nothing is left out and this is purely an ordering
+      // question.
+      budgetMinutes: 7,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      // Equal shares small enough that each course affords only its first
+      // item in the share pass — verified below to actually engage more than
+      // one redistribution round (`spentByCourse` widens twice before the
+      // uncapped final pass funds ALPHA's third item), which is the exact
+      // shape the bug report measured: pre-fix chronological SELECTION order
+      // was `a1 b1 c1 a2 b2 c2 a3` (6 switches for 3 courses).
+      courseBudgetSeconds: new Map([
+        ['ALPHA', 60],
+        ['BRAVO', 60],
+        ['CHARLIE', 60],
+      ]),
+    });
+
+    const instrumentIds = session.items.map((item) => item.instrumentId);
+    const courses = session.items.map((item) => item.course);
+
+    // Selection is untouched by this fix: same seven instruments served,
+    // same per-course multiset as the pre-fix, pass-scattered order above.
+    expect(new Set(instrumentIds)).toEqual(new Set(['a1', 'a2', 'a3', 'b1', 'b2', 'c1', 'c2']));
+    expect(
+      new Map(
+        [...new Set(courses)].map((course) => [course, courses.filter((c) => c === course).length]),
+      ),
+    ).toEqual(
+      new Map([
+        ['ALPHA', 3],
+        ['BRAVO', 2],
+        ['CHARLIE', 2],
+      ]),
+    );
+
+    // Order is what changes: one contiguous block per course, blocks in the
+    // order the first (share) pass produced them, each course's own items in
+    // the order the fill originally selected them.
+    expect(courses).toEqual(['ALPHA', 'ALPHA', 'ALPHA', 'BRAVO', 'BRAVO', 'CHARLIE', 'CHARLIE']);
+    expect(instrumentIds).toEqual(['a1', 'a2', 'a3', 'b1', 'b2', 'c1', 'c2']);
+
+    // F2.18: N courses served, N - 1 course switches.
+    const coursesServed = new Set(courses).size;
+    const switches = courses.slice(1).filter((course, i) => course !== courses[i]).length;
+    expect(coursesServed).toBe(3);
+    expect(switches).toBe(coursesServed - 1);
+
+    // `position` reflects the reordering, 1-based, gap-free.
+    expect(session.items.map((item) => item.position)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('an ordinary flat fill (no course allocation) is unaffected — one course, one block, trivially', () => {
+    const rows = rankedRows([
+      { conceptName: 'A1', gapScore: 9 },
+      { conceptName: 'A2', gapScore: 8 },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('a2', ['A2'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 2,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items.map((item) => item.instrumentId)).toEqual(['a1', 'a2']);
   });
 });

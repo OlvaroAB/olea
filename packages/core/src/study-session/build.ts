@@ -130,6 +130,26 @@
  * of the session a course receives. Three questions, three rules, no rule
  * standing in for another.
  *
+ * **F2.18's blocks survive the multiple passes above (`ol-egov.132.10`
+ * [SESS-10]).** The share pass, its redistribution rounds, and the final
+ * cross-course pass are each a further walk over `queues` from wherever each
+ * row left off — so a course funded across two or three of those passes had
+ * its items land at each pass's boundary in `items`, not together: served
+ * order read `A B C A B C A C A ...` for three courses, not the one
+ * contiguous block per course F2.18 requires. Every pass still selects
+ * exactly what it always did — which items, how many per course, the
+ * per-concept cap, `[D-240]`'s override, the share fill and this
+ * redistribution are all unchanged above. Only the FINAL `items` array is
+ * different: it is stable-grouped by `course` — each course's items keep the
+ * exact relative order this fill selected them in (the pass-by-pass
+ * interleave across that course's own concepts, F2.19's job, is untouched),
+ * and the blocks themselves are ordered by whichever course this fill
+ * happened to serve first. Two items funded from the very same row (F2.17's
+ * final-week relaxation) keep the order they were actually selected in,
+ * because the grouping sort is stable. Nothing about WHICH items are chosen
+ * changes; only where each lands in `items`. See the reordering step itself,
+ * right after the fill's last pass, for the mechanics.
+ *
  * Breadth before depth is a **judgement, and a reversible one**: "drawing on
  * the highest-priority gaps" (F4.6, plural) reads as covering several rather
  * than exhausting one, and twenty minutes on one concept is a session she could
@@ -1126,6 +1146,38 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     }
   }
   runFill(null, true);
+
+  // F2.18 (`ol-egov.132.10` [SESS-10]): selection above is finished and
+  // unchanged from here — every item, its course, and the set served are
+  // fixed. What is NOT yet right is ORDER: the share pass and its
+  // redistribution rounds (`[SESS-9]`), and F2.17's final-week relaxation
+  // (`[HARD-2b]`) funding a row's SECOND instrument only once a later pass
+  // reaches it again, each run a further pass over the same `queues`, so a
+  // course (or, inside one course, a single concept fed across two passes)
+  // has its items scattered at each pass's boundary — served order reads
+  // A B C A B C A C A ... rather than staying in the one contiguous block
+  // per course F2.18 requires.
+  //
+  // The fix moves items across a course boundary, never within one. Group
+  // the finished `items` by `course`, stably: each course keeps every one of
+  // its items in the exact relative order this fill already selected them
+  // in — the same pass-by-pass interleave across that course's own concepts
+  // F2.19 already produced (and, on the composed path, `composeSessionRows`
+  // (`./compose.ts`) already fed this fill a row order encoding that
+  // grouping) — and blocks are ordered by whichever course this fill
+  // happened to serve first, i.e. "blocks in the order the first fill
+  // produced". Nothing here re-derives F2.18/F2.19's grouping judgement; it
+  // only stops one course's block from being interrupted by another's.
+  // `position` is the only field that changes on any item.
+  const courseOrder: string[] = [];
+  for (const item of items) {
+    if (!courseOrder.includes(item.course)) courseOrder.push(item.course);
+  }
+  const servedOrder = [...items]
+    .sort((a, b) => courseOrder.indexOf(a.course) - courseOrder.indexOf(b.course))
+    .map((item, index) => ({ ...item, position: index + 1 }));
+  items.length = 0;
+  items.push(...servedOrder);
 
   const leftOut: StudySessionOmission[] = [];
   let leftOutInstrumentCount = 0;
