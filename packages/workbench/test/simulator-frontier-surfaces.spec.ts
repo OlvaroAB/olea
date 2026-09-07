@@ -307,6 +307,148 @@ describe('buildPlanModel', () => {
   });
 });
 
+const SESSIONS: { items: FrontierStateItem[] } = {
+  items: [
+    {
+      taskId: 'loop.session.v1',
+      tier: 'none',
+      round: 'loop',
+      context: { date: '2026-06-01', cycle: 1 },
+      result: {
+        courseShares: [{ courseId: 'AAA101', share: 0.6, seconds: 900, reason: 'exam soon' }],
+        allocationSentence: 'Most of today goes to AAA101.',
+        items: [
+          {
+            instrumentId: 'i1',
+            instrumentType: 'flashcard',
+            conceptId: 'Dornith',
+            course: 'AAA101',
+            rank: 1,
+            reason: 'weakest concept',
+          },
+        ],
+        nextThing: { conceptId: 'Kelvane', course: 'AAA101', reason: 'due next' },
+      },
+    },
+    {
+      taskId: 'loop.session.v1',
+      tier: 'none',
+      round: 'loop',
+      context: { date: '2026-07-01', cycle: 2 },
+      result: {
+        courseShares: [{ courseId: 'BBB101', share: 0.4, seconds: 600, reason: 'steady pace' }],
+        allocationSentence: 'BBB101 gets a smaller share today.',
+        items: [
+          {
+            instrumentId: 'i2',
+            instrumentType: 'cloze',
+            conceptId: 'Ilmenor',
+            course: 'BBB101',
+            rank: 1,
+            reason: 'due today',
+          },
+        ],
+        nextThing: { conceptId: 'Ilmenor', course: 'BBB101', reason: 'due today' },
+      },
+    },
+  ] as unknown as FrontierStateItem[],
+};
+
+describe('buildPlanModel — composed session (F9.51)', () => {
+  it('renders the session as the first group, ahead of proposals and strain', () => {
+    const groups = buildPlanModel([
+      SESSIONS.items[0] as FrontierStateItem,
+      {
+        taskId: 'plan.governor.v1',
+        context: { date: '2026-06-01' },
+        result: {
+          proposals: [{ courseId: 'AAA101', input: 'assessmentPressure', reason: 'exam soon' }],
+        },
+      },
+    ]);
+    expect(groups.map((g) => g.heading)).toEqual(['Session — 2026-06-01', 'Proposals']);
+  });
+
+  it('renders the lead line, allocation sentence, course shares (percentage and minutes) and items in order', () => {
+    const groups = buildPlanModel([SESSIONS.items[0] as FrontierStateItem]);
+    expect(groups[0]?.heading).toBe('Session — 2026-06-01');
+    expect(groups[0]?.lines.map((l) => l.primary)).toEqual([
+      'Next: Kelvane (AAA101)',
+      'Most of today goes to AAA101.',
+      'AAA101 — 60%, 15 min',
+      '1. flashcard — Dornith (AAA101)',
+    ]);
+    expect(groups[0]?.lines[0]?.detail).toBe('due next');
+    expect(groups[0]?.lines[2]?.detail).toBe('exam soon');
+    expect(groups[0]?.lines[3]?.detail).toBe('weakest concept');
+  });
+
+  it('picks the LATEST session when more than one is given, never merging them', () => {
+    const groups = buildPlanModel([
+      SESSIONS.items[0] as FrontierStateItem,
+      SESSIONS.items[1] as FrontierStateItem,
+    ]);
+    expect(groups[0]?.heading).toBe('Session — 2026-07-01');
+    expect(groups[0]?.lines.map((l) => l.primary)).toEqual([
+      'Next: Ilmenor (BBB101)',
+      'BBB101 gets a smaller share today.',
+      'BBB101 — 40%, 10 min',
+      '1. cloze — Ilmenor (BBB101)',
+    ]);
+  });
+
+  it('adds no session group, and changes nothing else, when no loop.session.v1 item is present', () => {
+    const groups = buildPlanModel([
+      {
+        taskId: 'plan.governor.v1',
+        context: { date: '2026-07-01' },
+        result: {
+          proposals: [{ courseId: 'AAA101', input: 'assessmentPressure', reason: 'exam soon' }],
+        },
+      },
+    ]);
+    expect(groups.map((g) => g.heading)).toEqual(['Proposals']);
+  });
+});
+
+describe('buildFrontierSurfaceModels — composed session selection by scrubbed day', () => {
+  const bundle: FrontierBundle = {
+    index: {
+      world: 'x',
+      generatedAt: '',
+      surfaces: [
+        {
+          surface: 'plan',
+          title: 'Plan',
+          files: ['sessions.json'],
+          taskIds: ['plan.governor.v1'],
+          tier: 'none',
+          answered: 2,
+        },
+      ],
+    },
+    states: new Map<string, readonly FrontierStateItem[]>([['sessions.json', SESSIONS.items]]),
+  };
+
+  it('renders the latest session at or before the scrubbed day, not a later one', () => {
+    const mid = buildFrontierSurfaceModels(bundle, '2026-06-15').find((m) => m.surface === 'plan');
+    expect(mid?.groups[0]?.heading).toBe('Session — 2026-06-01');
+  });
+
+  it('moves to the next session once the scrubber passes it', () => {
+    const late = buildFrontierSurfaceModels(bundle, '2026-08-01').find((m) => m.surface === 'plan');
+    expect(late?.groups[0]?.heading).toBe('Session — 2026-07-01');
+  });
+
+  it('leaves the plan unanswered before any session has arrived — no change from today', () => {
+    const early = buildFrontierSurfaceModels(bundle, '2026-01-01').find(
+      (m) => m.surface === 'plan',
+    );
+    expect(early?.state).toBe('unanswered');
+    expect(early?.groups).toEqual([]);
+  });
+});
+
 describe('buildFrontierSurfaceModels', () => {
   const bundle: FrontierBundle = {
     index: INDEX as FrontierBundle['index'],
@@ -392,5 +534,18 @@ describe('frontierBadgeText', () => {
         groups: [],
       }),
     ).toBe(`no tier answered · ${FRONTIER_UPPER_BAR_NOTE}`);
+  });
+
+  it('a composed session (tier "none") says so rather than "answered by none"', () => {
+    expect(
+      frontierBadgeText({
+        surface: 'plan',
+        title: 'Plan',
+        state: 'answered',
+        tier: 'none',
+        taskIds: ['plan.governor.v1'],
+        groups: [],
+      }),
+    ).toBe(`composed locally, no model call · ${FRONTIER_UPPER_BAR_NOTE}`);
   });
 });

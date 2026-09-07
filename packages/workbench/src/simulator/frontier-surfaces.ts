@@ -439,11 +439,101 @@ export function buildExplainBackModel(
   return groups;
 }
 
-/** The plan: the governor's proposals, and the strain it could not express. */
+/**
+ * The one composed session at or before the walked day, from `loop.session.v1`
+ * items — the latest by `context.date` among what {@link itemsUpTo} already
+ * kept. Ties (same date, more than one cycle) keep the last item in arrival
+ * order. `null` when no session item is present, so a build with no
+ * `sessions.json` adds no group and changes nothing (F9.50/F9.51).
+ */
+function latestSession(items: readonly FrontierStateItem[]): FrontierStateItem | null {
+  let latest: FrontierStateItem | null = null;
+  let latestDate = '';
+  for (const item of items) {
+    const date = item.context?.date;
+    if (typeof date !== 'string') continue;
+    if (latest === null || date >= latestDate) {
+      latest = item;
+      latestDate = date;
+    }
+  }
+  return latest;
+}
+
+/**
+ * The composed-session group: the next thing as the lead line, the
+ * allocation sentence, one line per course share, then the ranked items —
+ * all from `loop.session.v1`'s own `result`, nothing merged in.
+ */
+function buildSessionGroup(items: readonly FrontierStateItem[]): FrontierGroup | null {
+  const session = latestSession(items);
+  if (session === null) return null;
+  const result = asRecord(session.result);
+  const date = session.context?.date;
+  const lines: FrontierEntryLine[] = [];
+
+  const nextThing = asRecord(result.nextThing);
+  const nextConcept = text(nextThing.conceptId);
+  if (nextConcept !== undefined) {
+    const nextCourse = text(nextThing.course);
+    lines.push({
+      primary: `Next: ${nextConcept}${nextCourse === undefined ? '' : ` (${nextCourse})`}`,
+      detail: text(nextThing.reason),
+      arrivedOn: date,
+    });
+  }
+
+  const allocationSentence = text(result.allocationSentence);
+  if (allocationSentence !== undefined) {
+    lines.push({ primary: allocationSentence, arrivedOn: date });
+  }
+
+  for (const raw of asArray(result.courseShares)) {
+    const share = asRecord(raw);
+    const courseId = text(share.courseId);
+    if (courseId === undefined) continue;
+    const pct = typeof share.share === 'number' ? `${Math.round(share.share * 100)}%` : undefined;
+    const minutes =
+      typeof share.seconds === 'number' ? `${Math.round(share.seconds / 60)} min` : undefined;
+    const measure = [pct, minutes].filter((p): p is string => p !== undefined).join(', ');
+    lines.push({
+      primary: `${courseId}${measure === '' ? '' : ` — ${measure}`}`,
+      detail: text(share.reason),
+      arrivedOn: date,
+    });
+  }
+
+  for (const raw of asArray(result.items)) {
+    const sessionItem = asRecord(raw);
+    const concept = text(sessionItem.conceptId);
+    if (concept === undefined) continue;
+    const rank = typeof sessionItem.rank === 'number' ? `${sessionItem.rank}.` : undefined;
+    const type = text(sessionItem.instrumentType);
+    const course = text(sessionItem.course);
+    const primary = [rank, type, `— ${concept}`, course === undefined ? undefined : `(${course})`]
+      .filter((p): p is string => p !== undefined)
+      .join(' ');
+    lines.push({ primary, detail: text(sessionItem.reason), arrivedOn: date });
+  }
+
+  if (lines.length === 0) return null;
+  return group(`Session — ${date ?? 'undated'}`, lines);
+}
+
+/**
+ * The plan: the latest composed session that had arrived by the walked day
+ * (when the build carries `loop.session.v1` output — F9.51), then the
+ * governor's proposals, and the strain it could not express.
+ */
 export function buildPlanModel(items: readonly FrontierStateItem[]): readonly FrontierGroup[] {
   const proposals: FrontierEntryLine[] = [];
   const strain: FrontierEntryLine[] = [];
+  const sessionItems: FrontierStateItem[] = [];
   for (const item of items) {
+    if (item.taskId === 'loop.session.v1') {
+      sessionItems.push(item);
+      continue;
+    }
     const result = asRecord(item.result);
     for (const raw of asArray(result.proposals)) {
       const proposal = asRecord(raw);
@@ -469,6 +559,8 @@ export function buildPlanModel(items: readonly FrontierStateItem[]): readonly Fr
     }
   }
   const groups: FrontierGroup[] = [];
+  const sessionGroup = buildSessionGroup(sessionItems);
+  if (sessionGroup !== null) groups.push(sessionGroup);
   if (proposals.length > 0) groups.push(group('Proposals', proposals));
   if (strain.length > 0) groups.push(group('Strain — what the plan could not express', strain));
   return groups;
@@ -570,10 +662,17 @@ function injectFrontierStyle(doc: Document): void {
 /**
  * The per-surface provenance badge's text: which tier answered this surface,
  * and {@link FRONTIER_UPPER_BAR_NOTE}. A surface nothing answered says so
- * rather than borrowing a neighbour's tier.
+ * rather than borrowing a neighbour's tier. A composed session carries the
+ * literal tier `'none'` (`loop.session.v1` calls no model — F9.51), which
+ * reads as its own badge rather than as "answered by none".
  */
 export function frontierBadgeText(model: FrontierSurfaceModel): string {
-  const answeredBy = model.tier === null ? 'no tier answered' : `answered by ${model.tier}`;
+  const answeredBy =
+    model.tier === null
+      ? 'no tier answered'
+      : model.tier === 'none'
+        ? 'composed locally, no model call'
+        : `answered by ${model.tier}`;
   return `${answeredBy} · ${FRONTIER_UPPER_BAR_NOTE}`;
 }
 
