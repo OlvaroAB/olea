@@ -40,20 +40,39 @@
  *    F4.8 (assessment-*format*-matching, a separate downstream feature) is
  *    where practice format is matched to `type` — this edge does not
  *    pre-filter on its behalf.
- *  - **Objectives citations are excluded from this edge.** The knowledge
- *    model's own sentence names both past papers *and* objectives as
- *    evidence; this bead's acceptance criteria names only "past-paper
- *    question citations" as the edge's carried evidence. Implemented per the
- *    acceptance text — objectives citations still feed concept *extraction*
- *    (`../tier3-evidence/build.js`, already shipped), just not this edge's
- *    `citations` or its `confidence`/`yieldRank` computation. Flagged as a
- *    discovered-from candidate rather than silently decided either way.
+ *  - **Objectives citations are admitted, on their own basis (`[D-226]` ruling
+ *    2, `ol-af3j`).** Superseding the exclusion this doc used to state: F4.2
+ *    as amended says objectives count as ranking evidence, so a course whose
+ *    only registered source is an objectives document is ranked rather than
+ *    left unranked. An objectives document declares what is **in scope**; it
+ *    does not evidence **how often something is examined**, so its evidence
+ *    is never folded into a past-paper edge's `confidence` or `citations` —
+ *    it gets its **own** edge, `basis: 'objectives'`, its **own** confidence
+ *    (the objectives-source fraction, see `build.ts`'s
+ *    `objectivesSourcesByCourse`), and its evidence lives in
+ *    {@link ConceptAssessmentEdge.objectivesCitations} rather than
+ *    `citations` — an objectives mention carries no question label or text
+ *    to put there, and inventing one would be exactly the "wears a past
+ *    paper's clothes" failure the ruling forbids. A concept cited by both
+ *    kinds of source in one course gets **two** edges, one per basis, per
+ *    the ruling's "each basis is stated for what it is."
+ *
+ * **What THIS module does not finish.** The edge is the data half of the
+ * ruling. Presenting it — a copy-layer "own attribution sentence" analogous
+ * to `packages/plugin/src/gap/copy.ts`'s `rankingAttribution`, and
+ * `oracle/rank.ts`'s `buildReasoning` naming the basis rather than always
+ * saying "past paper" — is downstream work this bead's ownership
+ * (`evidence-edge/build.ts` and `types.ts` only) does not reach. No ratified
+ * copy for an objectives-basis sentence exists in
+ * `docs/Olea_vocabulary_registry.md` today, so none is invented here;
+ * {@link ConceptAssessmentEdge.basis} is exactly the field a follow-on bead
+ * needs to write one without guessing which edges it applies to.
  *
  * **Yield rank and confidence — both computable and inspectable, no invented
  * cutoff (per this run's provisional-parameter rule).** See `build.ts` for
  * the exact formulas and why each was chosen; neither uses a tunable
  * threshold, so there is nothing here for a decision bead to ratify — only
- * the two design calls above, which are structural rather than numeric.
+ * the design calls above, which are structural rather than numeric.
  */
 
 import type { AssessmentReadReport } from '../assessment/types.js';
@@ -85,11 +104,38 @@ export interface EvidenceQuestionCitation {
 }
 
 /**
+ * Which registered evidence an edge's `confidence` and citations were
+ * computed from (`[D-226]` ruling 2). The two bases are never mixed — an
+ * edge is one or the other, never a blend — which is what makes "each basis
+ * is stated for what it is" checkable rather than a wording promise.
+ */
+export type ConceptEvidenceBasis = 'past-paper' | 'objectives';
+
+/**
+ * One objectives-document mention of a concept — the `basis: 'objectives'`
+ * sibling of {@link EvidenceQuestionCitation}. An objectives document
+ * declares scope, not examiner behaviour (`[D-226]` ruling 2): there is no
+ * question to point at, so unlike its past-paper sibling this carries no
+ * `questionLabel`/`questionText` — inventing either would misrepresent a
+ * scope mention as an examiner's question, which is exactly what the ruling
+ * forbids ("never wears a past paper's clothes").
+ */
+export interface EvidenceObjectivesCitation {
+  readonly sourcePath: VaultPath;
+  readonly provenance: Provenance;
+  /** See `ConceptCitation.duplicateSourcePaths` (`ol-n0yc`) — present only when the citing objectives document is filed at more than one path. */
+  readonly duplicateSourcePaths?: readonly VaultPath[];
+}
+
+/**
  * One concept↔assessment edge (knowledge model §5). Never constructed with
- * an empty `citations` array — an edge with no evidence is not emitted at
- * all (see the module doc's "evidential, not membership" rule), so a
- * consumer that has an edge in hand always has at least one citation to show
- * for it.
+ * BOTH `citations` and `objectivesCitations` empty — an edge with no
+ * evidence at all is not emitted (see the module doc's "evidential, not
+ * membership" rule). Which of the two is the real evidence depends on
+ * {@link basis}: a `'past-paper'` edge's evidence is `citations` and
+ * `objectivesCitations` is absent; an `'objectives'` edge's evidence is
+ * `objectivesCitations` and `citations` is the empty array, never a
+ * fabricated one (`[D-226]` ruling 2 — see module doc).
  */
 export interface ConceptAssessmentEdge {
   /**
@@ -128,14 +174,38 @@ export interface ConceptAssessmentEdge {
    */
   readonly yieldRank: number;
   /**
-   * In `(0, 1]` — the fraction of this course's distinct registered past
-   * papers that cite this concept at least once. See `build.ts`'s
+   * In `(0, 1]` — the fraction of this course's distinct registered sources
+   * of THIS edge's {@link basis} that cite this concept at least once. A
+   * `'past-paper'` edge's denominator is distinct past-paper sources; an
+   * `'objectives'` edge's denominator is distinct objectives sources —
+   * **never the other basis's count** (`[D-226]` ruling 2). See `build.ts`'s
    * `computeConfidence` for the exact formula and why it needs no invented
    * threshold.
    */
   readonly confidence: number;
-  /** Every past-paper question that cites `conceptName` in `course` — the proof, not a count of it. */
+  /** Every past-paper question that cites `conceptName` in `course` — the proof, not a count of it. Empty (never fabricated) when {@link basis} is `'objectives'`; see {@link objectivesCitations} for that edge's real evidence. */
   readonly citations: readonly EvidenceQuestionCitation[];
+  /**
+   * Which registered evidence this edge's `confidence` and citations were
+   * computed from (`[D-226]` ruling 2 — see module doc). **Optional,
+   * defaulting to `'past-paper'`** so every edge this module produced before
+   * this field existed, and every literal a caller outside this package
+   * constructs without it (`packages/synthetic/src/curriculum.ts`), reads
+   * exactly as it always has. `build.ts` sets it explicitly on every edge it
+   * builds, for both bases.
+   */
+  readonly basis?: ConceptEvidenceBasis;
+  /**
+   * The objectives citations behind this edge — this edge's real evidence
+   * when {@link basis} is `'objectives'`; absent (never an empty array) for
+   * a `'past-paper'` edge, matching how `citations` is never fabricated for
+   * an `'objectives'` edge. Kept as a **separate** field rather than folded
+   * into `citations` because the two citation shapes are not
+   * interchangeable — an objectives mention carries no question label or
+   * text, and giving it one would be exactly the "wears a past paper's
+   * clothes" misrepresentation `[D-226]` forbids.
+   */
+  readonly objectivesCitations?: readonly EvidenceObjectivesCitation[];
 }
 
 export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3EvidenceOptions {

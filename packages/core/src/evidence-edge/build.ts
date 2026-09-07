@@ -17,6 +17,8 @@ import type {
   BuildConceptAssessmentEdgesOptions,
   BuildConceptAssessmentEdgesResult,
   ConceptAssessmentEdge,
+  ConceptEvidenceBasis,
+  EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from './types.js';
 
@@ -94,9 +96,10 @@ export async function buildQuestionIndex(
 /**
  * Verifies every `kind: 'past-paper'` citation against `questionIndex`,
  * throwing `UnresolvableCitationError` on the first one that does not
- * resolve. Citations of other kinds are not this module's concern and pass
- * through untouched — see `./types.js`'s module doc for why objectives
- * citations are excluded from this edge entirely.
+ * resolve. Citations of other kinds (`objectives`, `generated-content`) pass
+ * through untouched — an objectives citation carries no `questionLabel` to
+ * verify against a segmented question index in the first place (`[D-226]`
+ * ruling 2, see `./types.js`'s module doc for how they are admitted instead).
  */
 export function resolveCitations(
   citations: readonly ConceptCitation[],
@@ -138,28 +141,108 @@ function toEvidenceQuestionCitation(citation: ConceptCitation): EvidenceQuestion
 }
 
 /**
- * The fraction of `course`'s distinct registered past-paper sources that
+ * The `basis: 'objectives'` sibling of {@link toEvidenceQuestionCitation}
+ * (`[D-226]` ruling 2) — carries no question label or text because an
+ * objectives mention names none; see `./types.js`'s `EvidenceObjectivesCitation`
+ * doc.
+ */
+function toEvidenceObjectivesCitation(citation: ConceptCitation): EvidenceObjectivesCitation {
+  return {
+    sourcePath: citation.sourcePath,
+    provenance: citation.provenance,
+    ...(citation.duplicateSourcePaths !== undefined
+      ? { duplicateSourcePaths: citation.duplicateSourcePaths }
+      : {}),
+  };
+}
+
+/**
+ * The fraction of `course`'s distinct registered sources of ONE basis that
  * cite `conceptName` at least once — see `./types.js`'s module doc for why
- * this needs no invented threshold. `distinctPastPaperSourcesForCourse` is
- * always ≥ 1 when this is called (an edge is only ever built from at least
- * one citation, and a citation implies at least one citing source), so this
- * never divides by zero.
+ * this needs no invented threshold, and for why the two bases' denominators
+ * are never mixed (`[D-226]` ruling 2). `distinctSourcesForCourse` is always
+ * ≥ 1 when this is called (an edge is only ever built from at least one
+ * citation, and a citation implies at least one citing source of its own
+ * basis), so this never divides by zero.
  */
 function computeConfidence(
   citingSourcePaths: ReadonlySet<VaultPath>,
-  distinctPastPaperSourcesForCourse: number,
+  distinctSourcesForCourse: number,
 ): number {
-  return citingSourcePaths.size / distinctPastPaperSourcesForCourse;
+  return citingSourcePaths.size / distinctSourcesForCourse;
 }
 
-/** Deterministic descending sort: more citing questions first, then more distinct citing papers, then concept name ascending. No two entries can tie all the way through, so rank assignment below never has to break a further tie. */
+/**
+ * Deterministic descending sort: more citing questions first, then more
+ * distinct citing sources, then concept name ascending, then basis ascending.
+ * The basis tiebreak is what keeps this total now that `[D-226]` lets the
+ * SAME concept in the SAME course carry two entries — one per basis — that
+ * can otherwise tie on every other field; a within-basis tie is still
+ * impossible (each basis's grouping already deduplicates by concept name),
+ * so this is reached only across bases and never needed within one.
+ */
 function compareByYield(
-  a: { readonly conceptName: string; readonly citationCount: number; readonly sourceCount: number },
-  b: { readonly conceptName: string; readonly citationCount: number; readonly sourceCount: number },
+  a: {
+    readonly conceptName: string;
+    readonly citationCount: number;
+    readonly sourceCount: number;
+    readonly basis: ConceptEvidenceBasis;
+  },
+  b: {
+    readonly conceptName: string;
+    readonly citationCount: number;
+    readonly sourceCount: number;
+    readonly basis: ConceptEvidenceBasis;
+  },
 ): number {
   if (a.citationCount !== b.citationCount) return b.citationCount - a.citationCount;
   if (a.sourceCount !== b.sourceCount) return b.sourceCount - a.sourceCount;
-  return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
+  if (a.conceptName !== b.conceptName) return a.conceptName < b.conceptName ? -1 : 1;
+  return a.basis < b.basis ? -1 : a.basis > b.basis ? 1 : 0;
+}
+
+/**
+ * Groups citations of ONE kind by course, then by concept — the join this
+ * module performs is course-only (see `./types.js`'s module doc for why).
+ * `sourceRole` is required rather than inferred from `kind` because a
+ * `ConceptCitation`'s `kind` and a `Source`'s `role` are separate vocabularies
+ * that happen to share two of their values today; passing it explicitly
+ * keeps this function correct if that ever stops being true.
+ */
+function groupCitationsByCourseAndConcept(
+  citations: readonly ConceptCitation[],
+): ReadonlyMap<string, ReadonlyMap<string, ConceptCitation[]>> {
+  const byCourse = new Map<string, Map<string, ConceptCitation[]>>();
+  for (const citation of citations) {
+    if (citation.course === undefined) continue; // never guessed — see module doc.
+    let byConcept = byCourse.get(citation.course);
+    if (byConcept === undefined) {
+      byConcept = new Map();
+      byCourse.set(citation.course, byConcept);
+    }
+    const list = byConcept.get(citation.conceptName);
+    if (list === undefined) byConcept.set(citation.conceptName, [citation]);
+    else list.push(citation);
+  }
+  return byCourse;
+}
+
+/** Distinct registered source paths per course, for one `SourceRole` — the confidence denominator for that role's basis. Built from `sourcesReport.sources` (already de-duplicated by `ol-n0yc`'s content-hash rule upstream in `registerSources`), never from the citations themselves, so a concept with zero citations in an otherwise-cited course still has a correct (if unused) denominator. */
+function sourcePathsByCourseForRole(
+  sources: readonly Source[],
+  role: 'past-paper' | 'objectives',
+): ReadonlyMap<string, ReadonlySet<VaultPath>> {
+  const byCourse = new Map<string, Set<VaultPath>>();
+  for (const source of sources) {
+    if (source.role !== role || source.course === undefined) continue;
+    let set = byCourse.get(source.course);
+    if (set === undefined) {
+      set = new Set();
+      byCourse.set(source.course, set);
+    }
+    set.add(source.path);
+  }
+  return byCourse;
 }
 
 /**
@@ -187,56 +270,48 @@ export async function buildConceptAssessmentEdges(
   resolveCitations(tier3.citations, questionIndex);
 
   const pastPaperCitations = tier3.citations.filter((c) => c.kind === 'past-paper');
+  // `[D-226]` ruling 2: admitted on their own basis, never folded into the
+  // past-paper denominator or citation set — see `./types.js`'s module doc.
+  const objectivesCitations = tier3.citations.filter((c) => c.kind === 'objectives');
 
-  // Distinct past-paper sources per course — the confidence denominator.
-  // Built from `sourcesReport.sources` (already de-duplicated by `ol-n0yc`'s
-  // content-hash rule upstream in `registerSources`), never from the
-  // citations themselves, so a concept with zero citations in an
-  // otherwise-cited course still has a correct (if unused) denominator.
-  const pastPaperSourcesByCourse = new Map<string, Set<VaultPath>>();
-  for (const source of tier3.sourcesReport.sources) {
-    if (source.role !== 'past-paper' || source.course === undefined) continue;
-    let set = pastPaperSourcesByCourse.get(source.course);
-    if (set === undefined) {
-      set = new Set();
-      pastPaperSourcesByCourse.set(source.course, set);
-    }
-    set.add(source.path);
-  }
+  const pastPaperSourcesByCourse = sourcePathsByCourseForRole(
+    tier3.sourcesReport.sources,
+    'past-paper',
+  );
+  const objectivesSourcesByCourse = sourcePathsByCourseForRole(
+    tier3.sourcesReport.sources,
+    'objectives',
+  );
 
-  // Citations grouped by course, then by concept — the join this module
-  // performs is course-only (see ./types.js's module doc for why).
-  const citationsByCourse = new Map<string, Map<string, ConceptCitation[]>>();
-  for (const citation of pastPaperCitations) {
-    if (citation.course === undefined) continue; // never guessed — see module doc.
-    let byConcept = citationsByCourse.get(citation.course);
-    if (byConcept === undefined) {
-      byConcept = new Map();
-      citationsByCourse.set(citation.course, byConcept);
-    }
-    const list = byConcept.get(citation.conceptName);
-    if (list === undefined) byConcept.set(citation.conceptName, [citation]);
-    else list.push(citation);
-  }
+  const pastPaperByCourse = groupCitationsByCourseAndConcept(pastPaperCitations);
+  const objectivesByCourse = groupCitationsByCourseAndConcept(objectivesCitations);
 
   // One evidence set per course, computed once and reused across every
   // assessment that shares the course — course-level evidence, not
   // per-assessment evidence, per the module doc's stated coarse-graining.
+  // A course can carry entries of BOTH bases for the same concept
+  // (`[D-226]` ruling 2's "each basis is stated for what it is") — they are
+  // never merged into one entry.
   interface CourseEvidenceEntry {
     readonly conceptName: string;
+    readonly basis: ConceptEvidenceBasis;
     readonly citations: readonly EvidenceQuestionCitation[];
+    readonly objectivesCitations: readonly EvidenceObjectivesCitation[];
     readonly confidence: number;
     readonly citationCount: number;
     readonly sourceCount: number;
   }
-  const evidenceByCourse = new Map<string, readonly CourseEvidenceEntry[]>();
-  for (const [course, byConcept] of citationsByCourse) {
-    const distinctSources = pastPaperSourcesByCourse.get(course)?.size ?? 0;
+
+  function pastPaperEntries(
+    byConcept: ReadonlyMap<string, ConceptCitation[]>,
+    distinctSources: number,
+  ): CourseEvidenceEntry[] {
     const entries: CourseEvidenceEntry[] = [];
     for (const [conceptName, citations] of byConcept) {
       const citingSourcePaths = new Set(citations.map((c) => c.sourcePath));
       entries.push({
         conceptName,
+        basis: 'past-paper',
         citations: citations
           .map(toEvidenceQuestionCitation)
           .sort((a, b) =>
@@ -250,11 +325,64 @@ export async function buildConceptAssessmentEdges(
                   ? 1
                   : 0,
           ),
+        objectivesCitations: [],
         confidence: computeConfidence(citingSourcePaths, distinctSources),
         citationCount: citations.length,
         sourceCount: citingSourcePaths.size,
       });
     }
+    return entries;
+  }
+
+  function objectivesEntries(
+    byConcept: ReadonlyMap<string, ConceptCitation[]>,
+    distinctSources: number,
+  ): CourseEvidenceEntry[] {
+    const entries: CourseEvidenceEntry[] = [];
+    for (const [conceptName, citations] of byConcept) {
+      const citingSourcePaths = new Set(citations.map((c) => c.sourcePath));
+      entries.push({
+        conceptName,
+        basis: 'objectives',
+        citations: [],
+        objectivesCitations: citations
+          .map(toEvidenceObjectivesCitation)
+          // No question label to sort by (an objectives mention names none)
+          // — sourcePath, then the citing location, keeps this deterministic
+          // without inventing an ordering key the citation doesn't carry.
+          .sort((a, b) =>
+            a.sourcePath !== b.sourcePath
+              ? a.sourcePath < b.sourcePath
+                ? -1
+                : 1
+              : JSON.stringify(a.provenance.location) < JSON.stringify(b.provenance.location)
+                ? -1
+                : 1,
+          ),
+        confidence: computeConfidence(citingSourcePaths, distinctSources),
+        citationCount: citations.length,
+        sourceCount: citingSourcePaths.size,
+      });
+    }
+    return entries;
+  }
+
+  const coursesWithEvidence = new Set<string>([
+    ...pastPaperByCourse.keys(),
+    ...objectivesByCourse.keys(),
+  ]);
+  const evidenceByCourse = new Map<string, readonly CourseEvidenceEntry[]>();
+  for (const course of coursesWithEvidence) {
+    const entries: CourseEvidenceEntry[] = [
+      ...pastPaperEntries(
+        pastPaperByCourse.get(course) ?? new Map(),
+        pastPaperSourcesByCourse.get(course)?.size ?? 0,
+      ),
+      ...objectivesEntries(
+        objectivesByCourse.get(course) ?? new Map(),
+        objectivesSourcesByCourse.get(course)?.size ?? 0,
+      ),
+    ];
     entries.sort(compareByYield);
     evidenceByCourse.set(course, entries);
   }
@@ -291,6 +419,8 @@ export async function buildConceptAssessmentEdges(
         yieldRank: index + 1,
         confidence: entry.confidence,
         citations: entry.citations,
+        basis: entry.basis,
+        ...(entry.basis === 'objectives' ? { objectivesCitations: entry.objectivesCitations } : {}),
       });
     });
   }

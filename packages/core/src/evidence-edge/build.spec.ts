@@ -193,19 +193,83 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     expect(names.has('Reagent titration')).toBe(false);
   });
 
-  it('excludes objectives-only evidence — a concept cited only by the objectives document gets no edge, even in a course with real past-paper evidence', async () => {
+  it('[D-226] admits objectives-only evidence on its OWN basis — a concept cited only by the objectives document gets its own edge, distinct from the course’s past-paper edges', async () => {
     const result = await buildConceptAssessmentEdges(source, {
       basePath: BASE_PATH,
       concepts: NO_CONCEPTS,
     });
-    // TESTC101 legitimately has edges (Widget theory, Gadget assembly), so
-    // this is not the zero-evidence-course case — it isolates the citation
-    // KIND filter specifically.
-    const names = new Set(
-      result.edges.filter((e) => e.course === 'TESTC101').map((e) => e.conceptName),
+    // TESTC101 legitimately has past-paper edges too (Widget theory, Gadget
+    // assembly), so this is not the zero-evidence-course case — it isolates
+    // the citation KIND handling specifically.
+    const testc101 = result.edges.filter((e) => e.course === 'TESTC101');
+    const names = new Set(testc101.map((e) => e.conceptName));
+    expect([...names].sort()).toEqual([
+      'Flux capacitor tuning',
+      'Gadget assembly',
+      'Widget theory',
+    ]);
+
+    const flux = testc101.find(
+      (e) =>
+        e.assessmentPath === '02 Assignments/Quiz 1.md' &&
+        e.conceptName === 'Flux capacitor tuning',
     );
-    expect(names.has('Flux capacitor tuning')).toBe(false);
-    expect([...names].sort()).toEqual(['Gadget assembly', 'Widget theory']);
+    expect(flux?.basis).toBe('objectives');
+    // Never wears a past paper's clothes: the past-paper-shaped `citations`
+    // stays empty rather than fabricating a question label/text for a
+    // mention that names none.
+    expect(flux?.citations).toEqual([]);
+    expect(flux?.objectivesCitations).toHaveLength(1);
+    expect(flux?.objectivesCitations?.[0]?.sourcePath).toBe(
+      '03 Research/TESTC101 Course Objectives.md',
+    );
+    // TESTC101 has exactly one registered objectives document, and it cites
+    // Flux capacitor tuning — confidence 1.0 on the OBJECTIVES denominator,
+    // never the past-paper one (which would also read 1.0 here by
+    // coincidence — the mixed-course test below is what actually isolates
+    // the two denominators).
+    expect(flux?.confidence).toBe(1);
+
+    const widget = testc101.find(
+      (e) => e.assessmentPath === '02 Assignments/Quiz 1.md' && e.conceptName === 'Widget theory',
+    );
+    expect(widget?.basis).toBe('past-paper');
+    expect(widget?.objectivesCitations).toBeUndefined();
+  });
+
+  it('[D-226] mixed course: past-paper and objectives evidence never share a denominator', async () => {
+    // TESTC101's objectives document registers ALONGSIDE two past-paper
+    // documents, so the two confidence bases would coincide at 1.0/2
+    // sources if ever mixed. Add a second objectives document that also
+    // cites Widget theory (already past-paper evidenced) to prove its
+    // confidence is computed from the one-of-two objectives sources, not
+    // folded into Widget theory's past-paper count of two-of-two.
+    await write(
+      '03 Research/TESTC101 Extra Objectives.md',
+      ['---', 'role: objectives', 'course: TESTC101', '---', '', '# Extra objectives', ''].join(
+        '\n',
+      ),
+    );
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
+    const flux = result.edges.find(
+      (e) =>
+        e.assessmentPath === '02 Assignments/Quiz 1.md' &&
+        e.conceptName === 'Flux capacitor tuning',
+    );
+    // Cited by 1 of the now-2 registered objectives documents.
+    expect(flux?.confidence).toBe(0.5);
+    const widget = result.edges.find(
+      (e) =>
+        e.assessmentPath === '02 Assignments/Quiz 1.md' &&
+        e.conceptName === 'Widget theory' &&
+        e.basis === 'past-paper',
+    );
+    // Still cited by both of the 2 registered past-paper documents —
+    // unaffected by the objectives denominator growing.
+    expect(widget?.confidence).toBe(1);
   });
 
   it('an assessment with no `class` value is never guessed into a course, and never receives an edge', async () => {
@@ -227,7 +291,12 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     const testc101Concepts = new Set(
       result.edges.filter((e) => e.course === 'TESTC101').map((e) => e.conceptName),
     );
-    expect(testc101Concepts).toEqual(new Set(['Widget theory', 'Gadget assembly']));
+    // [D-226]: 'Flux capacitor tuning' now gets its own objectives-basis
+    // edge alongside the two past-paper-cited concepts — see the dedicated
+    // objectives-admission tests above for what distinguishes it.
+    expect(testc101Concepts).toEqual(
+      new Set(['Widget theory', 'Gadget assembly', 'Flux capacitor tuning']),
+    );
   });
 
   it('confidence is the fraction of a course’s distinct past papers that cite the concept, and yield rank orders by citation breadth', async () => {
@@ -249,9 +318,13 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     expect(gadget?.confidence).toBe(0.5);
     expect(gadget?.citations).toHaveLength(1);
 
-    // More citing questions -> better (lower) rank.
+    // More citing questions -> better (lower) rank. 'Flux capacitor tuning'
+    // (1 citation, 1 source, objectives basis) ties Gadget assembly (1
+    // citation, 1 source) on both counts, so the deterministic name
+    // tiebreak places it ahead of Gadget assembly ('F' < 'G') — see
+    // `compareByYield`'s doc for why a basis tiebreak exists at all.
     expect(widget?.yieldRank).toBe(1);
-    expect(gadget?.yieldRank).toBe(2);
+    expect(gadget?.yieldRank).toBe(3);
 
     const sprocket = result.edges.find(
       (e) =>
@@ -279,7 +352,10 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
       .map(strip)
       .sort((a, b) => (a.conceptName < b.conceptName ? -1 : 1));
     expect(finalExam).toEqual(quiz1);
-    expect(quiz1).toHaveLength(2);
+    // Widget theory, Gadget assembly (past-paper) + Flux capacitor tuning
+    // (objectives, [D-226]) — three concept-basis rows now broadcast
+    // identically to both of TESTC101's assessments.
+    expect(quiz1).toHaveLength(3);
   });
 
   it('every citation carried on an edge is real: sourcePath + questionLabel resolve to what segmentPastPaper actually produced', async () => {
@@ -319,6 +395,88 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     );
     expect(after).toEqual(before);
     expect(await source.list()).toEqual(allPaths);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [D-226] ruling 2 / `ol-af3j`: a course whose ONLY registered source is an
+// objectives document is ranked rather than left unranked — the acceptance
+// criterion the parent bug names directly. Self-contained fixture, deliberately
+// separate from the shared TESTC101/202/303 vault above, so this course
+// genuinely carries zero past-paper sources of any kind.
+// ---------------------------------------------------------------------------
+
+describe('buildConceptAssessmentEdges — [D-226] an objectives-only course', () => {
+  let root: string;
+  let source: FolderSource;
+  const OBJ_BASE_PATH = '02 Assignments/Assignments.base';
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-evidence-edge-objectives-only-'));
+    source = new FolderSource(root);
+
+    await write('05 Zettelkasten/Vortex calibration.md', '# Vortex calibration\n');
+    await write(
+      '03 Research/TESTC404 Course Objectives.md',
+      [
+        '---',
+        'role: objectives',
+        'course: TESTC404',
+        '---',
+        '',
+        '# TESTC404 — Course Objectives',
+        '',
+        '- Explain the fundamentals of Vortex calibration.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      OBJ_BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/TESTC404 Quiz.md',
+      '---\nclass: TESTC404\ntype: Quiz\n---\n\n# TESTC404 Quiz\n',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('is ranked, not left unranked: the assessment gets a real edge, never assessmentsWithNoEvidence', async () => {
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: OBJ_BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
+    expect(result.assessmentsWithNoEvidence).toEqual([]);
+    const edge = result.edges.find((e) => e.assessmentPath === '02 Assignments/TESTC404 Quiz.md');
+    expect(edge).toBeDefined();
+    expect(edge?.conceptName).toBe('Vortex calibration');
+    expect(edge?.basis).toBe('objectives');
+    // No past-paper source registered at all for this course — confidence is
+    // 1 of the course's 1 registered objectives document, never a past-paper
+    // fraction (there is no past-paper denominator to even compute here).
+    expect(edge?.confidence).toBe(1);
+    expect(edge?.citations).toEqual([]);
+    expect(edge?.objectivesCitations).toHaveLength(1);
+    expect(edge?.objectivesCitations?.[0]?.sourcePath).toBe(
+      '03 Research/TESTC404 Course Objectives.md',
+    );
   });
 });
 
