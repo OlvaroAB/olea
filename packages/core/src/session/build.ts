@@ -72,16 +72,20 @@ import { resolvePrerequisiteConceptKeys } from '../concept/prerequisite-order.js
 import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
+import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import { composeQueue } from '../queue/compose.js';
 import type {
   ComposedQueue,
   QueueCandidate,
   QueueFilter,
+  QueueItem,
+  QueueSelectionContext,
   QueueServingPolicy,
 } from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
-import type { Scheduler } from '../scheduler/types.js';
+import type { Scheduler, SchedulerState } from '../scheduler/types.js';
+import type { StudySessionItem } from '../study-session/build.js';
 import { type CalendarDay, calendarDayFromLocalDate } from '../today/calendar-day.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { filterContainmentCoPresence } from './containment.js';
@@ -429,4 +433,136 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     entries,
     recordsById,
   };
+}
+
+/**
+ * `dueState` for one instrument the study-session composer already chose, at
+ * `now` — the same three-way math `../queue/compose.js`'s private `dueStateOf`
+ * uses, widened to answer `'early'` rather than excluding the instrument.
+ *
+ * `composeQueue` only ever offers a due-or-overdue instrument, so `dueStateOf`
+ * documents `'early'` as "deliberately unreachable in v1". The study-session
+ * composer is not so restricted — SESS-2's baseline/elective obligation
+ * classes (`study-session/compose.ts`) can and do choose a concept ahead of
+ * its FSRS due day — so an item this function is asked about may genuinely be
+ * early, and stating that honestly is the point: mislabelling it `'due'`
+ * would be a false claim about what the composer actually decided.
+ */
+function composedDueState(
+  state: SchedulerState | null,
+  now: Date,
+): QueueSelectionContext['dueState'] {
+  if (state === null) return 'new';
+  const daysLate = daysBetween(new Date(state.due), now);
+  if (daysLate < 0) return 'early';
+  return daysLate === 0 ? 'due' : 'overdue';
+}
+
+/**
+ * D7.1's `instrumentTypesOffered` for one item the study-session composer
+ * chose: every type of an instrument in `candidates` sharing at least one of
+ * `conceptIds`, in `candidates`' own order — the same question and the same
+ * formula `../queue/compose.js`'s private `instrumentTypesOfferedFor` answers
+ * for `composeQueue`'s own offer.
+ *
+ * `candidates` here is the KEPT enumeration `buildReviewSession` still
+ * produces (every schedulable instrument in scope, post-containment-filter,
+ * pre-selection) rather than `compose.ts`'s narrower due-only "eligible" set:
+ * with `'early'` reachable ({@link composedDueState}), "eligible" no longer
+ * means "due", so the honest answer to "what else could this concept have
+ * offered" is read off the whole kept set.
+ */
+function instrumentTypesOfferedAmong(
+  ownType: SchedulableInstrumentType,
+  conceptIds: readonly string[],
+  candidates: readonly QueueCandidate[],
+): SchedulableInstrumentType[] {
+  const concepts = new Set(conceptIds);
+  const types: SchedulableInstrumentType[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.conceptIds.some((conceptId) => concepts.has(conceptId))) continue;
+    if (!types.includes(candidate.instrumentType)) types.push(candidate.instrumentType);
+  }
+  return types.length > 0 ? types : [ownType];
+}
+
+export interface ComposedSessionQueueItemsInput {
+  /** The study-session composer's own ordered rows — never reordered here. */
+  readonly items: readonly StudySessionItem[];
+  /** `ReviewSession.recordsById` — the kept enumeration's `conceptIds` per instrument. */
+  readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
+  /** `ReviewSession.candidates` — the kept enumeration's FSRS state per instrument, and {@link instrumentTypesOfferedAmong}'s own set. */
+  readonly candidates: readonly QueueCandidate[];
+  /** The same instant the composition and the enumeration were both read at. */
+  readonly now: Date;
+}
+
+/**
+ * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` row 4):
+ * translates the study-session composer's own ordered `StudySessionItem[]`
+ * into the `QueueItem[]` shape `../plan/execute.js`'s
+ * `executeStudyPlanOverComposedRows` joins against the plan.
+ *
+ * `StudySessionItem` carries no `conceptIds`/`priorState`/`selectionContext`
+ * at all — the study-session composer never touches FSRS scheduling state
+ * (`plan/execute.ts`'s own module doc, "Why the input is `QueueItem[]`, not
+ * literally `StudySessionItem[]`") — so every field this produces is read off
+ * the SAME kept enumeration `buildReviewSession` already produced for this
+ * call (`recordsById` for `conceptIds`, `candidates` for FSRS `state`), never
+ * a second vault walk or a second replay.
+ *
+ * **Order is exactly `items`' own order.** This function never reorders,
+ * never drops and never adds a row — selection and order are the study-session
+ * composer's decision alone (C5.7, F6.4); this only fills in the per-item
+ * facts a plan join needs.
+ *
+ * `dedupeReason` is always omitted: the study-session composer's own
+ * per-concept selection is not `composeQueue`'s format-preference-vs-recall
+ * override (`[D-240]` item 5), so there is no equivalent reason to attach —
+ * the same "state the absence" posture {@link QueueItem.dedupeReason}'s own
+ * doc already takes for the ordinary case.
+ *
+ * A `StudySessionItem` naming an `instrumentId` absent from `recordsById`
+ * would mean the composer's own enumeration and this call's kept one
+ * disagreed about what the vault holds, even though both are built from the
+ * same walk within one `openReviewSession` call — an inconsistency worth
+ * failing loudly on rather than silently dropping the row.
+ */
+export function queueItemsFromComposedSession(
+  input: ComposedSessionQueueItemsInput,
+): readonly QueueItem[] {
+  const candidatesById = new Map(
+    input.candidates.map((candidate) => [candidate.instrumentId, candidate]),
+  );
+
+  return input.items.map((item): QueueItem => {
+    const record = input.recordsById.get(item.instrumentId);
+    if (record === undefined) {
+      throw new Error(
+        `queueItemsFromComposedSession: composed item's instrument "${item.instrumentId}" is not in the kept enumeration`,
+      );
+    }
+    const state = candidatesById.get(item.instrumentId)?.state ?? null;
+    const selectionContext: QueueSelectionContext = {
+      dueState: composedDueState(state, input.now),
+      // v1's honest "we did not rank this" answer — see `QueueSelectionContext`'s
+      // own doc. `executeStudyPlanOverComposedRows` overrides both when the
+      // cached plan ranks one of `record.conceptIds`, and leaves them exactly
+      // as given otherwise.
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: instrumentTypesOfferedAmong(
+        item.instrumentType,
+        record.conceptIds,
+        input.candidates,
+      ),
+    };
+    return {
+      instrumentId: item.instrumentId,
+      instrumentType: item.instrumentType,
+      conceptIds: record.conceptIds,
+      priorState: state,
+      selectionContext,
+    };
+  });
 }

@@ -1066,8 +1066,19 @@ export type { BuildStudyPlanInput } from './plan/build.js';
 export { buildStudyPlan, studyPlanVersion } from './plan/build.js';
 export type { LoadCachedStudyPlanResult, StudyPlanCacheRejection } from './plan/cache.js';
 export { loadCachedStudyPlan, saveCachedStudyPlan } from './plan/cache.js';
-export type { ExecutedQueue, ExecuteStudyPlanInput, PlannedQueueItem } from './plan/execute.js';
-export { executeStudyPlan } from './plan/execute.js';
+// `[SESS-8.3]` (`ol-egov.132.3`, `docs/dev/one-assembly-path.md` row 3): the
+// composed-rows entry — same plan join as `executeStudyPlan`, zero reordering.
+// `packages/plugin/src/review/open-session.ts` (`ol-egov.132.4` [SESS-8.4]) is
+// its first real caller — see that module's own doc for how it translates
+// `StudySessionItem[]` plus the kept vault enumeration into `QueueItem`-shaped
+// rows before this join runs.
+export type {
+  ExecuteComposedSessionInput,
+  ExecutedQueue,
+  ExecuteStudyPlanInput,
+  PlannedQueueItem,
+} from './plan/execute.js';
+export { executeStudyPlan, executeStudyPlanOverComposedRows } from './plan/execute.js';
 export type { RefreshStudyPlanDeps } from './plan/refresh.js';
 export { refreshStudyPlan } from './plan/refresh.js';
 export type {
@@ -1524,8 +1535,19 @@ export { buildGroveModel } from './scope/grove.js';
 // derivation module itself still writes nothing into her notes — the write
 // half is `mcq-format.ts`'s `stampMcqId` and `card-format.ts`'s
 // `stampQaCardBlockId`.
-export type { BuildReviewSessionInput, ReviewSession } from './session/build.js';
-export { buildReviewSession, toQueueCandidate } from './session/build.js';
+// `[SESS-8.4]` (`ol-egov.132.4`): translates the study-session composer's own
+// `StudySessionItem[]` into `QueueItem`s, off the SAME kept enumeration
+// `buildReviewSession` above produces — see `session/build.ts`'s own doc.
+export type {
+  BuildReviewSessionInput,
+  ComposedSessionQueueItemsInput,
+  ReviewSession,
+} from './session/build.js';
+export {
+  buildReviewSession,
+  queueItemsFromComposedSession,
+  toQueueCandidate,
+} from './session/build.js';
 export { toDueInstruments } from './session/due-instruments.js';
 export type { EnumerateVaultInstrumentsOptions } from './session/enumerate.js';
 export { enumerateVaultInstruments } from './session/enumerate.js';

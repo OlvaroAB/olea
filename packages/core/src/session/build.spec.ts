@@ -11,10 +11,12 @@ import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { reviewLogPath } from '../review-log/path.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
+import type { StudySessionItem } from '../study-session/build.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { buildReviewSession } from './build.js';
+import { buildReviewSession, queueItemsFromComposedSession } from './build.js';
 import { toDueInstruments } from './due-instruments.js';
 import { readReviewLogHistory } from './history.js';
+import type { VaultInstrumentRecord } from './types.js';
 
 /**
  * `ol-63e1`: every concept in `smallVault()` below is unbound (tier 2 — no
@@ -767,5 +769,175 @@ describe('[D-149] (`ol-4e7o`) — arrivalDays/conceptSourcePaths resolved intern
     // fallback above, which is what a mutation dropping either resolved map
     // (or failing to thread it into `composeQueue`) would produce instead.
     expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptZ'), unboundKey('ConceptY')]);
+  });
+});
+
+// `[SESS-8.4]` (`ol-egov.132.4`): `queueItemsFromComposedSession` translates
+// the study-session composer's own rows into `QueueItem[]`, off the kept
+// enumeration alone — @auto:core/session/build.spec.
+describe('queueItemsFromComposedSession — translating composed rows off the kept enumeration', () => {
+  function studySessionItemFor(record: VaultInstrumentRecord, position: number): StudySessionItem {
+    return {
+      position,
+      instrumentId: record.instrumentId,
+      instrumentType: record.instrumentType,
+      notePath: record.notePath,
+      noteTitle: record.noteTitle,
+      conceptName: record.conceptIds[0] ?? record.instrumentId,
+      course: record.courses[0] ?? '',
+      gapClass: 'mastery-gap',
+      gapRank: position,
+      gapScore: 1,
+      estimatedSeconds: 60,
+      durationSource: 'assumed',
+      formatMatch: 'no-preference',
+    };
+  }
+
+  it('fills conceptIds and priorState from the kept enumeration, never reorders, and computes instrumentTypesOffered over the whole kept candidate set', async () => {
+    const vault = smallVault();
+    const session = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+
+    const alphaQa = session.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    const alphaCloze = session.candidates.find((c) => c.instrumentType === 'cloze');
+    const beta = session.candidates.find((c) => c.conceptIds.includes(unboundKey('Beta')));
+    if (alphaQa === undefined || alphaCloze === undefined || beta === undefined) {
+      throw new Error('fixture vault missing an expected candidate');
+    }
+
+    // Deliberately the reverse of vault-walk order (Beta's file sorts after
+    // Alpha's) — the composer's own order is what must survive, not the
+    // enumeration's.
+    const betaRecord = session.recordsById.get(beta.instrumentId);
+    const alphaQaRecord = session.recordsById.get(alphaQa.instrumentId);
+    if (betaRecord === undefined || alphaQaRecord === undefined) {
+      throw new Error('fixture vault missing an expected record');
+    }
+    const items = [studySessionItemFor(betaRecord, 1), studySessionItemFor(alphaQaRecord, 2)];
+
+    const queueItems = queueItemsFromComposedSession({
+      items,
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: NOW,
+    });
+
+    expect(queueItems.map((i) => i.instrumentId)).toEqual([
+      beta.instrumentId,
+      alphaQa.instrumentId,
+    ]);
+
+    const [betaItem, alphaQaItem] = queueItems;
+    expect(betaItem?.conceptIds).toEqual(betaRecord.conceptIds);
+    expect(betaItem?.priorState).toBeNull();
+    expect(betaItem?.selectionContext.dueState).toBe('new');
+    // Nothing else in the kept set shares Beta's concept.
+    expect(betaItem?.selectionContext.instrumentTypesOffered).toEqual(['qa']);
+
+    expect(alphaQaItem?.conceptIds).toEqual(alphaQaRecord.conceptIds);
+    expect(alphaQaItem?.priorState).toBeNull();
+    // Alpha's cloze instrument shares the concept, so both types are named —
+    // this is `../queue/compose.js`'s `instrumentTypesOfferedFor` question,
+    // answered over the kept `candidates` rather than composeQueue's own
+    // narrower "eligible" set.
+    expect(alphaQaItem?.selectionContext.instrumentTypesOffered).toEqual(
+      expect.arrayContaining(['qa', 'cloze']),
+    );
+    expect(alphaCloze).toBeDefined();
+
+    // Never ranked by this translator — `executeStudyPlanOverComposedRows` is
+    // the only thing that may fill these in, from the plan.
+    expect(betaItem?.selectionContext.examProximity).toBeNull();
+    expect(betaItem?.selectionContext.yieldRank).toBeNull();
+  });
+
+  it('dueState reads `early` for an item the composer chose ahead of its FSRS due day — unreachable through composeQueue, reachable here', async () => {
+    const vault = smallVault();
+    const enumeration = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const alphaQa = enumeration.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    if (alphaQa === undefined) throw new Error('fixture vault missing Alpha qa candidate');
+
+    const entries = [
+      reviewOf('e1', '2026-08-10T09:00:00Z', alphaQa.instrumentId, unboundKey('Alpha')),
+    ];
+    const session = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries,
+    });
+    const candidate = session.candidates.find((c) => c.instrumentId === alphaQa.instrumentId);
+    const record = session.recordsById.get(alphaQa.instrumentId);
+    if (candidate?.state === null || candidate?.state === undefined || record === undefined) {
+      throw new Error('expected a reviewed instrument to carry FSRS state');
+    }
+    const due = new Date(candidate.state.due);
+    const dayBefore = new Date(due.getTime() - 24 * 60 * 60 * 1000);
+    const dayAfter = new Date(due.getTime() + 24 * 60 * 60 * 1000);
+    const items = [studySessionItemFor(record, 1)];
+
+    const early = queueItemsFromComposedSession({
+      items,
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: dayBefore,
+    });
+    expect(early[0]?.selectionContext.dueState).toBe('early');
+
+    const onDue = queueItemsFromComposedSession({
+      items,
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: due,
+    });
+    expect(onDue[0]?.selectionContext.dueState).toBe('due');
+
+    const overdue = queueItemsFromComposedSession({
+      items,
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: dayAfter,
+    });
+    expect(overdue[0]?.selectionContext.dueState).toBe('overdue');
+  });
+
+  it('throws when a composed item names an instrument the kept enumeration does not have', async () => {
+    const session = await buildReviewSession({
+      vault: smallVault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const ghost: StudySessionItem = {
+      position: 1,
+      instrumentId: 'not-a-real-instrument',
+      instrumentType: 'qa',
+      notePath: 'Courses/GEO/one.md' as VaultPath,
+      noteTitle: 'one',
+      conceptName: 'Alpha',
+      course: 'GEO101',
+      gapClass: 'mastery-gap',
+      gapRank: 1,
+      gapScore: 1,
+      estimatedSeconds: 60,
+      durationSource: 'assumed',
+      formatMatch: 'no-preference',
+    };
+
+    expect(() =>
+      queueItemsFromComposedSession({
+        items: [ghost],
+        recordsById: session.recordsById,
+        candidates: session.candidates,
+        now: NOW,
+      }),
+    ).toThrow(/not-a-real-instrument/);
   });
 });
