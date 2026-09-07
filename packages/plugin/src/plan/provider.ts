@@ -169,7 +169,12 @@ export function createLocalStudyPlanProvider(
       // degrade-not-half-work posture, same as `readRankWeights` above: a
       // plan with no allocation is byte-identical to today's plan before
       // this bead, never a plan with every course silently zeroed.
-      const courses = resolvePlanPolicyCourseInputs(today, ranking, assessmentReport.records);
+      const courses = resolvePlanPolicyCourseInputs(
+        today,
+        ranking,
+        assessmentReport.records,
+        concepts,
+      );
       const policy =
         courses.length === 0 ? undefined : await deps.readPlanPolicy?.({ asOf: today, courses });
 

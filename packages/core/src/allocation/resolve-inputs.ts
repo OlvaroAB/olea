@@ -63,6 +63,31 @@
  *     (`[D-081]`, service-side) is what turns a low `evidenceVolume` into
  *     "fall back to tempo", not this module.
  *
+ * ## F4.7's fallback also has to reach courses `rankOracle` never sees at all
+ * (`ol-3ux7.5.57.14.34` / HARD-2c)
+ *
+ * `rankOracle`'s own course set (`RankOracleResult.courses`) is built purely
+ * from courses named in her assessments table (`oracle/rank.ts`'s
+ * `coursesInOrder`) — a course with no assessment record on file at all,
+ * ever, never appears there, ranked or abstained. That is fine for F4.7's
+ * literal case (an assessment whose date has passed still leaves its course
+ * in the table, so `daysToNextAssessment` correctly falls to `null` for it,
+ * same as any other course below) — but a course with **no** assessment
+ * record would otherwise vanish from this function's output entirely,
+ * taking it out of the cross-course allocation (C5.6) even though her
+ * material for it has arrived. F4.7's own argument ("the material is still
+ * hers") does not stop at "no assessment left" — it covers "no assessment
+ * ever". So this function's course universe is the union of `rankOracle`'s
+ * courses AND every course named in `concepts[number].courses` (F1.3's own
+ * course-attribution field — "material has arrived" read the same way F4.10
+ * and F8.2 already read it). A course present only via `concepts` gets the
+ * same treatment an abstained course gets: `readiness: 0, evidenceVolume: 0`
+ * (no ranked evidence exists for it, full stop) and
+ * `daysToNextAssessment`/`assessmentWorth` resolved off the same assessments
+ * table every other course uses — `null`/neutral when, as here, none exists.
+ * A course present in NEITHER set is not running and gets no entry, same as
+ * before this fix.
+ *
  * **`tempoWeight`, `steeringWeight`, `sittingsSinceFloorMet`** — omitted
  * outright, never defaulted:
  *   - `tempoWeight` has no client-side producer today (the register's own
@@ -87,6 +112,7 @@
  */
 
 import type { AssessmentRecord } from '../assessment/types.js';
+import type { ConceptRecord } from '../concept/types.js';
 import type { CourseOracleRanking, RankOracleResult } from '../oracle/types.js';
 
 /** Mirrors `plan-policy-provider.ts`'s `PlanPolicyCourseInput` field-for-field (the plugin package cannot import from here without an ownership crossing, so the two are kept in sync by hand — same discipline `PLAN_POLICY_ENDPOINT_PATH` already uses). */
@@ -152,28 +178,70 @@ function readinessAndEvidenceVolume(course: CourseOracleRanking): {
   };
 }
 
+/** Every course id named by any concept's `courses` attribution (F1.3) — "her material has arrived" for that course, the same reading F4.10/F8.2 already give it. */
+function coursesWithMaterial(concepts: readonly ConceptRecord[]): ReadonlySet<string> {
+  const courses = new Set<string>();
+  for (const concept of concepts) {
+    for (const course of concept.courses) courses.add(course);
+  }
+  return courses;
+}
+
+/** Resolves one course's `PlanPolicyCourseInput`, whether or not `rankOracle` reported on it — see the module doc's F4.7 fallback section. */
+function resolveCourseInput(
+  asOf: string,
+  courseId: string,
+  ranked: CourseOracleRanking | undefined,
+  assessments: readonly AssessmentRecord[],
+): PlanPolicyCourseInput {
+  const courseRecords = assessments.filter((record) => record.course === courseId);
+  const nearest = nearestUpcomingAssessment(asOf, courseRecords);
+  const { readiness, evidenceVolume } =
+    ranked === undefined ? { readiness: 0, evidenceVolume: 0 } : readinessAndEvidenceVolume(ranked);
+  return {
+    courseId,
+    daysToNextAssessment: nearest?.days ?? null,
+    assessmentWorth: nearest?.record.weight ?? NEUTRAL_ASSESSMENT_WORTH,
+    readiness,
+    evidenceVolume,
+  };
+}
+
 /**
- * Resolve component 3.5's per-course inputs for every course `rankOracle`
- * reported on (ranked or abstained — both are "running"). `assessments` is
- * the full, unfiltered read of her assignments table (`readAssessments`'
- * `records`); this function does the per-course narrowing itself so a
- * caller hands it the same report it already read for `composeOracleRanking`.
+ * Resolve component 3.5's per-course inputs for every course that is
+ * "running": every course `rankOracle` reported on (ranked or abstained —
+ * both are "running"), UNION every course named by `concepts`' own course
+ * attribution (F1.3) — F4.7's fallback reaching the courses `rankOracle`
+ * never sees at all (see the module doc). `rankOracle`'s own courses keep
+ * their existing order first; any course present only via `concepts` is
+ * appended after, sorted, so an existing caller iterating just the ranked
+ * courses sees no reordering of what it already had.
+ *
+ * `assessments` is the full, unfiltered read of her assignments table
+ * (`readAssessments`' `records`); this function does the per-course
+ * narrowing itself so a caller hands it the same report it already read for
+ * `composeOracleRanking`. `concepts` is the same extraction a caller already
+ * ran for `composeOracleRanking`'s own `concepts` input (F1.3's course
+ * attribution) — passing `[]` (the default) reproduces this function's
+ * pre-fix behaviour exactly, for a caller not yet passing it.
  */
 export function resolvePlanPolicyCourseInputs(
   asOf: string,
   ranking: RankOracleResult,
   assessments: readonly AssessmentRecord[],
+  concepts: readonly ConceptRecord[] = [],
 ): readonly PlanPolicyCourseInput[] {
-  return ranking.courses.map((course) => {
-    const courseRecords = assessments.filter((record) => record.course === course.course);
-    const nearest = nearestUpcomingAssessment(asOf, courseRecords);
-    const { readiness, evidenceVolume } = readinessAndEvidenceVolume(course);
-    return {
-      courseId: course.course,
-      daysToNextAssessment: nearest?.days ?? null,
-      assessmentWorth: nearest?.record.weight ?? NEUTRAL_ASSESSMENT_WORTH,
-      readiness,
-      evidenceVolume,
-    };
-  });
+  const rankedById = new Map(ranking.courses.map((course) => [course.course, course]));
+  const materialOnlyIds = [...coursesWithMaterial(concepts)]
+    .filter((courseId) => !rankedById.has(courseId))
+    .sort();
+
+  return [
+    ...ranking.courses.map((course) =>
+      resolveCourseInput(asOf, course.course, course, assessments),
+    ),
+    ...materialOnlyIds.map((courseId) =>
+      resolveCourseInput(asOf, courseId, undefined, assessments),
+    ),
+  ];
 }

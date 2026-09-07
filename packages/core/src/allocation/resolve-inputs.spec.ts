@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AssessmentRecord } from '../assessment/types.js';
+import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptPriority, CourseOracleRanking, RankOracleResult } from '../oracle/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { resolvePlanPolicyCourseInputs } from './resolve-inputs.js';
@@ -45,6 +46,17 @@ function conceptPriority(overrides: Partial<ConceptPriority> = {}): ConceptPrior
 
 function ranking(courses: readonly CourseOracleRanking[], asOf = '2026-09-01'): RankOracleResult {
   return { courses, unattributableAssessments: [], asOf };
+}
+
+function concept(overrides: Partial<ConceptRecord> = {}): ConceptRecord {
+  return {
+    key: 'concept-a',
+    name: 'Concept A',
+    tier: 2,
+    courses: ['COURSE-A'],
+    sourcePaths: ['01 Courses/COURSE-A/note.md'],
+    ...overrides,
+  };
 }
 
 describe('resolvePlanPolicyCourseInputs', () => {
@@ -181,5 +193,72 @@ describe('resolvePlanPolicyCourseInputs', () => {
     );
 
     expect(result.map((r) => r.courseId)).toEqual(['COURSE-A', 'COURSE-B']);
+  });
+
+  // HARD-2c (`ol-3ux7.5.57.14.34`): F4.7's fallback also has to reach a course
+  // `rankOracle` never even reported on — see the module doc.
+  describe('F4.7 fallback — courses rankOracle never reported on', () => {
+    it('a course with material arrived but no assessment record at all still gets a running-course entry', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [assessment({ course: 'COURSE-A', due: '2026-09-10' })],
+        [concept({ courses: ['COURSE-A', 'COURSE-B'] })],
+      );
+
+      expect(result.map((r) => r.courseId)).toEqual(['COURSE-A', 'COURSE-B']);
+      expect(result[1]).toEqual({
+        courseId: 'COURSE-B',
+        daysToNextAssessment: null,
+        assessmentWorth: 1,
+        readiness: 0,
+        evidenceVolume: 0,
+      });
+    });
+
+    it('a course with material arrived and only passed assessments on file also still gets an entry', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [assessment({ course: 'COURSE-A', due: '2026-08-01' })],
+        [concept({ courses: ['COURSE-A'] })],
+      );
+
+      // COURSE-A is already in the ranking (its passed assessment never dropped
+      // it from `rankOracle`'s own course set) — the fallback path is inert here,
+      // and `daysToNextAssessment` still falls to null via the ordinary path.
+      expect(result).toHaveLength(1);
+      expect(result[0]?.courseId).toBe('COURSE-A');
+      expect(result[0]?.daysToNextAssessment).toBeNull();
+    });
+
+    it('a course with neither material nor an assessment record is not running', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [assessment({ course: 'COURSE-A' })],
+        [concept({ courses: ['COURSE-A'] })],
+      );
+
+      expect(result.map((r) => r.courseId)).toEqual(['COURSE-A']);
+      expect(result.some((r) => r.courseId === 'COURSE-C')).toBe(false);
+    });
+
+    it('a caller passing no concepts at all reproduces the pre-fix behaviour exactly', () => {
+      const withDefault = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [assessment({ course: 'COURSE-A' })],
+      );
+      const withEmpty = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [assessment({ course: 'COURSE-A' })],
+        [],
+      );
+
+      expect(withDefault).toEqual(withEmpty);
+      expect(withDefault).toHaveLength(1);
+    });
   });
 });
