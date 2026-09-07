@@ -15,8 +15,10 @@ import { addDays } from '../dates.js';
 import { createFsrsScheduler } from './fsrs-scheduler.js';
 import {
   DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER,
+  FINAL_WEEK_DAYS,
   firstIntervalDaysAfterGood,
   hasWaitedItsOwnInterval,
+  isWithinFinalWeek,
   recallOutranksFormatPreference,
 } from './serving.js';
 import type { SchedulerState } from './types.js';
@@ -177,5 +179,36 @@ describe('the rule both composers call', () => {
     // `findings/precommitment-dedupe-interval.md` (private repo), never by
     // someone editing the number.
     expect(DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2.17's final week (`[HARD-2b]`, `ol-3ux7.5.57.14.33`) — the one judgment
+// shared by both composers once each resolves its own countdown; see
+// `../study-session/build.ts`'s `courseNextAssessmentDays` for the
+// study-session composer's own resolution of the number this takes.
+// ---------------------------------------------------------------------------
+
+describe("F2.17's final week", () => {
+  it('is seven days, the declared default', () => {
+    expect(FINAL_WEEK_DAYS).toBe(7);
+  });
+
+  it('is false with no readable countdown at all', () => {
+    expect(isWithinFinalWeek(null)).toBe(false);
+  });
+
+  it('is false more than seven days out', () => {
+    expect(isWithinFinalWeek(8)).toBe(false);
+  });
+
+  it('is true at exactly seven days out, and at every day inside that', () => {
+    expect(isWithinFinalWeek(7)).toBe(true);
+    expect(isWithinFinalWeek(1)).toBe(true);
+    expect(isWithinFinalWeek(0)).toBe(true);
+  });
+
+  it('is false for a negative countdown — an assessment already behind her never opens the final week (F4.7)', () => {
+    expect(isWithinFinalWeek(-1)).toBe(false);
   });
 });

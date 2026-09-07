@@ -1233,6 +1233,25 @@ describe('buildComposedStudySession', () => {
       beta1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
       beta2: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
     });
+    // `[HARD-2b]`: outside the final week, F2.17's per-concept cap now holds
+    // explicitly, so a second instrument on the SAME concept (`alpha2`,
+    // `beta2`) is exactly the case that cap forbids by default. This test is
+    // about a different clause — F2.18's interleave, demonstrated across two
+    // DIFFERENT concepts — so it puts CRS101 inside its own final week
+    // (an assessment 3 days out) to legitimately unlock each concept's
+    // second instrument, the same way `[D-240]`'s own tests do.
+    const CRS101_QUIZ = '02 Assignments/crs101-quiz.md' as VaultPath;
+    const theAssessments: readonly AssessmentRecord[] = [
+      {
+        path: CRS101_QUIZ,
+        course: 'CRS101',
+        type: 'Quiz',
+        weight: 5,
+        weightRaw: '5',
+        due: '2026-09-17',
+        status: 'upcoming',
+      },
+    ];
 
     const composed = buildComposedStudySession({
       rows: theRows,
@@ -1241,6 +1260,7 @@ describe('buildComposedStudySession', () => {
       budgetMinutes: 20,
       durations: flatDurations(60),
       asOf: AS_OF,
+      assessments: theAssessments,
     });
 
     // Interleaved: Alpha, Beta, Alpha, Beta — never Alpha, Alpha, Beta, Beta

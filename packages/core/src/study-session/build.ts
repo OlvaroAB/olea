@@ -45,9 +45,48 @@
  * class, cross-course allocation and F2.18's course blocking. The fill runs
  * in **passes**:
  * each pass offers every row one instrument, so a 20-minute session spreads
- * across her top gaps before it gives any single concept a second card. Within
- * a row, instruments matching the preferred format come first, then the
- * enumeration's own vault order.
+ * across her top gaps before it considers a second instrument for any single
+ * concept. Within a row, instruments matching the preferred format come
+ * first (subject to `[D-240]` item 2's override — see `orderedForFormat`),
+ * then the enumeration's own vault order.
+ *
+ * ## F2.17's per-concept cap, made explicit (`[HARD-2b]`, `ol-3ux7.5.57.14.33`)
+ *
+ * A row that has already won a slot this session takes no more of them: once
+ * `queue.chose` is true, later passes skip it outright, rather than letting
+ * it compete again whenever the budget still has room. Before this the cap
+ * was only the fill-order's side effect — true only as long as every row got
+ * at least one instrument before any row got a second, and false the moment
+ * a session had spare budget after every concept was covered once (a real
+ * pre-flight measured 11 of 21 sittings serving some concept two
+ * instruments, 141 days from any assessment — nowhere near F2.17's named
+ * exception). The cap is now a real gate, checked before a row is offered
+ * anything in a pass at all.
+ *
+ * **The final week lifts it.** F2.17's own last sentence: "exam-proximity
+ * mode may deliberately relax the cap — drilling both forms in the final
+ * week is a feature, not redundancy." Each row's cap is lifted when its own
+ * course's next unpassed assessment is inside `isWithinFinalWeek`'s
+ * seven-day window — computed from {@link BuildStudySessionInput.assessments},
+ * the same F4.7/F4.8 countdown input this module already reads for the
+ * format preference and the exam countdown, so no caller has anything new to
+ * pass. That is the fix for the other half of `[HARD-2b]`: the relaxation
+ * could not fire at all on this path because nothing computed "is this the
+ * final week" here — it is not that a caller forgot to flip a flag, there
+ * was no flag whose value could ever change. See
+ * {@link courseNextAssessmentDays} and `../scheduler/serving.ts`'s
+ * `isWithinFinalWeek`, the one shared judgment both composers apply once
+ * either resolves its own countdown (the queue path's own relaxation stays
+ * unwired for a different, pre-existing reason — "exam-proximity mode itself
+ * is not built" per `../queue/types.ts`'s own doc — and is out of this
+ * bead's scope).
+ *
+ * The `[D-240]` item 2 recall override (`orderedForFormat`,
+ * `recallOutranksFormatPreference`) is unaffected either way: it decides
+ * which instrument a row offers FIRST within a pass, never how many passes a
+ * row may be offered something in. The cap and the override compose exactly
+ * as the queue path's `dedupeByConcept` and `servingPolicy` do — orthogonal
+ * inputs to the same fill.
  *
  * **The budget is a declared target, never a cap (`[D-091]`, component
  * register §3.7; `ol-zji3` [BUD-1]).** While the running total is still below
@@ -111,7 +150,7 @@ import type { AssessmentFormat } from '../gap/readiness.js';
 import { assessmentFormatOf } from '../gap/readiness.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type { ServingPolicy } from '../scheduler/serving.js';
-import { recallOutranksFormatPreference } from '../scheduler/serving.js';
+import { isWithinFinalWeek, recallOutranksFormatPreference } from '../scheduler/serving.js';
 import type { SchedulerState } from '../scheduler/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import type { SelfAssessmentFeeling } from '../support-level/self-assessment.js';
@@ -511,6 +550,34 @@ function daysUntilDue(asOf: CalendarDay, due: string | undefined): number | null
 }
 
 /**
+ * F2.17's final-week relaxation input: the soonest still-ahead assessment for
+ * ONE course, in whole days from `asOf` — `null` when that course has no
+ * assessment record with a readable, still-ahead date.
+ *
+ * The same "soonest by date, never one already behind her" reading
+ * {@link nextAssessmentOf} applies for the whole session's format
+ * preference, scoped instead to a single course: F2.17's final week is
+ * per-course, because two courses can sit on different timetables, and
+ * `../scheduler/serving.ts`'s `isWithinFinalWeek` takes exactly this number.
+ * `record.course === course` matches verbatim (R1/R2) — the same exact-string
+ * course matching every other clause in this package uses.
+ */
+function courseNextAssessmentDays(
+  course: string,
+  assessments: readonly AssessmentRecord[] | undefined,
+  asOf: CalendarDay,
+): number | null {
+  let soonest: number | null = null;
+  for (const record of assessments ?? []) {
+    if (record.course !== course) continue;
+    const days = daysUntilDue(asOf, record.due);
+    if (days === null || days < 0) continue;
+    if (soonest === null || days < soonest) soonest = days;
+  }
+  return soonest;
+}
+
+/**
  * `rows` under the default (`'gapScore'`) order, by distinct `course` —
  * XCRS-1 (`ol-dq1c`)'s check. **Never called for `order: 'given'`**: a
  * caller using `'given'` (`composeSessionRows`/`buildComposedStudySession`)
@@ -774,6 +841,21 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   const explainBackSeconds = totalExplainBackSeconds(explainBackItems);
   const candidateBudgetSeconds = Math.max(0, budgetSeconds - explainBackSeconds);
 
+  // F2.17's final week, resolved once per course rather than once per row —
+  // `courseNextAssessmentDays` is a plain scan of `input.assessments`, and
+  // every row in a course shares the same answer. `[HARD-2b]`'s fix: this is
+  // the seam that never existed on this path before, computed here rather
+  // than left to a caller that (per the queue path's own history) never
+  // passes it.
+  const finalWeekByCourse = new Map<string, boolean>();
+  function isFinalWeekForCourse(course: string): boolean {
+    const cached = finalWeekByCourse.get(course);
+    if (cached !== undefined) return cached;
+    const finalWeek = isWithinFinalWeek(courseNextAssessmentDays(course, input.assessments, asOf));
+    finalWeekByCourse.set(course, finalWeek);
+    return finalWeek;
+  }
+
   // Per row: its instruments in fill order, and how far the fill has walked
   // that list. Built once so the passes below are a walk rather than a
   // repeated lookup.
@@ -795,6 +877,8 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     chose: false,
     /** Set when a row still had instruments left that the remaining budget could not take. */
     blockedByBudget: false,
+    /** F2.17's final-week relaxation (`[HARD-2b]`) — see the module doc. */
+    finalWeek: isFinalWeekForCourse(row.course),
   }));
 
   const chosenInstrumentIds = new Set<string>();
@@ -804,6 +888,12 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   for (;;) {
     let addedThisPass = false;
     for (const queue of queues) {
+      // F2.17's per-concept cap, made explicit (`[HARD-2b]`): a row that
+      // already won this session's one slot for its concept takes no more of
+      // them, unless the final-week relaxation lifted the cap for its
+      // course. Checked before anything else in the pass, so a capped row
+      // can never be marked budget-blocked either.
+      if (queue.chose && !queue.finalWeek) continue;
       let taken = false;
       let sawUnaffordable = false;
       // Walk from where this row left off. Instruments already in the session

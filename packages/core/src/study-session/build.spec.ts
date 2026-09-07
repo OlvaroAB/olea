@@ -388,7 +388,14 @@ describe('the budget is a promise', () => {
     expect(session.items.map((i) => i.conceptName)).toEqual(['Strong']);
   });
 
-  it('spreads across her top gaps before giving any one concept a second card', () => {
+  it("spreads across her top gaps, and F2.17's per-concept cap means neither ever gets a second card outside the final week (`[HARD-2b]`)", () => {
+    // Before `[HARD-2b]`, "one instrument per row per pass" was the ONLY
+    // thing standing between a concept and a second card, so spare budget
+    // after every concept's first instrument let a2/b2 through — the exact
+    // pre-flight defect (`ol-3ux7.5.57.14.33`): 11 of 21 real sittings served
+    // some concept two instruments, 141 days from any assessment. With no
+    // `assessments` supplied here there is no final week to relax the cap,
+    // so it is an explicit gate now, not a fill-order accident.
     const rows = rankedRows([
       { conceptName: 'A', gapScore: 9 },
       { conceptName: 'B', gapScore: 8 },
@@ -408,8 +415,16 @@ describe('the budget is a promise', () => {
       asOf: AS_OF,
     });
 
-    // Breadth before depth: A, B, then A again, then B again.
-    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1', 'b1', 'a2', 'b2']);
+    // Breadth, and no depth: A, B, and nothing more — a2/b2 stay unchosen
+    // even though 120 of the 240s target is still unspent.
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1', 'b1']);
+    expect(session.plannedSeconds).toBe(120);
+    // Both rows DID contribute, so neither is an omitted concept — the cap
+    // is invisible at the concept-leftOut grain, exactly as an instrument
+    // spent on a higher-ranked sibling concept already is (`ol-t3sd`); it
+    // shows up only in the instrument count.
+    expect(session.leftOut).toEqual([]);
+    expect(session.leftOutInstrumentCount).toBe(2);
   });
 
   it('refuses an unusable budget rather than substituting a default', () => {
@@ -503,6 +518,157 @@ describe('a coarse concept costs more of the budget than a fine one', () => {
 
     expect(session.items).toHaveLength(2);
     expect(session.plannedSeconds).toBe(180);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2.17's per-concept cap, made explicit, and its final-week relaxation
+// (`[HARD-2b]`, `ol-3ux7.5.57.14.33`)
+// Scenarios: `../../../../olea-service/features/F2-review.md`, "F2.17's cap
+// on the study-session composer" — @auto:core/study-session/build.spec
+// ---------------------------------------------------------------------------
+
+describe("F2.17's per-concept cap, made explicit (`[HARD-2b]`)", () => {
+  it('holds far from an assessment: a concept with budget to spare still gets only one instrument', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('a2', ['A'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      // No assessments at all: there is nothing for `courseNextAssessmentDays`
+      // to read, `isWithinFinalWeek(null)` is `false`, and the ordinary cap
+      // holds — the conservative default this bead's fix takes when there is
+      // no calendar signal to relax it with.
+    });
+
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1']);
+    expect(session.leftOutInstrumentCount).toBe(1);
+  });
+
+  it('holds when the next assessment is more than seven days out', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('a2', ['A'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      // AS_OF is 2026-09-14; 8 days out is one day past the seven-day window.
+      assessments: [assessment('02 Assignments/quiz-2.md', { due: '2026-09-22' })],
+    });
+
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1']);
+  });
+
+  it('lifts within the last seven days before the concept’s course’s next unpassed assessment', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('a2', ['A'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      // 7 days out, exactly at the boundary — inclusive.
+      assessments: [assessment('02 Assignments/quiz-2.md', { due: '2026-09-21' })],
+    });
+
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1', 'a2']);
+    expect(session.leftOutInstrumentCount).toBe(0);
+  });
+
+  it('an assessment already behind her never opens the final week', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9 }]);
+    const index = buildConceptInstrumentIndex([qa('a1', ['A']), qa('a2', ['A'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      // F4.7: a passed assessment exerts no weight and is never counted
+      // down to — the cap must not read a stale exam as "close".
+      assessments: [assessment('02 Assignments/quiz-2.md', { due: '2026-09-10' })],
+    });
+
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a1']);
+  });
+
+  it('the relaxation is per COURSE: a concept in a different course keeps the cap', () => {
+    const rows = rankedRows([
+      { conceptName: 'Near', gapScore: 9, course: 'CRS101' },
+      { conceptName: 'Far', gapScore: 8, course: 'CRS202' },
+    ]);
+    const index = buildConceptInstrumentIndex([
+      qa('near1', ['Near']),
+      qa('near2', ['Near']),
+      qa('far1', ['Far']),
+      qa('far2', ['Far']),
+    ]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      assessments: [
+        assessment('02 Assignments/crs101-quiz.md', { course: 'CRS101', due: '2026-09-16' }),
+        assessment('02 Assignments/crs202-final.md', { course: 'CRS202', due: '2026-12-01' }),
+      ],
+    });
+
+    // CRS101's concept is inside its own course's final week and gets both
+    // instruments; CRS202's concept is nowhere near its own and gets one.
+    // Order: pass 1 offers every row its first instrument (near1, far1);
+    // pass 2 offers Near its second only because Near's course is in its
+    // final week — Far is capped and sits out the pass entirely.
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['near1', 'far1', 'near2']);
+  });
+
+  it('the [D-240] recall override still wins inside the final week: format preference is decided per instrument, the cap is decided per concept', () => {
+    // Inside the final week the cap no longer chooses between the two
+    // instruments — both are served — but `orderedForFormat` still decides
+    // which one she meets FIRST, and `[D-240]` item 2 still applies to that
+    // ordering: an overdue recall card still outranks the matched MCQ.
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const overdueState: SchedulerState = {
+      schemaVersion: 1,
+      due: '2026-09-01T09:00:00.000Z',
+      stability: 3,
+      difficulty: 5,
+      scheduledDays: 3,
+      learningStepIndex: 0,
+      reps: 2,
+      lapses: 0,
+      learningState: 'review',
+      lastReview: '2026-08-29T09:00:00.000Z',
+    };
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      // Inside the final week (6 days out).
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+      schedulerStates: new Map([['a-qa', overdueState]]),
+    });
+
+    // Both are served (the cap is lifted), and the overdue recall card is
+    // still the one served first (the override is unaffected by the cap).
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a-qa', 'a-mcq']);
   });
 });
 
@@ -1215,6 +1381,15 @@ describe('the support-level chooser, wired into the fill (row 3.9, [SUPP-2])', (
       durations: flatDurations(60),
       asOf: AS_OF,
       supportHistory: history,
+      // `[HARD-2b]`: two instruments on ONE concept in one session is F2.17's
+      // final-week exception, not the ordinary case — the row's default
+      // target assessment (`02 Assignments/quiz-2.md`) falls due 6 days
+      // after `AS_OF`, inside the 7-day window, so both `a1` and `a2` win a
+      // slot legitimately rather than by the fill-order accident this bead
+      // closed. What this test is actually about (the frozen support level
+      // across two same-session reviews) is unaffected by which rule let the
+      // second review happen.
+      assessments: [assessment('02 Assignments/quiz-2.md')],
     });
 
     // Both instruments practise concept A at the recall tier, and both are

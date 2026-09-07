@@ -53,6 +53,30 @@
  * module answers `false`: the same "no-op absent `arrivalDays`" posture both
  * composers already take for that map, and the conservative direction, since
  * `false` leaves F2.17's un-amended preference rule in charge.
+ *
+ * ## The final-week relaxation — F2.17's own last sentence, {@link isWithinFinalWeek}
+ *
+ * F2.17 names one case that lifts the per-concept cap outright rather than
+ * arbitrating it: "exam-proximity mode may deliberately relax the cap —
+ * drilling both forms in the final week is a feature, not redundancy." That
+ * judgment — is a given countdown inside the final week — is the one piece
+ * of the relaxation that generalises across composers, so it lives here
+ * alongside the rule it sits beside; *computing* the countdown does not,
+ * because the two composers hold it in different shapes (the study-session
+ * composer's `AssessmentRecord[]`, the queue's `QueueAssessmentContext` map),
+ * so each composer resolves its own days-until-assessment and hands the
+ * number to {@link isWithinFinalWeek}.
+ *
+ * `[HARD-2b]` (`ol-3ux7.5.57.14.33`) found the relaxation itself had no seam
+ * on the study-session path at all — `dedupeByConcept` was never an input
+ * there, so nothing could pass `false` even in principle, on top of a
+ * per-concept cap that was never explicit either (only a fill-order effect:
+ * see `../study-session/build.ts`'s module doc). Both are fixed together:
+ * that composer now computes the countdown itself from the `assessments` it
+ * already receives (F4.7's own reading — see `AssessmentRecord` in
+ * `../assessment/types.ts`), rather than waiting on a caller to notice the
+ * final week and thread a flag that (per the queue path's own history) never
+ * arrives.
  */
 
 import { daysBetween } from '../dates.js';
@@ -135,6 +159,42 @@ export function firstIntervalDaysAfterGood(): number {
   });
   cachedFirstIntervalDays = intervalDays;
   return intervalDays;
+}
+
+/**
+ * F2.17's "final week" — how many whole days out from a course's next
+ * unpassed assessment the per-concept dedupe cap lifts entirely, so a
+ * concept's recall and recognition instruments may both be served in one
+ * sitting.
+ *
+ * **Declared, not derived** (component register's declared/derived rule):
+ * defensible in one plain-English sentence — F2.17 itself names "the final
+ * week" — never fitted against a corpus. Seven matches the ordinary meaning
+ * of the phrase (the calendar week immediately before the exam) and is the
+ * number a composer with no other signal should ship; it moves only via a
+ * decision bead, same as any other contract number.
+ */
+export const FINAL_WEEK_DAYS = 7;
+
+/**
+ * Is a countdown of `daysUntilAssessment` whole days inside F2.17's final
+ * week — i.e. should the per-concept dedupe cap lift?
+ *
+ * `null` (no readable, still-ahead assessment for the course in question) and
+ * a negative count (the composer's own countdown logic should never produce
+ * one, but a defensive floor costs nothing) both read `false`: no signal is
+ * the conservative direction, same as {@link hasWaitedItsOwnInterval}'s
+ * absent-arrival-day case, and it leaves the ordinary per-concept cap in
+ * force rather than guessing a relaxation into existence.
+ *
+ * Each composer resolves its own `daysUntilAssessment` from whatever shape it
+ * holds assessments in — see this module's doc, "The final-week relaxation" —
+ * and hands the number here so both composers apply the identical seven-day
+ * judgment.
+ */
+export function isWithinFinalWeek(daysUntilAssessment: number | null): boolean {
+  if (daysUntilAssessment === null) return false;
+  return daysUntilAssessment >= 0 && daysUntilAssessment <= FINAL_WEEK_DAYS;
 }
 
 /** What the rule needs to know about one instrument, on either composer's row shape. */
