@@ -23,14 +23,22 @@ import {
   buildGroveModel,
   buildPlanModel,
   buildRankingModel,
+  createFrontierSessionsCache,
   FRONTIER_GROUP_DISPLAY_CAP,
+  FRONTIER_SESSIONS_FALLBACK_FILE,
+  FRONTIER_SESSIONS_INDEX_FILE,
   FRONTIER_SURFACE_ORDER,
   FRONTIER_UPPER_BAR_NOTE,
   type FrontierBundle,
+  type FrontierIndex,
+  type FrontierSessionsIndex,
   type FrontierStateItem,
   frontierBadgeText,
+  frontierSessionsShardsForDay,
   itemsUpTo,
   loadFrontierIndex,
+  loadFrontierSessionsForDay,
+  loadFrontierSessionsIndex,
   loadFrontierStateFile,
   loadFrontierSurfaces,
 } from '../src/simulator/frontier-surfaces.js';
@@ -547,5 +555,281 @@ describe('frontierBadgeText', () => {
         groups: [],
       }),
     ).toBe(`composed locally, no model call · ${FRONTIER_UPPER_BAR_NOTE}`);
+  });
+});
+
+// ==================================================================================================
+// SESSIONS SHARDING (`[HARD-18]`, `ol-3ux7.5.57.14.41`) — `olea-service`'s `scripts/
+// simulator-build.mjs` no longer writes a flat `frontier/sessions.json`; it shards a walk into
+// `frontier/sessions.NNN.json` files plus `frontier/sessions.index.json`. Every id, cycle number
+// and date below is invented (INV-3) — no real frontier material.
+// ==================================================================================================
+
+/** A `fetch` stub, exact-URL keyed like `fakeFetch` above, that also records every URL asked for. */
+function countingFetch(routes: Record<string, unknown>): {
+  fetchFn: typeof fetch;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const fetchFn = (async (url: string) => {
+    calls.push(url);
+    const body = routes[url];
+    if (body === undefined) return new Response('not found', { status: 404 });
+    if (body instanceof Error) throw body;
+    return new Response(JSON.stringify(body));
+  }) as unknown as typeof fetch;
+  return { fetchFn, calls };
+}
+
+/** An invented `loop.session.v1` item, in `frontier-loop.mjs`'s own shape (`context.cycle`/`date`). */
+function inventedSessionItem(cycle: number, date: string): FrontierStateItem {
+  return {
+    taskId: 'loop.session.v1',
+    tier: 'none',
+    context: { date, cycle },
+    result: { items: [{ conceptId: `coined-concept-${cycle}`, rank: 1 }] },
+  };
+}
+
+/** A three-shard invented index: cycles 1-3 / 4-6 / 7-9, one day per cycle in August. */
+function threeShardIndex(): FrontierSessionsIndex {
+  return {
+    version: 1,
+    shards: [
+      {
+        file: 'sessions.000.json',
+        fromCycle: 1,
+        toCycle: 3,
+        fromDate: '2026-08-01',
+        toDate: '2026-08-03',
+        bytes: 100,
+      },
+      {
+        file: 'sessions.001.json',
+        fromCycle: 4,
+        toCycle: 6,
+        fromDate: '2026-08-04',
+        toDate: '2026-08-06',
+        bytes: 100,
+      },
+      {
+        file: 'sessions.002.json',
+        fromCycle: 7,
+        toCycle: 9,
+        fromDate: '2026-08-07',
+        toDate: '2026-08-09',
+        bytes: 100,
+      },
+    ],
+  };
+}
+
+describe('loadFrontierSessionsIndex', () => {
+  it('parses a well-formed three-shard index', async () => {
+    const { fetchFn } = countingFetch({
+      [`/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`]: threeShardIndex(),
+    });
+    const index = await loadFrontierSessionsIndex(fetchFn, '/');
+    expect(index?.shards).toHaveLength(3);
+  });
+
+  it('is null on a 404 — the fallback signal for an older dist', async () => {
+    expect(await loadFrontierSessionsIndex(countingFetch({}).fetchFn, '/')).toBeNull();
+  });
+
+  it('is null on a shape that is not {shards: [...]}', async () => {
+    const { fetchFn } = countingFetch({
+      [`/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`]: { notAnIndex: true },
+    });
+    expect(await loadFrontierSessionsIndex(fetchFn, '/')).toBeNull();
+  });
+
+  it('is null, never throws, when fetch itself rejects', async () => {
+    const throwing = (async () => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+    expect(await loadFrontierSessionsIndex(throwing, '/')).toBeNull();
+  });
+});
+
+describe('frontierSessionsShardsForDay', () => {
+  const index = threeShardIndex();
+
+  it('picks the one shard whose range brackets the day', () => {
+    expect(frontierSessionsShardsForDay(index, '2026-08-05').map((s) => s.file)).toEqual([
+      'sessions.001.json',
+    ]);
+  });
+
+  it('picks the last shard whose range starts at or before a day that falls after every shard', () => {
+    // No shard's range literally contains 2026-08-10 — the LATEST session at or before that day
+    // is still in the last shard.
+    expect(frontierSessionsShardsForDay(index, '2026-08-10').map((s) => s.file)).toEqual([
+      'sessions.002.json',
+    ]);
+  });
+
+  it('is empty when the day precedes every shard — nothing has arrived yet', () => {
+    expect(frontierSessionsShardsForDay(index, '2026-07-01')).toEqual([]);
+  });
+
+  it('names every shard for an unparseable day, mirroring itemsUpTo', () => {
+    expect(frontierSessionsShardsForDay(index, 'not-a-date')).toEqual(index.shards);
+  });
+});
+
+describe('loadFrontierSessionsForDay', () => {
+  it('fetches only the shard covering the day, and caches it — a repeat call for the same day refetches nothing', async () => {
+    const { fetchFn, calls } = countingFetch({
+      [`/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`]: threeShardIndex(),
+      '/frontier/sessions.001.json': { items: [inventedSessionItem(5, '2026-08-05')] },
+    });
+    const cache = createFrontierSessionsCache();
+
+    const first = await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-08-05');
+    expect(first).toHaveLength(1);
+    expect(calls.filter((u) => u === '/frontier/sessions.001.json')).toHaveLength(1);
+    expect(calls).not.toContain('/frontier/sessions.000.json');
+    expect(calls).not.toContain('/frontier/sessions.002.json');
+
+    const second = await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-08-05');
+    expect(second).toEqual(first);
+    // Still exactly one fetch of the index and one of the shard — the cache absorbed the repeat.
+    expect(calls.filter((u) => u === `/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`)).toHaveLength(1);
+    expect(calls.filter((u) => u === '/frontier/sessions.001.json')).toHaveLength(1);
+  });
+
+  it('fetches a later day’s shard on top of an already-cached earlier one, never re-fetching the earlier shard', async () => {
+    const { fetchFn, calls } = countingFetch({
+      [`/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`]: threeShardIndex(),
+      '/frontier/sessions.000.json': { items: [inventedSessionItem(2, '2026-08-02')] },
+      '/frontier/sessions.001.json': { items: [inventedSessionItem(5, '2026-08-05')] },
+    });
+    const cache = createFrontierSessionsCache();
+
+    await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-08-02');
+    await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-08-05');
+
+    expect(calls.filter((u) => u === '/frontier/sessions.000.json')).toHaveLength(1);
+    expect(calls.filter((u) => u === '/frontier/sessions.001.json')).toHaveLength(1);
+    expect(calls.filter((u) => u === `/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`)).toHaveLength(1);
+  });
+
+  it('falls back to a flat sessions.json, cached, when no index exists (an older dist)', async () => {
+    const { fetchFn, calls } = countingFetch({
+      [`/frontier/${FRONTIER_SESSIONS_FALLBACK_FILE}`]: {
+        items: [inventedSessionItem(1, '2026-08-01')],
+      },
+    });
+    const cache = createFrontierSessionsCache();
+
+    const first = await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-08-01');
+    expect(first).toHaveLength(1);
+    const second = await loadFrontierSessionsForDay(fetchFn, '/', cache, '2026-09-01');
+    expect(second).toEqual(first);
+
+    expect(calls.filter((u) => u === `/frontier/${FRONTIER_SESSIONS_FALLBACK_FILE}`)).toHaveLength(
+      1,
+    );
+    // The index absence itself is cached (`cache.index` goes from `undefined` to `null`, never
+    // re-checked) — one 404 for the whole mount, not one per scrub.
+    expect(calls.filter((u) => u === `/frontier/${FRONTIER_SESSIONS_INDEX_FILE}`)).toHaveLength(1);
+  });
+
+  it('returns [] when the dist carries neither an index nor a flat file', async () => {
+    const cache = createFrontierSessionsCache();
+    expect(
+      await loadFrontierSessionsForDay(countingFetch({}).fetchFn, '/', cache, '2026-08-01'),
+    ).toEqual([]);
+  });
+});
+
+describe('loadFrontierSurfaces excludes sessions from its generic eager fetch', () => {
+  it('never fetches sessions.index.json or sessions.json through the generic per-file path, even when an (older-shaped) index names sessions.json', async () => {
+    const oldStyleIndex: FrontierIndex = {
+      world: 'PERSONA COINED',
+      generatedAt: '2026-09-06T00:00:00.000Z',
+      surfaces: [
+        {
+          surface: 'plan',
+          title: 'The plan',
+          files: ['sessions.json'],
+          taskIds: ['plan.governor.v1'],
+          tier: 'none',
+          answered: 3,
+        },
+      ],
+    };
+    const { fetchFn, calls } = countingFetch({
+      '/simulator-frontier.json': oldStyleIndex,
+      // A real caller would never reach this from loadFrontierSurfaces — if it did, the
+      // assertion below (no such call happened) would fail loudly.
+      '/frontier/sessions.json': { items: [inventedSessionItem(1, '2026-08-01')] },
+    });
+    const bundle = await loadFrontierSurfaces(fetchFn, '/');
+    expect(bundle?.states.has('sessions.json')).toBe(false);
+    expect(calls).not.toContain('/frontier/sessions.json');
+  });
+});
+
+describe('buildFrontierSurfaceModels — plan surface merges lazily-loaded sessions (`[HARD-18]`)', () => {
+  function bundleWithPlanSurface(governorItems: readonly FrontierStateItem[]): FrontierBundle {
+    const index: FrontierIndex = {
+      world: 'PERSONA COINED',
+      generatedAt: '2026-09-06T00:00:00.000Z',
+      surfaces: [
+        {
+          surface: 'plan',
+          title: 'The plan',
+          files: governorItems.length > 0 ? ['governor.json'] : [],
+          taskIds: ['plan.governor.v1'],
+          tier: governorItems.length > 0 ? 'opus' : null,
+          answered: governorItems.length,
+        },
+      ],
+    };
+    const states = new Map<string, readonly FrontierStateItem[]>();
+    if (governorItems.length > 0) states.set('governor.json', governorItems);
+    return { index, states };
+  }
+
+  it('renders a session group from the SEPARATE sessionItems argument even when no other file answered the plan', () => {
+    const bundle = bundleWithPlanSurface([]);
+    const models = buildFrontierSurfaceModels(bundle, '2026-08-05', [
+      inventedSessionItem(5, '2026-08-05'),
+    ]);
+    const plan = models.find((m) => m.surface === 'plan');
+    expect(plan?.state).toBe('answered');
+    expect(plan?.groups.some((g) => g.heading.startsWith('Session'))).toBe(true);
+  });
+
+  it('defaults to no session group when the argument is omitted — the old call shape still works', () => {
+    const bundle = bundleWithPlanSurface([]);
+    const models = buildFrontierSurfaceModels(bundle, '2026-08-05');
+    const plan = models.find((m) => m.surface === 'plan');
+    expect(plan?.state).toBe('unanswered');
+  });
+
+  it('scrub-back applies to the lazily-loaded session items too: a session AFTER the walked day is not shown', () => {
+    const bundle = bundleWithPlanSurface([]);
+    const models = buildFrontierSurfaceModels(bundle, '2026-08-01', [
+      inventedSessionItem(5, '2026-08-05'),
+    ]);
+    const plan = models.find((m) => m.surface === 'plan');
+    expect(plan?.state).toBe('unanswered');
+  });
+
+  it('merges lazily-loaded sessions alongside governor content answered through the ordinary eager path', () => {
+    const governorItem: FrontierStateItem = {
+      taskId: 'plan.governor.v1',
+      context: { date: '2026-08-05' },
+      result: { proposals: [{ courseId: 'AAA101', input: 'assessmentPressure', reason: 'exam' }] },
+    };
+    const bundle = bundleWithPlanSurface([governorItem]);
+    const models = buildFrontierSurfaceModels(bundle, '2026-08-05', [
+      inventedSessionItem(5, '2026-08-05'),
+    ]);
+    const plan = models.find((m) => m.surface === 'plan');
+    expect(plan?.groups.map((g) => g.heading)).toEqual(['Session — 2026-08-05', 'Proposals']);
   });
 });

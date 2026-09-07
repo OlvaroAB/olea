@@ -205,14 +205,25 @@ export async function loadFrontierStateFile(
   }
 }
 
-/** The index plus every file it names, loaded once per mount. `null` when there is no index. */
+/**
+ * The index plus every file it names, loaded once per mount. `null` when there is no index.
+ *
+ * Sessions are excluded from this generic per-file fetch (`[HARD-18]`, `ol-3ux7.5.57.14.41`) —
+ * see `FRONTIER_SESSIONS_INDEX_FILE`'s own doc for why. Filtering by exact name here rather than
+ * changing what the build reports in `entry.files` means a build made by an OLDER copy of
+ * `simulator-build.mjs` (whose index still literally names `'sessions.json'` for the plan
+ * surface) never has this eager path fetch that file wholesale — `loadFrontierSessionsForDay` is
+ * the ONLY path that ever fetches sessions data, old dist or new.
+ */
 export async function loadFrontierSurfaces(
   fetchFn: typeof fetch,
   base = '/',
 ): Promise<FrontierBundle | null> {
   const index = await loadFrontierIndex(fetchFn, base);
   if (index === null) return null;
-  const files = [...new Set(index.surfaces.flatMap((entry) => entry.files))];
+  const files = [...new Set(index.surfaces.flatMap((entry) => entry.files))].filter(
+    (file) => file !== FRONTIER_SESSIONS_INDEX_FILE && file !== FRONTIER_SESSIONS_FALLBACK_FILE,
+  );
   const loaded = await Promise.all(
     files.map(
       async (file): Promise<readonly [string, readonly FrontierStateItem[]]> => [
@@ -222,6 +233,180 @@ export async function loadFrontierSurfaces(
     ),
   );
   return { index, states: new Map(loaded) };
+}
+
+/**
+ * ==========================================================================
+ * SESSIONS SHARDING (`[HARD-18]`, `ol-3ux7.5.57.14.41`)
+ * ==========================================================================
+ * A loop's own composed-session record grows one item per cycle and nothing
+ * trims it — a real 164-session walk is 27.2 MiB, over Cloudflare Pages' 25
+ * MiB per-file cap, so `olea-service/scripts/simulator-build.mjs` no longer
+ * ships a flat `frontier/sessions.json` at all: it shards the walk into
+ * `frontier/sessions.NNN.json` files (cycle order preserved) plus
+ * `frontier/sessions.index.json`, naming every shard's cycle/date range and
+ * byte size.
+ *
+ * The reader below is deliberately DECOUPLED from `simulator-frontier.json`'s
+ * own `entry.files` field: it always tries the fixed path
+ * `frontier/sessions.index.json` first, and falls back to a fixed
+ * `frontier/sessions.json` fetch only when that 404s (a dist built by an
+ * older copy of the build script, which never wrote an index at all). That
+ * makes this correct for both an old and a new dist with no version check —
+ * absence of the index IS the signal.
+ *
+ * Only the shard(s) that cover the day being scrubbed are ever fetched
+ * ({@link frontierSessionsShardsForDay}), and every fetch — the index itself,
+ * each shard, and the flat fallback — is cached in a {@link FrontierSessionsCache}
+ * that a caller creates once per mount ({@link createFrontierSessionsCache})
+ * and keeps across every scrub, so moving the term scrubber back to a day
+ * already visited never re-fetches.
+ */
+
+/** The sharded index a `[HARD-18]`-or-later build always writes when it carries sessions at all. */
+export const FRONTIER_SESSIONS_INDEX_FILE = 'sessions.index.json';
+
+/** The pre-`[HARD-18]` flat file name — the fallback for a dist with no index. */
+export const FRONTIER_SESSIONS_FALLBACK_FILE = 'sessions.json';
+
+/** One `frontier/sessions.index.json` row — the cycle/date range and size of one shard file. */
+export interface FrontierSessionsShardMeta {
+  readonly file: string;
+  readonly fromCycle: number | null;
+  readonly toCycle: number | null;
+  readonly fromDate: string | null;
+  readonly toDate: string | null;
+  readonly bytes: number;
+}
+
+/** `frontier/sessions.index.json`'s own shape, as written by `simulator-build.mjs`. */
+export interface FrontierSessionsIndex {
+  readonly version: number;
+  readonly shards: readonly FrontierSessionsShardMeta[];
+}
+
+function isFrontierSessionsShardMeta(value: unknown): value is FrontierSessionsShardMeta {
+  if (typeof value !== 'object' || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    typeof c.file === 'string' &&
+    (c.fromCycle === null || typeof c.fromCycle === 'number') &&
+    (c.toCycle === null || typeof c.toCycle === 'number') &&
+    (c.fromDate === null || typeof c.fromDate === 'string') &&
+    (c.toDate === null || typeof c.toDate === 'string') &&
+    typeof c.bytes === 'number'
+  );
+}
+
+/**
+ * Best-effort, never-throwing parse of `frontier/sessions.index.json`. `null` for a dist that
+ * carries none — either an older dist (pre-`[HARD-18]`) or one with no frontier sessions at all —
+ * which is exactly the signal {@link loadFrontierSessionsForDay} uses to fall back to the flat
+ * file.
+ */
+export async function loadFrontierSessionsIndex(
+  fetchFn: typeof fetch,
+  base: string,
+): Promise<FrontierSessionsIndex | null> {
+  try {
+    const response = await fetchFn(`${base}${FRONTIER_DIR}${FRONTIER_SESSIONS_INDEX_FILE}`);
+    if (!response.ok) return null;
+    const raw: unknown = await response.json();
+    if (typeof raw !== 'object' || raw === null) return null;
+    const candidate = raw as Record<string, unknown>;
+    if (!Array.isArray(candidate.shards) || !candidate.shards.every(isFrontierSessionsShardMeta)) {
+      return null;
+    }
+    return {
+      version: typeof candidate.version === 'number' ? candidate.version : 1,
+      shards: candidate.shards,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which shard(s) of `index` cover `dayIso` — the single shard whose date range brackets the
+ * scrubbed day, so the one composed session at or before it ({@link buildPlanModel}'s own
+ * `latestSession`) can be found without ever fetching a shard outside that range. Mirrors
+ * {@link itemsUpTo}'s own handling of an unparseable day: every shard is named, since nothing
+ * would be filtered out anyway. Empty when `dayIso` precedes every shard (nothing has arrived).
+ *
+ * A shard with `fromDate: null` (no dated item at all — should not happen for a real build, but
+ * never trusted) is treated as covering every day, the same "record nothing rather than guess
+ * wrong" posture the service-side index writer takes.
+ */
+export function frontierSessionsShardsForDay(
+  index: FrontierSessionsIndex,
+  dayIso: string,
+): readonly FrontierSessionsShardMeta[] {
+  if (!ASOF_PATTERN.test(dayIso)) return index.shards;
+  let picked: FrontierSessionsShardMeta | null = null;
+  for (const shard of index.shards) {
+    if (shard.fromDate === null || shard.fromDate <= dayIso) picked = shard;
+    else break;
+  }
+  return picked === null ? [] : [picked];
+}
+
+/**
+ * Per-mount cache for the lazy sessions loader — create ONE with
+ * {@link createFrontierSessionsCache} per `SimulatorController` and pass the SAME instance to
+ * every {@link loadFrontierSessionsForDay} call for that mount's whole lifetime, so scrubbing
+ * back to an already-visited day never re-fetches. `index` distinguishes "not checked yet"
+ * (`undefined`) from "checked, and this dist carries none" (`null`) so the index fetch itself
+ * only ever happens once.
+ */
+export interface FrontierSessionsCache {
+  index: FrontierSessionsIndex | null | undefined;
+  readonly shardItems: Map<string, readonly FrontierStateItem[]>;
+  fallbackItems: readonly FrontierStateItem[] | undefined;
+}
+
+export function createFrontierSessionsCache(): FrontierSessionsCache {
+  return { index: undefined, shardItems: new Map(), fallbackItems: undefined };
+}
+
+/**
+ * The plan surface's session items at `dayIso` — see this module's own SESSIONS SHARDING header.
+ * Tries the shard index first: every shard {@link frontierSessionsShardsForDay} names for
+ * `dayIso` is fetched at most once per `cache` (never once per render — the caller keeps `cache`
+ * for the mount's whole lifetime). Falls back to a single, whole `frontier/sessions.json` fetch —
+ * cached the same way, under a fixed key — for a dist built before `[HARD-18]`, which never wrote
+ * an index at all. Returns `[]`, never throws, for a dist with neither (no frontier build, or a
+ * frontier build with nothing carried for the plan surface yet).
+ */
+export async function loadFrontierSessionsForDay(
+  fetchFn: typeof fetch,
+  base: string,
+  cache: FrontierSessionsCache,
+  dayIso: string,
+): Promise<readonly FrontierStateItem[]> {
+  if (cache.index === undefined) {
+    cache.index = await loadFrontierSessionsIndex(fetchFn, base);
+  }
+  if (cache.index !== null) {
+    const shards = frontierSessionsShardsForDay(cache.index, dayIso);
+    const perShard = await Promise.all(
+      shards.map(async (shard): Promise<readonly FrontierStateItem[]> => {
+        const cached = cache.shardItems.get(shard.file);
+        if (cached !== undefined) return cached;
+        const items = await loadFrontierStateFile(fetchFn, base, shard.file);
+        cache.shardItems.set(shard.file, items);
+        return items;
+      }),
+    );
+    return perShard.flat();
+  }
+  if (cache.fallbackItems === undefined) {
+    cache.fallbackItems = await loadFrontierStateFile(
+      fetchFn,
+      base,
+      FRONTIER_SESSIONS_FALLBACK_FILE,
+    );
+  }
+  return cache.fallbackItems;
 }
 
 /**
@@ -575,13 +760,23 @@ export function frontierRefusal(entry: FrontierIndexEntry, dayIso: string): stri
 }
 
 /**
- * The whole panel at one simulated day — the only function `controller.ts`
+ * The whole panel at one simulated day — the primary function `controller.ts`
  * calls per remount. Order is the index's, filtered to
  * {@link FRONTIER_SURFACE_ORDER}, so the walk always reads A, D, D, C, B.
+ *
+ * `sessionItems` is the plan surface's lazily-loaded session data
+ * (`[HARD-18]`) — the caller fetches it separately, via
+ * {@link loadFrontierSessionsForDay} against its own {@link FrontierSessionsCache},
+ * because it is no longer eagerly loaded into `bundle.states` at all (see
+ * `loadFrontierSurfaces`'s own doc on why sessions are excluded from that
+ * generic path). Defaults to `[]`, so a caller that never wires the lazy
+ * loader in gets exactly the plan surface's governor/proposal content and no
+ * session group — never a crash, never stale eager-loaded data.
  */
 export function buildFrontierSurfaceModels(
   bundle: FrontierBundle,
   dayIso: string,
+  sessionItems: readonly FrontierStateItem[] = [],
 ): readonly FrontierSurfaceModel[] {
   const byId = new Map(bundle.index.surfaces.map((entry) => [entry.surface, entry]));
   const models: FrontierSurfaceModel[] = [];
@@ -595,7 +790,7 @@ export function buildFrontierSurfaceModels(
     else if (surface === 'cards') groups = buildCardsModel(filesItems.flat());
     else if (surface === 'assessment') groups = buildRankingModel(filesItems.flat());
     else if (surface === 'explain-back') groups = buildExplainBackModel(filesItems.flat());
-    else groups = buildPlanModel(filesItems.flat());
+    else groups = buildPlanModel([...filesItems.flat(), ...itemsUpTo(sessionItems, dayIso)]);
 
     const answered = groups.some((g) => g.lines.length > 0);
     models.push({

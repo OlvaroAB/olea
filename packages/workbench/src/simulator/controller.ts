@@ -123,7 +123,10 @@ import {
 import { seedSimulatorDrafts } from './draft-seed.js';
 import {
   buildFrontierSurfaceModels,
+  createFrontierSessionsCache,
   type FrontierBundle,
+  type FrontierSessionsCache,
+  loadFrontierSessionsForDay,
   loadFrontierSurfaces,
   renderFrontierSurfaces,
 } from './frontier-surfaces.js';
@@ -1285,6 +1288,8 @@ export class SimulatorController {
   private readonly courseSetupSeenBridge: CourseSetupSeenBridge;
   /** Bumped once per `remountPane()` call, written onto `elements.root`'s `[data-wb-remount]` — see {@link SimulatorControllerOptions.elements}'s own doc. */
   private remountCount = 0;
+  /** `[HARD-18]`: the lazy frontier-sessions loader's per-mount cache — see `renderFrontierPanel`'s own doc. Assigned in the constructor, not a field initialiser, so its doc sits beside the other constructor-body assignments. */
+  private readonly frontierSessionsCache: FrontierSessionsCache;
 
   private constructor(
     private readonly elements: SimulatorShellElements,
@@ -1335,6 +1340,11 @@ export class SimulatorController {
      */
     private readonly frontier: FrontierBundle | null,
   ) {
+    // `[HARD-18]`: one cache per mount, shared across every `renderFrontierPanel()` call for this
+    // controller's whole lifetime — see `FrontierSessionsCache`'s own doc on why re-creating it
+    // per render would defeat the point (every scrub back to an already-visited day would
+    // re-fetch its shard).
+    this.frontierSessionsCache = createFrontierSessionsCache();
     this.courseSetupSeenBridge = installCourseSetupSeenBridge(
       this.pluginDataHost,
       () => this.beforeMountCourseSetupSeenCodes,
@@ -1530,7 +1540,7 @@ export class SimulatorController {
     // remount for the same reason the badge and the scrubber are: the clock
     // has moved, and these surfaces move with it (`frontier-surfaces.ts`'s
     // own SCRUB-BACK note).
-    this.renderFrontierPanel();
+    await this.renderFrontierPanel();
     // WBX-9: read BEFORE `mountPlugin` below — the fresh `OleaPlugin`
     // instance's own cold-start scan can start proposing courses during
     // `onload()`, and this snapshot must reflect only what an EARLIER mount
@@ -1638,13 +1648,28 @@ export class SimulatorController {
    * `buildFrontierSurfaceModels` filters to the items that had arrived by the
    * walked day, which is exactly what makes the scrubber move these surfaces
    * with the term.
+   *
+   * `[HARD-18]`: async because the plan surface's session data is no longer
+   * eagerly loaded into `this.frontier.states` at all — it is fetched here,
+   * lazily, shard by shard, through `loadFrontierSessionsForDay` against this
+   * controller's own `frontierSessionsCache` (one per mount, never rebuilt
+   * per render, so a scrub back to an already-visited day never re-fetches).
+   * Plain `fetch`, same reasoning as `create()`'s own `fetchFn`: this is a
+   * static GET, never routed through the transport bridge.
    */
-  private renderFrontierPanel(): void {
+  private async renderFrontierPanel(): Promise<void> {
     if (this.frontier === null) return;
+    const dayIso = formatSimulatedDate(this.clock.now());
+    const sessionItems = await loadFrontierSessionsForDay(
+      globalThis.fetch.bind(globalThis),
+      this.worldBase,
+      this.frontierSessionsCache,
+      dayIso,
+    );
     renderFrontierSurfaces(
       this.elements.main,
       this.worldLabel,
-      buildFrontierSurfaceModels(this.frontier, formatSimulatedDate(this.clock.now())),
+      buildFrontierSurfaceModels(this.frontier, dayIso, sessionItems),
     );
   }
 
