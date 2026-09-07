@@ -1,6 +1,7 @@
 import { Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import type { SoloLevel, StudyPlanEnvelope } from 'olea-contracts';
 import {
+  buildMisconceptionDigest,
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
   type ConceptRecord,
@@ -2382,6 +2383,25 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `ol-2zfj.75` (C7.9/F5.6): the transient misconception digest for one
+   * explain-back prompt's concept(s) — a fresh misconception-store read
+   * every call, same "load fresh, never cache" discipline
+   * `buildExplainBackObservationContextFor` above already follows for the
+   * identical store. `[]` (never a throw) when the store cannot read the
+   * vault, mirroring `buildExplainBackObservationContextFor`'s own
+   * `?? []` collapse of `store.load()`'s null case.
+   */
+  private async buildExplainBackMisconceptionDigestFor(
+    conceptIds: readonly string[],
+  ): Promise<GradeExplainBackInput['misconceptionDigest']> {
+    const vault = new ObsidianSource(this.app);
+    const deviceId = await ensureDeviceId(this);
+    const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
+    const records = (await store.load()) ?? [];
+    return buildMisconceptionDigest(records, { conceptIds: [...conceptIds] });
+  }
+
+  /**
    * The ONE construction point for `ExplainBackModal` (`[D-163]`, `ol-12gs`)
    * — every one of the four ruled entry points (the command below, F2.12's
    * confusion banner in `review/view.ts`, and the session-builder/Today
@@ -2400,6 +2420,8 @@ export default class OleaPlugin extends Plugin {
         retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
         buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
         recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGradeAndReview(params),
+        loadMisconceptionDigest: (conceptIds) =>
+          this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
         ...(onClosed ? { onClosed } : {}),
       },

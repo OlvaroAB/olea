@@ -198,6 +198,23 @@ export interface ExplainBackModalDeps {
    * this bead does not own.
    */
   readonly getMasteryState?: (conceptId: string) => MasteryState | null;
+  /**
+   * `ol-2zfj.75` (C7.9/F5.6): loads the transient misconception digest
+   * (`olea-core`'s `buildMisconceptionDigest`) for the instrument's own
+   * concept ids, so the judge sees "has she raised this specific confusion
+   * before, on this concept" per D-008/M4 — the same digest field
+   * `ExplainBackPromptContext.misconceptionDigest` already carries and
+   * `buildGradeExplainBackInputFromTypedAnswer` already forwards verbatim
+   * (`./request.ts`). Optional and best-effort, same posture as
+   * `getMasteryState`/`recordSoloGradeAndReview`: a caller that omits it (or
+   * whose load fails) gets the pre-existing `[]` default, never a thrown
+   * error mid-prompt. Called only from `resolveInstrumentPrompt` — a topic
+   * prompt (`resolveTopicPrompt`) has no known `subjectConceptId` to key a
+   * digest by, so it stays `[]` there, unchanged.
+   */
+  readonly loadMisconceptionDigest?: (
+    conceptIds: readonly string[],
+  ) => Promise<GradeExplainBackInput['misconceptionDigest']>;
 }
 
 interface ResolvedPrompt {
@@ -312,7 +329,18 @@ export class ExplainBackModal extends Modal {
   private async resolveInstrumentPrompt(instrument: ReviewInstrument): Promise<void> {
     const query = questionQuery(instrument);
     const sourceBlocks = await this.deps.retrieveSourceBlocks(query);
-    const context = buildExplainBackPromptContextFromInstrument(instrument, sourceBlocks);
+    // `ol-2zfj.75` (C7.9/F5.6): a real digest when the concept(s) this
+    // instrument targets have prior misconception history, `[]` otherwise —
+    // never thrown into the prompt-resolution path (see the dep's own doc).
+    const misconceptionDigest =
+      instrument.conceptIds.length > 0 && this.deps.loadMisconceptionDigest
+        ? await this.deps.loadMisconceptionDigest(instrument.conceptIds)
+        : [];
+    const context = buildExplainBackPromptContextFromInstrument(
+      instrument,
+      sourceBlocks,
+      misconceptionDigest,
+    );
     const prompt: ResolvedPrompt = {
       context,
       subjectConceptId: instrument.conceptIds[0] ?? null,

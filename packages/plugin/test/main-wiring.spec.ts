@@ -120,14 +120,18 @@ describe('every port the session needs is the real one', () => {
     // into `createVaultSuspendPort`, `ol-12gs`'s
     // `buildExplainBackObservationContextFor` awaits it a fourth time to
     // thread the same id into its OWN `createVaultMisconceptionStore` read
-    // (the accept-and-observe step's misconception-record lookup), and
+    // (the accept-and-observe step's misconception-record lookup),
     // `ol-38kp`'s `recordExplainBackSoloGradeAndReview` awaits it a fifth
     // time to thread the same id into `recordSoloGradeAndReview`'s SOLO
-    // review-log write — there is no `this.deviceId` cache to reuse instead
-    // in any of the five. The count below tracks known call sites rather
-    // than asserting "exactly once", so a future accidental duplicate still
-    // has to be a deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(5);
+    // review-log write, and `ol-2zfj.75`'s
+    // `buildExplainBackMisconceptionDigestFor` awaits it a sixth time to
+    // thread the same id into its OWN `createVaultMisconceptionStore` read
+    // (the judge digest's misconception-record lookup) — there is no
+    // `this.deviceId` cache to reuse instead in any of the six. The count
+    // below tracks known call sites rather than asserting "exactly once", so
+    // a future accidental duplicate still has to be a deliberate edit to
+    // this test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(6);
   });
 });
 
@@ -301,6 +305,33 @@ describe('the SOLO review-log write has a real production caller (ol-38kp)', () 
     expect(main).toMatch(
       /import \{ recordSoloGradeAndReview \} from '\.\/explain-back\/solo-review\.js';/,
     );
+  });
+});
+
+describe('the explain-back judge digest has a real production caller (ol-2zfj.75, C7.9/F5.6)', () => {
+  // `ol-2zfj.70` built `buildMisconceptionDigest` (`olea-core`) and
+  // `request.ts`/`modal.ts` already threaded a `misconceptionDigest` field
+  // end to end, but nothing ever called `buildMisconceptionDigest` to
+  // populate it — every explain-back attempt graded with an empty digest
+  // regardless of real history. These assertions are the source-level proof
+  // that a real load now happens, off the SAME `createVaultMisconceptionStore`
+  // instance `buildExplainBackObservationContextFor` already uses for its
+  // sibling read just above it.
+
+  it('exposes a production entry point that loads a real digest off a fresh misconception-store read', () => {
+    expect(main).toMatch(
+      /async buildExplainBackMisconceptionDigestFor\(\s*conceptIds:\s*readonly string\[\],\s*\):\s*Promise<GradeExplainBackInput\['misconceptionDigest'\]> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*const store = createVaultMisconceptionStore\(\{ vault, deviceId, now: \(\) => new Date\(\) \}\);\s*const records = \(await store\.load\(\)\) \?\? \[\];\s*return buildMisconceptionDigest\(records, \{ conceptIds: \[\.\.\.conceptIds\] \}\);/,
+    );
+  });
+
+  it("supplies that entry point as ExplainBackModal's loadMisconceptionDigest dep", () => {
+    expect(main).toMatch(
+      /loadMisconceptionDigest:\s*\(conceptIds\) =>\s*this\.buildExplainBackMisconceptionDigestFor\(conceptIds\),/,
+    );
+  });
+
+  it('imports buildMisconceptionDigest from olea-core', () => {
+    expect(main).toMatch(/buildMisconceptionDigest,/);
   });
 });
 

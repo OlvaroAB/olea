@@ -997,6 +997,15 @@ export {
   evaluateSchedulingObservationRouting,
   schedulingObservationPromptLine,
 } from './misconception/scheduling-observation-routing.js';
+// The read-time Stream A/Stream B reconciliation (`[D-202]`, `ol-2zfj.70`) —
+// see `./misconception/store.js`'s own module doc. Exported so the plugin's
+// vault-backed store (`ol-2zfj.74`) can call it instead of the Stream-A-only
+// `projectMisconceptions` above.
+export type {
+  McqMisconceptionPick,
+  ReconcileMisconceptionStreamsOptions,
+} from './misconception/store.js';
+export { mcqObservationKey, projectMisconceptionsFromAllSources } from './misconception/store.js';
 export type {
   EmbeddingVector as MisconceptionEmbeddingVector,
   MisconceptionEmbedder,

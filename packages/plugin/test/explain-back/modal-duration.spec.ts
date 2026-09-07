@@ -104,3 +104,41 @@ describe('ExplainBackModal renders the [D-217] depth heading only once a level i
     expect(modal).toMatch(/phase: 'accepted', message, soloLevel \};/);
   });
 });
+
+/**
+ * `ol-2zfj.75` (C7.9/F5.6): the same "source is the only instrument"
+ * constraint as above — `resolveInstrumentPrompt` must actually call the
+ * injected `loadMisconceptionDigest` dep and thread its result into
+ * `buildExplainBackPromptContextFromInstrument`, not just declare the dep on
+ * the interface. `store.spec.ts`/`digest.spec.ts` (olea-core) cover the pure
+ * digest computation; this covers that this view actually asks for one.
+ */
+describe('ExplainBackModal loads a real misconception digest for an instrument-seeded prompt', () => {
+  it("resolveInstrumentPrompt calls deps.loadMisconceptionDigest with the instrument's own conceptIds when supplied", () => {
+    const resolveStart = modal.indexOf('private async resolveInstrumentPrompt(');
+    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
+    expect(resolveStart).toBeGreaterThan(-1);
+    expect(resolveTopicStart).toBeGreaterThan(resolveStart);
+    const body = modal.slice(resolveStart, resolveTopicStart);
+    expect(body).toMatch(
+      /instrument\.conceptIds\.length > 0 && this\.deps\.loadMisconceptionDigest\s*\?\s*await this\.deps\.loadMisconceptionDigest\(instrument\.conceptIds\)\s*:\s*\[\]/,
+    );
+  });
+
+  it('threads the resolved digest into buildExplainBackPromptContextFromInstrument, not the pre-existing default', () => {
+    const resolveStart = modal.indexOf('private async resolveInstrumentPrompt(');
+    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
+    const body = modal.slice(resolveStart, resolveTopicStart);
+    expect(body).toMatch(
+      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*sourceBlocks,\s*misconceptionDigest,\s*\);/,
+    );
+  });
+
+  it('resolveTopicPrompt does not read loadMisconceptionDigest — a topic prompt has no known subjectConceptId to key one by', () => {
+    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
+    const nextMethodStart = modal.indexOf('private ', resolveTopicStart + 1);
+    expect(resolveTopicStart).toBeGreaterThan(-1);
+    const body = modal.slice(resolveTopicStart, nextMethodStart);
+    expect(body).not.toMatch(/loadMisconceptionDigest/);
+  });
+});

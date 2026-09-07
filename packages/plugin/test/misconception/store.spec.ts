@@ -15,6 +15,44 @@ import type {
 import { describe, expect, it } from 'vitest';
 import { createVaultMisconceptionStore } from '../../src/misconception/store.js';
 
+interface McqObservedOverrides {
+  readonly eventId?: string;
+  readonly timestamp?: string;
+  readonly instrumentId?: string;
+  readonly conceptIds?: readonly string[];
+  readonly reviewEventId?: string;
+  readonly misconceptionId?: string;
+  readonly distractor?: {
+    readonly text: string;
+    readonly believes: string;
+    readonly source_says: string;
+  };
+}
+
+/** One `kind: 'misconception-observed'` review-log line (`[D-202]`/`[D-220]`, `misconceptionObservedLogRecordV5`). */
+function mcqObservedLine(overrides: McqObservedOverrides = {}): string {
+  const record = {
+    schemaVersion: 5,
+    kind: 'misconception-observed',
+    eventId: 'mcq-event-1',
+    timestamp: '2026-08-10T09:00:00-04:00',
+    instrumentId: 'mcq:concept-alpha:1',
+    conceptIds: ['Concept Alpha'],
+    reviewEventId: 'review-event-1',
+    // Client-minted, fresh every write ([D-202]) — never used as the fold's
+    // identity key (see `olea-core`'s `store.ts` module doc); present only
+    // because the schema requires it.
+    misconceptionId: 'mcq-minted-id-1',
+    distractor: {
+      text: 'Y always follows X',
+      believes: 'Believes X always implies Y.',
+      source_says: 'X implies Y only under condition Z.',
+    },
+    ...overrides,
+  };
+  return `${JSON.stringify(record)}\n`;
+}
+
 const DEVICE = 'olea-testdevice1';
 const OTHER_DEVICE = 'olea-herphone01';
 
@@ -68,10 +106,14 @@ function fakeVault(
     throw new Error(`the misconception store must not call VaultSource.${name}`);
   };
   const vault = {
-    async list() {
+    async list(listOptions?: { under?: string }) {
       if (options.broken === true) throw new Error('list() failed');
       if (options.listSeesDotFolder !== true) return [];
-      return Object.keys(files).sort();
+      const under = listOptions?.under;
+      const names = Object.keys(files);
+      return (
+        under === undefined ? names : names.filter((path) => path.startsWith(`${under}/`))
+      ).sort();
     },
     async exists(path: string) {
       if (options.broken === true) throw new Error('exists() failed');
@@ -93,6 +135,10 @@ function fakeVault(
 
 function logPath(day: string, deviceId: string): string {
   return `.olea/misconceptions/${day}.${deviceId}.jsonl`;
+}
+
+function reviewPath(day: string, deviceId: string): string {
+  return `.olea/reviews/${day}.${deviceId}.jsonl`;
 }
 
 describe('createVaultMisconceptionStore', () => {
@@ -196,5 +242,97 @@ describe('createVaultMisconceptionStore', () => {
 
     const records = await store.load();
     expect(records?.[0]?.occurrenceCount).toBe(1);
+  });
+
+  describe('Stream B: review-log misconception-observed picks (`[D-202]`, `ol-2zfj.74`)', () => {
+    it('a review-log MCQ pick alone projects into a real record, no explain-back event needed', async () => {
+      const { vault } = fakeVault(
+        { [reviewPath('2026-08-10', DEVICE)]: mcqObservedLine() },
+        { listSeesDotFolder: false },
+      );
+      const store = createVaultMisconceptionStore({
+        vault,
+        deviceId: DEVICE,
+        now: () => new Date('2026-08-10T12:00:00-04:00'),
+      });
+
+      const records = await store.load();
+      expect(records).not.toBeNull();
+      expect(records).toHaveLength(1);
+      expect(records?.[0]).toMatchObject({
+        conceptId: 'Concept Alpha',
+        status: 'active',
+        occurrenceCount: 1,
+        statement: 'Believes X always implies Y.',
+        correction: 'X implies Y only under condition Z.',
+      });
+    });
+
+    it('repeated picks of the same distractor accumulate occurrenceCount via the deterministic fallback key', async () => {
+      const { vault } = fakeVault(
+        {
+          [reviewPath('2026-08-10', DEVICE)]: mcqObservedLine({ eventId: 'mcq-event-1' }),
+          [reviewPath('2026-08-12', DEVICE)]: mcqObservedLine({
+            eventId: 'mcq-event-2',
+            reviewEventId: 'review-event-2',
+            timestamp: '2026-08-12T09:00:00-04:00',
+            // A fresh minted id per [D-202] — the fold must key on
+            // (instrumentId, conceptId, distractor.text), never on this.
+            misconceptionId: 'mcq-minted-id-2',
+          }),
+        },
+        { listSeesDotFolder: false },
+      );
+      const store = createVaultMisconceptionStore({
+        vault,
+        deviceId: DEVICE,
+        now: () => new Date('2026-08-12T12:00:00-04:00'),
+      });
+
+      const records = await store.load();
+      expect(records).toHaveLength(1);
+      expect(records?.[0]?.occurrenceCount).toBe(2);
+    });
+
+    it('an explain-back (Stream A) resolution fold downgrades an MCQ-origin (Stream B) record on the same concept', async () => {
+      const { vault } = fakeVault({
+        [reviewPath('2026-08-10', DEVICE)]: mcqObservedLine(),
+        [logPath('2026-08-11', DEVICE)]: resolutionLine(),
+      });
+      const store = createVaultMisconceptionStore({
+        vault,
+        deviceId: DEVICE,
+        now: () => new Date('2026-08-11T12:00:00-04:00'),
+      });
+
+      const records = await store.load();
+      expect(records).toHaveLength(1);
+      expect(records?.[0]?.status).toBe('fading');
+    });
+
+    it('a non-misconception review-log record (an ordinary review) contributes nothing', async () => {
+      const ordinaryReview = `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'review-1',
+        timestamp: '2026-08-10T09:00:00-04:00',
+        instrumentId: 'qa:concept-alpha:1',
+        instrumentType: 'qa',
+        conceptIds: ['Concept Alpha'],
+        rating: 3,
+        correctness: { matchedKey: true },
+      })}\n`;
+      const { vault } = fakeVault(
+        { [reviewPath('2026-08-10', DEVICE)]: ordinaryReview },
+        { listSeesDotFolder: false },
+      );
+      const store = createVaultMisconceptionStore({
+        vault,
+        deviceId: DEVICE,
+        now: () => new Date('2026-08-10T12:00:00-04:00'),
+      });
+
+      expect(await store.load()).toEqual([]);
+    });
   });
 });

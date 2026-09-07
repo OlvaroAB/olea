@@ -14,6 +14,26 @@
  * store.ts` hold DEVICE-LOCAL bookkeeping with no vault source of truth —
  * `data.json` *is* their durable state. A misconception record is the
  * opposite shape: it is a **projection of her vault's own event log**
+ *
+ * ===========================================================================
+ * TWO STREAMS FOLDED, ONE PROJECTION (`[D-202]`, `ol-2zfj.70`/`ol-2zfj.74`)
+ * ===========================================================================
+ * `load()` now reads BOTH of the vault's misconception-shaped logs and folds
+ * them through `olea-core`'s `projectMisconceptionsFromAllSources` — never
+ * the Stream-A-only `projectMisconceptions` this module used before. **Stream
+ * A** is this folder's own event log (`.olea/misconceptions/`, unchanged from
+ * before this fold). **Stream B** is a wrong MCQ pick: every
+ * `kind: 'misconception-observed'` record in the review log
+ * (`.olea/reviews/`, `olea-core`'s `parseReviewLog`), mapped to
+ * `McqMisconceptionPick` field-for-field (the two schemas already match,
+ * per `olea-core/src/misconception/store.ts`'s own module doc). No embedder
+ * is threaded through here — the deterministic per-distractor fallback key
+ * alone gives real `occurrenceCount`/`status` behaviour for the common "same
+ * distractor picked again" case (`ol-2zfj.74`'s own scope note); wiring
+ * `believesEmbeddings`/`candidateEmbeddings` is separate, optional follow-up.
+ * The SAME `discoverLogPaths` helper this module already used for Stream A is
+ * reused for Stream B's folder — same discovery strategy, same probe window,
+ * a different folder and path-builder (`REVIEW_LOG_FOLDER`/`reviewLogPath`).
  * (`packages/core/src/misconception/types.ts`'s module doc: "local
  * event-sourcing, same as the review log... every read-facing shape... is a
  * projection folded from it, never a second source of truth"). Caching that
@@ -136,13 +156,17 @@
 
 import {
   calendarDayFromLocalDate,
+  type McqMisconceptionPick,
   MISCONCEPTION_LOG_FOLDER,
   type MisconceptionEvent,
   type MisconceptionRecord,
   mergeMisconceptionEvents,
   misconceptionLogPath,
   parseMisconceptionLog,
-  projectMisconceptions,
+  parseReviewLog,
+  projectMisconceptionsFromAllSources,
+  REVIEW_LOG_FOLDER,
+  reviewLogPath,
   type VaultSource,
 } from 'olea-core';
 import { DEFAULT_LOG_PROBE_DAYS, discoverLogPaths } from '../privacy/log-discovery.js';
@@ -190,23 +214,54 @@ export function createVaultMisconceptionStore(
     async load() {
       try {
         const today = calendarDayFromLocalDate(deps.now());
-        const paths = await discoverLogPaths(
+        const probeDays = deps.probeDays ?? DEFAULT_LOG_PROBE_DAYS;
+
+        const misconceptionPaths = await discoverLogPaths(
           deps.vault,
           MISCONCEPTION_LOG_FOLDER,
           misconceptionLogPath,
           deps.deviceId,
           today,
-          deps.probeDays ?? DEFAULT_LOG_PROBE_DAYS,
+          probeDays,
         );
 
         const perFile: (readonly MisconceptionEvent[])[] = [];
-        for (const path of paths) {
+        for (const path of misconceptionPaths) {
           const content = await deps.vault.read(path);
           perFile.push(parseMisconceptionLog(content).events);
         }
 
         const merged = mergeMisconceptionEvents(...perFile);
-        return projectMisconceptions(merged.events);
+
+        // Stream B: every `misconception-observed` record across the review
+        // log, mapped to `McqMisconceptionPick` — see the module doc's "TWO
+        // STREAMS FOLDED" section.
+        const reviewPaths = await discoverLogPaths(
+          deps.vault,
+          REVIEW_LOG_FOLDER,
+          reviewLogPath,
+          deps.deviceId,
+          today,
+          probeDays,
+        );
+        const mcqPicks: McqMisconceptionPick[] = [];
+        for (const path of reviewPaths) {
+          const content = await deps.vault.read(path);
+          const parsed = parseReviewLog(content);
+          for (const record of parsed.records) {
+            if (record.kind !== 'misconception-observed') continue;
+            mcqPicks.push({
+              eventId: record.eventId,
+              timestamp: record.timestamp,
+              instrumentId: record.instrumentId,
+              conceptIds: record.conceptIds,
+              reviewEventId: record.reviewEventId,
+              distractor: record.distractor,
+            });
+          }
+        }
+
+        return projectMisconceptionsFromAllSources(merged.events, mcqPicks);
       } catch {
         // "Could not read the vault" is not "no misconceptions" — same
         // honest-absence posture every other `today/data-source.ts` source
