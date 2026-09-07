@@ -26,7 +26,12 @@
  * so comparing against it stands in for "the neutral-default ranking" without
  * this suite having to reconstruct the pre-bead call itself.
  */
-import type { ReviewLogRecord } from 'olea-contracts';
+import {
+  GOVERNING_FRESH_FOR_SECONDS,
+  GOVERNING_GOVERNS_FOR_SECONDS,
+  type ReviewLogRecord,
+  type StudyPlanEnvelope,
+} from 'olea-contracts';
 import type { Scheduler, SchedulerState, StudySessionModel } from 'olea-core';
 import { enumerateVaultInstruments, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -824,5 +829,169 @@ describe('createLocalSessionBuilderProvider — F4.6/STEER-2 course-or-topic wir
     expect(second).not.toBe(first);
     if (second.kind !== 'model') throw new Error('expected a model');
     expect(conceptNamesOf(second.model)).toEqual(['Gadget theory']);
+  });
+});
+
+// `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the defect this suite closes — no
+// plugin caller passed the cached plan's `allocation` into the composed
+// session, so the session she was SHOWN ran on the interim per-course
+// proportional-by-material shares (`study-session/compose.ts`'s own
+// `proportionalCourseShares`) while the session she ANSWERS already reads
+// the plan. `twoCourseBaseFiles` below is `twoConceptBaseFiles`'s own
+// pattern (this file's F2.19 suite, above), widened from two concepts in ONE
+// course to two concepts in TWO DIFFERENT courses — allocation is a
+// per-course share, so a single-course fixture can never distinguish "the
+// plan's shares" from "the interim ones" (both always resolve to `1.0` for
+// the one course present). Course codes and concept names are invented
+// (INV-3).
+const TESTC202_PAST_PAPER = [
+  '---',
+  'role: past-paper',
+  'course: TESTC202',
+  '---',
+  '',
+  '# TESTC202 Past Paper — 2023',
+  '',
+  '## Question 1 (10 marks)',
+  '',
+  'Explain the core mechanism behind Gadget theory and why it matters.',
+  '',
+].join('\n');
+
+const QUIZ_TESTC202 =
+  '---\nclass: TESTC202\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 2\n';
+
+function twoCourseBaseFiles(): Readonly<Record<string, string>> {
+  return {
+    '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+    '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
+    'Notes/one.md': [
+      '---',
+      'topic: [Widget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    'Notes/two.md': [
+      '---',
+      'topic: [Gadget theory]',
+      'course: TESTC202',
+      '---',
+      '',
+      'Front2::Back2',
+      '',
+    ].join('\n'),
+    '03 Research/TESTC101 Past Paper 2023.md': [
+      '---',
+      'role: past-paper',
+      'course: TESTC101',
+      '---',
+      '',
+      '# TESTC101 Past Paper — 2023',
+      '',
+      '## Question 1 (10 marks)',
+      '',
+      'Explain the core mechanism behind Widget theory and why it matters.',
+      '',
+    ].join('\n'),
+    '03 Research/TESTC202 Past Paper 2023.md': TESTC202_PAST_PAPER,
+    [BASE_PATH]: BASE_FILE,
+    '02 Assignments/Quiz 1.md': QUIZ,
+    '02 Assignments/Quiz 2.md': QUIZ_TESTC202,
+  };
+}
+
+/** `today/data-source.spec.ts`'s own `planFixture` pattern, restated here rather than imported (outside this package's tsconfig). */
+function planFixtureWithAllocation(
+  allocation: StudyPlanEnvelope['body']['allocation'],
+): StudyPlanEnvelope {
+  return {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: 1,
+    policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
+    computedAt: NOW.toISOString(),
+    freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+    governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
+    body: {
+      asOf: '2026-08-10',
+      courses: [],
+      allocation,
+    },
+  };
+}
+
+function allocationEntry(courseId: string, share: number) {
+  return {
+    courseId,
+    share,
+    minBlockSeconds: 1,
+    contributions: [{ name: 'risk', value: 0.5 }],
+    reason: `${courseId} gets its share.`,
+  };
+}
+
+describe("createLocalSessionBuilderProvider — the cached plan's real allocation reaches the composed session (ol-egov.132.1 [SESS-8.1], A2.5, C5.6)", () => {
+  // Two never-reviewed concepts, one per course, each costing the same
+  // single Q&A card (45s, `ASSUMED_INSTRUMENT_SECONDS.qa`) and a 60-second
+  // (`budgetMinutes: 1`) session: too tight for the interim 50/50 split to
+  // afford EITHER course's own item in `composeSessionRows`'s course-capped
+  // first pass (each gets 30s < 45s), so the interim path's only surviving
+  // item comes from its course-blind fallback pass, decided by overdue/
+  // gapScore tie-break rather than by any course's share. A REAL allocation
+  // giving one course the whole budget and the other `0` (dropped below its
+  // own `minBlockSeconds`, `allocation-seconds.ts`) instead funds that one
+  // course's own item through the course-capped first pass outright — the
+  // two providers below can only disagree because of the plan each was
+  // handed.
+  function providerWithPlan(plan: StudyPlanEnvelope | null) {
+    return createLocalSessionBuilderProvider({
+      vault: memoryVault(twoCourseBaseFiles()),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+      plan: () => plan,
+    });
+  }
+
+  it('a plan funding TESTC101 wholesale (share 1.0) and dropping TESTC202 (share 0) includes Widget theory and excludes Gadget theory', async () => {
+    const plan = planFixtureWithAllocation([
+      allocationEntry('TESTC101', 1),
+      allocationEntry('TESTC202', 0),
+    ]);
+    const state = await providerWithPlan(plan).load({ budgetMinutes: 1 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const names = conceptNamesOf(state.model);
+    expect(names).toContain('Widget theory');
+    expect(names).not.toContain('Gadget theory');
+  });
+
+  it("the same plan with the two shares swapped swaps which course is included — the composed shares equal the plan's, not a fixed default", async () => {
+    const plan = planFixtureWithAllocation([
+      allocationEntry('TESTC101', 0),
+      allocationEntry('TESTC202', 1),
+    ]);
+    const state = await providerWithPlan(plan).load({ budgetMinutes: 1 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const names = conceptNamesOf(state.model);
+    expect(names).toContain('Gadget theory');
+    expect(names).not.toContain('Widget theory');
+  });
+
+  it('with no `plan` thunk at all, behaviour is unchanged from before this bead: a plan of `null` (nothing cached yet) reads identically to omitting the field', async () => {
+    const withNullPlan = await providerWithPlan(null).load({ budgetMinutes: 1 });
+    const withNoPlanField = await createLocalSessionBuilderProvider({
+      vault: memoryVault(twoCourseBaseFiles()),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    }).load({ budgetMinutes: 1 });
+    if (withNullPlan.kind !== 'model') throw new Error('expected a model (null plan)');
+    if (withNoPlanField.kind !== 'model') throw new Error('expected a model (no plan field)');
+    expect(conceptNamesOf(withNullPlan.model)).toEqual(conceptNamesOf(withNoPlanField.model));
   });
 });

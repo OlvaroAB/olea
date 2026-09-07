@@ -52,6 +52,7 @@
  * F6.10's ordinary state, not a gap.
  */
 
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   ConceptRelation,
   GroveCourseModel,
@@ -99,6 +100,15 @@ export interface CreateLocalHomeProviderDeps {
    * both.
    */
   readonly relations?: () => readonly ConceptRelation[];
+  /**
+   * `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached study plan, passed
+   * straight through to `../session-builder/provider.ts`'s own `plan` —
+   * same thunk shape and same reason (a fresh read per call, never a value
+   * captured once), so Home's headline session runs on the real per-course
+   * allocation exactly like the session builder's own, rather than the
+   * interim shares.
+   */
+  readonly plan?: () => StudyPlanEnvelope | null;
   /**
    * `ol-ppa9` (F1.4/`[D-213]`): the first-read readout, for every course
    * folder ticked so far this session — see `./view.ts`'s own module doc for
@@ -203,6 +213,7 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
     now: deps.now,
     scheduler: deps.scheduler,
     ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
+    ...(deps.plan !== undefined ? { plan: deps.plan } : {}),
   });
   const groveProvider = createLocalGroveProvider({
     vault: deps.vault,

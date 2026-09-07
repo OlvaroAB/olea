@@ -215,6 +215,7 @@
  * her closing and reopening the leaf.
  */
 
+import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentProximityBand,
   CalendarDay,
@@ -335,6 +336,21 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * compose.ts` already proves is a no-op.
    */
   readonly relations?: () => readonly ConceptRelation[];
+  /**
+   * `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached study plan, read the
+   * same way `main.ts`'s `buildReviewSessionInput` reads `this.review.plan`
+   * — fresh per call, never a value captured once. **A thunk, not a
+   * value**, for the identical reason {@link relations} is one:
+   * `createLocalSessionBuilderProvider` is called once per leaf, but
+   * `refreshCachedStudyPlan` mutates the plan in place in the background, so
+   * a captured value would go stale the moment a fresher plan lands after
+   * the leaf opened. `buildFresh` reads `plan()?.body.allocation` and passes
+   * it to `composeReentrySession` as `allocation` — undefined (never
+   * called, or no plan cached yet) reads exactly as `compose.ts`'s own
+   * `allocation === undefined` fallback to the interim per-course shares,
+   * the same degradation the answered (review) path already has.
+   */
+  readonly plan?: () => StudyPlanEnvelope | null;
   /**
    * F4.6 / F6.4, `[D-163]` (`ol-12gs`): passed straight through to the
    * returned `SessionBuilderViewDeps.openExplainBack` — this function never
@@ -788,6 +804,12 @@ export function createLocalSessionBuilderProvider(
         enumeration.concepts,
       );
 
+      // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
+      // allocation, read fresh through `deps.plan` — see that field's own
+      // doc. An empty array reads the same as `undefined` to `compose.ts`'s
+      // own optional field, so this is not narrowed further here.
+      const allocation = deps.plan?.()?.body.allocation;
+
       // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
       // module doc, `readReviewLogHistory`), so a real multi-week absence
       // is measured correctly regardless of `probeDays`.
@@ -826,6 +848,13 @@ export function createLocalSessionBuilderProvider(
         // `resolveCourseOrTopicFilter`'s own doc for how these two are
         // derived.
         ...courseOrTopicFilter,
+        // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
+        // cross-course allocation, read fresh via `deps.plan` (see that
+        // field's own doc). `undefined` — no `plan` thunk supplied, or the
+        // thunk returns `null` (nothing cached yet) — reads identically to
+        // `compose.ts`'s own optional field: the interim per-course shares,
+        // never a thrown error or a degraded session.
+        ...(allocation !== undefined ? { allocation } : {}),
       });
 
       // F6.6: a re-entry composition returns the narrower, count-free

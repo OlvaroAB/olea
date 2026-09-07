@@ -107,7 +107,10 @@ describe('the session builder reads what only a real vault has', () => {
   it('SESS-2: replays scheduling state through the same Scheduler the Today panel uses, and reads its own scheduler dep rather than building a second instance', () => {
     expect(provider).toMatch(/replaySchedulerStates\(entries,\s*deps\.scheduler\)/);
     expect(main).toMatch(
-      /scheduler,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*\}\),/,
+      // `ol-egov.132.1` [SESS-8.1]: `plan` now lands between `relations` and
+      // the closing `}),` — see that field's own doc on
+      // `CreateLocalSessionBuilderProviderDeps` (session-builder/provider.ts).
+      /scheduler,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*plan:\s*\(\)\s*=>\s*this\.review\?\.plan\s*\?\?\s*null,\s*\}\),/,
     );
   });
 

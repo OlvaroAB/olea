@@ -949,6 +949,13 @@ export default class OleaPlugin extends Plugin {
             // after this leaf was first opened, not just the one at hand when
             // it was.
             relations: () => this.servedRelationEdges(),
+            // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the same cached plan
+            // `buildReviewSessionInput` reads as `this.review.plan` — a
+            // thunk, not a captured value, so a background
+            // `refreshCachedStudyPlan` that lands after this leaf opened
+            // still reaches the next composition, exactly like `plan` on
+            // `ReviewWiring` already does for the answered path.
+            plan: () => this.review?.plan ?? null,
           }),
         ),
     );
@@ -1024,6 +1031,10 @@ export default class OleaPlugin extends Plugin {
         now: () => new Date(),
         scheduler,
         relations: () => this.servedRelationEdges(),
+        // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): passed straight through
+        // to the session-builder provider Home wraps — see that call
+        // site's own comment above, and `home/provider.ts`'s `plan` doc.
+        plan: () => this.review?.plan ?? null,
         // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
         // ingestion tick's fresh queue state and a later course-setup
         // confirmation both reach a Home leaf built before either happened —
