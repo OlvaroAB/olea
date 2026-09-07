@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { projectMisconceptions } from './project.js';
+import {
+  foldMisconceptionObservations,
+  type NormalizedMisconceptionFoldEntry,
+  projectMisconceptions,
+} from './project.js';
 import type { MisconceptionEvent } from './types.js';
 
 // Synthetic events only (INV-3): invented concept/instrument ids and
@@ -95,6 +99,91 @@ describe('projectMisconceptions — observation folding', () => {
     const records = projectMisconceptions(events);
     expect(records).toHaveLength(2);
     expect(records.map((r) => r.conceptId).sort()).toEqual(['concept-alpha', 'concept-beta']);
+  });
+});
+
+describe('projectMisconceptions — sticky citation/confusedWithConceptId (ol-2zfj.70)', () => {
+  it('a later occurrence with confusedWithConceptId: null never erases an earlier non-null value', () => {
+    const events = [
+      observed({
+        eventId: 'e1',
+        misconceptionId: 'm-1',
+        confusedWithConceptId: 'concept-beta',
+        timestamp: '2026-08-16T09:00:00-04:00',
+      }),
+      observed({
+        eventId: 'e2',
+        misconceptionId: 'm-1',
+        confusedWithConceptId: null,
+        timestamp: '2026-08-17T09:00:00-04:00',
+      }),
+    ];
+    const [record] = projectMisconceptions(events);
+    expect(record?.confusedWithConceptId).toBe('concept-beta');
+    expect(record?.occurrenceCount).toBe(2);
+  });
+
+  it('a later occurrence with a non-null confusedWithConceptId still overwrites, as before', () => {
+    const events = [
+      observed({
+        eventId: 'e1',
+        misconceptionId: 'm-1',
+        confusedWithConceptId: 'concept-beta',
+        timestamp: '2026-08-16T09:00:00-04:00',
+      }),
+      observed({
+        eventId: 'e2',
+        misconceptionId: 'm-1',
+        confusedWithConceptId: 'concept-gamma',
+        timestamp: '2026-08-17T09:00:00-04:00',
+      }),
+    ];
+    const [record] = projectMisconceptions(events);
+    expect(record?.confusedWithConceptId).toBe('concept-gamma');
+  });
+
+  it('a later occurrence with citation: null (only reachable via a Stream B pick, ./store.js) never erases an earlier real citation', () => {
+    // A pure Stream A event always carries a real citation (the persisted
+    // schema requires one) — a null citation is only ever produced by
+    // ./store.js's Stream B normalization. This test exercises the shared
+    // `foldMisconceptionObservations` directly with a synthetic normalized
+    // entry, the same shape `./store.js` feeds it, rather than forcing an
+    // invalid `MisconceptionEvent`.
+    const laterCitation = { path: 'Courses/Sample/other.md', blockIndex: 5 };
+    const withCitation: Extract<NormalizedMisconceptionFoldEntry, { kind: 'observed' }> = {
+      kind: 'observed',
+      eventId: 'e1',
+      timestamp: '2026-08-16T09:00:00-04:00',
+      misconceptionId: 'm-1',
+      conceptId: 'concept-alpha',
+      confusedWithConceptId: null,
+      statement: 'Believes X always implies Y.',
+      correction: 'X implies Y only under condition Z.',
+      citation: CITATION,
+      originInstrumentId: 'explain-back:concept-alpha:1',
+    };
+    const withNullCitation: Extract<NormalizedMisconceptionFoldEntry, { kind: 'observed' }> = {
+      kind: 'observed',
+      eventId: 'e2',
+      timestamp: '2026-08-17T09:00:00-04:00',
+      misconceptionId: 'm-1',
+      conceptId: 'concept-alpha',
+      confusedWithConceptId: null,
+      statement: 'she believes the wrong thing this option encodes',
+      correction: 'what the source material actually says instead',
+      citation: null,
+      originInstrumentId: 'mcq:concept-alpha:1',
+    };
+    const [record] = foldMisconceptionObservations([withCitation, withNullCitation]);
+    expect(record?.citation).toEqual(CITATION);
+    expect(record?.occurrenceCount).toBe(2);
+
+    // Sanity: a real, non-null later citation still overwrites, as before.
+    const overwritten = foldMisconceptionObservations([
+      { ...withCitation, misconceptionId: 'm-2' },
+      { ...withNullCitation, eventId: 'e3', misconceptionId: 'm-2', citation: laterCitation },
+    ]);
+    expect(overwritten[0]?.citation).toEqual(laterCitation);
   });
 });
 

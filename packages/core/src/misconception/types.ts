@@ -131,7 +131,19 @@ export interface MisconceptionRecord {
   /** The most recent occurrence's wording — see `./project.js`'s doc on why the record tracks the latest phrasing while `occurrenceCount` preserves the full history. */
   readonly statement: string;
   readonly correction: string;
-  readonly citation: SourceCitation;
+  /**
+   * `null` for a record folded (in part or entirely) from a review-log
+   * `misconception-observed` pick (`[D-202]`/`[D-220]`, `./store.js`, `ol-2zfj.70`)
+   * — that stream's schema carries `distractor.source_says` as free text, never
+   * a `{ path, blockIndex }` reference into her material, so there is nothing
+   * honest to put here. `null` reads as "grounded in `correction`'s free text,
+   * not a vault block," never as "no correction available." **Additive,
+   * non-breaking:** this widens only the read-model shape — the PERSISTED
+   * Stream A event (`MisconceptionObservedEvent.citation`, below) is
+   * unchanged and still required; every existing writer/reader of that event
+   * is unaffected.
+   */
+  readonly citation: SourceCitation | null;
   /** Timestamp of the first `observed` event that produced this id. */
   readonly firstSeen: string;
   /** Timestamp of the most recent `observed` event that produced this id. */
