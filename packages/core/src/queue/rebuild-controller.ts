@@ -89,13 +89,23 @@
  * `hold-cap-exceeded` is treated as ending the sitting rather than
  * recomposing the tail.
  *
- * `packages/plugin/src/review/queue-adapter.ts` (owned by a different lane's
- * `queue/`-consuming surface) still composes the review queue with no freeze
- * at all — every call recomputes from scratch. Wiring it to hold a
- * `SittingState` across calls, and to source its own three trigger facts, is
- * client-surface work outside this lane's owned paths
- * (`packages/core/src/study-session/`, `packages/core/src/queue/`) — filed
- * as a follow-up (see `ol-o7hr`'s notes) rather than built here silently.
+ * `packages/plugin/src/review/queue-adapter.ts`'s `createFrozenReviewQueue`
+ * later wired a second instance of its own — a
+ * `SittingState<readonly ReviewQueueItem[]>` per instance, driven by this
+ * same `decideRebuild`. Two instances of one deliberately-shared controller
+ * meant two compositions with no handoff between them, which is the defect
+ * `../../../olea-service/docs/dev/one-assembly-path.md` names.
+ *
+ * ## `[SESS-8.2]` (`ol-egov.132.2`): the two instances collapse onto one
+ *
+ * `packages/plugin/src/session/holder.ts`'s `createStudySessionHolder`
+ * (`ol-egov.132.2`) is the single `SittingState<ComposedStudySession>` per
+ * plugin instance the design note's §3a calls for — built ahead of its
+ * callers, per the note's own build order. It is not yet wired to a
+ * production caller: `ol-egov.132.3` widens the plan-execution stage to take
+ * composed rows, `.4` moves the review tab onto the holder, and `.5` moves
+ * Today onto it — only once those land do the two instances above retire in
+ * favour of the one.
  */
 
 import type { CalendarDay } from '../today/calendar-day.js';
