@@ -6,7 +6,7 @@
 // `ComposedQueue`. Hand-building it would test the adapter against the shape
 // this file believes the composer produces, which is exactly the coupling the
 // adapter exists to remove.
-import type { RandomSource, VaultSource } from 'olea-core';
+import type { PlannedQueueItem, RandomSource, VaultSource } from 'olea-core';
 import {
   buildReviewSession,
   createFsrsScheduler,
@@ -557,6 +557,51 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
     const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
     expect(adapted?.selectionContext.planVersion).toBe(plan.policyVersion);
     expect(adapted?.selectionContext.yieldRank).toBe(1);
+  });
+});
+
+// [SESS-8.3] `ol-egov.132.3`, `docs/dev/one-assembly-path.md` row 3:
+// `plan/execute.ts` gains a second entry, `executeStudyPlanOverComposedRows`,
+// that runs the same join as `executeStudyPlan` but never reorders. This
+// adapter needs no change for that — it already just walks `input.items` in
+// the order given and passes `selectionContext` through verbatim (see this
+// file's module doc). Proven here by hand-building a `PlannedQueueItem[]` in
+// an order a weight sort would reverse, rather than importing the new
+// function: it has no barrel export yet, by design — row 4 (`ol-egov.132.4`)
+// is its first real caller.
+describe('adaptExecutedReviewQueue accepts a composed-rows result unchanged in shape (SESS-8.3)', () => {
+  it('preserves whatever order the executed items arrive in, course blocks intact', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    expect(session.queue.items.length).toBeGreaterThanOrEqual(3);
+
+    // Reverse of the composed queue's own order — stands in for a composed
+    // session having decided a different (course-blocked) order than plain
+    // FSRS due order would. The adapter must not disturb it either way.
+    const reversed = [...session.queue.items].reverse();
+    const composedOrderItems: readonly PlannedQueueItem[] = reversed.map((q) => ({
+      instrumentId: q.instrumentId,
+      instrumentType: q.instrumentType,
+      conceptIds: q.conceptIds,
+      priorState: q.priorState,
+      selectionContext: { ...q.selectionContext, planVersion: null },
+      planWeight: null,
+    }));
+
+    const adapted = adaptExecutedReviewQueue({
+      items: composedOrderItems,
+      recordsById: session.recordsById,
+    });
+
+    expect(adapted.map((i) => i.instrument.instrumentId)).toEqual(
+      reversed.map((q) => q.instrumentId),
+    );
+    expect(adapted.map((i) => i.instrument.instrumentId)).not.toEqual(
+      session.queue.items.map((q) => q.instrumentId),
+    );
   });
 });
 

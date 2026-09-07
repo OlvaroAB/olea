@@ -8,7 +8,7 @@ import {
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ComposedQueue, QueueItem } from '../queue/types.js';
-import { executeStudyPlan } from './execute.js';
+import { executeStudyPlan, executeStudyPlanOverComposedRows } from './execute.js';
 
 /** Synthetic vocabulary only (INV-3). */
 function item(instrumentId: string, conceptIds: readonly string[]): QueueItem {
@@ -369,5 +369,142 @@ describe('executeStudyPlan — joins and edge cases', () => {
     });
 
     expect(executed.items.map((i) => i.instrumentId).sort()).toEqual(['i-a', 'i-b', 'i-c']);
+  });
+});
+
+// Scenarios: features/F4-oracle.md — "[SESS-8.3] `ol-egov.132.3`" block, added
+// beside the `executeStudyPlan` scenarios above (DF-20).
+describe('executeStudyPlanOverComposedRows — [SESS-8.3] ol-egov.132.3: composed rows, given order preserved', () => {
+  it('serves the exact given order — course blocks intact, no cross-course reorder by weight (F2.18, C5.7)', () => {
+    // A weight-based cross-course sort would put i-b (weight 0.9) before
+    // i-a (weight 0.2). The composed session put COURSE-A's block first;
+    // this entry must leave it there.
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-a', ['concept-alpha']), item('i-b', ['concept-beta'])],
+      plan: plan([
+        rankedCourse('COURSE-A', [['concept-alpha', 1, 0.2, 25]]),
+        rankedCourse('COURSE-B', [['concept-beta', 1, 0.9, 3]]),
+      ]),
+    });
+
+    expect(executed.items.map((i) => i.instrumentId)).toEqual(['i-a', 'i-b']);
+  });
+
+  it('leaves unranked items interleaved at their given position, never moved after the ranked ones', () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-unranked', ['concept-nowhere']), item('i-ranked', ['concept-alpha'])],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+
+    // Under executeStudyPlan's own sort this would come back
+    // ['i-ranked', 'i-unranked'] — the composed-rows entry must not do that.
+    expect(executed.items.map((i) => i.instrumentId)).toEqual(['i-unranked', 'i-ranked']);
+  });
+
+  it("stamps yieldRank/examProximity/planVersion from the plan, exactly as executeStudyPlan does — never the composition's own rank", () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-ranked', ['concept-alpha'])],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 3, 0.7, 11]])]),
+    });
+
+    expect(executed.items[0]?.selectionContext).toEqual({
+      dueState: 'due',
+      examProximity: 11,
+      yieldRank: 3,
+      instrumentTypesOffered: ['qa'],
+      planVersion: 'sp1-aaaaaaaaaaaaaaaa',
+    });
+    expect(executed.items[0]?.planWeight).toBe(0.7);
+    expect(executed.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');
+  });
+
+  it('carries the plan version but a null yieldRank for an unranked concept', () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-unranked', ['concept-nowhere'])],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+
+    expect(executed.items[0]?.selectionContext.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');
+    expect(executed.items[0]?.selectionContext.yieldRank).toBeNull();
+    expect(executed.items[0]?.selectionContext.examProximity).toBeNull();
+  });
+
+  it('records explicit nulls and the given order, with no plan cached', () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-b', ['concept-beta']), item('i-a', ['concept-alpha'])],
+      plan: null,
+    });
+
+    expect(executed.items.map((i) => i.instrumentId)).toEqual(['i-b', 'i-a']);
+    expect(executed.planVersion).toBeNull();
+    for (const offered of executed.items) {
+      expect(offered.selectionContext.planVersion).toBeNull();
+      expect(offered.selectionContext.yieldRank).toBeNull();
+    }
+  });
+
+  it('carries dedupeReason through by name, same as executeStudyPlan', () => {
+    const withReason: QueueItem = {
+      ...item('i-ranked', ['concept-alpha']),
+      dedupeReason: 'recall-overdue',
+    };
+    const executed = executeStudyPlanOverComposedRows({
+      items: [withReason],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+
+    expect(executed.items[0]?.dedupeReason).toBe('recall-overdue');
+  });
+
+  it('always reports an empty deferred list — a composed session has no DeferredInstrument-shaped fact to restate', () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-a', ['concept-alpha'])],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+
+    expect(executed.deferred).toEqual([]);
+  });
+
+  it('is a pure function of (items, plan) — no provider, no store, no clock, and does not mutate the input array', () => {
+    const input = {
+      items: [item('i-b', ['concept-beta']), item('i-a', ['concept-alpha'])],
+      plan: plan([
+        rankedCourse('COURSE-A', [
+          ['concept-beta', 1, 0.9, 2],
+          ['concept-alpha', 2, 0.3, 30],
+        ]),
+      ]),
+    };
+
+    const first = executeStudyPlanOverComposedRows(input);
+    const second = executeStudyPlanOverComposedRows(input);
+    expect(second).toEqual(first);
+    expect(input.items.map((i) => i.instrumentId)).toEqual(['i-b', 'i-a']);
+  });
+
+  it('produces a selection context the frozen v5 record actually accepts', () => {
+    const executed = executeStudyPlanOverComposedRows({
+      items: [item('i-ranked', ['concept-alpha'])],
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+    });
+    const offered = executed.items[0];
+    if (offered === undefined) throw new Error('expected an item');
+
+    const record: ReviewLogRecordV5 = {
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'evt-1',
+      timestamp: '2026-08-16T10:00:00.000Z',
+      instrumentId: offered.instrumentId,
+      instrumentType: offered.instrumentType,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 4200,
+      selectionContext: offered.selectionContext,
+      conceptIds: [...offered.conceptIds],
+    };
+
+    const parsed = reviewLogRecordV5.parse(record);
+    expect(parsed.selectionContext.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');
   });
 });

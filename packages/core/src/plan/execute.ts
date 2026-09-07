@@ -76,6 +76,53 @@
  * Note what does **not** change: nothing is dropped, and `deferred` passes
  * through untouched. F2.17's dedupe already decided what is offered; execution
  * only decides the order of what survived it.
+ *
+ * ## Two entries: the queue's own order, and a composed session's
+ *
+ * `[SESS-8.3]` (`ol-egov.132.3`, `docs/dev/one-assembly-path.md` row 3): C5.7
+ * forbids a consumer sorting items drawn from more than one course by a
+ * ranking scalar, and F6.4 names holding one such sorted list across courses
+ * as inventing a second rule rather than avoiding it. The "Unranked items
+ * keep their order" sort above is exactly that shape, so it is not
+ * generalised — it is left exactly where it is, for exactly the caller that
+ * still needs it, and a **second, sort-free entry** is added beside it.
+ *
+ * - {@link executeStudyPlan} is unchanged. `open-session.ts` (the live "Start
+ *   today's review" command) still calls it with a `composeQueue` output
+ *   today, and its tests assert the cross-course sort's output — removing
+ *   the sort out from under that caller would silently reorder her live
+ *   session ahead of the ruling that is supposed to gate it. Row 4
+ *   (`ol-egov.132.4`) is what retires that call; until it does, this entry
+ *   keeps doing exactly what it did before this bead.
+ * - {@link executeStudyPlanOverComposedRows} is the new entry (`docs/dev/
+ *   one-assembly-path.md` §2's surviving composer, `buildComposedStudySession`
+ *   / `StudySessionItem`). It runs the identical plan join —
+ *   {@link PlannedQueueItem.selectionContext}'s `yieldRank`/`examProximity`
+ *   are filled from the plan's entry exactly as {@link executeStudyPlan}
+ *   fills them, never from anything the composition itself ranked, per this
+ *   bead's own hard constraint — but never reorders: the rows arrive in the
+ *   order the study-session composer gave them (F2.18's course blocks,
+ *   interleaved within a course) and leave in that same order.
+ *
+ * **Why the input is `QueueItem[]`, not literally `StudySessionItem[]`.**
+ * `StudySessionItem` (`study-session/build.ts`) carries no
+ * `priorState`/`selectionContext.dueState`/`instrumentTypesOffered` at all —
+ * the study-session composer never touches FSRS scheduling state, so it has
+ * nothing to put there. Those three fields are exactly what `QueueItem`
+ * already carries and this module's join needs, so the composed-rows entry
+ * takes rows in that shape and leaves translating a `StudySessionItem[]`
+ * (plus the kept vault enumeration that still knows priorState/dueState/
+ * instrumentTypesOffered per instrument) into it to row 4, the first real
+ * caller. **Reachability (`[D-072]` clause 5): nothing calls
+ * {@link executeStudyPlanOverComposedRows} yet — that is row 4's wiring, not
+ * a gap in this one.**
+ *
+ * `deferred` is always `[]` from this entry: a composed session's own build
+ * already decided what did not fit, as a `StudySessionOmission` — a
+ * different shape for a different reason ("did not fit" / "no instruments" /
+ * "already in session") than `DeferredInstrument`'s "deferred behind this
+ * other instrument", and restating one as the other would invent a fact
+ * neither shape states.
  */
 
 import type { SelectionContextV4, StudyPlanEnvelope } from 'olea-contracts';
@@ -206,18 +253,31 @@ function bestEntryFor(
   return best;
 }
 
+/** One row after the plan join, before either entry decides what order to return it in. */
+interface JoinedRow {
+  readonly entry: PlannedEntry | null;
+  readonly item: PlannedQueueItem;
+}
+
 /**
- * Execute a plan against a composed queue.
+ * The join both entries share: stamp `planVersion` onto every item and fill
+ * `selectionContext.yieldRank`/`examProximity`/`planWeight` from the plan's
+ * strongest entry for that item's concepts, or leave the queue's own values
+ * when the plan ranked none of them. See the module doc's "Joining a queue
+ * item to the plan" section for the multiplicity rules this applies.
  *
- * Pure: same `(queue, plan)` in, same `ExecutedQueue` out, always. Neither
- * argument is mutated.
+ * Order is exactly `items`' own order — neither entry may reorder here;
+ * {@link executeStudyPlan} sorts its own copy afterward, and
+ * {@link executeStudyPlanOverComposedRows} does not sort at all.
  */
-export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
-  const { queue, plan } = input;
+function joinItemsToPlan(
+  items: readonly QueueItem[],
+  plan: StudyPlanEnvelope | null,
+): { readonly rows: readonly JoinedRow[]; readonly planVersion: string | null } {
   const planVersion = plan === null ? null : plan.policyVersion;
   const index = plan === null ? new Map<string, PlannedEntry>() : indexPlan(plan);
 
-  const placed = queue.items.map((item, order) => {
+  const rows = items.map((item) => {
     const entry = bestEntryFor(item, index);
     const selectionContext: SelectionContextV4 = {
       dueState: item.selectionContext.dueState,
@@ -232,7 +292,6 @@ export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
       planVersion,
     };
     return {
-      order,
       entry,
       item: {
         instrumentId: item.instrumentId,
@@ -246,20 +305,73 @@ export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
     };
   });
 
+  return { rows, planVersion };
+}
+
+/**
+ * Execute a plan against a composed queue.
+ *
+ * Pure: same `(queue, plan)` in, same `ExecutedQueue` out, always. Neither
+ * argument is mutated. **Unchanged by `[SESS-8.3]`** — see the module doc's
+ * "Two entries" section for why this one keeps its cross-course sort while
+ * {@link executeStudyPlanOverComposedRows} does not.
+ */
+export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
+  const { queue, plan } = input;
+  const { rows, planVersion } = joinItemsToPlan(queue.items, plan);
+
   // Ranked before unranked; among ranked, by the plan's weight; ties anywhere
   // fall back to the queue's own order, which is plain FSRS due order. Sorting a
   // copy, so the caller's queue is untouched.
-  const ordered = [...placed].sort((a, b) => {
-    if ((a.entry === null) !== (b.entry === null)) return a.entry === null ? 1 : -1;
-    if (a.entry !== null && b.entry !== null && a.entry.weight !== b.entry.weight) {
-      return b.entry.weight - a.entry.weight;
-    }
-    return a.order - b.order;
-  });
+  const ordered = rows
+    .map((row, order) => ({ ...row, order }))
+    .sort((a, b) => {
+      if ((a.entry === null) !== (b.entry === null)) return a.entry === null ? 1 : -1;
+      if (a.entry !== null && b.entry !== null && a.entry.weight !== b.entry.weight) {
+        return b.entry.weight - a.entry.weight;
+      }
+      return a.order - b.order;
+    });
 
   return {
     items: ordered.map(({ item }) => item),
     deferred: queue.deferred,
+    planVersion,
+  };
+}
+
+/**
+ * `[SESS-8.3]` (`ol-egov.132.3`) — the composed-rows entry. See the module
+ * doc's "Two entries" section for the full argument; in one line: same plan
+ * join as {@link executeStudyPlan}, zero reordering.
+ */
+export interface ExecuteComposedSessionInput {
+  /**
+   * Rows in the order the study-session composer gave them (F2.18) — never
+   * reordered by this function. `QueueItem`-shaped rather than literally
+   * `StudySessionItem[]`; see the module doc for why, and for row 4
+   * (`ol-egov.132.4`) as the first real caller.
+   */
+  readonly items: readonly QueueItem[];
+  readonly plan: StudyPlanEnvelope | null;
+}
+
+/**
+ * Execute a plan against a composed session's own rows, in the order given.
+ *
+ * Pure, like {@link executeStudyPlan}, and no caller yet — see the module
+ * doc's reachability note. `deferred` is always `[]`: see the module doc for
+ * why a composed session's `StudySessionOmission`s are not restated here.
+ */
+export function executeStudyPlanOverComposedRows(
+  input: ExecuteComposedSessionInput,
+): ExecutedQueue {
+  const { items, plan } = input;
+  const { rows, planVersion } = joinItemsToPlan(items, plan);
+
+  return {
+    items: rows.map(({ item }) => item),
+    deferred: [],
     planVersion,
   };
 }
