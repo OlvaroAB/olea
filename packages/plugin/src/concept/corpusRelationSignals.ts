@@ -194,29 +194,19 @@ function conceptMentioned(text: string, concept: CorpusConcept): boolean {
  * recover most of the missed edges; see the module doc's `ol-2zfj.64`
  * paragraph for both rounds' numbers.
  *
- * **Where 4000 comes from, in plain English.** The demand model's own
- * measured note-size distribution (`docs/Olea_ai_workload_and_cost_model.md`,
- * "What the demand model has no line for" §1, `olea-service`;
- * `findings/demand-model-authoring-rate.md`) puts a typical new note's
- * *median* under ~210 bytes and its *mean* at ~2 KB, with a long tail running
- * to ~26.5 KB. 4000 characters is roughly double that mean — generous enough
- * that an ordinary lecture section fits whole, without also being large
- * enough to reproduce the 1.5 MB whole-note payload the harness's own
- * `RELATIONS_CHUNKS_PER_ENDPOINT` doc (`olea-service`,
- * `scripts/harness/playback-extraction.mjs`) named as the failure mode this
- * bound exists to avoid. It is a plain-English generosity call, not a number
- * swept or scored against an eval set — nothing here was fitted.
- *
- * **Under a sensitivity sweep, not yet run.** Now that this budget bounds a
- * WHOLE note rather than a section, the harness's own round-1c measurement
- * (same budget, whole-note mode) found the mean endpoint landing close to
- * this cap and named it "a structural-fact number that wants a sensitivity
- * sweep (4,000 / 8,000 / 16,000) before it is pinned, not a fitted value"
- * (`findings/relations-endpoint-context-2026-09-07.md`, addendum,
- * `olea-service`). That sweep is its own bead (REL-6) and has not run —
- * this value is unchanged pending it.
+ * **8000, in plain English — [REL-6.1].** The sensitivity sweep this doc
+ * once deferred has run: three whole-note endpoints, three budgets, the same
+ * candidates judged blind (`findings/relations-endpoint-context-2026-09-07.md`,
+ * "the endpoint budget sweep" addendum, `olea-service`). Precision sat at
+ * ceiling throughout — the budget was never where false edges came from —
+ * and recall rose 6, 8, 9 true edges at 4,000 / 8,000 / 16,000, a plateau
+ * above 8,000. 8,000 characters is about the length of one full lecture
+ * note, so a note that was being cut at 4,000 now arrives whole; the next
+ * doubling to 16,000 returns one more edge for twice the judge cost, which
+ * is the sweep's basis for stopping here rather than following the tail.
+ * Declared, not fitted — it moves only through a decision bead.
  */
-export const RELATIONS_ENDPOINT_CHAR_BUDGET = 4000;
+export const RELATIONS_ENDPOINT_CHAR_BUDGET = 8000;
 
 /**
  * The block in `doc.blocks` whose own `[start, end)` contains `charRange` —
