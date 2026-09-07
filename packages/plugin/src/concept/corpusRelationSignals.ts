@@ -6,17 +6,26 @@
  * mostly the same set of files, so this module does the vault work in one
  * pass rather than three.
  *
- * **`ol-2zfj.64` [REL-5]: passage text is now the anchor's SECTION, not its
- * bare block.** `gatherCorpusRelationVaultContext`'s `passageTextByName`
- * used to be a plain `content.slice(charRange.start, charRange.end)` — the
- * one anchor block, and nothing else. The pre-flight judge contrast
- * measured that this loses 41 of 49 real edges against a whole-note
- * baseline (`findings/frontier-loop-preflight-2026-09-07.md` S3,
- * `olea-service`). `sectionPassageText` (below) widens it to the anchor's
- * nearest enclosing heading and its own content, or the whole note when
- * there is no heading to key on, bounded by the declared
- * `RELATIONS_ENDPOINT_CHAR_BUDGET` — see that constant's own doc for where
- * the number comes from.
+ * **`ol-2zfj.64` [REL-5]: passage text is now the WHOLE source note, bounded
+ * by budget — not the anchor's bare block, and not only its section either.**
+ * `gatherCorpusRelationVaultContext`'s `passageTextByName` started as a plain
+ * `content.slice(charRange.start, charRange.end)` — the one anchor block, and
+ * nothing else. The pre-flight judge contrast measured that this loses 41 of
+ * 49 real edges against a whole-note baseline
+ * (`findings/frontier-loop-preflight-2026-09-07.md` S3, `olea-service`). The
+ * first fix widened it to the anchor's own SECTION (`sectionPassageText`,
+ * below) — an improvement, but the harness's own round-1b measurement found a
+ * section barely bigger than three chunks in these notes (mean 762 to 782
+ * characters) and recovering only 17 of 48 real edges. Round 1c measured the
+ * WHOLE source note truncated to the same budget (mean 2,812 characters) and
+ * recovered 30 of 48 plus 9 novel edges that hold, judge saturated at 89/89
+ * (`findings/relations-endpoint-context-2026-09-07.md`, addendum). This is
+ * the shape production now sends: `notePassageText` (below) bounds the
+ * concept's WHOLE source note to `RELATIONS_ENDPOINT_CHAR_BUDGET` characters
+ * centred on the anchor, keeping the anchor's own text intact — see that
+ * constant's own doc for where the budget number comes from.
+ * `sectionPassageText` stays exported and tested as a standalone widener;
+ * nothing in this module calls it anymore.
  *
 
  * **All three register-row-1.2a-named signals are wired, plus a fourth from
@@ -177,11 +186,13 @@ function conceptMentioned(text: string, concept: CorpusConcept): boolean {
  * charRange.end)`) that production sent until this bead — measured, in the
  * pre-flight judge contrast, to lose 41 of 49 real edges against a whole-note
  * baseline (`findings/frontier-loop-preflight-2026-09-07.md` S3,
- * `olea-service`). `sectionPassageText` below now carries the anchor's own
- * SECTION (its nearest enclosing heading's material, or the whole note when
- * there is no heading structure to key on) instead of the bare block, and
- * this budget is what keeps that section from becoming a second whole-note
- * payload for her longest notes.
+ * `olea-service`). Production now carries the concept's WHOLE source note,
+ * bounded to this budget centred on the anchor (`notePassageText`, below) —
+ * an intermediate fix widened only to the anchor's enclosing SECTION
+ * (`sectionPassageText`, kept as a tested standalone helper) before a further
+ * measurement round found the section too close to the old bare-block size to
+ * recover most of the missed edges; see the module doc's `ol-2zfj.64`
+ * paragraph for both rounds' numbers.
  *
  * **Where 4000 comes from, in plain English.** The demand model's own
  * measured note-size distribution (`docs/Olea_ai_workload_and_cost_model.md`,
@@ -195,6 +206,15 @@ function conceptMentioned(text: string, concept: CorpusConcept): boolean {
  * `scripts/harness/playback-extraction.mjs`) named as the failure mode this
  * bound exists to avoid. It is a plain-English generosity call, not a number
  * swept or scored against an eval set — nothing here was fitted.
+ *
+ * **Under a sensitivity sweep, not yet run.** Now that this budget bounds a
+ * WHOLE note rather than a section, the harness's own round-1c measurement
+ * (same budget, whole-note mode) found the mean endpoint landing close to
+ * this cap and named it "a structural-fact number that wants a sensitivity
+ * sweep (4,000 / 8,000 / 16,000) before it is pinned, not a fitted value"
+ * (`findings/relations-endpoint-context-2026-09-07.md`, addendum,
+ * `olea-service`). That sweep is its own bead (REL-6) and has not run —
+ * this value is unchanged pending it.
  */
 export const RELATIONS_ENDPOINT_CHAR_BUDGET = 4000;
 
@@ -297,11 +317,13 @@ function boundAroundAnchor(
 
 /**
  * `ol-2zfj.64` [REL-5]. The anchor block's own passage text, widened to its
- * SURROUNDING SECTION and bounded by `budget` — the fix this bead makes for
- * the payload production actually sends (`WorkerCorpusRelationVerdict.
- * toWireEndpoint`, `packages/plugin/src/concept/
- * workerCorpusRelationVerdict.ts`, still `sourceChunks: [passageText]`, ONE
- * entry; only what that one entry carries changes here).
+ * SURROUNDING SECTION and bounded by `budget`. This was the first fix this
+ * bead made for the payload production sends — production has since moved on
+ * to `notePassageText` (below), which widens to the WHOLE source note rather
+ * than only its section (see the module doc's `ol-2zfj.64` paragraph for the
+ * measurement that moved it). Kept exported and tested as a standalone
+ * section-widener for any future caller that wants a section rather than a
+ * whole note; nothing in this module calls it anymore.
  *
  * "Section" is the anchor's nearest enclosing heading's own material — the
  * heading line plus the content directly under it, NOT nested subsections
@@ -352,6 +374,51 @@ export function sectionPassageText(
   };
 
   return boundAroundAnchor(content, section, charRange, budget);
+}
+
+/**
+ * `ol-2zfj.64` [REL-5]. The concept's WHOLE source note, bounded by `budget`
+ * characters centred on the anchor — what production actually calls now
+ * (`gatherCorpusRelationVaultContext`'s `passageTextByName`, feeding
+ * `WorkerCorpusRelationVerdict.toWireEndpoint`'s `sourceChunks: [passageText]`,
+ * still one entry; only what that entry carries changes here). See the
+ * module doc's `ol-2zfj.64` paragraph for the measurement that moved
+ * production from `sectionPassageText` to this: the section was barely wider
+ * than three chunks in these notes and recovered only 17 of 48 real missed
+ * edges, where the whole note under the same budget recovered 30 plus 9
+ * novel edges.
+ *
+ * A concept with no note of its own — its anchor is a stub heading inside a
+ * shared course note, not a dedicated zettelkasten note — still gets a real
+ * note's worth of text here, never a bare heading: `content` is always
+ * `concept.anchor.sourcePath`'s own text, the note the concept was actually
+ * *extracted from*, whatever kind of note that is (`[D-068]`; see the module
+ * doc's "why this scans every concept's OWN anchor passage" paragraph for the
+ * identical reasoning applied to the `her-link` signal). There is no separate
+ * "does this concept have its own note" branch — the whole-note rule already
+ * reads the one note `anchor.sourcePath` names, in full, for every concept.
+ *
+ * This is `boundAroundAnchor` with the "section" widened to the entire note
+ * (`[0, content.length)`) rather than an enclosing heading's material: the
+ * anchor is never dropped, and never itself truncated unless it alone
+ * exceeds `budget`; context comes symmetrically from both sides of the
+ * anchor, and a side that runs out of room first hands its leftover budget to
+ * the other. Mirrors `scripts/harness/playback-extraction.mjs`'s
+ * `centeredTruncateAroundAnchor` (`olea-service`) exactly — that function is
+ * the harness's own copy of this same rule, built for a replay path with no
+ * `charRange` to key `parseDocument` on, so it works from `text.length`
+ * directly rather than composing with `boundAroundAnchor`. Unlike
+ * `sectionPassageText`, there is no document-parsing degrade path to fall
+ * off of: a whole note needs no outline, so any `charRange` within
+ * `[0, content.length)` — including a hand-built one that straddles two
+ * blocks — truncates correctly.
+ */
+export function notePassageText(
+  content: string,
+  charRange: { readonly start: number; readonly end: number },
+  budget: number = RELATIONS_ENDPOINT_CHAR_BUDGET,
+): string {
+  return boundAroundAnchor(content, { start: 0, end: content.length }, charRange, budget);
 }
 
 export interface AssessmentCooccurrenceOptions {
@@ -596,13 +663,15 @@ export async function gatherCorpusRelationVaultContext(
     // `charRange` is optional (`../../core/src/extract/types.js`, `ol-2zfj.54`); every anchor a
     // concept actually gets is one block's real `[start, end)` (see the module doc above), so
     // this is never absent in practice — but a nomination signal degrades honestly rather than
-    // throwing if it ever is, by falling back to the whole passage's text (bounded, same as the
-    // ordinary path below — see `RELATIONS_ENDPOINT_CHAR_BUDGET`'s own doc for why an unbounded
-    // whole note was never the fix).
+    // throwing if it ever is, by falling back to the note's own text bounded from its start
+    // (still never an unbounded whole note — see `RELATIONS_ENDPOINT_CHAR_BUDGET`'s own doc for
+    // why that was never the fix). The ordinary path is `notePassageText`, [REL-5]'s whole-note,
+    // budget-bounded rule — see the module doc's `ol-2zfj.64` paragraph for why this superseded
+    // `sectionPassageText`.
     const charRange = concept.anchor.location.charRange;
     const passageText =
       charRange !== undefined
-        ? sectionPassageText(content, charRange)
+        ? notePassageText(content, charRange)
         : content.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
     passageTextByName.set(concept.name, passageText);
 

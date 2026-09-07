@@ -24,6 +24,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import {
   gatherCorpusRelationVaultContext,
+  notePassageText,
   RELATIONS_ENDPOINT_CHAR_BUDGET,
   sectionPassageText,
 } from '../../src/concept/corpusRelationSignals.js';
@@ -65,54 +66,81 @@ function concept(name: string, sourcePath: VaultPath, range: [number, number]): 
   };
 }
 
-describe('gatherCorpusRelationVaultContext — passage text', () => {
+describe('gatherCorpusRelationVaultContext — passage text (`ol-2zfj.64` [REL-5])', () => {
+  it('the whole note passes through unchanged when it is under budget, no heading structure to key on', async () => {
+    const note = '0123456789Type I error is a false positive.';
+    const vault = new MemoryVault({ 'Note.md': note });
+    const c = concept('Type I error', 'Note.md', [10, 43]);
+
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+
+    expect(passageTextByName.get('Type I error')).toBe(note);
+  });
+
+  it('the whole note passes through unchanged when under budget, INCLUDING a sibling heading a section-widener would exclude', async () => {
+    const note = [
+      '# Errors',
+      '',
+      '## Type I',
+      '',
+      'A Type I error is a false positive.',
+      '',
+      '## Type II',
+      '',
+      'A Type II error is a false negative.',
+      '',
+    ].join('\n');
+    const anchorStart = note.indexOf('A Type I error');
+    const anchorEnd = anchorStart + 'A Type I error is a false positive.'.length;
+    const vault = new MemoryVault({ 'Note.md': note });
+    const c = concept('Type I error', 'Note.md', [anchorStart, anchorEnd]);
+
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+
+    // Whole-note behaviour: unlike `sectionPassageText`'s own widening (see that describe
+    // block below), the WHOLE note comes back, sibling "Type II" section included.
+    expect(passageTextByName.get('Type I error')).toBe(note);
+  });
+
   it(
-    'widens to the whole note when the anchor sits in a note with no heading structure ' +
-      '(no section boundary to key on — `ol-2zfj.64` [REL-5])',
-    async () => {
-      const note = '0123456789Type I error is a false positive.';
-      const vault = new MemoryVault({ 'Note.md': note });
-      const c = concept('Type I error', 'Note.md', [10, 43]);
-
-      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
-
-      expect(passageTextByName.get('Type I error')).toBe(note);
-    },
-  );
-
-  it(
-    'widens the anchor block to its own SECTION (nearest enclosing heading) rather than a ' +
-      "sibling section's material — `ol-2zfj.64` [REL-5]",
+    'a concept with no note of its own — its anchor is a heading inside a note shared with ' +
+      'other concepts — gets that WHOLE source note, never a bare heading stub',
     async () => {
       const note = [
-        '# Errors',
+        '# Course notes',
         '',
-        '## Type I',
+        '## Type I error',
         '',
         'A Type I error is a false positive.',
         '',
-        '## Type II',
+        '## Type II error',
         '',
         'A Type II error is a false negative.',
         '',
       ].join('\n');
-      const anchorStart = note.indexOf('A Type I error');
-      const anchorEnd = anchorStart + 'A Type I error is a false positive.'.length;
-      const vault = new MemoryVault({ 'Note.md': note });
-      const c = concept('Type I error', 'Note.md', [anchorStart, anchorEnd]);
+      const vault = new MemoryVault({ 'Course notes.md': note });
+      const type1Start = note.indexOf('A Type I error');
+      const type1End = type1Start + 'A Type I error is a false positive.'.length;
+      const type2Start = note.indexOf('A Type II error');
+      const type2End = type2Start + 'A Type II error is a false negative.'.length;
+      // Neither concept has a dedicated note of its own — both are anchored to a heading
+      // inside the SAME shared course note. The source note is the note each was extracted
+      // from, per `notePassageText`'s own doc — never each concept's own heading in isolation.
+      const concepts = [
+        concept('Type I error', 'Course notes.md', [type1Start, type1End]),
+        concept('Type II error', 'Course notes.md', [type2Start, type2End]),
+      ];
 
-      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+      const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, concepts);
 
-      const passage = passageTextByName.get('Type I error');
-      expect(passage).toContain('## Type I');
-      expect(passage).toContain('A Type I error is a false positive.');
-      expect(passage).not.toContain('Type II');
+      expect(passageTextByName.get('Type I error')).toBe(note);
+      expect(passageTextByName.get('Type II error')).toBe(note);
     },
   );
 
   it(
-    'bounds the widened section to `RELATIONS_ENDPOINT_CHAR_BUDGET` characters, always keeping ' +
-      "the anchor's own text intact — `ol-2zfj.64` [REL-5]",
+    'over-budget: truncates around the anchor to `RELATIONS_ENDPOINT_CHAR_BUDGET` characters, ' +
+      "always keeping the anchor's own text intact",
     async () => {
       const filler = 'x'.repeat(RELATIONS_ENDPOINT_CHAR_BUDGET * 2);
       const anchorText = 'A Type I error is a false positive.';
@@ -163,6 +191,46 @@ describe('gatherCorpusRelationVaultContext — passage text', () => {
 });
 
 describe('sectionPassageText — the standalone widener (`ol-2zfj.64` [REL-5])', () => {
+  // Production no longer calls this helper (see `notePassageText` and the describe block
+  // below), but it stays exported for any future caller that wants a section rather than a
+  // whole note, so its own behaviour stays covered directly rather than through the gatherer.
+
+  it(
+    "widens to the anchor's own SECTION (nearest enclosing heading), excluding a sibling " +
+      'section — the behaviour `gatherCorpusRelationVaultContext` used before this bead moved ' +
+      'production to `notePassageText`',
+    () => {
+      const note = [
+        '# Errors',
+        '',
+        '## Type I',
+        '',
+        'A Type I error is a false positive.',
+        '',
+        '## Type II',
+        '',
+        'A Type II error is a false negative.',
+        '',
+      ].join('\n');
+      const anchorStart = note.indexOf('A Type I error');
+      const anchorEnd = anchorStart + 'A Type I error is a false positive.'.length;
+
+      const result = sectionPassageText(note, { start: anchorStart, end: anchorEnd });
+
+      expect(result).toContain('## Type I');
+      expect(result).toContain('A Type I error is a false positive.');
+      expect(result).not.toContain('Type II');
+    },
+  );
+
+  it('widens to the whole note when the anchor sits before any heading, or the note has none at all', () => {
+    const note = '0123456789Type I error is a false positive.';
+
+    const result = sectionPassageText(note, { start: 10, end: 43 });
+
+    expect(result).toBe(note);
+  });
+
   it('degrades to the bare charRange slice when nothing in the note contains it exactly', () => {
     // A hand-built charRange that straddles two blocks — not the "one anchor is one block"
     // shape `../read.js` guarantees in production — so there is no section to widen to.
@@ -184,6 +252,66 @@ describe('sectionPassageText — the standalone widener (`ol-2zfj.64` [REL-5])',
     const end = start + anchorText.length;
 
     const result = sectionPassageText(note, { start, end }, 100);
+
+    expect(result.length).toBeLessThanOrEqual(100);
+    expect(result).toContain(anchorText);
+  });
+});
+
+describe('notePassageText — the whole-note bounder (`ol-2zfj.64` [REL-5])', () => {
+  it('returns the whole note unchanged when it is under budget, heading structure and all', () => {
+    const note = [
+      '# Errors',
+      '',
+      '## Type I',
+      '',
+      'A Type I error is a false positive.',
+      '',
+      '## Type II',
+      '',
+      'A Type II error is a false negative.',
+      '',
+    ].join('\n');
+    const anchorStart = note.indexOf('A Type I error');
+    const anchorEnd = anchorStart + 'A Type I error is a false positive.'.length;
+
+    const result = notePassageText(note, { start: anchorStart, end: anchorEnd });
+
+    expect(result).toBe(note);
+  });
+
+  it("truncates an over-budget note, centred on the anchor, always keeping the anchor's own text intact", () => {
+    const filler = 'x'.repeat(RELATIONS_ENDPOINT_CHAR_BUDGET * 2);
+    const anchorText = 'A Type I error is a false positive.';
+    const note = ['# Errors', '', filler, '', anchorText, '', filler, ''].join('\n');
+    const start = note.indexOf(anchorText);
+    const end = start + anchorText.length;
+
+    const result = notePassageText(note, { start, end });
+
+    expect(result.length).toBeLessThanOrEqual(RELATIONS_ENDPOINT_CHAR_BUDGET);
+    expect(result).toContain(anchorText);
+  });
+
+  it("truncates to the anchor's own text when the anchor alone exceeds the budget", () => {
+    const anchorText = 'y'.repeat(200);
+    const note = `${'x'.repeat(50)}${anchorText}${'x'.repeat(50)}`;
+    const start = note.indexOf(anchorText);
+    const end = start + anchorText.length;
+
+    const result = notePassageText(note, { start, end }, 100);
+
+    expect(result.length).toBe(100);
+    expect(result).toBe(note.slice(start, start + 100));
+  });
+
+  it('accepts a caller-supplied budget rather than always using the module default', () => {
+    const anchorText = 'A Type I error is a false positive.';
+    const note = ['x'.repeat(500), anchorText, 'y'.repeat(500)].join('\n');
+    const start = note.indexOf(anchorText);
+    const end = start + anchorText.length;
+
+    const result = notePassageText(note, { start, end }, 100);
 
     expect(result.length).toBeLessThanOrEqual(100);
     expect(result).toContain(anchorText);
