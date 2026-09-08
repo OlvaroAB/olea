@@ -318,6 +318,7 @@ import {
 } from './build.js';
 import type { DurationModel } from './duration.js';
 import type { ConceptInstrumentIndex } from './instrument-index.js';
+import type { WindowDeficitEntry } from './window.js';
 
 const SECONDS_PER_MINUTE = 60;
 
@@ -1068,12 +1069,19 @@ function fillWholeGroups(
  * applied upstream, before classification) without itself settling
  * dominance, so the hierarchy continues to urgency/deficit over just the
  * named courses.
+ *
+ * `deficitByCourse` is generic over WHICH deficit reading fed it —
+ * `[FOCUS-3b]`'s real session-denominated {@link WindowDeficitEntry.deficit}
+ * when a caller supplied {@link ComposeSessionRowsInput.windowDeficit}, or
+ * this module's own days-since-last-seen substitute otherwise (see
+ * {@link composeFocusedSelection}'s call site). Both scales agree that
+ * "bigger is more owed"; only the ordering matters here.
  */
 function selectDominantCourse(
   eligibleCourses: readonly string[],
   courseFilter: readonly string[] | undefined,
   urgencyByCourse: ReadonlyMap<string, number>,
-  deficitDaysByCourse: ReadonlyMap<string, number>,
+  deficitByCourse: ReadonlyMap<string, number>,
 ): { readonly course: string; readonly branch: FocusBranch } | undefined {
   if (eligibleCourses.length === 0) return undefined;
 
@@ -1100,7 +1108,7 @@ function selectDominantCourse(
 
   let byDeficit: { readonly course: string; readonly value: number } | undefined;
   for (const course of eligibleCourses) {
-    const deficit = deficitDaysByCourse.get(course) ?? 0;
+    const deficit = deficitByCourse.get(course) ?? 0;
     if (
       byDeficit === undefined ||
       deficit > byDeficit.value ||
@@ -1122,6 +1130,13 @@ function selectDominantCourse(
  * on `courseId` for determinism. Returns `undefined` when no candidate's
  * first group is both affordable and warranted — "at most one second
  * course", never a forced admission.
+ *
+ * `forcedSet` is the set of courses whose deficit door is open — `[FOCUS-3b]`
+ * (`ol-ulj7`)'s real, positive session-denominated window deficit when a
+ * caller supplied {@link ComposeSessionRowsInput.windowDeficit}, or this
+ * module's own days-since-last-seen substitute ({@link forcedCoursesFor})
+ * otherwise — see {@link composeFocusedSelection}'s call site for which one
+ * built it.
  */
 function selectSecondCourse(
   candidates: readonly string[],
@@ -1155,8 +1170,8 @@ function selectSecondCourse(
       urgent.push({ course, group: firstGroup, value: urgency });
     } else if (forcedSet.has(course)) {
       // Clause 3, deficit door: the window can no longer pay this course's
-      // floor later — reusing `forcedCoursesFor`'s own threshold (this
-      // module's existing C5.6 substitute), never a new constant.
+      // floor later — `forcedSet` names which reading decided that, see this
+      // function's own doc.
       owed.push({ course, group: firstGroup });
     }
     // Neither door open: clause 3 fails and the candidate is not warranted.
@@ -1228,6 +1243,15 @@ interface FocusedSelectionResult {
  * (`eligibleCourses.length === 0`) — `composeSessionRows`'s caller falls back
  * to the ordinary (empty either way) path in that one degenerate case; see
  * the call site's comment for why the two are provably equivalent there.
+ *
+ * `windowDeficit` is `[FOCUS-3b]`'s (`ol-ulj7`) real, session-denominated
+ * D-092 window reading (`./window.js`'s `computeWindowDeficit`), read off her
+ * review log by the caller. **Optional, and its absence is byte-identical to
+ * this bead** — both places that would read it (the deficit branch's
+ * ordering below, and the second-course deficit door) fall back to this
+ * module's own days-since-last-seen substitute exactly as before this bead.
+ * Never read for urgency, and never for eligibility (eligibility is read at
+ * the row-set level regardless — see the module doc's eligibility note).
  */
 function composeFocusedSelection(
   policy: 'focused' | 'single',
@@ -1240,14 +1264,21 @@ function composeFocusedSelection(
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
   arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+  windowDeficit: ReadonlyMap<string, WindowDeficitEntry> | undefined,
 ): FocusedSelectionResult | undefined {
   const urgencyByCourse = urgencyByCourseFrom(allocation);
-  const deficitDaysByCourse = deficitDaysByCourseFrom(byCourse, asOf);
+  // `[FOCUS-3b]`: the real window projection, when supplied, REPLACES the
+  // days-since-last-seen substitute for ordering the deficit branch — never
+  // compounds with it. Absent, this is byte-identical to before this bead.
+  const deficitByCourse: ReadonlyMap<string, number> =
+    windowDeficit !== undefined
+      ? new Map([...windowDeficit].map(([course, entry]) => [course, entry.deficit]))
+      : deficitDaysByCourseFrom(byCourse, asOf);
   const dominantPick = selectDominantCourse(
     courses,
     courseFilter,
     urgencyByCourse,
-    deficitDaysByCourse,
+    deficitByCourse,
   );
   if (dominantPick === undefined) return undefined;
   const { course: dominantCourse, branch } = dominantPick;
@@ -1275,7 +1306,19 @@ function composeFocusedSelection(
   if (policy === 'focused') {
     const remaining = budgetSeconds - dominantSpent;
     if (remaining > 0) {
-      const forcedSet = new Set(forcedCoursesFor(byCourse, asOf, courses.length));
+      // `[FOCUS-3b]`: the deficit door opens on a REAL positive accrued
+      // deficit when `windowDeficit` was supplied — never on the days
+      // substitute's own "never seen" tie-break, which is exactly the
+      // FOCUS-4c finding this bead exists to fix (both of that sweep's
+      // second-course admissions traced to the tie-break, never to accrued
+      // debt). Falls back to `forcedCoursesFor`'s threshold, byte-identical
+      // to before this bead, when `windowDeficit` is absent.
+      const forcedSet =
+        windowDeficit !== undefined
+          ? new Set(
+              [...windowDeficit].filter(([, entry]) => entry.deficit > 0).map(([course]) => course),
+            )
+          : new Set(forcedCoursesFor(byCourse, asOf, courses.length));
       const candidates = courses.filter((c) => c !== dominantCourse);
       const pick = selectSecondCourse(
         candidates,
@@ -1471,6 +1514,25 @@ export interface ComposeSessionRowsInput {
    */
   readonly focusPolicy?: FocusPolicy;
   /**
+   * `[FOCUS-3b]` (`ol-ulj7`, discovered from `ol-egov.137.5` [FOCUS-4c]):
+   * D-092's real, session-denominated window deficit
+   * (`./window.js`'s `computeWindowDeficit`), read off her review log by the
+   * caller. **Optional, and its absence is the exact behaviour FOCUS-3
+   * already shipped**: `composeFocusedSelection` falls back to this module's
+   * own days-since-last-seen substitute
+   * ({@link forcedCourseFloorDays}/{@link deficitDaysByCourseFrom}) exactly
+   * as before this bead — see the module doc's "C5.6's rolling floor" note
+   * for why that substitute exists and FOCUS-4c's finding for its known gap
+   * (a course starving 13-14 sessions while the substitute never read past a
+   * 2-day deficit). Read for TWO of item 1/2's tests only, when
+   * `focusPolicy !== 'every-course'`: the deficit branch's dominant-course
+   * ordering, and the second-course deficit door — never for urgency, and
+   * never for eligibility (a refused course is read at the row-set level
+   * regardless, both here and inside `./window.js`'s own history — see that
+   * module's doc).
+   */
+  readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
+  /**
    * C7.9 containment co-presence (register row 3.7; `[SESS-11]`,
    * `ol-egov.132.12`) — `part-of` edges available at composition time,
    * applied to `rows` before anything else runs. **Omitted means none, which
@@ -1577,6 +1639,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     courses: courseFilter,
     conceptIds: conceptIdFilter,
     allocation,
+    windowDeficit,
   } = input;
   const focusPolicy = input.focusPolicy ?? 'every-course';
 
@@ -1647,6 +1710,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
           relatedConceptKeys,
           assessmentContext,
           arrivalDays,
+          windowDeficit,
         );
 
   let shares: ReadonlyMap<string, number>;
@@ -1789,6 +1853,8 @@ export interface BuildComposedStudySessionInput
   readonly allocation?: readonly StudyPlanAllocationEntry[];
   /** `[D-244]` (`[FOCUS-3]`) — see `ComposeSessionRowsInput.focusPolicy`, passed straight through. Defaults to `'every-course'`. */
   readonly focusPolicy?: FocusPolicy;
+  /** `[FOCUS-3b]` (`ol-ulj7`) — see `ComposeSessionRowsInput.windowDeficit`, passed straight through. */
+  readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
   /** C7.9 (`[SESS-11]`) — see `ComposeSessionRowsInput.relations`, passed straight through. */
   readonly relations?: readonly ConceptRelation[];
 }
@@ -1914,6 +1980,7 @@ export function buildComposedStudySession(
     ...(input.allocation !== undefined ? { allocation: input.allocation } : {}),
     ...(input.conceptIds !== undefined ? { conceptIds: input.conceptIds } : {}),
     ...(input.focusPolicy !== undefined ? { focusPolicy: input.focusPolicy } : {}),
+    ...(input.windowDeficit !== undefined ? { windowDeficit: input.windowDeficit } : {}),
     ...(input.relations !== undefined ? { relations: input.relations } : {}),
   });
 

@@ -1751,6 +1751,17 @@ export {
 // fold itself before this.
 export type { GradedReviewEvidence } from './study-session/support-level-signal.js';
 export { deriveFailureShape } from './study-session/support-level-signal.js';
+// `[FOCUS-3b]` (`ol-ulj7`): D-092's real, session-denominated window
+// deficit — see window.ts's module doc for what it is (pure arithmetic over
+// an already-clustered per-session history) and is not (it does not cluster
+// the review log itself; C5.5's own clustering rule has no implementation
+// anywhere in this codebase yet).
+export type { PastSessionRecord, WindowDeficitEntry } from './study-session/window.js';
+export {
+  computeWindowDeficit,
+  WINDOW_SLACK_SESSIONS,
+  windowWidthSessions,
+} from './study-session/window.js';
 // Support-level ladder (register row 3.9, `ol-ry2k`, `[D-094]`) — session-boundary
 // transitions only; self-assessment adjusts the offer, never the persisted level.
 export {

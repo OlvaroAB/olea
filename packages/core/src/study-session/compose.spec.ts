@@ -40,6 +40,7 @@ import {
 } from './compose.js';
 import type { DurationModel } from './duration.js';
 import { buildConceptInstrumentIndex } from './instrument-index.js';
+import { computeWindowDeficit, type PastSessionRecord } from './window.js';
 
 const AS_OF = '2026-09-14';
 
@@ -2428,6 +2429,204 @@ describe('[FOCUS-3] focusPolicy', () => {
     expect(FOCUS_BRANCH_SENTENCE.deficit).toBe(
       'because it is behind its share from your recent sessions',
     );
+  });
+});
+
+// `[FOCUS-3b]` (`ol-ulj7`, discovered from `ol-egov.137.5` [FOCUS-4c]): D-092's
+// real, session-denominated window deficit (`./window.js`) replaces the days
+// substitute for the deficit branch's ordering and the second-course deficit
+// door. Scenarios: `features/F6-today.md` (olea-service), the C5.6 block
+// added by this bead.
+describe('[FOCUS-3b] windowDeficit replaces the days substitute', () => {
+  function pastSession(
+    day: string,
+    eligibleCourses: readonly string[],
+    received: Readonly<Record<string, number>>,
+    entitlement: Readonly<Record<string, number>>,
+  ): PastSessionRecord {
+    return {
+      asOf: day,
+      eligibleCourses,
+      received: new Map(Object.entries(received)),
+      entitlement: new Map(Object.entries(entitlement)),
+    };
+  }
+
+  it('a course absent for courses + 1 sessions reads the largest deficit and becomes dominant, overriding the days-substitute tie', () => {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    // Both courses last reviewed on the SAME day — the days substitute would
+    // tie and break the tie on courseId (ALPHA wins). The window projection
+    // must override that: BETA has gone every one of the last 4 sessions
+    // (2 running courses + slack 2, D-092's own width) without a single one,
+    // despite an equal 0.5 entitlement each time — a real, accruing deficit.
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+    });
+    const history: PastSessionRecord[] = [
+      pastSession('2026-08-25', ['ALPHA', 'BETA'], { ALPHA: 300 }, { ALPHA: 0.5, BETA: 0.5 }),
+      pastSession('2026-08-27', ['ALPHA', 'BETA'], { ALPHA: 300 }, { ALPHA: 0.5, BETA: 0.5 }),
+      pastSession('2026-08-29', ['ALPHA', 'BETA'], { ALPHA: 300 }, { ALPHA: 0.5, BETA: 0.5 }),
+      pastSession('2026-09-01', ['ALPHA', 'BETA'], { ALPHA: 300 }, { ALPHA: 0.5, BETA: 0.5 }),
+    ];
+    const windowDeficit = computeWindowDeficit(
+      history,
+      ['ALPHA', 'BETA'],
+      new Map([
+        ['ALPHA', 0.5],
+        ['BETA', 0.5],
+      ]),
+    );
+    // Sanity: BETA's reading really is the larger, real deficit this test
+    // relies on — not an artefact of the fixture.
+    expect(
+      (windowDeficit.get('BETA')?.deficit ?? 0) > (windowDeficit.get('ALPHA')?.deficit ?? 0),
+    ).toBe(true);
+
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('BETA');
+    expect(result.focusBranch).toBe('deficit');
+  });
+
+  it('a refused (ineligible) historical session accrues nothing toward the deficit', () => {
+    // GAMMA is refused every session in its history (absent from
+    // eligibleCourses) — its window deficit must read 0, not "owed and
+    // unpaid", per `[D-244]` item 2's "deficit does not accrue while
+    // refused".
+    const history: PastSessionRecord[] = [
+      pastSession('2026-08-25', ['ALPHA'], { ALPHA: 600 }, { ALPHA: 1 }),
+      pastSession('2026-08-27', ['ALPHA'], { ALPHA: 600 }, { ALPHA: 1 }),
+      pastSession('2026-08-29', ['ALPHA'], { ALPHA: 600 }, { ALPHA: 1 }),
+      pastSession('2026-09-01', ['ALPHA'], { ALPHA: 600 }, { ALPHA: 1 }),
+    ];
+    const windowDeficit = computeWindowDeficit(
+      history,
+      ['ALPHA', 'GAMMA'],
+      new Map([['ALPHA', 1]]),
+    );
+
+    expect(windowDeficit.get('GAMMA')?.deficit).toBe(0);
+  });
+
+  describe('the second-course deficit door opens on a real deficit, never on a never-served tie', () => {
+    it('stays shut when no candidate has any accrued history (a cold-start tie the days substitute would have opened)', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // ALPHA still dominant on urgency-less deficit-days
+        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      });
+      // No history at all for either course — `computeWindowDeficit` reads
+      // deficit 0 for both (no data, no accrued debt), unlike the days
+      // substitute's own "+Infinity, never seen" reading that FOCUS-4c found
+      // forces a tie-break admission.
+      const windowDeficit = computeWindowDeficit([], ['ALPHA', 'BETA'], new Map());
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(200),
+        asOf: AS_OF,
+        budgetSeconds: 500,
+        focusPolicy: 'focused',
+        windowDeficit,
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBeUndefined();
+      expect(result.secondCourseDoor).toBeUndefined();
+    });
+
+    it('opens when the candidate carries a real, positive accrued deficit', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      });
+      // ALPHA carries the LARGER real deficit (stays dominant, branch
+      // "deficit"), and BETA carries a smaller but still strictly POSITIVE
+      // real deficit — the second-course door tests only "is it owed
+      // something real", not "is it owed the most".
+      const windowDeficit = new Map([
+        ['ALPHA', { deficit: 5, sessionsSinceLastServed: 10 }],
+        ['BETA', { deficit: 1, sessionsSinceLastServed: 6 }],
+      ]);
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        // 200s per concept: comfortably clears MIN_BLOCK_SECONDS (180).
+        durations: flatDurations(200),
+        asOf: AS_OF,
+        budgetSeconds: 500,
+        focusPolicy: 'focused',
+        windowDeficit,
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBe('BETA');
+      expect(result.secondCourseDoor).toBe('deficit');
+    });
+  });
+
+  it('every-course (the flag omitted) is byte-identical whether or not windowDeficit is supplied — the every-course arm never reads it', () => {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const base = {
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+    };
+    const windowDeficit = computeWindowDeficit(
+      [pastSession('2026-08-01', ['ALPHA', 'BETA'], { ALPHA: 600 }, { ALPHA: 0.5, BETA: 0.5 })],
+      ['ALPHA', 'BETA'],
+      new Map([
+        ['ALPHA', 0.5],
+        ['BETA', 0.5],
+      ]),
+    );
+
+    const withoutIt = composeSessionRows(base);
+    const withIt = composeSessionRows({ ...base, windowDeficit });
+
+    expect(withIt.orderedRows).toEqual(withoutIt.orderedRows);
+    expect(withIt.courseShares).toEqual(withoutIt.courseShares);
+    expect(withIt.courseSeconds).toEqual(withoutIt.courseSeconds);
+    expect(Object.keys(withIt).sort()).not.toContain('dominantCourse');
+    expect(Object.keys(withIt).sort()).not.toContain('focusPolicy');
   });
 });
 
