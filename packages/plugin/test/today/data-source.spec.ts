@@ -28,10 +28,17 @@
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
-import type { ConceptRelation, StudyPlanStore, VaultSource } from 'olea-core';
-import { createFsrsScheduler, provisionalConceptKey } from 'olea-core';
+import type {
+  ComposedStudySession,
+  ConceptRelation,
+  StudyPlanStore,
+  StudySessionItem,
+  VaultSource,
+} from 'olea-core';
+import { calendarDayFromLocalDate, createFsrsScheduler, provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
+import { createStudySessionHolder } from '../../src/session/holder.js';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
@@ -625,6 +632,225 @@ describe('createVaultInstrumentSource — the seam, closed', () => {
       expect(due?.every((d) => d.courseCode === 'MUS101')).toBe(true);
       expect(due).toHaveLength(1);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[SESS-8.5]` (`ol-egov.132.5`, `docs/dev/one-assembly-path.md` §3a/§3c):
+// Today reads the one composed-session holder Home and the review tab read,
+// rather than running its own `buildReviewSession` selection. Everything
+// above this point drives the LEGACY, no-holder-supplied path unchanged
+// (`createVaultInstrumentSource`'s own doc: it survives for callers that
+// have not migrated — the workbench and the simulator).
+// ---------------------------------------------------------------------------
+
+/**
+ * A minimal, hand-built `ComposedStudySession` naming exactly which
+ * instruments and courses this suite wants Today to count — the same
+ * "state it, do not re-derive the composer's own selection" posture
+ * `open-session.spec.ts`'s `composedSessionFixture` documents. Every field
+ * this suite never reads (`courseShares`/`forcedCourses`/`overflow`, the
+ * model's `leftOut`/`nextAssessment`/…) is a harmless, unused default.
+ */
+function fixtureComposedSession(
+  items: ReadonlyArray<{
+    readonly instrumentId: string;
+    readonly course: string;
+    readonly obligationClass?: StudySessionItem['obligationClass'];
+  }>,
+  now: Date,
+): ComposedStudySession {
+  const modelItems: StudySessionItem[] = items.map((item, index) => ({
+    position: index + 1,
+    instrumentId: item.instrumentId,
+    instrumentType: 'qa',
+    notePath: `Courses/${item.course}/note-${index}.md`,
+    noteTitle: `Note ${index}`,
+    conceptName: `Concept ${index}`,
+    course: item.course,
+    gapClass: 'coverage-gap',
+    gapRank: index + 1,
+    gapScore: 1,
+    estimatedSeconds: 60,
+    durationSource: 'assumed',
+    formatMatch: 'no-preference',
+    ...(item.obligationClass !== undefined ? { obligationClass: item.obligationClass } : {}),
+  }));
+  return {
+    model: {
+      asOf: calendarDayFromLocalDate(now),
+      budgetMinutes: 20,
+      budgetSeconds: 1200,
+      plannedSeconds: modelItems.length * 60,
+      items: modelItems,
+      leftOut: [],
+      leftOutInstrumentCount: 0,
+      consideredRowCount: modelItems.length,
+      formatPreference: 'unknown',
+      nextAssessment: null,
+      durationBasis: 'assumed',
+      focusConcept: null,
+    },
+    overflow: [],
+    courseShares: new Map(),
+    forcedCourses: [],
+    obligationClasses: new Map(),
+    // `[SESS-11]` (`ol-egov.132.12`): this suite never composes anything for
+    // containment to drop — an empty, honest default, not a claim about the
+    // filter's real behaviour.
+    containmentDropped: [],
+  };
+}
+
+describe('createVaultInstrumentSource — [SESS-8.5] reading the shared composition', () => {
+  const now = () => new Date(2026, 7, 10, 9, 15);
+
+  /** Fails loudly if reached — the same guard `open-session.spec.ts` uses for its "should not be reachable" fixtures. */
+  const composeDefaultStudySessionUnreachable = (): Promise<ComposedStudySession | null> => {
+    throw new Error(
+      'data-source.spec: composeDefaultStudySession should not be reachable — this fixture pre-seeds an active holder',
+    );
+  };
+
+  it('counts the held composition when the holder is already active, and never re-enters it', async () => {
+    const holder = createStudySessionHolder();
+    const composed = fixtureComposedSession(
+      [
+        { instrumentId: 'qa:alpha:1', course: 'GEO101', obligationClass: 'unmet' },
+        { instrumentId: 'qa:beta:1', course: 'MUS101', obligationClass: 'recall-due' },
+        { instrumentId: 'qa:gamma:1', course: 'GEO101', obligationClass: 'baseline-due' },
+      ],
+      now(),
+    );
+    holder.enter(now(), composed);
+    const sittingBefore = holder.getSitting();
+
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
+    });
+    const due = await source.listDueCandidates();
+
+    expect(due).not.toBeNull();
+    expect(due).toHaveLength(3);
+    expect(new Set(due?.map((d) => d.courseCode))).toEqual(new Set(['GEO101', 'MUS101']));
+    // Never a second composition, never a re-entry: same sitting, by reference.
+    expect(holder.getSitting()).toBe(sittingBefore);
+  });
+
+  it('marks an unmet-obligation item as never-reviewed (F6.1 newCount), every other class as due now', async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      now(),
+      fixtureComposedSession(
+        [
+          { instrumentId: 'qa:alpha:1', course: 'GEO101', obligationClass: 'unmet' },
+          { instrumentId: 'qa:beta:1', course: 'GEO101', obligationClass: 'recall-due' },
+          { instrumentId: 'qa:gamma:1', course: 'GEO101', obligationClass: 'baseline-due' },
+          { instrumentId: 'qa:delta:1', course: 'GEO101', obligationClass: 'elective' },
+        ],
+        now(),
+      ),
+    );
+
+    const due = await createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
+    }).listDueCandidates();
+
+    const byId = new Map(due?.map((d) => [d.instrumentId, d]));
+    expect(byId.get('qa:alpha:1')?.due).toBeNull();
+    expect(byId.get('qa:beta:1')?.due).not.toBeNull();
+    expect(byId.get('qa:gamma:1')?.due).not.toBeNull();
+    expect(byId.get('qa:delta:1')?.due).not.toBeNull();
+
+    const vm = await loadTodayPanel({
+      vault: memoryVault({}),
+      deviceId: DEVICE,
+      instruments: {
+        listDueCandidates: async () => due,
+      },
+      now,
+      windowDays: 30,
+    });
+    expect(vm.due?.total).toBe(4);
+    expect(vm.due?.newCount).toBe(1);
+  });
+
+  it('composes once through the port when the holder is idle, and does not enter the result into it', async () => {
+    const holder = createStudySessionHolder();
+    expect(holder.getSitting().status).toBe('idle');
+    let calls = 0;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      calls += 1;
+      return fixtureComposedSession(
+        [{ instrumentId: 'qa:alpha:1', course: 'GEO101', obligationClass: 'unmet' }],
+        now(),
+      );
+    };
+
+    const due = await createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    }).listDueCandidates();
+
+    expect(due).toHaveLength(1);
+    expect(calls).toBe(1);
+    // Today is a reader only — only Start (`main.ts`'s
+    // `enterStudySessionHolderForStart`) may enter the holder.
+    expect(holder.getSitting().status).toBe('idle');
+  });
+
+  it('calls the composer port at most once per load — never a second, private composition', async () => {
+    const holder = createStudySessionHolder();
+    let calls = 0;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      calls += 1;
+      return fixtureComposedSession([{ instrumentId: 'qa:alpha:1', course: 'GEO101' }], now());
+    };
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    await source.listDueCandidates();
+    expect(calls).toBe(1);
+
+    calls = 0;
+    await source.listDueCandidates();
+    expect(calls).toBe(1);
+  });
+
+  it('a study plan not yet configured (the port returns null) reads as "cannot count yet", never a zero', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => null;
+
+    const due = await createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    }).listDueCandidates();
+
+    expect(due).toBeNull();
   });
 });
 

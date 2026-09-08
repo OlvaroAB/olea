@@ -70,6 +70,22 @@
  * The instrument identity underneath is still provisional (D-030, open): see
  * `olea-core`'s `session/instrument-id.ts`. That affects which ids the counted
  * instruments carry, not whether the count is honest.
+ *
+ * ## `[SESS-8.5]`: the count is "the list she is working", not a private walk
+ *
+ * `docs/dev/one-assembly-path.md` §3a/§3c (`ol-egov.132.5`): production
+ * (`main.ts`) now supplies `createVaultInstrumentSource` a
+ * `studySessionHolder`/`composeDefaultStudySession` pair, and when both are
+ * present `listDueCandidates` counts the SAME composed session Home carries
+ * and the review tab opens over — held when active, composed through the
+ * port when idle, and never entered into the holder from here (only Start
+ * does that) — rather than running its own `buildReviewSession` selection.
+ * F6.4's own words for what Today renders: "the list she is working, from
+ * that same composition." See `dueInstrumentsFromComposition`'s doc for what
+ * this narrows (the study plan must now be configured; C7.9 containment is
+ * not yet re-applied, `[SESS-11]`). The `buildReviewSession`-based walk below
+ * survives as the fallback for every caller that has not migrated yet — the
+ * workbench and the simulator (design note §4: "neither is production").
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -80,6 +96,7 @@ import {
   buildReviewSession,
   buildTodayPanel,
   type CalendarDay,
+  type ComposedStudySession,
   type ConceptCourses,
   type ConceptRelation,
   type CourseFloorShare,
@@ -118,6 +135,7 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
+import type { StudySessionHolder } from '../session/holder.js';
 import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
 import type { ObsidianTermWindowStore } from './term-window-store.js';
 
@@ -343,12 +361,95 @@ export interface VaultInstrumentSourceDeps {
   readonly probeDays?: number;
   /**
    * `part-of` edges available at composition time (C7.9; `ol-v7r5.7`) —
-   * forwarded straight to `buildReviewSession`'s `relations` input, so the
-   * Today panel's due count agrees with the review queue about which
-   * container/part candidates the containment co-presence filter drops.
-   * Omitted means none, the same real no-op `buildReviewSession` documents.
+   * forwarded to `buildReviewSession`'s `relations` input on the LEGACY path
+   * below (no {@link studySessionHolder}/{@link composeDefaultStudySession}
+   * supplied). Ignored on the composed-session path: containment co-presence
+   * is not yet a `study-session/compose.ts` capability — see `[SESS-11]`
+   * (`ol-egov.132.12`), which tracks porting it from `composeQueue` for every
+   * reader of the shared composition, Today included.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * `[SESS-8.5]` (`ol-egov.132.5`, `docs/dev/one-assembly-path.md` §3a/§3c)
+   * — the ONE composed-session holder Home, the review tab and Today all
+   * read (`session/holder.ts`). Supplied by `main.ts`'s real wiring;
+   * deliberately absent for every caller `[SESS-8.6]` (`ol-egov.132.6`)
+   * has not yet migrated — the workbench and the simulator "pin the retired
+   * composer" per the design note §4, rather than following this row's
+   * shape. Today never enters this holder itself (only Start does, via
+   * `main.ts`'s `enterStudySessionHolderForStart`) — it only ever reads.
+   *
+   * When this and {@link composeDefaultStudySession} are BOTH supplied,
+   * `listDueCandidates` reads the composed session (held when active,
+   * composed through the port when idle) instead of running its own
+   * `buildReviewSession` walk below — see {@link dueInstrumentsFromComposition}.
+   * When either is absent, this source keeps its previous, independent
+   * `buildReviewSession`-based count; the two paths are never blended for
+   * one call.
+   */
+  readonly studySessionHolder?: StudySessionHolder;
+  /**
+   * The SAME port `main.ts`'s Start and the review tab call when the holder
+   * is idle — no course/topic/concept steering, C5.5's default budget (see
+   * `main.ts`'s own `composeDefaultStudySession` doc). Called at most once
+   * per `listDueCandidates()` invocation, and never entered into
+   * {@link studySessionHolder} from here — see that field's doc.
+   *
+   * `null` back (the study plan is not configured, or the vault wiring is
+   * not up yet) is read the same way an unreadable vault already is on the
+   * legacy path: "we cannot count yet", never a zero. **This is a real
+   * behavioural narrowing worth naming, not a gap this bead closes**: before
+   * this row, Today's due count needed nothing but a readable vault; on the
+   * composed-session path it now also needs the study plan configured — the
+   * identical consequence `[SESS-8.4]`'s own close evidence names for the
+   * review tab's on-demand door.
+   */
+  readonly composeDefaultStudySession?: () => Promise<ComposedStudySession | null>;
+}
+
+/**
+ * `[SESS-8.5]`: the composed session's own item list, translated into what
+ * `summariseDue` needs — one `DueInstrument` per item, grouped by the SAME
+ * `course` the composition attributed it to.
+ *
+ * **`due` is a derived signal, not a re-read scheduler fact.** A
+ * `StudySessionItem` carries no scheduler due-instant of its own (that lives
+ * in the enumeration `buildReviewSession` keeps for the plan-executor join,
+ * `open-session.ts`'s doc — not reachable from here without a second vault
+ * walk, which would be exactly the second composition this row exists to
+ * remove). What it DOES carry is `obligationClass` (`SESS-2`,
+ * `study-session/compose.ts`): `'unmet'` means "none of this concept's
+ * instruments have ever been retrieved" — `classifyObligation`'s own
+ * `lastRetrievalDay === null` branch — which is the identical fact
+ * `DueInstrument.due === null` (`toDueInstruments`' "never reviewed") always
+ * meant, read off a concept-level signal instead of a per-instrument one.
+ * Every other item is stamped with `now`, which always satisfies
+ * `isDueThrough`'s `due <= dueThrough` gate (`dueThrough` is always at or
+ * after `now`) — so every item the composition chose for today counts,
+ * matching "the list she is working" (F6.4) rather than re-deriving urgency
+ * from scratch.
+ *
+ * **No suspended/containment re-filtering here**, unlike the legacy path
+ * below. The composer applies neither (`[SESS-11]`, `ol-egov.132.12`) —
+ * the same gap Home (F6.10) and the review tab (`[SESS-8.4]`) already carry
+ * today, since all three now read the identical composition. Patching it
+ * only for Today's count would make the three surfaces disagree about what
+ * counts as "hers", which is the opposite of `[D-033]`'s one-answer intent;
+ * the fix belongs on `[SESS-11]`, for every reader at once.
+ */
+function dueInstrumentsFromComposition(
+  session: ComposedStudySession,
+  now: Date,
+): readonly DueInstrument[] {
+  const nowIso = now.toISOString();
+  return session.model.items.map((item) => ({
+    instrumentId: item.instrumentId,
+    courseCode: item.course,
+    // The vault gives a course *code*, never a name (INV-3) — the same
+    // empty-string convention `toDueInstruments` uses below.
+    courseName: '',
+    due: item.obligationClass === 'unmet' ? null : nowIso,
+  }));
 }
 
 /**
@@ -365,12 +466,32 @@ export interface VaultInstrumentSourceDeps {
  *  - **Returns `null` when it cannot enumerate.** A vault that throws mid-walk
  *    is not a vault with nothing due. This is the one place the honest-absence
  *    state survives now that the seam is closed.
+ *
+ * **`[SESS-8.5]`: this is the legacy path.** When `deps.studySessionHolder`
+ * and `deps.composeDefaultStudySession` are both supplied (`main.ts`'s real
+ * wiring), `listDueCandidates` never reaches `buildReviewSession` at all —
+ * see {@link dueInstrumentsFromComposition} and this file's module doc.
  */
 export function createVaultInstrumentSource(
   deps: VaultInstrumentSourceDeps,
 ): TodayInstrumentSource {
   return {
     async listDueCandidates() {
+      if (deps.studySessionHolder !== undefined && deps.composeDefaultStudySession !== undefined) {
+        const holder = deps.studySessionHolder;
+        const composeDefaultStudySession = deps.composeDefaultStudySession;
+        const sitting = holder.getSitting();
+        // Read-only: a sitting is never entered from here — only Start
+        // (`main.ts`'s `enterStudySessionHolderForStart`) does that. Reading
+        // twice in a row with nothing else touching the holder composes
+        // twice on the idle branch, a cost and not a correctness problem —
+        // the composer is pure over the same inputs.
+        const composed =
+          sitting.status === 'active' ? sitting.items : await composeDefaultStudySession();
+        if (composed === null) return null;
+        return dueInstrumentsFromComposition(composed, deps.now());
+      }
+
       try {
         const today = localToday(deps.now());
         const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;

@@ -445,11 +445,16 @@ export default class OleaPlugin extends Plugin {
    * the exact fragility that clause prevents. The persisted home is a Class C
    * proposal in `olea-service/docs/dev/relation-landing-design.md` §7.1.
    *
-   * **Now read by both session-composition call sites** (`ol-v7r5.7`):
-   * `composeReviewSession` and the Today panel's `createVaultInstrumentSource`
-   * wiring below each pass `this.servedRelationEdges()` into
-   * `buildReviewSession`'s `relations` input, which feeds `session/build.ts`'s
-   * C7.9 containment co-presence filter. Of `[D-070]`'s two corpus-type
+   * **Read by `buildReviewSessionInput`'s `composeReviewSession` call site**
+   * (`ol-v7r5.7`), which passes `this.servedRelationEdges()` into
+   * `buildReviewSession`'s `relations` input, feeding `session/build.ts`'s
+   * C7.9 containment co-presence filter. The Today panel's
+   * `createVaultInstrumentSource` wiring stopped being a second reader of
+   * this field at `[SESS-8.5]` (`ol-egov.132.5`): its due count now reads
+   * the shared study-session composition instead of running its own
+   * `buildReviewSession` walk, and that composer has no containment logic of
+   * its own yet (`[SESS-11]`, `ol-egov.132.12`) — so threading this fold
+   * into it would be a no-op, not a fix. Of `[D-070]`'s two corpus-type
    * readers, the misconception record's confusion pairing now has real code
    * and a real caller (`ol-2zfj.32`, `[D-130]`, `tickIngestionAndMaybeRunCorpusRelations`
    * below); queue ordering does not. No clause names a triage surface (design
@@ -823,11 +828,16 @@ export default class OleaPlugin extends Plugin {
               scheduler,
               deviceId,
               now: () => new Date(),
-              // C7.9's containment co-presence filter (`ol-v7r5.7`): the
-              // Today count and the review queue must agree on which
-              // candidates a container/part pair drops, so this reads the
-              // same served fold `composeReviewSession` below passes.
-              relations: this.servedRelationEdges(),
+              // `[SESS-8.5]` (`ol-egov.132.5`, one-assembly-path.md §3a/§3c):
+              // the same holder and on-demand port Start and the review tab
+              // use, so Today's due count reads "the list she is working"
+              // off the identical shared composition rather than its own
+              // `buildReviewSession` walk — see `data-source.ts`'s own doc
+              // for what this narrows (the study plan must now be
+              // configured) and what it no longer re-applies (C7.9
+              // containment, `[SESS-11]`/`ol-egov.132.12`).
+              studySessionHolder: this.studySessionHolder,
+              composeDefaultStudySession: () => this.composeDefaultStudySession(),
             }),
             now: () => new Date(),
             // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
