@@ -219,6 +219,7 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentProximityBand,
   CalendarDay,
+  ComposedReentrySession,
   ConceptInstrumentIndex,
   ConceptMaterialPresence,
   ConceptRecord,
@@ -606,9 +607,11 @@ function bandFor(assessment: FrozenScopeAssessment, asOf: CalendarDay): Assessme
  * The full frozen scope a sitting is checked against — everything
  * {@link buildScopeSnapshotAt} needs to answer `[D-162]`'s three facts at
  * any later instant, over the exact candidate set (`GapRow`s, not just
- * chosen items) `buildFresh` considered.
+ * chosen items) `buildFresh` considered. Exported so
+ * {@link ComposeStudySessionForRequestResult} can carry one back to
+ * `buildFresh`'s own closure (`[SESS-8.4]`) — opaque to every other caller.
  */
-interface FrozenSittingScope {
+export interface FrozenSittingScope {
   readonly concepts: readonly FrozenScopeConcept[];
   readonly assessments: readonly FrozenScopeAssessment[];
   readonly vault: VaultSource;
@@ -650,14 +653,228 @@ async function buildScopeSnapshotAt(
 }
 
 /**
+ * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3c): what
+ * {@link composeStudySessionForRequest} returns — the full, undropped
+ * `ComposedReentrySession` (not the narrower `SessionBuilderState` a
+ * rendering surface gets), plus the bookkeeping `buildFresh` below needs to
+ * keep its own staleness freeze working now that this half of it lives here.
+ */
+export interface ComposeStudySessionForRequestResult {
+  /** The unstripped composition — `.full` is exactly the `ComposedStudySession` shape `session/holder.ts`'s shared holder carries. */
+  readonly composed: ComposedReentrySession;
+  readonly courseOrTopicOptions: readonly CourseOrTopicOption[];
+  /** `buildFresh`'s own freeze-staleness bookkeeping (`ol-v7r5.26`) — opaque to every other caller, which needs only `composed`. */
+  readonly frozenScope: FrozenSittingScope;
+}
+
+/**
+ * `[SESS-8.4]` (`ol-egov.132.4`) — the ONE place a plugin assembles the
+ * study-session composer's real input (the oracle chain, the gap view, her
+ * review history, F2.19's two resolvers, A2.5's cached allocation) from a
+ * vault and a settings host, and calls it. Extracted from `buildFresh` below
+ * — which is now a thin wrapper around this — so a second door onto the
+ * same composer (the review tab, opening over an idle holder,
+ * `docs/dev/one-assembly-path.md` §3c: "she gets a composition, not a
+ * different one") reuses this exact assembly rather than duplicating
+ * ~150 lines of it. `main.ts` calls this directly, with `{ budgetMinutes:
+ * DEFAULT_SESSION_BUDGET_MINUTES }` and no steering, for that door.
+ *
+ * Returns `null` when the study plan is not configured yet — the same
+ * `isStudyPlanConfigured` gate `buildFresh` already applied privately, now
+ * visible to every caller rather than only to `SessionBuilderState`'s
+ * `'unavailable'` kind. Throws whatever the vault walk, the log read or the
+ * oracle chain throws — `buildFresh` below is what turns that into
+ * `'unavailable'`; a caller composing on demand for the review tab (`open-
+ * session.ts`) is expected to do the same, the same "failure is reported,
+ * not rendered as empty" posture that module already documents for a vault
+ * it cannot read.
+ */
+export async function composeStudySessionForRequest(
+  deps: CreateLocalSessionBuilderProviderDeps,
+  request: SessionBuilderRequest,
+  now: Date,
+): Promise<ComposeStudySessionForRequestResult | null> {
+  const config = await new ObsidianStudyPlanSettingsStore(deps.settingsHost).load();
+  if (!isStudyPlanConfigured(config)) return null;
+
+  const today = localToday(now);
+  const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+  const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
+    reviewLogPath(day, deps.deviceId),
+  );
+
+  // Neither walk depends on the other's result and both read the same
+  // read-only vault — the same concurrency `gap/provider.ts` uses, for
+  // the same reason.
+  const [{ entries }, enumeration] = await Promise.all([
+    readReviewLogHistory(deps.vault, { additionalPaths }),
+    enumerateVaultInstruments(deps.vault),
+  ]);
+
+  const { ranking, edges, mastery } = await composeOracleRanking({
+    vault: deps.vault,
+    basePath: config.assignmentsBasePath,
+    reviewLog: entries,
+    asOf: today,
+    // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
+    // (`ol-63e1`) — already extracted by the instrument walk above, so
+    // this pays no second walk.
+    concepts: enumeration.concepts,
+    // `[D-087]`/`ol-95vv.1` (RANK-3, `ol-v7r5.4`): the first production
+    // caller to thread real FSRS retrievability into the blend.
+    // `deps.scheduler` and `now` are both already held above for the
+    // SESS-2 replay at `replaySchedulerStates(entries, deps.scheduler)`
+    // below — the same scheduler, the same instant, never a second
+    // instance or a fresh clock read (`ComposeRetrievabilityInput`'s own
+    // doc, `oracle/compose.ts`).
+    retrievability: { scheduler: deps.scheduler, now },
+  });
+
+  const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> = buildMaterialPresence(
+    enumeration.concepts,
+    instrumentCountsByNotePath(enumeration.records),
+  );
+
+  const gap = buildGapView({
+    ranking,
+    assessments: edges.assessmentsRead.records,
+    mastery,
+    materialPresence,
+    sourceCoverage: edges.tier3.sourceCoverage,
+  });
+
+  // SESS-2 (`ol-4a78`): the same replay `main.ts`'s Today panel builds
+  // its due-state from, over the same `entries` this call already read
+  // for the mastery join — a second fold over data already in hand,
+  // never a second read of the vault.
+  const replay = replaySchedulerStates(entries, deps.scheduler);
+
+  // `composed.overflow`/`courseShares`/`forcedCourses` are deliberately
+  // dropped by `buildFresh` below rather than threaded into
+  // `SessionBuilderState`: F6.7 forbids a standing counter of unmet
+  // material, and nothing on that surface has a clause authorising one
+  // (`study-session/compose.ts`'s module doc). This function returns the
+  // full, undropped composition — see this function's own doc.
+  // ARRIVE-2 (`ol-epi9`): resolved here, after the gap view names the
+  // rows, so only concepts actually in play cost a stat call.
+  const gapRows = allGapRows(gap);
+  const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
+  const conceptInstrumentIndex = buildConceptInstrumentIndex(enumeration.records);
+
+  // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
+  // candidate this call considered (not just the ones the budget cut
+  // kept), so a concept that only narrowly missed the cut still counts
+  // toward "this sitting's own composition" for staleness purposes.
+  // Returned to the caller (`buildFresh` below) rather than held here —
+  // this function has no sitting of its own to hold it in — never
+  // persisted, rebuildable from the same `enumeration`/`replay` this call
+  // already produced.
+  const nextFrozenScope: FrozenSittingScope = {
+    concepts: gapRows.map(
+      (row): FrozenScopeConcept => ({
+        conceptKey: row.conceptKey,
+        notePaths: row.notePaths,
+        masteryState: row.masteryState,
+        ...obligationSignalsForConcept(row.conceptKey, conceptInstrumentIndex, replay),
+      }),
+    ),
+    assessments: [...new Set(gapRows.map((row) => row.targetAssessmentPath))]
+      .filter((path): path is VaultPath => path !== null)
+      .map((path) => ({
+        path,
+        due: edges.assessmentsRead.records.find((record) => record.path === path)?.due,
+      })),
+    vault: deps.vault,
+  };
+
+  // F2.19 (`ol-v7r5.11`): both resolvers are pure and synchronous, over
+  // data this call already holds — `enumeration.concepts` is the same
+  // extraction `composeOracleRanking` used for its own name→key join
+  // above, and `edges.assessmentsRead.records` is the same read the
+  // `assessments` field below passes through for F4.7's countdown. See
+  // this file's own module doc, "F2.19's two resolvers".
+  const { relatedConceptKeys } = resolveRelatedConceptKeys(
+    deps.relations?.() ?? [],
+    enumeration.concepts,
+  );
+  const { assessmentContext } = resolveAssessmentGroupingContext(
+    edges.assessmentsRead.records,
+    enumeration.concepts,
+  );
+
+  // STEER-2 (`ol-ijms`): the option list a caller offers the view
+  // regardless of what (if anything) `request.courseOrTopic` asks for —
+  // see `courseOrTopicOptionsFrom`'s own doc for why it is built from
+  // the whole-vault enumeration rather than the ranked gap rows.
+  const courseOrTopicOptions = courseOrTopicOptionsFrom(enumeration.concepts);
+  const courseOrTopicFilter = resolveCourseOrTopicFilter(
+    request.courseOrTopic,
+    enumeration.concepts,
+  );
+
+  // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
+  // allocation, read fresh through `deps.plan` — see that field's own
+  // doc. An empty array reads the same as `undefined` to `compose.ts`'s
+  // own optional field, so this is not narrowed further here.
+  const allocation = deps.plan?.()?.body.allocation;
+
+  // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
+  // module doc, `readReviewLogHistory`), so a real multi-week absence
+  // is measured correctly regardless of `probeDays`.
+  const composed = composeReentrySession({
+    rows: gapRows,
+    arrivalDays,
+    relatedConceptKeys,
+    assessmentContext,
+    instruments: buildConceptInstrumentIndex(enumeration.records),
+    replay,
+    daysSinceLastReview: daysSinceLastReview(entries, now),
+    candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
+    ordinaryBudgetMinutes: request.budgetMinutes,
+    // The first production read of the review log's `durationMs` (INV-4:
+    // the discipline went in ahead of the feature, and this is the
+    // feature).
+    durations: estimateInstrumentDurations(entries),
+    asOf: today,
+    // Unmodified — the countdown (F4.7) is only as honest as this
+    // pass-through, and re-reading the Base separately would let the
+    // ranking and the countdown disagree about the same assessment.
+    assessments: edges.assessmentsRead.records,
+    // Row 3.9's chooser input ([SUPP-3], `ol-lpl4`): built from the same
+    // `entries` read above for the mastery join and the SESS-2 replay —
+    // a fold over data already in hand, never a second log read. No
+    // self-assessment input exists on this surface yet (`request` names
+    // no such field), so the fill scores the evidence-derived level with
+    // none to adjust it, same as any caller that omits it.
+    supportHistory: buildSupportLevelHistoryLookup(entries),
+    ...(request.focusConceptName !== undefined
+      ? { focusConceptName: request.focusConceptName }
+      : {}),
+    // [STEER-1]/STEER-2: passed straight through to
+    // `buildComposedStudySession` via `ComposeReentrySessionInput`'s own
+    // `Omit<BuildComposedStudySessionInput, 'budgetMinutes'>` — see
+    // `resolveCourseOrTopicFilter`'s own doc for how these two are
+    // derived.
+    ...courseOrTopicFilter,
+    // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
+    // cross-course allocation, read fresh via `deps.plan` (see that
+    // field's own doc). `undefined` — no `plan` thunk supplied, or the
+    // thunk returns `null` (nothing cached yet) — reads identically to
+    // `compose.ts`'s own optional field: the interim per-course shares,
+    // never a thrown error or a degraded session.
+    ...(allocation !== undefined ? { allocation } : {}),
+  });
+
+  return { composed, courseOrTopicOptions, frozenScope: nextFrozenScope };
+}
+
+/**
  * A `SessionBuilderViewDeps` whose `load` composes a fresh session from the
  * vault and the review log, entirely on-device, no Worker call.
  */
 export function createLocalSessionBuilderProvider(
   deps: CreateLocalSessionBuilderProviderDeps,
 ): SessionBuilderViewDeps {
-  const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
-
   // RBLD-2 (`ol-e228`), component register row 3.6 — see this file's own
   // module doc, "The freeze contract". One `SittingState` per leaf (this
   // closure), `IDLE_SITTING` until the first real build.
@@ -679,183 +896,25 @@ export function createLocalSessionBuilderProvider(
   // uses to cross the `buildFresh` call without widening its signature.
   let pendingFrozenScope: FrozenSittingScope | undefined;
 
-  /** The full, expensive composition — unchanged from before `ol-e228` except that it now takes `now` from the caller rather than reading `deps.now()` a second time, so a build and the `SittingState.enteredAt` it is frozen under are always the same instant. */
+  /**
+   * The full, expensive composition — unchanged from before `ol-e228` except
+   * that it now takes `now` from the caller rather than reading `deps.now()`
+   * a second time, so a build and the `SittingState.enteredAt` it is frozen
+   * under are always the same instant. `[SESS-8.4]`: the assembly itself now
+   * lives in {@link composeStudySessionForRequest} above; this is a thin
+   * wrapper that narrows its result to `SessionBuilderState` and stashes the
+   * freeze-staleness scope this closure's own `load()` needs.
+   */
   async function buildFresh(
     request: SessionBuilderRequest,
     now: Date,
   ): Promise<SessionBuilderState> {
     pendingFrozenScope = undefined;
     try {
-      const config = await settingsStore.load();
-      if (!isStudyPlanConfigured(config)) return { kind: 'unavailable' };
-
-      const today = localToday(now);
-      const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
-      const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
-        reviewLogPath(day, deps.deviceId),
-      );
-
-      // Neither walk depends on the other's result and both read the same
-      // read-only vault — the same concurrency `gap/provider.ts` uses, for
-      // the same reason.
-      const [{ entries }, enumeration] = await Promise.all([
-        readReviewLogHistory(deps.vault, { additionalPaths }),
-        enumerateVaultInstruments(deps.vault),
-      ]);
-
-      const { ranking, edges, mastery } = await composeOracleRanking({
-        vault: deps.vault,
-        basePath: config.assignmentsBasePath,
-        reviewLog: entries,
-        asOf: today,
-        // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
-        // (`ol-63e1`) — already extracted by the instrument walk above, so
-        // this pays no second walk.
-        concepts: enumeration.concepts,
-        // `[D-087]`/`ol-95vv.1` (RANK-3, `ol-v7r5.4`): the first production
-        // caller to thread real FSRS retrievability into the blend.
-        // `deps.scheduler` and `now` are both already held above for the
-        // SESS-2 replay at `replaySchedulerStates(entries, deps.scheduler)`
-        // below — the same scheduler, the same instant, never a second
-        // instance or a fresh clock read (`ComposeRetrievabilityInput`'s own
-        // doc, `oracle/compose.ts`).
-        retrievability: { scheduler: deps.scheduler, now },
-      });
-
-      const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> = buildMaterialPresence(
-        enumeration.concepts,
-        instrumentCountsByNotePath(enumeration.records),
-      );
-
-      const gap = buildGapView({
-        ranking,
-        assessments: edges.assessmentsRead.records,
-        mastery,
-        materialPresence,
-        sourceCoverage: edges.tier3.sourceCoverage,
-      });
-
-      // SESS-2 (`ol-4a78`): the same replay `main.ts`'s Today panel builds
-      // its due-state from, over the same `entries` this call already read
-      // for the mastery join — a second fold over data already in hand,
-      // never a second read of the vault.
-      const replay = replaySchedulerStates(entries, deps.scheduler);
-
-      // `composed.overflow`/`courseShares`/`forcedCourses` are deliberately
-      // dropped here rather than threaded into `SessionBuilderState`: F6.7
-      // forbids a standing counter of unmet material, and nothing on this
-      // surface has a clause authorising one (`study-session/compose.ts`'s
-      // module doc).
-      // ARRIVE-2 (`ol-epi9`): resolved here, after the gap view names the
-      // rows, so only concepts actually in play cost a stat call.
-      const gapRows = allGapRows(gap);
-      const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
-      const conceptInstrumentIndex = buildConceptInstrumentIndex(enumeration.records);
-
-      // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
-      // candidate `buildFresh` considered (not just the ones the budget cut
-      // kept), so a concept that only narrowly missed the cut still counts
-      // toward "this sitting's own composition" for staleness purposes. Held
-      // in the closure below once this build actually becomes the new
-      // sitting (`load()`'s own assignment, after this function returns) —
-      // never persisted, rebuildable from the same `enumeration`/`replay`
-      // this call already produced.
-      const nextFrozenScope: FrozenSittingScope = {
-        concepts: gapRows.map(
-          (row): FrozenScopeConcept => ({
-            conceptKey: row.conceptKey,
-            notePaths: row.notePaths,
-            masteryState: row.masteryState,
-            ...obligationSignalsForConcept(row.conceptKey, conceptInstrumentIndex, replay),
-          }),
-        ),
-        assessments: [...new Set(gapRows.map((row) => row.targetAssessmentPath))]
-          .filter((path): path is VaultPath => path !== null)
-          .map((path) => ({
-            path,
-            due: edges.assessmentsRead.records.find((record) => record.path === path)?.due,
-          })),
-        vault: deps.vault,
-      };
-      pendingFrozenScope = nextFrozenScope;
-
-      // F2.19 (`ol-v7r5.11`): both resolvers are pure and synchronous, over
-      // data this call already holds — `enumeration.concepts` is the same
-      // extraction `composeOracleRanking` used for its own name→key join
-      // above, and `edges.assessmentsRead.records` is the same read the
-      // `assessments` field below passes through for F4.7's countdown. See
-      // this file's own module doc, "F2.19's two resolvers".
-      const { relatedConceptKeys } = resolveRelatedConceptKeys(
-        deps.relations?.() ?? [],
-        enumeration.concepts,
-      );
-      const { assessmentContext } = resolveAssessmentGroupingContext(
-        edges.assessmentsRead.records,
-        enumeration.concepts,
-      );
-
-      // STEER-2 (`ol-ijms`): the option list this call offers the view
-      // regardless of what (if anything) `request.courseOrTopic` asks for —
-      // see `courseOrTopicOptionsFrom`'s own doc for why it is built from
-      // the whole-vault enumeration rather than the ranked gap rows.
-      const courseOrTopicOptions = courseOrTopicOptionsFrom(enumeration.concepts);
-      const courseOrTopicFilter = resolveCourseOrTopicFilter(
-        request.courseOrTopic,
-        enumeration.concepts,
-      );
-
-      // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
-      // allocation, read fresh through `deps.plan` — see that field's own
-      // doc. An empty array reads the same as `undefined` to `compose.ts`'s
-      // own optional field, so this is not narrowed further here.
-      const allocation = deps.plan?.()?.body.allocation;
-
-      // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
-      // module doc, `readReviewLogHistory`), so a real multi-week absence
-      // is measured correctly regardless of `probeDays`.
-      const composed = composeReentrySession({
-        rows: gapRows,
-        arrivalDays,
-        relatedConceptKeys,
-        assessmentContext,
-        instruments: buildConceptInstrumentIndex(enumeration.records),
-        replay,
-        daysSinceLastReview: daysSinceLastReview(entries, now),
-        candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
-        ordinaryBudgetMinutes: request.budgetMinutes,
-        // The first production read of the review log's `durationMs` (INV-4:
-        // the discipline went in ahead of the feature, and this is the
-        // feature).
-        durations: estimateInstrumentDurations(entries),
-        asOf: today,
-        // Unmodified — the countdown (F4.7) is only as honest as this
-        // pass-through, and re-reading the Base separately would let the
-        // ranking and the countdown disagree about the same assessment.
-        assessments: edges.assessmentsRead.records,
-        // Row 3.9's chooser input ([SUPP-3], `ol-lpl4`): built from the same
-        // `entries` read above for the mastery join and the SESS-2 replay —
-        // a fold over data already in hand, never a second log read. No
-        // self-assessment input exists on this surface yet (`request` names
-        // no such field), so the fill scores the evidence-derived level with
-        // none to adjust it, same as any caller that omits it.
-        supportHistory: buildSupportLevelHistoryLookup(entries),
-        ...(request.focusConceptName !== undefined
-          ? { focusConceptName: request.focusConceptName }
-          : {}),
-        // [STEER-1]/STEER-2: passed straight through to
-        // `buildComposedStudySession` via `ComposeReentrySessionInput`'s own
-        // `Omit<BuildComposedStudySessionInput, 'budgetMinutes'>` — see
-        // `resolveCourseOrTopicFilter`'s own doc for how these two are
-        // derived.
-        ...courseOrTopicFilter,
-        // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): the cached plan's real
-        // cross-course allocation, read fresh via `deps.plan` (see that
-        // field's own doc). `undefined` — no `plan` thunk supplied, or the
-        // thunk returns `null` (nothing cached yet) — reads identically to
-        // `compose.ts`'s own optional field: the interim per-course shares,
-        // never a thrown error or a degraded session.
-        ...(allocation !== undefined ? { allocation } : {}),
-      });
+      const result = await composeStudySessionForRequest(deps, request, now);
+      if (result === null) return { kind: 'unavailable' };
+      pendingFrozenScope = result.frozenScope;
+      const { composed, courseOrTopicOptions } = result;
 
       // F6.6: a re-entry composition returns the narrower, count-free
       // `view` (`ReentryStudySessionView`) rather than the ordinary

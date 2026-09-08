@@ -37,27 +37,52 @@
  * an `empty` phase for it. Refusing to open would make "nothing is due" and
  * "the command is broken" the same experience.
  *
- * **It does not decide what is offered.** Order, dedupe, filter, due-state and
- * suspension are all `composeQueue`'s, arriving settled — the same refusal
- * `queue-adapter.ts` states for itself.
+ * **It does not decide what is offered.** `[SESS-8.4]` (`ol-egov.132.4`,
+ * `docs/dev/one-assembly-path.md` — F4.6/F6.4's "one assembly path, not
+ * two", `[D-033]` as amended by `[D-223]`): order and selection are the
+ * study-session composer's, arriving settled through {@link
+ * OpenReviewSessionInput.studySessionHolder} — this module runs no
+ * `composeQueue` selection step of its own. What `buildReviewSession` still
+ * does here is the KEPT half: the vault enumeration and its by-id records
+ * (`instruments`, `recordsById`, `entries`, `candidates`, `replay`,
+ * `suspended`) — an enumeration a plan join needs, not a composition (see
+ * the design note §4). Due-state and suspension for an item the composer
+ * chose are read off that kept enumeration by {@link
+ * queueItemsFromComposedSession}, never recomputed here.
  *
- * ## P5-T07: the plan, when there is one
+ * ## `[SESS-8.4]`: she gets a composition, not a different one
  *
- * `composeQueue` never prioritises (see its own module doc). Ordering by a
- * published study plan is `olea-core`'s `executeStudyPlan` — C5.5's "core
- * executes it" — and this is the composition's only caller in production:
- * every composed queue is run through it, `plan` included or `null`. A
- * `null` plan is not a special case here; `executeStudyPlan`'s own doc calls
- * it "the Phase A shape", meaning the executed result is byte-for-byte the
- * queue's own order and its own (null, null, null) selection context. So
- * this function always executes, and Phase A is what "no plan cached yet"
- * produces through the same path Phase B does, rather than a second
- * branch that could drift from it.
+ * The held sitting is read when active; when {@link
+ * OpenReviewSessionInput.studySessionHolder} is idle, this module calls
+ * {@link OpenReviewSessionInput.composeDefaultStudySession} — the SAME
+ * composer Home and the session builder call, with no steering and the
+ * default budget (design note §3c) — exactly once, and enters the result
+ * into the holder before reading it, so a second call this same open never
+ * composes twice. `null` back from that port (the study plan is not
+ * configured) is treated as a composition failure, the same `{ ok: false }`
+ * posture an unreadable vault already gets — see "a failure is reported"
+ * above.
+ *
+ * ## P5-T07 / `[SESS-8.3]`: the plan, when there is one
+ *
+ * The study-session composer never prioritises across courses by a plan
+ * (see its own module doc). Ordering by a published study plan is
+ * `olea-core`'s `executeStudyPlanOverComposedRows` (`[SESS-8.3]`,
+ * `ol-egov.132.3`) — C5.5's "core executes it", and the composed-rows twin
+ * of `executeStudyPlan` that adds no cross-course sort of its own (C5.7,
+ * F6.4) — and this is the composition's only caller in production: every
+ * composed session's rows are run through it, `plan` included or `null`. A
+ * `null` plan is not a special case here; `execute.ts`'s own doc calls the
+ * `executeStudyPlan` twin's null-plan result "the Phase A shape", and the
+ * composed-rows entry produces the identical shape (rows' own order, an
+ * explicit `(null, null, null)` selection context) through the same path
+ * Phase B does, rather than a second branch that could drift from it.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentRecord,
+  ComposedStudySession,
   ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
@@ -76,7 +101,8 @@ import {
   calendarDaysEndingOn,
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
-  executeStudyPlan,
+  executeStudyPlanOverComposedRows,
+  queueItemsFromComposedSession,
   readDistractorProvenance,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
@@ -87,6 +113,7 @@ import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { evaluateSchedulingObservationRouting } from '../grading/wiring.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
+import type { StudySessionHolder } from '../session/holder.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
@@ -222,6 +249,32 @@ export interface OpenReviewSessionInput {
    * `OpenFrozenReviewQueueInput.staleness` doc.
    */
   readonly frozenQueueStaleness?: SittingStalenessInput;
+  /**
+   * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3a/§3c):
+   * the one plugin-wide `SittingState<ComposedStudySession>` holder — "Home,
+   * the session builder, Today and the review tab all read that one
+   * holder." When it already holds an active sitting (Start committed one,
+   * or an earlier open of this tab composed one via {@link
+   * composeDefaultStudySession} below), this module reads it verbatim and
+   * runs no selection step of its own. `main.ts` constructs exactly one
+   * instance for the whole plugin and passes it here unchanged.
+   */
+  readonly studySessionHolder: StudySessionHolder;
+  /**
+   * `[SESS-8.4]` (§3c): composes a fresh `ComposedStudySession` with no
+   * course/topic/concept steering and C5.5's default budget — the SAME
+   * assembly Home and the session builder use
+   * (`session-builder/provider.ts`'s `composeStudySessionForRequest`),
+   * reached through `main.ts`'s own port rather than a second, differently-
+   * assembled call. Called ONLY when {@link studySessionHolder} is found
+   * idle, and the result is entered into it before this module reads it —
+   * "she gets a composition, not a different one." `null` means the study
+   * plan is not configured yet (the same `'unavailable'` state Home and the
+   * session builder already surface); this module treats that as a
+   * composition failure, the same posture an unreadable vault already gets
+   * (see the module doc).
+   */
+  readonly composeDefaultStudySession: () => Promise<ComposedStudySession | null>;
 }
 
 export type OpenReviewSessionOutcome =
@@ -293,6 +346,11 @@ export async function openReviewSession(
       probeDays,
     ).map((day) => reviewLogPath(day, input.deviceId));
 
+    // `[SESS-8.4]`: kept for its vault enumeration ONLY — `instruments`,
+    // `recordsById`, `entries`, `candidates`, `replay`, `suspended`. Its own
+    // `composed.queue` (`composeQueue`'s selection) is deliberately never
+    // read below; row 6 (`ol-egov.132.6`) retires the call once nothing
+    // production reads it anywhere. See the module doc.
     const composed = await buildReviewSession({
       vault: input.vault,
       scheduler: input.scheduler,
@@ -303,9 +361,41 @@ export async function openReviewSession(
       ...(input.assessments !== undefined ? { assessments: input.assessments } : {}),
     });
 
-    // C5.5: "the Worker supplies the policy … core executes it". A `null`
-    // plan is the Phase A shape, not a branch — see the module doc.
-    const executed = executeStudyPlan({ queue: composed.queue, plan: input.plan ?? null });
+    // `[SESS-8.4]` (design note §3a/§3c): she gets the ONE composition, not
+    // a private selection step. Reads the held sitting when active; composes
+    // once through the port when idle and enters the result before reading
+    // it — see the module doc's "she gets a composition, not a different
+    // one".
+    const sitting = input.studySessionHolder.getSitting();
+    let composedSession: ComposedStudySession;
+    if (sitting.status === 'active') {
+      composedSession = sitting.items;
+    } else {
+      const fresh = await input.composeDefaultStudySession();
+      if (fresh === null) {
+        throw new Error(
+          'openReviewSession: the study plan is not configured, so there is nothing for the study-session composer to build from',
+        );
+      }
+      composedSession = fresh;
+      input.studySessionHolder.enter(now, composedSession);
+    }
+
+    // `[SESS-8.4]`/`[SESS-8.3]`: the composer's own ordered rows, translated
+    // into the plan join's input off the SAME kept enumeration above (no
+    // second vault walk, no second replay), then executed — C5.5's "core
+    // executes it", with no cross-course sort of its own (C5.7, F6.4). A
+    // `null` plan is the Phase A shape, not a branch — see the module doc.
+    const queueItems = queueItemsFromComposedSession({
+      items: composedSession.model.items,
+      recordsById: composed.recordsById,
+      candidates: composed.candidates,
+      now,
+    });
+    const executed = executeStudyPlanOverComposedRows({
+      items: queueItems,
+      plan: input.plan ?? null,
+    });
 
     // `[D-220]`'s read side (`ol-yfyi`): one vault read per `mcq` instrument
     // in this enumeration, off the SAME `composed.instruments.records` this

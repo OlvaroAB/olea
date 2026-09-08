@@ -634,8 +634,11 @@ describe('C7.9 containment relations reach both session-composition call sites (
     // the same `OpenReviewSessionInput` object — both signal inputs, one
     // build site (`ol-v7r5.35`'s `buildReviewSessionInput`, shared by the
     // ordinary open and the C5.8 extend path rather than duplicated).
+    // `[SESS-8.4]` (`ol-egov.132.4`): `studySessionHolder`/
+    // `composeDefaultStudySession` now follow `assessments` in the same
+    // object, before the closing brace — see that method's own doc.
     expect(main).toMatch(
-      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,\s*\};/,
+      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,[\s\S]{0,300}?\};/,
     );
   });
 

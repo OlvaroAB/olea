@@ -59,8 +59,13 @@ describe('the session builder is registered, not merely written (ol-p5t06b)', ()
   });
 
   it('imports the provider from session-builder/provider, not a placeholder', () => {
+    // `[SESS-8.4]` (`ol-egov.132.4`): `main.ts` also imports
+    // `composeStudySessionForRequest` from this same module now (the review
+    // tab's composer port) — a multi-line named import, so this checks the
+    // module specifier and `createLocalSessionBuilderProvider`'s presence in
+    // it independently rather than one single-name import statement.
     expect(main).toMatch(
-      /import\s*\{\s*createLocalSessionBuilderProvider\s*\}\s*from\s*'\.\/session-builder\/provider\.js'/,
+      /createLocalSessionBuilderProvider,?\s*\n\}\s*from\s*'\.\/session-builder\/provider\.js'/,
     );
   });
 
@@ -116,8 +121,16 @@ describe('the session-builder view is no longer a navigation target ([D-243])', 
     expect(main).not.toMatch(/revealSessionBuilderView/);
   });
 
-  it("Home's own Start action opens the review surface directly, never the session builder", () => {
-    expect(main).toMatch(/startSession:\s*\(\)\s*=>\s*\{\s*void this\.revealReviewView\(\);/);
+  // `[SESS-8.4]` (`ol-egov.132.4`): Start now enters the shared composed-
+  // session holder (`enterStudySessionHolderForStart`, one `decideRebuild`
+  // call) BEFORE revealing the review surface — see that method's own doc —
+  // but it is still the review surface it reveals, never the session
+  // builder.
+  it("Home's own Start action enters the shared holder, then opens the review surface directly, never the session builder", () => {
+    expect(main).toMatch(
+      /startSession:\s*\(\)\s*=>\s*\{\s*void \(async \(\) => \{\s*await this\.enterStudySessionHolderForStart\(\);\s*void this\.revealReviewView\(\);/,
+    );
+    expect(main).not.toMatch(/startSession:[^}]*revealSessionBuilderView/);
   });
 });
 

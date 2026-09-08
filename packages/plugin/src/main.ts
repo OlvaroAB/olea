@@ -4,6 +4,7 @@ import {
   buildMisconceptionDigest,
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
+  type ComposedStudySession,
   type ConceptRecord,
   type ConceptRelation,
   type ConfusionPairingVerdict,
@@ -174,7 +175,12 @@ import {
 import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
-import { createLocalSessionBuilderProvider } from './session-builder/provider.js';
+import { createStudySessionHolder, type StudySessionHolder } from './session/holder.js';
+import { DEFAULT_SESSION_BUDGET_MINUTES } from './session-builder/copy.js';
+import {
+  composeStudySessionForRequest,
+  createLocalSessionBuilderProvider,
+} from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
 import {
   type HeadingOfferSettingSnapshot,
@@ -269,6 +275,17 @@ export default class OleaPlugin extends Plugin {
    */
   private processNowAction: ProcessNowAction | null = null;
   private review: ReviewWiring | null = null;
+  /**
+   * `[SESS-8.2]`/`[SESS-8.4]` (`ol-egov.132.2`/`.4`, `docs/dev/one-assembly-
+   * path.md` §3a): the ONE composed-session holder for this plugin instance
+   * — "Home, the session builder, Today and the review tab all read that one
+   * holder." Constructed unconditionally at class-field init (never lazily,
+   * never per-leaf) so every reader added by this row or a later one shares
+   * the identical instance; constructing a second one would reintroduce the
+   * two-holder split `session/holder.ts`'s own module doc names as the
+   * defect this bead exists to collapse.
+   */
+  private readonly studySessionHolder: StudySessionHolder = createStudySessionHolder();
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
@@ -1037,9 +1054,11 @@ export default class OleaPlugin extends Plugin {
     // `[D-243]` (`ol-egov.132.7` [SESS-8.7]): `openSessionBuilder` is gone —
     // `startSession` replaces it, wired to the review surface she actually
     // answers from (`revealReviewView`, the same door `startReview`/the Today
-    // button already use) rather than to a session-assembly screen. See
-    // `home/view.ts`'s own module doc, "What Start does NOT yet do", for why
-    // this does not yet also enter `session/holder.ts`'s shared sitting.
+    // button already use) rather than to a session-assembly screen.
+    // `[SESS-8.4]` (`ol-egov.132.4`): Start now also enters
+    // `session/holder.ts`'s shared sitting first — see
+    // `enterStudySessionHolderForStart`'s own doc — closing the gap
+    // `home/view.ts`'s module doc named ("What Start does NOT yet do").
     this.registerView(VIEW_TYPE_OLEA_HOME, (leaf) => {
       const provider = createLocalHomeProvider({
         vault,
@@ -1065,7 +1084,10 @@ export default class OleaPlugin extends Plugin {
           void this.revealRetrospectiveView();
         },
         startSession: () => {
-          void this.revealReviewView();
+          void (async () => {
+            await this.enterStudySessionHolderForStart();
+            void this.revealReviewView();
+          })();
         },
         openGrove: () => {
           void this.revealGroveView();
@@ -2166,6 +2188,112 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3c) —
+   * the port: composes a `ComposedStudySession` through the SAME assembly
+   * `createLocalSessionBuilderProvider` uses for Home and the session
+   * builder (`session-builder/provider.ts`'s `composeStudySessionForRequest`,
+   * extracted there for exactly this reuse), with no course/topic/concept
+   * steering and C5.5's declared default budget
+   * (`DEFAULT_SESSION_BUDGET_MINUTES`) — the identical one-liner
+   * `home/provider.ts` already calls for Home's own preview
+   * (`sessionProvider.load({ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES })`).
+   * One composer, two doors (`[D-033]` as amended by `[D-223]`) — this
+   * never calls `buildComposedStudySession`/`composeReentrySession` a second,
+   * differently-assembled way.
+   *
+   * `null` means either the vault wiring is not up yet (`this.review` is
+   * `null`, the same "not composed at all" posture `buildReviewSessionInput`
+   * below gives) or the study plan is not configured yet — the same
+   * `isStudyPlanConfigured` gate Home and the session builder already apply,
+   * now reached by the review tab's on-demand door too. Both `open-
+   * session.ts` (finding the holder idle) and `startSession` below (entering
+   * the holder at Start) call this and treat `null` as "nothing to compose",
+   * never a thrown error.
+   */
+  private async composeDefaultStudySession(): Promise<ComposedStudySession | null> {
+    const wiring = this.review;
+    if (wiring === null) return null;
+    const now = new Date();
+    const result = await composeStudySessionForRequest(
+      {
+        vault: wiring.vault,
+        deviceId: wiring.deviceId,
+        settingsHost: this,
+        // Unused by `composeStudySessionForRequest` itself (it takes `now`
+        // as its own explicit argument, below) — supplied only to satisfy
+        // `CreateLocalSessionBuilderProviderDeps`'s shape, the same deps
+        // shape `createLocalSessionBuilderProvider`'s own `registerView`
+        // call site below constructs.
+        now: () => now,
+        scheduler: wiring.scheduler,
+        relations: () => this.servedRelationEdges(),
+        plan: () => wiring.plan,
+      },
+      { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+      now,
+    );
+    return result?.composed.full ?? null;
+  }
+
+  /**
+   * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3b):
+   * Home's Start button is the freeze point — one `decideRebuild` call
+   * against the shared holder, then a recompose BEFORE entering if one is
+   * warranted, never during ("the only place a recompose is allowed to
+   * disagree with what Home drew"). Called by `startSession` below, before
+   * `revealReviewView`, so the review tab it opens finds the holder already
+   * holding the composition Start just committed to.
+   *
+   * **The `decideRebuild` call fires only when the holder already holds an
+   * active sitting.** An idle holder has nothing to decide from:
+   * `decideRebuild`'s between-sittings branch needs a memory of a sitting
+   * that has already ended, which this holder does not keep past `exit()`
+   * (`session/holder.ts`'s own doc — no memory across processes, and none
+   * within one either) — the identical "not reachable from this surface
+   * today, deliberately not wired" posture `session-builder/provider.ts`'s
+   * own module doc states for its own between-sittings trigger set. An idle
+   * holder simply composes, below, exactly as a genuine first Start of the
+   * plugin session must.
+   *
+   * `trigger`/`staleness` are honest zeros, not fabricated facts — the same
+   * posture `session-builder/provider.ts` took for its own `trigger` field
+   * before `ol-v7r5.26` wired real staleness signals for ITS sitting.
+   * `decideRebuild` never reads `trigger` while a sitting is active, so only
+   * `staleness` is live here, and honest zeros mean this can only ever
+   * decide `'hold'` today — real material-change detection for the SHARED
+   * holder (items due, material arrived, an assessment band crossed, since
+   * whichever surface entered it) is real future work, not this row's to
+   * build; see this bead's close evidence.
+   */
+  private async enterStudySessionHolderForStart(): Promise<void> {
+    const now = new Date();
+    const sitting = this.studySessionHolder.getSitting();
+    if (sitting.status === 'active') {
+      const decision = this.studySessionHolder.decide({
+        now,
+        trigger: {
+          lastRebuiltDay: localToday(now),
+          today: localToday(now),
+          materialLandedSinceLastRebuild: false,
+          assessmentDatePassedSinceLastRebuild: false,
+        },
+        staleness: {
+          itemsDueInScope: false,
+          materialArrivedInScope: false,
+          assessmentProximityBandCrossedInScope: false,
+        },
+      });
+      if (decision.action === 'hold') return;
+      // `[D-162]`: the sitting ENDS — never a recompose of the unreviewed
+      // tail — so this falls through to a fresh compose below, exactly like
+      // the idle case.
+      this.studySessionHolder.exit();
+    }
+    const composed = await this.composeDefaultStudySession();
+    if (composed !== null) this.studySessionHolder.enter(now, composed);
+  }
+
+  /**
    * Everything `openReviewSession` needs, read fresh at composition time —
    * shared between the ordinary open (`composeReviewSession`) and the C5.8
    * extend path (`extendReviewSession`, `ol-v7r5.35`), which otherwise would
@@ -2216,6 +2344,12 @@ export default class OleaPlugin extends Plugin {
       // F2.19 (`ol-vr8z`): resolved into `assessmentContext` inside
       // `buildReviewSession`, alongside `relations` above.
       assessments,
+      // `[SESS-8.2]`/`[SESS-8.4]` (`docs/dev/one-assembly-path.md` §3a/§3c):
+      // the one plugin-wide composed-session holder, and the port
+      // `open-session.ts` calls through when it finds that holder idle —
+      // never a private composition step of its own.
+      studySessionHolder: this.studySessionHolder,
+      composeDefaultStudySession: () => this.composeDefaultStudySession(),
     };
   }
 

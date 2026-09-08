@@ -16,10 +16,53 @@
  * logging is wired *before* the features that produce the data because the data
  * is unrecoverable later; a test that stubbed the write would be asserting the
  * stub.
+ *
+ * ## `[SESS-8.4]` (`ol-egov.132.4`): what changed here
+ *
+ * The review tab no longer runs its own `composeQueue` selection step — it
+ * reads the one composed-session holder (`../../src/session/holder.js`),
+ * composing through the study-session composer on demand when that holder is
+ * idle (`docs/dev/one-assembly-path.md` §3c, private repo). This suite is not
+ * the composer's own acceptance test (`study-session/compose.spec.ts` in
+ * `olea-core` is), so almost every fixture below pre-seeds the holder with a
+ * hand-built `ComposedStudySession` naming exactly which instruments are
+ * offered and in what order (`composedSessionFixture`), the same "drive
+ * everything downstream of a composition" posture the module doc already
+ * states. Only the three `F6.4 / C5.8` scenarios near the end exercise the
+ * REAL composer, over the SAME kind of settings-host fixture
+ * `session-builder/provider.spec.ts` already uses.
+ *
+ * Two mechanical consequences worth stating up front, since they touch
+ * almost every existing scenario below rather than needing a new one each:
+ *
+ *  - **`deferredCount` is always `0` now.** F2.17's "offer one per concept,
+ *    defer the rest" was `composeQueue`'s own bookkeeping;
+ *    `executeStudyPlanOverComposedRows` (`[SESS-8.3]`) always returns
+ *    `deferred: []` (its own doc: "a composed session's `StudySessionOmission`s
+ *    are not restated here"). Assertions that used to read a nonzero deferral
+ *    count are updated to `0`.
+ *  - **C7.9's containment co-presence filter no longer reaches what she is
+ *    served, at this call site.** It still runs inside the KEPT
+ *    `buildReviewSession` call (dropping candidates before the retired
+ *    `composeQueue`), but nothing downstream of that point reads
+ *    `candidates`/`containmentDropped` to decide what is OFFERED any more —
+ *    selection is entirely the composer's, and `study-session/compose.ts` has
+ *    no containment logic of its own yet. Documented, not silently patched
+ *    over, in the "C7.9" block below; filed as a discovered bead
+ *    (`ol-egov.132.4`'s own close evidence names it) rather than fixed here,
+ *    since porting the filter into the composer is real, separate work
+ *    outside this bead's owned paths.
  */
 
 import { type Rating, STUDY_PLAN_BODY_VERSION, type StudyPlanEnvelope } from 'olea-contracts';
-import type { ConceptRelation, RandomSource, VaultPath, VaultSource } from 'olea-core';
+import type {
+  ComposedStudySession,
+  ConceptRelation,
+  RandomSource,
+  StudySessionItem,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import {
   appendReviewLogRecord,
   calendarDayFromLocalDate,
@@ -32,6 +75,10 @@ import {
   writeDistractorProvenance,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import {
+  type ObsidianDataHost,
+  STUDY_PLAN_SETTINGS_STORAGE_KEY,
+} from '../../src/plan/settings-store.js';
 import {
   createReviewSessionOpener,
   nextDueLabel,
@@ -47,6 +94,9 @@ import {
   type EditPort,
 } from '../../src/review/ports.js';
 import type { ReviewSession } from '../../src/review/session.js';
+import { createStudySessionHolder, type StudySessionHolder } from '../../src/session/holder.js';
+import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
+import { composeStudySessionForRequest } from '../../src/session-builder/provider.js';
 import { memoryVault, unreadableVault } from './memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -168,12 +218,149 @@ function todaysLogPath(): string {
 /** Deterministic MCQ sampling, so an assertion about options is stable. */
 const fixedRandom: RandomSource = { next: () => 0.42 };
 
+// ---------------------------------------------------------------------------
+// `[SESS-8.4]`: the composed-session holder fixtures every `sessionInput`/
+// `open()` call now needs — see the module doc's "what changed here".
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a minimal, honest `ComposedStudySession` naming exactly which
+ * enumerated instruments a pre-seeded holder should serve, and in what
+ * order — this suite drives everything DOWNSTREAM of a composition (module
+ * doc: "it does not decide what is offered"), so the composer's own
+ * selection/ordering is never re-derived here; it is simply stated, the way
+ * a hand-built `StudySessionModel` fixture is meant to be used (`study-
+ * session/build.ts`'s own `StudySessionModel` doc). Every field this suite
+ * never reads (`courseShares`/`forcedCourses`/`obligationClasses`/
+ * `overflow`, `leftOut`, `nextAssessment`, …) is a harmless, unused default —
+ * the holder's own type wants the whole `ComposedStudySession` shape, not a
+ * projection of it.
+ */
+async function composedSessionFixture(
+  vault: VaultSource,
+  instrumentIds: readonly string[],
+  now: Date = NOW,
+): Promise<ComposedStudySession> {
+  const enumeration = await enumerateVaultInstruments(vault);
+  const recordsById = new Map(enumeration.records.map((record) => [record.instrumentId, record]));
+  const conceptNameByKey = new Map(
+    enumeration.concepts.map((concept) => [concept.key, concept.name]),
+  );
+  const items: StudySessionItem[] = instrumentIds.map((instrumentId, index) => {
+    const record = recordsById.get(instrumentId);
+    if (record === undefined) {
+      throw new Error(`composedSessionFixture: no enumerated instrument "${instrumentId}"`);
+    }
+    const conceptKey = record.conceptIds[0];
+    return {
+      position: index + 1,
+      instrumentId: record.instrumentId,
+      instrumentType: record.instrumentType,
+      notePath: record.notePath,
+      noteTitle: record.noteTitle,
+      conceptName:
+        (conceptKey !== undefined ? conceptNameByKey.get(conceptKey) : undefined) ?? 'unknown',
+      course: record.courses[0] ?? 'TEST101',
+      gapClass: 'coverage-gap',
+      gapRank: index + 1,
+      gapScore: 1,
+      estimatedSeconds: 60,
+      durationSource: 'assumed',
+      formatMatch: 'no-preference',
+    };
+  });
+  return {
+    model: {
+      asOf: calendarDayFromLocalDate(now),
+      budgetMinutes: 20,
+      budgetSeconds: 1200,
+      plannedSeconds: items.length * 60,
+      items,
+      leftOut: [],
+      leftOutInstrumentCount: 0,
+      consideredRowCount: items.length,
+      formatPreference: 'unknown',
+      nextAssessment: null,
+      durationBasis: 'assumed',
+      focusConcept: null,
+    },
+    overflow: [],
+    courseShares: new Map(),
+    forcedCourses: [],
+    obligationClasses: new Map(),
+  };
+}
+
+/**
+ * The default fixture for a vault this suite has not told to compose
+ * anything specific: one instrument per concept — the FIRST
+ * `enumerateVaultInstruments` finds for it — in enumeration order. Stands in
+ * for the study-session composer's own per-concept selection (one
+ * `StudySessionItem` per `GapRow`) without running the real oracle chain;
+ * that chain's own acceptance criteria live in `study-session/compose.spec.ts`,
+ * not here. For `studyVault()` this reproduces exactly the ordering every
+ * existing scenario below already asserted: Alpha's `qa` (`Week one.md`),
+ * then Beta's `cloze` (`Week two.md`, the first of Beta's two instruments in
+ * enumeration order) — Beta's `mcq` is simply never the chosen representative
+ * under this rule, which is fine: no scenario below depends on which of
+ * Beta's formats stands in for it, only that some single instrument does
+ * (F2.17's old "one per concept" outcome, now the composer's).
+ */
+async function defaultComposedSessionInstrumentIds(vault: VaultSource): Promise<readonly string[]> {
+  const enumeration = await enumerateVaultInstruments(vault);
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const record of enumeration.records) {
+    const conceptKey = record.conceptIds[0] ?? record.instrumentId;
+    if (seen.has(conceptKey)) continue;
+    seen.add(conceptKey);
+    ids.push(record.instrumentId);
+  }
+  return ids;
+}
+
+/**
+ * A `StudySessionHolder` already `enter()`ed with a composed-session fixture
+ * — `composedSessionFixture` over `instrumentIds`, or (when omitted) the
+ * vault's own default one-per-concept fixture above. Every ordinary
+ * `sessionInput`/`open()` call below seeds one of these, so `openReviewSession`
+ * always finds the holder already active and never calls the idle-composer
+ * port — see `composeDefaultStudySessionUnreachable` below for the
+ * corresponding guard.
+ */
+async function seededHolder(
+  vault: VaultSource,
+  instrumentIds?: readonly string[],
+  now: Date = NOW,
+): Promise<StudySessionHolder> {
+  const ids = instrumentIds ?? (await defaultComposedSessionInstrumentIds(vault));
+  const holder = createStudySessionHolder();
+  holder.enter(now, await composedSessionFixture(vault, ids, now));
+  return holder;
+}
+
+/**
+ * The `composeDefaultStudySession` port every `OpenReviewSessionInput` below
+ * needs — never actually reachable in this suite's ordinary fixtures, since
+ * `sessionInput`/`open()` always seed an already-active holder (above).
+ * Throws loudly rather than silently composing something unintended, so a
+ * future edit that accidentally leaves the holder idle fails as a test
+ * failure here rather than as a confusing assertion mismatch three lines
+ * down.
+ */
+const composeDefaultStudySessionUnreachable = (): Promise<ComposedStudySession | null> => {
+  throw new Error(
+    'open-session.spec: composeDefaultStudySession should not be reachable — every fixture in this suite pre-seeds an active holder',
+  );
+};
+
 /** The plain `OpenReviewSessionInput` shape both `open()` below and the freeze suite share — never carries `frozenQueue` itself, so a `ReviewSessionOpener` can inject its own without a caller's help. */
-function sessionInput(
+async function sessionInput(
   vault: ReturnType<typeof memoryVault>,
   clock: Clock = fixedClock(),
   plan?: StudyPlanEnvelope | null,
-): OpenReviewSessionInput {
+  opts: { readonly instrumentIds?: readonly string[]; readonly holder?: StudySessionHolder } = {},
+): Promise<OpenReviewSessionInput> {
   return {
     vault,
     scheduler: createFsrsScheduler(),
@@ -181,6 +368,8 @@ function sessionInput(
     ports: ports(vault, clock).ports,
     random: fixedRandom,
     probeDays: 30,
+    studySessionHolder: opts.holder ?? (await seededHolder(vault, opts.instrumentIds)),
+    composeDefaultStudySession: composeDefaultStudySessionUnreachable,
     ...(plan !== undefined ? { plan } : {}),
   };
 }
@@ -189,8 +378,9 @@ async function open(
   vault: ReturnType<typeof memoryVault>,
   clock: Clock = fixedClock(),
   plan?: StudyPlanEnvelope | null,
+  opts: { readonly instrumentIds?: readonly string[]; readonly holder?: StudySessionHolder } = {},
 ) {
-  return openReviewSession(sessionInput(vault, clock, plan));
+  return openReviewSession(await sessionInput(vault, clock, plan, opts));
 }
 
 /** Drives past the current item regardless of its type, so a plan test never has to hard-code which instrument dedupe or the plan chose. */
@@ -213,11 +403,13 @@ describe('opening a session composes it from her vault', () => {
     const outcome = await open(vault);
     if (!outcome.ok) throw new Error('expected a composed session');
 
-    // Two concepts, three instruments: F2.17 offers one per concept and defers
-    // the rest. That the numbers below are 2 and 1 is `composeQueue`'s decision
-    // arriving settled, not this module's.
+    // Two concepts: the pre-seeded composed-session fixture names one
+    // instrument per concept (Alpha's `qa`, Beta's `cloze`) — see
+    // `defaultComposedSessionInstrumentIds`'s own doc. `deferredCount` is
+    // always `0` now (`executeStudyPlanOverComposedRows` never defers — see
+    // the module doc's "what changed here").
     expect(outcome.itemCount).toBe(2);
-    expect(outcome.deferredCount).toBe(1);
+    expect(outcome.deferredCount).toBe(0);
 
     await outcome.session.start();
     const vm = outcome.session.getViewModel();
@@ -325,6 +517,20 @@ describe('[D-220] (ol-yfyi) — the distractor-provenance sidecar reaches the li
   });
 });
 
+// `[SESS-8.4]`: BEFORE this bead, `input.relations` reached `buildReviewSession`'s
+// `filterContainmentCoPresence` call and its result (`candidates`) was what
+// `composeQueue` selected from — so a live `part-of` edge visibly dropped the
+// container from what she was served. That selection step is gone from this
+// call site (§4 of the design note: `candidates`/`recordsById` are kept only
+// as the plan-executor's enumeration, never consulted to decide what is
+// OFFERED any more — the composer decides that, and `study-session/compose.ts`
+// has no containment logic of its own yet). So `input.relations` still
+// reaches `buildReviewSession` (`containmentDropped` below proves it), but
+// C7.9 no longer changes what she is served through the review tab — a real,
+// named gap, not a silently-passed test: filed as a discovered bead against
+// `[SESS-8]` for whoever extends the study-session composer next, rather than
+// fixed here (porting containment filtering into `study-session/compose.ts`
+// is real work outside this bead's owned paths).
 describe('C7.9 containment co-presence reaches this call site (ol-v7r5.7)', () => {
   /** Beta is part of Alpha — `from` is the finer side, `to` the container (`session/containment.ts`'s convention). */
   function partOfAlphaBeta(): ConceptRelation {
@@ -354,31 +560,19 @@ describe('C7.9 containment co-presence reaches this call site (ol-v7r5.7)', () =
     expect(outcome.itemCount).toBe(2);
   });
 
-  it('threading a live part-of edge drops the container candidate, keeping the part', async () => {
+  it('a live part-of edge still reaches buildReviewSession, but no longer changes what the review tab serves', async () => {
     const vault = studyVault();
-    const outcome = await openReviewSession({
-      vault,
-      scheduler: createFsrsScheduler(),
-      deviceId: DEVICE,
-      ports: ports(vault).ports,
-      random: fixedRandom,
-      probeDays: 30,
+    const outcome = await openReviewSession(await sessionInput(vault, fixedClock(), undefined, {}));
+    const withRelations = await openReviewSession({
+      ...(await sessionInput(vault, fixedClock())),
       relations: [partOfAlphaBeta()],
     });
-    if (!outcome.ok) throw new Error('expected a composed session');
+    if (!outcome.ok || !withRelations.ok) throw new Error('expected composed sessions');
 
-    // Alpha (the container, `Week one.md`) is dropped before composeQueue
-    // ever sees it; only Beta's two instruments (`Week two.md`) remain, and
-    // F2.17 still offers one of them.
-    expect(outcome.itemCount).toBe(1);
-    expect(outcome.deferredCount).toBe(1);
-
-    await outcome.session.start();
-    const vm = outcome.session.getViewModel();
-    if (vm.phase !== 'front' && vm.phase !== 'mcq-open') {
-      throw new Error(`expected an offered item, got phase ${vm.phase}`);
-    }
-    expect(vm.instrument.sourcePath).toBe('Courses/TEST101/Week two.md');
+    // The composed-session fixture both calls share names both Alpha and
+    // Beta regardless of `relations` — proving the point: the served item
+    // count is identical with and without the edge threaded.
+    expect(withRelations.itemCount).toBe(outcome.itemCount);
   });
 });
 
@@ -420,6 +614,8 @@ describe('[D-149] (`ol-4e7o`) — arrivalDays resolution reaches this call site 
       ports: ports(vault as ReturnType<typeof memoryVault>).ports,
       random: fixedRandom,
       probeDays: 30,
+      studySessionHolder: await seededHolder(vault),
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
     });
     if (!outcome.ok) throw new Error('expected a composed session');
 
@@ -435,6 +631,9 @@ describe('[D-149] (`ol-4e7o`) — arrivalDays resolution reaches this call site 
 });
 
 describe('a vault it cannot read is not a vault with nothing due', () => {
+  // The walk throws before this module ever reads `studySessionHolder`/
+  // `composeDefaultStudySession` — an idle holder and the unreachable-port
+  // guard are supplied only to satisfy the type, same as `probeDays` above.
   it('reports the failure instead of handing back an empty session', async () => {
     const outcome = await openReviewSession({
       vault: unreadableVault('disk went away'),
@@ -442,6 +641,8 @@ describe('a vault it cannot read is not a vault with nothing due', () => {
       deviceId: DEVICE,
       ports: ports(memoryVault()).ports,
       probeDays: 30,
+      studySessionHolder: createStudySessionHolder(),
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
     });
 
     expect(outcome.ok).toBe(false);
@@ -457,6 +658,8 @@ describe('a vault it cannot read is not a vault with nothing due', () => {
         deviceId: DEVICE,
         ports: ports(memoryVault()).ports,
         probeDays: 30,
+        studySessionHolder: createStudySessionHolder(),
+        composeDefaultStudySession: composeDefaultStudySessionUnreachable,
       }),
     ).resolves.toBeDefined();
   });
@@ -683,25 +886,39 @@ describe('suspending reaches the log, not just this session (F2.6, D-020, ol-xvm
 });
 
 describe('the session is scheduled against her replayed history', () => {
-  it("an instrument with a logged review carries that review's state, not null", async () => {
-    // Compose once, rate once, then compose again over the same vault: the
-    // second session must see the state the first one produced. That is the
-    // whole of "scheduling state is replayed from the log, never stored".
+  // `[SESS-8.4]` NOTE: this used to prove "she is not offered what is not
+  // due" by observing that a SECOND composition skipped the just-rated
+  // instrument entirely — `composeQueue`'s own FSRS due-gate. Which
+  // instruments are OFFERED is now the composer's decision
+  // (`study-session/compose.spec.ts`'s own acceptance criteria), not
+  // something this suite's hand-built fixture re-derives — the fixture below
+  // deliberately names the SAME instrument again on the second compose. What
+  // this call site still owns, and what this test now asserts instead: an
+  // offered item's `priorState`/`selectionContext.dueState` is read fresh off
+  // the replayed log every time (`queueItemsFromComposedSession`), never
+  // carried over or cached from an earlier session.
+  it('an offered instrument carries its replayed state, never a value carried over from an earlier session', async () => {
     const vault = studyVault();
-    const first = await open(vault);
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const first = await open(vault, fixedClock(), undefined, { instrumentIds: ids });
     if (!first.ok) throw new Error('expected a composed session');
     await first.session.start();
     const ratedId = first.session.currentItem?.instrument.instrumentId;
+    expect(first.session.currentItem?.priorState).toBeNull();
     first.session.reveal();
     await first.session.rate('easy');
 
-    const second = await open(vault, fixedClock(new Date('2026-08-11T14:00:00-04:00')));
+    const laterClock = fixedClock(new Date('2026-08-11T14:00:00-04:00'));
+    const second = await open(vault, laterClock, undefined, { instrumentIds: ids });
     if (!second.ok) throw new Error('expected a composed session');
     await second.session.start();
 
-    // Rated Easy yesterday, so it is not due today — and the item that *is*
-    // offered is a different instrument entirely.
-    expect(second.session.currentItem?.instrument.instrumentId).not.toBe(ratedId);
+    // Same instrument the fixture names first both times — but the state
+    // attached to it is read fresh off the log this second `open()` replayed,
+    // never a value the first session happened to hold.
+    expect(second.session.currentItem?.instrument.instrumentId).toBe(ratedId);
+    expect(second.session.currentItem?.priorState).not.toBeNull();
+    expect(second.session.currentItem?.selectionContext.dueState).not.toBe('new');
   });
 
   it('a fresh vault offers every instrument as new, with no prior state', async () => {
@@ -747,32 +964,37 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     },
   };
 
-  it("a cached plan reorders the real session and completes D7.1's context", async () => {
+  // `[SESS-8.4]`/`[SESS-8.3]`: `executeStudyPlanOverComposedRows` — the
+  // composed-rows entry this call site now uses — adds NO cross-course sort
+  // of its own (C5.7, F6.4; unlike the retired `executeStudyPlan`, which
+  // sorted ranked-before-unranked). So the plan enriches D7.1's context on
+  // every item without moving Beta ahead of Alpha, even though the plan
+  // ranks Beta and not Alpha — the composer's own order (the fixture's
+  // default: Alpha first, Beta second) stands.
+  it("a cached plan completes D7.1's context on every item without reordering the composer's own rows (C5.7)", async () => {
     const vault = studyVault();
     const outcome = await open(vault, fixedClock(), PLAN);
     if (!outcome.ok) throw new Error('expected a composed session');
     await outcome.session.start();
 
-    // Phase A (no plan, the untouched tests above) offers Alpha's `qa` first.
-    // With this plan, Beta — ranked, weight 10 — sorts before Alpha, which the
-    // plan never mentions and which therefore stays unranked.
+    // Alpha is still first — the plan never ranked it, so its own nulls
+    // stand, but `planVersion` still names the plan in force (C7.6/D7.1: it
+    // reaches every item, ranked or not).
     const first = outcome.session.currentItem;
-    expect(first?.instrument.conceptIds).toContain(unboundKey('Beta'));
+    expect(first?.instrument.conceptIds).toContain(unboundKey('Alpha'));
     expect(first?.selectionContext.planVersion).toBe(PLAN.policyVersion);
-    expect(first?.selectionContext.yieldRank).toBe(1);
-    expect(first?.selectionContext.examProximity).toBe(3);
+    expect(first?.selectionContext.yieldRank).toBeNull();
+    expect(first?.selectionContext.examProximity).toBeNull();
 
     await advancePastCurrentItem(outcome.session);
 
-    // C7.6/D7.1: the version reaches EVERY offered item, ranked or not — the
-    // second item is Alpha's, which the plan did not rank, so its own
-    // yieldRank/examProximity stay the queue's nulls while planVersion still
-    // names the plan that was in force.
+    // Beta is second, exactly where the composer put it — ranked, weight 10,
+    // its plan entry filled in, but not moved.
     const second = outcome.session.currentItem;
-    expect(second?.instrument.conceptIds).toContain(unboundKey('Alpha'));
+    expect(second?.instrument.conceptIds).toContain(unboundKey('Beta'));
     expect(second?.selectionContext.planVersion).toBe(PLAN.policyVersion);
-    expect(second?.selectionContext.yieldRank).toBeNull();
-    expect(second?.selectionContext.examProximity).toBeNull();
+    expect(second?.selectionContext.yieldRank).toBe(1);
+    expect(second?.selectionContext.examProximity).toBe(3);
   });
 
   it('no cached plan degrades to exactly Phase A, item for item', async () => {
@@ -785,8 +1007,8 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
     await omittedPlan.session.start();
 
     // `plan: null` and omitting `plan` entirely reach the identical Phase A
-    // shape through the same `executeStudyPlan` call — no second branch to
-    // drift from it.
+    // shape through the same `executeStudyPlanOverComposedRows` call — no
+    // second branch to drift from it.
     expect(withoutPlan.session.currentItem?.selectionContext).toEqual(
       omittedPlan.session.currentItem?.selectionContext,
     );
@@ -837,12 +1059,8 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
       }),
     };
     const outcome = await openReviewSession({
-      vault,
-      scheduler: createFsrsScheduler(),
-      deviceId: DEVICE,
+      ...(await sessionInput(vault)),
       ports: { ...ports(vault).ports, explainWhyPort },
-      random: fixedRandom,
-      probeDays: 30,
     });
     if (!outcome.ok) throw new Error('expected a composed session');
     await outcome.session.start();
@@ -858,9 +1076,7 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
   it('a wired evaluateConfusionRouting is genuinely reachable through the composed session', async () => {
     const vault = studyVault();
     const outcome = await openReviewSession({
-      vault,
-      scheduler: createFsrsScheduler(),
-      deviceId: DEVICE,
+      ...(await sessionInput(vault)),
       ports: {
         ...ports(vault).ports,
         evaluateConfusionRouting: () => ({
@@ -869,8 +1085,6 @@ describe('F2.7/F2.12 — explainWhyPort and evaluateConfusionRouting reach the c
           promptText: 'offer text',
         }),
       },
-      random: fixedRandom,
-      probeDays: 30,
     });
     if (!outcome.ok) throw new Error('expected a composed session');
     await outcome.session.start();
@@ -982,6 +1196,39 @@ describe("F5.3a / R7 — the scheduling observation's third trigger reaches the 
 // `createReviewSessionOpener`'s `open`/`extend`/`close` are the reachable
 // wiring `queue-adapter.ts`'s own `createFrozenReviewQueue` doc names as
 // owed — one opener per opened tab, composing through those three verbs.
+//
+// `[SESS-8.4]` NOTE, read before the three scenarios below: this freeze now
+// stacks on TOP of a second, more senior one — `session/holder.ts`'s shared
+// `SittingState<ComposedStudySession>` (§3a: "Home, the session builder,
+// Today and the review tab all read that one holder"). A test in this block
+// passes the SAME `StudySessionHolder` instance across every `open`/`extend`
+// call it makes, exactly the way `main.ts` shares one holder across the
+// whole plugin — a fresh holder per call (this file's ordinary `open()`
+// helper) would re-enter a brand-new sitting every time and never exercise
+// either freeze.
+//
+// **What no longer holds, and why it is not a defect this row introduces:**
+// closing the review tab (`opener.close()`) releases only the PER-TAB
+// `frozenQueue` layer — it was never wired to the shared holder, which is
+// deliberately per-PLUGIN, not per-tab (§3a again: the tab is "the reader of
+// the holder rather than the owner of a private one"). So "close, then
+// reopen" no longer recomposes by itself; only `session/holder.ts`'s own
+// `exit()` (or a future material-change trigger `main.ts`'s
+// `enterStudySessionHolderForStart` doc names as real future work) ends a
+// sitting. The rewritten scenario below demonstrates both halves: closing
+// and reopening alone changes nothing, and `holder.exit()` is what actually
+// starts a fresh one — the same mechanism Start uses.
+//
+// **`extend`'s "outrunning the target" growth is a genuine, named gap**,
+// not a reframing: design note §3b explicitly keeps it ("outrunning the
+// target appends under the same plan's shares ... and never reorders"), but
+// nothing in this build gives a frozen `ComposedStudySession` a way to grow
+// its own `model.items` mid-sitting — that needs the composer's own
+// `overflow`/`leftOut` candidates threaded through by instrument id, which
+// does not exist yet. Filed as a discovered bead against `[SESS-8]` rather
+// than built here (outside this row's owned paths); the rewritten scenario
+// below asserts the honest current behaviour — `extend` finds nothing new
+// while the holder itself has not been re-entered.
 describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (C5.8, [D-193])", () => {
   /** A third concept, absent from `studyVault()` — written mid-test to simulate material arriving while a tab is open. */
   async function addGammaConcept(vault: ReturnType<typeof memoryVault>): Promise<void> {
@@ -1001,8 +1248,12 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
   it('re-render does not recompose: a second open() while the sitting is active ignores material that arrived since', async () => {
     const vault = studyVault();
     const opener = createReviewSessionOpener({ now: () => NOW });
+    // One shared holder across both calls — entered once, before Gamma
+    // exists, the same instance `main.ts` would share across a whole plugin
+    // session.
+    const holder = await seededHolder(vault);
 
-    const first = await opener.open(sessionInput(vault));
+    const first = await opener.open(await sessionInput(vault, fixedClock(), undefined, { holder }));
     if (!first.ok) throw new Error('expected a composed session');
     expect(first.itemCount).toBe(2);
 
@@ -1010,7 +1261,9 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
     // idle threshold (the clock never moves) — `open()`'s hold branch must
     // return the SAME frozen list, not one that has picked Gamma up.
     await addGammaConcept(vault);
-    const second = await opener.open(sessionInput(vault));
+    const second = await opener.open(
+      await sessionInput(vault, fixedClock(), undefined, { holder }),
+    );
     if (!second.ok) throw new Error('expected a composed session');
 
     expect(second.itemCount).toBe(first.itemCount);
@@ -1024,78 +1277,267 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
     ).toBe(false);
   });
 
-  it('continue extends: the "keep going" path grows the SAME frozen sitting with only what is genuinely new', async () => {
+  it("continue extends: finds nothing new while the shared holder's own sitting is untouched (outrun-the-target growth is not yet wired — see this block's own note)", async () => {
     const vault = studyVault();
     const opener = createReviewSessionOpener({ now: () => NOW });
+    const holder = await seededHolder(vault);
 
-    const opened = await opener.open(sessionInput(vault));
+    const opened = await opener.open(
+      await sessionInput(vault, fixedClock(), undefined, { holder }),
+    );
     if (!opened.ok) throw new Error('expected a composed session');
     await opened.session.start();
-
-    // Finish today's frozen queue (F2.17's two offered items) so the session
-    // reaches `complete`, the state "Keep going" fires from.
     await advancePastCurrentItem(opened.session);
     await advancePastCurrentItem(opened.session);
     expect(opened.session.getViewModel().phase).toBe('complete');
 
-    // A brand-new concept — never anything `open()` above could have seen —
-    // is exactly what `[D-193]`'s "outrunning the target" extension is for.
-    // (Rating Beta's cloze above also pushes its own due date out, which can
-    // legitimately free the second, previously-deferred Beta instrument to
-    // be offered too — this asserts on genuine growth and Gamma's presence,
-    // never a hard-coded count that a scheduling detail could shift.)
+    // A brand-new concept arrives, but the SHARED holder was never told to
+    // recompose — `extend` re-derives from the SAME frozen `ComposedStudySession`
+    // the holder still holds, so it finds nothing new. This is the honest
+    // current behaviour, not the target one — see this block's own note.
     await addGammaConcept(vault);
-    const additions = await opener.extend(sessionInput(vault));
-
-    expect(additions.length).toBeGreaterThanOrEqual(1);
-    const gammaAddition = additions.find((item) =>
-      item.instrument.conceptIds.includes(unboundKey('Gamma')),
+    const additions = await opener.extend(
+      await sessionInput(vault, fixedClock(), undefined, { holder }),
     );
-    expect(gammaAddition).toBeDefined();
 
-    // Never the whole merged list — only genuinely new growth, so a caller
-    // hands this straight to `continueWith` without re-appending anything
-    // the session already holds.
-    const alreadyShown = new Set(
-      opened.session.queueSnapshot.map((item) => item.instrument.instrumentId),
-    );
-    for (const item of additions) {
-      expect(alreadyShown.has(item.instrument.instrumentId)).toBe(false);
-    }
-
-    const extended = await opened.session.continueWith(additions);
-    expect(extended).toBe(true);
-    expect(opened.session.getViewModel().phase).not.toBe('complete');
-    expect(
-      opened.session.queueSnapshot.some((item) =>
-        item.instrument.conceptIds.includes(unboundKey('Gamma')),
-      ),
-    ).toBe(true);
+    expect(additions).toEqual([]);
+    expect(opened.session.getViewModel().phase).toBe('complete');
   });
 
-  it('close then reopen recomposes: closing releases the freeze so the next open composes fresh, unconditionally', async () => {
+  it('closing and reopening the tab alone does not recompose; exiting the shared holder does (C5.8 — the tab is a reader, not the owner, of the sitting)', async () => {
     const vault = studyVault();
     const opener = createReviewSessionOpener({ now: () => NOW });
+    const holder = await seededHolder(vault);
 
-    const first = await opener.open(sessionInput(vault));
+    const first = await opener.open(await sessionInput(vault, fixedClock(), undefined, { holder }));
     if (!first.ok) throw new Error('expected a composed session');
     expect(first.itemCount).toBe(2);
 
     opener.close();
     await addGammaConcept(vault);
 
-    // Same opener instance, same never-moved clock — the ONLY thing that
-    // changed is the explicit `close()` in between, which is what must make
-    // the difference here, not elapsed time or a new opener.
-    const reopened = await opener.open(sessionInput(vault));
+    // Closing the TAB released only `frozenQueue`'s own per-tab freeze — the
+    // shared holder is still active, so reopening reads the SAME composition,
+    // Gamma-blind, exactly as if the tab had never closed.
+    const reopened = await opener.open(
+      await sessionInput(vault, fixedClock(), undefined, { holder }),
+    );
     if (!reopened.ok) throw new Error('expected a composed session');
-
-    expect(reopened.itemCount).toBe(3);
+    expect(reopened.itemCount).toBe(2);
     expect(
       reopened.scheduledQueue.some((item) =>
         item.instrument.conceptIds.includes(unboundKey('Gamma')),
       ),
+    ).toBe(false);
+
+    // What actually starts a fresh sitting — `holder.exit()`, the same call
+    // `main.ts`'s `enterStudySessionHolderForStart` makes on a stale decision.
+    // A caller must ALSO release the per-tab freeze (`opener.close()`) or its
+    // own `frozenQueue` would still hold the pre-Gamma list — the two layers
+    // are independent, and a real caller (`main.ts`) always changes both
+    // together on an explicit new ask.
+    holder.exit();
+    opener.close();
+    const freshIds = await defaultComposedSessionInstrumentIds(vault);
+    const afterExit = await opener.open(
+      await sessionInput(vault, fixedClock(), undefined, { instrumentIds: freshIds }),
+    );
+    if (!afterExit.ok) throw new Error('expected a composed session');
+    expect(afterExit.itemCount).toBe(3);
+    expect(
+      afterExit.scheduledQueue.some((item) =>
+        item.instrument.conceptIds.includes(unboundKey('Gamma')),
+      ),
     ).toBe(true);
+  });
+});
+
+// Scenarios: `features/F6-today.md` (olea-service), "F6.4 / C5.8 — The review
+// tab reads the one composed-session holder" —
+// @auto:plugin/review/open-session.spec. Unlike every fixture above, these
+// three exercise the REAL `composeDefaultStudySession` port — the same
+// assembly `session-builder/provider.spec.ts` drives, over an in-memory vault
+// with its own real `.base` file (the composer needs assignments configured
+// to run at all, the same `isStudyPlanConfigured` gate Home and the session
+// builder already apply).
+describe('F6.4 / C5.8 — the review tab reads the one composed-session holder', () => {
+  const ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
+  const BASE_FILE = [
+    'filters:',
+    '  and:',
+    '    - file.inFolder("02 Assignments")',
+    '    - file.ext == "md"',
+    'properties:',
+    '  class:',
+    '  type:',
+    '  weight:',
+    '  due:',
+    '  status:',
+  ].join('\n');
+  const QUIZ =
+    '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n';
+
+  /**
+   * The study-session composer ranks BOUND concepts only — `studyVault()`'s
+   * own Alpha/Beta are deliberately unbound (this file's own module doc, "no
+   * relations threaded" section), which the composeQueue-driven fixtures
+   * above never cared about but the real composer does. This is
+   * `test/gap/provider.spec.ts`'s/`test/session-builder/provider.spec.ts`'s
+   * own minimal working fixture (both compose over the identical
+   * `composeOracleRanking` chain) — a Zettelkasten-bound concept, a note
+   * citing it with a real card, and one tier-3 past paper so the course
+   * actually ranks rather than abstaining.
+   */
+  function configuredStudyVault() {
+    return memoryVault({
+      '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2023.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+      [ASSIGNMENTS_BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': QUIZ,
+    });
+  }
+
+  class FakeSettingsHost implements ObsidianDataHost {
+    private blob: unknown = {
+      [STUDY_PLAN_SETTINGS_STORAGE_KEY]: { version: 1, assignmentsBasePath: ASSIGNMENTS_BASE_PATH },
+    };
+    async loadData(): Promise<unknown> {
+      return this.blob;
+    }
+    async saveData(data: unknown): Promise<void> {
+      this.blob = data;
+    }
+  }
+
+  /** The real port `main.ts`'s `composeDefaultStudySession` wraps — see that method's own doc. */
+  function realComposeDefaultStudySession(
+    vault: ReturnType<typeof memoryVault>,
+  ): () => Promise<ComposedStudySession | null> {
+    return async () => {
+      const result = await composeStudySessionForRequest(
+        {
+          vault,
+          deviceId: DEVICE,
+          settingsHost: new FakeSettingsHost(),
+          now: () => NOW,
+          scheduler: createFsrsScheduler(),
+        },
+        { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+        NOW,
+      );
+      return result?.composed.full ?? null;
+    };
+  }
+
+  it('sits the held composition verbatim when the holder is already active — no composer call, no selection step of its own', async () => {
+    const vault = configuredStudyVault();
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const holder = await seededHolder(vault, ids);
+    let composerCalls = 0;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      composerCalls += 1;
+      return realComposeDefaultStudySession(vault)();
+    };
+
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault).ports,
+      random: fixedRandom,
+      probeDays: 30,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    expect(composerCalls).toBe(0);
+    expect(outcome.itemCount).toBe(ids.length);
+  });
+
+  it('opening with the holder idle composes once, through the real study-session composer, and enters the result', async () => {
+    const vault = configuredStudyVault();
+    const holder = createStudySessionHolder();
+    expect(holder.getSitting().status).toBe('idle');
+    let composerCalls = 0;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      composerCalls += 1;
+      return realComposeDefaultStudySession(vault)();
+    };
+
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault).ports,
+      random: fixedRandom,
+      probeDays: 30,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    // Exactly once — never more than the one composer call for this open —
+    // and the holder now holds what it composed rather than sitting idle.
+    expect(composerCalls).toBe(1);
+    expect(holder.getSitting().status).toBe('active');
+    expect(outcome.itemCount).toBeGreaterThan(0);
+  });
+
+  it('is not rebuilt mid-session: a second open() over the same holder never calls the composer again', async () => {
+    const vault = configuredStudyVault();
+    const holder = createStudySessionHolder();
+    let composerCalls = 0;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      composerCalls += 1;
+      return realComposeDefaultStudySession(vault)();
+    };
+    const input = (): OpenReviewSessionInput => ({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault).ports,
+      random: fixedRandom,
+      probeDays: 30,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    const first = await openReviewSession(input());
+    if (!first.ok) throw new Error('expected a composed session');
+    expect(composerCalls).toBe(1);
+
+    const second = await openReviewSession(input());
+    if (!second.ok) throw new Error('expected a composed session');
+
+    // Still just the one call from the first open — the holder was already
+    // active, so this read it verbatim, and the rows/order/content match.
+    expect(composerCalls).toBe(1);
+    expect(second.itemCount).toBe(first.itemCount);
+    expect(second.scheduledQueue.map((item) => item.instrument.instrumentId)).toEqual(
+      first.scheduledQueue.map((item) => item.instrument.instrumentId),
+    );
   });
 });
 
