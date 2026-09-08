@@ -30,7 +30,10 @@ import {
   buildComposedStudySession,
   classifyObligation,
   composeSessionRows,
+  FOCUS_BRANCH_SENTENCE,
+  MIN_BLOCK_SECONDS,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
+  URGENCY_OVERRIDE_THRESHOLD,
   withinBlockCohortAffinity,
   withinBlockCohortDecayWeight,
 } from './compose.js';
@@ -2028,5 +2031,394 @@ describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
     expect(alphaFirst[0]?.instrumentType).toBe('qa');
     // F2.17's cap: once, outside any final week.
     expect(alphaFirst).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-244]` (`[FOCUS-3]`, `ol-egov.137.2`): the focus policy — scenarios
+// `features/F2-review.md` F2.18 and `features/F6-today.md` C5.6 name.
+// ---------------------------------------------------------------------------
+
+describe('[FOCUS-3] focusPolicy', () => {
+  function focusAllocationEntry(
+    overrides: Partial<StudyPlanAllocationEntry> & { courseId: string; risk: number },
+  ): StudyPlanAllocationEntry {
+    return {
+      share: 0,
+      minBlockSeconds: 60,
+      reason: `${overrides.courseId} gets its share.`,
+      ...overrides,
+      contributions: [{ name: 'risk', value: overrides.risk }],
+    };
+  }
+
+  it('the declared constants match the pre-commitments verbatim', () => {
+    expect(URGENCY_OVERRIDE_THRESHOLD).toBeCloseTo(1 / 14);
+    expect(MIN_BLOCK_SECONDS).toBe(180);
+  });
+
+  it('every-course (the default, and omitting the field) composes byte-identically', () => {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const base = {
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+    };
+    const omitted = composeSessionRows(base);
+    const explicitEveryCourse = composeSessionRows({
+      ...base,
+      focusPolicy: 'every-course' as const,
+    });
+
+    // Byte-identical shape: no new field appears unless the caller opted in.
+    expect(Object.keys(omitted).sort()).not.toContain('focusPolicy');
+    expect(Object.keys(omitted).sort()).not.toContain('dominantCourse');
+    // Same selection either way.
+    expect(explicitEveryCourse.focusPolicy).toBe('every-course');
+    expect(explicitEveryCourse.orderedRows).toEqual(omitted.orderedRows);
+    expect(explicitEveryCourse.courseShares).toEqual(omitted.courseShares);
+    expect(explicitEveryCourse.courseSeconds).toEqual(omitted.courseSeconds);
+    // Both courses served — the every-course arm never picks a dominant.
+    expect(new Set(omitted.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA', 'BETA']));
+  });
+
+  describe('the selection hierarchy: filter, then urgency, then deficit', () => {
+    it('her course filter names the dominant course outright — branch "filter"', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        courses: ['BETA'],
+        focusPolicy: 'focused',
+      });
+
+      expect(result.dominantCourse).toBe('BETA');
+      expect(result.focusBranch).toBe('filter');
+      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.filter);
+      expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['BETA']));
+    });
+
+    it('an eligible course\'s assessment urgency crossing the threshold wins over a larger deficit elsewhere — branch "urgency"', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      // ALPHA has by far the largest window deficit (last seen months ago);
+      // BETA was seen recently but crosses the urgency threshold. Urgency
+      // must still win — item 2's hierarchy stops at the first test that
+      // fires.
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-06-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-13', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        focusPolicy: 'focused',
+        allocation: [
+          focusAllocationEntry({ courseId: 'ALPHA', share: 0.5, risk: 0.01 }),
+          focusAllocationEntry({ courseId: 'BETA', share: 0.5, risk: 0.5 }),
+        ],
+      });
+
+      expect(result.dominantCourse).toBe('BETA');
+      expect(result.focusBranch).toBe('urgency');
+      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.urgency);
+    });
+
+    it('absent a filter or a crossed urgency threshold, the largest window deficit wins — branch "deficit"', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      // No allocation supplied at all — the urgency branch has nothing to
+      // read (see `urgencyByCourseFrom`'s doc) and never fires. ALPHA has the
+      // larger deficit (seen longer ago).
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-06-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-10', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        focusPolicy: 'single',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.focusBranch).toBe('deficit');
+      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.deficit);
+    });
+  });
+
+  it('a refused course (zero rows from the ranking) is never dominant and never accrues a deficit', () => {
+    // GAMMA is "refused" the pre-commitment's own way: the ranking gave it no
+    // rows at all, so it never enters `byCourse`. There is no explicit
+    // refusal flag to pass — see `composeFocusedSelection`'s eligibility note.
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'focused',
+      // The plan still names GAMMA (a real allocation carries an entry for
+      // every running course, refused or not) — its share must still read 0
+      // and it must never be selectable.
+      allocation: [
+        focusAllocationEntry({ courseId: 'ALPHA', share: 0.4, risk: 0.02 }),
+        focusAllocationEntry({ courseId: 'BETA', share: 0.4, risk: 0.02 }),
+        focusAllocationEntry({ courseId: 'GAMMA', share: 0.2, risk: 0.9 }),
+      ],
+    });
+
+    expect(result.dominantCourse).not.toBe('GAMMA');
+    expect(result.secondCourse).not.toBe('GAMMA');
+    expect(result.courseShares.has('GAMMA')).toBe(false);
+    expect(result.courseSeconds.has('GAMMA')).toBe(false);
+    expect(result.orderedRows.some((r) => r.course === 'GAMMA')).toBe(false);
+  });
+
+  // ALPHA is always the dominant course in this section, chosen by the
+  // DEFICIT branch (never by her filter — a filter naming one course would
+  // remove every other course from `rows` before classification even runs,
+  // leaving no candidate for a second course to test against). ALPHA is kept
+  // seen far longer ago than any other course in every fixture below so the
+  // dominant pick never depends on the admission scenario being tested.
+  describe('second-course admission: a whole group must fit and a door must be open', () => {
+    it('admits the second course when its whole group fits the leftover and the deficit door is open', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // largest deficit -> dominant
+        // BETA unseen for 13 days -> its window deficit door is open
+        // (`forcedCoursesFor`'s own threshold: 2 courses + slack 2 = 4 days).
+        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        // 200s per concept: comfortably clears MIN_BLOCK_SECONDS (180).
+        durations: flatDurations(200),
+        asOf: AS_OF,
+        // ALPHA's one concept costs 200s; 300s left over easily holds BETA's
+        // 200s group.
+        budgetSeconds: 500,
+        focusPolicy: 'focused',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBe('BETA');
+      expect(result.secondCourseDoor).toBe('deficit');
+      expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual(['A1', 'B1']);
+    });
+
+    it('does not admit a second course when the leftover cannot hold its whole group', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' }, // deficit door open
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(200),
+        // Only 100s left over after ALPHA's 200s block — BETA's 200s group
+        // does not fit, so there is no partial block.
+        asOf: AS_OF,
+        budgetSeconds: 300,
+        focusPolicy: 'focused',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBeUndefined();
+      expect(result.secondCourseDoor).toBeUndefined();
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+    });
+
+    it('does not admit a second course whose only group prices under MIN_BLOCK_SECONDS, even with room and an open door', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' }, // deficit door open
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        // 60s per concept — under the 180s guard.
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        focusPolicy: 'focused',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBeUndefined();
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+    });
+
+    it('does not admit a second course when neither door is open, even though its whole group would fit', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      // BETA was seen recently (deficit door shut) and no allocation is
+      // supplied (urgency door has nothing to read).
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-13', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(200),
+        asOf: AS_OF,
+        budgetSeconds: 500,
+        focusPolicy: 'focused',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
+      expect(result.secondCourse).toBeUndefined();
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+    });
+  });
+
+  it('"single" never admits a second course, even where "focused" would', () => {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+    });
+    const shared = {
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(200),
+      asOf: AS_OF,
+      budgetSeconds: 500,
+    };
+
+    const focused = composeSessionRows({ ...shared, focusPolicy: 'focused' as const });
+    const single = composeSessionRows({ ...shared, focusPolicy: 'single' as const });
+
+    expect(focused.dominantCourse).toBe('ALPHA');
+    expect(focused.secondCourse).toBe('BETA');
+    expect(single.dominantCourse).toBe('ALPHA');
+    expect(single.secondCourse).toBeUndefined();
+    expect(single.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+  });
+
+  it('leftover time never adds a THIRD course — it continues the dominant course or the session ends short', () => {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'A2', course: 'ALPHA', gapScore: 8 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 7 },
+      { conceptName: 'C1', course: 'GAMMA', gapScore: 6 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['A1']),
+      qa('a2', ['A2']),
+      qa('b1', ['B1']),
+      qa('c1', ['C1']),
+    ]);
+    // BETA and GAMMA are both plausible deficit candidates (long unseen); at
+    // most one may ever be admitted as the second course, and never both.
+    const theReplay = replay({
+      a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // ALPHA: the largest deficit -> dominant
+      // A2 is never reviewed at all (no entry here) — `courseLastSeenDay`
+      // reads only A1's day, so ALPHA's deficit is unaffected by A2's
+      // presence, and A2 still classifies (`unmet`) and groups normally.
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(200),
+      asOf: AS_OF,
+      // A1 (200s) + one second-course group (200s) leaves 100s — never
+      // enough for a further whole group, so it goes unused rather than
+      // spilling into a third course.
+      budgetSeconds: 500,
+      focusPolicy: 'focused',
+    });
+
+    const courses = new Set(result.orderedRows.map((r) => r.course));
+    expect(result.dominantCourse).toBe('ALPHA');
+    expect(courses.size).toBeLessThanOrEqual(2);
+    expect(courses.has('ALPHA')).toBe(true);
+  });
+
+  it('FOCUS_BRANCH_SENTENCE holds exactly the three ratified sentences', () => {
+    expect(FOCUS_BRANCH_SENTENCE.filter).toBe('mostly this course because you asked for it');
+    expect(FOCUS_BRANCH_SENTENCE.urgency).toBe(
+      'because its assessment is close and the assessed material still needs work',
+    );
+    expect(FOCUS_BRANCH_SENTENCE.deficit).toBe(
+      'because it is behind its share from your recent sessions',
+    );
   });
 });
