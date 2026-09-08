@@ -78,6 +78,23 @@
  * both fall back to the interim path, so a caller with a stale or absent
  * plan degrades to today's behaviour rather than starving every course.
  *
+ * **This interim path IS the composer's plan-less degraded mode**
+ * (`docs/dev/one-assembly-path.md` §6 row 1, olea-service; `[SESS-11]`,
+ * `ol-egov.132.12`) — a first-run student with no cached study plan at all
+ * still gets a composed session, on these interim shares, exactly as she
+ * always has. `[SESS-11]` considered and rejected building a SECOND
+ * plan-less path here: this module has never required `allocation` to
+ * produce a session, so there is nothing new to add. What that bead names
+ * instead is a real but separate dependency, upstream of this module —
+ * `rows` (`GapRow[]`) comes from the oracle chain (`gap/build.ts`'s
+ * `buildGapView`), which needs an assignments base path to rank anything at
+ * all, the same `isStudyPlanConfigured` gate Home and the session builder
+ * already apply. A vault with no plan configured cannot produce `rows` in
+ * the first place, regardless of `allocation` — no change this module could
+ * make closes that gap, because it is a fact about what feeds this
+ * function, not about what this function does with `allocation` once fed.
+ *
+
  * C5.6's rolling floor is enforced ({@link forcedCourseFloorDays}): a course
  * that has gone at least `runningCourses + slack` days without a concept from
  * it being retrieved is forced a guaranteed slice, where `slack` is C5.6's own
@@ -277,10 +294,12 @@
  */
 
 import type { StudyPlanAllocationEntry } from 'olea-contracts';
+import type { ConceptRelation } from '../concept/relation.js';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
 import type { OracleMasteryState } from '../oracle/types.js';
 import type { SchedulerState } from '../scheduler/types.js';
+import { containerConceptKeysToDrop } from '../session/containment.js';
 import type { ReplayResult } from '../session/replay.js';
 import {
   type CalendarDay,
@@ -294,6 +313,7 @@ import {
   type BuildStudySessionInput,
   buildStudySession,
   CONCEPT_SIZE_SECONDS_MULTIPLIER,
+  type StudySessionItem,
   type StudySessionModel,
 } from './build.js';
 import type { DurationModel } from './duration.js';
@@ -1315,6 +1335,65 @@ function composeFocusedSelection(
   };
 }
 
+/**
+ * C7.9 containment co-presence (register row 3.7; `../session/containment.js`;
+ * `[SESS-11]`, `ol-egov.132.12`) — a broad-area concept and one of its own
+ * parts are never composed into the same session. `session/build.ts` already
+ * applies this rule to `composeQueue`'s instrument-level candidate pool
+ * before that composer runs; this composer's own candidate pool is
+ * concept-level (`GapRow`, one row per concept), so this applies the
+ * identical rule — `containerConceptKeysToDrop`, the same shared primitive,
+ * same `part-of` edges, same "the part is kept, the container yields"
+ * asymmetry — to `rows` instead, over the SAME candidate pool `composeQueue`
+ * would have seen: every row this composition was handed, before
+ * [STEER-1]'s course/topic filter narrows it (mirroring `session/build.ts`'s
+ * own ordering, containment before `composeQueue`'s `filter`).
+ *
+ * **No second concept lookup.** `containerConceptKeysToDrop` needs a name ->
+ * key resolver to read `ConceptRelation.from`/`.to` (concept **names**)
+ * against `GapRow.conceptKey` (the opaque join key) — this module has no
+ * `ConceptRecord[]` to build one from, so it builds the map from `rows`
+ * itself: every row already carries both `conceptName` and `conceptKey`
+ * (`ol-63e1`), the exact pair `session/containment.ts`'s own `nameToKey`
+ * resolves from `ConceptRecord[]`. First occurrence wins, the same
+ * convention that module uses.
+ *
+ * A no-op whenever `edges` is empty — which is every real caller today,
+ * exactly `session/build.ts`'s own `relations` posture (that module's doc:
+ * "a real filter with a real caller ... not yet reachable with a live edge
+ * set in production"). Wiring a live edge set through is a separate,
+ * pre-existing plumbing gap (`build.ts`'s own module doc names it), not
+ * reopened here.
+ */
+function nameToKeyFromRows(rows: readonly GapRow[]): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    if (!map.has(row.conceptName)) map.set(row.conceptName, row.conceptKey);
+  }
+  return map;
+}
+
+/**
+ * `rows` with every C7.9 co-present container concept's row dropped — see
+ * this section's doc above {@link nameToKeyFromRows}. Returns `rows`
+ * unchanged by reference whenever nothing is dropped (the no-op case), the
+ * same "no new array on the common path" discipline
+ * `session/containment.ts`'s own `filterContainmentCoPresence` follows.
+ */
+function applyContainmentCoPresence(
+  rows: readonly GapRow[],
+  edges: readonly ConceptRelation[],
+): { readonly kept: readonly GapRow[]; readonly dropped: readonly GapRow[] } {
+  if (edges.length === 0 || rows.length === 0) return { kept: rows, dropped: [] };
+  const present = new Set(rows.map((row) => row.conceptKey));
+  const drop = containerConceptKeysToDrop(edges, nameToKeyFromRows(rows), present);
+  if (drop.size === 0) return { kept: rows, dropped: [] };
+  const kept: GapRow[] = [];
+  const dropped: GapRow[] = [];
+  for (const row of rows) (drop.has(row.conceptKey) ? dropped : kept).push(row);
+  return { kept, dropped };
+}
+
 export interface ComposeSessionRowsInput {
   readonly rows: readonly GapRow[];
   readonly instruments: ConceptInstrumentIndex;
@@ -1391,6 +1470,17 @@ export interface ComposeSessionRowsInput {
    * See {@link FocusPolicy}'s doc for what `'focused'`/`'single'` change.
    */
   readonly focusPolicy?: FocusPolicy;
+  /**
+   * C7.9 containment co-presence (register row 3.7; `[SESS-11]`,
+   * `ol-egov.132.12`) — `part-of` edges available at composition time,
+   * applied to `rows` before anything else runs. **Omitted means none, which
+   * is a real no-op, not a degraded mode** — the identical posture
+   * `session/build.ts`'s own `BuildReviewSessionInput.relations` documents
+   * for `composeQueue`'s candidate pool. See the doc above
+   * {@link nameToKeyFromRows} for why this module resolves names to keys from
+   * `rows` itself rather than taking a second `ConceptRecord[]` input.
+   */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 export interface ComposeSessionRowsResult {
@@ -1399,6 +1489,19 @@ export interface ComposeSessionRowsResult {
   readonly overflow: readonly ObligationOverflowEntry[];
   readonly courseShares: ReadonlyMap<string, number>;
   readonly forcedCourses: readonly string[];
+  /**
+   * Rows the C7.9 containment co-presence filter dropped before anything
+   * else ran (`[SESS-11]`) — empty whenever `input.relations` is omitted,
+   * which is every real caller today. Reported rather than folded silently
+   * into `orderedRows`'s absence, the same posture
+   * `ReviewSession.containmentDropped` already takes on the retiring queue
+   * path. Optional only so a hand-built fixture predating this bead remains
+   * valid — the same "optional on the result, always set by the real
+   * builder" pattern `StudySessionModel.explainBackItems` and
+   * `ComposeSessionRowsResult.focusPolicy` already use; `composeSessionRows`
+   * itself always sets it.
+   */
+  readonly containmentDropped?: readonly GapRow[];
   /**
    * Each chosen concept's own {@link ObligationClass}, keyed by `conceptKey`
    * — a student-visible signal, unlike {@link overflow}. See the module
@@ -1477,13 +1580,19 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   } = input;
   const focusPolicy = input.focusPolicy ?? 'every-course';
 
+  // C7.9 containment co-presence (`[SESS-11]`), over the WHOLE candidate
+  // pool and before [STEER-1]'s course/topic filter — see the doc above
+  // `applyContainmentCoPresence` for why this mirrors `session/build.ts`'s
+  // own ordering (containment before `composeQueue`'s `filter`).
+  const containment = applyContainmentCoPresence(allRows, input.relations ?? []);
+
   // [STEER-1]: the course-or-topic input, applied before any allocation
   // work so shares/forced-courses/obligation classes are all computed over
   // exactly the scope she asked about — see the field docs above.
   const rows =
     courseFilter === undefined && conceptIdFilter === undefined
-      ? allRows
-      : allRows.filter(
+      ? containment.kept
+      : containment.kept.filter(
           (row) =>
             (courseFilter === undefined || courseFilter.includes(row.course)) &&
             (conceptIdFilter === undefined || conceptIdFilter.includes(row.conceptKey)),
@@ -1623,6 +1732,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     forcedCourses: forced,
     obligationClasses,
     courseSeconds: budgets,
+    containmentDropped: containment.dropped,
     // `[FOCUS-3]`: byte-identical to before this bead when the caller omits
     // `focusPolicy` entirely — the field is echoed only when the caller
     // explicitly supplied one (even `'every-course'` explicitly), never
@@ -1679,6 +1789,8 @@ export interface BuildComposedStudySessionInput
   readonly allocation?: readonly StudyPlanAllocationEntry[];
   /** `[D-244]` (`[FOCUS-3]`) — see `ComposeSessionRowsInput.focusPolicy`, passed straight through. Defaults to `'every-course'`. */
   readonly focusPolicy?: FocusPolicy;
+  /** C7.9 (`[SESS-11]`) — see `ComposeSessionRowsInput.relations`, passed straight through. */
+  readonly relations?: readonly ConceptRelation[];
 }
 
 /**
@@ -1723,6 +1835,14 @@ export interface ComposedStudySession {
    * walking every item.
    */
   readonly obligationClasses: ReadonlyMap<string, ObligationClass>;
+  /**
+   * C7.9 containment co-presence (`[SESS-11]`) — see
+   * `ComposeSessionRowsResult.containmentDropped`. Empty whenever no
+   * `relations` were supplied, which is every real caller today. Optional
+   * for the same fixture-compatibility reason as that field;
+   * `buildComposedStudySession` always sets it.
+   */
+  readonly containmentDropped?: readonly GapRow[];
   /** `[D-244]` (`[FOCUS-3]`) — see `ComposeSessionRowsResult.focusPolicy`; optional for the same fixture-compatibility reason. `buildComposedStudySession` always sets it. */
   readonly focusPolicy?: FocusPolicy;
   /** See `ComposeSessionRowsResult.dominantCourse`. */
@@ -1794,6 +1914,7 @@ export function buildComposedStudySession(
     ...(input.allocation !== undefined ? { allocation: input.allocation } : {}),
     ...(input.conceptIds !== undefined ? { conceptIds: input.conceptIds } : {}),
     ...(input.focusPolicy !== undefined ? { focusPolicy: input.focusPolicy } : {}),
+    ...(input.relations !== undefined ? { relations: input.relations } : {}),
   });
 
   const model = buildStudySession({
@@ -1823,6 +1944,9 @@ export function buildComposedStudySession(
     courseShares: composed.courseShares,
     forcedCourses: composed.forcedCourses,
     obligationClasses: composed.obligationClasses,
+    ...(composed.containmentDropped !== undefined
+      ? { containmentDropped: composed.containmentDropped }
+      : {}),
     ...(composed.focusPolicy !== undefined ? { focusPolicy: composed.focusPolicy } : {}),
     ...(composed.dominantCourse !== undefined ? { dominantCourse: composed.dominantCourse } : {}),
     ...(composed.secondCourse !== undefined ? { secondCourse: composed.secondCourse } : {}),
@@ -1832,4 +1956,69 @@ export function buildComposedStudySession(
       ? { secondCourseDoor: composed.secondCourseDoor }
       : {}),
   };
+}
+
+/**
+ * F2.17/C5.8's "outran the target" extension
+ * (`docs/dev/one-assembly-path.md` §3b, olea-service; `[SESS-11]`,
+ * `ol-egov.132.12`).
+ *
+ * C5.8's own text: "the list changes only by her own action (finishing,
+ * leaving, or outrunning the target under the same plan's shares), never by
+ * the tool." A frozen `ComposedStudySession` has no way to grow itself — this
+ * is the missing move. It calls {@link buildComposedStudySession} again, with
+ * `input` unmodified apart from `budgetMinutes` (the caller's own wider
+ * number — how far she wants to keep going is a product judgement this
+ * function does not make, the same posture `./reentry.js`'s
+ * `composeReentrySession` already takes for "how much smaller"), so any
+ * caller that hands over the SAME `courses`/`conceptIds`/`allocation`/
+ * `focusPolicy` it used to build `previous` gets "the same plan's shares"
+ * (C5.5) by construction — identity, not a re-derivation — rather than this
+ * function inventing a pinned-shares mechanism of its own. This is the same
+ * discipline `composeReentrySession` already states for its own variant call
+ * ("this module contains no second selection mechanism of its own"), applied
+ * to growth instead of shrinkage.
+ *
+ * **Never reorders, never drops, never duplicates** — the same three-word
+ * contract `packages/plugin/src/review/queue-adapter.ts`'s
+ * `FrozenReviewQueue.extend` already states for the queue path (`extend`'s
+ * own doc: "grow, never replace, never reorder, never duplicate"). `previous`'s
+ * own items are returned byte-identical and in their existing positions;
+ * only items the wider composition offers that are not already among them
+ * (matched by `instrumentId`, the same key `extend` matches on) are appended,
+ * in the order the wider fill produced them, with `position` renumbered to
+ * continue the sequence.
+ *
+ * **The gap this closes.** `ComposedStudySession.model.leftOut`/`.overflow`
+ * are per-CONCEPT (`StudySessionOmission`/`ObligationOverflowEntry`) — there
+ * was nothing per-instrument to thread through `extend`'s
+ * `instrument.instrumentId` matching, which is exactly why re-running the
+ * same budget found nothing new (`ol-egov.132.12`'s own bead, confirmed
+ * empirically against `packages/plugin/test/review/open-session.spec.ts`'s
+ * "continue extends" scenario). Recomposing at a wider budget and diffing by
+ * `instrumentId` produces the missing per-instrument view without inventing
+ * a second per-instrument bookkeeping structure inside this module.
+ *
+ * **Reachability.** `packages/plugin/src/review/open-session.ts` and
+ * `packages/plugin/src/main.ts` (row 6/`ol-egov.132.6`'s owned paths) are the
+ * production callers this needs — wiring `FrozenReviewQueue`-shaped growth
+ * for the composed session's holder onto this function is filed as a note on
+ * that bead rather than built here, across this lane's file-ownership
+ * boundary (see `[SESS-11]`'s own close evidence).
+ */
+export function extendComposedStudySession(
+  input: BuildComposedStudySessionInput,
+  previous: ComposedStudySession,
+): readonly StudySessionItem[] {
+  const widened = buildComposedStudySession(input);
+  const alreadyServed = new Set(previous.model.items.map((item) => item.instrumentId));
+  const appended = widened.model.items.filter((item) => !alreadyServed.has(item.instrumentId));
+  if (appended.length === 0) return previous.model.items;
+  return [
+    ...previous.model.items,
+    ...appended.map((item, index) => ({
+      ...item,
+      position: previous.model.items.length + index + 1,
+    })),
+  ];
 }

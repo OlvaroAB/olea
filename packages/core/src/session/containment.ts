@@ -52,6 +52,16 @@
  * Whether a real edge set reaches a real session is a wiring question for
  * whoever calls `buildReviewSession` — see `build.ts`'s module doc for
  * exactly what is wired today and what is not.
+ *
+ * **A second caller, same rule (`[SESS-11]`, `ol-egov.132.12`).**
+ * `study-session/compose.ts`'s `composeSessionRows` — the composer that
+ * replaces this one's own selection role (`docs/dev/one-assembly-path.md`
+ * §2, olea-service) — applies the identical rule to its own `GapRow[]`
+ * candidate pool via {@link containerConceptKeysToDrop}, the primitive this
+ * module factors {@link filterContainmentCoPresence} through rather than
+ * restating the edge-walk for a second candidate shape. It is, the same way
+ * this module's own production callers are, a no-op until a caller threads a
+ * live edge set through.
  */
 
 import type { ConceptRelation } from '../concept/relation.js';
@@ -81,12 +91,48 @@ function nameToKey(concepts: readonly ConceptRecord[]): ReadonlyMap<string, stri
 }
 
 /**
- * The container concept keys to drop: every `part-of` edge whose part side
- * and container side are BOTH present among `candidates`' concept keys.
- * Edge types other than `part-of` are ignored rather than rejected, so a
- * caller may hand over a whole `RelationSet`'s served edges (`is-a`,
+ * The container concept KEYS to drop, given a name -> key resolver and the
+ * concept keys actually present in some candidate pool. Every `part-of` edge
+ * whose part side and container side are BOTH present drops the container
+ * side. Edge types other than `part-of` are ignored rather than rejected, so
+ * a caller may hand over a whole `RelationSet`'s served edges (`is-a`,
  * `prerequisite`, …) without pre-filtering by type — this rule is C7.9's
  * alone and `part-of`'s alone (RANK-4 §4.3).
+ *
+ * **Exported as its own primitive** (`[SESS-11]`, `ol-egov.132.12`) so a
+ * caller working in a different candidate shape —
+ * `study-session/compose.ts`'s `GapRow[]`, one row per concept rather than
+ * one `QueueCandidate` per instrument — can apply the identical rule without
+ * a second implementation of the edge-walk, or a second concept lookup: that
+ * caller already carries `GapRow.conceptName`/`.conceptKey` on every row, so
+ * it builds its own name -> key map from the rows it already has rather than
+ * requiring a `ConceptRecord[]` it is not otherwise given. `keyOfName` is
+ * this module's own {@link nameToKey} when the caller is instrument
+ * candidates (see {@link containerKeysToDrop} below); a `GapRow`-based caller
+ * builds the equivalent map itself, the same first-occurrence-wins
+ * convention.
+ */
+export function containerConceptKeysToDrop(
+  edges: readonly ConceptRelation[],
+  keyOfName: ReadonlyMap<string, string>,
+  presentConceptKeys: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const drop = new Set<string>();
+  for (const edge of edges) {
+    if (edge.type !== 'part-of') continue;
+    const partKey = keyOfName.get(edge.from);
+    const containerKey = keyOfName.get(edge.to);
+    if (partKey === undefined || containerKey === undefined) continue;
+    if (presentConceptKeys.has(partKey) && presentConceptKeys.has(containerKey))
+      drop.add(containerKey);
+  }
+  return drop;
+}
+
+/**
+ * {@link containerConceptKeysToDrop}, specialised to a `QueueCandidate` pool:
+ * resolves the name -> key map from `concepts` and the present-key set from
+ * every candidate's `conceptIds`, then defers to the shared primitive.
  */
 function containerKeysToDrop(
   edges: readonly ConceptRelation[],
@@ -98,16 +144,7 @@ function containerKeysToDrop(
   for (const candidate of candidates) {
     for (const conceptId of candidate.conceptIds) present.add(conceptId);
   }
-
-  const drop = new Set<string>();
-  for (const edge of edges) {
-    if (edge.type !== 'part-of') continue;
-    const partKey = keyOf.get(edge.from);
-    const containerKey = keyOf.get(edge.to);
-    if (partKey === undefined || containerKey === undefined) continue;
-    if (present.has(partKey) && present.has(containerKey)) drop.add(containerKey);
-  }
-  return drop;
+  return containerConceptKeysToDrop(edges, keyOf, present);
 }
 
 /**

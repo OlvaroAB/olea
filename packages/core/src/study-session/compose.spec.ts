@@ -30,6 +30,7 @@ import {
   buildComposedStudySession,
   classifyObligation,
   composeSessionRows,
+  extendComposedStudySession,
   FOCUS_BRANCH_SENTENCE,
   MIN_BLOCK_SECONDS,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
@@ -1385,7 +1386,14 @@ describe('buildComposedStudySession', () => {
     // module doc's "Per-item obligation class" section for why a class-per-
     // concept map is a structural field, not a rendered sentence.
     expect(Object.keys(composed).sort()).toEqual(
-      ['courseShares', 'forcedCourses', 'model', 'obligationClasses', 'overflow'].sort(),
+      [
+        'containmentDropped',
+        'courseShares',
+        'forcedCourses',
+        'model',
+        'obligationClasses',
+        'overflow',
+      ].sort(),
     );
   });
 
@@ -2420,5 +2428,363 @@ describe('[FOCUS-3] focusPolicy', () => {
     expect(FOCUS_BRANCH_SENTENCE.deficit).toBe(
       'because it is behind its share from your recent sessions',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[SESS-11]` (`ol-egov.132.12`) — C7.9 containment co-presence, ported from
+// `session/containment.ts`'s `QueueCandidate`-shaped rule onto this
+// composer's own `GapRow`-shaped candidate pool.
+//
+// Scenarios: `features/F2-review.md`, "SESS-11 — Containment co-presence
+// ported onto the study-session composer (C7.9)" — @auto:core/study-session/compose.spec
+//
+// INV-3: every concept/course name below is coined for the test.
+// ---------------------------------------------------------------------------
+
+describe('composeSessionRows: C7.9 containment co-presence (`[SESS-11]`)', () => {
+  function passage(sourcePath: string): Provenance {
+    return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
+  }
+
+  function edge(type: RelationType, from: string, to: string): ConceptRelation {
+    return {
+      type,
+      from,
+      to,
+      provenance: 'model-proposed',
+      confidence: 0.9,
+      introducingPassages: { from: passage(`${from}.md`), to: passage(`${to}.md`) },
+    };
+  }
+
+  // Mitochondria part-of Cell — `from` is the part, `to` the container, the
+  // same convention `session/containment.ts`'s own fixtures use.
+  const PART_OF_EDGE = edge('part-of', 'Mitochondria', 'Cell');
+
+  function containmentRows(): readonly GapRow[] {
+    return rows([
+      { conceptName: 'Mitochondria', course: 'BIO101', gapScore: 9 },
+      { conceptName: 'Cell', course: 'BIO101', gapScore: 5 },
+      { conceptName: 'Photosynthesis', course: 'BIO101', gapScore: 1 },
+    ]);
+  }
+
+  function containmentFixture() {
+    const instruments = buildConceptInstrumentIndex([
+      qa('i-mito', ['Mitochondria']),
+      qa('i-cell', ['Cell']),
+      qa('i-photo', ['Photosynthesis']),
+    ]);
+    const overdue = replay({
+      'i-mito': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      'i-cell': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      'i-photo': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    return { instruments, replay: overdue };
+  }
+
+  it('with no relations supplied, composition is unaffected — every real caller today', () => {
+    const { instruments, replay: theReplay } = containmentFixture();
+    const result = composeSessionRows({
+      rows: containmentRows(),
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+    });
+    expect(result.containmentDropped).toEqual([]);
+    expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual([
+      'Cell',
+      'Mitochondria',
+      'Photosynthesis',
+    ]);
+  });
+
+  it('a broad area and one of its parts are never both composed into the same session', () => {
+    const { instruments, replay: theReplay } = containmentFixture();
+    const result = composeSessionRows({
+      rows: containmentRows(),
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      relations: [PART_OF_EDGE],
+    });
+    const composedNames = new Set(result.orderedRows.map((r) => r.conceptName));
+    expect(composedNames.has('Mitochondria') && composedNames.has('Cell')).toBe(false);
+  });
+
+  it('the container is the side that yields, never the part', () => {
+    const { instruments, replay: theReplay } = containmentFixture();
+    const result = composeSessionRows({
+      rows: containmentRows(),
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      relations: [PART_OF_EDGE],
+    });
+    expect(result.orderedRows.some((r) => r.conceptName === 'Mitochondria')).toBe(true);
+    expect(result.orderedRows.some((r) => r.conceptName === 'Cell')).toBe(false);
+    expect(result.containmentDropped?.map((r) => r.conceptName)).toEqual(['Cell']);
+    // Untouched: a concept on neither side of the edge is unaffected.
+    expect(result.orderedRows.some((r) => r.conceptName === 'Photosynthesis')).toBe(true);
+  });
+
+  it('containment runs before the course/topic steering filter, over the whole candidate pool', () => {
+    // The container's own course is the one she steers AWAY from — if
+    // containment ran only after [STEER-1] narrowed to her chosen course, the
+    // container's row would never have been in that narrowed pool to begin
+    // with, and this scenario would pass by accident rather than by the rule.
+    const theRows = rows([
+      { conceptName: 'Mitochondria', course: 'BIO101', gapScore: 9 },
+      { conceptName: 'Cell', course: 'CHEM101', gapScore: 9 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('i-mito', ['Mitochondria']),
+      qa('i-cell', ['Cell']),
+    ]);
+    const overdue = replay({
+      'i-mito': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      'i-cell': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 1200,
+      relations: [PART_OF_EDGE],
+      courses: ['CHEM101'],
+    });
+    // The container (Cell, in CHEM101, the course she asked about) is still
+    // dropped for containment even though the part (Mitochondria) sits
+    // entirely outside her steered scope.
+    expect(result.orderedRows).toEqual([]);
+    expect(result.containmentDropped?.map((r) => r.conceptName)).toEqual(['Cell']);
+  });
+
+  it('containment survives the instrument-level fill, not just concept selection', () => {
+    const { instruments, replay: theReplay } = containmentFixture();
+    const session = buildComposedStudySession({
+      rows: containmentRows(),
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetMinutes: 20,
+      relations: [PART_OF_EDGE],
+    });
+    expect(session.model.items.some((item) => item.conceptName === 'Cell')).toBe(false);
+    expect(session.model.items.some((item) => item.conceptName === 'Mitochondria')).toBe(true);
+    expect(session.containmentDropped?.map((r) => r.conceptName)).toEqual(['Cell']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[SESS-11]` (`ol-egov.132.12`) — F2.17/C5.8's "outran the target"
+// extension, ported from `queue-adapter.ts`'s `FrozenReviewQueue.extend` onto
+// this composer.
+//
+// Scenarios: `features/F2-review.md`, "SESS-11 — the study-session composer
+// grows under the same plan's shares (F2.17, C5.5, C5.8)" —
+// @auto:core/study-session/compose.spec
+//
+// INV-3: every concept/course name below is coined for the test.
+// ---------------------------------------------------------------------------
+
+describe('extendComposedStudySession (`[SESS-11]`)', () => {
+  function allocationEntry(courseId: string, share: number): StudyPlanAllocationEntry {
+    return {
+      courseId,
+      share,
+      minBlockSeconds: 60,
+      contributions: [{ name: 'risk', value: 0.5 }],
+      reason: `${courseId} gets its share.`,
+    };
+  }
+
+  it('grows a frozen session with material a smaller budget could not reach, appended after her existing items', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+      { conceptName: 'Charlie', gapScore: 7 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['Alpha']),
+      qa('b1', ['Bravo']),
+      qa('c1', ['Charlie']),
+    ]);
+    const overdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    };
+
+    // 60s target -> she reaches exactly one item before the target and stops.
+    const previous = buildComposedStudySession({ ...baseInput, budgetMinutes: 1 });
+    expect(previous.model.items.map((i) => i.conceptName)).toEqual(['Alpha']);
+
+    // She outruns it: the same composition, asked again at a wider target.
+    const extended = extendComposedStudySession({ ...baseInput, budgetMinutes: 3 }, previous);
+
+    expect(extended.map((i) => i.instrumentId)).toEqual(['a1', 'b1', 'c1']);
+    expect(extended[0]).toEqual(previous.model.items[0]);
+    expect(extended.map((i) => i.position)).toEqual([1, 2, 3]);
+  });
+
+  it('nothing left to add returns her existing items unchanged, by reference', () => {
+    const theRows = rows([{ conceptName: 'Alpha', gapScore: 9 }]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha'])]);
+    const overdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    };
+
+    const previous = buildComposedStudySession({ ...baseInput, budgetMinutes: 10 });
+    expect(previous.model.items.map((i) => i.conceptName)).toEqual(['Alpha']);
+
+    // A wider budget still finds nothing new — there is only ever one row.
+    const extended = extendComposedStudySession({ ...baseInput, budgetMinutes: 20 }, previous);
+    expect(extended).toBe(previous.model.items);
+  });
+
+  it('never reorders or duplicates what she has already been served, whatever order the sitting already holds them in', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('b1', ['Bravo'])]);
+    const overdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    };
+
+    const built = buildComposedStudySession({ ...baseInput, budgetMinutes: 2 });
+    expect(built.model.items.map((i) => i.instrumentId)).toEqual(['a1', 'b1']);
+    // The frozen sitting holds them in whatever order it holds them in —
+    // reversed here, deliberately, to prove `extendComposedStudySession`
+    // trusts that order rather than re-deriving it from a fresh composition.
+    const previous = {
+      ...built,
+      model: { ...built.model, items: [...built.model.items].reverse() },
+    };
+
+    const thirdRow = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+      { conceptName: 'Charlie', gapScore: 7 },
+    ]);
+    const widerInstruments = buildConceptInstrumentIndex([
+      qa('a1', ['Alpha']),
+      qa('b1', ['Bravo']),
+      qa('c1', ['Charlie']),
+    ]);
+    const widerReplay = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const extended = extendComposedStudySession(
+      {
+        rows: thirdRow,
+        instruments: widerInstruments,
+        replay: widerReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetMinutes: 3,
+      },
+      previous,
+    );
+
+    expect(extended.map((i) => i.instrumentId)).toEqual(['b1', 'a1', 'c1']);
+    expect(new Set(extended.map((i) => i.instrumentId)).size).toBe(3);
+  });
+
+  it('the extension is composed under the same plan’s shares, not a freshly recomputed proportional split', () => {
+    // Twenty concepts per course (1200s of material each) — far more than
+    // either budget below can absorb, so each course's own share is what
+    // actually binds, never its supply of material. Proportional-by-material
+    // would split evenly (20/20); the plan's own allocation says the
+    // opposite (90/10) — a caller that recomputed shares fresh instead of
+    // pinning the plan's would produce a visibly different, more balanced
+    // result.
+    const courseRows = (course: string) =>
+      Array.from({ length: 20 }, (_, i) => ({
+        conceptName: `${course}-${i + 1}`,
+        course,
+        gapScore: 20 - i,
+      }));
+    const theRows = rows([...courseRows('BIG'), ...courseRows('SMALL')]);
+    const instruments = buildConceptInstrumentIndex(
+      theRows.map((r) => qa(`i-${r.conceptName}`, [r.conceptName])),
+    );
+    const overdueEntries = Object.fromEntries(
+      theRows.map((r) => [
+        `i-${r.conceptName}`,
+        { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      ]),
+    );
+    const overdue = replay(overdueEntries);
+    const allocation = [allocationEntry('BIG', 0.9), allocationEntry('SMALL', 0.1)];
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      allocation,
+    };
+
+    // 10 minutes (600s): BIG's 540s share funds 9 items, SMALL's 60s share
+    // (exactly its declared `minBlockSeconds` floor) funds exactly 1.
+    const previous = buildComposedStudySession({ ...baseInput, budgetMinutes: 10 });
+    expect(previous.courseShares.get('BIG')).toBeCloseTo(0.9);
+    expect(previous.courseShares.get('SMALL')).toBeCloseTo(0.1);
+    const previousByCourse = new Map<string, number>();
+    for (const item of previous.model.items) {
+      previousByCourse.set(item.course, (previousByCourse.get(item.course) ?? 0) + 1);
+    }
+    expect(previousByCourse.get('BIG')).toBe(9);
+    expect(previousByCourse.get('SMALL')).toBe(1);
+
+    // She outruns it: widened to 20 minutes (1200s), same allocation handed
+    // through unmodified — C5.5's "same plan's shares" by construction.
+    const extended = extendComposedStudySession({ ...baseInput, budgetMinutes: 20 }, previous);
+    const byCourse = new Map<string, number>();
+    for (const item of extended) byCourse.set(item.course, (byCourse.get(item.course) ?? 0) + 1);
+
+    // The pinned 90/10 split governs the widened total too (18/2, the same
+    // ratio) — never the even (20/20 material, so 1/1 marginal) split a
+    // fresh proportional recompute would give.
+    expect(byCourse.get('BIG')).toBe(18);
+    expect(byCourse.get('SMALL')).toBe(2);
+    expect(extended.length).toBe(20);
   });
 });

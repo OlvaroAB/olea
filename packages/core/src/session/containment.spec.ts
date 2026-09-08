@@ -9,7 +9,7 @@ import type { ConceptRelation, RelationType } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { Provenance } from '../extract/types.js';
 import type { QueueCandidate } from '../queue/types.js';
-import { filterContainmentCoPresence } from './containment.js';
+import { containerConceptKeysToDrop, filterContainmentCoPresence } from './containment.js';
 
 function passage(sourcePath: string): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
@@ -159,5 +159,49 @@ describe('filterContainmentCoPresence', () => {
     // sub-instrument split to keep the part's half of a single candidate.
     expect(result.dropped.map((c) => c.instrumentId)).toEqual(['i-both']);
     expect(result.candidates).toEqual([]);
+  });
+});
+
+// `[SESS-11]` (`ol-egov.132.12`): the shared primitive `filterContainmentCoPresence`
+// itself now factors through, so a caller working in a different candidate
+// shape (`study-session/compose.ts`'s `GapRow[]`) applies the identical rule
+// without a second edge-walk. Exercised directly here, over a plain
+// name -> key map rather than a `ConceptRecord[]`/`QueueCandidate[]` pool, to
+// pin the primitive's own contract independent of either caller's shape.
+describe('containerConceptKeysToDrop', () => {
+  it('drops the container key when both the part and the container keys are present', () => {
+    const keyOf = new Map([
+      [PART.name, PART.key],
+      [CONTAINER.name, CONTAINER.key],
+    ]);
+    const drop = containerConceptKeysToDrop(
+      [edge('part-of', PART.name, CONTAINER.name)],
+      keyOf,
+      new Set([PART.key, CONTAINER.key]),
+    );
+    expect(drop).toEqual(new Set([CONTAINER.key]));
+  });
+
+  it('drops nothing when only one side is present', () => {
+    const keyOf = new Map([
+      [PART.name, PART.key],
+      [CONTAINER.name, CONTAINER.key],
+    ]);
+    const drop = containerConceptKeysToDrop(
+      [edge('part-of', PART.name, CONTAINER.name)],
+      keyOf,
+      new Set([CONTAINER.key]),
+    );
+    expect(drop.size).toBe(0);
+  });
+
+  it('an edge whose endpoint the resolver does not know contributes nothing', () => {
+    const keyOf = new Map([[CONTAINER.name, CONTAINER.key]]);
+    const drop = containerConceptKeysToDrop(
+      [edge('part-of', 'Ghost', CONTAINER.name)],
+      keyOf,
+      new Set([CONTAINER.key]),
+    );
+    expect(drop.size).toBe(0);
   });
 });
