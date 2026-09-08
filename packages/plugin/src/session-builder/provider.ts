@@ -218,6 +218,7 @@
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentProximityBand,
+  BuildComposedStudySessionInput,
   CalendarDay,
   ComposedReentrySession,
   ConceptInstrumentIndex,
@@ -665,6 +666,18 @@ export interface ComposeStudySessionForRequestResult {
   readonly courseOrTopicOptions: readonly CourseOrTopicOption[];
   /** `buildFresh`'s own freeze-staleness bookkeeping (`ol-v7r5.26`) — opaque to every other caller, which needs only `composed`. */
   readonly frozenScope: FrozenSittingScope;
+  /**
+   * `[SESS-8.6]` (`ol-egov.132.6`): the exact `BuildComposedStudySessionInput`
+   * this call assembled to build `composed`, minus `budgetMinutes` (which
+   * `composeReentrySession` may override for a re-entry candidate size —
+   * see `ComposeReentrySessionInput`'s own `candidateBudgetMinutes`/
+   * `ordinaryBudgetMinutes`). Exposed so `main.ts`'s
+   * `extendDefaultStudySession` can call `study-session/compose.ts`'s
+   * `extendComposedStudySession` at a wider budget without re-deriving this
+   * assembly a second, possibly-disagreeing way — see this field's
+   * assignment above for why it is built once, not twice.
+   */
+  readonly composedInput: Omit<BuildComposedStudySessionInput, 'budgetMinutes'>;
 }
 
 /**
@@ -821,16 +834,23 @@ export async function composeStudySessionForRequest(
   // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
   // module doc, `readReviewLogHistory`), so a real multi-week absence
   // is measured correctly regardless of `probeDays`.
-  const composed = composeReentrySession({
+  //
+  // Built once, apart from `composeReentrySession`'s own call below, so it
+  // can also be returned as `composedInput` (see `ComposeStudySessionForRequestResult`'s
+  // doc) — `[SESS-8.6]`'s outrun-extension wiring
+  // (`packages/plugin/src/main.ts`'s `extendDefaultStudySession`) needs the
+  // SAME `BuildComposedStudySessionInput` shape this call assembles, minus
+  // `budgetMinutes`, to call `study-session/compose.ts`'s
+  // `extendComposedStudySession` at a wider budget — re-deriving it a second
+  // way there would risk the widened composition disagreeing with this one
+  // about anything but the budget.
+  const composedInput: Omit<BuildComposedStudySessionInput, 'budgetMinutes'> = {
     rows: gapRows,
     arrivalDays,
     relatedConceptKeys,
     assessmentContext,
     instruments: buildConceptInstrumentIndex(enumeration.records),
     replay,
-    daysSinceLastReview: daysSinceLastReview(entries, now),
-    candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
-    ordinaryBudgetMinutes: request.budgetMinutes,
     // The first production read of the review log's `durationMs` (INV-4:
     // the discipline went in ahead of the feature, and this is the
     // feature).
@@ -863,9 +883,26 @@ export async function composeStudySessionForRequest(
     // `compose.ts`'s own optional field: the interim per-course shares,
     // never a thrown error or a degraded session.
     ...(allocation !== undefined ? { allocation } : {}),
+    // C7.9 containment co-presence (`[SESS-11]`, `ol-egov.132.12`;
+    // `study-session/compose.ts`'s own `applyContainmentCoPresence`):
+    // `deps.relations()` is the SAME live, served `part-of` edge fold
+    // `session/build.ts`'s queue-path containment filter already reads
+    // (`main.ts`'s `servedRelationEdges`) — passed through here so this
+    // path stops being the no-op `study-session/compose.ts`'s module doc
+    // names ("no production caller threads a live edge set through yet").
+    // Omitted (`deps.relations` absent) reads as "none", the same real
+    // no-op posture every other optional field on this call already takes.
+    ...(deps.relations !== undefined ? { relations: deps.relations() } : {}),
+  };
+
+  const composed = composeReentrySession({
+    ...composedInput,
+    daysSinceLastReview: daysSinceLastReview(entries, now),
+    candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
+    ordinaryBudgetMinutes: request.budgetMinutes,
   });
 
-  return { composed, courseOrTopicOptions, frozenScope: nextFrozenScope };
+  return { composed, courseOrTopicOptions, frozenScope: nextFrozenScope, composedInput };
 }
 
 /**

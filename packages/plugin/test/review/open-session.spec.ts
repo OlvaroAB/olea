@@ -60,7 +60,6 @@ import type {
   ConceptRelation,
   RandomSource,
   StudySessionItem,
-  VaultPath,
   VaultSource,
 } from 'olea-core';
 import {
@@ -359,7 +358,14 @@ async function sessionInput(
   vault: ReturnType<typeof memoryVault>,
   clock: Clock = fixedClock(),
   plan?: StudyPlanEnvelope | null,
-  opts: { readonly instrumentIds?: readonly string[]; readonly holder?: StudySessionHolder } = {},
+  opts: {
+    readonly instrumentIds?: readonly string[];
+    readonly holder?: StudySessionHolder;
+    /** `[SESS-8.6]` — see `OpenReviewSessionInput.extendDefaultStudySession`'s own doc. Omitted keeps today's default: an active sitting never grows on `extend`. */
+    readonly extendDefaultStudySession?: (
+      previous: ComposedStudySession,
+    ) => Promise<ComposedStudySession | null>;
+  } = {},
 ): Promise<OpenReviewSessionInput> {
   return {
     vault,
@@ -370,6 +376,9 @@ async function sessionInput(
     probeDays: 30,
     studySessionHolder: opts.holder ?? (await seededHolder(vault, opts.instrumentIds)),
     composeDefaultStudySession: composeDefaultStudySessionUnreachable,
+    ...(opts.extendDefaultStudySession !== undefined
+      ? { extendDefaultStudySession: opts.extendDefaultStudySession }
+      : {}),
     ...(plan !== undefined ? { plan } : {}),
   };
 }
@@ -576,59 +585,17 @@ describe('C7.9 containment co-presence reaches this call site (ol-v7r5.7)', () =
   });
 });
 
-/**
- * `[D-149]` (`ol-4e7o`): unlike `relations` above, `arrivalDays`/
- * `conceptSourcePaths` need no new field on `OpenReviewSessionInput` at
- * all — `buildReviewSession` resolves both fully from `vault` (already
- * forwarded here, unconditionally, as `input.vault`) and its own
- * `instruments.concepts` enumeration (`session/build.ts`'s
- * `arrivalDaysByConceptKey`/`conceptSourcePathsByConceptKey`). So the thing
- * to prove reachable at *this* call site is narrower than the C7.9 block
- * above: not a new forwarded value, but that the real "Olea: Start today's
- * review" path actually calls the injected vault's `firstSeen` at all — the
- * accessor `session/build.ts` had no caller resolving before this bead
- * (`ol-v7r5.22`'s own honest gap).
- */
-describe('[D-149] (`ol-4e7o`) — arrivalDays resolution reaches this call site too', () => {
-  function vaultWithFirstSeenSpy(vault: ReturnType<typeof memoryVault>): {
-    readonly vault: VaultSource;
-    readonly calls: readonly VaultPath[];
-  } {
-    const calls: VaultPath[] = [];
-    const vaultWithSpy: VaultSource = {
-      ...vault,
-      async firstSeen(path: VaultPath) {
-        calls.push(path);
-        return null;
-      },
-    };
-    return { vault: vaultWithSpy, calls };
-  }
-
-  it("opening a session queries the vault's firstSeen over the concepts it enumerated — the mutation this catches is build.ts never calling it at all", async () => {
-    const { vault, calls } = vaultWithFirstSeenSpy(studyVault());
-    const outcome = await openReviewSession({
-      vault,
-      scheduler: createFsrsScheduler(),
-      deviceId: DEVICE,
-      ports: ports(vault as ReturnType<typeof memoryVault>).ports,
-      random: fixedRandom,
-      probeDays: 30,
-      studySessionHolder: await seededHolder(vault),
-      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
-    });
-    if (!outcome.ok) throw new Error('expected a composed session');
-
-    // Alpha's only `topic:` occurrence is `Week one.md`; Beta's is
-    // `Week two.md` — exactly `ConceptRecord.sourcePaths` for each, per
-    // `arrivalDaysByConceptKey`'s doc. Order-independent: what matters is
-    // that both were queried through this real command path, not a second,
-    // parallel enumeration this suite would have no way to catch drifting.
-    expect(new Set(calls)).toEqual(
-      new Set(['Courses/TEST101/Week one.md', 'Courses/TEST101/Week two.md']),
-    );
-  });
-});
+// `[D-149]` (`ol-4e7o`) / `[SESS-8.6]` (`ol-egov.132.6`): the describe block
+// this comment replaces proved `session/build.ts`'s `arrivalDaysByConceptKey`
+// was reachable through `openReviewSession` — real when it fed `composeQueue`'s
+// cohort signal. That whole resolution pipeline is gone from `build.ts` now,
+// along with the `composeQueue` call it existed for (see `build.ts`'s own
+// module doc): nothing on this KEPT path (the enumeration `openReviewSession`
+// still runs) reads `vault.firstSeen` any more. The composed path's OWN
+// arrival-days signal (ARRIVE-2, `session-builder/provider.ts`'s
+// `arrivalDaysByConceptKey`) is unrelated and unaffected — already covered by
+// `session-builder/provider.spec.ts`'s own suite, which this bead does not
+// touch.
 
 describe('a vault it cannot read is not a vault with nothing due', () => {
   // The walk throws before this module ever reads `studySessionHolder`/
@@ -1277,7 +1244,7 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
     ).toBe(false);
   });
 
-  it("continue extends: finds nothing new while the shared holder's own sitting is untouched (outrun-the-target growth is not yet wired — see this block's own note)", async () => {
+  it("continue extends: with no `extendDefaultStudySession` port supplied (the default), finds nothing new — the shared holder's own sitting is untouched", async () => {
     const vault = studyVault();
     const opener = createReviewSessionOpener({ now: () => NOW });
     const holder = await seededHolder(vault);
@@ -1291,10 +1258,12 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
     await advancePastCurrentItem(opened.session);
     expect(opened.session.getViewModel().phase).toBe('complete');
 
-    // A brand-new concept arrives, but the SHARED holder was never told to
-    // recompose — `extend` re-derives from the SAME frozen `ComposedStudySession`
+    // A brand-new concept arrives, but no `extendDefaultStudySession` port is
+    // supplied — `extend` re-derives from the SAME frozen `ComposedStudySession`
     // the holder still holds, so it finds nothing new. This is the honest
-    // current behaviour, not the target one — see this block's own note.
+    // omitted-port default (`OpenReviewSessionInput.extendDefaultStudySession`'s
+    // own doc); the test below wires the real port and shows the growth it
+    // unlocks.
     await addGammaConcept(vault);
     const additions = await opener.extend(
       await sessionInput(vault, fixedClock(), undefined, { holder }),
@@ -1302,6 +1271,79 @@ describe("ol-v7r5.35 — createReviewSessionOpener holds a tab's session still (
 
     expect(additions).toEqual([]);
     expect(opened.session.getViewModel().phase).toBe('complete');
+  });
+
+  // Scenario: `features/F2-review.md`, "F2.17/C5.8 — outrunning the target
+  // grows the held composition" — @auto:plugin/review/open-session.spec.
+  // `[SESS-8.6]` (`ol-egov.132.6`): the gap `[SESS-11]` (`ol-egov.132.12`)
+  // named and filed here — `extendComposedStudySession` had no production
+  // caller, because a frozen `ComposedStudySession` had no way to grow its
+  // own `model.items` mid-sitting. This proves the WIRING reaches the served
+  // queue: `extendDefaultStudySession` is called with the sitting's own
+  // items, its wider result is what `extend` hands back (never reordering or
+  // dropping what she already has), and the SHARED holder itself is updated —
+  // a later reader (Home, Today, a plain re-`open`) sees the wider
+  // composition too, not just this one call's return — with `enteredAt`
+  // preserved (C5.8's idle threshold still measures from when she opened).
+  it("[SESS-8.6] continue extends: with `extendDefaultStudySession` wired, a wider composition's new item is appended and the shared holder itself grows", async () => {
+    const vault = studyVault();
+    const opener = createReviewSessionOpener({ now: () => NOW });
+    const holder = await seededHolder(vault);
+    const before = holder.getSitting();
+    if (before.status !== 'active') throw new Error('expected an active sitting');
+    const priorItems = before.items.model.items;
+
+    const opened = await opener.open(
+      await sessionInput(vault, fixedClock(), undefined, { holder }),
+    );
+    if (!opened.ok) throw new Error('expected a composed session');
+
+    // Deliberately no grading here (unlike the test above): grading stamps a
+    // durable id onto whatever it touches ([D-030], first sight), which would
+    // move an item's instrumentId out from under the frozen per-tab list this
+    // test also checks against — a real, separate identity-churn interaction
+    // this bead does not touch. What this test proves is the WIRING: the
+    // port is called, its wider result is what she is served, and the shared
+    // holder grows — not the full "she outran the target after finishing"
+    // narrative, which needs no grading to be true of the wiring.
+    const gammaIds = await (async () => {
+      const before = await defaultComposedSessionInstrumentIds(vault);
+      await addGammaConcept(vault);
+      const after = await defaultComposedSessionInstrumentIds(vault);
+      return after.filter((id) => !before.includes(id));
+    })();
+    expect(gammaIds.length).toBeGreaterThan(0);
+    const widened = await composedSessionFixture(
+      vault,
+      [...priorItems.map((item) => item.instrumentId), ...gammaIds],
+      NOW,
+    );
+
+    const extendDefaultStudySession = async (
+      previous: ComposedStudySession,
+    ): Promise<ComposedStudySession | null> => {
+      // The port receives the SAME items the sitting already holds — the
+      // "same plan's shares" contract `extendComposedStudySession`'s own doc
+      // states, verified at the wiring boundary rather than assumed.
+      expect(previous.model.items.map((item) => item.instrumentId)).toEqual(
+        priorItems.map((item) => item.instrumentId),
+      );
+      return widened;
+    };
+
+    const additions = await opener.extend(
+      await sessionInput(vault, fixedClock(), undefined, { holder, extendDefaultStudySession }),
+    );
+
+    expect(additions.length).toBe(gammaIds.length);
+    expect(additions.some((item) => item.instrument.conceptIds.includes(unboundKey('Gamma')))).toBe(
+      true,
+    );
+
+    const after = holder.getSitting();
+    if (after.status !== 'active') throw new Error('expected the sitting to remain active');
+    expect(after.items.model.items.length).toBe(priorItems.length + gammaIds.length);
+    expect(after.enteredAt).toEqual(before.enteredAt);
   });
 
   it('closing and reopening the tab alone does not recompose; exiting the shared holder does (C5.8 — the tab is a reader, not the owner, of the sitting)', async () => {

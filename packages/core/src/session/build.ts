@@ -3,24 +3,42 @@
  *
  * ```
  *   VaultSource ──enumerate.ts──▶ VaultInstrumentRecord[]  ─┐
- *                                                            ├─▶ QueueCandidate[] ──composeQueue──▶ ComposedQueue
- *   review log ──history.ts──▶ entries ──replay.ts──▶ states ┘        (suspension.ts excludes)
+ *                                                            ├─▶ QueueCandidate[] (containment-filtered)
+ *   review log ──history.ts──▶ entries ──replay.ts──▶ states ┘
  * ```
  *
- * Four modules, each testable alone, joined here and nowhere else. What this
- * function adds beyond wiring is the one thing a caller cannot do afterwards:
- * it returns **both** the composed queue and the enumerated records, so
- * rendering what the queue chose does not mean walking the vault a second time
- * with a second enumeration that can disagree about what exists.
+ * Four modules, each testable alone, joined here and nowhere else.
+ *
+ * **`[SESS-8.6]` (`ol-egov.132.6`, `docs/dev/one-assembly-path.md` §4): this
+ * function no longer composes a session.** Before this bead it ran
+ * `../queue/compose.js`'s `composeQueue` over the enumerated, containment-
+ * filtered candidates and returned the result as `ReviewSession.queue` —
+ * that call, that field, and the `BuildReviewSessionInput` fields that fed it
+ * alone (`filter`, `formatPreference`, `dedupeByConcept`, `servingPolicy`)
+ * are gone, once `[SESS-8.4]` (row 4) moved the review tab off reading
+ * `.queue` and nothing production read it anywhere else — see the design
+ * note §2 for the argument (`buildComposedStudySession` is the one
+ * composition now) and §4 for exactly what this row deletes, keeps and
+ * moves. What survives is the KEPT half the design note names: the vault
+ * enumeration and its by-id records, the containment-filtered candidate pool
+ * (`candidates`/`containmentDropped`, still real — see below), the replay and
+ * the suspension projection. A caller wanting a composed, servable session
+ * now calls `../study-session/compose.js`'s `buildComposedStudySession` (or,
+ * for the plugin's own held composition, reads the shared holder,
+ * `packages/plugin/src/session/holder.ts`) — this function only ever
+ * enumerates.
+ *
+ * `composeQueue` itself is not gone: `../queue/compose.js` still exists,
+ * reduced to what its two remaining, non-production callers need — see that
+ * module's own doc.
  *
  * ## What it does not do
  *
- * It does not order, prioritise, dedupe or filter — `composeQueue` does all
- * four and this passes its arguments through untouched. It does not read a
- * clock: `now` is the caller's, same discipline as `ScheduleInput.now` and
- * `ComposeQueueInput.now`, so a composed session is deterministic and a replay
- * of it is trustworthy. And it writes nothing at all, into the vault or beside
- * it.
+ * It does not order, prioritise, dedupe or filter beyond the containment rule
+ * below. It does not read a clock: `now` is the caller's, same discipline as
+ * `ScheduleInput.now`, so a caller's own composition over this enumeration is
+ * deterministic and a replay of it is trustworthy. And it writes nothing at
+ * all, into the vault or beside it.
  *
  * ## Suspension comes from the whole log, deliberately
  *
@@ -31,62 +49,34 @@
  * in front of her. This is the component F2.6's scenarios mean when they say
  * "the queue reads the full history".
  *
- * ## C7.9's containment co-presence rule, and the plumbing gap it exposes
+ * ## C7.9's containment co-presence rule
  *
- * `containment.ts`'s `filterContainmentCoPresence` runs here, over `candidates`
- * and before `composeQueue`, so a broad-area concept and one of its own parts
- * are never composed into the same session (C7.9; register row 3.7). It is a
- * real filter with a real caller — this function — not a dangling helper.
+ * `containment.ts`'s `filterContainmentCoPresence` runs here, over the
+ * enumerated candidates, so a broad-area concept and one of its own parts are
+ * never both counted as "kept" by this enumeration (C7.9; register row 3.7).
+ * `candidates`/`containmentDropped` feed `ReviewSession`'s own diagnostics
+ * (`instrumentTypesOfferedAmong`, a candidate's replayed FSRS state) rather
+ * than deciding what is served — that decision belongs to whichever composer
+ * a caller runs over this enumeration, and `study-session/compose.ts`'s own
+ * `applyContainmentCoPresence` (`[SESS-11]`, `ol-egov.132.12`) is the one
+ * that now enforces C7.9 on what is actually served, wired to a real edge set
+ * by `[SESS-8.6]` at `session-builder/provider.ts`'s `composedInput`.
  *
- * **What it is not, yet: reachable with a live edge set in production.**
- * `input.relations` is optional and every real caller omits it today, which
- * makes the filter a no-op everywhere it currently runs. The edges the rule
- * needs are produced — `WorkerConceptReader`'s per-document read emits
- * `part-of` on every pass (component register row 1.2) — but nothing threads
- * them here:
- *
- *   - `packages/plugin/src/main.ts:184` holds the live fold as
- *     `OleaPlugin.relations` (a `RelationSet`, populated at
- *     `main.ts:584` on every ingestion-session close), and it is read by
- *     nothing (component register row 1.2a's "read by nothing" finding,
- *     unchanged by this bead).
- *   - `packages/plugin/src/review/open-session.ts:199` calls
- *     `buildReviewSession` — the real "Olea: Start today's review" command —
- *     without a `relations` argument.
- *   - `packages/plugin/src/today/data-source.ts:240` calls it a second time,
- *     for the Today panel's count, also without one.
- *
- * Closing that gap means passing `servedRelations(this.relations)` (or
- * equivalent) from `main.ts` through both call sites above, all three of
- * which sit outside `packages/core/src/session/`'s ownership for this bead.
- * Nothing here invents a new persisted store to work around that — `edges`
- * stays an explicit, transient parameter, matching every other model-derived
- * value this package accepts rather than caches.
+ * `input.relations` omitted means no edges, a real no-op rather than a
+ * degraded mode — the same posture this field has always documented.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import type { AssessmentConceptContext } from '../assessment/scope-concept-keys.js';
 import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
 import type { AssessmentRecord } from '../assessment/types.js';
-import { resolvePrerequisiteConceptKeys } from '../concept/prerequisite-order.js';
-import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
-import type { ConceptRecord } from '../concept/types.js';
 import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
-import { composeQueue } from '../queue/compose.js';
-import type {
-  ComposedQueue,
-  QueueCandidate,
-  QueueFilter,
-  QueueItem,
-  QueueSelectionContext,
-  QueueServingPolicy,
-} from '../queue/types.js';
+import type { QueueCandidate, QueueItem, QueueSelectionContext } from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import type { StudySessionItem } from '../study-session/build.js';
-import { type CalendarDay, calendarDayFromLocalDate } from '../today/calendar-day.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { filterContainmentCoPresence } from './containment.js';
 import type { EnumerateVaultInstrumentsOptions } from './enumerate.js';
@@ -103,8 +93,6 @@ export interface BuildReviewSessionInput {
   readonly scheduler: Scheduler;
   /** The instant the session is composed. Always the caller's, never a clock read here. */
   readonly now: Date;
-  /** F2.5. Omitted means no filter. */
-  readonly filter?: QueueFilter;
   /**
    * Review-log entries the caller already holds. When given, **no log is
    * read** — the whole function becomes pure apart from reading notes.
@@ -121,76 +109,45 @@ export interface BuildReviewSessionInput {
   readonly under?: VaultPath;
   /** Passed straight to `enumerateVaultInstruments` — including the D-030 id seam. */
   readonly instruments?: Omit<EnumerateVaultInstrumentsOptions, 'under'>;
-  /** F2.17's format preference, injected. Omitted means none — see `ComposeQueueInput`. */
-  readonly formatPreference?: readonly SchedulableInstrumentType[];
-  /** F2.17's per-session dedupe. Defaults to `true`, as `composeQueue` does. */
-  readonly dedupeByConcept?: boolean;
-  /**
-   * `[D-240]` items 2/4: how `formatPreference` and per-session dedupe
-   * interact — `'today'` (pre-amendment), `'interval-bound'` (the amendment,
-   * and this input's default) or `'preference-off'`. Passed straight through
-   * to `composeQueue`; see `QueueServingPolicy`'s own doc for what each value
-   * does. This is the flag `[SESS-4]`'s harness sweep sets to run all three
-   * arms against the real composer.
-   */
-  readonly servingPolicy?: QueueServingPolicy;
   /**
    * `part-of` edges available at composition time (C7.9; register row 3.7;
    * `./containment.js`). Omitted means none, which is a real no-op, not a
-   * degraded mode — see this file's module doc for exactly what still has to
-   * be wired before a real caller can pass one. Edge types other than
-   * `part-of` are ignored rather than rejected, so a caller holding a whole
-   * `RelationSet`'s served edges may pass them through unfiltered.
+   * degraded mode. Edge types other than `part-of` are ignored rather than
+   * rejected, so a caller holding a whole `RelationSet`'s served edges may
+   * pass them through unfiltered.
    */
   readonly relations?: readonly ConceptRelation[];
   /**
-   * F2.19 (`ol-vr8z`): assessment records this function resolves — together
-   * with `relations` above and its own `instruments.concepts` enumeration —
-   * into `composeQueue`'s `relatedConceptKeys`/`assessmentContext` maps via
-   * `resolveRelatedConceptKeys`/`resolveAssessmentGroupingContext`. This
-   * function does the resolution itself rather than taking the two maps
-   * pre-resolved, so a caller never has to enumerate concepts a second time
-   * just to join against them (`ol-ua0i`'s hand-back, option (b)). Omitted
-   * means no assessment-scope signal, a real no-op (`block-order.ts`'s
-   * doc), not a degraded mode — same posture `relations` already documents.
+   * F2.19 (`ol-vr8z`): assessment records, resolved (together with this
+   * call's own `instruments.concepts` enumeration) into the
+   * `assessmentContext` map `targetAssessmentPathIndex` reads. Omitted means
+   * no assessment-scope signal, a real no-op, not a degraded mode — same
+   * posture `relations` above documents.
    *
-   * Also the source, via `targetAssessmentPathIndex`, for each candidate's
-   * own `QueueCandidate.targetAssessmentPath` (`ol-f3qu`) — without this,
-   * `assessmentContext` was resolved but nothing joined against it, so
-   * `block-order.ts`'s scope-matching half of F2.19 silently scored `0` on
-   * this path regardless of what was passed here. See `toQueueCandidate`'s
-   * doc.
+   * The source, via `targetAssessmentPathIndex`, for each candidate's own
+   * `QueueCandidate.targetAssessmentPath` (`ol-f3qu`) — without this,
+   * `assessmentContext` was resolved but nothing joined against it. See
+   * `toQueueCandidate`'s doc.
    */
   readonly assessments?: readonly AssessmentRecord[];
-  // `[D-149]`'s material-arrival cohort (`ol-4e7o`) deliberately adds NO field
-  // here. Unlike `relations`/`assessments` above, both maps `composeQueue`
-  // needs (`conceptSourcePaths`, `arrivalDays`) are fully resolvable from
-  // inputs this interface already carries — `vault` (for `firstSeen`) and
-  // `instruments.concepts` (already enumerated above) — so there is nothing
-  // for a caller to supply. See `conceptSourcePathsByConceptKey`'s and
-  // `arrivalDaysByConceptKey`'s own docs, and `queue/types.ts`'s
-  // `ComposeQueueInput.arrivalDays`/`conceptSourcePaths` for the shapes this
-  // resolves into.
 }
 
 export interface ReviewSession {
-  /** What is offered and what was due and deferred (F2.17). */
-  readonly queue: ComposedQueue;
   /** Everything the walk found, including what it refused and why. */
   readonly instruments: VaultInstrumentEnumeration;
   /**
-   * The candidates handed to `composeQueue`, in enumeration order —
-   * **after** the C7.9 containment co-presence filter, so this is exactly
-   * what `composeQueue` saw. Exposed for diagnostics and for the Today
-   * panel's count.
+   * Every enumerated instrument, in enumeration order, **after** the C7.9
+   * containment co-presence filter — see this file's module doc. Exposed for
+   * diagnostics (`instrumentTypesOfferedAmong`, a candidate's replayed FSRS
+   * state) and for the Today panel's legacy count; it does not decide what is
+   * served — see the module doc for which composer does.
    */
   readonly candidates: readonly QueueCandidate[];
   /**
-   * Candidates the C7.9 containment co-presence filter dropped before
-   * `composeQueue` ran (`./containment.js`) — empty whenever `input.relations`
-   * is omitted, which is every real caller today. Reported rather than folded
-   * silently into `candidates`' absence, the same posture `instruments.unbound`
-   * and `queue.deferred` already take.
+   * Candidates the C7.9 containment co-presence filter dropped from
+   * `candidates` (`./containment.js`) — empty whenever `input.relations` is
+   * omitted. Reported rather than folded silently into `candidates`' absence,
+   * the same posture `instruments.unbound` already takes.
    */
   readonly containmentDropped: readonly QueueCandidate[];
   /** Replayed scheduling state, by instrument id. Absent means never reviewed. */
@@ -199,7 +156,7 @@ export interface ReviewSession {
   readonly suspended: ReadonlySet<string>;
   /** The entries the replay and the projection were built from. */
   readonly entries: readonly ReviewLogEntry[];
-  /** `instrumentId` -> record, so a caller rendering `queue.items` does not re-scan. */
+  /** `instrumentId` -> record, so a caller rendering a composer's chosen items does not re-scan. */
   readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
 }
 
@@ -288,61 +245,11 @@ function isSoonerTarget(
 }
 
 /**
- * `[D-149]` (`ol-4e7o`): each concept's own source-note grain, keyed by
- * `conceptKey` — `ConceptRecord.sourcePaths` verbatim, the identical shape
- * `queue/types.ts`'s `ComposeQueueInput.conceptSourcePaths` doc names
- * (`ol-v7r5.22`). Pure and total over `instruments.concepts`, the same
- * enumeration {@link resolveRelatedConceptKeys}/{@link resolveAssessmentGroupingContext}
- * already join against — no second vault walk, no new concept read.
- */
-function conceptSourcePathsByConceptKey(
-  concepts: readonly ConceptRecord[],
-): ReadonlyMap<string, readonly VaultPath[]> {
-  return new Map(concepts.map((concept) => [concept.key, concept.sourcePaths]));
-}
-
-/**
- * `[D-149]` (`ol-4e7o`): `ARRIVE-1`'s days-since-arrival signal, resolved
- * here rather than taken pre-resolved — the same posture `relatedConceptKeys`/
- * `assessmentContext` already take (`ol-vr8z`'s hand-back, option (b)), so a
- * caller never enumerates concepts a second time just to join arrival days
- * against them. Mirrors `session-builder/provider.ts`'s own
- * `arrivalDaysByConceptKey` (`ARRIVE-2`, `ol-epi9`) exactly — EARLIEST
- * `VaultSource.firstSeen` across a concept's own `sourcePaths`, keyed by
- * `conceptKey` — over `ConceptRecord.sourcePaths` instead of `GapRow.notePaths`,
- * because this path enumerates concepts, not gap rows.
+ * Walk the vault, replay the log, enumerate what a composer could draw from.
  *
- * `firstSeen` is optional on `VaultSource` (same doc, same reasoning): a host
- * that cannot say — including every `VaultSource` fake in this package's own
- * tests, `memoryVault` included — yields an empty map immediately, no I/O
- * attempted, which `block-order.ts`'s no-op proof already reads identically
- * to `arrivalDays` being omitted entirely. So this makes no observable change
- * to any existing caller or test until a real host's `firstSeen` is present.
- */
-async function arrivalDaysByConceptKey(
-  vault: VaultSource,
-  concepts: readonly ConceptRecord[],
-): Promise<ReadonlyMap<string, CalendarDay>> {
-  const firstSeen = vault.firstSeen?.bind(vault);
-  if (firstSeen === undefined) return new Map();
-
-  const days = new Map<string, CalendarDay>();
-  await Promise.all(
-    concepts.map(async (concept) => {
-      const stats = await Promise.all(concept.sourcePaths.map((path) => firstSeen(path)));
-      const known = stats.filter((ms): ms is number => ms !== null);
-      if (known.length === 0) return;
-      days.set(concept.key, calendarDayFromLocalDate(new Date(Math.min(...known))));
-    }),
-  );
-  return days;
-}
-
-/**
- * Walk the vault, replay the log, compose today's session.
- *
- * The single call a plugin, a panel or a harness makes. Everything it returns
- * is plain data.
+ * The single call a plugin, a panel or a harness makes to get an enumeration
+ * — see this file's module doc for why it no longer composes a session
+ * itself. Everything it returns is plain data.
  */
 export async function buildReviewSession(input: BuildReviewSessionInput): Promise<ReviewSession> {
   const instruments = await enumerateVaultInstruments(input.vault, {
@@ -356,45 +263,16 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   const replay = replaySchedulerStates(entries, input.scheduler);
   const suspended = suspendedInstrumentIds(entries);
 
-  // F2.19 (`ol-vr8z`/`ol-f3qu`): resolve both signal maps here, against the
-  // same `instruments.concepts` enumeration this call already produced above
-  // — no second vault walk. Both resolvers accept an empty input array and
-  // return an empty map, which `block-order.ts` already proves reads
-  // identically to the map being omitted entirely, so passing them
-  // unconditionally (rather than spreading on definedness, as `filter`/
-  // `formatPreference`/`dedupeByConcept` do above) changes nothing when
-  // `input.relations`/`input.assessments` are both omitted. Resolved BEFORE
-  // `toQueueCandidate` runs (moved up from after, `ol-f3qu`) because
-  // `assessmentContext` is also `targetAssessmentPathIndex`'s input, and a
-  // candidate needs its `targetAssessmentPath` set at construction — neither
-  // resolver reads `candidates`, so the reorder changes nothing else.
-  const { relatedConceptKeys } = resolveRelatedConceptKeys(
-    input.relations ?? [],
-    instruments.concepts,
-  );
-  // C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`): the same
-  // already-produced enumeration and the same already-threaded `relations`
-  // list, resolved a second way — the corpus stage's `prerequisite` edges
-  // become an ordering INSIDE an exact overdue tie band. Empty in, empty out,
-  // and an empty map is a proven no-op in `block-order.ts`, so this is
-  // unconditional for the same reason the resolver above is.
-  const { prerequisiteConceptKeys } = resolvePrerequisiteConceptKeys(
-    input.relations ?? [],
-    instruments.concepts,
-  );
+  // F2.19 (`ol-vr8z`/`ol-f3qu`): resolved against the same
+  // `instruments.concepts` enumeration this call already produced above — no
+  // second vault walk. An empty `input.assessments` reads identically to it
+  // being omitted (`block-order.ts`'s own no-op proof), so this is
+  // unconditional.
   const { assessmentContext } = resolveAssessmentGroupingContext(
     input.assessments ?? [],
     instruments.concepts,
   );
   const targetAssessmentPathByConceptKey = targetAssessmentPathIndex(assessmentContext);
-
-  // `[D-149]` (`ol-4e7o`): the material-arrival cohort's two caller-resolved
-  // maps, same posture as the pair above — resolved unconditionally against
-  // `instruments.concepts`, a provable no-op (empty maps) when `input.vault`
-  // has no `firstSeen` to offer. See `conceptSourcePathsByConceptKey`'s and
-  // `arrivalDaysByConceptKey`'s own docs.
-  const conceptSourcePaths = conceptSourcePathsByConceptKey(instruments.concepts);
-  const arrivalDays = await arrivalDaysByConceptKey(input.vault, instruments.concepts);
 
   const enumeratedCandidates = instruments.records.map((record) =>
     toQueueCandidate(record, replay, targetAssessmentPathByConceptKey),
@@ -406,25 +284,9 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   );
   const candidates = containment.candidates;
 
-  const queue = composeQueue({
-    candidates,
-    now: input.now,
-    suspended,
-    ...(input.filter !== undefined ? { filter: input.filter } : {}),
-    ...(input.formatPreference !== undefined ? { formatPreference: input.formatPreference } : {}),
-    ...(input.dedupeByConcept !== undefined ? { dedupeByConcept: input.dedupeByConcept } : {}),
-    ...(input.servingPolicy !== undefined ? { servingPolicy: input.servingPolicy } : {}),
-    relatedConceptKeys,
-    prerequisiteConceptKeys,
-    assessmentContext,
-    conceptSourcePaths,
-    arrivalDays,
-  });
-
   const recordsById = new Map(instruments.records.map((record) => [record.instrumentId, record]));
 
   return {
-    queue,
     instruments,
     candidates,
     containmentDropped: containment.dropped,

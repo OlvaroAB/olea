@@ -1,6 +1,29 @@
 /**
  * Queue composition v1 (F2.5, F2.14, F2.17, C5.5, P2-T07).
  *
+ * **Retired from production, `[SESS-8.6]` (`ol-egov.132.6`,
+ * `docs/dev/one-assembly-path.md` §2/§4).** `composeQueue` was the review
+ * tab's second, competing composition — F4.6/F6.4's own defect, "two doors,
+ * two compositions, one of them answered." `../study-session/compose.ts`'s
+ * `buildComposedStudySession` is now the one composition the student
+ * actually sits; `session/build.ts` no longer calls this function at all (see
+ * that module's own doc), and the review tab's own former call
+ * (`review/open-session.ts`) was removed at `[SESS-8.4]` (row 4), before this
+ * row deleted the composeQueue call it had already stopped reading.
+ *
+ * **Everything below is unchanged and still real** — this module is pinned
+ * by its two remaining, non-production callers, both of which compose
+ * exactly the shape this doc describes over a real vault's enumeration:
+ * `packages/workbench/src/queue/derive.ts` (the design workbench's scripted
+ * `#/today/*`/`#/review/*` states) and
+ * `packages/workbench/src/simulator/live-queue.ts` (the simulator's live,
+ * persisted-vault "rate one item" affordance). Neither reaches
+ * `session/build.ts`'s `queue` field — both already called `composeQueue`
+ * directly over `buildReviewSession`'s enumerated `candidates`, which is why
+ * neither needed to change for this row. `packages/core/src/session/build.spec.ts`
+ * and `packages/core/test/session/fixture-vault.spec.ts` exercise this exact
+ * same real-vault-to-`composeQueue` shape, for the identical reason.
+ *
  * Six steps, in this order, each of which exists for a stated reason:
  *
  *   1. **Filter** (F2.5) — narrow to a course or a concept, if she asked.
@@ -96,12 +119,15 @@
  * **The rule itself is not in this file.** It lives in
  * `../scheduler/serving.ts` (`recallOutranksFormatPreference`,
  * `hasWaitedItsOwnInterval`, `firstIntervalDaysAfterGood` and
- * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER}), because this package has two
- * production composers and one serving rule: the study-session composer
- * (`../study-session/build.ts`'s `orderedForFormat`, reached from the session
- * builder and the Home screen) calls exactly the same function. `ol-2zfj.71`
- * [SESS-7] is the bead; that module's doc carries the C5.7 argument for why a
- * second implementation was the defect rather than a convenience.
+ * {@link DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER}) — this module's own
+ * `dedupeRank` calls it, and so does `../study-session/build.ts`'s
+ * `orderedForFormat`, the ONE production composer's own serving step
+ * (`[SESS-8.6]`, this file's retirement note above). One rule shared by both
+ * rather than restated in each, so a workbench/simulator screenshot composed
+ * through this file still honours the identical `[D-240]` item 2 arbitration
+ * the student actually gets. `ol-2zfj.71` [SESS-7] is the bead that shared
+ * it; that module's doc carries the C5.7 argument for why a second
+ * implementation was the defect rather than a convenience.
  *
  * This only ever fires where a preference exists to defer against
  * (`formatPreference.length > 0`) — with no preference, dedupe already runs

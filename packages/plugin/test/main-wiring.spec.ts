@@ -642,9 +642,18 @@ describe('C7.9 containment relations reach both session-composition call sites (
     );
   });
 
-  it("the Today panel's instrument source is given the same fold", () => {
+  it("the Today panel's instrument source is wired over the shared composed-session holder ([SESS-8.5], ol-egov.132.5)", () => {
+    // `[SESS-8.5]` (`ol-egov.132.5`) stopped Today's instrument source
+    // running its own `buildReviewSession`-based walk (the "legacy path"
+    // `today/data-source.ts`'s own module doc names) — it now reads the
+    // shared `studySessionHolder`/`composeDefaultStudySession` port, the same
+    // pair `buildReviewSessionInput` threads into the review tab. Test
+    // updated alongside `[SESS-8.6]` (`ol-egov.132.6`) after being found
+    // stale (`discovered-from ol-egov.132.5`): this call no longer passes
+    // `relations`, because the legacy path it would have fed is unreachable
+    // in production once both of the other two fields are always supplied.
     expect(main).toMatch(
-      /instruments:\s*createVaultInstrumentSource\(\{\s*vault,\s*scheduler,\s*deviceId,\s*now:\s*\(\)\s*=>\s*new Date\(\),[\s\S]*?relations:\s*this\.servedRelationEdges\(\),\s*\}\),/,
+      /instruments:\s*createVaultInstrumentSource\(\{\s*vault,\s*scheduler,\s*deviceId,\s*now:\s*\(\)\s*=>\s*new Date\(\),[\s\S]*?studySessionHolder:\s*this\.studySessionHolder,\s*composeDefaultStudySession:\s*\(\)\s*=>\s*this\.composeDefaultStudySession\(\),\s*\}\),/,
     );
   });
 

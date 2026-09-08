@@ -19,6 +19,7 @@ import {
   EMPTY_REGISTRY_OVERRIDES,
   type ExplainBackPromptContext,
   type ExtractedUnit,
+  extendComposedStudySession,
   type FirstInvitationCandidate,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
@@ -2246,6 +2247,63 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `[SESS-8.6]` (`ol-egov.132.6`): the outrun-the-target port
+   * (`open-session.ts`'s `OpenReviewSessionInput.extendDefaultStudySession`)
+   * — F2.17/C5.8's "she outran the target" growth for the ONE shared
+   * composed-session holder, closing the gap `[SESS-11]`
+   * (`ol-egov.132.12`) named and filed here: `extendComposedStudySession`
+   * (`olea-core`) had no production caller, because a frozen
+   * `ComposedStudySession` has no way to grow its own `model.items`
+   * mid-sitting.
+   *
+   * Re-assembles the SAME composer input `composeDefaultStudySession` uses —
+   * `composeStudySessionForRequest`'s own `composedInput`
+   * (`session-builder/provider.ts`) — fresh, at outrun time, the same "always
+   * composes a fresh candidate list" posture `queue-adapter.ts`'s own
+   * `FrozenReviewQueue.extend` already takes for the retiring path. Only
+   * `budgetMinutes` differs from `previous`'s own composition: widened by one
+   * more `DEFAULT_SESSION_BUDGET_MINUTES`-sized step — a declared, plain-
+   * English default (C5.5's "her typical session length" unit, reused as the
+   * growth step rather than inventing a second number), not a fitted
+   * threshold, so it needs no decision bead — and every other steering input
+   * (courses, conceptIds, allocation, focusPolicy) held identical, which is
+   * what makes the growth "the same plan's shares" (C5.5) by construction,
+   * per `extendComposedStudySession`'s own doc.
+   *
+   * `null` means the same "nothing to compose" condition
+   * {@link composeDefaultStudySession} already reports — `open-session.ts`
+   * reads that as "nothing new to append," never a failure.
+   */
+  private async extendDefaultStudySession(
+    previous: ComposedStudySession,
+  ): Promise<ComposedStudySession | null> {
+    const wiring = this.review;
+    if (wiring === null) return null;
+    const now = new Date();
+    const result = await composeStudySessionForRequest(
+      {
+        vault: wiring.vault,
+        deviceId: wiring.deviceId,
+        settingsHost: this,
+        now: () => now,
+        scheduler: wiring.scheduler,
+        relations: () => this.servedRelationEdges(),
+        plan: () => wiring.plan,
+      },
+      { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+      now,
+    );
+    if (result === null) return null;
+
+    const widerBudgetMinutes = previous.model.budgetMinutes + DEFAULT_SESSION_BUDGET_MINUTES;
+    const items = extendComposedStudySession(
+      { ...result.composedInput, budgetMinutes: widerBudgetMinutes },
+      previous,
+    );
+    return { ...previous, model: { ...previous.model, items } };
+  }
+
+  /**
    * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3b):
    * Home's Start button is the freeze point — one `decideRebuild` call
    * against the shared holder, then a recompose BEFORE entering if one is
@@ -2360,6 +2418,9 @@ export default class OleaPlugin extends Plugin {
       // never a private composition step of its own.
       studySessionHolder: this.studySessionHolder,
       composeDefaultStudySession: () => this.composeDefaultStudySession(),
+      // `[SESS-8.6]` (`ol-egov.132.6`): F2.17/C5.8's outrun-the-target growth
+      // for the held composition — see `extendDefaultStudySession`'s own doc.
+      extendDefaultStudySession: (previous) => this.extendDefaultStudySession(previous),
     };
   }
 

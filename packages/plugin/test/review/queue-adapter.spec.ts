@@ -6,9 +6,19 @@
 // `ComposedQueue`. Hand-building it would test the adapter against the shape
 // this file believes the composer produces, which is exactly the coupling the
 // adapter exists to remove.
-import type { PlannedQueueItem, RandomSource, VaultSource } from 'olea-core';
+//
+// `[SESS-8.6]` (`ol-egov.132.6`): `buildReviewSession` no longer composes a
+// `ComposedQueue` itself — see `session/build.ts`'s own module doc. This file
+// tests `queue-adapter.ts`, which is UNCHANGED (still kept, per
+// `docs/dev/one-assembly-path.md` §4): every fixture below still gets a real
+// `ComposedQueue` out of a real vault, just via an explicit `composeQueue`
+// call over `buildReviewSession`'s enumerated `candidates` — see
+// {@link composedQueueFor} — the identical shape
+// `packages/workbench/src/queue/derive.ts` uses in production.
+import type { ComposedQueue, PlannedQueueItem, RandomSource, VaultSource } from 'olea-core';
 import {
   buildReviewSession,
+  composeQueue,
   createFsrsScheduler,
   executeStudyPlan,
   PRESENTED_OPTIONS,
@@ -113,6 +123,19 @@ function vault(): VaultSource {
   });
 }
 
+/**
+ * `[SESS-8.6]`: the `ComposedQueue` `buildReviewSession` used to hand back
+ * directly — now composed explicitly over its enumerated `candidates`, the
+ * same real-vault-to-`composeQueue` shape `packages/workbench/src/queue/derive.ts`
+ * uses in production. See this file's own module doc.
+ */
+function composedQueueFor(
+  built: { readonly candidates: Parameters<typeof composeQueue>[0]['candidates'] },
+  now: Date = NOW,
+): ComposedQueue {
+  return composeQueue({ candidates: built.candidates, now });
+}
+
 async function adapt(options: { readonly random?: RandomSource } = {}) {
   const session = await buildReviewSession({
     vault: vault(),
@@ -120,7 +143,7 @@ async function adapt(options: { readonly random?: RandomSource } = {}) {
     now: NOW,
   });
   return adaptReviewQueue({
-    queue: session.queue,
+    queue: composedQueueFor(session),
     recordsById: session.recordsById,
     ...(options.random !== undefined ? { random: options.random } : {}),
   });
@@ -232,7 +255,7 @@ describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fa
   it('populates believes/source_says only for the distractors named in the sidecar, matched by text', async () => {
     const built = await session();
     const baseline = mcqItemOf(
-      adaptReviewQueue({ queue: built.queue, recordsById: built.recordsById }),
+      adaptReviewQueue({ queue: composedQueueFor(built), recordsById: built.recordsById }),
     );
     const instrumentId = baseline.instrument.instrumentId;
 
@@ -261,7 +284,7 @@ describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fa
     for (let i = 0; i < 60; i += 1) {
       const item = mcqItemOf(
         adaptReviewQueue({
-          queue: built.queue,
+          queue: composedQueueFor(built),
           recordsById: built.recordsById,
           distractorProvenanceById,
         }),
@@ -285,7 +308,7 @@ describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fa
   it('never attaches believes/source_says to the correct option, even if a (malformed) sidecar names its text', async () => {
     const built = await session();
     const baseline = mcqItemOf(
-      adaptReviewQueue({ queue: built.queue, recordsById: built.recordsById }),
+      adaptReviewQueue({ queue: composedQueueFor(built), recordsById: built.recordsById }),
     );
     const distractorProvenanceById = new Map([
       [
@@ -305,7 +328,7 @@ describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fa
     for (let i = 0; i < 20; i += 1) {
       const item = mcqItemOf(
         adaptReviewQueue({
-          queue: built.queue,
+          queue: composedQueueFor(built),
           recordsById: built.recordsById,
           distractorProvenanceById,
         }),
@@ -326,7 +349,7 @@ describe('distractor provenance ([D-220 / DIST-3]) is attached by text, never fa
 
   it('adaptExecutedReviewQueue threads the same lookup through, keyed the same way', async () => {
     const built = await session();
-    const executed = executeStudyPlan({ queue: built.queue, plan: null });
+    const executed = executeStudyPlan({ queue: composedQueueFor(built), plan: null });
     const baseline = mcqItemOf(
       adaptExecutedReviewQueue({ items: executed.items, recordsById: built.recordsById }),
     );
@@ -390,9 +413,10 @@ describe('the adapter carries the queue’s explicit nulls through unchanged', (
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const items = adaptReviewQueue({ queue: session.queue, recordsById: session.recordsById });
+    const composedQueue = composedQueueFor(session);
+    const items = adaptReviewQueue({ queue: composedQueue, recordsById: session.recordsById });
     for (const [index, item] of items.entries()) {
-      const queued = session.queue.items[index];
+      const queued = composedQueue.items[index];
       expect(item.selectionContext.dueState).toBe(queued?.selectionContext.dueState);
       expect(item.selectionContext.instrumentTypesOffered).toEqual(
         queued?.selectionContext.instrumentTypesOffered,
@@ -446,7 +470,10 @@ describe('the prior state the view schedules against is the replayed one', () =>
       ],
     });
 
-    const items = adaptReviewQueue({ queue: session.queue, recordsById: session.recordsById });
+    const items = adaptReviewQueue({
+      queue: composedQueueFor(session, new Date('2027-08-20T12:00:00Z')),
+      recordsById: session.recordsById,
+    });
     const adapted = items.find((i) => i.instrument.instrumentId === qa.instrumentId);
     expect(adapted?.priorState).not.toBeNull();
     expect(adapted?.priorState?.reps).toBe(1);
@@ -461,11 +488,12 @@ describe('the adapter adds nothing and drops nothing', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const items = adaptReviewQueue({ queue: session.queue, recordsById: session.recordsById });
+    const composedQueue = composedQueueFor(session);
+    const items = adaptReviewQueue({ queue: composedQueue, recordsById: session.recordsById });
     expect(items.map((i) => i.instrument.instrumentId)).toEqual(
-      session.queue.items.map((i) => i.instrumentId),
+      composedQueue.items.map((i) => i.instrumentId),
     );
-    for (const deferral of session.queue.deferred) {
+    for (const deferral of composedQueue.deferred) {
       expect(items.map((i) => i.instrument.instrumentId)).not.toContain(deferral.instrumentId);
     }
   });
@@ -476,7 +504,7 @@ describe('the adapter adds nothing and drops nothing', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const items = adaptReviewQueue({ queue: session.queue, recordsById: new Map() });
+    const items = adaptReviewQueue({ queue: composedQueueFor(session), recordsById: new Map() });
     expect(items).toEqual([]);
   });
 });
@@ -492,14 +520,15 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const executed = executeStudyPlan({ queue: session.queue, plan: null });
+    const composedQueue = composedQueueFor(session);
+    const executed = executeStudyPlan({ queue: composedQueue, plan: null });
 
     // Same fixed source for both calls — MCQ sampling is per-showing (F2.15),
     // so two independently-seeded `Math.random` calls would disagree on an MCQ's
     // option order for a reason that has nothing to do with this comparison.
     const fixedRandom: RandomSource = { next: () => 0.42 };
     const viaQueue = adaptReviewQueue({
-      queue: session.queue,
+      queue: composedQueue,
       recordsById: session.recordsById,
       random: fixedRandom,
     });
@@ -518,7 +547,7 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const first = session.queue.items[0];
+    const first = composedQueueFor(session).items[0];
     if (first === undefined) throw new Error('expected a composed item');
 
     const plan = {
@@ -548,7 +577,7 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
       },
     };
 
-    const executed = executeStudyPlan({ queue: session.queue, plan });
+    const executed = executeStudyPlan({ queue: composedQueueFor(session), plan });
     const items = adaptExecutedReviewQueue({
       items: executed.items,
       recordsById: session.recordsById,
@@ -576,12 +605,13 @@ describe('adaptExecutedReviewQueue accepts a composed-rows result unchanged in s
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    expect(session.queue.items.length).toBeGreaterThanOrEqual(3);
+    const composedQueue = composedQueueFor(session);
+    expect(composedQueue.items.length).toBeGreaterThanOrEqual(3);
 
     // Reverse of the composed queue's own order — stands in for a composed
     // session having decided a different (course-blocked) order than plain
     // FSRS due order would. The adapter must not disturb it either way.
-    const reversed = [...session.queue.items].reverse();
+    const reversed = [...composedQueue.items].reverse();
     const composedOrderItems: readonly PlannedQueueItem[] = reversed.map((q) => ({
       instrumentId: q.instrumentId,
       instrumentType: q.instrumentType,
@@ -600,7 +630,7 @@ describe('adaptExecutedReviewQueue accepts a composed-rows result unchanged in s
       reversed.map((q) => q.instrumentId),
     );
     expect(adapted.map((i) => i.instrument.instrumentId)).not.toEqual(
-      session.queue.items.map((q) => q.instrumentId),
+      composedQueue.items.map((q) => q.instrumentId),
     );
   });
 });
@@ -616,7 +646,7 @@ describe('both adapters carry dedupeReason through verbatim ([D-240] item 5)', (
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const [first, ...rest] = session.queue.items;
+    const [first, ...rest] = composedQueueFor(session).items;
     if (first === undefined) throw new Error('expected a composed item');
 
     const items = adaptReviewQueue({
@@ -638,7 +668,7 @@ describe('both adapters carry dedupeReason through verbatim ([D-240] item 5)', (
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const [first, ...rest] = session.queue.items;
+    const [first, ...rest] = composedQueueFor(session).items;
     if (first === undefined) throw new Error('expected a composed item');
 
     const executed = executeStudyPlan({
@@ -793,7 +823,10 @@ describe('supportLevel threads through both adapters ([SUPP-3])', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const items = adaptReviewQueue({ queue: session.queue, recordsById: session.recordsById });
+    const items = adaptReviewQueue({
+      queue: composedQueueFor(session),
+      recordsById: session.recordsById,
+    });
     for (const item of items) {
       expect(Object.hasOwn(item.instrument, 'supportLevel')).toBe(false);
     }
@@ -824,7 +857,7 @@ describe('supportLevel threads through both adapters ([SUPP-3])', () => {
     ]);
 
     const items = adaptReviewQueue({
-      queue: session.queue,
+      queue: composedQueueFor(session),
       recordsById: session.recordsById,
       supportHistory,
     });
@@ -862,7 +895,7 @@ describe('supportLevel threads through both adapters ([SUPP-3])', () => {
     // survives that reconstruction because it is computed here, in adaptation,
     // from `instrumentType`/`conceptIds`, both of which `executeStudyPlan`
     // preserves verbatim.
-    const executed = executeStudyPlan({ queue: session.queue, plan: null });
+    const executed = executeStudyPlan({ queue: composedQueueFor(session), plan: null });
     const items = adaptExecutedReviewQueue({
       items: executed.items,
       recordsById: session.recordsById,
@@ -880,7 +913,7 @@ describe('supportLevel threads through both adapters ([SUPP-3])', () => {
       now: NOW,
     });
     const items = adaptReviewQueue({
-      queue: session.queue,
+      queue: composedQueueFor(session),
       recordsById: session.recordsById,
       supportSelfAssessment: 'confident',
     });
@@ -913,7 +946,7 @@ describe('createFrozenReviewQueue — C5.8’s freeze, held across calls', () =>
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const executed = executeStudyPlan({ queue: session.queue, plan: null });
+    const executed = executeStudyPlan({ queue: composedQueueFor(session), plan: null });
     return { items: executed.items, recordsById: session.recordsById };
   }
 

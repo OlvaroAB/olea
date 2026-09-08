@@ -26,6 +26,7 @@
  */
 import {
   buildReviewSession,
+  composeQueue,
   createFsrsScheduler,
   parseMcqBlocks,
   provisionalConceptKey,
@@ -205,15 +206,18 @@ describe('an accepted MCQ persists as a scheduled instrument (F2.15/F3.4, ol-p3t
 
     const { instrumentId } = await port.accept('draft-1', 'accepted');
 
-    // The same call `main.ts`'s `composeReviewSession` makes on her next
-    // "start today's review" — a fresh walk of the SAME vault `accept()`
-    // just wrote into, composed by the real `composeQueue`. No fixture here
-    // stands in for either.
+    // A fresh walk of the SAME vault `accept()` just wrote into — the
+    // enumeration `main.ts`'s `composeReviewSession` reads on her next
+    // "start today's review" — composed by the real `composeQueue`, exactly
+    // `packages/workbench/src/queue/derive.ts`'s own shape (`[SESS-8.6]`,
+    // `ol-egov.132.6`: `buildReviewSession` itself no longer composes). No
+    // fixture here stands in for either.
     const composed = await buildReviewSession({
       vault,
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
+    const queue = composeQueue({ candidates: composed.candidates, now: NOW });
 
     const record = composed.recordsById.get(instrumentId);
     expect(record?.instrumentType).toBe('mcq');
@@ -222,7 +226,7 @@ describe('an accepted MCQ persists as a scheduled instrument (F2.15/F3.4, ol-p3t
     ]);
     expect(record?.courses).toEqual(['GEO101']);
 
-    const offered = composed.queue.items.find((item) => item.instrumentId === instrumentId);
+    const offered = queue.items.find((item) => item.instrumentId === instrumentId);
     expect(offered).toBeDefined();
     // Never reviewed yet — the same 'new' dueState any hand-authored
     // instrument gets the first time the queue ever sees it (compose.ts's
@@ -271,6 +275,7 @@ describe('an accepted MCQ persists as a scheduled instrument (F2.15/F3.4, ol-p3t
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
+    const queue = composeQueue({ candidates: composed.candidates, now: NOW });
 
     // Both instruments are eligible (dueState 'new'), share one concept, and
     // F2.17 (compose.ts) offers exactly one of them per session — the same
@@ -278,8 +283,8 @@ describe('an accepted MCQ persists as a scheduled instrument (F2.15/F3.4, ol-p3t
     // Which one wins is FSRS-order/insertion-order, `composeQueue`'s call,
     // not a distinction this test makes: the point is there is exactly one
     // winner and one deferral, not that the generated one always wins.
-    const offeredIds = composed.queue.items.map((item) => item.instrumentId);
-    const deferredIds = composed.queue.deferred.map((d) => d.instrumentId);
+    const offeredIds = queue.items.map((item) => item.instrumentId);
+    const deferredIds = queue.deferred.map((d) => d.instrumentId);
     expect(offeredIds).toHaveLength(1);
     expect(deferredIds).toHaveLength(1);
     expect(new Set([...offeredIds, ...deferredIds])).toEqual(

@@ -1664,6 +1664,7 @@ export {
   buildComposedStudySession,
   classifyObligation,
   composeSessionRows,
+  extendComposedStudySession,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
 } from './study-session/compose.js';
 export type {

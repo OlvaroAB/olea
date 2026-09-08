@@ -24,6 +24,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { QueueCandidate, SchedulableInstrumentType } from '../../src/index.js';
+import { composeQueue } from '../../src/queue/compose.js';
 import { createFsrsScheduler } from '../../src/scheduler/fsrs-scheduler.js';
 import { buildReviewSession } from '../../src/session/build.js';
 import { toDueInstruments } from '../../src/session/due-instruments.js';
@@ -49,6 +51,35 @@ function session(options: { readonly now?: Date } = {}) {
     scheduler: createFsrsScheduler(),
     now: options.now ?? NOW,
     instruments: { excludePaths: NOT_A_FIXTURE_NOTE },
+  });
+}
+
+/**
+ * `[SESS-8.6]` (`ol-egov.132.6`): `buildReviewSession` no longer composes a
+ * queue itself (see `session/build.ts`'s own module doc) — this suite's real
+ * value was always proving `composeQueue`'s behaviour survives contact with
+ * the real fixture corpus, and it still does: `composeQueue` remains a real,
+ * tested function (kept for `packages/workbench/src/queue/derive.ts` and
+ * `simulator/live-queue.ts`, which compose it over this exact enumeration
+ * shape), just no longer wired to the review tab. Every test below that used
+ * to read `built.queue` now calls this over the same enumeration's
+ * `candidates`.
+ */
+function queueFor(
+  built: { readonly candidates: readonly QueueCandidate[] },
+  options: {
+    readonly now?: Date;
+    readonly formatPreference?: readonly SchedulableInstrumentType[];
+    readonly filter?: { readonly courses?: readonly string[] };
+  } = {},
+) {
+  return composeQueue({
+    candidates: built.candidates,
+    now: options.now ?? NOW,
+    ...(options.formatPreference !== undefined
+      ? { formatPreference: options.formatPreference }
+      : {}),
+    ...(options.filter !== undefined ? { filter: options.filter } : {}),
   });
 }
 
@@ -105,7 +136,7 @@ describe('the fixture vault composes into a real session', () => {
 
 describe('what the composed session actually contains', () => {
   it('offers one instrument per concept and defers the rest, each naming what took its slot', async () => {
-    const { queue } = await session();
+    const queue = queueFor(await session());
     // Dedupe is over the concept SET (ol-t3sd): winning a slot claims every one
     // of an item's `conceptIds` at once, so across every offered item the
     // concepts claimed, flattened, still contain no duplicate — the same
@@ -128,11 +159,12 @@ describe('what the composed session actually contains', () => {
   });
 
   it('at least one concept genuinely had a choice to make, so dedupe is not proven vacuously', async () => {
-    const { queue, instruments } = await session();
+    const built = await session();
+    const queue = queueFor(built);
     // An instrument counts toward every one of its `conceptIds`, not just a
     // chosen first one (`ol-t3sd`).
     const perConcept = new Map<string, number>();
-    for (const record of instruments.records) {
+    for (const record of built.instruments.records) {
       for (const conceptId of record.conceptIds) {
         perConcept.set(conceptId, (perConcept.get(conceptId) ?? 0) + 1);
       }
@@ -149,19 +181,20 @@ describe('what the composed session actually contains', () => {
   });
 
   it('nothing is lost: every enumerated instrument is offered, deferred, or not due', async () => {
-    const { queue, instruments, candidates } = await session();
+    const built = await session();
+    const queue = queueFor(built);
     const accountedFor = new Set([
       ...queue.items.map((item) => item.instrumentId),
       ...queue.deferred.map((deferral) => deferral.instrumentId),
     ]);
     // Nothing has been reviewed, so nothing can be "not due" — every instrument
     // must be accounted for exactly once.
-    expect(accountedFor.size).toBe(instruments.records.length);
-    expect(candidates).toHaveLength(instruments.records.length);
+    expect(accountedFor.size).toBe(built.instruments.records.length);
+    expect(built.candidates).toHaveLength(built.instruments.records.length);
   });
 
   it('every offered item is new, with a null prior state and no prioritisation claimed', async () => {
-    const { queue } = await session();
+    const queue = queueFor(await session());
     for (const item of queue.items) {
       expect(item.selectionContext.dueState).toBe('new');
       expect(item.priorState).toBeNull();
@@ -195,17 +228,12 @@ describe('what the composed session actually contains', () => {
   // at most one instrument per concept, nothing dropped without being named,
   // and the preference genuinely moving a slot.
   it('a format preference moves which instrument wins a concept, and may change how many are offered', async () => {
-    const plain = await session();
-    const preferCloze = await buildReviewSession({
-      vault: new FolderSource(vaultRoot),
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-      instruments: { excludePaths: NOT_A_FIXTURE_NOTE },
-      formatPreference: ['cloze'],
-    });
+    const built = await session();
+    const plainQueue = queueFor(built);
+    const preferClozeQueue = queueFor(built, { formatPreference: ['cloze'] });
 
     // F2.17 holds under either preference: no concept is offered twice.
-    for (const composed of [plain.queue, preferCloze.queue]) {
+    for (const composed of [plainQueue, preferClozeQueue]) {
       const conceptsOffered = composed.items.flatMap((i) => i.conceptIds);
       expect(new Set(conceptsOffered).size).toBe(conceptsOffered.length);
     }
@@ -214,42 +242,37 @@ describe('what the composed session actually contains', () => {
     // offered or named as deferred. This is the accountability property that
     // replaced the count invariant, and it is the stronger of the two: a count
     // can match while an instrument silently vanishes, this cannot.
-    for (const composed of [plain.queue, preferCloze.queue]) {
+    for (const composed of [plainQueue, preferClozeQueue]) {
       const accounted = new Set([
         ...composed.items.map((i) => i.instrumentId),
         ...composed.deferred.map((d) => d.instrumentId),
       ]);
-      expect(accounted.size).toBe(plain.instruments.records.length);
+      expect(accounted.size).toBe(built.instruments.records.length);
     }
 
     // A preference can only ever cost items, never add them: it reorders which
     // instrument reaches a concept first, and a multi-concept winner absorbs
     // slots that separate winners would have filled one each.
-    expect(preferCloze.queue.items.length).toBeLessThanOrEqual(plain.queue.items.length);
+    expect(preferClozeQueue.items.length).toBeLessThanOrEqual(plainQueue.items.length);
 
     // The corpus has concepts carrying both a card and a cloze, so preferring
     // cloze must actually move at least one slot.
-    const clozeOffered = preferCloze.queue.items.filter((i) => i.instrumentType === 'cloze');
+    const clozeOffered = preferClozeQueue.items.filter((i) => i.instrumentType === 'cloze');
     expect(clozeOffered.length).toBeGreaterThanOrEqual(1);
   });
 
   it('a course filter narrows the session to that course, as a subsequence', async () => {
-    const all = await session();
-    const oneCourse = all.instruments.records[0]?.courses[0];
+    const built = await session();
+    const oneCourse = built.instruments.records[0]?.courses[0];
     if (oneCourse === undefined) throw new Error('expected a course on the first record');
 
-    const filtered = await buildReviewSession({
-      vault: new FolderSource(vaultRoot),
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-      instruments: { excludePaths: NOT_A_FIXTURE_NOTE },
-      filter: { courses: [oneCourse] },
-    });
+    const all = queueFor(built);
+    const filtered = queueFor(built, { filter: { courses: [oneCourse] } });
 
-    expect(filtered.queue.items.length).toBeGreaterThanOrEqual(1);
-    expect(filtered.queue.items.length).toBeLessThan(all.queue.items.length);
-    const allIds = all.queue.items.map((i) => i.instrumentId);
-    const filteredIds = filtered.queue.items.map((i) => i.instrumentId);
+    expect(filtered.items.length).toBeGreaterThanOrEqual(1);
+    expect(filtered.items.length).toBeLessThan(all.items.length);
+    const allIds = all.items.map((i) => i.instrumentId);
+    const filteredIds = filtered.items.map((i) => i.instrumentId);
     expect(allIds.filter((id) => filteredIds.includes(id))).toEqual(filteredIds);
   });
 });
@@ -275,6 +298,6 @@ describe('the Today panel counts the same corpus the queue composes from', () =>
     });
     // The panel counts instruments waiting; the session offers at most one per
     // concept. The panel may legitimately exceed the session, never trail it.
-    expect(summary.total).toBeGreaterThanOrEqual(built.queue.items.length);
+    expect(summary.total).toBeGreaterThanOrEqual(queueFor(built).items.length);
   });
 });

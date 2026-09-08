@@ -275,6 +275,30 @@ export interface OpenReviewSessionInput {
    * (see the module doc).
    */
   readonly composeDefaultStudySession: () => Promise<ComposedStudySession | null>;
+  /**
+   * `[SESS-8.6]` (`ol-egov.132.6`, `[SESS-11]`'s own close notes): F2.17/
+   * C5.8's "outrun the target" growth for the held composition. Called ONLY
+   * when {@link studySessionHolder} holds an active sitting AND
+   * {@link frozenQueueMode} is `'extend'` — the "Keep going" path
+   * ({@link ReviewSessionOpener.extend}) — with the sitting's own
+   * `ComposedStudySession` as `previous`. Composes a wider candidate list
+   * through the SAME assembly {@link composeDefaultStudySession} uses
+   * (`session-builder/provider.ts`'s `composeStudySessionForRequest`) and
+   * calls `olea-core`'s `extendComposedStudySession(input, previous)` at a
+   * wider `budgetMinutes` — see `main.ts`'s `extendDefaultStudySession` for
+   * the wiring. `null` means the same "nothing to compose" condition
+   * {@link composeDefaultStudySession} already reports (vault wiring not up,
+   * or the study plan is not configured); this module then keeps the
+   * sitting's existing items unchanged rather than treating it as a
+   * failure — an outrun that finds nothing new is not an error, the same
+   * posture `queue-adapter.ts`'s own `FrozenReviewQueue.extend` already
+   * takes for "every candidate already present." Omitted entirely (every
+   * test in `open-session.spec.ts` that does not exercise this path) keeps
+   * today's behaviour: an active sitting's items never grow on `extend`.
+   */
+  readonly extendDefaultStudySession?: (
+    previous: ComposedStudySession,
+  ) => Promise<ComposedStudySession | null>;
 }
 
 export type OpenReviewSessionOutcome =
@@ -369,7 +393,27 @@ export async function openReviewSession(
     const sitting = input.studySessionHolder.getSitting();
     let composedSession: ComposedStudySession;
     if (sitting.status === 'active') {
-      composedSession = sitting.items;
+      // `[SESS-8.6]`: outrunning the target (`frozenQueueMode === 'extend'`,
+      // the "Keep going" path) is the one case an active sitting's own items
+      // may grow — never reorder, never drop, never duplicate, per C5.8 and
+      // `extendComposedStudySession`'s own contract. Every other read of an
+      // active sitting (a plain re-`open`, Home's preview, Today's render)
+      // takes `sitting.items` verbatim, unchanged.
+      const extended =
+        input.frozenQueueMode === 'extend' && input.extendDefaultStudySession !== undefined
+          ? await input.extendDefaultStudySession(sitting.items)
+          : null;
+      if (extended !== null) {
+        composedSession = extended;
+        // The freeze clock does not restart on an extension — `enteredAt`
+        // still marks when she opened THIS sitting, the same discipline
+        // `queue-adapter.ts`'s own `FrozenReviewQueue.extend` states for the
+        // identical reason (C5.8's idle threshold measures from when she
+        // opened, not when the list was last topped up).
+        input.studySessionHolder.enter(sitting.enteredAt, composedSession);
+      } else {
+        composedSession = sitting.items;
+      }
     } else {
       const fresh = await input.composeDefaultStudySession();
       if (fresh === null) {

@@ -32,12 +32,13 @@ import {
   type ReviewLogRecord,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
-import type { Scheduler, SchedulerState, StudySessionModel } from 'olea-core';
+import type { ConceptRelation, Scheduler, SchedulerState, StudySessionModel } from 'olea-core';
 import { enumerateVaultInstruments, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import {
+  composeStudySessionForRequest,
   createLocalSessionBuilderProvider,
   reentryCandidateBudgetMinutes,
 } from '../../src/session-builder/provider.js';
@@ -444,6 +445,82 @@ describe('createLocalSessionBuilderProvider — F2.19 assessment-scope resolver 
     const scopedNames = conceptNamesOf(scoped.model);
     expect(scopedNames).not.toEqual(baselineNames);
     expect(scopedNames.indexOf('Widget theory')).toBeLessThan(scopedNames.indexOf('Gadget theory'));
+  });
+});
+
+// Scenario: `features/F2-review.md`, "F2.19/C7.9 — containment reaches the
+// composed session with real relations" — @auto:plugin/session-builder/provider.spec.
+// `[SESS-11]` (`ol-egov.132.12`) ported C7.9 containment co-presence onto
+// `study-session/compose.ts` but named it a no-op in production: nothing
+// threaded a live `part-of` edge set through `deps.relations()` into the
+// composer's own `relations` field. `[SESS-8.6]` (`ol-egov.132.6`) closes
+// exactly that one line (`provider.ts`'s `composedInput`, folded into
+// `composeReentrySession`'s call) — this suite is the production-caller
+// proof the edge actually reaches the composed session, the same shape the
+// F2.19 suite above already gives for the assessment-scope resolver.
+describe('createLocalSessionBuilderProvider — C7.9 containment reaches the composed session with real relations (`[SESS-11]`/`[SESS-8.6]`, ol-egov.132.12, ol-egov.132.6)', () => {
+  function passage(sourcePath: string) {
+    return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
+  }
+
+  /** Widget theory part-of Gadget theory — `from` is the part, `to` the container, `session/containment.ts`'s own convention. */
+  function partOfWidgetInGadget(): ConceptRelation {
+    return {
+      type: 'part-of',
+      from: 'Widget theory',
+      to: 'Gadget theory',
+      provenance: 'model-proposed',
+      confidence: 0.9,
+      introducingPassages: {
+        from: passage('05 Zettelkasten/Widget theory.md'),
+        to: passage('05 Zettelkasten/Gadget theory.md'),
+      },
+    };
+  }
+
+  it('with no `relations` supplied, both concepts compose — the pre-existing no-op every real caller had before this bead', async () => {
+    const result = await composeStudySessionForRequest(
+      {
+        vault: memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE)),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: stubScheduler({}),
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) throw new Error('expected a composed result');
+    expect(result.composed.full.containmentDropped ?? []).toEqual([]);
+    expect(conceptNamesOf(result.composed.full.model)).toEqual(
+      expect.arrayContaining(['Widget theory', 'Gadget theory']),
+    );
+  });
+
+  it('a real "part-of" edge, threaded through `deps.relations`, drops the container from the composed session', async () => {
+    const result = await composeStudySessionForRequest(
+      {
+        vault: memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE)),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: stubScheduler({}),
+        relations: () => [partOfWidgetInGadget()],
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) throw new Error('expected a composed result');
+
+    const names = conceptNamesOf(result.composed.full.model);
+    expect(names).toContain('Widget theory');
+    expect(names).not.toContain('Gadget theory');
+    expect(result.composed.full.containmentDropped?.map((r) => r.conceptName)).toEqual([
+      'Gadget theory',
+    ]);
+    // `composedInput` (threaded to `main.ts`'s outrun-extension wiring,
+    // `[SESS-8.6]`) carries the SAME edge, unmodified.
+    expect(result.composedInput.relations).toEqual([partOfWidgetInGadget()]);
   });
 });
 

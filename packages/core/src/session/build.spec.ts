@@ -6,17 +6,57 @@
 import type { ReviewLogEntry, SelectionContextV4 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { memoryVault } from '../../test/session/memory-vault.js';
+import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
+import { resolveRelatedConceptKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
+import type { ConceptRecord } from '../concept/types.js';
+import { composeQueue } from '../queue/compose.js';
 import { reviewLogPath } from '../review-log/path.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { StudySessionItem } from '../study-session/build.js';
+import type { CalendarDay } from '../today/calendar-day.js';
+import { calendarDayFromLocalDate } from '../today/calendar-day.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { buildReviewSession, queueItemsFromComposedSession } from './build.js';
 import { toDueInstruments } from './due-instruments.js';
 import { readReviewLogHistory } from './history.js';
 import type { VaultInstrumentRecord } from './types.js';
+
+/**
+ * `[SESS-8.6]` (`ol-egov.132.6`): `session/build.ts` no longer resolves these
+ * two `composeQueue` inputs itself (it no longer calls `composeQueue` at
+ * all) — see `build.ts`'s own module doc. The tests below that still exercise
+ * `composeQueue`'s cohort-ordering behaviour (real for the workbench and the
+ * simulator, `packages/workbench/src/queue/derive.ts` /
+ * `simulator/live-queue.ts`, per `docs/dev/one-assembly-path.md` §4) build the
+ * two maps themselves, the same way that real caller does — never by
+ * resurrecting the deleted resolution inside `build.ts`.
+ */
+function conceptSourcePathsByConceptKey(
+  concepts: readonly ConceptRecord[],
+): ReadonlyMap<string, readonly VaultPath[]> {
+  return new Map(concepts.map((concept) => [concept.key, concept.sourcePaths]));
+}
+
+async function arrivalDaysByConceptKey(
+  vault: VaultSource,
+  concepts: readonly ConceptRecord[],
+): Promise<ReadonlyMap<string, CalendarDay>> {
+  const firstSeen = vault.firstSeen?.bind(vault);
+  if (firstSeen === undefined) return new Map();
+  const days = new Map<string, CalendarDay>();
+  await Promise.all(
+    concepts.map(async (concept) => {
+      const stats = await Promise.all(concept.sourcePaths.map((path) => firstSeen(path)));
+      const known = stats.filter((ms): ms is number => ms !== null);
+      if (known.length === 0) return;
+      days.set(concept.key, calendarDayFromLocalDate(new Date(Math.min(...known))));
+    }),
+  );
+  return days;
+}
 
 /**
  * `ol-63e1`: every concept in `smallVault()` below is unbound (tier 2 — no
@@ -82,8 +122,14 @@ function reviewOf(
   };
 }
 
-describe('one entry point, both halves returned', () => {
-  it('returns the composed queue and the records that produced it, from one walk', async () => {
+// `[SESS-8.6]` (`ol-egov.132.6`): `buildReviewSession` no longer composes —
+// see `build.ts`'s own module doc. Every test below that used to read
+// `session.queue` now calls `composeQueue` directly over `session.candidates`
+// — exactly `packages/workbench/src/queue/derive.ts`'s own real composition
+// (buildReviewSession's enumeration, fed to composeQueue), which is what
+// this integration coverage is FOR now that the review tab no longer is one.
+describe('one entry point, an enumeration composeQueue can still be fed (`[SESS-8.6]`)', () => {
+  it('every candidate resolves in `recordsById` — a caller composing over it never walks the vault again', async () => {
     const session = await buildReviewSession({
       vault: smallVault(),
       scheduler: createFsrsScheduler(),
@@ -92,8 +138,8 @@ describe('one entry point, both halves returned', () => {
 
     expect(session.instruments.records).toHaveLength(4);
     expect(session.candidates).toHaveLength(4);
-    // Every offered item can be rendered without walking the vault again.
-    for (const item of session.queue.items) {
+    const queue = composeQueue({ candidates: session.candidates, now: NOW });
+    for (const item of queue.items) {
       expect(session.recordsById.get(item.instrumentId)).toBeDefined();
     }
   });
@@ -104,13 +150,10 @@ describe('one entry point, both halves returned', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
+    const queue = composeQueue({ candidates: session.candidates, now: NOW });
 
-    const alphaItems = session.queue.items.filter((i) =>
-      i.conceptIds.includes(unboundKey('Alpha')),
-    );
-    const alphaDeferred = session.queue.deferred.filter((d) =>
-      d.conceptIds.includes(unboundKey('Alpha')),
-    );
+    const alphaItems = queue.items.filter((i) => i.conceptIds.includes(unboundKey('Alpha')));
+    const alphaDeferred = queue.deferred.filter((d) => d.conceptIds.includes(unboundKey('Alpha')));
     expect(alphaItems).toHaveLength(1);
     expect(alphaDeferred).toHaveLength(1);
     expect(alphaDeferred[0]?.deferredBehind).toBe(alphaItems[0]?.instrumentId);
@@ -123,7 +166,8 @@ describe('one entry point, both halves returned', () => {
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    for (const item of session.queue.items) {
+    const queue = composeQueue({ candidates: session.candidates, now: NOW });
+    for (const item of queue.items) {
       expect(item.selectionContext.dueState).toBe('new');
       expect(item.priorState).toBeNull();
       expect(item.selectionContext.yieldRank).toBeNull();
@@ -151,8 +195,9 @@ describe('one entry point, both halves returned', () => {
         reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')),
       ],
     });
+    const queue = composeQueue({ candidates: session.candidates, now: NOW });
 
-    const item = session.queue.items.find((i) => i.instrumentId === gamma.instrumentId);
+    const item = queue.items.find((i) => i.instrumentId === gamma.instrumentId);
     // A Good the day before pushes it out of today's session entirely — which
     // is itself the proof that the replay reached composition.
     expect(item).toBeUndefined();
@@ -166,7 +211,11 @@ describe('one entry point, both halves returned', () => {
         reviewOf('e1', '2026-08-19T09:00:00+00:00', gamma.instrumentId, unboundKey('Gamma')),
       ],
     });
-    const overdue = later.queue.items.find((i) => i.instrumentId === gamma.instrumentId);
+    const laterQueue = composeQueue({
+      candidates: later.candidates,
+      now: new Date('2027-08-20T12:00:00Z'),
+    });
+    const overdue = laterQueue.items.find((i) => i.instrumentId === gamma.instrumentId);
     expect(overdue?.selectionContext.dueState).toBe('overdue');
     expect(overdue?.priorState).not.toBeNull();
   });
@@ -199,8 +248,13 @@ describe('suspension, read from the whole log', () => {
       ],
     });
     expect(suspended.suspended.has(gamma.instrumentId)).toBe(true);
-    expect(suspended.queue.items.map((i) => i.instrumentId)).not.toContain(gamma.instrumentId);
-    expect(suspended.queue.deferred.map((d) => d.instrumentId)).not.toContain(gamma.instrumentId);
+    const suspendedQueue = composeQueue({
+      candidates: suspended.candidates,
+      now: NOW,
+      suspended: suspended.suspended,
+    });
+    expect(suspendedQueue.items.map((i) => i.instrumentId)).not.toContain(gamma.instrumentId);
+    expect(suspendedQueue.deferred.map((d) => d.instrumentId)).not.toContain(gamma.instrumentId);
 
     const restored = await buildReviewSession({
       vault,
@@ -225,30 +279,38 @@ describe('suspension, read from the whole log', () => {
         },
       ],
     });
-    expect(restored.queue.items.map((i) => i.instrumentId)).toContain(gamma.instrumentId);
+    const restoredQueue = composeQueue({
+      candidates: restored.candidates,
+      now: NOW,
+      suspended: restored.suspended,
+    });
+    expect(restoredQueue.items.map((i) => i.instrumentId)).toContain(gamma.instrumentId);
   });
 });
 
+// F2.5's `filter` is `composeQueue`'s own field, not `BuildReviewSessionInput`'s
+// any more (`[SESS-8.6]`) — this suite now proves the same real-vault
+// integration by feeding the enumeration's `candidates` to `composeQueue`
+// directly, exactly `packages/workbench/src/queue/derive.ts`'s own shape.
 describe('the filter narrows a real-vault session the same way it narrows a synthetic one', () => {
   it('a course filter keeps only that course’s concepts, as a subsequence', async () => {
-    const vault = smallVault();
-    const unfiltered = await buildReviewSession({
-      vault,
+    const session = await buildReviewSession({
+      vault: smallVault(),
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
-    const filtered = await buildReviewSession({
-      vault,
-      scheduler: createFsrsScheduler(),
+    const unfiltered = composeQueue({ candidates: session.candidates, now: NOW });
+    const filtered = composeQueue({
+      candidates: session.candidates,
       now: NOW,
       filter: { courses: ['GEO101'] },
     });
 
-    expect(filtered.queue.items.flatMap((i) => i.conceptIds).sort()).toEqual(
+    expect(filtered.items.flatMap((i) => i.conceptIds).sort()).toEqual(
       [unboundKey('Alpha'), unboundKey('Beta')].sort(),
     );
-    const unfilteredIds = unfiltered.queue.items.map((i) => i.instrumentId);
-    const filteredIds = filtered.queue.items.map((i) => i.instrumentId);
+    const unfilteredIds = unfiltered.items.map((i) => i.instrumentId);
+    const filteredIds = filtered.items.map((i) => i.instrumentId);
     // Subsequence: same items, same order, fewer of them.
     expect(unfilteredIds.filter((id) => filteredIds.includes(id))).toEqual(filteredIds);
   });
@@ -258,9 +320,13 @@ describe('the filter narrows a real-vault session the same way it narrows a synt
       vault: smallVault(),
       scheduler: createFsrsScheduler(),
       now: NOW,
+    });
+    const queue = composeQueue({
+      candidates: session.candidates,
+      now: NOW,
       filter: { conceptIds: [unboundKey('Gamma')] },
     });
-    expect(session.queue.items.flatMap((i) => i.conceptIds)).toEqual([unboundKey('Gamma')]);
+    expect(queue.items.flatMap((i) => i.conceptIds)).toEqual([unboundKey('Gamma')]);
   });
 });
 
@@ -370,19 +436,22 @@ describe('C7.9 containment co-presence, wired through buildReviewSession (regist
       relations: [partOfEdge('Alpha', 'Beta')],
     });
 
-    // Beta (the container) is the side that yields; Alpha (the part) stays.
-    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Beta')))).toBe(
-      false,
-    );
-    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Alpha')))).toBe(
-      true,
-    );
+    // Beta (the container) is the side that yields; Alpha (the part) stays —
+    // asserted directly on `candidates`/`containmentDropped` now, per
+    // `build.ts`'s own module doc: this is what decides "kept", not what any
+    // one composer downstream does with it.
+    expect(
+      session.candidates.some((candidate) => candidate.conceptIds.includes(unboundKey('Beta'))),
+    ).toBe(false);
+    expect(
+      session.candidates.some((candidate) => candidate.conceptIds.includes(unboundKey('Alpha'))),
+    ).toBe(true);
     expect(session.containmentDropped).toHaveLength(1);
     expect(session.containmentDropped[0]?.conceptIds).toContain(unboundKey('Beta'));
     // Gamma is untouched — the rule is scoped to the edge's own two concepts.
-    expect(session.queue.items.some((item) => item.conceptIds.includes(unboundKey('Gamma')))).toBe(
-      true,
-    );
+    expect(
+      session.candidates.some((candidate) => candidate.conceptIds.includes(unboundKey('Gamma'))),
+    ).toBe(true);
   });
 });
 
@@ -420,8 +489,19 @@ function contrastEdge(a: string, b: string): ConceptRelation {
   };
 }
 
+/**
+ * `[SESS-8.6]` (`ol-egov.132.6`): `relations`/`assessments` no longer resolve
+ * into `relatedConceptKeys`/`assessmentContext` inside `build.ts` (that
+ * resolution pipeline fed `composeQueue` alone and is gone with the call —
+ * see `build.ts`'s own module doc). This block still proves `composeQueue`'s
+ * own cohort-ordering behaviour is real and reachable — `relations`/
+ * `assessments` are resolved HERE, the same two calls `build.ts` used to
+ * make, then handed to `composeQueue` directly alongside the real-vault
+ * `candidates` `buildReviewSession` still enumerates. Exactly
+ * `packages/workbench/src/queue/derive.ts`'s own shape.
+ */
 async function bandedItemOrder(
-  extra: Partial<Parameters<typeof buildReviewSession>[0]> = {},
+  extra: { relations?: readonly ConceptRelation[]; assessments?: readonly AssessmentRecord[] } = {},
 ): Promise<readonly string[]> {
   const vault = bandVault();
   const enumerated = await buildReviewSession({
@@ -449,15 +529,30 @@ async function bandedItemOrder(
     scheduler: createFsrsScheduler(),
     now: BAND_NOW,
     entries,
-    ...extra,
+    ...(extra.relations !== undefined ? { relations: extra.relations } : {}),
+    ...(extra.assessments !== undefined ? { assessments: extra.assessments } : {}),
+  });
+  const { relatedConceptKeys } = resolveRelatedConceptKeys(
+    extra.relations ?? [],
+    session.instruments.concepts,
+  );
+  const { assessmentContext } = resolveAssessmentGroupingContext(
+    extra.assessments ?? [],
+    session.instruments.concepts,
+  );
+  const queue = composeQueue({
+    candidates: session.candidates,
+    now: BAND_NOW,
+    relatedConceptKeys,
+    assessmentContext,
   });
   // Sanity: the property under test only holds if all three really did land
   // in one tie band together — three items, one course.
-  expect(session.queue.items).toHaveLength(3);
-  return session.queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
+  expect(queue.items).toHaveLength(3);
+  return queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
 }
 
-describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved and threaded through', () => {
+describe('F2.19 (`ol-vr8z`) — relatedConceptKeys/assessmentContext resolved and threaded through composeQueue directly (`[SESS-8.6]`)', () => {
   it('with neither raw input, the tie band keeps plain enumeration order (the pre-existing shape)', async () => {
     const order = await bandedItemOrder();
     expect(order).toEqual([unboundKey('ConceptX'), unboundKey('ConceptY'), unboundKey('ConceptZ')]);
@@ -654,15 +749,15 @@ describe('F2.19 (`ol-f3qu`) — `toQueueCandidate` populates `targetAssessmentPa
 });
 
 /**
- * `[D-149]` (`ol-4e7o`): `buildReviewSession` resolves `conceptSourcePaths` and
- * `arrivalDays` internally — no raw input for either exists on
- * `BuildReviewSessionInput` (see that interface's own doc) — from `vault`
- * (`VaultSource.firstSeen`) and `instruments.concepts`, both already in hand.
- * This is the reachability gap `ol-v7r5.22` filed and named precisely:
- * `session/build.ts:310`'s `composeQueue` call, and through it
- * `open-session.ts`'s `buildReviewSession` call (the real "Olea: Start
- * today's review" command), both now thread the maps `queue/block-order.ts`'s
- * cohort blend reads.
+ * `[SESS-8.6]` (`ol-egov.132.6`): `build.ts` no longer resolves
+ * `conceptSourcePaths`/`arrivalDays` itself — that pipeline fed `composeQueue`
+ * alone and is gone with the call (see `build.ts`'s own module doc). This
+ * block still proves `[D-149]`'s cohort signal is real and reachable through
+ * `composeQueue`: this file's own top-of-file `conceptSourcePathsByConceptKey`/
+ * `arrivalDaysByConceptKey` (mirroring the deleted resolvers) resolve the two
+ * maps here, from the SAME `vault`/`instruments.concepts` `build.ts` used to
+ * hold, and `cohortItemOrder` below hands them to `composeQueue` directly —
+ * exactly `packages/workbench/src/queue/derive.ts`'s own shape.
  *
  * Same tie-band construction as the `ol-vr8z` block above (three same-course
  * concepts landing in one exact overdue-days band — the only place F2.19's
@@ -745,10 +840,18 @@ async function cohortItemOrder(vault: VaultSource): Promise<readonly string[]> {
     now: COHORT_NOW,
     entries,
   });
+  const conceptSourcePaths = conceptSourcePathsByConceptKey(session.instruments.concepts);
+  const arrivalDays = await arrivalDaysByConceptKey(vault, session.instruments.concepts);
+  const queue = composeQueue({
+    candidates: session.candidates,
+    now: COHORT_NOW,
+    conceptSourcePaths,
+    arrivalDays,
+  });
   // Sanity: three items, one tie band — the same guard `bandedItemOrder`
   // above carries, for the same reason.
-  expect(session.queue.items).toHaveLength(3);
-  return session.queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
+  expect(queue.items).toHaveLength(3);
+  return queue.items.map((item) => item.conceptIds[0] ?? item.instrumentId);
 }
 
 describe('[D-149] (`ol-4e7o`) — arrivalDays/conceptSourcePaths resolved internally and threaded through', () => {
