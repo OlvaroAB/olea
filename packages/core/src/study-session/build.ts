@@ -200,6 +200,7 @@ import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
 import { assessmentFormatOf } from '../gap/readiness.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
+import type { QueueItemReason } from '../queue/types.js';
 import type { ServingPolicy } from '../scheduler/serving.js';
 import { isWithinFinalWeek, recallOutranksFormatPreference } from '../scheduler/serving.js';
 import type { SchedulerState } from '../scheduler/types.js';
@@ -338,6 +339,25 @@ export interface StudySessionItem {
    * follows on this shape.
    */
   readonly obligationClass?: ObligationClass;
+  /**
+   * `[SESS-8.9]` (`ol-egov.132.9`): this row's own `[D-240]` item 2 override
+   * (`ol-2zfj.71` [SESS-7]'s `recallOutranksFormatPreference`, shared with
+   * `../queue/compose.ts`'s `dedupeRank`), stated the same "derived from the
+   * outcome, never re-run" way `[SESS-6]`'s `QueueItem.dedupeReason` already
+   * is: `'recall-overdue'` when {@link orderedForFormat} placed this item
+   * ahead of format preference AND the row actually had a preference-matched
+   * instrument for the override to beat (`recallOverrodePreferenceIds` in
+   * that function's return) — never re-derived from `recallOutranksFormatPreference`
+   * a second time here, so this can never disagree with the order the fill
+   * actually walked. `undefined` in every other case: no preference in
+   * force, the override did not fire, or (`'preference-off'`) it could not.
+   * Only `'recall-overdue'` is ever produced on this path — `'format-match'`
+   * is the ordinary "preference wins, nothing overdue" case this module
+   * already expresses through {@link SessionFormatMatch}, and `copy.ts`'s
+   * `dedupeReasonLine` only renders a sentence for `'recall-overdue'` anyway
+   * (see `queue/types.ts`'s `QueueItemReason` doc for both values).
+   */
+  readonly dedupeReason?: QueueItemReason;
 }
 
 /** One considered concept the session does not contain, and why. */
@@ -830,6 +850,22 @@ function typesMatching(format: AssessmentFormat): readonly SchedulableInstrument
  * `'preference-off'` returns the records untouched, which is what "as if no
  * preference were supplied" means on this path — the same thing an
  * `'unknown'` format has always done.
+ *
+ * ## `[SESS-8.9]` (`ol-egov.132.9`) — `recallOverrodePreferenceIds`
+ *
+ * The `[D-240]` item 5 reason surface (`[SESS-6]`) names *why* an item won
+ * its slot, and `../queue/compose.ts`'s `dedupeReasonFor` derives that from
+ * which type actually lost the slot to the winner — never from re-running
+ * the override. This function is the one place on this path that KNOWS
+ * that, at the moment it partitions: an id lands in `undeferrable` only when
+ * the override fired, and it only actually beat something when `first` is
+ * non-empty (a preference-matched instrument existed for this row to lose
+ * its slot to). So `recallOverrodePreferenceIds` is exactly
+ * `undeferrable`'s ids, returned ONLY when `first.length > 0` — the same
+ * "no real competitor, no reason" case `dedupeReasonFor` states as
+ * `beatenTypes.size === 0`. The caller (`buildStudySession`'s fill) attaches
+ * `'recall-overdue'` to a chosen item's {@link StudySessionItem.dedupeReason}
+ * iff its id is in this set — one more read, never a second decision.
  */
 function orderedForFormat(
   records: readonly VaultInstrumentRecord[],
@@ -838,10 +874,11 @@ function orderedForFormat(
   schedulerStates: ReadonlyMap<string, SchedulerState> | undefined,
   arrivalDay: CalendarDay | null,
   now: Date,
-): readonly VaultInstrumentRecord[] {
-  if (servingPolicy === 'preference-off') return records;
+): { records: readonly VaultInstrumentRecord[]; recallOverrodePreferenceIds: ReadonlySet<string> } {
+  const none = { records, recallOverrodePreferenceIds: new Set<string>() };
+  if (servingPolicy === 'preference-off') return none;
   const preferred = typesMatching(format);
-  if (preferred.length === 0) return records;
+  if (preferred.length === 0) return none;
   const undeferrable: VaultInstrumentRecord[] = [];
   const first: VaultInstrumentRecord[] = [];
   const rest: VaultInstrumentRecord[] = [];
@@ -862,7 +899,13 @@ function orderedForFormat(
     } else if (preferred.includes(record.instrumentType)) first.push(record);
     else rest.push(record);
   }
-  return [...undeferrable, ...first, ...rest];
+  return {
+    records: [...undeferrable, ...first, ...rest],
+    recallOverrodePreferenceIds:
+      first.length > 0
+        ? new Set(undeferrable.map((record) => record.instrumentId))
+        : new Set<string>(),
+  };
 }
 
 function formatMatchOf(
@@ -957,27 +1000,32 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
   // Per row: its instruments in fill order, and how far the fill has walked
   // that list. Built once so the passes below are a walk rather than a
   // repeated lookup.
-  const queues = ordered.map((row) => ({
-    row,
+  const queues = ordered.map((row) => {
     // `row.conceptKey`, not `row.conceptName` (`ol-63e1`) — `instruments`
     // indexes `VaultInstrumentRecord.conceptIds`, which `session/enumerate.ts`
     // now mints as the opaque key; a display-name lookup here would silently
     // find nothing for every row.
-    records: orderedForFormat(
+    const { records, recallOverrodePreferenceIds } = orderedForFormat(
       instruments.instrumentsFor(row.conceptKey),
       formatPreference,
       servingPolicy,
       input.schedulerStates,
       input.arrivalDays?.get(row.conceptKey) ?? null,
       asOfInstant,
-    ),
-    at: 0,
-    chose: false,
-    /** Set when a row still had instruments left that the remaining budget could not take. */
-    blockedByBudget: false,
-    /** F2.17's final-week relaxation (`[HARD-2b]`) — see the module doc. */
-    finalWeek: isFinalWeekForCourse(row.course),
-  }));
+    );
+    return {
+      row,
+      records,
+      /** `[SESS-8.9]` — ids `orderedForFormat` placed ahead of format preference with a real competitor to beat. See {@link StudySessionItem.dedupeReason}. */
+      recallOverrodePreferenceIds,
+      at: 0,
+      chose: false,
+      /** Set when a row still had instruments left that the remaining budget could not take. */
+      blockedByBudget: false,
+      /** F2.17's final-week relaxation (`[HARD-2b]`) — see the module doc. */
+      finalWeek: isFinalWeekForCourse(row.course),
+    };
+  });
 
   const chosenInstrumentIds = new Set<string>();
   const items: StudySessionItem[] = [];
@@ -1086,6 +1134,14 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
           // SESS-2 (F6.7, `ol-y237`): threaded through verbatim, never
           // re-derived — see `StudySessionItem.obligationClass`'s doc.
           const obligationClass = input.obligationClasses?.get(queue.row.conceptKey);
+          // `[SESS-8.9]` (`ol-egov.132.9`): a read of the set `orderedForFormat`
+          // already decided this row's fill order from — never a second call
+          // to `recallOutranksFormatPreference` — see `StudySessionItem.dedupeReason`'s doc.
+          const dedupeReason: QueueItemReason | undefined = queue.recallOverrodePreferenceIds.has(
+            record.instrumentId,
+          )
+            ? 'recall-overdue'
+            : undefined;
           items.push({
             position: items.length + 1,
             instrumentId: record.instrumentId,
@@ -1102,6 +1158,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
             formatMatch: formatMatchOf(record.instrumentType, formatPreference),
             ...(supportLevel !== undefined ? { supportLevel } : {}),
             ...(obligationClass !== undefined ? { obligationClass } : {}),
+            ...(dedupeReason !== undefined ? { dedupeReason } : {}),
           });
           queue.chose = true;
           taken = true;

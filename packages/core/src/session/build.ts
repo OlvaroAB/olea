@@ -378,11 +378,19 @@ export interface ComposedSessionQueueItemsInput {
  * composer's decision alone (C5.7, F6.4); this only fills in the per-item
  * facts a plan join needs.
  *
- * `dedupeReason` is always omitted: the study-session composer's own
- * per-concept selection is not `composeQueue`'s format-preference-vs-recall
- * override (`[D-240]` item 5), so there is no equivalent reason to attach —
- * the same "state the absence" posture {@link QueueItem.dedupeReason}'s own
- * doc already takes for the ordinary case.
+ * `dedupeReason` is threaded straight through from `item.dedupeReason`
+ * (`[SESS-8.9]`, `ol-egov.132.9`), never recomputed here: the study-session
+ * composer's own per-concept selection now runs `[D-240]` item 2's same
+ * shared override (`ol-2zfj.71` [SESS-7]'s `recallOutranksFormatPreference`,
+ * called from `../study-session/build.ts`'s `orderedForFormat`) that
+ * `composeQueue`'s `dedupeRank` runs, so it has exactly `[SESS-6]`'s reason
+ * to attach when it fires — `'recall-overdue'` — and the study-session
+ * composer already decided whether it fired (see
+ * {@link StudySessionItem.dedupeReason}'s own doc); recomputing it here
+ * would risk it disagreeing with the order this function's own `items`
+ * argument already reflects. `undefined` passes through unchanged, the same
+ * "state the absence" posture {@link QueueItem.dedupeReason}'s own doc
+ * already takes for the ordinary case.
  *
  * A `StudySessionItem` naming an `instrumentId` absent from `recordsById`
  * would mean the composer's own enumeration and this call's kept one
@@ -425,6 +433,7 @@ export function queueItemsFromComposedSession(
       conceptIds: record.conceptIds,
       priorState: state,
       selectionContext,
+      ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
     };
   });
 }

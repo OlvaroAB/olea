@@ -1737,6 +1737,97 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
 });
 
 // ---------------------------------------------------------------------------
+// [SESS-8.9] (`ol-egov.132.9`) — the [SESS-6] recall-override reason renders
+// on the composed path too: `dedupeReason` set here, on the winning item,
+// exactly when [SESS-7]'s shared override actually beat a preference-matched
+// competitor. Scenarios: `../../../../olea-service/features/F2-review.md`,
+// the "SESS-8.9" block.
+// ---------------------------------------------------------------------------
+
+describe('[SESS-8.9] — dedupeReason on the study-session composer (`[D-240]` item 5)', () => {
+  const bound = firstIntervalDaysAfterGood() * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER;
+  const atBound = shiftCalendarDay(AS_OF, -bound);
+  const insideBound = shiftCalendarDay(AS_OF, -(bound - 1));
+
+  it("tags the recall card 'recall-overdue' when it takes the slot back from a preference-matched competitor", () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+      arrivalDays: new Map([['A', atBound]]),
+    });
+    expect(
+      session.items.map((i) => ({ id: i.instrumentId, dedupeReason: i.dedupeReason })),
+    ).toEqual([
+      { id: 'a-qa', dedupeReason: 'recall-overdue' },
+      { id: 'a-mcq', dedupeReason: undefined },
+    ]);
+  });
+
+  it('omits dedupeReason when the override has not yet fired — plain preference decided it', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+      arrivalDays: new Map([['A', insideBound]]),
+    });
+    expect(session.items[0]?.instrumentId).toBe('a-mcq');
+    expect(session.items[0]?.dedupeReason).toBeUndefined();
+    expect('dedupeReason' in (session.items[0] ?? {})).toBe(false);
+  });
+
+  it('omits dedupeReason when the recall card had no preference-matched competitor to beat', () => {
+    // Only a recall-tier instrument exists for this concept — the override
+    // condition can still hold, but there is nothing for it to have won
+    // against, the same "no real competitor, no reason" case
+    // `../queue/compose.ts`'s `dedupeReasonFor` states for `beatenTypes.size
+    // === 0`.
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([qa('a-qa', ['A'])]);
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+      arrivalDays: new Map([['A', atBound]]),
+    });
+    expect(session.items.map((i) => i.instrumentId)).toEqual(['a-qa']);
+    expect(session.items[0]?.dedupeReason).toBeUndefined();
+  });
+
+  it('omits dedupeReason under `preference-off` and under `today` even past the bound', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
+    const input = {
+      rows,
+      instruments: index,
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
+      arrivalDays: new Map([['A', atBound]]),
+    } as const;
+
+    for (const servingPolicy of ['preference-off', 'today'] as const) {
+      const session = buildStudySession({ ...input, servingPolicy });
+      for (const item of session.items) expect(item.dedupeReason).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // [SESS-9] (`ol-2zfj.77`) — the per-course seconds are an OPTIONAL input, and
 // omitting them is the flat fill this module always ran. Scenarios:
 // features/F2-review.md (olea-service), the "SESS-9" block.

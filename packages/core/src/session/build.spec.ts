@@ -1043,4 +1043,53 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
       }),
     ).toThrow(/not-a-real-instrument/);
   });
+
+  // `[SESS-8.9]` (`ol-egov.132.9`): `dedupeReason` threads straight through
+  // from the composed `StudySessionItem`, never recomputed — @auto:core/session/build.spec.
+  it("carries dedupeReason onto the produced QueueItem when the composed item carried 'recall-overdue'", async () => {
+    const vault = smallVault();
+    const session = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const alphaQa = session.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    if (alphaQa === undefined) throw new Error('fixture vault missing Alpha qa candidate');
+    const record = session.recordsById.get(alphaQa.instrumentId);
+    if (record === undefined) throw new Error('fixture vault missing Alpha qa record');
+
+    const item: StudySessionItem = {
+      ...studySessionItemFor(record, 1),
+      dedupeReason: 'recall-overdue',
+    };
+
+    const queueItems = queueItemsFromComposedSession({
+      items: [item],
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: NOW,
+    });
+    expect(queueItems[0]?.dedupeReason).toBe('recall-overdue');
+  });
+
+  it('omits dedupeReason (never a fabricated value) when the composed item carried none', async () => {
+    const vault = smallVault();
+    const session = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const alphaQa = session.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    if (alphaQa === undefined) throw new Error('fixture vault missing Alpha qa candidate');
+    const record = session.recordsById.get(alphaQa.instrumentId);
+    if (record === undefined) throw new Error('fixture vault missing Alpha qa record');
+
+    const item = studySessionItemFor(record, 1);
+    expect(item.dedupeReason).toBeUndefined();
+
+    const queueItems = queueItemsFromComposedSession({
+      items: [item],
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: NOW,
+    });
+    expect(queueItems[0]?.dedupeReason).toBeUndefined();
+    expect('dedupeReason' in (queueItems[0] ?? {})).toBe(false);
+  });
 });
