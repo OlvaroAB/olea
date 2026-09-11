@@ -157,7 +157,11 @@ describe('the session builder reads what only a real vault has', () => {
       // `ol-egov.132.1` [SESS-8.1]: `plan` now lands between `relations` and
       // the closing `}),` — see that field's own doc on
       // `CreateLocalSessionBuilderProviderDeps` (session-builder/provider.ts).
-      /scheduler,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*plan:\s*\(\)\s*=>\s*this\.review\?\.plan\s*\?\?\s*null,\s*\}\),/,
+      // `[SESS-13]` (`ol-egov.132.14`): `windowDeficit` now follows `plan`, so
+      // this reads to the end of `plan`'s own line rather than to the closing
+      // brace — the assertion is about the scheduler/relations/plan ORDER,
+      // which is what SESS-8.1 wrote it for, not about `plan` being last.
+      /scheduler,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*plan:\s*\(\)\s*=>\s*this\.review\?\.plan\s*\?\?\s*null,/,
     );
   });
 

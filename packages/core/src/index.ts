@@ -1548,6 +1548,20 @@ export {
   queueItemsFromComposedSession,
   toQueueCandidate,
 } from './session/build.js';
+// `[SESS-13]` (`ol-egov.132.14`): C5.5's session clustering (`[D-091]`) and the
+// `PastSessionRecord` history `study-session/window.ts`'s `computeWindowDeficit`
+// reads — the projection that module's own doc declined to invent.
+export type {
+  ClusteredSession,
+  ClusterReviewSessionsOptions,
+  PastSessionsFromReviewLogInput,
+} from './session/cluster.js';
+export {
+  clusterReviewSessions,
+  pastSessionsFromReviewLog,
+  RECEIVED_SECONDS_PER_ITEM_CAP,
+  SESSION_CLUSTERING_GAP_SECONDS,
+} from './session/cluster.js';
 export { toDueInstruments } from './session/due-instruments.js';
 export type { EnumerateVaultInstrumentsOptions } from './session/enumerate.js';
 export { enumerateVaultInstruments } from './session/enumerate.js';

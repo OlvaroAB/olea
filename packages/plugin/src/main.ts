@@ -1,5 +1,10 @@
 import { Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
-import type { SoloLevel, StudyPlanEnvelope } from 'olea-contracts';
+import type {
+  ReviewLogEntry,
+  SoloLevel,
+  StudyPlanAllocationEntry,
+  StudyPlanEnvelope,
+} from 'olea-contracts';
 import {
   buildMisconceptionDigest,
   type ClassifyKnowledgeKindOptions,
@@ -12,6 +17,7 @@ import {
   type ConfusionRoutingInput,
   type CourseDetectionProposal,
   calendarDayFromLocalDate,
+  computeWindowDeficit,
   corroborateConfusionPairings,
   createFsrsScheduler,
   type DeviceCapability,
@@ -27,6 +33,7 @@ import {
   type PendingExplainBackGrading,
   parseDocument,
   parseFrontmatter,
+  pastSessionsFromReviewLog,
   pickNextExplainBackInvitation,
   type QueueSnapshot,
   type RegistryOverrides,
@@ -38,6 +45,7 @@ import {
   servedRelations,
   type VaultPath,
   type VaultSource,
+  type WindowDeficitEntry,
 } from 'olea-core';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
 import { createCardPlaceholder } from './commands/placeholders.js';
@@ -993,6 +1001,11 @@ export default class OleaPlugin extends Plugin {
             // still reaches the next composition, exactly like `plan` on
             // `ReviewWiring` already does for the answered path.
             plan: () => this.review?.plan ?? null,
+            // `[SESS-13]` (`ol-egov.132.14`): the same `[D-092]` window
+            // reading the Start-button door gets, so the session-builder leaf
+            // and the composed session she sits cannot disagree about how far
+            // behind a course is — see `windowDeficitFromReviewLog` below.
+            windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
           }),
         ),
     );
@@ -2199,6 +2212,58 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `[SESS-13]` (`ol-egov.132.14`, discovered-from `[FOCUS-3b]`/`ol-ulj7`):
+   * `[D-092]`'s session-denominated fairness window, read off her review log
+   * — the production caller `study-session/window.ts`'s `computeWindowDeficit`
+   * did not have, and the reason C5.5's session clustering (`[D-091]`) had to
+   * be implemented at all (`session/cluster.ts`).
+   *
+   * Handed the review entries, the concept walk and the cached allocation by
+   * `composeStudySessionForRequest`, which has all three in hand already —
+   * see `CreateLocalSessionBuilderProviderDeps.windowDeficit` for why this
+   * takes them as arguments rather than reading them itself.
+   *
+   * `undefined` — no cached allocation, so no running-course set to divide
+   * between; or no clustered session in the log at all — omits the composer
+   * input entirely and `compose.ts` keeps its own days-since-last-seen
+   * substitute, exactly as before this bead. Never an empty map, which
+   * `compose.ts` would read as "every course has zero deficit" and is a
+   * different, false claim.
+   *
+   * **No `sharesByPlanVersion` is supplied yet, deliberately.** Entitlement is
+   * the PLAN's share for the session that composed it, never the share that
+   * was served — but every review writer on this side records
+   * `selectionContext.planVersion: null` today (`review/queue-adapter.ts`,
+   * `explain-back/solo-review.ts`, `generation/review-adapter.ts`), so no
+   * historical session can be joined to the plan that composed it. Passing a
+   * map that can never match would only look like the join works.
+   * `computeWindowDeficit` falls back to `currentShares` — the honest degrade
+   * its own doc names — and `session/cluster.ts` is ready for the join the day
+   * a writer stamps the version. Named as a gap on `[SESS-13]`.
+   */
+  private windowDeficitFromReviewLog(input: {
+    readonly entries: readonly ReviewLogEntry[];
+    readonly concepts: readonly ConceptRecord[];
+    readonly allocation: readonly StudyPlanAllocationEntry[] | undefined;
+  }): ReadonlyMap<string, WindowDeficitEntry> | undefined {
+    const { allocation } = input;
+    if (allocation === undefined || allocation.length === 0) return undefined;
+
+    const runningCourses = allocation.map((entry) => entry.courseId);
+    const currentShares = new Map(allocation.map((entry) => [entry.courseId, entry.share]));
+    const coursesOfConcept = new Map(
+      input.concepts.map((concept) => [concept.key, concept.courses] as const),
+    );
+
+    const history = pastSessionsFromReviewLog(input.entries, {
+      coursesOfConcept,
+      runningCourses,
+    });
+    if (history.length === 0) return undefined;
+    return computeWindowDeficit(history, runningCourses, currentShares);
+  }
+
+  /**
    * `[SESS-8.4]` (`ol-egov.132.4`, `docs/dev/one-assembly-path.md` §3c) —
    * the port: composes a `ComposedStudySession` through the SAME assembly
    * `createLocalSessionBuilderProvider` uses for Home and the session
@@ -2239,6 +2304,10 @@ export default class OleaPlugin extends Plugin {
         scheduler: wiring.scheduler,
         relations: () => this.servedRelationEdges(),
         plan: () => wiring.plan,
+        // `[SESS-13]` (`ol-egov.132.14`): `[D-092]`'s window deficit, read off
+        // her review log through C5.5's clustering — see
+        // `windowDeficitFromReviewLog` above.
+        windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
       },
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
@@ -2289,6 +2358,10 @@ export default class OleaPlugin extends Plugin {
         scheduler: wiring.scheduler,
         relations: () => this.servedRelationEdges(),
         plan: () => wiring.plan,
+        // `[SESS-13]` (`ol-egov.132.14`): `[D-092]`'s window deficit, read off
+        // her review log through C5.5's clustering — see
+        // `windowDeficitFromReviewLog` above.
+        windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
       },
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,

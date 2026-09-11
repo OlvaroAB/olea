@@ -215,7 +215,7 @@
  * her closing and reopening the leaf.
  */
 
-import type { StudyPlanEnvelope } from 'olea-contracts';
+import type { ReviewLogEntry, StudyPlanAllocationEntry, StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentProximityBand,
   BuildComposedStudySessionInput,
@@ -233,6 +233,7 @@ import type {
   SittingState,
   VaultPath,
   VaultSource,
+  WindowDeficitEntry,
 } from 'olea-core';
 import {
   allGapRows,
@@ -353,6 +354,33 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * the same degradation the answered (review) path already has.
    */
   readonly plan?: () => StudyPlanEnvelope | null;
+  /**
+   * `[SESS-13]` (`ol-egov.132.14`): `[D-092]`'s session-denominated fairness
+   * window, read off her review log — `study-session/window.ts`'s
+   * `computeWindowDeficit`, over the `PastSessionRecord`s C5.5's clustering
+   * (`session/cluster.ts`) projects from the same entries this call has
+   * already read.
+   *
+   * **Handed the data rather than reading it.** The derivation lives in
+   * `main.ts` (`windowDeficitFromReviewLog`), not here, because it is a
+   * policy read and this function's job is the assembly; but it needs the
+   * whole review log and the concept→course join, both of which this call
+   * has in hand a few lines below. Passing them in is what keeps the client
+   * to ONE whole-log read and ONE vault walk per composition — a thunk of no
+   * arguments would have forced a second of each.
+   *
+   * Omitted (no caller wired, or the caller returns `undefined` because there
+   * is no history yet) leaves `windowDeficit` off the composer input
+   * entirely, and `study-session/compose.ts` falls back to its own
+   * days-since-last-seen substitute — byte-identical to before this bead, the
+   * same absence-is-a-no-op posture {@link relations} and `allocation`
+   * already take.
+   */
+  readonly windowDeficit?: (input: {
+    readonly entries: readonly ReviewLogEntry[];
+    readonly concepts: readonly ConceptRecord[];
+    readonly allocation: readonly StudyPlanAllocationEntry[] | undefined;
+  }) => ReadonlyMap<string, WindowDeficitEntry> | undefined;
   /**
    * F4.6 / F6.4, `[D-163]` (`ol-12gs`): passed straight through to the
    * returned `SessionBuilderViewDeps.openExplainBack` — this function never
@@ -830,6 +858,13 @@ export async function composeStudySessionForRequest(
   // doc. An empty array reads the same as `undefined` to `compose.ts`'s
   // own optional field, so this is not narrowed further here.
   const allocation = deps.plan?.()?.body.allocation;
+  // `[SESS-13]`: handed what this call has already read — never a second
+  // whole-log read or a second vault walk. See the dep's own doc.
+  const windowDeficit = deps.windowDeficit?.({
+    entries,
+    concepts: enumeration.concepts,
+    allocation,
+  });
 
   // F6.6 (`ol-v7r5.18`): `entries` is the WHOLE log (this file's own
   // module doc, `readReviewLogHistory`), so a real multi-week absence
@@ -893,6 +928,13 @@ export async function composeStudySessionForRequest(
     // Omitted (`deps.relations` absent) reads as "none", the same real
     // no-op posture every other optional field on this call already takes.
     ...(deps.relations !== undefined ? { relations: deps.relations() } : {}),
+    // `[SESS-13]` (`ol-egov.132.14`, discovered-from `[FOCUS-3b]`/`ol-ulj7`):
+    // `[D-092]`'s session-denominated window deficit, derived by the caller
+    // from the SAME `entries` and concept walk this call already made — see
+    // `CreateLocalSessionBuilderProviderDeps.windowDeficit`. `undefined`
+    // (unwired, or no history yet) omits the key and `compose.ts` keeps its
+    // own days substitute, exactly as before this bead.
+    ...(windowDeficit !== undefined ? { windowDeficit } : {}),
   };
 
   const composed = composeReentrySession({

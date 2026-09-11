@@ -29,11 +29,24 @@
 import {
   GOVERNING_FRESH_FOR_SECONDS,
   GOVERNING_GOVERNS_FOR_SECONDS,
+  type ReviewLogEntry,
   type ReviewLogRecord,
+  type StudyPlanAllocationEntry,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
-import type { ConceptRelation, Scheduler, SchedulerState, StudySessionModel } from 'olea-core';
-import { enumerateVaultInstruments, reviewLogPath } from 'olea-core';
+import type {
+  ConceptRecord,
+  ConceptRelation,
+  Scheduler,
+  SchedulerState,
+  StudySessionModel,
+} from 'olea-core';
+import {
+  computeWindowDeficit,
+  enumerateVaultInstruments,
+  pastSessionsFromReviewLog,
+  reviewLogPath,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
@@ -1070,5 +1083,161 @@ describe("createLocalSessionBuilderProvider — the cached plan's real allocatio
     if (withNullPlan.kind !== 'model') throw new Error('expected a model (null plan)');
     if (withNoPlanField.kind !== 'model') throw new Error('expected a model (no plan field)');
     expect(conceptNamesOf(withNullPlan.model)).toEqual(conceptNamesOf(withNoPlanField.model));
+  });
+});
+
+// `[SESS-13]` (`ol-egov.132.14`, discovered-from `[FOCUS-3b]`/`ol-ulj7`):
+// `[D-092]`'s session-denominated fairness window had no production reader —
+// `computeWindowDeficit` existed and nothing on the client could build the
+// `PastSessionRecord[]` it takes, because C5.5's session clustering (`[D-091]`)
+// had no implementation anywhere. This suite is that wiring's proof: the
+// derivation itself is `packages/core/src/session/cluster.spec.ts`'s; what is
+// tested here is that `main.ts`'s `windowDeficitFromReviewLog` is handed the
+// real log, the real concept walk and the real cached allocation, and that what
+// it returns reaches the composer input.
+describe('createLocalSessionBuilderProvider — C5.5 clustering feeds the D-092 window deficit (`[SESS-13]`, ol-egov.132.14)', () => {
+  /** The real `(conceptKey, instrumentId)` pairs for both courses, resolved by walking the fixture rather than hand-guessing opaque ids (`ol-63e1`). */
+  async function twoCourseIdentities(): Promise<
+    ReadonlyMap<string, { conceptKey: string; instrumentId: string }>
+  > {
+    const enumeration = await enumerateVaultInstruments(memoryVault(twoCourseBaseFiles()));
+    const byCourse = new Map<string, { conceptKey: string; instrumentId: string }>();
+    for (const record of enumeration.records) {
+      const [conceptKey] = record.conceptIds;
+      const [course] = record.courses;
+      if (conceptKey === undefined || course === undefined) continue;
+      byCourse.set(course, { conceptKey, instrumentId: record.instrumentId });
+    }
+    return byCourse;
+  }
+
+  /**
+   * `main.ts`'s own `windowDeficitFromReviewLog`, restated here rather than
+   * imported (it is a private method on the plugin class, which this package's
+   * test tsconfig cannot instantiate without Obsidian). The point of the
+   * restatement is that this suite exercises the REAL core functions over the
+   * REAL data the provider hands across the seam — not a stubbed map.
+   */
+  function deficitFromLog(input: {
+    readonly entries: readonly ReviewLogEntry[];
+    readonly concepts: readonly ConceptRecord[];
+    readonly allocation: readonly StudyPlanAllocationEntry[] | undefined;
+  }) {
+    const { allocation } = input;
+    if (allocation === undefined || allocation.length === 0) return undefined;
+    const runningCourses = allocation.map((entry) => entry.courseId);
+    const history = pastSessionsFromReviewLog(input.entries, {
+      coursesOfConcept: new Map(input.concepts.map((c) => [c.key, c.courses] as const)),
+      runningCourses,
+    });
+    if (history.length === 0) return undefined;
+    return computeWindowDeficit(
+      history,
+      runningCourses,
+      new Map(allocation.map((entry) => [entry.courseId, entry.share])),
+    );
+  }
+
+  it('with no review history, the composer is handed no window reading at all — byte-identical to before this bead', async () => {
+    const seen: unknown[] = [];
+    const result = await composeStudySessionForRequest(
+      {
+        vault: memoryVault(twoCourseBaseFiles()),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: stubScheduler({}),
+        plan: () =>
+          planFixtureWithAllocation([
+            allocationEntry('TESTC101', 0.5),
+            allocationEntry('TESTC202', 0.5),
+          ]),
+        windowDeficit: (input) => {
+          seen.push(input);
+          return deficitFromLog(input);
+        },
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) throw new Error('expected a composed result');
+    // The derivation ran and honestly reported "no history", rather than an
+    // empty map — which `compose.ts` would read as "every course has zero
+    // deficit", a different and false claim.
+    expect(seen).toHaveLength(1);
+    expect(result.composedInput.windowDeficit).toBeUndefined();
+  });
+
+  it('with no `windowDeficit` dep wired at all, the composer input carries none — the pre-bead default', async () => {
+    const result = await composeStudySessionForRequest(
+      {
+        vault: memoryVault(twoCourseBaseFiles()),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: stubScheduler({}),
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) throw new Error('expected a composed result');
+    expect(result.composedInput.windowDeficit).toBeUndefined();
+  });
+
+  it('a real clustered history reaches the composer, and the starved course reads a positive accrued deficit', async () => {
+    const identities = await twoCourseIdentities();
+    const a = identities.get('TESTC101');
+    const b = identities.get('TESTC202');
+    if (a === undefined || b === undefined) throw new Error('expected both courses enumerated');
+
+    // Two sessions, five hours apart on one day — well over the 45-minute
+    // clustering gap, so `clusterReviewSessions` cuts a seam between them
+    // without any calendar-day boundary being involved. TESTC202 appears in
+    // the first and is served nothing in the second.
+    const log = [
+      reviewRecord(a.conceptKey, a.instrumentId, {
+        eventId: 'w-1',
+        timestamp: '2026-08-05T09:00:00-04:00',
+      }),
+      reviewRecord(b.conceptKey, b.instrumentId, {
+        eventId: 'g-1',
+        timestamp: '2026-08-05T09:10:00-04:00',
+      }),
+      reviewRecord(a.conceptKey, a.instrumentId, {
+        eventId: 'w-2',
+        timestamp: '2026-08-05T14:00:00-04:00',
+      }),
+    ];
+    const result = await composeStudySessionForRequest(
+      {
+        vault: memoryVault({
+          ...twoCourseBaseFiles(),
+          [reviewLogPath('2026-08-05', DEVICE)]: log.map((r) => JSON.stringify(r)).join('\n'),
+        }),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: stubScheduler({ [a.instrumentId]: 0.5, [b.instrumentId]: 0.5 }),
+        plan: () =>
+          planFixtureWithAllocation([
+            allocationEntry('TESTC101', 0.5),
+            allocationEntry('TESTC202', 0.5),
+          ]),
+        windowDeficit: deficitFromLog,
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) throw new Error('expected a composed result');
+
+    const deficit = result.composedInput.windowDeficit;
+    if (deficit === undefined) throw new Error('expected a window deficit on the composer input');
+    // The starved course is owed, and the reading is DENOMINATED IN SESSIONS:
+    // one session since it was last served, not one day (both sessions are the
+    // same calendar day, which is exactly what the days substitute could not
+    // see — the FOCUS-4c finding).
+    expect(deficit.get('TESTC202')?.deficit).toBeGreaterThan(0);
+    expect(deficit.get('TESTC202')?.sessionsSinceLastServed).toBe(1);
+    expect(deficit.get('TESTC101')?.sessionsSinceLastServed).toBe(0);
   });
 });
