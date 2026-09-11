@@ -205,6 +205,26 @@ describe('corpusConceptsFrom', () => {
     const [result] = corpusConceptsFrom([concept]);
     expect(result?.courses).toEqual([]);
   });
+
+  it('populates `key` when the caller supplies one (`ol-l40p` [REL-9])', () => {
+    const withKey: ReadConcept & { key?: string } = { ...readConcept('X', 'A.md'), key: 'key-x' };
+    const [result] = corpusConceptsFrom([withKey]);
+    expect(result?.key).toBe('key-x');
+  });
+
+  it("omits `key` entirely (never `key: undefined`) for today's production input, `ReadConcept[]`, which carries none", () => {
+    const noKey = readConcept('Y', 'A.md');
+    const [result] = corpusConceptsFrom([noKey]);
+    expect(result).not.toHaveProperty('key');
+  });
+
+  it('a mixed batch carries `key` only for the concepts that had one', () => {
+    const withKey: ReadConcept & { key?: string } = { ...readConcept('X', 'A.md'), key: 'key-x' };
+    const withoutKey = readConcept('Y', 'A.md');
+    const results = corpusConceptsFrom([withKey, withoutKey]);
+    expect(results.find((c) => c.name === 'X')?.key).toBe('key-x');
+    expect(results.find((c) => c.name === 'Y')).not.toHaveProperty('key');
+  });
 });
 
 // ---- runCorpusRelationBatchIfDue -------------------------------------------

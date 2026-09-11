@@ -386,17 +386,38 @@ export async function buildCorpusRelationWiring(
  * (a concept confirmed to sit in no course) excludes it from pairing on
  * either side, the same "ineligible for this stage" posture `anchor` already
  * holds here.
+ *
+ * **Threads `key` through when the caller has one (`ol-l40p` [REL-9]).**
+ * The parameter type is widened to `ReadConcept & { key?: string }` rather
+ * than `ReadConcept` alone: `ReadConcept` itself (`olea-core`'s `read.ts`,
+ * not owned by this bead) carries no `key` field today, so today's one
+ * production caller (`readConceptsAndRelations` below, passing
+ * `read.concepts`) still produces `key: undefined` on every candidate —
+ * this is a real, named gap, not silently papered over (see this bead's own
+ * close notes). The widening exists so that a FUTURE caller supplying a
+ * `ConceptRecord`-shaped object (which does carry a required `key`) needs no
+ * further change here: TypeScript's structural typing already accepts it,
+ * since a required `string` satisfies an optional `string | undefined`.
+ * Once threaded, `reconcileCorpusVerdicts` (`olea-core`,
+ * `corpus-relations/verdict.ts`) can join a verdict back to this concept by
+ * key directly, bypassing the exact-name join `findings/
+ * relations-join-2026-09.md` (`olea-service`) measured failing on most
+ * endpoint mentions in production terms.
  */
-export function corpusConceptsFrom(concepts: readonly ReadConcept[]): readonly CorpusConcept[] {
+export function corpusConceptsFrom(
+  concepts: readonly (ReadConcept & { readonly key?: string })[],
+): readonly CorpusConcept[] {
   return concepts
     .filter(
-      (concept): concept is ReadConcept & { anchor: Provenance } => concept.anchor !== undefined,
+      (concept): concept is ReadConcept & { anchor: Provenance; key?: string } =>
+        concept.anchor !== undefined,
     )
     .map((concept) => ({
       name: concept.name,
       aliases: concept.aliases,
       anchor: concept.anchor,
       courses: concept.courses,
+      ...(concept.key !== undefined ? { key: concept.key } : {}),
     }));
 }
 

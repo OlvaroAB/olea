@@ -60,11 +60,25 @@
  * vocabulary closed and independently testable, the same call
  * `../reconcile.js`'s own doc makes about its DROP_REASONS being "a bug in
  * this module, not a new kind of drop to add ad hoc."
+ *
+ * **Closes the client half of `ol-2zfj.79` [REL-8]'s key round-trip --
+ * `ol-l40p` [REL-9], 2026-09-11.** `CorpusVerdict.aKey`/`.bKey` (new,
+ * optional) let `reconcileCorpusVerdicts` resolve an endpoint by
+ * `CorpusConcept.key` directly when the service echoed one back, instead of
+ * only ever matching `verdict.a`/`.b` against a candidate's own `name` --
+ * see `findings/relations-join-2026-09.md` (`olea-service`) for what that
+ * name-only join was measured failing on. Falls back to the exact-name join
+ * when a key is absent, so this is additive, not a replacement.
  */
 
 import type { Provenance } from '../../extract/types.js';
-import type { ConceptRelation, RelationProvenanceKind, RelationType } from '../relation.js';
-import type { CorpusConcept, CorpusRelationCandidate, CorpusRelationDropReason } from './types.js';
+import type { RelationProvenanceKind, RelationType } from '../relation.js';
+import type {
+  CorpusConcept,
+  CorpusReconciledRelation,
+  CorpusRelationCandidate,
+  CorpusRelationDropReason,
+} from './types.js';
 import { CORPUS_STAGE_EMITTABLE_TYPES } from './types.js';
 
 /**
@@ -105,6 +119,26 @@ export interface CorpusVerdict {
    */
   readonly direction?: 'a-to-b' | 'b-to-a';
   readonly confidence: number;
+  /**
+   * The candidate endpoint's own `CorpusConcept.key`, echoed back by the
+   * service (`olea-service`'s `src/tasks/conceptsRelations.ts`,
+   * `groundCorpusVerdicts`) once resolved server-side from the SAME
+   * candidate whose `name` this verdict already had to echo exactly --
+   * never invented by the model, never present unless the request's
+   * matching endpoint sent one (`ol-l40p` [REL-9]).
+   *
+   * **Optional, and absence is the ordinary case until every candidate in a
+   * batch carries a key** (e.g. replaying an older cassette entry recorded
+   * before the client threaded `key` through `CorpusConcept` at all).
+   * `reconcileCorpusVerdicts` below keys the join on this field directly
+   * when present, falling back to the existing exact-name join
+   * (`verdict.a`/`.b` against a candidate's own `name`) only when it is
+   * absent -- never the reverse, and never a silent preference for
+   * whichever happens to resolve.
+   */
+  readonly aKey?: string;
+  /** Same contract as {@link aKey}, for endpoint `b`. */
+  readonly bKey?: string;
 }
 
 export interface CorpusVerdictResponse {
@@ -122,7 +156,7 @@ export interface CorpusRelationVerdictPort {
 }
 
 export interface ReconcileCorpusVerdictsResult {
-  readonly relations: readonly ConceptRelation[];
+  readonly relations: readonly CorpusReconciledRelation[];
   readonly dropped: Readonly<Partial<Record<CorpusRelationDropReason, number>>>;
 }
 
@@ -139,6 +173,25 @@ function byName(
 
 function anchorOf(concept: CorpusConcept): Provenance {
   return concept.anchor;
+}
+
+/**
+ * Same candidate set as {@link byName}, indexed by `CorpusConcept.key`
+ * instead of `.name` -- `ol-l40p` [REL-9]. Only candidates that actually
+ * carry a key are indexed, so a verdict's `aKey`/`bKey` that names a key no
+ * candidate in THIS batch supplied misses here exactly as an unrecognised
+ * name misses `byName`, and is dropped as `'unknown-concept'` by the same
+ * check rather than silently falling back to a name lookup -- "the
+ * candidate set is authoritative" applies to the key join precisely as much
+ * as the name one.
+ */
+function byKey(candidates: readonly CorpusRelationCandidate[]): ReadonlyMap<string, CorpusConcept> {
+  const index = new Map<string, CorpusConcept>();
+  for (const candidate of candidates) {
+    if (candidate.a.key !== undefined) index.set(candidate.a.key, candidate.a);
+    if (candidate.b.key !== undefined) index.set(candidate.b.key, candidate.b);
+  }
+  return index;
 }
 
 /** Unordered, same key shape `./nominate.js` uses — restated rather than
@@ -183,18 +236,32 @@ function provenanceFor(signals: CorpusRelationCandidate['signals']): RelationPro
  * mirroring `../reconcile.js`'s "the concept set is authoritative" rule
  * one level up: here, the CANDIDATE set is authoritative over what a
  * verdict may resolve against.
+ *
+ * **Resolves each endpoint by key when the verdict carries one, by name
+ * otherwise -- `ol-l40p` [REL-9], never the reverse.** `verdict.aKey`
+ * (`.bKey`) is only ever present because the SAME candidate's own `key`
+ * travelled through the request unread by the model (`CorpusVerdict.aKey`'s
+ * own doc) and was echoed back by the service, so a present key is strictly
+ * more trustworthy than the name join it replaces -- a paraphrase or a
+ * length-bound truncation can still change what `verdict.a`/`.b` says, but
+ * cannot change which key rode along with it. An absent key (e.g. replaying
+ * an older cassette entry recorded before either side threaded `key`
+ * through) falls back to exactly the pre-`ol-l40p` exact-name join, so this
+ * change is additive: a candidate set and verdict batch with no keys at all
+ * behaves identically to before.
  */
 export function reconcileCorpusVerdicts(
   verdicts: readonly CorpusVerdict[],
   candidates: readonly CorpusRelationCandidate[],
 ): ReconcileCorpusVerdictsResult {
   const known = byName(candidates);
+  const knownByKey = byKey(candidates);
   const signalsIndex = signalsByPair(candidates);
   const dropped: Partial<Record<CorpusRelationDropReason, number>> = {};
   const bump = (reason: CorpusRelationDropReason) => {
     dropped[reason] = (dropped[reason] ?? 0) + 1;
   };
-  const relations: ConceptRelation[] = [];
+  const relations: CorpusReconciledRelation[] = [];
 
   for (const verdict of verdicts) {
     if (!CORPUS_STAGE_EMITTABLE_TYPES.has(verdict.type)) {
@@ -202,8 +269,8 @@ export function reconcileCorpusVerdicts(
       continue;
     }
 
-    const a = known.get(verdict.a);
-    const b = known.get(verdict.b);
+    const a = verdict.aKey !== undefined ? knownByKey.get(verdict.aKey) : known.get(verdict.a);
+    const b = verdict.bKey !== undefined ? knownByKey.get(verdict.bKey) : known.get(verdict.b);
     if (a === undefined || b === undefined) {
       bump('unknown-concept');
       continue;
@@ -246,6 +313,13 @@ export function reconcileCorpusVerdicts(
       provenance: provenanceFor(signals),
       confidence: verdict.confidence,
       introducingPassages: { from: anchorOf(from), to: anchorOf(to) },
+      // `ol-l40p` [REL-9]: carried post-swap, so `fromKey`/`toKey` name the
+      // SAME endpoints `from`/`to` already do, regardless of which of `a`/`b`
+      // each came from. Omitted entirely (never `key: undefined`) when the
+      // resolved concept has none, matching every other optional-field
+      // discipline in this file family.
+      ...(from.key !== undefined ? { fromKey: from.key } : {}),
+      ...(to.key !== undefined ? { toKey: to.key } : {}),
     });
   }
 

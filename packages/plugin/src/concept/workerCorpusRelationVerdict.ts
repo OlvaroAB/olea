@@ -45,6 +45,18 @@
  * unloadable from a plain Node process running `packages/core` or
  * `packages/plugin`'s built output. `workerCorpusRelationVerdict.spec.ts`
  * asserts both constants equal the frozen catalogue's.
+ *
+ * **`key` rides the wire the other direction from `anchor` -- `ol-l40p`
+ * [REL-9].** `CorpusConcept.key` (new, optional) is safe to send precisely
+ * because it is NOT `anchor`/`sourcePath`: `ConceptRecord.key`'s own doc
+ * (olea-core) calls it "opaque, immutable, never displayed to her", so it
+ * carries no D-005 exposure the way a vault path would. `toWireEndpoint`
+ * below sends it when present; `toCorpusVerdict` reads the service's
+ * `aKey`/`bKey` echo back off the response. No vendored schema in
+ * `packages/contracts` needed a change for this: the envelope's `payload`
+ * is `z.unknown()` (`worker.ts`) and this repo hand-parses the per-task
+ * response body itself, exactly as it already did for `direction`/
+ * `confidence` above.
  */
 
 import type {
@@ -91,6 +103,18 @@ interface WireEndpoint {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly sourceChunks: readonly string[];
+  /**
+   * The candidate's own `CorpusConcept.key`, when the caller that built the
+   * `CorpusVerdictRequest` supplied one -- `ol-l40p` [REL-9]. Mirrors the
+   * module doc's `anchor`/`sourcePath` exclusion in spirit but is the
+   * opposite call: a key is NOT a vault path or any other D-005 identifier
+   * (`ConceptRecord.key`'s own doc, olea-core: "opaque, immutable, never
+   * displayed to her"), so unlike `anchor` it is safe and intended to travel
+   * on the wire. `toWireEndpoint` below sends `key` ALONE for this purpose --
+   * never `anchor`, never a `sourcePath` -- exactly the same restraint the
+   * module doc already states for the other, unsafe field.
+   */
+  readonly key?: string;
 }
 
 interface WireCandidate {
@@ -108,6 +132,11 @@ function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a'
     // applies unchanged; there is exactly one passage per endpoint on this
     // side of the port.
     sourceChunks: [endpoint.passageText],
+    // `ol-l40p` [REL-9]: `key` only -- never `endpoint.anchor` and never a
+    // vault path, per this file's module doc and `WireEndpoint.key`'s own
+    // doc. Omitted entirely (never `key: undefined`) when the candidate has
+    // none, matching the request schema's own optional field.
+    ...(endpoint.key !== undefined ? { key: endpoint.key } : {}),
   };
 }
 
@@ -237,11 +266,41 @@ function toCorpusVerdict(raw: unknown, index: number): CorpusVerdict {
     );
   }
 
+  // `ol-l40p` [REL-9]: optional, resolved server-side from the SAME
+  // candidate whose name/aliases were sent (`CorpusVerdict.aKey`'s own doc,
+  // olea-core) -- never invented by the model, so absence is the ordinary
+  // case whenever the request's matching endpoint carried no `key` at all.
+  // A PRESENT-but-malformed value (not a non-empty string) is a defect in
+  // the Worker's own response, same posture as every other field here.
+  const aKeyRaw = entry.aKey;
+  let aKey: string | undefined;
+  if (aKeyRaw !== undefined) {
+    if (typeof aKeyRaw !== 'string' || aKeyRaw.length === 0) {
+      throw new WorkerCorpusRelationVerdictError(
+        `WorkerCorpusRelationVerdict: verdict ${index} carried a non-string or empty aKey.`,
+      );
+    }
+    aKey = aKeyRaw;
+  }
+
+  const bKeyRaw = entry.bKey;
+  let bKey: string | undefined;
+  if (bKeyRaw !== undefined) {
+    if (typeof bKeyRaw !== 'string' || bKeyRaw.length === 0) {
+      throw new WorkerCorpusRelationVerdictError(
+        `WorkerCorpusRelationVerdict: verdict ${index} carried a non-string or empty bKey.`,
+      );
+    }
+    bKey = bKeyRaw;
+  }
+
   return {
     a,
     b,
     type: type as RelationType,
     ...(direction !== undefined ? { direction } : {}),
     confidence,
+    ...(aKey !== undefined ? { aKey } : {}),
+    ...(bKey !== undefined ? { bKey } : {}),
   };
 }

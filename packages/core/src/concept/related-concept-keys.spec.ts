@@ -130,3 +130,72 @@ describe('resolveRelatedConceptKeys', () => {
     });
   });
 });
+
+describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [REL-9])', () => {
+  it('keys an edge by fromKey/toKey directly when present, even though `concepts` names neither endpoint at all', () => {
+    // `concepts` is deliberately empty: a pre-REL-9 name join over this input
+    // would resolve nothing. A relation carrying its own endpoint keys needs
+    // no entry in `concepts` to resolve.
+    const relations = [
+      {
+        ...edge('related' as RelationType, 'Photosynthesis', 'Respiration'),
+        fromKey: 'key-photo',
+        toKey: 'key-resp',
+      },
+    ];
+
+    const result = resolveRelatedConceptKeys(relations, []);
+
+    expect(result.unresolvedEndpointCount).toBe(0);
+    expect(result.relatedConceptKeys.get('key-photo')).toEqual(new Set(['key-resp']));
+    expect(result.relatedConceptKeys.get('key-resp')).toEqual(new Set(['key-photo']));
+  });
+
+  it('falls back to the exact-name join when fromKey/toKey are absent — the pre-REL-9 behaviour, unchanged', () => {
+    const concepts = [concept('Photosynthesis', 'key-photo'), concept('Respiration', 'key-resp')];
+    const relations = [edge('related' as RelationType, 'Photosynthesis', 'Respiration')];
+
+    const result = resolveRelatedConceptKeys(relations, concepts);
+
+    expect(result.unresolvedEndpointCount).toBe(0);
+    expect(result.relatedConceptKeys.get('key-photo')).toEqual(new Set(['key-resp']));
+  });
+
+  it('a mixed batch resolves each edge by whichever join it is eligible for — some by key, some by name', () => {
+    const concepts = [concept('A', 'k-a'), concept('B', 'k-b')];
+    const relations = [
+      { ...edge('prerequisite', 'X', 'Y'), fromKey: 'k-x', toKey: 'k-y' }, // X/Y name nothing in `concepts`
+      edge('is-a', 'A', 'B'), // no keys — resolved by name against `concepts`
+    ];
+
+    const result = resolveRelatedConceptKeys(relations, concepts);
+
+    expect(result.unresolvedEndpointCount).toBe(0);
+    expect(result.relatedConceptKeys.get('k-x')).toEqual(new Set(['k-y']));
+    expect(result.relatedConceptKeys.get('k-a')).toEqual(new Set(['k-b']));
+  });
+
+  it('every relation carrying a key resolves — unresolvedEndpointCount is 0 across a whole batch', () => {
+    const relations = [
+      { ...edge('prerequisite', 'X', 'Y'), fromKey: 'k-x', toKey: 'k-y' },
+      { ...edge('contrasts-with', 'Y', 'Z'), fromKey: 'k-y', toKey: 'k-z' },
+      { ...edge('is-a', 'Z', 'W'), fromKey: 'k-z', toKey: 'k-w' },
+    ];
+
+    const result = resolveRelatedConceptKeys(relations, []); // no `concepts` needed at all
+
+    expect(result.unresolvedEndpointCount).toBe(0);
+  });
+
+  it('a key present on only one endpoint resolves that one by key and the other by name', () => {
+    const concepts = [concept('Respiration', 'key-resp')];
+    const relations = [
+      { ...edge('related' as RelationType, 'Photosynthesis', 'Respiration'), fromKey: 'key-photo' },
+    ];
+
+    const result = resolveRelatedConceptKeys(relations, concepts);
+
+    expect(result.unresolvedEndpointCount).toBe(0);
+    expect(result.relatedConceptKeys.get('key-photo')).toEqual(new Set(['key-resp']));
+  });
+});

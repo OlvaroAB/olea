@@ -229,3 +229,79 @@ describe('reconcileCorpusVerdicts — every emitted edge carries both endpoints�
     expect(Object.values(result.dropped).reduce((s, n) => s + (n ?? 0), 0)).toBe(0);
   });
 });
+
+describe('reconcileCorpusVerdicts — key-based join (`ol-l40p` [REL-9])', () => {
+  it('resolves both endpoints by aKey/bKey when present, even though the verdict names do not exact-match either candidate', () => {
+    const osmosis = concept('Osmosis', { key: 'key-osmosis' });
+    const diffusion = concept('Diffusion basics', { key: 'key-diffusion' });
+    const result = reconcileCorpusVerdicts(
+      [
+        verdict({
+          a: 'osmosis (a paraphrase the model echoed instead of the exact name)',
+          b: 'diffusion, roughly',
+          aKey: 'key-osmosis',
+          bKey: 'key-diffusion',
+        }),
+      ],
+      [candidate(osmosis, diffusion)],
+    );
+    expect(result.relations).toHaveLength(1);
+    expect(Object.values(result.dropped).reduce((s, n) => s + (n ?? 0), 0)).toBe(0);
+    // `from`/`to` still carry the CANDIDATE's own name (post the a/b->from/to
+    // swap), never the paraphrased verdict string.
+    expect(result.relations[0]?.to).toBe('Osmosis');
+    expect(result.relations[0]?.from).toBe('Diffusion basics');
+    expect(result.relations[0]?.fromKey).toBe('key-diffusion');
+    expect(result.relations[0]?.toKey).toBe('key-osmosis');
+  });
+
+  it('falls back to the exact-name join when aKey/bKey are absent — the pre-REL-9 behaviour, unchanged', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)]);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.fromKey).toBeUndefined();
+    expect(result.relations[0]?.toKey).toBeUndefined();
+  });
+
+  it('a mixed batch resolves each verdict by whichever join it is eligible for — some by key, some by name', () => {
+    const osmosis = concept('Osmosis', { key: 'key-osmosis' });
+    const diffusion = concept('Diffusion basics', { key: 'key-diffusion' });
+    const typeI = concept('Type I error'); // no key — this pair never threaded one
+    const typeII = concept('Type II error');
+    const result = reconcileCorpusVerdicts(
+      [
+        verdict({ aKey: 'key-osmosis', bKey: 'key-diffusion' }),
+        { a: 'Type I error', b: 'Type II error', type: 'contrasts-with', confidence: 0.5 },
+      ],
+      [candidate(osmosis, diffusion), candidate(typeI, typeII)],
+    );
+    expect(result.relations).toHaveLength(2);
+    const byType = new Map(result.relations.map((r) => [r.type, r]));
+    expect(byType.get('prerequisite')?.fromKey).toBe('key-diffusion');
+    expect(byType.get('contrasts-with')?.fromKey).toBeUndefined();
+  });
+
+  it('a key present on the verdict that names no candidate in THIS batch is an unknown-concept drop, never a silent fallback to the name', () => {
+    const osmosis = concept('Osmosis', { key: 'key-osmosis' });
+    const diffusion = concept('Diffusion basics', { key: 'key-diffusion' });
+    const result = reconcileCorpusVerdicts(
+      [verdict({ aKey: 'key-never-nominated-this-run' })],
+      [candidate(osmosis, diffusion)],
+    );
+    expect(result.relations).toHaveLength(0);
+    expect(result.dropped['unknown-concept']).toBe(1);
+  });
+
+  it('a verdict supplying only one of aKey/bKey resolves that endpoint by key and the other by name', () => {
+    const osmosis = concept('Osmosis', { key: 'key-osmosis' });
+    const diffusion = concept('Diffusion basics', { key: 'key-diffusion' });
+    const result = reconcileCorpusVerdicts(
+      [verdict({ aKey: 'key-osmosis' })], // bKey absent — 'b' resolves by name
+      [candidate(osmosis, diffusion)],
+    );
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.toKey).toBe('key-osmosis'); // a -> to, per default b-to-a direction
+    expect(result.relations[0]?.fromKey).toBe('key-diffusion'); // resolved by name, but the candidate DOES have a key
+  });
+});

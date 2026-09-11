@@ -104,6 +104,28 @@ export interface CorpusConcept {
    * `anchor` above already holds for provenance.
    */
   readonly courses?: readonly string[];
+  /**
+   * The caller's own opaque `ConceptRecord.key` (`[D-088]`) for this concept,
+   * when the caller building `CorpusConcept[]` has one -- `ol-l40p` [REL-9],
+   * closing the client half of `ol-2zfj.79` [REL-8]'s service-side round-trip
+   * (`olea-service`'s `src/tasks/conceptsRelations.ts`,
+   * `conceptsRelationsEndpoint.key`'s own doc).
+   *
+   * **Optional for the same reason `courses` is: not every caller has one
+   * yet.** `packages/plugin/src/concept/wiring.ts`'s `corpusConceptsFrom` is,
+   * as of this writing, built from `ReadConcept[]` -- the per-document read
+   * stage's own type, which does not carry a `key` at all -- so a production
+   * call still produces `key: undefined` on every candidate until a caller
+   * supplies one; this field only stops being universally absent once such a
+   * caller exists. Its only reader is `./verdict.js`'s
+   * `reconcileCorpusVerdicts`, which sends it unread by the model
+   * (`WorkerCorpusRelationVerdict.toWireEndpoint`, `packages/plugin`) and
+   * joins a surviving verdict back to this SAME concept directly when the
+   * verdict echoes it as `aKey`/`bKey`, bypassing the exact-name join
+   * `findings/relations-join-2026-09.md` (`olea-service`) measured failing on
+   * most endpoint mentions in production terms.
+   */
+  readonly key?: string;
 }
 
 /**
@@ -214,8 +236,35 @@ export const CORPUS_RELATION_DROP_REASONS: readonly CorpusRelationDropReason[] =
   'no-relation',
 ];
 
+/**
+ * A `ConceptRelation` reconciled by this stage, with its two endpoints' own
+ * `CorpusConcept.key` carried alongside `from`/`to` when the candidate that
+ * produced it had one -- `ol-l40p` [REL-9]. `ConceptRelation` itself
+ * (`../relation.js`) stays untouched: it is not owned by this bead, and its
+ * `from`/`to` are names by C7.10's own contract regardless of whether a key
+ * happened to be available for this particular edge. This type is a
+ * strict superset (every `CorpusReconciledRelation` is a valid
+ * `ConceptRelation`), so nothing downstream that only knows about
+ * `ConceptRelation` -- `./batch.js`'s own return type below,
+ * `deriveRelationSet` (`../relation.js`) -- needs to change to keep
+ * carrying it: a `readonly` array of the wider type is assignable wherever
+ * the narrower one is expected, and `deriveRelationSet` holds the original
+ * edge object by reference rather than reconstructing it, so the extra
+ * fields survive the fold unchanged.
+ *
+ * `fromKey`/`toKey` name the ENDPOINTS post the `a`/`b`-to-`from`/`to`
+ * direction swap `./verdict.js`'s `reconcileCorpusVerdicts` already
+ * performs -- `verdict.aKey`/`.bKey` name the wire-level `a`/`b` pair before
+ * that swap; see that module's own doc for why the two naming schemes both
+ * exist rather than one being wrong.
+ */
+export interface CorpusReconciledRelation extends ConceptRelation {
+  readonly fromKey?: string;
+  readonly toKey?: string;
+}
+
 export interface CorpusRelationBatchResult {
-  readonly relations: readonly ConceptRelation[];
+  readonly relations: readonly CorpusReconciledRelation[];
   /** Counts only, per reason (D-005) — see `../reconcile.js`'s identical discipline. */
   readonly dropped: Readonly<Record<CorpusRelationDropReason, number>>;
   /** How many candidates this run nominated, before any verdict — a coverage measurement, not a log of names. */

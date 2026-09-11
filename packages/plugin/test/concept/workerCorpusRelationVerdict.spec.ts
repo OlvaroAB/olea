@@ -30,30 +30,30 @@ function okResponse(result: unknown) {
   return { ok: true, stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' }, result };
 }
 
+type Endpoint = CorpusVerdictRequest['candidates'][number]['a'];
+
+const typeIEndpoint: Endpoint = {
+  name: 'Type I error',
+  aliases: [],
+  anchor: {
+    sourcePath: 'Courses/COGS214/lecture-3.md',
+    location: { page: 1, charRange: { start: 0, end: 10 } },
+  },
+  passageText: 'A Type I error is a false positive: rejecting a true null hypothesis.',
+};
+
+const typeIIEndpoint: Endpoint = {
+  name: 'Type II error',
+  aliases: [],
+  anchor: {
+    sourcePath: 'Courses/COGS214/lecture-4.md',
+    location: { page: 1, charRange: { start: 0, end: 10 } },
+  },
+  passageText: 'A Type II error is a false negative: failing to reject a false null hypothesis.',
+};
+
 const request: CorpusVerdictRequest = {
-  candidates: [
-    {
-      a: {
-        name: 'Type I error',
-        aliases: [],
-        anchor: {
-          sourcePath: 'Courses/COGS214/lecture-3.md',
-          location: { page: 1, charRange: { start: 0, end: 10 } },
-        },
-        passageText: 'A Type I error is a false positive: rejecting a true null hypothesis.',
-      },
-      b: {
-        name: 'Type II error',
-        aliases: [],
-        anchor: {
-          sourcePath: 'Courses/COGS214/lecture-4.md',
-          location: { page: 1, charRange: { start: 0, end: 10 } },
-        },
-        passageText:
-          'A Type II error is a false negative: failing to reject a false null hypothesis.',
-      },
-    },
-  ],
+  candidates: [{ a: typeIEndpoint, b: typeIIEndpoint }],
 };
 
 describe('WorkerCorpusRelationVerdict — the frozen vocabulary it mirrors', () => {
@@ -63,6 +63,58 @@ describe('WorkerCorpusRelationVerdict — the frozen vocabulary it mirrors', () 
 
   it('sends the current contract version', () => {
     expect(CONCEPTS_RELATIONS_CONTRACT_VERSION).toBe(2);
+  });
+});
+
+const requestWithKeys: CorpusVerdictRequest = {
+  candidates: [
+    {
+      a: { ...typeIEndpoint, key: 'key-type-i' },
+      b: { ...typeIIEndpoint, key: 'key-type-ii' },
+    },
+  ],
+};
+
+describe('WorkerCorpusRelationVerdict — the request it builds, `key` on the wire (`ol-l40p` [REL-9])', () => {
+  it('sends `key` on the wire when the candidate has one — key only, never anchor', async () => {
+    const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    await port.verdict(requestWithKeys);
+
+    const sent = transport.sent[0];
+    expect(sent?.payload).toEqual({
+      candidates: [
+        {
+          a: {
+            name: 'Type I error',
+            aliases: [],
+            sourceChunks: ['A Type I error is a false positive: rejecting a true null hypothesis.'],
+            key: 'key-type-i',
+          },
+          b: {
+            name: 'Type II error',
+            aliases: [],
+            sourceChunks: [
+              'A Type II error is a false negative: failing to reject a false null hypothesis.',
+            ],
+            key: 'key-type-ii',
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(sent?.payload)).not.toContain('Courses/COGS214');
+  });
+
+  it('omits `key` entirely (never `key: undefined`) when the candidate has none', async () => {
+    const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    await port.verdict(request);
+
+    const sent = transport.sent[0] as { payload: { candidates: [{ a: object; b: object }] } };
+    expect(sent.payload.candidates[0]?.a).not.toHaveProperty('key');
+    expect(sent.payload.candidates[0]?.b).not.toHaveProperty('key');
   });
 });
 
@@ -157,6 +209,53 @@ describe('WorkerCorpusRelationVerdict — the response it reads', () => {
     expect(result.verdicts[0]).not.toHaveProperty('direction');
   });
 
+  it('parses aKey/bKey when the service echoes them back (`ol-l40p` [REL-9])', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'contrasts-with',
+            confidence: 0.9,
+            aKey: 'key-type-i',
+            bKey: 'key-type-ii',
+          },
+        ],
+      }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    const result = await port.verdict(requestWithKeys);
+
+    expect(result.verdicts).toEqual([
+      {
+        a: 'Type I error',
+        b: 'Type II error',
+        type: 'contrasts-with',
+        confidence: 0.9,
+        aKey: 'key-type-i',
+        bKey: 'key-type-ii',
+      },
+    ]);
+  });
+
+  it('an omitted aKey/bKey reads exactly like the pre-REL-9 shape — no property at all', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          { a: 'Type I error', b: 'Type II error', type: 'contrasts-with', confidence: 0.9 },
+        ],
+      }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    const result = await port.verdict(request);
+
+    expect(result.verdicts[0]).not.toHaveProperty('aKey');
+    expect(result.verdicts[0]).not.toHaveProperty('bKey');
+  });
+
   it('an empty verdicts array is a valid, successful response (abstention)', async () => {
     const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
     const port = new WorkerCorpusRelationVerdict({ transport });
@@ -213,6 +312,44 @@ describe('WorkerCorpusRelationVerdict — refuses rather than mis-parses a confa
   it('throws when a verdict carries no numeric confidence — never defaulted', async () => {
     const transport = new RecordingTransport(() =>
       okResponse({ verdicts: [{ a: 'Type I error', b: 'Type II error', type: 'contrasts-with' }] }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
+  });
+
+  it('throws when a verdict carries a non-string aKey', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'contrasts-with',
+            confidence: 0.5,
+            aKey: 7,
+          },
+        ],
+      }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
+  });
+
+  it('throws when a verdict carries an empty-string bKey', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'contrasts-with',
+            confidence: 0.5,
+            bKey: '',
+          },
+        ],
+      }),
     );
     const port = new WorkerCorpusRelationVerdict({ transport });
 

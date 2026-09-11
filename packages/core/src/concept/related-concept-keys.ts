@@ -40,10 +40,33 @@
  * (`RELATION_EMISSION_STATUS`); `causes`/`related` carry no production edges
  * yet, so this default has not been exercised against those two and should be
  * revisited if it ever is.
+ *
+ * **The exact-name join is no longer the only join — `ol-l40p` [REL-9],
+ * 2026-09-11.** `resolveRelatedConceptKeys` now keys an endpoint by its own
+ * `fromKey`/`toKey` directly when the relation carries one (a corpus-stage
+ * edge whose verdict echoed the candidate's `CorpusConcept.key`), and falls
+ * back to this module's original name join only when it is absent. See that
+ * function's own doc for the argument; the name join above is unchanged and
+ * still the only path for a per-document edge or an older, key-less replay.
  */
 
 import type { ConceptRelation } from './relation.js';
 import type { ConceptRecord } from './types.js';
+
+/**
+ * A `ConceptRelation` that also carries its own endpoint keys, when the
+ * producer that reconciled it had them -- `ol-l40p` [REL-9]. Structurally
+ * identical to `./corpus-relations/types.js`'s `CorpusReconciledRelation`
+ * (same two optional fields, same names) but declared locally rather than
+ * imported: this module's own contract is general over "any C7.10 relation
+ * list", not specific to the corpus stage, and TypeScript's structural
+ * typing means a `CorpusReconciledRelation[]` already satisfies this type
+ * with no cast needed at the call site.
+ */
+export interface RelationWithEndpointKeys extends ConceptRelation {
+  readonly fromKey?: string;
+  readonly toKey?: string;
+}
 
 /** {@link resolveRelatedConceptKeys}'s result: the adjacency map plus the honest miss count. */
 export interface RelatedConceptKeysResolution {
@@ -70,10 +93,28 @@ function link(adjacency: Map<string, Set<string>>, a: string, b: string): void {
  * Resolve C7.10 relation edges (post-fold — typically `servedRelations`'s
  * output) into the `conceptKey`-keyed adjacency map the F2.19 grouping seam
  * reads. Pure: no I/O, no identity minting — `concepts` supplies every key
- * this function can ever produce.
+ * this function can ever produce for an endpoint resolved by name.
+ *
+ * **Keys an endpoint by `fromKey`/`toKey` directly when the relation carries
+ * one, falling back to the exact-name join against `concepts` only when it
+ * is absent — `ol-l40p` [REL-9], never the reverse.** A relation reconciled
+ * from a corpus-relations verdict that echoed the candidate's own
+ * `CorpusConcept.key` (`./corpus-relations/verdict.js`'s
+ * `reconcileCorpusVerdicts`) already carries a trustworthy key that
+ * travelled through the request/response pair unchanged; re-deriving it from
+ * `relation.from`/`.to` against a `concepts` list that may come from a
+ * DIFFERENT naming pass over the same passage is exactly the join
+ * `findings/relations-join-2026-09.md` (`olea-service`) measured failing on
+ * most endpoint mentions in production terms. A key that IS present is
+ * therefore never second-guessed against `concepts` — the candidate-set
+ * check that vouches for it already ran, one layer up, in
+ * `reconcileCorpusVerdicts`. Absent (e.g. a per-document `is-a`/`part-of`
+ * edge, or a corpus-stage edge replayed from an older cassette entry
+ * recorded before either side threaded `key` through), this is exactly the
+ * pre-`ol-l40p` behaviour.
  */
 export function resolveRelatedConceptKeys(
-  relations: readonly ConceptRelation[],
+  relations: readonly RelationWithEndpointKeys[],
   concepts: readonly ConceptRecord[],
 ): RelatedConceptKeysResolution {
   const keyByName = new Map(concepts.map((concept) => [concept.name, concept.key]));
@@ -81,8 +122,8 @@ export function resolveRelatedConceptKeys(
   let unresolvedEndpointCount = 0;
 
   for (const relation of relations) {
-    const fromKey = keyByName.get(relation.from);
-    const toKey = keyByName.get(relation.to);
+    const fromKey = relation.fromKey ?? keyByName.get(relation.from);
+    const toKey = relation.toKey ?? keyByName.get(relation.to);
     if (fromKey === undefined) unresolvedEndpointCount += 1;
     if (toKey === undefined) unresolvedEndpointCount += 1;
     if (fromKey === undefined || toKey === undefined) continue;
