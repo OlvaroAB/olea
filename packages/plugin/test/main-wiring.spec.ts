@@ -1058,3 +1058,32 @@ describe("component 3.5's plan-policy fetch has a real production caller ([D-167
     );
   });
 });
+
+describe('[SESS-14] (ol-egov.132.15): windowDeficitFromReviewLog builds sharesByPlanVersion from the cached plan', () => {
+  // Scenario: `features/F2-review.md`, "SESS-14 — the window reads the plan's
+  // own shares for a session it actually composed" (olea-service).
+  //
+  // `session/cluster.ts`'s `pastSessionsFromReviewLog` has taken an optional
+  // `sharesByPlanVersion` since SESS-13 (ol-egov.132.14), and that join is
+  // unit-tested directly in `packages/core/src/session/cluster.spec.ts`
+  // ("entitlement is the plan's share, never the share that was served").
+  // What SESS-13 left undone, and this proves at the source level (`main.ts`
+  // imports `obsidian` and cannot be instantiated under Vitest — see this
+  // file's own module doc), is that `windowDeficitFromReviewLog` actually
+  // builds the map at all: before this bead it called
+  // `pastSessionsFromReviewLog` with no `sharesByPlanVersion` key present,
+  // so the join always took the "unknown version" branch regardless of
+  // whether a plan was cached.
+  it('pairs the cached plan’s own policyVersion with the same allocation used for currentShares', () => {
+    expect(main).toMatch(/const planVersion = this\.review\?\.plan\?\.policyVersion \?\? null;/);
+    expect(main).toMatch(
+      /const sharesByPlanVersion =\s*planVersion === null \? undefined : new Map\(\[\[planVersion, currentShares\]\]\);/,
+    );
+  });
+
+  it('threads sharesByPlanVersion into the pastSessionsFromReviewLog call, omitted rather than an empty map when there is no cached plan', () => {
+    expect(main).toMatch(
+      /const history = pastSessionsFromReviewLog\(input\.entries, \{\s*coursesOfConcept,\s*runningCourses,\s*\.\.\.\(sharesByPlanVersion !== undefined \? \{ sharesByPlanVersion \} : \{\}\),\s*\}\);/,
+    );
+  });
+});

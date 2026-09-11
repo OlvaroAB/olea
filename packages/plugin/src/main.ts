@@ -2230,16 +2230,39 @@ export default class OleaPlugin extends Plugin {
    * `compose.ts` would read as "every course has zero deficit" and is a
    * different, false claim.
    *
-   * **No `sharesByPlanVersion` is supplied yet, deliberately.** Entitlement is
-   * the PLAN's share for the session that composed it, never the share that
-   * was served — but every review writer on this side records
-   * `selectionContext.planVersion: null` today (`review/queue-adapter.ts`,
-   * `explain-back/solo-review.ts`, `generation/review-adapter.ts`), so no
-   * historical session can be joined to the plan that composed it. Passing a
-   * map that can never match would only look like the join works.
-   * `computeWindowDeficit` falls back to `currentShares` — the honest degrade
-   * its own doc names — and `session/cluster.ts` is ready for the join the day
-   * a writer stamps the version. Named as a gap on `[SESS-13]`.
+   * **`sharesByPlanVersion` now carries the one plan version this side can
+   * actually name — `[SESS-14]` (`ol-egov.132.15`).** SESS-13's own doc here
+   * used to say every writer on this side recorded `planVersion: null`
+   * (`review/queue-adapter.ts`, `explain-back/solo-review.ts`,
+   * `generation/review-adapter.ts`) and left the map out because it could
+   * never match. On inspection two of those three were already wrong by the
+   * time SESS-13 closed: `[SESS-8.3]`'s `executeStudyPlanOverComposedRows`
+   * (`open-session.ts`'s live path) stamps `plan.policyVersion` onto EVERY
+   * item's `selectionContext`, ranked or not — asserted green already at
+   * `open-session.spec.ts`'s `selectionContext.planVersion` checks — so a
+   * review served from a plan-composed session already names that plan's
+   * version in the log. `explain-back/solo-review.ts` and
+   * `generation/review-adapter.ts` keep `planVersion: null` on purpose: an
+   * explain-back attempt or an accepted draft was never selected by the plan
+   * (`[D-126]`, "priced, never selected"), so joining them to it would be a
+   * false claim, not a fix — `session/cluster.ts`'s own join already ignores
+   * a `null` entry for exactly this reason (it only adds non-null versions to
+   * the set it joins against).
+   *
+   * So the one real gap was here, the READER: this method never built the map
+   * `session/cluster.ts` was ready to join against. `allocation` above IS
+   * `wiring.plan?.body.allocation` (`session-builder/provider.ts`'s own
+   * `deps.plan?.()?.body.allocation`, threaded through unchanged by this
+   * method's caller), so pairing it with that SAME cached plan's
+   * `policyVersion` — read fresh off `this.review?.plan`, same "never a
+   * captured copy" discipline every other reader of it in this file already
+   * takes — is not a guess; it restates what produced `allocation` in the
+   * first place. A session whose reviews name a DIFFERENT (older, no longer
+   * cached) plan version still finds no entry in this one-version map and
+   * falls back to `currentShares`, exactly the honest degrade
+   * `computeWindowDeficit` already documents; only the current plan's shares
+   * are known here, not any retained history of older ones (there is none to
+   * retain — see this bead's close evidence for what that leaves undone).
    */
   private windowDeficitFromReviewLog(input: {
     readonly entries: readonly ReviewLogEntry[];
@@ -2255,9 +2278,18 @@ export default class OleaPlugin extends Plugin {
       input.concepts.map((concept) => [concept.key, concept.courses] as const),
     );
 
+    // `[SESS-14]`: the current cached plan's own version, paired with the SAME
+    // plan's allocation `currentShares` above already carries — a one-entry
+    // map is honest here because this side retains no older plan version to
+    // pair a second entry with.
+    const planVersion = this.review?.plan?.policyVersion ?? null;
+    const sharesByPlanVersion =
+      planVersion === null ? undefined : new Map([[planVersion, currentShares]]);
+
     const history = pastSessionsFromReviewLog(input.entries, {
       coursesOfConcept,
       runningCourses,
+      ...(sharesByPlanVersion !== undefined ? { sharesByPlanVersion } : {}),
     });
     if (history.length === 0) return undefined;
     return computeWindowDeficit(history, runningCourses, currentShares);
