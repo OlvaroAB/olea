@@ -1013,12 +1013,12 @@ function planFixtureWithAllocation(
   };
 }
 
-function allocationEntry(courseId: string, share: number) {
+function allocationEntry(courseId: string, share: number, risk = 0.5) {
   return {
     courseId,
     share,
     minBlockSeconds: 1,
-    contributions: [{ name: 'risk', value: 0.5 }],
+    contributions: [{ name: 'risk', value: risk }],
     reason: `${courseId} gets its share.`,
   };
 }
@@ -1059,10 +1059,17 @@ describe("createLocalSessionBuilderProvider — the cached plan's real allocatio
     expect(names).not.toContain('Gadget theory');
   });
 
-  it("the same plan with the two shares swapped swaps which course is included — the composed shares equal the plan's, not a fixed default", async () => {
+  // `[FOCUS-5]` (`ol-egov.137.4`, David's ruling 2026-09-11): the composer's
+  // default is now `'single'` — which course is dominant follows C5.6's
+  // filter/urgency/deficit hierarchy, never the plan's `share` directly
+  // (share only ever bounds seconds within the chosen course). This still
+  // proves the real allocation reaches the composed session: swapping which
+  // course carries the urgency-crossing `risk` swaps which course is
+  // included.
+  it('the same plan with the crossing urgency swapped swaps which course is included', async () => {
     const plan = planFixtureWithAllocation([
-      allocationEntry('TESTC101', 0),
-      allocationEntry('TESTC202', 1),
+      allocationEntry('TESTC101', 0, 0.01),
+      allocationEntry('TESTC202', 1, 0.5),
     ]);
     const state = await providerWithPlan(plan).load({ budgetMinutes: 1 });
     if (state.kind !== 'model') throw new Error('expected a model');

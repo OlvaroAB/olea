@@ -32,7 +32,6 @@ import {
   composeSessionRows,
   extendComposedStudySession,
   FOCUS_BRANCH_SENTENCE,
-  MIN_BLOCK_SECONDS,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
   URGENCY_OVERRIDE_THRESHOLD,
   withinBlockCohortAffinity,
@@ -40,7 +39,7 @@ import {
 } from './compose.js';
 import type { DurationModel } from './duration.js';
 import { buildConceptInstrumentIndex } from './instrument-index.js';
-import { computeWindowDeficit, type PastSessionRecord } from './window.js';
+import { computeWindowDeficit, type PastSessionRecord, type WindowDeficitEntry } from './window.js';
 
 const AS_OF = '2026-09-14';
 
@@ -442,6 +441,10 @@ describe('composeSessionRows', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 1200,
+      // This test is about the ordinary (every-course) proportional-share
+      // path, not `[FOCUS-5]`'s single-course default — see that policy's
+      // own describe block for the default.
+      focusPolicy: 'every-course',
     });
 
     // BIG holds 3 of 4 rows -> 0.75 share; SMALL holds 1 of 4 -> 0.25.
@@ -474,6 +477,10 @@ describe('composeSessionRows', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 1200,
+      // The local C5.6 floor-forcing this test exercises applies only on the
+      // ordinary (every-course) path — `[FOCUS-5]`'s single-course default
+      // never forces a second course.
+      focusPolicy: 'every-course',
     });
 
     expect(result.forcedCourses).toEqual(['B']);
@@ -526,6 +533,9 @@ describe('composeSessionRows', () => {
           allocationEntry({ courseId: 'BIG', share: 0.25 }),
           allocationEntry({ courseId: 'SMALL', share: 0.75 }),
         ],
+        // ALLOC-2's every-course wiring, not `[FOCUS-5]`'s single-course
+        // default.
+        focusPolicy: 'every-course',
       });
 
       expect(result.courseShares.get('BIG')).toBeCloseTo(0.25);
@@ -565,6 +575,9 @@ describe('composeSessionRows', () => {
           allocationEntry({ courseId: 'BIG', share: 0.9, minBlockSeconds: 60 }),
           allocationEntry({ courseId: 'SMALL', share: 0.1, minBlockSeconds: 60 }),
         ],
+        // ALLOC-2's every-course wiring, not `[FOCUS-5]`'s single-course
+        // default.
+        focusPolicy: 'every-course',
       });
 
       expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual([
@@ -652,6 +665,10 @@ describe('composeSessionRows', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 1200,
+      // Cross-course block ordering only arises when more than one course is
+      // served — the every-course path, not `[FOCUS-5]`'s single-course
+      // default.
+      focusPolicy: 'every-course',
     });
 
     // Course B's block (unmet, precedence 0) sorts ahead of course A's (elective, precedence 3).
@@ -1374,6 +1391,9 @@ describe('buildComposedStudySession', () => {
       budgetMinutes: 20,
       durations: flatDurations(60),
       asOf: AS_OF,
+      // Unrelated to `[FOCUS-5]`'s focus fields — pin `'every-course'` so
+      // this test's field list stays about F2.22's scope alone.
+      focusPolicy: 'every-course',
     });
 
     // The whole result is exactly these five structural fields — a per-item
@@ -1390,6 +1410,10 @@ describe('buildComposedStudySession', () => {
       [
         'containmentDropped',
         'courseShares',
+        // Present because this test pins `focusPolicy: 'every-course'`
+        // explicitly (`[FOCUS-3]`'s echo discipline) — not a display string,
+        // and unrelated to the F2.22 scope this test is about.
+        'focusPolicy',
         'forcedCourses',
         'model',
         'obligationClasses',
@@ -1947,6 +1971,9 @@ describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
       assessments,
       allocation,
       servingPolicy: 'interval-bound',
+      // [SESS-9] is about the every-course allocation fill, not
+      // `[FOCUS-5]`'s single-course default.
+      focusPolicy: 'every-course',
     });
 
     const served = secondsByCourse(composed.model.items);
@@ -1968,6 +1995,9 @@ describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
       assessments,
       allocation,
       servingPolicy: 'interval-bound',
+      // [SESS-9] is about the every-course allocation fill, not
+      // `[FOCUS-5]`'s single-course default.
+      focusPolicy: 'every-course',
     });
 
     const served = secondsByCourse(composed.model.items);
@@ -2015,6 +2045,9 @@ describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
         },
       ],
       servingPolicy: 'interval-bound',
+      // [SESS-9] is about the every-course allocation fill, not
+      // `[FOCUS-5]`'s single-course default.
+      focusPolicy: 'every-course',
     });
 
     expect(withEmptyCourse.model.items.some((item) => item.course === 'DELTA')).toBe(false);
@@ -2048,7 +2081,7 @@ describe('[SESS-9] allocation is honoured before the cross-course fill', () => {
 // `features/F2-review.md` F2.18 and `features/F6-today.md` C5.6 name.
 // ---------------------------------------------------------------------------
 
-describe('[FOCUS-3] focusPolicy', () => {
+describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
   function focusAllocationEntry(
     overrides: Partial<StudyPlanAllocationEntry> & { courseId: string; risk: number },
   ): StudyPlanAllocationEntry {
@@ -2061,20 +2094,19 @@ describe('[FOCUS-3] focusPolicy', () => {
     };
   }
 
-  it('the declared constants match the pre-commitments verbatim', () => {
+  it('the declared constant matches the pre-commitment verbatim', () => {
     expect(URGENCY_OVERRIDE_THRESHOLD).toBeCloseTo(1 / 14);
-    expect(MIN_BLOCK_SECONDS).toBe(180);
   });
 
-  it('every-course (the default, and omitting the field) composes byte-identically', () => {
+  it('`[FOCUS-5]`: single (the default, and omitting the field) selects exactly one dominant course; every-course must be requested explicitly', () => {
     const theRows = rows([
       { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
       { conceptName: 'B1', course: 'BETA', gapScore: 8 },
     ]);
     const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
     const theReplay = replay({
-      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
-      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      a1: { lastReviewedDay: '2026-06-01', dueDay: '2099-01-01' }, // ALPHA: larger deficit -> dominant
+      b1: { lastReviewedDay: '2026-09-10', dueDay: '2099-01-01' },
     });
     const base = {
       rows: theRows,
@@ -2085,21 +2117,30 @@ describe('[FOCUS-3] focusPolicy', () => {
       budgetSeconds: 600,
     };
     const omitted = composeSessionRows(base);
+    const explicitSingle = composeSessionRows({ ...base, focusPolicy: 'single' as const });
     const explicitEveryCourse = composeSessionRows({
       ...base,
       focusPolicy: 'every-course' as const,
     });
 
-    // Byte-identical shape: no new field appears unless the caller opted in.
+    // Echo discipline is unchanged by the default flip: `focusPolicy` itself
+    // is echoed only when the caller supplied it explicitly.
     expect(Object.keys(omitted).sort()).not.toContain('focusPolicy');
-    expect(Object.keys(omitted).sort()).not.toContain('dominantCourse');
-    // Same selection either way.
+    // But `dominantCourse`/`focusBranch`/`focusReason` DO appear on the
+    // omitted-input call now, because the default is `'single'`, not
+    // `'every-course'` — see `composeSessionRows`'s own comment on this.
+    expect(omitted.dominantCourse).toBe('ALPHA');
+    expect(omitted.focusBranch).toBe('deficit');
+    expect(omitted.orderedRows).toEqual(explicitSingle.orderedRows);
+    expect(new Set(omitted.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA']));
+
+    // `'every-course'` still exists, but only when asked for — the harness's
+    // own comparison baseline, never the default.
     expect(explicitEveryCourse.focusPolicy).toBe('every-course');
-    expect(explicitEveryCourse.orderedRows).toEqual(omitted.orderedRows);
-    expect(explicitEveryCourse.courseShares).toEqual(omitted.courseShares);
-    expect(explicitEveryCourse.courseSeconds).toEqual(omitted.courseSeconds);
-    // Both courses served — the every-course arm never picks a dominant.
-    expect(new Set(omitted.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA', 'BETA']));
+    expect(explicitEveryCourse.dominantCourse).toBeUndefined();
+    expect(new Set(explicitEveryCourse.orderedRows.map((r) => r.course))).toEqual(
+      new Set(['ALPHA', 'BETA']),
+    );
   });
 
   describe('the selection hierarchy: filter, then urgency, then deficit', () => {
@@ -2121,7 +2162,7 @@ describe('[FOCUS-3] focusPolicy', () => {
         asOf: AS_OF,
         budgetSeconds: 600,
         courses: ['BETA'],
-        focusPolicy: 'focused',
+        focusPolicy: 'single',
       });
 
       expect(result.dominantCourse).toBe('BETA');
@@ -2151,7 +2192,7 @@ describe('[FOCUS-3] focusPolicy', () => {
         durations: flatDurations(60),
         asOf: AS_OF,
         budgetSeconds: 600,
-        focusPolicy: 'focused',
+        focusPolicy: 'single',
         allocation: [
           focusAllocationEntry({ courseId: 'ALPHA', share: 0.5, risk: 0.01 }),
           focusAllocationEntry({ courseId: 'BETA', share: 0.5, risk: 0.5 }),
@@ -2212,7 +2253,7 @@ describe('[FOCUS-3] focusPolicy', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 600,
-      focusPolicy: 'focused',
+      focusPolicy: 'single',
       // The plan still names GAMMA (a real allocation carries an entry for
       // every running course, refused or not) — its share must still read 0
       // and it must never be selectable.
@@ -2224,181 +2265,57 @@ describe('[FOCUS-3] focusPolicy', () => {
     });
 
     expect(result.dominantCourse).not.toBe('GAMMA');
-    expect(result.secondCourse).not.toBe('GAMMA');
     expect(result.courseShares.has('GAMMA')).toBe(false);
     expect(result.courseSeconds.has('GAMMA')).toBe(false);
     expect(result.orderedRows.some((r) => r.course === 'GAMMA')).toBe(false);
   });
 
-  // ALPHA is always the dominant course in this section, chosen by the
-  // DEFICIT branch (never by her filter — a filter naming one course would
-  // remove every other course from `rows` before classification even runs,
-  // leaving no candidate for a second course to test against). ALPHA is kept
-  // seen far longer ago than any other course in every fixture below so the
-  // dominant pick never depends on the admission scenario being tested.
-  describe('second-course admission: a whole group must fit and a door must be open', () => {
-    it('admits the second course when its whole group fits the leftover and the deficit door is open', () => {
-      const theRows = rows([
-        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
-        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
-      ]);
-      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
-      const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // largest deficit -> dominant
-        // BETA unseen for 13 days -> its window deficit door is open
-        // (`forcedCoursesFor`'s own threshold: 2 courses + slack 2 = 4 days).
-        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
-      });
-      const result = composeSessionRows({
-        rows: theRows,
-        instruments,
-        replay: theReplay,
-        // 200s per concept: comfortably clears MIN_BLOCK_SECONDS (180).
-        durations: flatDurations(200),
-        asOf: AS_OF,
-        // ALPHA's one concept costs 200s; 300s left over easily holds BETA's
-        // 200s group.
-        budgetSeconds: 500,
-        focusPolicy: 'focused',
-      });
-
-      expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBe('BETA');
-      expect(result.secondCourseDoor).toBe('deficit');
-      expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual(['A1', 'B1']);
-    });
-
-    it('does not admit a second course when the leftover cannot hold its whole group', () => {
-      const theRows = rows([
-        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
-        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
-      ]);
-      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
-      const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
-        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' }, // deficit door open
-      });
-      const result = composeSessionRows({
-        rows: theRows,
-        instruments,
-        replay: theReplay,
-        durations: flatDurations(200),
-        // Only 100s left over after ALPHA's 200s block — BETA's 200s group
-        // does not fit, so there is no partial block.
-        asOf: AS_OF,
-        budgetSeconds: 300,
-        focusPolicy: 'focused',
-      });
-
-      expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBeUndefined();
-      expect(result.secondCourseDoor).toBeUndefined();
-      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
-    });
-
-    it('does not admit a second course whose only group prices under MIN_BLOCK_SECONDS, even with room and an open door', () => {
-      const theRows = rows([
-        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
-        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
-      ]);
-      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
-      const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
-        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' }, // deficit door open
-      });
-      const result = composeSessionRows({
-        rows: theRows,
-        instruments,
-        replay: theReplay,
-        // 60s per concept — under the 180s guard.
-        durations: flatDurations(60),
-        asOf: AS_OF,
-        budgetSeconds: 600,
-        focusPolicy: 'focused',
-      });
-
-      expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBeUndefined();
-      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
-    });
-
-    it('does not admit a second course when neither door is open, even though its whole group would fit', () => {
-      const theRows = rows([
-        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
-        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
-      ]);
-      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
-      // BETA was seen recently (deficit door shut) and no allocation is
-      // supplied (urgency door has nothing to read).
-      const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
-        b1: { lastReviewedDay: '2026-09-13', dueDay: '2099-01-01' },
-      });
-      const result = composeSessionRows({
-        rows: theRows,
-        instruments,
-        replay: theReplay,
-        durations: flatDurations(200),
-        asOf: AS_OF,
-        budgetSeconds: 500,
-        focusPolicy: 'focused',
-      });
-
-      expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBeUndefined();
-      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
-    });
-  });
-
-  it('"single" never admits a second course, even where "focused" would', () => {
+  it('`[FOCUS-5]`: never composes a second course, however much budget is left over or however owed another course is', () => {
+    // Before `[FOCUS-5]` this fixture (room left over after the dominant
+    // course, and a second course whose deficit door would have opened)
+    // admitted BETA as a second course. The two-course path is removed, not
+    // parked: BETA must never appear.
     const theRows = rows([
       { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
       { conceptName: 'B1', course: 'BETA', gapScore: 8 },
     ]);
     const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
     const theReplay = replay({
-      a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
-      b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+      a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // ALPHA: largest deficit -> dominant
+      b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' }, // BETA: long unseen, old deficit door would have opened
     });
-    const shared = {
+    const result = composeSessionRows({
       rows: theRows,
       instruments,
-      replay: theReplay,
+      // 200s per concept, 500s budget: 300s would be left over after ALPHA's
+      // one 200s concept — comfortably enough for BETA's own 200s group
+      // under the old rule.
       durations: flatDurations(200),
       asOf: AS_OF,
       budgetSeconds: 500,
-    };
+      replay: theReplay,
+      focusPolicy: 'single',
+    });
 
-    const focused = composeSessionRows({ ...shared, focusPolicy: 'focused' as const });
-    const single = composeSessionRows({ ...shared, focusPolicy: 'single' as const });
-
-    expect(focused.dominantCourse).toBe('ALPHA');
-    expect(focused.secondCourse).toBe('BETA');
-    expect(single.dominantCourse).toBe('ALPHA');
-    expect(single.secondCourse).toBeUndefined();
-    expect(single.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+    expect(result.dominantCourse).toBe('ALPHA');
+    expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA']));
+    expect('secondCourse' in result).toBe(false);
+    expect('secondCourseDoor' in result).toBe(false);
   });
 
-  it('leftover time never adds a THIRD course — it continues the dominant course or the session ends short', () => {
+  it("`[FOCUS-5]` (F2.18): leftover budget after the dominant course's own material goes unused — ending early is the intended shape", () => {
     const theRows = rows([
       { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
-      { conceptName: 'A2', course: 'ALPHA', gapScore: 8 },
       { conceptName: 'B1', course: 'BETA', gapScore: 7 },
       { conceptName: 'C1', course: 'GAMMA', gapScore: 6 },
     ]);
     const instruments = buildConceptInstrumentIndex([
       qa('a1', ['A1']),
-      qa('a2', ['A2']),
       qa('b1', ['B1']),
       qa('c1', ['C1']),
     ]);
-    // BETA and GAMMA are both plausible deficit candidates (long unseen); at
-    // most one may ever be admitted as the second course, and never both.
     const theReplay = replay({
       a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // ALPHA: the largest deficit -> dominant
-      // A2 is never reviewed at all (no entry here) — `courseLastSeenDay`
-      // reads only A1's day, so ALPHA's deficit is unaffected by A2's
-      // presence, and A2 still classifies (`unmet`) and groups normally.
       b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
       c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
     });
@@ -2408,21 +2325,22 @@ describe('[FOCUS-3] focusPolicy', () => {
       replay: theReplay,
       durations: flatDurations(200),
       asOf: AS_OF,
-      // A1 (200s) + one second-course group (200s) leaves 100s — never
-      // enough for a further whole group, so it goes unused rather than
-      // spilling into a third course.
+      // Only ALPHA's one 200s concept exists in ALPHA's own material — the
+      // other 300s of the 500s budget goes unused rather than pulling in
+      // BETA or GAMMA.
       budgetSeconds: 500,
-      focusPolicy: 'focused',
+      focusPolicy: 'single',
     });
 
-    const courses = new Set(result.orderedRows.map((r) => r.course));
     expect(result.dominantCourse).toBe('ALPHA');
-    expect(courses.size).toBeLessThanOrEqual(2);
-    expect(courses.has('ALPHA')).toBe(true);
+    expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['A1']);
+    expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA']));
   });
 
-  it('FOCUS_BRANCH_SENTENCE holds exactly the three ratified sentences', () => {
-    expect(FOCUS_BRANCH_SENTENCE.filter).toBe('mostly this course because you asked for it');
+  it('FOCUS_BRANCH_SENTENCE holds the three ratified sentences, corrected by `[FOCUS-5]`', () => {
+    // `filter`'s "mostly" was true under the two-course rule and is false
+    // now a session is exactly one course — see `[FOCUS-5]`'s ruling.
+    expect(FOCUS_BRANCH_SENTENCE.filter).toBe('this course because you asked for it');
     expect(FOCUS_BRANCH_SENTENCE.urgency).toBe(
       'because its assessment is close and the assessed material still needs work',
     );
@@ -2434,10 +2352,11 @@ describe('[FOCUS-3] focusPolicy', () => {
 
 // `[FOCUS-3b]` (`ol-ulj7`, discovered from `ol-egov.137.5` [FOCUS-4c]): D-092's
 // real, session-denominated window deficit (`./window.js`) replaces the days
-// substitute for the deficit branch's ordering and the second-course deficit
-// door. Scenarios: `features/F6-today.md` (olea-service), the C5.6 block
-// added by this bead.
-describe('[FOCUS-3b] windowDeficit replaces the days substitute', () => {
+// substitute for the deficit branch's ordering. `[FOCUS-5]` (`ol-egov.137.4`,
+// David's ruling 2026-09-11) adds the exact-tie recency tie-break: "the
+// course served least recently wins; course id breaks a remaining tie."
+// Scenarios: `features/F6-today.md` (olea-service), the C5.6 block.
+describe('[FOCUS-3b]/[FOCUS-5] windowDeficit replaces the days substitute, and its exact-tie recency tie-break', () => {
   function pastSession(
     day: string,
     eligibleCourses: readonly string[],
@@ -2522,77 +2441,125 @@ describe('[FOCUS-3b] windowDeficit replaces the days substitute', () => {
     expect(windowDeficit.get('GAMMA')?.deficit).toBe(0);
   });
 
-  describe('the second-course deficit door opens on a real deficit, never on a never-served tie', () => {
-    it('stays shut when no candidate has any accrued history (a cold-start tie the days substitute would have opened)', () => {
+  describe('`[FOCUS-5]` exact-tie recency tie-break: the course served least recently wins; course id last', () => {
+    it('an exact deficit tie is broken by `sessionsSinceLastServed`: the course served longer ago wins', () => {
       const theRows = rows([
         { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
         { conceptName: 'B1', course: 'BETA', gapScore: 8 },
       ]);
       const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
       const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' }, // ALPHA still dominant on urgency-less deficit-days
-        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+        a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
       });
-      // No history at all for either course — `computeWindowDeficit` reads
-      // deficit 0 for both (no data, no accrued debt), unlike the days
-      // substitute's own "+Infinity, never seen" reading that FOCUS-4c found
-      // forces a tie-break admission.
-      const windowDeficit = computeWindowDeficit([], ['ALPHA', 'BETA'], new Map());
+      // Deficits tie exactly at 3; BETA was served longer ago
+      // (`sessionsSinceLastServed: 5` vs ALPHA's `2`) — BETA must win.
+      const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+        ['ALPHA', { deficit: 3, sessionsSinceLastServed: 2 }],
+        ['BETA', { deficit: 3, sessionsSinceLastServed: 5 }],
+      ]);
 
       const result = composeSessionRows({
         rows: theRows,
         instruments,
         replay: theReplay,
-        durations: flatDurations(200),
+        durations: flatDurations(60),
         asOf: AS_OF,
-        budgetSeconds: 500,
-        focusPolicy: 'focused',
+        budgetSeconds: 600,
+        focusPolicy: 'single',
         windowDeficit,
       });
 
-      expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBeUndefined();
-      expect(result.secondCourseDoor).toBeUndefined();
+      expect(result.dominantCourse).toBe('BETA');
+      expect(result.focusBranch).toBe('deficit');
     });
 
-    it('opens when the candidate carries a real, positive accrued deficit', () => {
+    it('a course never served in the window (`sessionsSinceLastServed: Infinity`) always wins an exact-deficit tie', () => {
       const theRows = rows([
         { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
         { conceptName: 'B1', course: 'BETA', gapScore: 8 },
       ]);
       const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
       const theReplay = replay({
-        a1: { lastReviewedDay: '2026-07-01', dueDay: '2099-01-01' },
-        b1: { lastReviewedDay: '2026-09-01', dueDay: '2099-01-01' },
+        a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
       });
-      // ALPHA carries the LARGER real deficit (stays dominant, branch
-      // "deficit"), and BETA carries a smaller but still strictly POSITIVE
-      // real deficit — the second-course door tests only "is it owed
-      // something real", not "is it owed the most".
-      const windowDeficit = new Map([
-        ['ALPHA', { deficit: 5, sessionsSinceLastServed: 10 }],
-        ['BETA', { deficit: 1, sessionsSinceLastServed: 6 }],
+      const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+        ['ALPHA', { deficit: 3, sessionsSinceLastServed: 9 }],
+        ['BETA', { deficit: 3, sessionsSinceLastServed: Number.POSITIVE_INFINITY }],
       ]);
 
       const result = composeSessionRows({
         rows: theRows,
         instruments,
         replay: theReplay,
-        // 200s per concept: comfortably clears MIN_BLOCK_SECONDS (180).
-        durations: flatDurations(200),
+        durations: flatDurations(60),
         asOf: AS_OF,
-        budgetSeconds: 500,
-        focusPolicy: 'focused',
+        budgetSeconds: 600,
+        focusPolicy: 'single',
+        windowDeficit,
+      });
+
+      expect(result.dominantCourse).toBe('BETA');
+    });
+
+    it('a full tie (deficit AND recency) falls back to course id — determinism only', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+        ['BETA', { deficit: 3, sessionsSinceLastServed: 4 }],
+        ['ALPHA', { deficit: 3, sessionsSinceLastServed: 4 }],
+      ]);
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        focusPolicy: 'single',
         windowDeficit,
       });
 
       expect(result.dominantCourse).toBe('ALPHA');
-      expect(result.secondCourse).toBe('BETA');
-      expect(result.secondCourseDoor).toBe('deficit');
+    });
+
+    it('absent windowDeficit, the days-substitute tie also falls back to course id (recency and deficit are the same reading in that mode)', () => {
+      const theRows = rows([
+        { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+        { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+      // Identical last-reviewed day for both courses — a genuine tie in the
+      // days-since-last-seen substitute this module falls back to when no
+      // real window is supplied.
+      const theReplay = replay({
+        a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      });
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: theReplay,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 600,
+        focusPolicy: 'single',
+      });
+
+      expect(result.dominantCourse).toBe('ALPHA');
     });
   });
 
-  it('every-course (the flag omitted) is byte-identical whether or not windowDeficit is supplied — the every-course arm never reads it', () => {
+  it('every-course (supplied explicitly) is byte-identical whether or not windowDeficit is supplied — the every-course arm never reads it', () => {
     const theRows = rows([
       { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
       { conceptName: 'B1', course: 'BETA', gapScore: 8 },
@@ -2609,6 +2576,7 @@ describe('[FOCUS-3b] windowDeficit replaces the days substitute', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 600,
+      focusPolicy: 'every-course' as const,
     };
     const windowDeficit = computeWindowDeficit(
       [pastSession('2026-08-01', ['ALPHA', 'BETA'], { ALPHA: 600 }, { ALPHA: 0.5, BETA: 0.5 })],
@@ -2626,7 +2594,7 @@ describe('[FOCUS-3b] windowDeficit replaces the days substitute', () => {
     expect(withIt.courseShares).toEqual(withoutIt.courseShares);
     expect(withIt.courseSeconds).toEqual(withoutIt.courseSeconds);
     expect(Object.keys(withIt).sort()).not.toContain('dominantCourse');
-    expect(Object.keys(withIt).sort()).not.toContain('focusPolicy');
+    expect(withIt.focusPolicy).toBe('every-course');
   });
 });
 
@@ -2959,6 +2927,9 @@ describe('extendComposedStudySession (`[SESS-11]`)', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       allocation,
+      // This test is about ALLOC-2's pinned-shares extension across the
+      // every-course path, not `[FOCUS-5]`'s single-course default.
+      focusPolicy: 'every-course' as const,
     };
 
     // 10 minutes (600s): BIG's 540s share funds 9 items, SMALL's 60s share

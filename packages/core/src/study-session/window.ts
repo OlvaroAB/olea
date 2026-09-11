@@ -135,6 +135,13 @@ export interface WindowDeficitEntry {
    * in the ENTIRE supplied history — not window-truncated, matching
    * `compose.ts`'s own `deficitDaysByCourseFrom`'s "`null` → `+Infinity`"
    * convention for "never retrieved at all".
+   *
+   * **Second consumer, `[FOCUS-5]` (`ol-egov.137.4`, David's ruling
+   * 2026-09-11):** this is also the tie-break signal `compose.ts`'s
+   * `selectDominantCourse` reads when two courses' window deficits tie
+   * exactly — "the course served least recently wins" — reusing this field
+   * rather than computing a second recency reading. No change to this
+   * module's own behaviour; see `compose.ts`'s `recencyByCourseFrom`.
    */
   readonly sessionsSinceLastServed: number;
 }

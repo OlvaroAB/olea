@@ -875,13 +875,19 @@ function buildOverflow(
 
 /**
  * `[D-244]` (`ol-egov.137` / FOCUS-1), item 6's implementation (`[FOCUS-3]`,
- * `ol-egov.137.2`). `'every-course'` is today's behaviour, byte-identical
- * when the field is omitted — see {@link ComposeSessionRowsInput.focusPolicy}.
- * `'focused'` admits a dominant course plus at most one second course under
- * the admission rule below; `'single'` never admits a second course. The
- * default flips only under `[FOCUS-5]` (`ol-egov.137.4`).
+ * `ol-egov.137.2`), narrowed by `[FOCUS-5]` (`ol-egov.137.4`, David's ruling
+ * 2026-09-11): a session is exactly one course (C5.6, F2.18). The two-course
+ * `'focused'` policy — the admission step, the deficit/urgency doors,
+ * `MIN_BLOCK_SECONDS` — is **removed, not parked**; see this bead's commit
+ * for the diff and `docs/Olea_alpha_functional_scope.md`'s amended C5.6/F2.18
+ * for the ratified text. `'single'` selects one dominant course (filter,
+ * then urgency, then window deficit) and never admits a second.
+ * **`'single'` is now the default** — see
+ * {@link ComposeSessionRowsInput.focusPolicy}. `'every-course'` survives only
+ * as the harness's comparison baseline: every eligible course gets a slice,
+ * exactly as this module did before `[FOCUS-3]`.
  */
-export type FocusPolicy = 'every-course' | 'focused' | 'single';
+export type FocusPolicy = 'every-course' | 'single';
 
 /**
  * Which of `[D-244]` item 2's three tests chose the dominant course this
@@ -908,31 +914,19 @@ export type FocusBranch = 'filter' | 'urgency' | 'deficit';
 export const URGENCY_OVERRIDE_THRESHOLD = 1 / 14;
 
 /**
- * `[D-244]` item 6 / `findings/precommitment-focus-second-course.md`: the
- * guard beneath F2.19's group primitive — a completed group priced under this
- * many seconds does not admit a second course (the leftover goes to the
- * dominant course instead). **Declared**, mirroring
- * `src/plan/allocation.ts:152`'s `MIN_BLOCK_SECONDS` (the service-side guard
- * beneath A2.5's own redistribution rule) at the same value and the same
- * plain-English defence — "the shortest fundable retrieval block" — argued
- * once and reused, not re-derived. Duplicated client-side because this
- * admission check runs at composition time, which is client (`[D-069]`); the
- * pre-commitment leaves "which side holds it" to this bead and this is that
- * answer. Retirement condition: the pre-commitment's (a) table, checked by
- * `[FOCUS-4]`'s sweep, not by this file.
- */
-export const MIN_BLOCK_SECONDS = 180;
-
-/**
- * `[D-244]` item 5's sentence, verbatim from the ruling and worded through
- * `docs/Olea_vocabulary_registry.md` at ratification time — this module does
- * not compose prose (see the module doc's "Framing" note two files over,
- * `build.ts`), it carries the one ratified fragment per branch so a caller
- * assembling the rendered sentence (naming the course) has the exact wording
- * `[D-244]` approved rather than inventing a paraphrase.
+ * `[D-244]` item 5's sentence, worded through
+ * `docs/Olea_vocabulary_registry.md` at ratification time and corrected by
+ * `[FOCUS-5]` (`ol-egov.137.4`): the `filter` fragment's "mostly" was true
+ * under the two-course rule (a second course could still fill leftover
+ * budget) and is false now that a session is exactly one course — the
+ * fragment is corrected to match, `urgency`/`deficit` unchanged. This module
+ * does not compose prose (see the module doc's "Framing" note two files
+ * over, `build.ts`), it carries the one ratified fragment per branch so a
+ * caller assembling the rendered sentence (naming the course) has the exact
+ * wording ratified rather than inventing a paraphrase.
  */
 export const FOCUS_BRANCH_SENTENCE: Readonly<Record<FocusBranch, string>> = Object.freeze({
-  filter: 'mostly this course because you asked for it',
+  filter: 'this course because you asked for it',
   urgency: 'because its assessment is close and the assessed material still needs work',
   deficit: 'because it is behind its share from your recent sessions',
 });
@@ -962,9 +956,9 @@ function urgencyByCourseFrom(
 }
 
 /**
- * The window-deficit ordering key FOCUS-3 reads for its deficit branch and
- * door: days since a course's material was last retrieved, `+Infinity` for a
- * course never seen — the SAME days-denominated proxy this module's own
+ * The window-deficit ordering key FOCUS-3 reads for its deficit branch: days
+ * since a course's material was last retrieved, `+Infinity` for a course
+ * never seen — the SAME days-denominated proxy this module's own
  * {@link forcedCourseFloorDays}/{@link forcedCoursesFor} already substitute
  * for C5.6's session-denominated window (see the module doc's "C5.6's rolling
  * floor" note). Real per-session window bookkeeping
@@ -988,6 +982,35 @@ function deficitDaysByCourseFrom(
     );
   }
   return out;
+}
+
+/**
+ * `[FOCUS-5]` (`ol-egov.137.4`)'s tie-break input for
+ * {@link selectDominantCourse}: how long ago each course was actually
+ * SERVED (not merely owed) — bigger means "served longer ago",
+ * `Number.POSITIVE_INFINITY` for "never served" in the supplied signal. Reads
+ * `[FOCUS-3b]`'s real {@link WindowDeficitEntry.sessionsSinceLastServed} when
+ * a caller supplied `windowDeficit` — `window.ts`'s own doc already defines
+ * "served" there as "a past session where the course received > 0 seconds",
+ * exactly `[FOCUS-5]`'s own wording, so this reuses that field rather than
+ * computing a second recency reading. Falls back to
+ * {@link deficitDaysByCourseFrom}'s days-since-last-seen substitute otherwise
+ * — the SAME value that substitute already sorts the deficit branch by, so a
+ * tie in that mode's deficit is already a tie in this reading too and
+ * `courseId` remains the only signal left to break it, exactly as before this
+ * bead.
+ */
+function recencyByCourseFrom(
+  byCourse: ReadonlyMap<string, readonly ClassifiedRow[]>,
+  asOf: CalendarDay,
+  windowDeficit: ReadonlyMap<string, WindowDeficitEntry> | undefined,
+): ReadonlyMap<string, number> {
+  if (windowDeficit !== undefined) {
+    return new Map(
+      [...windowDeficit].map(([course, entry]) => [course, entry.sessionsSinceLastServed]),
+    );
+  }
+  return deficitDaysByCourseFrom(byCourse, asOf);
 }
 
 /** Total representative-seconds cost of a concept group — see {@link groupConceptRows}. */
@@ -1076,12 +1099,25 @@ function fillWholeGroups(
  * this module's own days-since-last-seen substitute otherwise (see
  * {@link composeFocusedSelection}'s call site). Both scales agree that
  * "bigger is more owed"; only the ordering matters here.
+ *
+ * `[FOCUS-5]` (`ol-egov.137.4`, David's ruling 2026-09-11, C5.6): **at an
+ * exact deficit tie, the course served LEAST RECENTLY wins** — "the one you
+ * have not seen in longest" is a rule she can anticipate, unlike a raw
+ * `courseId` sort. `recencyByCourse` is generic the same way
+ * `deficitByCourse` is: `[FOCUS-3b]`'s real
+ * {@link WindowDeficitEntry.sessionsSinceLastServed} when `windowDeficit` was
+ * supplied, or this module's own days-since-last-seen substitute otherwise
+ * (see {@link recencyByCourseFrom}) — bigger means "served longer ago",
+ * `Number.POSITIVE_INFINITY` for "never served at all", the same convention
+ * both readings already use. `courseId` still breaks a remaining tie, for
+ * determinism only.
  */
 function selectDominantCourse(
   eligibleCourses: readonly string[],
   courseFilter: readonly string[] | undefined,
   urgencyByCourse: ReadonlyMap<string, number>,
   deficitByCourse: ReadonlyMap<string, number>,
+  recencyByCourse: ReadonlyMap<string, number>,
 ): { readonly course: string; readonly branch: FocusBranch } | undefined {
   if (eligibleCourses.length === 0) return undefined;
 
@@ -1106,91 +1142,23 @@ function selectDominantCourse(
   }
   if (byUrgency !== undefined) return { course: byUrgency.course, branch: 'urgency' };
 
-  let byDeficit: { readonly course: string; readonly value: number } | undefined;
+  let byDeficit:
+    | { readonly course: string; readonly value: number; readonly recency: number }
+    | undefined;
   for (const course of eligibleCourses) {
     const deficit = deficitByCourse.get(course) ?? 0;
+    const recency = recencyByCourse.get(course) ?? Number.POSITIVE_INFINITY;
     if (
       byDeficit === undefined ||
       deficit > byDeficit.value ||
-      (deficit === byDeficit.value && course < byDeficit.course)
+      (deficit === byDeficit.value &&
+        (recency > byDeficit.recency ||
+          (recency === byDeficit.recency && course < byDeficit.course)))
     ) {
-      byDeficit = { course, value: deficit };
+      byDeficit = { course, value: deficit, recency };
     }
   }
   return byDeficit === undefined ? undefined : { course: byDeficit.course, branch: 'deficit' };
-}
-
-/**
- * `[D-244]` item 1 / `findings/precommitment-focus-second-course.md` (a): the
- * four admission clauses, read together. `candidates` already excludes the
- * dominant course and any ineligible (refused) course — see the module doc's
- * eligibility note. Prefers an urgency-door candidate (the calendar) over a
- * deficit-door one when both qualify, since the urgency door exists
- * specifically to notice a date the rotation would otherwise miss; ties break
- * on `courseId` for determinism. Returns `undefined` when no candidate's
- * first group is both affordable and warranted — "at most one second
- * course", never a forced admission.
- *
- * `forcedSet` is the set of courses whose deficit door is open — `[FOCUS-3b]`
- * (`ol-ulj7`)'s real, positive session-denominated window deficit when a
- * caller supplied {@link ComposeSessionRowsInput.windowDeficit}, or this
- * module's own days-since-last-seen substitute ({@link forcedCoursesFor})
- * otherwise — see {@link composeFocusedSelection}'s call site for which one
- * built it.
- */
-function selectSecondCourse(
-  candidates: readonly string[],
-  groupsByCourse: ReadonlyMap<string, readonly (readonly ClassifiedRow[])[]>,
-  remainingSeconds: number,
-  urgencyByCourse: ReadonlyMap<string, number>,
-  forcedSet: ReadonlySet<string>,
-):
-  | {
-      readonly course: string;
-      readonly group: readonly ClassifiedRow[];
-      readonly door: 'deficit' | 'urgency';
-    }
-  | undefined {
-  const urgent: {
-    readonly course: string;
-    readonly group: readonly ClassifiedRow[];
-    readonly value: number;
-  }[] = [];
-  const owed: { readonly course: string; readonly group: readonly ClassifiedRow[] }[] = [];
-  for (const course of candidates) {
-    const firstGroup = (groupsByCourse.get(course) ?? [])[0];
-    if (firstGroup === undefined) continue; // clause 1 (eligible, has material) / clause 2 (a group to offer)
-    const cost = groupCost(firstGroup);
-    // Clause 2: the whole group must fit — never a partial block.
-    if (cost > remainingSeconds) continue;
-    // The declared guard beneath the group primitive (`MIN_BLOCK_SECONDS`).
-    if (cost < MIN_BLOCK_SECONDS) continue;
-    const urgency = urgencyByCourse.get(course);
-    if (urgency !== undefined && urgency >= URGENCY_OVERRIDE_THRESHOLD) {
-      urgent.push({ course, group: firstGroup, value: urgency });
-    } else if (forcedSet.has(course)) {
-      // Clause 3, deficit door: the window can no longer pay this course's
-      // floor later — `forcedSet` names which reading decided that, see this
-      // function's own doc.
-      owed.push({ course, group: firstGroup });
-    }
-    // Neither door open: clause 3 fails and the candidate is not warranted.
-  }
-  if (urgent.length > 0) {
-    urgent.sort((a, b) => (b.value !== a.value ? b.value - a.value : a.course < b.course ? -1 : 1));
-    const top = urgent[0];
-    return top === undefined
-      ? undefined
-      : { course: top.course, group: top.group, door: 'urgency' };
-  }
-  if (owed.length > 0) {
-    owed.sort((a, b) => (a.course < b.course ? -1 : 1));
-    const top = owed[0];
-    return top === undefined
-      ? undefined
-      : { course: top.course, group: top.group, door: 'deficit' };
-  }
-  return undefined;
 }
 
 /** {@link composeFocusedSelection}'s result — see that function's doc. */
@@ -1199,19 +1167,28 @@ interface FocusedSelectionResult {
   readonly shares: ReadonlyMap<string, number>;
   readonly budgets: ReadonlyMap<string, number>;
   readonly dominantCourse: string;
-  readonly secondCourse: string | undefined;
   readonly focusBranch: FocusBranch;
   readonly focusReason: string;
-  readonly secondCourseDoor: 'deficit' | 'urgency' | undefined;
 }
 
 /**
- * `[D-244]` items 1-5 (`[FOCUS-3]`, `ol-egov.137.2`), the whole focus rule,
- * run when `focusPolicy !== 'every-course'`. Replaces `composeSessionRows`'s
- * ordinary course-by-course budgeted passes entirely for this branch — see
- * the call site — rather than composing with them, because the two rules
- * answer the same question ("how much of the session does each course get")
- * differently and must never both answer it at once.
+ * `[D-244]` items 1-3 (`[FOCUS-3]`, `ol-egov.137.2`), narrowed by `[FOCUS-5]`
+ * (`ol-egov.137.4`, David's ruling 2026-09-11): the one-course focus rule, run
+ * whenever `focusPolicy !== 'every-course'` (i.e. `'single'`, now the
+ * default — see {@link ComposeSessionRowsInput.focusPolicy}). Replaces
+ * `composeSessionRows`'s ordinary course-by-course budgeted passes entirely
+ * for this branch — see the call site — rather than composing with them,
+ * because the two rules answer the same question ("how much of the session
+ * does each course get") differently and must never both answer it at once.
+ *
+ * **`[FOCUS-5]` removed the second-course step entirely** — `[D-244]`'s
+ * admission clauses, its deficit/urgency "doors", and `MIN_BLOCK_SECONDS` are
+ * gone from this codebase, not parked behind a flag; see this bead's commit
+ * for the diff and `docs/Olea_alpha_functional_scope.md`'s amended C5.6/F2.18
+ * for the ratified text. A session is exactly one course: the dominant
+ * course fills from its OWN whole groups up to the full session budget, and
+ * whatever budget it does not use goes unspent — ending early is the
+ * intended shape (F2.18), never a hunt for a second course to fill it.
  *
  * **Eligibility (item 1's "the ranking will serve it").** `courses` here is
  * always `[...byCourse.keys()]` — a course the ranking refuses (P5-T03's
@@ -1223,21 +1200,11 @@ interface FocusedSelectionResult {
  * exactly what `byCourse` already is — never inferred from an empty block
  * after the fact.
  *
- * **Item 5, the floor is not paid per session.** A non-selected eligible
- * course's `share`/seconds this session are `0` (see the return below); its
- * window deficit is carried by the service-side accounting
- * (`src/plan/allocation.ts`) rather than by anything this module tracks
- * per-session, which is exactly D-244 item 5's "the window accounting
- * carries what is owed."
- *
- * **Item 1/(d), the sequencing.** The dominant course fills first, from its
- * OWN whole groups, up to the full session budget. Only the LEFTOVER (if
- * `'focused'` and a candidate is warranted) funds one second-course group;
- * whatever is left after THAT returns to the dominant course's own remaining
- * groups. `'single'` never runs the second-course step at all. The exact
- * INTERNAL order of `chosen` does not matter: `composeSessionRows`'s caller
- * re-derives F2.19/F2.18 order and course-blocking over whatever set this
- * function returns, identically to every other path.
+ * **The floor is not paid per session.** A non-selected eligible course's
+ * `share`/seconds this session are `0` (see the return below); its window
+ * deficit is carried by the service-side accounting (`src/plan/allocation.ts`)
+ * and by the client-side window (C5.6's rolling floor, paid across sessions)
+ * rather than by anything this module tracks per-session.
  *
  * Returns `undefined` only when there is no eligible course at all
  * (`eligibleCourses.length === 0`) — `composeSessionRows`'s caller falls back
@@ -1247,14 +1214,14 @@ interface FocusedSelectionResult {
  * `windowDeficit` is `[FOCUS-3b]`'s (`ol-ulj7`) real, session-denominated
  * D-092 window reading (`./window.js`'s `computeWindowDeficit`), read off her
  * review log by the caller. **Optional, and its absence is byte-identical to
- * this bead** — both places that would read it (the deficit branch's
- * ordering below, and the second-course deficit door) fall back to this
- * module's own days-since-last-seen substitute exactly as before this bead.
- * Never read for urgency, and never for eligibility (eligibility is read at
- * the row-set level regardless — see the module doc's eligibility note).
+ * this bead** — the deficit branch's ordering below (and, since `[FOCUS-5]`,
+ * its exact-tie recency tie-break, {@link recencyByCourseFrom}) fall back to
+ * this module's own days-since-last-seen substitute exactly as before this
+ * bead. Never read for urgency, and never for eligibility (eligibility is
+ * read at the row-set level regardless — see the module doc's eligibility
+ * note).
  */
 function composeFocusedSelection(
-  policy: 'focused' | 'single',
   byCourse: ReadonlyMap<string, readonly ClassifiedRow[]>,
   courses: readonly string[],
   courseFilter: readonly string[] | undefined,
@@ -1269,86 +1236,36 @@ function composeFocusedSelection(
   const urgencyByCourse = urgencyByCourseFrom(allocation);
   // `[FOCUS-3b]`: the real window projection, when supplied, REPLACES the
   // days-since-last-seen substitute for ordering the deficit branch — never
-  // compounds with it. Absent, this is byte-identical to before this bead.
+  // compounds with it. Absent, this is byte-identical to before that bead.
   const deficitByCourse: ReadonlyMap<string, number> =
     windowDeficit !== undefined
       ? new Map([...windowDeficit].map(([course, entry]) => [course, entry.deficit]))
       : deficitDaysByCourseFrom(byCourse, asOf);
+  const recencyByCourse = recencyByCourseFrom(byCourse, asOf, windowDeficit);
   const dominantPick = selectDominantCourse(
     courses,
     courseFilter,
     urgencyByCourse,
     deficitByCourse,
+    recencyByCourse,
   );
   if (dominantPick === undefined) return undefined;
   const { course: dominantCourse, branch } = dominantPick;
 
-  const groupsByCourse = new Map<string, readonly (readonly ClassifiedRow[])[]>();
-  for (const course of courses) {
-    const ordered = withinBlockOrder(
-      byCourse.get(course) ?? [],
-      relatedConceptKeys,
-      assessmentContext,
-      arrivalDays,
-      asOf,
-    );
-    groupsByCourse.set(course, groupConceptRows(ordered, relatedConceptKeys));
-  }
-
-  const dominantGroups = groupsByCourse.get(dominantCourse) ?? [];
-  const dominantFill1 = fillWholeGroups(dominantGroups, budgetSeconds);
-  let dominantChosen: ClassifiedRow[] = [...dominantFill1.chosen];
-  let dominantSpent = dominantFill1.spent;
-  let secondCourse: string | undefined;
-  let secondCourseDoor: 'deficit' | 'urgency' | undefined;
-  let secondSpent = 0;
-
-  if (policy === 'focused') {
-    const remaining = budgetSeconds - dominantSpent;
-    if (remaining > 0) {
-      // `[FOCUS-3b]`: the deficit door opens on a REAL positive accrued
-      // deficit when `windowDeficit` was supplied — never on the days
-      // substitute's own "never seen" tie-break, which is exactly the
-      // FOCUS-4c finding this bead exists to fix (both of that sweep's
-      // second-course admissions traced to the tie-break, never to accrued
-      // debt). Falls back to `forcedCoursesFor`'s threshold, byte-identical
-      // to before this bead, when `windowDeficit` is absent.
-      const forcedSet =
-        windowDeficit !== undefined
-          ? new Set(
-              [...windowDeficit].filter(([, entry]) => entry.deficit > 0).map(([course]) => course),
-            )
-          : new Set(forcedCoursesFor(byCourse, asOf, courses.length));
-      const candidates = courses.filter((c) => c !== dominantCourse);
-      const pick = selectSecondCourse(
-        candidates,
-        groupsByCourse,
-        remaining,
-        urgencyByCourse,
-        forcedSet,
-      );
-      if (pick !== undefined) {
-        secondCourse = pick.course;
-        secondCourseDoor = pick.door;
-        secondSpent = groupCost(pick.group);
-        // Item 1/(d): whatever is left after the second course's one group
-        // returns to the dominant course's own remaining groups.
-        const takenKeys = new Set(dominantChosen.map((c) => c.row.conceptKey));
-        const leftoverDominantGroups = dominantGroups.filter(
-          (group) => !group.some((c) => takenKeys.has(c.row.conceptKey)),
-        );
-        const dominantFill2 = fillWholeGroups(leftoverDominantGroups, remaining - secondSpent);
-        dominantChosen = [...dominantChosen, ...dominantFill2.chosen];
-        dominantSpent += dominantFill2.spent;
-      }
-    }
-  }
-
-  const chosen: ClassifiedRow[] = [...dominantChosen];
-  if (secondCourse !== undefined) {
-    const secondGroup = groupsByCourse.get(secondCourse)?.[0];
-    if (secondGroup !== undefined) chosen.push(...secondGroup);
-  }
+  // Only the dominant course's own groups are ever needed now — `[FOCUS-5]`
+  // removed every other course's role in this selection.
+  const orderedDominant = withinBlockOrder(
+    byCourse.get(dominantCourse) ?? [],
+    relatedConceptKeys,
+    assessmentContext,
+    arrivalDays,
+    asOf,
+  );
+  const dominantGroups = groupConceptRows(orderedDominant, relatedConceptKeys);
+  const { chosen: dominantChosen, spent: dominantSpent } = fillWholeGroups(
+    dominantGroups,
+    budgetSeconds,
+  );
 
   const shares = new Map<string, number>();
   const budgets = new Map<string, number>();
@@ -1356,25 +1273,20 @@ function composeFocusedSelection(
     if (course === dominantCourse) {
       shares.set(course, budgetSeconds > 0 ? dominantSpent / budgetSeconds : 0);
       budgets.set(course, dominantSpent);
-    } else if (course === secondCourse) {
-      shares.set(course, budgetSeconds > 0 ? secondSpent / budgetSeconds : 0);
-      budgets.set(course, secondSpent);
     } else {
-      // Item 5: not selected this session — zero, never a fragment.
+      // Not the dominant course this session — zero, never a fragment.
       shares.set(course, 0);
       budgets.set(course, 0);
     }
   }
 
   return {
-    chosen,
+    chosen: dominantChosen,
     shares,
     budgets,
     dominantCourse,
-    secondCourse,
     focusBranch: branch,
     focusReason: FOCUS_BRANCH_SENTENCE[branch],
-    secondCourseDoor,
   };
 }
 
@@ -1507,10 +1419,12 @@ export interface ComposeSessionRowsInput {
   readonly allocation?: readonly StudyPlanAllocationEntry[];
   /**
    * `[D-244]` (`ol-egov.137` / FOCUS-1), item 6 (`[FOCUS-3]`,
-   * `ol-egov.137.2`). **Defaults to `'every-course'`, today's behaviour, and
-   * is byte-identical when omitted** — this field's whole branch
-   * ({@link composeFocusedSelection}) never runs unless a caller opts in.
-   * See {@link FocusPolicy}'s doc for what `'focused'`/`'single'` change.
+   * `ol-egov.137.2`), narrowed by `[FOCUS-5]` (`ol-egov.137.4`, David's
+   * ruling 2026-09-11): **defaults to `'single'`** — a session is one course
+   * (C5.6, F2.18). `'every-course'` survives only as the harness's comparison
+   * baseline; supply it explicitly to serve every eligible course a slice,
+   * exactly as this module did before `[FOCUS-3]`. See {@link FocusPolicy}'s
+   * doc for the full history.
    */
   readonly focusPolicy?: FocusPolicy;
   /**
@@ -1524,12 +1438,12 @@ export interface ComposeSessionRowsInput {
    * as before this bead — see the module doc's "C5.6's rolling floor" note
    * for why that substitute exists and FOCUS-4c's finding for its known gap
    * (a course starving 13-14 sessions while the substitute never read past a
-   * 2-day deficit). Read for TWO of item 1/2's tests only, when
-   * `focusPolicy !== 'every-course'`: the deficit branch's dominant-course
-   * ordering, and the second-course deficit door — never for urgency, and
-   * never for eligibility (a refused course is read at the row-set level
-   * regardless, both here and inside `./window.js`'s own history — see that
-   * module's doc).
+   * 2-day deficit). Read when `focusPolicy !== 'every-course'`, for the
+   * deficit branch's dominant-course ordering and, since `[FOCUS-5]`, its
+   * exact-tie recency tie-break ({@link recencyByCourseFrom}) — never for
+   * urgency, and never for eligibility (a refused course is read at the
+   * row-set level regardless, both here and inside `./window.js`'s own
+   * history — see that module's doc).
    */
   readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
   /**
@@ -1588,12 +1502,12 @@ export interface ComposeSessionRowsResult {
   readonly courseSeconds: ReadonlyMap<string, number>;
   /**
    * Echoes {@link ComposeSessionRowsInput.focusPolicy}, defaulted to
-   * `'every-course'` — so a caller (or the `[FOCUS-4]` harness) can tell
-   * which arm ran without also threading the input through. Optional only so
-   * a hand-built fixture predating `[FOCUS-3]` remains valid — the same
-   * "optional on the result, always set by the real builder" pattern
-   * `StudySessionModel.explainBackItems` already uses; `composeSessionRows`
-   * itself always sets it.
+   * `'single'` since `[FOCUS-5]` — so a caller (or the `[FOCUS-4]` harness)
+   * can tell which arm ran without also threading the input through.
+   * Optional only so a hand-built fixture predating `[FOCUS-3]` remains
+   * valid — the same "optional on the result, always set by the real
+   * builder" pattern `StudySessionModel.explainBackItems` already uses;
+   * `composeSessionRows` itself always sets it.
    */
   readonly focusPolicy?: FocusPolicy;
   /**
@@ -1602,17 +1516,10 @@ export interface ComposeSessionRowsResult {
    * may be served) and in the degenerate case of no eligible course at all.
    */
   readonly dominantCourse?: string;
-  /**
-   * `[D-244]` item 1's admitted second course, when `'focused'` admitted one.
-   * Always `undefined` under `'every-course'` and `'single'`.
-   */
-  readonly secondCourse?: string;
   /** Which of item 2's three tests chose {@link dominantCourse} — see {@link FocusBranch}. `undefined` exactly when {@link dominantCourse} is. */
   readonly focusBranch?: FocusBranch;
   /** Item 5's ratified sentence fragment for {@link focusBranch} — see {@link FOCUS_BRANCH_SENTENCE}. `undefined` exactly when {@link focusBranch} is. */
   readonly focusReason?: string;
-  /** Which of the second-course admission rule's two doors opened {@link secondCourse} — see `findings/precommitment-focus-second-course.md` (a). `undefined` unless a second course was admitted. */
-  readonly secondCourseDoor?: 'deficit' | 'urgency';
 }
 
 /**
@@ -1641,7 +1548,10 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     allocation,
     windowDeficit,
   } = input;
-  const focusPolicy = input.focusPolicy ?? 'every-course';
+  // `[FOCUS-5]` (`ol-egov.137.4`, David's ruling 2026-09-11): omission now
+  // means `'single'` — a session is one course by default. `'every-course'`
+  // must be requested explicitly (the harness's own comparison baseline).
+  const focusPolicy = input.focusPolicy ?? 'single';
 
   // C7.9 containment co-presence (`[SESS-11]`), over the WHOLE candidate
   // pool and before [STEER-1]'s course/topic filter — see the doc above
@@ -1700,7 +1610,6 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     focusPolicy === 'every-course'
       ? undefined
       : composeFocusedSelection(
-          focusPolicy,
           byCourse,
           courses,
           courseFilter,
@@ -1797,23 +1706,20 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     obligationClasses,
     courseSeconds: budgets,
     containmentDropped: containment.dropped,
-    // `[FOCUS-3]`: byte-identical to before this bead when the caller omits
-    // `focusPolicy` entirely — the field is echoed only when the caller
-    // explicitly supplied one (even `'every-course'` explicitly), never
-    // synthesised from the default, so a caller reading
-    // `Object.keys(result)` sees no new field unless it opted in.
+    // `[FOCUS-3]`'s echo discipline, unchanged by `[FOCUS-5]`'s default flip:
+    // the `focusPolicy` field is echoed only when the caller explicitly
+    // supplied one (even `'every-course'` explicitly), never synthesised
+    // from the default, so a caller reading `Object.keys(result)` sees no
+    // new field unless it opted in — `dominantCourse`/`focusBranch`/
+    // `focusReason` below are NOT gated the same way: they appear whenever
+    // `focusResult` ran, which since `[FOCUS-5]` includes every omitted-input
+    // call (the default is `'single'`, not `'every-course'`).
     ...(input.focusPolicy !== undefined ? { focusPolicy } : {}),
     ...(focusResult !== undefined
       ? {
           dominantCourse: focusResult.dominantCourse,
-          ...(focusResult.secondCourse !== undefined
-            ? { secondCourse: focusResult.secondCourse }
-            : {}),
           focusBranch: focusResult.focusBranch,
           focusReason: focusResult.focusReason,
-          ...(focusResult.secondCourseDoor !== undefined
-            ? { secondCourseDoor: focusResult.secondCourseDoor }
-            : {}),
         }
       : {}),
   };
@@ -1851,7 +1757,7 @@ export interface BuildComposedStudySessionInput
   readonly conceptIds?: readonly string[];
   /** `ol-v7r5.17` [ALLOC-2] — see `ComposeSessionRowsInput.allocation`, passed straight through. */
   readonly allocation?: readonly StudyPlanAllocationEntry[];
-  /** `[D-244]` (`[FOCUS-3]`) — see `ComposeSessionRowsInput.focusPolicy`, passed straight through. Defaults to `'every-course'`. */
+  /** `[D-244]` (`[FOCUS-3]`) — see `ComposeSessionRowsInput.focusPolicy`, passed straight through. Defaults to `'single'` since `[FOCUS-5]`. */
   readonly focusPolicy?: FocusPolicy;
   /** `[FOCUS-3b]` (`ol-ulj7`) — see `ComposeSessionRowsInput.windowDeficit`, passed straight through. */
   readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
@@ -1913,14 +1819,10 @@ export interface ComposedStudySession {
   readonly focusPolicy?: FocusPolicy;
   /** See `ComposeSessionRowsResult.dominantCourse`. */
   readonly dominantCourse?: string;
-  /** See `ComposeSessionRowsResult.secondCourse`. */
-  readonly secondCourse?: string;
   /** See `ComposeSessionRowsResult.focusBranch`. */
   readonly focusBranch?: FocusBranch;
   /** See `ComposeSessionRowsResult.focusReason`. */
   readonly focusReason?: string;
-  /** See `ComposeSessionRowsResult.secondCourseDoor`. */
-  readonly secondCourseDoor?: 'deficit' | 'urgency';
 }
 
 /**
@@ -2016,12 +1918,8 @@ export function buildComposedStudySession(
       : {}),
     ...(composed.focusPolicy !== undefined ? { focusPolicy: composed.focusPolicy } : {}),
     ...(composed.dominantCourse !== undefined ? { dominantCourse: composed.dominantCourse } : {}),
-    ...(composed.secondCourse !== undefined ? { secondCourse: composed.secondCourse } : {}),
     ...(composed.focusBranch !== undefined ? { focusBranch: composed.focusBranch } : {}),
     ...(composed.focusReason !== undefined ? { focusReason: composed.focusReason } : {}),
-    ...(composed.secondCourseDoor !== undefined
-      ? { secondCourseDoor: composed.secondCourseDoor }
-      : {}),
   };
 }
 
