@@ -63,6 +63,7 @@ import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
 import { hashContent } from '../ingestion/hash.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts } from './extract.js';
 import { reconcileRelations, totalDropped } from './reconcile.js';
@@ -187,6 +188,27 @@ export class ConceptReaderUnavailableError extends Error {
  * is untouched by anything here.
  */
 export interface ReadConcept {
+  /**
+   * The opaque identity key (`[D-088]`, C7.11) — the join key every
+   * downstream stage keys a concept by, never displayed to her.
+   *
+   * **This stage is not a key producer, and that is the point** (`ol-282w`
+   * [REL-10]). `[D-088]` rules one mechanism mints or corroborates a key;
+   * two producers minting keys for the same concept is the defect. So where
+   * her conventions corroborated this concept, the key here is *the very
+   * `ConceptRecord.key`* `./extract.js` already minted for it, carried
+   * through unchanged — this module never re-derives a key a record already
+   * holds. Only a concept the read found that `./extract.js` returned no
+   * record for at all has no prior key to carry, and that one is minted
+   * through the same single seam (`./concept-key.js`'s `ConceptKeySource`),
+   * never by assembling a string here.
+   *
+   * Provisional, exactly as `ConceptRecord.key` is: `./concept-key.js`'s
+   * module doc states plainly that today's derivation is content-derived and
+   * not yet the stable key C7.11 contracts. Nothing here makes that better
+   * or worse — it inherits the same seam and will inherit its replacement.
+   */
+  readonly key: string;
   /**
    * Verbatim. Hers wherever she named it, otherwise the wording from the
    * passage that explained it most fully.
@@ -699,6 +721,13 @@ function corroborate(
   if (hers === undefined) {
     const sourcePaths: readonly VaultPath[] = [];
     return {
+      // No record corroborated this concept, so there is no key to carry and
+      // nothing is being overwritten — this is a first mint, through the one
+      // seam (`ReadConcept.key`'s doc, `[D-088]`). It is deliberately the
+      // same call `./extract.js`'s `keyFor` makes for an un-stamped concept,
+      // so a concept that later acquires a record converges on the same key
+      // rather than acquiring a second one.
+      key: provisionalConceptKey({ name: proposal.name, boundNotePath: null }),
       name: proposal.name,
       aliases: dedupe(proposal.aliases, proposal.name),
       // Tier 3 is not a fallback awaiting her confirmation (F1.4): nothing
@@ -715,6 +744,9 @@ function corroborate(
   // Her name wins; every wording the reader used is kept as an alias.
   const courses = new Set<string>([...hers.courses, ...coursesFromPassages]);
   return {
+    // Carried, never re-derived: this concept already has a key, minted by
+    // the one producer (`./extract.js`) — see `ReadConcept.key`'s doc.
+    key: hers.key,
     name: hers.name,
     aliases: dedupe(wordings, hers.name),
     provenanceTier: hers.tier,
@@ -982,6 +1014,9 @@ export async function readConcepts(
   for (const record of records) {
     if (claimed.has(record.name)) continue;
     concepts.push({
+      // Same carry as `corroborate`'s corroborated branch: this concept IS a
+      // record, so its key comes straight off the record.
+      key: record.key,
       name: record.name,
       aliases: [],
       provenanceTier: record.tier,

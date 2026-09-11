@@ -1139,6 +1139,7 @@ describe('foldReadAnchors — folding a completed read’s passage anchors onto 
   ): ReadConcept {
     const sourcePaths: readonly string[] = [];
     return {
+      key: `key:${name}`,
       name,
       aliases: [],
       provenanceTier: 3,

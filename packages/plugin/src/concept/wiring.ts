@@ -371,6 +371,18 @@ export async function buildCorpusRelationWiring(
 }
 
 /**
+ * What `corpusConceptsFrom` accepts: a `ReadConcept` whose `key` may be
+ * absent.
+ *
+ * `ReadConcept.key` is required (`ol-282w` [REL-10]), so production input
+ * always satisfies this. The looser alias exists for the two callers that
+ * are not a full read — a `ConceptRecord`-shaped object, and the tests that
+ * build a candidate by hand — so the "omit `key` when there is none" branch
+ * below stays reachable and tested rather than unreachable by type.
+ */
+export type CorpusConceptSource = Omit<ReadConcept, 'key'> & { readonly key?: string };
+
+/**
  * `ReadConcept[]` (a full concept READ, per-document relations included) ->
  * `CorpusConcept[]` (this stage's own narrower input) — dropping every
  * concept with no `anchor`, exactly as `ReadConcept.anchor`'s own doc says
@@ -387,29 +399,32 @@ export async function buildCorpusRelationWiring(
  * either side, the same "ineligible for this stage" posture `anchor` already
  * holds here.
  *
- * **Threads `key` through when the caller has one (`ol-l40p` [REL-9]).**
- * The parameter type is widened to `ReadConcept & { key?: string }` rather
- * than `ReadConcept` alone: `ReadConcept` itself (`olea-core`'s `read.ts`,
- * not owned by this bead) carries no `key` field today, so today's one
- * production caller (`readConceptsAndRelations` below, passing
- * `read.concepts`) still produces `key: undefined` on every candidate —
- * this is a real, named gap, not silently papered over (see this bead's own
- * close notes). The widening exists so that a FUTURE caller supplying a
- * `ConceptRecord`-shaped object (which does carry a required `key`) needs no
- * further change here: TypeScript's structural typing already accepts it,
- * since a required `string` satisfies an optional `string | undefined`.
- * Once threaded, `reconcileCorpusVerdicts` (`olea-core`,
- * `corpus-relations/verdict.ts`) can join a verdict back to this concept by
- * key directly, bypassing the exact-name join `findings/
+ * **Threads `key` through, and on the production path it is now always
+ * there (`ol-l40p` [REL-9], closed by `ol-282w` [REL-10]).** `ReadConcept`
+ * (`olea-core`'s `read.ts`) now carries a required `key`: the read stage
+ * carries the `ConceptRecord.key` its corroborating record already holds and
+ * mints through the one `[D-088]` seam only for a concept no record covers,
+ * so it is a key *carrier*, never a second producer. The production caller
+ * below (`readConceptsAndRelations`, passing `read.concepts`) therefore
+ * emits a keyed candidate for every eligible concept, which is what lets
+ * `reconcileCorpusVerdicts` and `resolveRelatedConceptKeys` (`olea-core`)
+ * join by key instead of by exact name — the join `findings/
  * relations-join-2026-09.md` (`olea-service`) measured failing on most
  * endpoint mentions in production terms.
+ *
+ * The parameter stays `CorpusConceptSource` (key OPTIONAL) rather than
+ * `ReadConcept` (key required) on purpose: it keeps accepting a
+ * `ConceptRecord`-shaped or partially-built caller with no cast, and it
+ * keeps the omit-when-absent branch below honest rather than dead code no
+ * type could ever reach. `key` is still never emitted as `key: undefined` —
+ * it is omitted entirely when absent.
  */
 export function corpusConceptsFrom(
-  concepts: readonly (ReadConcept & { readonly key?: string })[],
+  concepts: readonly CorpusConceptSource[],
 ): readonly CorpusConcept[] {
   return concepts
     .filter(
-      (concept): concept is ReadConcept & { anchor: Provenance; key?: string } =>
+      (concept): concept is CorpusConceptSource & { anchor: Provenance } =>
         concept.anchor !== undefined,
     )
     .map((concept) => ({

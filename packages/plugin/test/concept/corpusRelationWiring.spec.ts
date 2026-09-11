@@ -7,6 +7,7 @@
  * `obsidian` import anywhere in this file.
  */
 import type {
+  ConceptRelation,
   CorpusConcept,
   EmbeddingCacheStore,
   EmbeddingProvider,
@@ -20,14 +21,16 @@ import type {
   VaultSource,
   WorkerTaskRequest,
 } from 'olea-core';
-import { EmbeddingCacheEngine, hashText } from 'olea-core';
+import { EmbeddingCacheEngine, FolderSource, hashText, resolveRelatedConceptKeys } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { ObsidianCorpusRelationStateStore } from '../../src/concept/corpusRelationStateStore.js';
+import type { CorpusConceptSource } from '../../src/concept/wiring.js';
 import {
   buildConceptWiring,
   buildCorpusRelationWiring,
   corpusConceptsFrom,
   readConceptsAndRelations,
+  readConceptsFromVault,
   runCorpusRelationBatchIfDue,
 } from '../../src/concept/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
@@ -92,6 +95,7 @@ function readConcept(
   courses: readonly string[] = [],
 ): ReadConcept {
   return {
+    key: `key:${name}`,
     name,
     aliases: [],
     provenanceTier: 3,
@@ -186,13 +190,14 @@ describe('corpusConceptsFrom', () => {
     expect(corpusConcepts.map((c) => c.name)).toEqual(['Anchored']);
   });
 
-  it('carries name, aliases, anchor and courses through unchanged', () => {
+  it('carries name, aliases, anchor, courses and key through unchanged', () => {
     const concept: ReadConcept = {
       ...readConcept('X', 'A.md', ['CourseA']),
       aliases: ['Alias'],
     };
     const [result] = corpusConceptsFrom([concept]);
     expect(result).toEqual({
+      key: concept.key,
       name: 'X',
       aliases: ['Alias'],
       anchor: concept.anchor,
@@ -207,20 +212,24 @@ describe('corpusConceptsFrom', () => {
   });
 
   it('populates `key` when the caller supplies one (`ol-l40p` [REL-9])', () => {
-    const withKey: ReadConcept & { key?: string } = { ...readConcept('X', 'A.md'), key: 'key-x' };
+    const withKey: ReadConcept = { ...readConcept('X', 'A.md'), key: 'key-x' };
     const [result] = corpusConceptsFrom([withKey]);
     expect(result?.key).toBe('key-x');
   });
 
-  it("omits `key` entirely (never `key: undefined`) for today's production input, `ReadConcept[]`, which carries none", () => {
-    const noKey = readConcept('Y', 'A.md');
-    const [result] = corpusConceptsFrom([noKey]);
+  it('omits `key` entirely (never `key: undefined`) for a source that carries none', () => {
+    // `ReadConcept.key` is required since `ol-282w` [REL-10], so a key-less
+    // source is now only reachable through `CorpusConceptSource` — which is
+    // exactly why that looser alias exists (see its doc): the omit branch is
+    // still live for a `ConceptRecord`-shaped or hand-built caller.
+    const { key: _dropped, ...noKey } = readConcept('Y', 'A.md');
+    const [result] = corpusConceptsFrom([noKey satisfies CorpusConceptSource]);
     expect(result).not.toHaveProperty('key');
   });
 
   it('a mixed batch carries `key` only for the concepts that had one', () => {
-    const withKey: ReadConcept & { key?: string } = { ...readConcept('X', 'A.md'), key: 'key-x' };
-    const withoutKey = readConcept('Y', 'A.md');
+    const withKey: ReadConcept = { ...readConcept('X', 'A.md'), key: 'key-x' };
+    const { key: _dropped, ...withoutKey } = readConcept('Y', 'A.md');
     const results = corpusConceptsFrom([withKey, withoutKey]);
     expect(results.find((c) => c.name === 'X')?.key).toBe('key-x');
     expect(results.find((c) => c.name === 'Y')).not.toHaveProperty('key');
@@ -686,5 +695,233 @@ describe('readConceptsAndRelations — both producers land in one fold', () => {
     expect(Object.keys(blob)).toEqual(['corpusRelationState']);
     expect(JSON.stringify(blob)).not.toContain('contrasts-with');
     expect(JSON.stringify(blob)).not.toContain('is-a');
+  });
+});
+
+// ---- the fixture vault, end to end ----------------------------------------
+//
+// `ol-282w` [REL-10]. Everything above builds its `ReadConcept`s by hand, so
+// none of it can tell whether the PRODUCTION path — a real `readConcepts`
+// run over a real vault, through `corpusConceptsFrom`, out onto the
+// `concepts.relations.v1` wire — actually carries a key. That is the gap
+// [REL-9] closed the plumbing for and left open on the input side: every
+// production candidate still resolved to `key: undefined` because
+// `ReadConcept` had no key field. These two tests are the acceptance for
+// closing it, and they are deliberately run against the tracked fixture
+// vault rather than a `MemoryVault` so that the corroboration path (her
+// filed Zettelkasten wording -> `ConceptRecord.key` -> `ReadConcept.key`)
+// is exercised on real filing conventions rather than on a two-file mock.
+//
+// INV-3: the fixture vault (`packages/core/fixtures/vault`) is the public,
+// coined fixture. Nothing here comes from any real vault.
+
+const FIXTURE_VAULT_ROOT = new URL('../../../core/fixtures/vault', import.meta.url).pathname;
+
+const FIXTURE_SCOPE = '01 Courses/MUSTH104';
+
+/**
+ * Two of her Zettelkasten titles that she has ALSO wikilinked from a note in
+ * the scope under test — read off the fixture rather than hardcoded.
+ *
+ * Both halves matter. Zettelkasten titles are what `extractConcepts`
+ * corroborates against, so proposing them is what makes the read carry a
+ * `ConceptRecord.key` rather than mint one. Her wikilink is what the
+ * `her-link` nomination signal (`src/concept/corpusRelationSignals.ts`, always
+ * on) pairs them by, so it is what gets a candidate onto the wire at all.
+ */
+async function fixtureConventionNames(vault: FolderSource): Promise<readonly string[]> {
+  const zettel = await vault.list({ under: '05 Zettelkasten', extensions: ['md'] });
+  const titles = new Set(
+    zettel.map((path) => path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '')),
+  );
+  const notes = await vault.list({ under: FIXTURE_SCOPE, extensions: ['md'] });
+  const linked = new Set<string>();
+  for (const path of notes) {
+    const content = await vault.read(path);
+    for (const match of content.matchAll(/\[\[([^\]]+)\]\]/g)) {
+      const target = (match[1] ?? '').split('|')[0]?.trim() ?? '';
+      if (titles.has(target)) linked.add(target);
+    }
+  }
+  return [...linked].sort().slice(0, 2);
+}
+
+/**
+ * A reader that proposes her own filed wording (so the read corroborates and
+ * CARRIES the record's key) alongside one wording only the read saw (so the
+ * mint-through-the-one-seam branch is exercised in the same batch).
+ */
+function fixtureTransport(conventionNames: readonly string[]) {
+  const calls: WorkerTaskRequest[] = [];
+  return {
+    calls,
+    send: async (request: WorkerTaskRequest) => {
+      calls.push(request);
+      if (request.taskId === 'concepts.extract.v1') {
+        const names = [...conventionNames, 'A wording only the read saw'];
+        return {
+          ok: true,
+          result: {
+            concepts: names.map((name, index) => ({
+              name,
+              aliases: [],
+              anchorIndex: index + 1,
+              alsoInIndexes: [],
+            })),
+            relations: [],
+          },
+        };
+      }
+      // The service echoes each candidate's own key back on the verdict
+      // (`CorpusVerdict.aKey`, olea-core) — modelled here by echoing the
+      // request's own endpoints, never by inventing a key.
+      const payload = request.payload as {
+        candidates: readonly {
+          a: { name: string; key?: string };
+          b: { name: string; key?: string };
+        }[];
+      };
+      return {
+        ok: true,
+        result: {
+          verdicts: payload.candidates.map((candidate) => ({
+            a: candidate.a.name,
+            b: candidate.b.name,
+            type: 'contrasts-with',
+            confidence: 0.9,
+            ...(candidate.a.key !== undefined ? { aKey: candidate.a.key } : {}),
+            ...(candidate.b.key !== undefined ? { bKey: candidate.b.key } : {}),
+          })),
+        },
+      };
+    },
+  };
+}
+
+describe('the production corpus-relations batch, over the fixture vault (`ol-282w` [REL-10])', () => {
+  it('every CorpusConcept the production expression builds carries a key', async () => {
+    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const conventionNames = await fixtureConventionNames(vault);
+    const transport = fixtureTransport(conventionNames);
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    // Exactly `readConceptsAndRelations`'s own production expression
+    // (`src/concept/wiring.ts`: `allConcepts: corpusConceptsFrom(read.concepts)`).
+    const read = await readConceptsFromVault(conceptWiring, vault, {
+      under: FIXTURE_SCOPE,
+      budget: { maxPassages: 12 },
+    });
+    expect(read?.outcome).toBe('read');
+    const batch = corpusConceptsFrom(read?.outcome === 'read' ? read.concepts : []);
+
+    expect(batch.length).toBeGreaterThan(0);
+    for (const candidate of batch) {
+      expect(candidate.key, `no key on candidate "${candidate.name}"`).toBeTypeOf('string');
+      expect(candidate.key).not.toBe('');
+    }
+    expect(batch.filter((c) => c.key !== undefined)).toHaveLength(batch.length);
+
+    // Both producers of the key are represented, which is the point of the
+    // ruling: her filed concept CARRIES the record's key (one producer), and
+    // the read-only concept was minted through the same single seam.
+    const corroborated = batch.find((c) => conventionNames.includes(c.name));
+    const readOnly = batch.find((c) => c.name === 'A wording only the read saw');
+    expect(corroborated?.key).toBeTypeOf('string');
+    expect(readOnly?.key).toBeTypeOf('string');
+    expect(corroborated?.key).not.toBe(readOnly?.key);
+  });
+
+  it('every endpoint that reaches the concepts.relations.v1 wire carries its key', async () => {
+    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const conventionNames = await fixtureConventionNames(vault);
+    const transport = fixtureTransport(conventionNames);
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      {
+        vault,
+        ingestionSessionClosed: true,
+        read: { under: FIXTURE_SCOPE, budget: { maxPassages: 12 } },
+        sourcesFolder: FIXTURE_SCOPE,
+      },
+    );
+
+    expect(pass).not.toBeNull();
+    const relationRequests = transport.calls.filter(
+      (call) => call.taskId === 'concepts.relations.v1',
+    );
+    expect(relationRequests.length).toBeGreaterThan(0);
+
+    const endpoints = relationRequests.flatMap((request) => {
+      const payload = request.payload as {
+        candidates: readonly {
+          a: { name: string; key?: string };
+          b: { name: string; key?: string };
+        }[];
+      };
+      return payload.candidates.flatMap((candidate) => [candidate.a, candidate.b]);
+    });
+    expect(endpoints.length).toBeGreaterThan(0);
+    for (const endpoint of endpoints) {
+      expect(endpoint.key, `no key on wire endpoint "${endpoint.name}"`).toBeTypeOf('string');
+    }
+  });
+
+  it('the replies resolve by key: resolveRelatedConceptKeys needs no concept list at all', async () => {
+    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const conventionNames = await fixtureConventionNames(vault);
+    const transport = fixtureTransport(conventionNames);
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      {
+        vault,
+        ingestionSessionClosed: true,
+        read: { under: FIXTURE_SCOPE, budget: { maxPassages: 12 } },
+        sourcesFolder: FIXTURE_SCOPE,
+      },
+    );
+
+    // `olea-core`'s `RelationWithEndpointKeys` (`related-concept-keys.ts`) is
+    // not re-exported from the package index, and that module's own doc says
+    // this shape is meant to be satisfied structurally rather than imported.
+    const corpusEdges = (pass?.corpus.relations ?? []) as readonly (ConceptRelation & {
+      fromKey?: string;
+      toKey?: string;
+    })[];
+    expect(corpusEdges.length).toBeGreaterThan(0);
+    for (const edge of corpusEdges) {
+      expect(edge.fromKey).toBeTypeOf('string');
+      expect(edge.toKey).toBeTypeOf('string');
+    }
+
+    // The empty `concepts` list is the assertion: a name join has nothing to
+    // join against, so every entry below was resolved by key alone.
+    const resolved = resolveRelatedConceptKeys(corpusEdges, []);
+    expect(resolved.unresolvedEndpointCount).toBe(0);
+    expect(resolved.relatedConceptKeys.size).toBeGreaterThan(0);
   });
 });
