@@ -25,13 +25,16 @@
  * calendar arithmetic on the assessment's own `due` field (`../dates.ts`'s
  * `daysBetween`), never a re-derivation of the score.
  *
- * **It does not widen the format map (F4.8).** `assessmentFormatOf`
- * (`../gap/readiness.ts`) maps `quiz -> mcq` and nothing else, deliberately,
- * and that module's doc says outright that adding a row is a decision-bead
- * matter and not an implementer's default. This module consumes
- * `GapRow.assessmentFormat` verbatim. An `'unknown'` format expresses no
- * preference and reorders nothing — the honest answer far more often than the
- * other one.
+ * **It does not decide the format-class table (F4.8).** `assessmentFormatOf`
+ * (`../gap/readiness.ts`, delegating to `../assessment/format-class.ts`) maps
+ * her free-text `type` to one of three DECLARED classes — `'recall-style'`,
+ * `'written'`, `'practical'` — per `[D-246]` / `[VOC-7]`; an unrecognised word
+ * falls to `'written'` rather than being guessed at. This module consumes
+ * `GapRow.assessmentFormat` verbatim and only ever prefers `'recall-style'`
+ * toward an `'mcq'` instrument (`typesMatching` below) — widening that
+ * instrument mapping further is still not this module's call. An `'unknown'`
+ * format (no assessment to derive one from at all) expresses no preference
+ * and reorders nothing.
  *
  * ## The fill, stated plainly so the result is auditable
  *
@@ -818,9 +821,18 @@ function nextAssessmentOf(
   };
 }
 
-/** Instrument types that satisfy an `AssessmentFormat`. One entry, matching `assessmentFormatOf`'s one entry — this module widens nothing. */
+/**
+ * Instrument types that satisfy an `AssessmentFormat`.
+ *
+ * Only `'recall-style'` maps to anything, and it maps to `'mcq'` alone — the
+ * same single entry this had before `[D-246]` widened which `type` *words*
+ * reach `'recall-style'`. `'written'` and `'practical'` express no instrument
+ * preference here, same as `'unknown'` always has: nothing in the contract
+ * says a `qa`/`cloze` instrument should be preferred for either, so this
+ * module still widens nothing on its own.
+ */
 function typesMatching(format: AssessmentFormat): readonly SchedulableInstrumentType[] {
-  return format === 'mcq' ? ['mcq'] : [];
+  return format === 'recall-style' ? ['mcq'] : [];
 }
 
 /**

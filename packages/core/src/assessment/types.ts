@@ -21,8 +21,13 @@ export const REQUIRED_ASSESSMENT_FIELDS: readonly AssessmentField[] = [
 /**
  * One assessment note read from the folder(s) a `.base` file's filters name.
  *
- * **`type` is preserved verbatim** (F4.8 keys on its exact value later) —
- * this reader never normalises it. `course`, `due`, and `status` are also
+ * **`type` is preserved verbatim, her word, unclamped** (`[D-246]` / `[VOC-7]`:
+ * an assessment's `type` is a free string, never a fixed enum) — this reader
+ * never normalises it. F4.8 does not key on the exact string either: it maps
+ * `type` to one of three DECLARED format classes
+ * (`./format-class.js`'s `formatClassOf`), and that class — never `type`
+ * itself — is what downstream code and the student ever see reflected back.
+ * `course`, `due`, and `status` are also
  * verbatim (the meaning path's `readScalar`, which trims and unquotes but
  * does not reinterpret). Only `weight` is coerced to a number, because
  * summing weights (the Base's own `summaries: note.weight: Sum`) requires

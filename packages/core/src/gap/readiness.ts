@@ -42,47 +42,44 @@
  * **INV-1.** Pure; no `obsidian`, no I/O, no clock.
  */
 
+import { type AssessmentFormatClass, formatClassOf } from '../assessment/format-class.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+
+export { isDeclaredAssessmentType } from '../assessment/format-class.js';
 
 /**
  * The practice format an assessment will actually ask for (F4.8).
  *
- * `'unknown'` is not a failure state and is the correct answer far more often
- * than the other two: her assignments table carries a free-text `type` column
- * that the reader preserves verbatim (`AssessmentRecord.type`), and nothing in
- * the contract maps most of its values to a question format.
+ * Three declared classes (`../assessment/format-class.js`'s
+ * `AssessmentFormatClass`) plus `'unknown'` here for a case that module never
+ * produces: **no assessment to derive a format from at all** (no upcoming
+ * assessment, or none named). `'unknown'` is never what an unrecognised
+ * `type` word resolves to — that falls to `'written'`, per `[D-246]` /
+ * `[VOC-7]` — so `'unknown'` staying rare here is a *good* sign, not a
+ * regression from the old two-value map.
  */
-export type AssessmentFormat = 'mcq' | 'unknown';
-
-/**
- * Which formats an assessment `type` resolves to.
- *
- * **Exactly one entry, and widening it is not a lane's call.** F4.8 names four
- * `type` values she uses (Quiz, Assignment, Lab, Test) and states one mapping
- * outright — *"MCQ drilling for quizzes"*. It states nothing about the other
- * three, and a `Test` is at least as likely to be written as multiple-choice.
- * So `quiz` maps and the rest do not. Adding a row here changes what she sees
- * on the basis of a guess about her own courses, which is a decision-bead
- * matter (Class B at best, and only with her assessment data in hand), not a
- * default an implementer picks.
- *
- * Matched case-insensitively on the trimmed value, because `type` is her
- * free text and `Quiz` / `quiz` are not two formats.
- */
-const FORMAT_BY_ASSESSMENT_TYPE: ReadonlyMap<string, AssessmentFormat> = new Map([['quiz', 'mcq']]);
+export type AssessmentFormat = AssessmentFormatClass | 'unknown';
 
 /**
  * The format an assessment's verbatim `type` resolves to.
  *
- * An absent `type` — which `readAssessments` reports honestly rather than
- * defaulting — and any value the map does not cover both resolve to
- * `'unknown'`, which weights nothing. Nothing here guesses, for the same
- * reason nothing else in this pipeline guesses: a wrong format silently
- * reorders her study list.
+ * Delegates to `../assessment/format-class.js`'s `formatClassOf` — the
+ * declared word→class table lives there, alongside the reader, because it is
+ * about assessment-type semantics rather than anything specific to the gap
+ * view. `type` itself is never rewritten (`readAssessments` preserves it
+ * verbatim); this only ever produces the internal class F4.8 uses to pick a
+ * practice format, and that class is never shown to her.
+ *
+ * **Reachability note.** An unrecognised `type` word should, per `[D-246]`,
+ * trigger the same ask-once-at-the-point-it-matters path F1.7 already
+ * describes for assessment scope — but no caller for that ask exists yet in
+ * either repo (F1.7's own "ask once" is a contract pattern, not a built
+ * interaction). `../assessment/format-class.js`'s `isDeclaredAssessmentType`
+ * is the signal such a caller would key on; wiring the caller itself is
+ * left open on the decision bead rather than built speculatively here.
  */
 export function assessmentFormatOf(type: string | undefined): AssessmentFormat {
-  if (type === undefined) return 'unknown';
-  return FORMAT_BY_ASSESSMENT_TYPE.get(type.trim().toLowerCase()) ?? 'unknown';
+  return formatClassOf(type);
 }
 
 /**
@@ -151,7 +148,7 @@ export function readinessFactorsFor(
 
   const recognitionEvidence = mastery?.evidence.tiersPracticed.recognition ?? false;
   const recognitionOnly = mastery?.evidence.recognitionOnly ?? false;
-  const applied = assessmentFormat === 'mcq' && recognitionEvidence;
+  const applied = assessmentFormat === 'recall-style' && recognitionEvidence;
 
   return {
     assessmentFormat,

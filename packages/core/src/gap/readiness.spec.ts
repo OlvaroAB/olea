@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isDeclaredAssessmentType } from '../assessment/format-class.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptMasteryResult, EvidenceTier } from '../mastery/rollup.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
@@ -127,55 +128,91 @@ const COVERAGE: readonly SourceCoverage[] = [
 ];
 
 describe('assessmentFormatOf', () => {
-  it('resolves a quiz to the MCQ format, case- and whitespace-insensitively', () => {
-    expect(assessmentFormatOf('Quiz')).toBe('mcq');
-    expect(assessmentFormatOf('  quiz ')).toBe('mcq');
-  });
-
-  // The scenario "an assessment type the format map does not recognise weights
-  // nothing". Each of F4.8's other three named types is asserted, so widening
-  // the map silently is a red test rather than a quiet reordering of her list.
-  for (const type of ['Test', 'Assignment', 'Lab', 'Presentation', '']) {
-    it(`resolves '${type}' to unknown rather than guessing MCQ`, () => {
-      expect(assessmentFormatOf(type)).toBe('unknown');
+  // `[D-246]` / `[VOC-7]`: a declared, case-insensitive word→class table,
+  // never a fixed rename of her `type`. Every word named on the decision
+  // bead is asserted here so widening the table silently is a red test
+  // rather than a quiet reordering of her list.
+  for (const type of ['Quiz', 'Test', 'Exam', 'Midterm', 'Final', 'MCQ', '  quiz ']) {
+    it(`resolves '${type}' to the recall-style class`, () => {
+      expect(assessmentFormatOf(type)).toBe('recall-style');
     });
   }
 
-  it('resolves an absent type to unknown', () => {
-    expect(assessmentFormatOf(undefined)).toBe('unknown');
+  for (const type of [
+    'Assignment',
+    'Essay',
+    'Report',
+    'Project',
+    'Commentary',
+    'Reflection',
+    'Discussion',
+  ]) {
+    it(`resolves '${type}' to the written class`, () => {
+      expect(assessmentFormatOf(type)).toBe('written');
+    });
+  }
+
+  for (const type of ['Lab', 'Practical']) {
+    it(`resolves '${type}' to the practical class`, () => {
+      expect(assessmentFormatOf(type)).toBe('practical');
+    });
+  }
+
+  it('falls an unrecognised word to written rather than guessing recall-style', () => {
+    expect(assessmentFormatOf('Presentation')).toBe('written');
+    expect(assessmentFormatOf('Seminar')).toBe('written');
+    expect(assessmentFormatOf('')).toBe('written');
+  });
+
+  it('resolves an absent type to written', () => {
+    expect(assessmentFormatOf(undefined)).toBe('written');
+  });
+});
+
+describe('isDeclaredAssessmentType', () => {
+  it('is true for a word the table names, false otherwise — the ask-once signal', () => {
+    expect(isDeclaredAssessmentType('Quiz')).toBe(true);
+    expect(isDeclaredAssessmentType('  Lab ')).toBe(true);
+    expect(isDeclaredAssessmentType('Presentation')).toBe(false);
+    expect(isDeclaredAssessmentType(undefined)).toBe(false);
   });
 });
 
 describe('readinessFactorsFor', () => {
-  it('applies the weight only when the format is MCQ and recognition evidence exists', () => {
+  it('applies the weight only when the format is recall-style and recognition evidence exists', () => {
     const withMcq = mastery('Alpha', { recognition: true });
-    expect(readinessFactorsFor(withMcq, 'mcq').applied).toBe(true);
-    expect(readinessFactorsFor(withMcq, 'mcq').weight).toBe(DEFAULT_MCQ_RECOGNITION_WEIGHT);
+    expect(readinessFactorsFor(withMcq, 'recall-style').applied).toBe(true);
+    expect(readinessFactorsFor(withMcq, 'recall-style').weight).toBe(
+      DEFAULT_MCQ_RECOGNITION_WEIGHT,
+    );
+    expect(readinessFactorsFor(withMcq, 'written').applied).toBe(false);
+    expect(readinessFactorsFor(withMcq, 'written').weight).toBe(1);
+    expect(readinessFactorsFor(withMcq, 'practical').applied).toBe(false);
     expect(readinessFactorsFor(withMcq, 'unknown').applied).toBe(false);
     expect(readinessFactorsFor(withMcq, 'unknown').weight).toBe(1);
   });
 
   it('weights nothing when the concept has recall evidence but no recognition evidence', () => {
     const recallOnly = mastery('Beta', { recall: true });
-    expect(readinessFactorsFor(recallOnly, 'mcq').applied).toBe(false);
-    expect(readinessFactorsFor(recallOnly, 'mcq').weight).toBe(1);
+    expect(readinessFactorsFor(recallOnly, 'recall-style').applied).toBe(false);
+    expect(readinessFactorsFor(recallOnly, 'recall-style').weight).toBe(1);
   });
 
   it('weights nothing when there is no mastery entry at all', () => {
     // "No recorded practice" is the absence of evidence either way, not
     // evidence of readiness — and rank.ts already reads that silence.
-    expect(readinessFactorsFor(undefined, 'mcq').applied).toBe(false);
-    expect(readinessFactorsFor(undefined, 'mcq').weight).toBe(1);
+    expect(readinessFactorsFor(undefined, 'recall-style').applied).toBe(false);
+    expect(readinessFactorsFor(undefined, 'recall-style').weight).toBe(1);
   });
 
   it('never zeroes a row out, whatever it is configured to', () => {
     expect(() =>
-      readinessFactorsFor(mastery('Alpha', { recognition: true }), 'mcq', {
+      readinessFactorsFor(mastery('Alpha', { recognition: true }), 'recall-style', {
         mcqRecognitionWeight: 0,
       }),
     ).toThrow(/within \(0, 1]/);
     expect(() =>
-      readinessFactorsFor(mastery('Alpha', { recognition: true }), 'mcq', {
+      readinessFactorsFor(mastery('Alpha', { recognition: true }), 'recall-style', {
         mcqRecognitionWeight: 1.5,
       }),
     ).toThrow(/within \(0, 1]/);

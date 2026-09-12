@@ -643,7 +643,7 @@ describe("F2.17's per-concept cap, made explicit (`[HARD-2b]`)", () => {
     // instruments — both are served — but `orderedForFormat` still decides
     // which one she meets FIRST, and `[D-240]` item 2 still applies to that
     // ordering: an overdue recall card still outranks the matched MCQ.
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const overdueState: SchedulerState = {
       schemaVersion: 1,
@@ -839,7 +839,7 @@ describe('the exam countdown (F4.7)', () => {
 
     expect(session.nextAssessment?.assessmentPath).toBe('02 Assignments/quiz.md');
     expect(session.nextAssessment?.daysUntil).toBe(1);
-    expect(session.formatPreference).toBe('mcq');
+    expect(session.formatPreference).toBe('recall-style');
   });
 
   it('ignores an assessment in a course none of the rows belong to', () => {
@@ -866,7 +866,9 @@ describe('the exam countdown (F4.7)', () => {
     });
 
     expect(session.nextAssessment?.assessmentPath).toBe('02 Assignments/mine.md');
-    expect(session.formatPreference).toBe('unknown');
+    // 'Assignment' is a declared `written`-class word (`[D-246]` / `[VOC-7]`),
+    // not `'unknown'` — `'unknown'` is reserved for "no assessment at all".
+    expect(session.formatPreference).toBe('written');
   });
 
   it('names the soonest assessment still ahead, with whole days to it', () => {
@@ -994,7 +996,7 @@ describe('the exam countdown (F4.7)', () => {
 
 describe('assessment-format matching (F4.8)', () => {
   it('prefers the format of the nearest assessment, and records the match on every item', () => {
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     // Vault order puts the Q&A card first; the format preference must move the
     // MCQ ahead of it.
     const index = buildConceptInstrumentIndex([qa('a-qa', ['A']), mcq('a-mcq', ['A'])]);
@@ -1008,13 +1010,17 @@ describe('assessment-format matching (F4.8)', () => {
       assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Quiz' })],
     });
 
-    expect(session.formatPreference).toBe('mcq');
+    expect(session.formatPreference).toBe('recall-style');
     expect(session.items.map((i) => i.instrumentId)).toEqual(['a-mcq', 'a-qa']);
     expect(session.items.map((i) => i.formatMatch)).toEqual(['preferred-format', 'other-format']);
   });
 
-  it('an unrecognised assessment type expresses no preference and reorders nothing', () => {
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'unknown' }]);
+  it('an unrecognised assessment type falls to written — no instrument preference, reorders nothing', () => {
+    // `[D-246]` / `[VOC-7]`: a word the declared table does not name falls to
+    // `'written'`, never to `'unknown'` — `'unknown'` is reserved for "no
+    // assessment at all". `'written'` still prefers no instrument here (same
+    // as `'unknown'` always has), so the fill is untouched either way.
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'written' }]);
     const index = buildConceptInstrumentIndex([qa('a-qa', ['A']), mcq('a-mcq', ['A'])]);
 
     const session = buildStudySession({
@@ -1026,7 +1032,7 @@ describe('assessment-format matching (F4.8)', () => {
       assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Seminar' })],
     });
 
-    expect(session.formatPreference).toBe('unknown');
+    expect(session.formatPreference).toBe('written');
     // Vault order, untouched.
     expect(session.items.map((i) => i.instrumentId)).toEqual(['a-qa', 'a-mcq']);
     expect(session.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
@@ -1044,7 +1050,7 @@ describe('assessment-format matching (F4.8)', () => {
         conceptName: 'Next',
         gapScore: 8,
         targetAssessmentPath: '02 Assignments/quiz.md' as VaultPath,
-        assessmentFormat: 'mcq',
+        assessmentFormat: 'recall-style',
       },
     ]);
 
@@ -1061,7 +1067,7 @@ describe('assessment-format matching (F4.8)', () => {
     });
 
     expect(session.nextAssessment?.assessmentPath).toBe('02 Assignments/quiz.md');
-    expect(session.formatPreference).toBe('mcq');
+    expect(session.formatPreference).toBe('recall-style');
   });
 });
 
@@ -1572,7 +1578,7 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
     CONCEPTS.map((conceptName, index) => ({
       conceptName,
       gapScore: 100 - index,
-      assessmentFormat: 'mcq' as const,
+      assessmentFormat: 'recall-style' as const,
     })),
   );
   // MCQ first in vault order too, so nothing in the result can be an artefact
@@ -1670,7 +1676,7 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
     // distinguishable from both of the others: `today` would move the MCQ
     // ahead of it, and with no arrival day and no state the interval bound
     // has nothing to say either.
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([qa('a-qa', ['A']), mcq('a-mcq', ['A'])]);
     const input = {
       rows,
@@ -1695,7 +1701,7 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
     // The no-op posture both composers take for an absent `arrivalDays`: with
     // no day to measure the wait from, F2.17's un-amended preference rule
     // stays in charge rather than the composer guessing.
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const session = buildStudySession({
       rows,
@@ -1718,7 +1724,7 @@ describe('[SESS-7] — the serving rule on the study-session composer ([D-240] i
     const bound = firstIntervalDaysAfterGood() * DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER;
     const atBound = shiftCalendarDay(AS_OF, -bound);
     const insideBound = shiftCalendarDay(AS_OF, -(bound - 1));
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const at = (arrived: string) =>
       buildStudySession({
@@ -1750,7 +1756,7 @@ describe('[SESS-8.9] — dedupeReason on the study-session composer (`[D-240]` i
   const insideBound = shiftCalendarDay(AS_OF, -(bound - 1));
 
   it("tags the recall card 'recall-overdue' when it takes the slot back from a preference-matched competitor", () => {
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const session = buildStudySession({
       rows,
@@ -1770,7 +1776,7 @@ describe('[SESS-8.9] — dedupeReason on the study-session composer (`[D-240]` i
   });
 
   it('omits dedupeReason when the override has not yet fired — plain preference decided it', () => {
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const session = buildStudySession({
       rows,
@@ -1792,7 +1798,7 @@ describe('[SESS-8.9] — dedupeReason on the study-session composer (`[D-240]` i
     // against, the same "no real competitor, no reason" case
     // `../queue/compose.ts`'s `dedupeReasonFor` states for `beatenTypes.size
     // === 0`.
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([qa('a-qa', ['A'])]);
     const session = buildStudySession({
       rows,
@@ -1808,7 +1814,7 @@ describe('[SESS-8.9] — dedupeReason on the study-session composer (`[D-240]` i
   });
 
   it('omits dedupeReason under `preference-off` and under `today` even past the bound', () => {
-    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'mcq' }]);
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'recall-style' }]);
     const index = buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]);
     const input = {
       rows,

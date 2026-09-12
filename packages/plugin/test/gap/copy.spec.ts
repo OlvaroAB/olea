@@ -116,7 +116,7 @@ function everyProducibleString(): readonly string[] {
     row({ gapClass: 'material-gap', distinctSourceCount: 3, notePaths: [], instrumentCount: 0 }),
     row({
       readiness: {
-        assessmentFormat: 'mcq',
+        assessmentFormat: 'recall-style',
         recognitionEvidence: true,
         recognitionOnly: true,
         applied: true,
@@ -585,7 +585,7 @@ describe('the readiness note (R7 framing)', () => {
     const applied = readinessNote(
       row({
         readiness: {
-          assessmentFormat: 'mcq',
+          assessmentFormat: 'recall-style',
           recognitionEvidence: true,
           recognitionOnly: true,
           applied: true,

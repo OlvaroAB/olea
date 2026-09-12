@@ -162,10 +162,11 @@ export interface GenerationPipelineDeps {
    * once per course this sweep visits (never per concept — purpose is a
    * property of the course's nearest assessment, not of any one concept). A
    * non-`undefined` result marks every `quiz.generate.v1` build for that
-   * course as format-matched: `quiz.generate.v1` always builds MCQ, the one
-   * format F4.8 currently maps a `type` to (`readiness.ts`'s
-   * `FORMAT_BY_ASSESSMENT_TYPE`), so a course whose nearest assessment
-   * resolves to `'mcq'` has every quiz drafted for it built in that
+   * course as format-matched: `quiz.generate.v1` always builds MCQ, and
+   * `'recall-style'` is the one of the three declared classes F4.8 maps a
+   * `type` to (`[D-246]` / `[VOC-7]`, `assessment/format-class.ts`'s
+   * `formatClassOf`) that prefers it, so a course whose nearest assessment
+   * resolves to `'recall-style'` has every quiz drafted for it built in that
    * assessment's register (F3.8's purpose clause, `[D-188]`). Absent, or
    * returning `undefined` for a given course, leaves `purpose` unset on that
    * course's requests — the service then defaults to `'learning'`, her own

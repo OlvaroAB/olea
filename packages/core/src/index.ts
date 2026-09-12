@@ -13,6 +13,11 @@ export {
   extractExtFilters,
   extractInFolderFilters,
 } from './assessment/base-file.js';
+// `[D-246]` / `[VOC-7]`: her `type` stays a free string; this is the
+// declared word→format-class table F4.8 reads instead of keying on `type`
+// itself. See `./assessment/format-class.js`'s module doc.
+export type { AssessmentFormatClass } from './assessment/format-class.js';
+export { formatClassOf, isDeclaredAssessmentType } from './assessment/format-class.js';
 export { readAssessments } from './assessment/read.js';
 // F2.19's assessment-scope resolver (`ol-v7r5.11`): F1.7's free-text scope
 // and F4.7's due day, resolved to the `conceptKey`-keyed context

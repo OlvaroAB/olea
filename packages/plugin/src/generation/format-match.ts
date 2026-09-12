@@ -6,13 +6,15 @@
  *
  * **What "format-matched" means here, restated from the contract.** F4.8:
  * her assignments table carries a free-text `type` column, and
- * `assessmentFormatOf` (`packages/core/src/gap/readiness.ts`) maps exactly
- * one value of it — `'quiz'` — to `'mcq'`; everything else, including an
- * absent or unrecognised `type`, is `'unknown'` and never format-matched.
- * `[D-188]`'s purpose clause then says a course whose **nearest, not-yet-passed**
- * assessment resolves to `'mcq'` gets every quiz drafted for it built in that
- * assessment's register — instructor-curated passages supply terminology,
- * past-paper text supplies sentence shape, and where past papers are thin
+ * `assessmentFormatOf` (`packages/core/src/gap/readiness.ts`, delegating to
+ * `packages/core/src/assessment/format-class.ts`) maps it to one of three
+ * DECLARED classes — `'recall-style'`, `'written'`, `'practical'` — per
+ * `[D-246]` / `[VOC-7]`; an unrecognised or absent `type` falls to
+ * `'written'`. `[D-188]`'s purpose clause then says a course whose
+ * **nearest, not-yet-passed** assessment resolves to `'recall-style'` gets
+ * every quiz drafted for it built in that assessment's register —
+ * instructor-curated passages supply terminology, past-paper text supplies
+ * sentence shape, and where past papers are thin
  * the terminology stands alone (the plain-declarative fallback below that is
  * `quiz.generate.v1`'s own, not this module's).
  *
@@ -60,8 +62,8 @@
  * only: whether a course is format-matched (`assessmentFormatOf` on its
  * nearest future assessment) and, if so, what register hint to offer. It
  * does not choose which instrument format to build (`quiz.generate.v1`
- * always builds MCQ; `readiness.ts`'s own doc records that mapping as the
- * one entry F4.8 currently states outright) and it never sends a request —
+ * always builds MCQ; `readiness.ts`'s own doc records `'recall-style'` as
+ * the one class that prefers an `mcq` instrument) and it never sends a request —
  * `draft-quiz-cards.ts`'s "PURPOSE / REGISTER" section is what forwards
  * `purpose`/`registerHint` onto the wire, verbatim, once `pipeline.ts` has
  * consulted this module's result.
@@ -272,7 +274,7 @@ export async function buildFormatMatch(
   const matchedCourses: string[] = [];
   for (const course of courses) {
     const nearest = nearestUpcomingAssessment(course, deps.assessments, today);
-    if (nearest !== undefined && assessmentFormatOf(nearest.type) === 'mcq') {
+    if (nearest !== undefined && assessmentFormatOf(nearest.type) === 'recall-style') {
       matchedCourses.push(course);
     }
   }

@@ -11,12 +11,12 @@ const BASE_PATH = '02 Assignments/Assignments.base';
 describe('readAssessments — against the real Assignments.base fixture', () => {
   const source = new FolderSource(FIXTURE_ROOT);
 
-  it('reads all 14 assessment records, none dropped', async () => {
+  it('reads all 15 assessment records, none dropped', async () => {
     const report = await readAssessments(source, BASE_PATH);
     expect(report.configErrors).toEqual([]);
     expect(report.sourceFolders).toEqual(['02 Assignments']);
-    expect(report.notesScanned).toHaveLength(14);
-    expect(report.records).toHaveLength(14);
+    expect(report.notesScanned).toHaveLength(15);
+    expect(report.records).toHaveLength(15);
   });
 
   it('resolves all five fields to their real (canonical) frontmatter keys', () => {
@@ -39,7 +39,12 @@ describe('readAssessments — against the real Assignments.base fixture', () => 
   it('preserves `type` verbatim — exact casing, no normalisation', async () => {
     const report = await readAssessments(source, BASE_PATH);
     const types = new Set(report.records.map((r) => r.type));
-    expect(types).toEqual(new Set(['Quiz', 'Assignment', 'Lab', 'Test']));
+    // `Presentation` (`Presentation 1 - GEOL204.md`) is deliberately a word
+    // `[D-246]` / `[VOC-7]`'s declared table does not name — it exercises the
+    // "unrecognised word falls to `written`" path (`formatClassOf`,
+    // `../assessment/format-class.js`) without inventing a fixture-only
+    // format class of its own.
+    expect(types).toEqual(new Set(['Quiz', 'Assignment', 'Lab', 'Test', 'Presentation']));
   });
 
   // `[D-143]`: weights are canonically FRACTIONS of the course grade, and

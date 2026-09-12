@@ -297,17 +297,23 @@ export function countdownLine(model: Pick<StudySessionModel, 'nextAssessment'>):
  * Why multiple-choice came first, or `null` when no format preference applied.
  *
  * `null` far more often than not, and that is correct rather than a gap:
- * `assessmentFormatOf` maps one assessment type (`quiz -> mcq`) and widening it
- * is a decision-bead matter, so most sessions express no preference and say
- * nothing about format at all. A sentence offered for a preference that did not
- * fire would be a reason for something that did not happen.
+ * `assessmentFormatOf` maps her `type` word to one of three declared classes
+ * (`[D-246]` / `[VOC-7]`) and only `'recall-style'` prefers an instrument
+ * (`mcq`) here, so a `'written'` or `'practical'` assessment — and an
+ * unrecognised word, which falls to `'written'` — say nothing about format at
+ * all. A sentence offered for a preference that did not fire would be a
+ * reason for something that did not happen.
+ *
+ * The sentence itself no longer names "a quiz": the declared table now maps
+ * several words (quiz, test, exam, midterm, final, mcq) to `'recall-style'`,
+ * so a fixed noun would be wrong for most of them.
  */
 export function formatPreferenceLine(
   model: Pick<StudySessionModel, 'formatPreference' | 'items'>,
 ): string | null {
-  if (model.formatPreference !== 'mcq') return null;
+  if (model.formatPreference !== 'recall-style') return null;
   if (!model.items.some((item) => item.formatMatch === 'preferred-format')) return null;
-  return 'Multiple-choice questions come first here, because your next assessment is a quiz.';
+  return 'Multiple-choice questions come first here, to match the format of your next assessment.';
 }
 
 // ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ function countdown(
     due: '2026-09-18',
     daysUntil: 4,
     type: 'Quiz',
-    format: 'mcq',
+    format: 'recall-style',
     ...overrides,
   };
 }
@@ -164,7 +164,7 @@ function everyProducibleString(): readonly string[] {
 
   const models: StudySessionModel[] = [
     model(),
-    model({ formatPreference: 'mcq', items: [item({ formatMatch: 'preferred-format' })] }),
+    model({ formatPreference: 'recall-style', items: [item({ formatMatch: 'preferred-format' })] }),
     model({ durationBasis: 'measured', items: [item({ durationSource: 'measured' })] }),
     model({ durationBasis: 'mixed' }),
     model({ items: [], consideredRowCount: 0, plannedSeconds: 0, nextAssessment: null }),
@@ -351,7 +351,7 @@ describe('the countdown states a date and a number of days, and nothing more', (
         due: '2026-09-18',
         daysUntil: 4,
         type: 'Quiz',
-        format: 'mcq',
+        format: 'recall-style',
       }),
     ).toBe('Quiz 2 - Bedform Stratification');
   });
@@ -422,17 +422,21 @@ describe('the format line explains a preference only when one actually fired', (
   it('explains multiple-choice-first when the preference applied to a chosen item', () => {
     expect(
       formatPreferenceLine(
-        model({ formatPreference: 'mcq', items: [item({ formatMatch: 'preferred-format' })] }),
+        model({ formatPreference: 'recall-style', items: [item({ formatMatch: 'preferred-format' })] }),
       ),
-    ).toBe('Multiple-choice questions come first here, because your next assessment is a quiz.');
+    ).toBe('Multiple-choice questions come first here, to match the format of your next assessment.');
   });
 
   it('is silent with no preference — a reason is never offered for something that did not happen', () => {
     expect(formatPreferenceLine(model({ formatPreference: 'unknown' }))).toBeNull();
+    // `[D-246]` / `[VOC-7]`: `'written'` and `'practical'` also express no
+    // instrument preference here, same as `'unknown'` always has.
+    expect(formatPreferenceLine(model({ formatPreference: 'written' }))).toBeNull();
+    expect(formatPreferenceLine(model({ formatPreference: 'practical' }))).toBeNull();
     // Preference set, but nothing in the session actually matched it.
     expect(
       formatPreferenceLine(
-        model({ formatPreference: 'mcq', items: [item({ formatMatch: 'other-format' })] }),
+        model({ formatPreference: 'recall-style', items: [item({ formatMatch: 'other-format' })] }),
       ),
     ).toBeNull();
   });
