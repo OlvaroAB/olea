@@ -362,8 +362,10 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
       '---\ntype: concept\nolea-uid: uid-quartz\n---\n\n# Quartz cleavage\n\nDefinition, hers.\n',
     );
     await write(
+      // `[D-248]`: the link is what puts the concept note in this course's
+      // reading set, and binding is what this case is about.
       '01 Courses/COURSEA/Note.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Note\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Note\n',
     );
 
     const first = await extractConcepts(source, { stampConceptKeys: true });

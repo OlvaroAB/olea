@@ -308,8 +308,29 @@ type _assertNoForbiddenConceptCharacteristics = AssertNever<
 export interface ExtractConceptsOptions {
   /** Restrict `topic` scanning to this subtree. Defaults to the whole vault. */
   readonly under?: VaultPath;
-  /** Folder searched for tier-1 concept-note binding and, when `includeTier3` is on, tier-3 vocabulary. Defaults to `05 Zettelkasten`. */
+  /**
+   * Folder supplying **tier-3 vocabulary only**, and only when `includeTier3`
+   * is on (`../tier3-evidence/build.ts`). Defaults to `05 Zettelkasten`.
+   *
+   * **It no longer decides membership or tier-1 binding** (`[D-248]`,
+   * knowledge model §3): a concept binds to a student-authored note because a
+   * course-folder document links to it, wherever that note sits, not because
+   * the note sits in a folder with this name. Passing it changes nothing for
+   * a caller that leaves `includeTier3` off — which is every production
+   * caller, per `[EXT-2]`.
+   */
   readonly zettelkastenFolder?: VaultPath;
+  /**
+   * Per-course cap on how many one-hop closure documents join a course's
+   * reading set (`[D-248]` item 5, F1.3). Defaults to
+   * `./extract.js`'s `DEFAULT_CLOSURE_DOCUMENT_CAP` — a **provisional**
+   * number pending `ol-3ux7.5.64`'s measurement, not a fitted one.
+   *
+   * Degradation is silent by design: past the cap a course simply stops
+   * gaining closure documents and works from its folder-only material. There
+   * is no error, no warning, and nothing is shown to her.
+   */
+  readonly closureDocumentCap?: number;
   /** Folder whose immediate subdirectories are course codes (F1.3). Defaults to `01 Courses` (`./course.js`'s `DEFAULT_COURSES_FOLDER`). */
   readonly coursesFolder?: VaultPath;
   /**

@@ -240,9 +240,12 @@ describe('readConcepts — her conventions corroborate and outrank (scope princi
       '---\ntopic: Ormathel settling\ncourse: ABCD101\n---\n\n# Opening\n\nThe settling of the layer.\n',
   });
 
+  // `[D-248]`: her lecture *links* the concept note, which is what puts the
+  // note in this course's reading set and lets it bind. Before that ruling the
+  // note bound because of the folder it sat in; the folder is now incidental.
   const NOTED_VAULT = new MemoryVault({
     '01 Courses/ABCD101/Lecture One.md':
-      '---\ntopic: Ormathel settling\ncourse: ABCD101\n---\n\n# Opening\n\nThe settling of the layer.\n',
+      '---\ntopic: [[Ormathel settling]]\ncourse: ABCD101\n---\n\n# Opening\n\nThe settling of the layer.\n',
     '05 Zettelkasten/Ormathel settling.md': '# Ormathel settling\n\nHer own definition.\n',
   });
 
@@ -942,8 +945,53 @@ describe('readConcepts — budget allocation does not let one document starve th
     expect(result.truncatedByBudget).toBe(true);
     expect(result.passagesRead).toBe(10);
     const sourcesRepresented = result.coverage.filter((c) => c.passagesRead > 0);
-    expect(sourcesRepresented).toHaveLength(6);
+    // Nine, not six: `[D-248]` puts the three notes WEEK 3's own notes link
+    // out to into the reading set as well, each as its own document.
+    expect(sourcesRepresented).toHaveLength(9);
     const decksRepresented = sourcesRepresented.filter((c) => c.sourcePath.endsWith('.pdf'));
     expect(decksRepresented).toHaveLength(2);
+  });
+});
+
+// `[D-248]` (`ol-3ux7.5.61`), implemented by `ol-3ux7.5.62`. The reading set a
+// scoped gather offers is the course folder PLUS one outward hop — and each
+// reachable note is offered as its own document with its own anchors, never
+// spliced into the note that linked it (`[D-210]`).
+describe('gatherPassages — one-hop outward link closure (`[D-248]`)', () => {
+  const vaultRoot = new URL('../../fixtures/vault', import.meta.url).pathname;
+  const vault = new FolderSource(vaultRoot);
+
+  it('a scope-restricted gather still offers the notes those notes link out to', async () => {
+    const passages = await gatherPassages(vault, { under: '01 Courses/GEOL204/WEEK 1' });
+    const sources = new Set(passages.map((p) => p.anchor.sourcePath));
+
+    // Linked from WEEK 1's own lectures, and outside the scope it was given.
+    expect(sources).toContain('05 Zettelkasten/Imbrication.md');
+    expect(sources).toContain('05 Zettelkasten/Paraconformity.md');
+    // Nothing the scope's notes link to reaches a second hop: Imbrication's
+    // own links are not followed.
+    expect(sources).not.toContain('05 Zettelkasten/Tierce picarde.md');
+    // Not spliced: the linked note's text arrives under the linked note's own
+    // path, never inside a passage anchored at the note that linked it.
+    const imbrication = passages.filter(
+      (p) => p.anchor.sourcePath === '05 Zettelkasten/Imbrication.md',
+    );
+    expect(imbrication.length).toBeGreaterThan(0);
+    // Its course is whatever the note says about ITSELF (this fixture note
+    // carries `course: [GEOL204]` in its own frontmatter) or nothing at all —
+    // never a course inherited from whatever linked it. That is what keeps
+    // item 2 true here: reachability adds material, never course membership.
+    expect(imbrication.every((p) => p.course === 'GEOL204')).toBe(true);
+  });
+
+  it('the cap bounds the closure, silently', async () => {
+    const withCap = await gatherPassages(vault, {
+      under: '01 Courses/GEOL204/WEEK 1',
+      closureDocumentCap: 1,
+    });
+    const closureSources = new Set(
+      withCap.map((p) => p.anchor.sourcePath).filter((path) => path.startsWith('05 Zettelkasten/')),
+    );
+    expect(closureSources.size).toBe(1);
   });
 });

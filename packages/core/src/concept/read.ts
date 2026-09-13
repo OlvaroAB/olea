@@ -46,6 +46,17 @@
  * itself is private IP (C4.3) and deliberately does not exist in this
  * repository.
  *
+ * **What is read (`[D-248]`, F1.3).** A course's reading set is its
+ * course-folder documents **plus every existing in-vault note directly
+ * targeted by a wikilink from one of them** — one hop, outward only, capped
+ * per course and degrading silently past the cap. `gatherPassages` below
+ * applies that whenever the gather is scoped; an unscoped gather already sees
+ * the whole vault. Each reachable note is gathered as **its own document with
+ * its own anchors** — never spliced into the note that linked it (`[D-210]`)
+ * — and, sitting outside a course folder, it carries no course, so it
+ * enriches concepts the course's own material already attests without putting
+ * a concept into that course's scope by reachability alone.
+ *
  * **The accepted cost, ruled rather than discovered** (`[D-068]`): finding
  * concepts is budget-bounded, desktop-only and unavailable offline, the same
  * posture as generation. Today the concept list exists regardless of
@@ -65,7 +76,7 @@ import { hashContent } from '../ingestion/hash.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
-import { extractConcepts } from './extract.js';
+import { extractConcepts, resolveLinkClosure } from './extract.js';
 import { reconcileRelations, totalDropped } from './reconcile.js';
 import type { ConceptRelation, ProposedRelation } from './relation.js';
 import type { ConceptSize } from './size.js';
@@ -362,10 +373,20 @@ export interface ReadConceptsOptions {
   readonly budget: ConceptReadBudget;
   /** Restrict the read to this subtree. Defaults to the whole vault. */
   readonly under?: VaultPath;
-  /** Folder holding her concept notes, for corroboration. Defaults to `05 Zettelkasten`. */
+  /**
+   * Tier-3 vocabulary folder, passed straight through to `./extract.js`.
+   * Defaults to `05 Zettelkasten`. **Not** a membership or tier-1 binding
+   * mechanism any more (`[D-248]`) — see `ExtractConceptsOptions`.
+   */
   readonly zettelkastenFolder?: VaultPath;
   /** Folder whose immediate subdirectories are course codes (F1.3). Defaults to `01 Courses`. */
   readonly coursesFolder?: VaultPath;
+  /**
+   * Per-course one-hop closure document cap (`[D-248]`), passed through to
+   * both the passage gather below and `./extract.js`. Defaults to
+   * `DEFAULT_CLOSURE_DOCUMENT_CAP`; degrades silently.
+   */
+  readonly closureDocumentCap?: number;
 }
 
 function byCodeUnit(a: string, b: string): number {
@@ -627,13 +648,42 @@ function sectionsByBlockIndex(doc: ParsedDocument): ReadonlyMap<number, string> 
  */
 export async function gatherPassages(
   vault: VaultSource,
-  options: { readonly under?: VaultPath; readonly coursesFolder?: VaultPath } = {},
+  options: {
+    readonly under?: VaultPath;
+    readonly coursesFolder?: VaultPath;
+    readonly closureDocumentCap?: number;
+  } = {},
 ): Promise<readonly ConceptPassage[]> {
   const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
-  const paths = await vault.list({
+  const listed = await vault.list({
     ...(options.under !== undefined ? { under: options.under } : {}),
     extensions: ['md'],
   });
+
+  // `[D-248]`: the reading set is the course folders **plus** every existing
+  // in-vault note one outward hop away, so a scoped gather offers the linked
+  // notes too rather than only what sits under `under`. One hop, outward,
+  // capped per course, no splicing — each reachable note is gathered as its
+  // own document and keeps its own anchors, which is exactly what `[D-210]`
+  // requires and what makes the attested-only rule enforceable downstream: a
+  // note outside a course folder carries no course (`notePathCourses`), so
+  // its passages contribute definitions and evidence without putting a
+  // concept into any course's scope on their own.
+  //
+  // An unscoped gather already lists every note in the vault, so there is
+  // nothing for closure to add and the walk is skipped entirely.
+  let paths = listed;
+  if (options.under !== undefined) {
+    const closure = await resolveLinkClosure(vault, listed, {
+      coursesFolder,
+      ...(options.closureDocumentCap !== undefined
+        ? { closureDocumentCap: options.closureDocumentCap }
+        : {}),
+    });
+    if (closure.paths.length > 0) {
+      paths = [...new Set([...listed, ...closure.paths])].sort(byCodeUnit);
+    }
+  }
 
   const passages: ConceptPassage[] = [];
   for (const path of paths) {
@@ -918,6 +968,9 @@ export async function readConcepts(
   const all = await gatherPassages(vault, {
     ...(options.under !== undefined ? { under: options.under } : {}),
     ...(options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {}),
+    ...(options.closureDocumentCap !== undefined
+      ? { closureDocumentCap: options.closureDocumentCap }
+      : {}),
   });
 
   const budgeted = allocateByBudget(all, budget.maxPassages);
@@ -985,6 +1038,9 @@ export async function readConcepts(
     ...(options.under !== undefined ? { under: options.under } : {}),
     zettelkastenFolder: options.zettelkastenFolder ?? DEFAULT_ZETTELKASTEN_FOLDER,
     coursesFolder: options.coursesFolder ?? DEFAULT_COURSES_FOLDER,
+    ...(options.closureDocumentCap !== undefined
+      ? { closureDocumentCap: options.closureDocumentCap }
+      : {}),
   });
   const conventions = conventionIndex(records);
 

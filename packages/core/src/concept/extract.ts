@@ -67,6 +67,49 @@
  * Zettelkasten title on the other end, the same precision `topic:` already
  * has, not the vocabulary-matching tier `[D-068]`/`[EXT-2]` ruled off.
  *
+ * **Membership follows the link, not the folder (`[D-248]`, F1.3, knowledge
+ * model §3 tier 1).** A course's reading set is its course-folder documents
+ * **plus every existing in-vault markdown note directly targeted by a
+ * wikilink from one of them** — one hop, outward only, never inbound and
+ * never a second hop. `resolveLinkClosure` below computes exactly that, and
+ * it is what tier-1 binding now resolves against: a student-authored note
+ * reachable by one hop whose title matches an already-attested concept
+ * supplies that concept's name and definition **wherever it sits in the
+ * vault**. The old rule — bind only inside a folder identified by the name
+ * `05 Zettelkasten` — was the gap this generalises: a student who keeps no
+ * such folder, or calls it something else, got none of tier 1 while the
+ * knowledge model promised the ladder works for her too.
+ *
+ * **Three properties of that rule are load-bearing, and each is easy to
+ * break by accident:**
+ *
+ * - **Attestation stays pre-closure.** A concept enters a course's scope
+ *   only if the course's own material names it — her `topic` values and the
+ *   wikilinks written in her course-folder notes' own text. Linked material
+ *   *enriches* an already-attested concept (its name, its definition) and
+ *   never creates one. Concretely: nothing in a reachable note's body is
+ *   read here for identity, so a concept present only in a reachable note
+ *   enters no course by reachability alone.
+ * - **No splicing** (`[D-210]`). A reachable note is its own document with
+ *   its own provenance; its text is never folded into the note that linked
+ *   it. This module reads a bound note only for `noteDefinition`, which is
+ *   recorded against that note's own path.
+ * - **No external fetch.** Only in-vault markdown resolves; a URL is a
+ *   reference, not source material, and a missing or empty link target
+ *   contributes nothing.
+ *
+ * Closure is bounded per course by `DEFAULT_CLOSURE_DOCUMENT_CAP`
+ * (`ExtractConceptsOptions.closureDocumentCap`), which **degrades silently**:
+ * once a course has reached the cap, further closure documents are simply not
+ * added and the course still works from its folder-only material.
+ *
+ * **What the Zettelkasten folder is still for.** `zettelkastenFolder` /
+ * `DEFAULT_ZETTELKASTEN_FOLDER` no longer decide membership or tier-1
+ * binding. They survive as the **tier-3 vocabulary** source only
+ * (`./evidence.js`, `../tier3-evidence/build.ts`, both off in production per
+ * `[EXT-2]`), which is that module's own mechanism and outside `[D-248]`'s
+ * scope.
+ *
  * **Definition capture at bind time (`[DF-13]`).** Knowledge model §3 says a
  * bound concept note is canonical because it "adopts her name, her
  * definition, and binds to that note" — the name and the binding shipped
@@ -144,6 +187,176 @@ function resolveTitle(index: ReadonlyMap<string, VaultPath[]>, name: string): Ti
 }
 
 /**
+ * Per-course closure document cap (`[D-248]` item 5, F1.3).
+ *
+ * **Provisional, and deliberately not a fitted number.** `[D-248]` left the
+ * value empirical under a `[D-194]` pre-commitment rather than ruling one;
+ * `ol-3ux7.5.64` (`[LINK-4]`) is the measurement that derives it against the
+ * real corpus. This default is generous on purpose — the failure it guards is
+ * an index page sitting inside a course folder that links most of a vault at
+ * one hop, and a cap tight enough to bite an ordinary course would be a
+ * fitted number shipping in public client source before anything measured it.
+ * It is **declared, not derived** (component register): defensible in plain
+ * English as "far above any plausible per-course link count, still bounded",
+ * which is exactly why it may live here.
+ *
+ * Degradation is **silent**: once a course has this many closure documents,
+ * further ones are not added, the course still works from its folder-only
+ * material, and nothing is reported to her.
+ */
+export const DEFAULT_CLOSURE_DOCUMENT_CAP = 500;
+
+/**
+ * The one-hop outward link closure of a set of source paths (`[D-248]`).
+ *
+ * **What is reached.** Every existing in-vault markdown note directly
+ * targeted by a wikilink written in a **course-folder** document among
+ * `sourcePaths`. One hop: a link found in a reached note is not followed.
+ * Outward only: a note that links *to* a course note does not join by that
+ * fact. No external URL is resolved, and a target that names no existing
+ * markdown note contributes nothing.
+ *
+ * **Frontmatter links count.** Her live convention writes `topic:
+ * [[Concept]]` in frontmatter, and `[D-248]` says "a wikilink from a
+ * course-folder document" without qualifying where in the document it sits.
+ * (This is only about *membership*; what a `topic` value *means* is still
+ * read by `extractConcepts`'s own frontmatter pass, and a body link still
+ * attests separately.)
+ *
+ * **Many-to-many is preserved.** A note reachable from two courses is in both
+ * closures; no popularity ceiling is applied.
+ *
+ * **Resolution** is by exact vault path first (`Target` → `Target.md`), then
+ * by exact note title (R1/R2 — no case folding, no normalisation). A title
+ * carried by several notes resolves to all of them for *membership*; tier-1
+ * *binding* still refuses to pick one (`resolveTitle`, `ol-lzwe`).
+ *
+ * `read` lets a caller share an already-warmed content cache rather than
+ * reading her course notes twice.
+ */
+export interface LinkClosure {
+  /** Every reachable note, sorted — the closure half of the reading set. */
+  readonly paths: readonly VaultPath[];
+  /** Title → every reachable path carrying it, sorted. The tier-1 binding index. */
+  readonly byTitle: ReadonlyMap<string, VaultPath[]>;
+  /** Course → the link targets whose resolution actually entered that course's closure. */
+  readonly titlesByCourse: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Course → how many closure documents it reached. Equal to the cap exactly when it degraded. */
+  readonly countsByCourse: ReadonlyMap<string, number>;
+}
+
+export async function resolveLinkClosure(
+  vault: VaultSource,
+  sourcePaths: readonly VaultPath[],
+  options: {
+    readonly coursesFolder?: VaultPath;
+    readonly closureDocumentCap?: number;
+    readonly read?: (path: VaultPath) => Promise<string>;
+  } = {},
+): Promise<LinkClosure> {
+  const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
+  const cap = options.closureDocumentCap ?? DEFAULT_CLOSURE_DOCUMENT_CAP;
+  const read = options.read ?? ((path: VaultPath) => vault.read(path));
+
+  // Vault-wide, deliberately not restricted by the caller's `under`: a link
+  // out of a course folder lands "wherever it sits in the vault", which is
+  // the whole point of binding by link rather than by folder.
+  const allPaths = await vault.list({ extensions: ['md'] });
+  const allPathSet = new Set<VaultPath>(allPaths);
+  const allByTitle = new Map<string, VaultPath[]>();
+  for (const path of allPaths) {
+    const title = noteTitle(path);
+    const paths = allByTitle.get(title);
+    if (paths === undefined) allByTitle.set(title, [path]);
+    else paths.push(path);
+  }
+  for (const paths of allByTitle.values()) paths.sort(byCodeUnit);
+
+  function resolveTarget(target: string): readonly VaultPath[] {
+    if (target.length === 0) return [];
+    const asPath = (target.toLowerCase().endsWith('.md') ? target : `${target}.md`) as VaultPath;
+    if (allPathSet.has(asPath)) return [asPath];
+    return allByTitle.get(target) ?? [];
+  }
+
+  const pathsByCourse = new Map<string, Set<VaultPath>>();
+  const titlesByCourse = new Map<string, Set<string>>();
+  const reached = new Set<VaultPath>();
+
+  // Deterministic order, which is what makes silent degradation reproducible
+  // rather than a function of traversal luck: source paths in the caller's
+  // (sorted) order, link targets in the order she wrote them.
+  for (const path of [...sourcePaths].sort(byCodeUnit)) {
+    if (courseFromPath(path, coursesFolder) === undefined) continue;
+    const content = await read(path);
+    const doc = parseDocument(content);
+    const first = doc.blocks[0];
+    const explicit =
+      first?.kind === 'frontmatter' ? readList(parseFrontmatter(first.inner), 'course').items : [];
+    const courses = notePathCourses(path, explicit, coursesFolder);
+    if (courses.length === 0) continue;
+
+    const targets: string[] = [];
+    const seen = new Set<string>();
+    for (const link of extractWikilinks(content)) {
+      // A link may carry a pipe alias or a heading anchor
+      // (`[[Suspension|the returning held notes]]`, `[[Target#Heading]]`);
+      // neither is part of what it points at.
+      const target = link.replace(/\|.*$/s, '').replace(/#.*$/s, '').trim();
+      if (target.length === 0 || seen.has(target)) continue;
+      seen.add(target);
+      targets.push(target);
+    }
+
+    for (const target of targets) {
+      const resolved = resolveTarget(target).filter((candidate) => candidate !== path);
+      if (resolved.length === 0) continue; // missing target — contributes nothing
+      for (const course of courses) {
+        let coursePaths = pathsByCourse.get(course);
+        if (coursePaths === undefined) {
+          coursePaths = new Set();
+          pathsByCourse.set(course, coursePaths);
+        }
+        let courseTitles = titlesByCourse.get(course);
+        if (courseTitles === undefined) {
+          courseTitles = new Set();
+          titlesByCourse.set(course, courseTitles);
+        }
+        for (const candidate of resolved) {
+          if (coursePaths.has(candidate)) {
+            courseTitles.add(target);
+            continue;
+          }
+          // The cap, degrading silently: stop adding, never throw, never warn.
+          if (coursePaths.size >= cap) continue;
+          coursePaths.add(candidate);
+          courseTitles.add(target);
+          reached.add(candidate);
+        }
+      }
+    }
+  }
+
+  const byTitle = new Map<string, VaultPath[]>();
+  for (const path of [...reached].sort(byCodeUnit)) {
+    const title = noteTitle(path);
+    const paths = byTitle.get(title);
+    if (paths === undefined) byTitle.set(title, [path]);
+    else paths.push(path);
+  }
+
+  const countsByCourse = new Map<string, number>();
+  for (const [course, paths] of pathsByCourse) countsByCourse.set(course, paths.size);
+
+  return {
+    paths: [...reached].sort(byCodeUnit),
+    byTitle,
+    titlesByCourse,
+    countsByCourse,
+  };
+}
+
+/**
  * Her definition, read verbatim from a bound note's own content (`[DF-13]`,
  * knowledge model §3). Extraction, not synthesis: no model call, no
  * paraphrase, no markup stripped — the exact prose she wrote, trimmed only
@@ -199,25 +412,44 @@ export async function extractConcepts(
   const zettelkastenFolder = options.zettelkastenFolder ?? DEFAULT_ZETTELKASTEN_FOLDER;
   const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
 
-  const [notePaths, zettelPaths] = await Promise.all([
-    vault.list({
-      ...(options.under !== undefined ? { under: options.under } : {}),
-      extensions: ['md'],
-    }),
-    vault.list({ under: zettelkastenFolder, extensions: ['md'] }),
-  ]);
+  const notePaths = await vault.list({
+    ...(options.under !== undefined ? { under: options.under } : {}),
+    extensions: ['md'],
+  });
 
-  // Exact-match (case-sensitive, per R1/R2) title -> every note path carrying
-  // that title, for tier-1 binding. A title with more than one path is an
-  // ambiguity to record, never a race to resolve — see `resolveTitle`.
-  const zettelByTitle = new Map<string, VaultPath[]>();
-  for (const path of zettelPaths) {
-    const title = noteTitle(path);
-    const paths = zettelByTitle.get(title);
-    if (paths === undefined) zettelByTitle.set(title, [path]);
-    else paths.push(path);
+  // `[DF-13]`: her definition, read once per bound note regardless of how
+  // many places bind to it (tier-1/2's loop below and the tier-3 mint each
+  // resolve independently, so without this a note whose title is reached
+  // both ways — not possible today given `resolveTitle`'s 1:1 matching, but
+  // cheap to guard against regardless — would be read twice). `vault.read`
+  // only, never a write: definition capture is extraction, and INV-2 holds
+  // by construction because nothing here touches the vault source. Declared
+  // here rather than after the walk so the closure pass below and the walk
+  // itself read each course-folder note exactly once between them.
+  const noteContentCache = new Map<VaultPath, Promise<string>>();
+  function contentFor(path: VaultPath): Promise<string> {
+    let cached = noteContentCache.get(path);
+    if (cached === undefined) {
+      cached = vault.read(path);
+      noteContentCache.set(path, cached);
+    }
+    return cached;
   }
-  for (const paths of zettelByTitle.values()) paths.sort(byCodeUnit);
+
+  // `[D-248]`: the course reading set's closure half — one hop outward from
+  // her course-folder notes. This, not a folder name, is what tier-1 binding
+  // resolves against below, and what gates the body-wikilink course pass.
+  const closure = await resolveLinkClosure(vault, notePaths, {
+    coursesFolder,
+    ...(options.closureDocumentCap !== undefined
+      ? { closureDocumentCap: options.closureDocumentCap }
+      : {}),
+    read: contentFor,
+  });
+  // Exact-match (case-sensitive, per R1/R2) title -> every reachable note
+  // path carrying that title, for tier-1 binding. A title with more than one
+  // path is an ambiguity to record, never a race to resolve — `resolveTitle`.
+  const reachableByTitle = closure.byTitle;
 
   const byName = new Map<string, Accumulator>();
 
@@ -231,7 +463,7 @@ export async function extractConcepts(
   }
 
   for (const path of notePaths) {
-    const content = await vault.read(path);
+    const content = await contentFor(path);
     const doc = parseDocument(content);
     const first = doc.blocks[0];
     // A note with no frontmatter at all (a scratch note, say) contributes no
@@ -302,33 +534,25 @@ export async function extractConcepts(
         ),
       );
       for (const target of targets) {
-        // Only a link that lands on one of her actual concept notes counts —
-        // the same precision `topic:` already has, deliberately not the
-        // vocabulary-matching tier-3 pass mines free text for (module doc).
-        if (!zettelByTitle.has(target)) continue;
+        // `[D-248]`: only a link that lands on a note actually in this
+        // course's one-hop closure counts — the same precision `topic:`
+        // already has, deliberately not the vocabulary-matching tier-3 pass
+        // mines free text for (module doc), and no longer conditional on the
+        // target sitting in a folder with one particular name. The course is
+        // taken per course rather than for the whole note, so a course whose
+        // closure the cap already stopped does not inherit a target its own
+        // closure never reached.
+        const reaching = courses.filter(
+          (course) => closure.titlesByCourse.get(course)?.has(target) === true,
+        );
+        if (reaching.length === 0) continue;
         const acc = accumulatorFor(target);
         acc.sourcePaths.add(path);
-        for (const course of courses) acc.courses.add(course);
+        for (const course of reaching) acc.courses.add(course);
       }
     }
   }
 
-  // `[DF-13]`: her definition, read once per bound note regardless of how
-  // many places bind to it (tier-1/2's loop below and the tier-3 mint each
-  // resolve independently, so without this a note whose title is reached
-  // both ways — not possible today given `resolveTitle`'s 1:1 matching, but
-  // cheap to guard against regardless — would be read twice). `vault.read`
-  // only, never a write: definition capture is extraction, and INV-2 holds
-  // by construction because nothing here touches the vault source.
-  const noteContentCache = new Map<VaultPath, Promise<string>>();
-  function contentFor(path: VaultPath): Promise<string> {
-    let cached = noteContentCache.get(path);
-    if (cached === undefined) {
-      cached = vault.read(path);
-      noteContentCache.set(path, cached);
-    }
-    return cached;
-  }
   function definitionFor(path: VaultPath, title: string): Promise<string | undefined> {
     return contentFor(path).then((content) => noteDefinition(content, title));
   }
@@ -397,7 +621,7 @@ export async function extractConcepts(
 
   const records: ConceptRecord[] = await Promise.all(
     [...byName].map(async ([name, acc]) => {
-      const { bound, ambiguous } = resolveTitle(zettelByTitle, name);
+      const { bound, ambiguous } = resolveTitle(reachableByTitle, name);
       const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
       const sourcePaths = [...acc.sourcePaths].sort();
       const tier: ConceptTier = bound !== undefined ? 1 : 2;
@@ -418,6 +642,21 @@ export async function extractConcepts(
   );
 
   if (options.includeTier3 === true) {
+    // The Zettelkasten-folder index, built **only** for tier 3 and only when
+    // tier 3 runs. `[D-248]` took this folder out of membership and out of
+    // tier-1 binding entirely (module doc); what remains is tier-3's own
+    // vocabulary mechanism, which `../tier3-evidence/build.ts` owns and which
+    // that ruling does not touch. Nothing above this line reads it.
+    const zettelPaths = await vault.list({ under: zettelkastenFolder, extensions: ['md'] });
+    const zettelByTitle = new Map<string, VaultPath[]>();
+    for (const path of zettelPaths) {
+      const title = noteTitle(path);
+      const paths = zettelByTitle.get(title);
+      if (paths === undefined) zettelByTitle.set(title, [path]);
+      else paths.push(path);
+    }
+    for (const paths of zettelByTitle.values()) paths.sort(byCodeUnit);
+
     // Vocabulary = every Zettelkasten title *plus* every tier-1/2 name
     // already found, so tier-3 material that mentions an already-curated
     // concept attaches evidence to it rather than being invisible to this

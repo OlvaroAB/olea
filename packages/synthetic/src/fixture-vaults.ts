@@ -313,8 +313,11 @@ const NO_ZETTELKASTEN_GROUND_TRUTH: FixtureVaultGroundTruth = {
 //
 // No `01 Courses` folder anywhere — top-level `Week 1/`, `Week 2/` folders
 // instead, with `course` carried entirely by frontmatter. A Zettelkasten
-// folder is present so this shape also proves tier-1 binding survives a
-// totally different folder skeleton, not just tier-2.
+// folder is present, and since `[D-248]` (`ol-3ux7.5.61`) what it proves is
+// the opposite of what it used to: she wrote no wikilink anywhere in this
+// vault, so nothing is one hop out from her course material and NOTHING binds
+// at tier 1 — the folder's name buys nothing on its own. Tier-2 extraction is
+// unaffected, which is this shape's actual claim.
 
 function buildWeekOrganisedVault(): VaultSource {
   return vaultOf({
@@ -348,11 +351,12 @@ const WEEK_ORGANISED_GROUND_TRUTH: FixtureVaultGroundTruth = {
   shape: 'week-organised',
   expectedConcepts: [
     {
+      // Tier 2, not 1: `[D-248]` binds by link, and no note in this vault
+      // links to `05 Zettelkasten/Fenrask.md`.
       name: 'Fenrask',
-      tier: 1,
+      tier: 2,
       courses: ['PELWICK'],
       sourcePaths: ['Week 1/Opening.md', 'Week 2/Follow-up.md'],
-      boundNotePath: '05 Zettelkasten/Fenrask.md',
     },
     {
       name: 'Moldyne',
@@ -365,9 +369,10 @@ const WEEK_ORGANISED_GROUND_TRUTH: FixtureVaultGroundTruth = {
   explanation:
     'No note sits under 01 Courses anywhere in this vault — every course comes from an ' +
     'explicit `course` property, F1.3\'s "her property outranks the path" rule doing the whole ' +
-    'job. Tier-1 binding for Fenrask still resolves against 05 Zettelkasten even though the ' +
-    'folder skeleton around it (week-numbered, no course subfolder) has nothing else in common ' +
-    'with the default-shape fixture vault. No option was needed.',
+    'job, on a folder skeleton (week-numbered, no course subfolder) with nothing else in common ' +
+    'with the default-shape fixture vault. Fenrask stays tier 2: since [D-248] a concept note ' +
+    'binds because her course material links to it, and this student wrote no wikilinks at all, ' +
+    'so the 05 Zettelkasten folder sitting there changes nothing. No option was needed.',
 };
 
 const GROUND_TRUTH: Readonly<Record<FixtureVaultShapeId, FixtureVaultGroundTruth>> = {

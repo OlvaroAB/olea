@@ -174,10 +174,15 @@ describe('notes the walk has nothing to say about, and notes it has to complain 
 
 describe('the concept binding follows her `topic:` property', () => {
   it('binds a bare topic and a wikilink-shaped topic to the same concept', async () => {
+    // `[D-248]`: both notes sit under a course folder, and the wikilink-shaped
+    // one is what puts `Alpha` in the course's reading set — binding follows
+    // the link now, not the folder the target happens to sit in.
     const vault = memoryVault({
       '05 Zettelkasten/Alpha.md': '# Alpha\n',
-      'Notes/bare.md': [FRONTMATTER('[Alpha]'), 'Bare front::back', ''].join('\n'),
-      'Notes/linked.md': [FRONTMATTER('[[[Alpha]]]'), 'Linked front::back', ''].join('\n'),
+      '01 Courses/COURSEA/bare.md': [FRONTMATTER('[Alpha]'), 'Bare front::back', ''].join('\n'),
+      '01 Courses/COURSEA/linked.md': [FRONTMATTER('[[[Alpha]]]'), 'Linked front::back', ''].join(
+        '\n',
+      ),
     });
     const found = await enumerateVaultInstruments(vault);
     // Tier 1 — bound to the real Zettelkasten note — so the key derives from

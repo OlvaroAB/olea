@@ -297,14 +297,14 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     ]);
   });
 
-  it('binds tier 1 when a topic matches a Zettelkasten note title exactly', async () => {
+  it('binds tier 1 when a topic wikilinks a note whose title matches exactly (`[D-248]` — the link is what makes it reachable)', async () => {
     await write(
       '05 Zettelkasten/Quartz cleavage.md',
       '---\ntype: concept\n---\n\n# Quartz cleavage\n\nDefinition text, hers.\n',
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -451,7 +451,12 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
 
     const concepts = await extractConcepts(source);
     expect(concepts.map((c) => c.name)).toEqual(['Basalt weathering', 'Quartz cleavage']);
-    expect(concepts.every((c) => c.tier === 1)).toBe(true);
+    // Both topics survive, which is what this case is about. Only the
+    // wikilinked one *binds*, because `[D-248]` makes reachability — not a
+    // folder name — what puts a note in the course's reading set: nothing in
+    // this vault links to `Basalt weathering`, so it stays tier 2.
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.tier).toBe(1);
+    expect(concepts.find((c) => c.name === 'Basalt weathering')?.tier).toBe(2);
   });
 
   it('a topic that only mentions a wikilink keeps its own text and does not bind', async () => {
@@ -528,21 +533,37 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     expect(concepts[0]).not.toHaveProperty('ambiguousNotePaths');
   });
 
-  it('respects a custom zettelkastenFolder option', async () => {
+  // `[D-248]` replaced this case's predecessor, which asserted that a custom
+  // `zettelkastenFolder` was what let a note outside `05 Zettelkasten` bind.
+  // Folder name is no longer the mechanism in either direction: the link is.
+  it('binds a note in ANY folder when a course note links to it, with no folder option passed at all (`[D-248]`)', async () => {
     await write('Concepts/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Quartz cleavage\n');
+    await write(
+      '01 Courses/COURSEA/Lecture.md',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.tier).toBe(1);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.boundNotePath).toBe(
+      'Concepts/Quartz cleavage.md',
+    );
+  });
+
+  it('does NOT bind a note nothing links to, even sitting in the Zettelkasten folder by its default name (`[D-248]`)', async () => {
+    await write('05 Zettelkasten/Quartz cleavage.md', '---\ntype: concept\n---\n\n# Q\n\nHers.\n');
     await write(
       '01 Courses/COURSEA/Lecture.md',
       '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
-    const withDefault = await extractConcepts(source);
-    expect(withDefault.find((c) => c.name === 'Quartz cleavage')?.tier).toBe(2);
-
-    const withCustom = await extractConcepts(source, { zettelkastenFolder: 'Concepts' });
-    expect(withCustom.find((c) => c.name === 'Quartz cleavage')?.tier).toBe(1);
-    expect(withCustom.find((c) => c.name === 'Quartz cleavage')?.boundNotePath).toBe(
-      'Concepts/Quartz cleavage.md',
-    );
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    // Attested (her `topic` names it) but not reachable, so tier 2 and no
+    // definition: the folder's name buys nothing on its own any more.
+    expect(quartz?.tier).toBe(2);
+    expect(quartz).not.toHaveProperty('boundNotePath');
+    expect(quartz).not.toHaveProperty('definition');
   });
 });
 
@@ -582,7 +603,7 @@ describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () =
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -602,7 +623,7 @@ describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () =
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -617,7 +638,7 @@ describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () =
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -636,7 +657,7 @@ describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () =
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -652,7 +673,7 @@ describe('extractConcepts — definition capture at bind time (`[DF-13]`)', () =
     );
     await write(
       '01 Courses/COURSEA/Lecture.md',
-      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+      '---\ntopic: [[Quartz cleavage]]\ncourse: COURSEA\n---\n\n# Lecture\n',
     );
 
     const concepts = await extractConcepts(source);
@@ -1208,5 +1229,219 @@ describe('foldReadAnchors — folding a completed read’s passage anchors onto 
     const records = [record('Bioturbation'), record('Sediment provenance')];
     const folded = foldReadAnchors(records, []);
     expect(folded).toBe(records);
+  });
+});
+
+// `[D-248]` (`ol-3ux7.5.61`), implemented by `ol-3ux7.5.62`. A course's
+// reading set is its course-folder documents plus every existing in-vault
+// note directly targeted by a wikilink from one of them — one hop, outward,
+// capped per course, no splicing, no external fetch. The block above covers
+// the folder-bound predecessor's cases as they now behave; this block is the
+// ruling's own shape, and each case names the clause half it holds up:
+// membership (item 1), concept scope (item 2), definition binding (item 3),
+// external links (item 4) and the cost bound (item 5).
+describe('extractConcepts — one-hop outward link closure (`[D-248]`)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-closure-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  it('a linked note in an arbitrary folder supplies the name and the definition (item 3)', async () => {
+    await write(
+      'Reference/Field notes/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nA plane of weakness, hers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.tier).toBe(1);
+    expect(quartz?.courses).toEqual(['COURSEA']);
+    expect(quartz?.boundNotePath).toBe('Reference/Field notes/Quartz cleavage.md');
+    expect(quartz?.definition).toBe('A plane of weakness, hers.');
+  });
+
+  it('one hop only — a note linked from a linked note is not reached (item 1)', async () => {
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n\nCompare [[Basalt weathering]].\n',
+    );
+    await write(
+      'Reference/Basalt weathering.md',
+      '---\ntype: concept\n---\n\n# Basalt weathering\n\nAlso hers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ntopic: [Basalt weathering]\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.tier).toBe(1);
+    // Attested by her `topic`, so it is a concept of this course — but the
+    // note explaining it sits two hops out, so it never binds and her
+    // definition of it is not adopted.
+    const basalt = concepts.find((c) => c.name === 'Basalt weathering');
+    expect(basalt?.tier).toBe(2);
+    expect(basalt).not.toHaveProperty('definition');
+  });
+
+  it('outward only — a note that links INTO a course note joins nothing (item 1)', async () => {
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n\nUsed in [[Lecture]].\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ntopic: [Quartz cleavage]\ncourse: COURSEA\n---\n\n# Lecture\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.tier).toBe(2);
+    expect(quartz).not.toHaveProperty('boundNotePath');
+  });
+
+  it('a link target that names no existing note contributes nothing, and is not an error (item 1)', async () => {
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.map((c) => c.name)).toEqual([]);
+  });
+
+  it('an external URL is never followed — only in-vault notes join (item 4)', async () => {
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee https://example.invalid/quartz and [[Quartz cleavage]].\n',
+    );
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.map((c) => c.name)).toEqual(['Quartz cleavage']);
+    expect(concepts[0]?.sourcePaths).toEqual(['01 Courses/COURSEA/WEEK 1/Lecture.md']);
+  });
+
+  it('a note reachable from two courses is in both reading sets, with no popularity ceiling (item 1)', async () => {
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# A\n\nSee [[Quartz cleavage]].\n',
+    );
+    await write(
+      '01 Courses/COURSEB/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEB\n---\n\n# B\n\nAlso [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.courses).toEqual(['COURSEA', 'COURSEB']);
+    expect(quartz?.tier).toBe(1);
+  });
+
+  it('a concept present ONLY in a reachable note enters no course scope by reachability (item 2)', async () => {
+    // The linked note names a second idea in its own body, and cross-links a
+    // note about it. Neither may put "Research ethics" into COURSEA: the
+    // attestation base is her course-folder material, pre-closure.
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntopic: [Research ethics]\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n\nSee [[Research ethics]].\n',
+    );
+    await write(
+      'Reference/Research ethics.md',
+      '---\ntype: concept\n---\n\n# Research ethics\n\nAlso hers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source);
+    // It exists as a concept — her `topic` property named it — but it belongs
+    // to no course, and the enrichment the course DID attest still happened.
+    expect(concepts.find((c) => c.name === 'Research ethics')?.courses).toEqual([]);
+    expect(concepts.find((c) => c.name === 'Quartz cleavage')?.definition).toBe(
+      'Hers.\n\nSee [[Research ethics]].',
+    );
+  });
+
+  it('the per-course cap stops closure silently, and the course still works from its folder (item 5)', async () => {
+    // An index page inside the course folder, linking more than the cap
+    // allows — the ordinary shape `[D-248]` names as the reason for a bound.
+    await write('Reference/Alpha.md', '---\ntype: concept\n---\n\n# Alpha\n\nA.\n');
+    await write('Reference/Beta.md', '---\ntype: concept\n---\n\n# Beta\n\nB.\n');
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Index.md',
+      '---\ncourse: COURSEA\n---\n\n# Index\n\n- [[Alpha]]\n- [[Beta]]\n',
+    );
+
+    const uncapped = await extractConcepts(source);
+    expect(uncapped.map((c) => c.name)).toEqual(['Alpha', 'Beta']);
+    expect(uncapped.every((c) => c.tier === 1)).toBe(true);
+
+    const capped = await extractConcepts(source, { closureDocumentCap: 1 });
+    // Silent: no throw, no warning, no field saying so. The first target in
+    // her own writing order is the one that fits.
+    expect(capped.map((c) => c.name)).toEqual(['Alpha']);
+    expect(capped[0]?.tier).toBe(1);
+  });
+
+  it('an `under`-scoped run still binds to a note outside the scope it was given', async () => {
+    // `packages/plugin/src/generation/wiring.ts` scopes extraction to one
+    // course folder; closure resolves against the whole vault regardless, or
+    // scoping a course would silently switch its naming ladder off.
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n',
+    );
+    await write(
+      '01 Courses/COURSEA/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEA\n---\n\n# Lecture\n\nSee [[Quartz cleavage]].\n',
+    );
+    await write(
+      '01 Courses/COURSEB/WEEK 1/Lecture.md',
+      '---\ncourse: COURSEB\n---\n\n# B\n\nAlso [[Quartz cleavage]].\n',
+    );
+
+    const concepts = await extractConcepts(source, { under: '01 Courses/COURSEA' });
+    const quartz = concepts.find((c) => c.name === 'Quartz cleavage');
+    expect(quartz?.tier).toBe(1);
+    expect(quartz?.definition).toBe('Hers.');
+    // The other course's note is out of scope, so its course is not folded in.
+    expect(quartz?.courses).toEqual(['COURSEA']);
+  });
+
+  it('a note loose in the courses folder root reaches nothing — the course-folder test is unchanged', async () => {
+    await write(
+      'Reference/Quartz cleavage.md',
+      '---\ntype: concept\n---\n\n# Quartz cleavage\n\nHers.\n',
+    );
+    await write('01 Courses/Loose.md', '# Loose\n\nSee [[Quartz cleavage]].\n');
+
+    const concepts = await extractConcepts(source);
+    expect(concepts.map((c) => c.name)).toEqual([]);
   });
 });
