@@ -15,22 +15,20 @@
  * boundary's C6 proviso (`docs/Olea_architecture_boundary.md` §1) is met by
  * construction, not by a comment promising it.
  *
- * **Reachability (`[D-072]`).** There is deliberately no production caller
- * yet. This function needs (a) real nomination signals computed from the
- * local vector cache, assessment co-occurrence and her wikilinks, and (b) a
- * `CorpusRelationVerdictPort` implementation, which needs a task id — and
- * the task-id catalogue is frozen (C4.1–C4.3), so adding one is Class C,
- * exactly the procedure `[D-111]`/`[D-112]` used to wire `ConceptReaderPort`
- * (`ol-5nle`, `[EXT-7]`). This build declines to invent that decision and
- * instead files the follow-on bead as `[EXT-8]`, discovered-from this one —
- * see the bead's own notes for its id. Until it lands, this module is
- * exercised only by its own spec suite, the same honest gap
- * `ConceptReaderPort` sat in between `[EXT-3]` and `[EXT-7]`.
+ * **Reachability (`[D-072]`), corrected `ol-2zfj.108` [NEW-24].** This module doc previously said
+ * "there is deliberately no production caller yet" — stale since `[EXT-11]`/`ol-kw4a` (2026-08-25)
+ * wired `WorkerCorpusRelationVerdict` and `packages/plugin/src/concept/wiring.ts`'s
+ * `runCorpusRelationBatchIfDue` started calling this function on the plugin's own ingestion-tick
+ * interval (`OleaPlugin.tickIngestionAndMaybeRunCorpusRelations`, `packages/plugin/src/main.ts`).
+ * The gap this paragraph used to name — a verdict port with a task id — is closed; see
+ * `docs/dev/wiring-register.md`'s `CorpusRelationVerdictPort` row (olea-service) for the
+ * production caller's own reachability record.
  */
 
 import { nominateCorpusRelationCandidates } from './nominate.js';
 import type { CorpusConcept, NominationSignal } from './types.js';
 import {
+  CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
   type CorpusRelationBatchResult,
   emptyCorpusDropCounts,
   totalCorpusDropped,
@@ -71,19 +69,32 @@ export async function runCorpusRelationBatch(
   port: CorpusRelationVerdictPort,
   input: RunCorpusRelationBatchInput,
 ): Promise<CorpusRelationBatchResult> {
-  const candidates = nominateCorpusRelationCandidates(
+  const nominated = nominateCorpusRelationCandidates(
     input.newConcepts,
     input.allConcepts,
     input.signals,
   );
 
-  if (candidates.length === 0) {
+  if (nominated.length === 0) {
     // INV-5's refusal shape, one level up from `../read.js`: nothing
     // nominated means nothing to verdict, so the port is never reached —
     // the same reasoning that keeps a reader from being asked to invent
     // an edge over an empty context.
-    return { relations: [], dropped: emptyCorpusDropCounts(), candidatesNominated: 0 };
+    return {
+      relations: [],
+      dropped: emptyCorpusDropCounts(),
+      candidatesNominated: 0,
+      candidatesCappedOut: 0,
+    };
   }
+
+  // ONT-R2 (`ol-2zfj.89`, C7.10, `./types.js`'s own doc): the declared cap, enforced by simple
+  // truncation over nomination's own (deterministic) output order — never mandatory splitting,
+  // which the ruling rejects as the primary mechanism. A capped-out candidate is not lost: it is
+  // simply reconsidered on the next batch boundary, since this stage's scope is new-concept x
+  // all-concepts rather than a one-shot queue.
+  const candidates = nominated.slice(0, CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING);
+  const candidatesCappedOut = nominated.length - candidates.length;
 
   const requestCandidates: readonly CorpusVerdictRequestCandidate[] = candidates.map((c) => ({
     a: { ...c.a, passageText: input.passageText(c.a) },
@@ -98,7 +109,12 @@ export async function runCorpusRelationBatch(
     fullDropped[reason as keyof typeof fullDropped] = count ?? 0;
   }
 
-  return { relations, dropped: fullDropped, candidatesNominated: candidates.length };
+  return {
+    relations,
+    dropped: fullDropped,
+    candidatesNominated: nominated.length,
+    candidatesCappedOut,
+  };
 }
 
 export { totalCorpusDropped };

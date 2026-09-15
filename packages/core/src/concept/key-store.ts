@@ -80,7 +80,7 @@
  */
 
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { provisionalConceptKey } from './concept-key.js';
+import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './concept-key.js';
 import type { ConceptTier } from './types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/reviews/` and `.olea/misconceptions/`. */
@@ -134,6 +134,10 @@ export type ConceptKeyAnchor = NoteAnchor | TopicAnchor;
  * the only writer is `bindConceptKeyToNote`, which folds a `TopicAnchor`'s `name`/`aliases` in
  * here when rebinding the record onto a `NoteAnchor`. Optional, and absent on every record minted
  * before this field existed — every reader treats a missing value as `[]`, never as invalid.
+ *
+ * `normalizationCollisions` (added `ol-2zfj.108` [NEW-24], additive/non-breaking — same precedent
+ * as `aliases` and `TopicAnchor.introducingPaths`, `schemaVersion` unchanged) — see its own field
+ * doc below and `findNormalizationCollisions`'s doc.
  */
 export interface ConceptKeyRecord {
   readonly key: string;
@@ -141,6 +145,27 @@ export interface ConceptKeyRecord {
   readonly anchor: ConceptKeyAnchor;
   /** Prior wordings this key has answered to (`[D-183]`) — see the interface doc above. */
   readonly aliases?: readonly string[];
+  /**
+   * ONT-R1's mint-time normalisation index (`ol-2zfj.86`, C7.11): other existing keys whose
+   * TOPIC-anchor wording normalised (`./concept-key.js`'s `conceptIdentityNormalizationIndex`) to
+   * the same index as this record's own wording, at the moment THIS record was minted.
+   *
+   * **A candidate list, never a merge.** Recording a collision here changes nothing about either
+   * key's identity: this record and every key listed here keep their own key, their own history,
+   * and their own evidence, exactly as C7.10/F8.6's same-as mechanics require ("nothing is
+   * unioned"). Nothing in this module reads this field back to auto-resolve anything — it is
+   * provenance for a later evidential read (F8.6's proposal-and-resolve surface, not yet built),
+   * the same "record now, act later" posture `TopicAnchor.introducingPaths` already established
+   * for the rename-signature match.
+   *
+   * Absent when no collision was found at mint — the common case, since ONT-R1's own measured
+   * fact is that the identity rule bites on roughly one concept in nine. **Never recomputed
+   * afterwards**: a record minted later, whose wording happens to normalise the same as THIS
+   * one's, gets its OWN entry pointing back here (found via a listing scan at ITS mint time) —
+   * this record's own list is not retroactively updated, mirroring `mintedAt`'s "captured once"
+   * posture rather than `anchor`'s "allowed to drift" one.
+   */
+  readonly normalizationCollisions?: readonly string[];
   /** ISO date the key was first minted. Debugging only — not personal, no content. */
   readonly mintedAt: string;
   readonly schemaVersion: number;
@@ -198,6 +223,17 @@ export function isConceptKeyRecord(value: unknown): value is ConceptKeyRecord {
   // `ol-2zfj.55` has no `aliases` field at all — but a present value must be a string array.
   if (v.aliases !== undefined) {
     if (!Array.isArray(v.aliases) || !v.aliases.every((a) => typeof a === 'string')) return false;
+  }
+  // Optional and additive (see the interface doc): absent is valid — every record minted before
+  // `ol-2zfj.108` [NEW-24] has no `normalizationCollisions` field at all — but a present value
+  // must be a string array.
+  if (v.normalizationCollisions !== undefined) {
+    if (
+      !Array.isArray(v.normalizationCollisions) ||
+      !v.normalizationCollisions.every((k) => typeof k === 'string')
+    ) {
+      return false;
+    }
   }
   if (!isNonEmptyString(v.mintedAt)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
@@ -310,6 +346,40 @@ function recordMatchesAnchor(record: ConceptKeyRecord, candidate: ConceptKeyAnch
     if (candidate.aliases.some((alias) => aliases.includes(alias))) return true;
   }
   return false;
+}
+
+/**
+ * ONT-R1's "at mint" half (`ol-2zfj.86`, C7.11): finds every EXISTING key whose topic-anchor
+ * wording normalises (`./concept-key.js`'s `conceptIdentityNormalizationIndex`) to the same index
+ * as any of `candidateWordings`. Called only on the path that is about to MINT a genuinely new
+ * key — `resolveConceptKey`, below — never on the exact-match or rename-signature paths, which
+ * already resolve to an existing key by a stronger signal and are not "collisions" in this sense.
+ *
+ * **Proposes, never merges** (the ruling's own words): the result is a plain list of other keys,
+ * recorded on the new record as provenance for a later evidential read (F8.6's same-as surface,
+ * not yet built). Nothing here returns an existing key in place of a new one, unions two records,
+ * or mutates anything this function is not explicitly asked to read.
+ *
+ * Deliberately narrow to TOPIC anchors' wordings (`name` + `aliases`). A `NoteAnchor`'s identity
+ * is already the stronger `noteUid`/path signal `anchorMatches` uses; comparing bound notes by a
+ * normalised-wording index would add nothing there and risks a spurious hit between two unrelated
+ * notes that merely share a title fragment after folding.
+ */
+export function findNormalizationCollisions(
+  existing: readonly { readonly record: ConceptKeyRecord }[],
+  candidateWordings: readonly string[],
+): readonly string[] {
+  const candidateIndex = new Set(candidateWordings.map(conceptIdentityNormalizationIndex));
+  const collisions: string[] = [];
+  for (const { record } of existing) {
+    if (record.anchor.kind !== 'topic') continue;
+    const wordings = [record.anchor.name, ...recordAliases(record)];
+    const collides = wordings.some((wording) =>
+      candidateIndex.has(conceptIdentityNormalizationIndex(wording)),
+    );
+    if (collides) collisions.push(record.key);
+  }
+  return collisions;
 }
 
 /** Order-preserving de-duplication, dropping empty strings — the one place `aliases` merges live. */
@@ -451,11 +521,20 @@ export async function resolveConceptKey(
   }
 
   const key = mintKey(anchor);
+  // ONT-R1's "at mint" normalisation index (`ol-2zfj.86`, C7.11): only meaningful for a topic
+  // anchor (see `findNormalizationCollisions`'s doc for why a note anchor is excluded). Computed
+  // against `existing` — the same listing already fetched above, no second vault read — over this
+  // candidate's own wording (`name` plus any `aliases` it already carries).
+  const normalizationCollisions =
+    anchor.kind === 'topic'
+      ? findNormalizationCollisions(existing, [anchor.name, ...anchor.aliases])
+      : [];
   const record: ConceptKeyRecord = {
     key,
     tier,
     anchor,
     aliases: [],
+    ...(normalizationCollisions.length > 0 ? { normalizationCollisions } : {}),
     mintedAt: now(),
     schemaVersion: CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   };

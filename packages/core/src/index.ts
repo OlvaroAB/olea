@@ -74,6 +74,7 @@ export type { ConceptKeyInput, ConceptKeySource } from './concept/concept-key.js
 // See `./concept/concept-key.js`'s module doc for what this derivation can
 // and cannot yet promise.
 export {
+  conceptIdentityNormalizationIndex,
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept/concept-key.js';
@@ -123,6 +124,7 @@ export type {
 } from './concept/corpus-relations/types.js';
 export {
   CORPUS_RELATION_DROP_REASONS,
+  CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
   CORPUS_STAGE_EMITTABLE_TYPES,
   emptyCorpusDropCounts,
 } from './concept/corpus-relations/types.js';
@@ -161,6 +163,7 @@ export {
   CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   CONCEPT_KEY_STORE_FOLDER,
   conceptKeyRecordPath,
+  findNormalizationCollisions,
   isConceptKeyRecord,
   listConceptKeyRecords,
   resolveConceptKey,

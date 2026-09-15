@@ -85,3 +85,64 @@ export const provisionalConceptKey: ConceptKeySource = (input) => {
   const root = input.boundNotePath ?? input.name;
   return `${PROVISIONAL_CONCEPT_KEY_PREFIX}:${root}`;
 };
+
+/**
+ * ONT-R1's mint-time normalisation (`ol-2zfj.86`, closed 2026-09-15, C7.11):
+ * "a deterministic normalisation (Unicode and whitespace, case fold, a naive
+ * plural fold, minimal punctuation; containment — 'shortened or lengthened
+ * form' — excluded, no safe operating point) produces a lookup key that is
+ * an INDEX over identities, never the identity itself."
+ *
+ * **This is that index, and only that.** It is a pure string transform used
+ * to find CANDIDATE identity collisions at mint time — never to decide one.
+ * Per the ruling, a normalisation collision *proposes, it never merges*: the
+ * one caller today, `./key-store.js`'s `findNormalizationCollisions`, uses
+ * this only to list other existing keys whose wording collides, and nothing
+ * in this module or that one ever substitutes one key for another on the
+ * strength of a match here. The opaque `key` field itself is untouched by
+ * this function — see that module's doc and `ol-bo48` for the separate,
+ * still-open, Class C question of making `key` itself content-free (that
+ * migration is out of this ruling's scope, and out of this function's).
+ *
+ * Steps, exactly the ones the ruling names and none beyond them:
+ *
+ * 1. **Unicode normalisation** (`NFKC`) — canonicalises composed/decomposed
+ *    forms and compatibility variants (full-width characters, ligatures)
+ *    onto one representation before anything else runs.
+ * 2. **Whitespace normalisation** — trim, then collapse every run of
+ *    whitespace to one space.
+ * 3. **Case fold** — `toLocaleLowerCase()`.
+ * 4. **Minimal punctuation stripping** — a small, named set of ASCII marks
+ *    that carry no lexical content on their own (quotes, brackets, terminal
+ *    punctuation, commas, colons/semicolons). Deliberately **not** hyphens
+ *    or mid-word apostrophes: "co-occurrence" and "co occurrence" are left
+ *    distinct, because the ruling calls this stripping "minimal," not
+ *    exhaustive.
+ * 5. **A naive plural fold** — strips one trailing "s" (never from "ss," and
+ *    never from a string of length 1), exactly the scope the ruling names
+ *    ("a naive plural fold") and nothing cleverer: no irregular-plural
+ *    table, no stemming library.
+ *
+ * **Explicitly excluded, in the ruling's own words: containment.** Matching
+ * "cell" as a substring of "cell biology" — a shortened or lengthened form —
+ * is never attempted here, because the ruling found no safe operating point
+ * for it. This function only ever normalises one whole string for later
+ * *equality* comparison; it never does substring, prefix or suffix
+ * matching, and callers must not build that on top of it.
+ */
+export function conceptIdentityNormalizationIndex(wording: string): string {
+  let normalized = wording.normalize('NFKC').trim().replace(/\s+/g, ' ');
+  normalized = normalized.toLocaleLowerCase();
+  // Minimal punctuation stripping (step 4) — see the function doc for the
+  // named exclusions (hyphens, mid-word apostrophes: `'` is deliberately
+  // absent from this class).
+  normalized = normalized
+    .replace(/[.,;:!?"`()[\]{}]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  // Naive plural fold (step 5).
+  if (normalized.length > 1 && normalized.endsWith('s') && !normalized.endsWith('ss')) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
+}

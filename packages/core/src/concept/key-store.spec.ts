@@ -7,7 +7,9 @@ import { extractConcepts } from './extract.js';
 import {
   bindConceptKeyToNote,
   CONCEPT_KEY_STORE_FOLDER,
+  type ConceptKeyRecord,
   conceptKeyRecordPath,
+  findNormalizationCollisions,
   isConceptKeyRecord,
   listConceptKeyRecords,
   resolveConceptKey,
@@ -536,5 +538,130 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
       name: 'Basalt weathering',
       aliases: [],
     });
+  });
+});
+
+describe('findNormalizationCollisions (ONT-R1, ol-2zfj.86, C7.11 — mint-time index)', () => {
+  function topicRecord(
+    key: string,
+    name: string,
+    aliases: readonly string[] = [],
+  ): ConceptKeyRecord {
+    return {
+      key,
+      tier: 2,
+      anchor: { kind: 'topic', course: 'COURSEA', name, aliases: [] },
+      aliases,
+      mintedAt: '2026-09-01',
+      schemaVersion: 1,
+    };
+  }
+
+  it('finds a case-and-whitespace collision', () => {
+    const existing = [{ record: topicRecord('key-1', 'Basalt weathering') }];
+    expect(findNormalizationCollisions(existing, ['  BASALT   weathering  '])).toEqual(['key-1']);
+  });
+
+  it('finds a collision against an alias, not only the primary name', () => {
+    const existing = [
+      { record: topicRecord('key-1', 'Basalt weathering', ['Weathering of basalt'.toLowerCase()]) },
+    ];
+    expect(findNormalizationCollisions(existing, ['weathering of basalt'])).toEqual(['key-1']);
+  });
+
+  it('never treats a NoteAnchor record as a candidate — wording collisions there are not this index’s job', () => {
+    const existing = [
+      {
+        record: {
+          key: 'key-note',
+          tier: 1 as const,
+          anchor: {
+            kind: 'note' as const,
+            noteUid: 'uid-1',
+            notePath: '05 Zettelkasten/Basalt weathering.md',
+          },
+          mintedAt: '2026-09-01',
+          schemaVersion: 1,
+        },
+      },
+    ];
+    expect(findNormalizationCollisions(existing, ['BASALT WEATHERING'])).toEqual([]);
+  });
+
+  it('reports no collision for a genuinely distinct wording', () => {
+    const existing = [{ record: topicRecord('key-1', 'Basalt weathering') }];
+    expect(findNormalizationCollisions(existing, ['Diffusion'])).toEqual([]);
+  });
+
+  it('excludes containment — "cell" does not collide with "cell biology"', () => {
+    const existing = [{ record: topicRecord('key-1', 'Cell biology') }];
+    expect(findNormalizationCollisions(existing, ['Cell'])).toEqual([]);
+  });
+});
+
+describe('resolveConceptKey — normalisation-collision candidates recorded at mint (ONT-R1)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-key-store-norm-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a genuinely new topic mint records a normalisation collision against an existing key, and proposes rather than merges', async () => {
+    const first = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+
+    // A different, case/whitespace-folded wording — not an exact-match, not an alias, not a
+    // rename signature (no shared `introducingPaths`) — so this mints a genuinely SECOND key.
+    const second = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: '  BASALT   Weathering  ',
+      aliases: [],
+    });
+
+    // Proposes, never merges: both keys persist and are distinct.
+    expect(second).not.toBe(first);
+
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(2);
+    const secondRecord = records.find(({ record }) => record.key === second);
+    expect(secondRecord?.record.normalizationCollisions).toEqual([first]);
+    // The first record is untouched — the collision is recorded only on the NEW record, at ITS
+    // own mint time, never retrofitted onto the existing one.
+    const firstRecord = records.find(({ record }) => record.key === first);
+    expect(firstRecord?.record.normalizationCollisions).toBeUndefined();
+  });
+
+  it('no collision field is written when nothing collides — the common case stays unchanged', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    const records = await listConceptKeyRecords(source);
+    const record = records.find((r) => r.record.key === key);
+    expect(record?.record.normalizationCollisions).toBeUndefined();
+  });
+
+  it('a bound (note) concept never gets a normalisation-collision entry', async () => {
+    const key = await resolveConceptKey(source, 1, {
+      kind: 'note',
+      noteUid: 'uid-abc',
+      notePath: '05 Zettelkasten/Basalt weathering.md',
+    });
+    const records = await listConceptKeyRecords(source);
+    const record = records.find((r) => r.record.key === key);
+    expect(record?.record.normalizationCollisions).toBeUndefined();
   });
 });

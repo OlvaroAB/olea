@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { VaultPath } from '../vault/types.js';
-import { PROVISIONAL_CONCEPT_KEY_PREFIX, provisionalConceptKey } from './concept-key.js';
+import {
+  conceptIdentityNormalizationIndex,
+  PROVISIONAL_CONCEPT_KEY_PREFIX,
+  provisionalConceptKey,
+} from './concept-key.js';
 
 describe('provisionalConceptKey', () => {
   it('is pure and total: the same input always mints the same key', () => {
@@ -46,4 +50,73 @@ describe('provisionalConceptKey', () => {
       expect(afterRename).not.toBe(before);
     },
   );
+});
+
+describe('conceptIdentityNormalizationIndex (ONT-R1, ol-2zfj.86, C7.11)', () => {
+  it('is pure and total: the same wording always normalises the same way', () => {
+    expect(conceptIdentityNormalizationIndex('Osmosis')).toBe(
+      conceptIdentityNormalizationIndex('Osmosis'),
+    );
+  });
+
+  it('case-folds', () => {
+    expect(conceptIdentityNormalizationIndex('OSMOSIS')).toBe(
+      conceptIdentityNormalizationIndex('osmosis'),
+    );
+  });
+
+  it('collapses and trims whitespace', () => {
+    expect(conceptIdentityNormalizationIndex('  Membrane   transport  ')).toBe(
+      conceptIdentityNormalizationIndex('Membrane transport'),
+    );
+  });
+
+  it('applies Unicode NFKC normalisation — composed and decomposed forms collide', () => {
+    const composed = 'étude'; // 'étude', precomposed é
+    const decomposed = 'étude'; // 'e' + combining acute accent
+    expect(conceptIdentityNormalizationIndex(composed)).toBe(
+      conceptIdentityNormalizationIndex(decomposed),
+    );
+  });
+
+  it('strips minimal punctuation (quotes, terminal punctuation, commas, colons)', () => {
+    expect(conceptIdentityNormalizationIndex('"Osmosis," (basic)!')).toBe(
+      conceptIdentityNormalizationIndex('Osmosis basic'),
+    );
+  });
+
+  it('does NOT strip hyphens or mid-word apostrophes — the stripping is "minimal," not exhaustive', () => {
+    expect(conceptIdentityNormalizationIndex('co-occurrence')).not.toBe(
+      conceptIdentityNormalizationIndex('co occurrence'),
+    );
+    expect(conceptIdentityNormalizationIndex("student's")).toContain("'");
+  });
+
+  it('applies a naive plural fold: one trailing "s" only', () => {
+    expect(conceptIdentityNormalizationIndex('membranes')).toBe(
+      conceptIdentityNormalizationIndex('membrane'),
+    );
+  });
+
+  it('never folds a trailing "ss" as a plural', () => {
+    expect(conceptIdentityNormalizationIndex('glass')).toBe('glass');
+  });
+
+  it('never folds a single-character string to empty', () => {
+    expect(conceptIdentityNormalizationIndex('s')).toBe('s');
+  });
+
+  it('excludes containment — a shortened or lengthened form never collides', () => {
+    // The ruling's own example: "cell" is never treated as matching "cell
+    // biology" merely because one contains the other.
+    expect(conceptIdentityNormalizationIndex('cell')).not.toBe(
+      conceptIdentityNormalizationIndex('cell biology'),
+    );
+  });
+
+  it('two genuinely distinct wordings never collide', () => {
+    expect(conceptIdentityNormalizationIndex('Osmosis')).not.toBe(
+      conceptIdentityNormalizationIndex('Diffusion'),
+    );
+  });
 });

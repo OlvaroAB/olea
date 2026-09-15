@@ -269,7 +269,37 @@ export interface CorpusRelationBatchResult {
   readonly dropped: Readonly<Record<CorpusRelationDropReason, number>>;
   /** How many candidates this run nominated, before any verdict — a coverage measurement, not a log of names. */
   readonly candidatesNominated: number;
+  /**
+   * ONT-R2 (`ol-2zfj.89`, closed 2026-09-15): how many of `candidatesNominated` this run excluded
+   * because `CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING` was reached — a count, per
+   * D-005, never the pairs themselves. `0` whenever nomination stayed under the cap, which is
+   * every batch measured so far. A capped-out candidate is not lost: the corpus stage is scoped to
+   * new-concept x all-concepts and re-verdicts on the next batch boundary (knowledge model §5), so
+   * it is simply reconsidered next run rather than this one.
+   */
+  readonly candidatesCappedOut: number;
 }
+
+/**
+ * ONT-R2 (`ol-2zfj.89`, closed 2026-09-15, C7.10): "a declared cap on candidates per call ... with
+ * the cap value RE-MEASURED after the scoping fix (cross-course pair leakage, `[ONT-R8]`) and the
+ * course-membership fix land, since both change the pair count the cap is sized against." The
+ * ruling explicitly sets no value: "this is a structural-fact number: no value is ruled here."
+ *
+ * **This constant is that mechanism's placeholder, not a measured or fitted operating point.**
+ * The `_DECLARED_PENDING` suffix is the whole point: it is greppable, so nothing downstream can
+ * mistake this number for a tuned constant, and it marks exactly where the eventual sensitivity
+ * sweep (`[D-194]`) and pin land once the scoping/membership fixes above have run and the
+ * candidate-pair count under them has actually been measured. Chosen only to make the pass BOUNDED
+ * starting now — the alternative the ruling rejected was "re-measure alone, with no declared cap
+ * in the meantime," leaving the pass unbounded during the interval before that measurement exists.
+ *
+ * Enforced in `./batch.js`'s `runCorpusRelationBatch`, by simple truncation (deterministic:
+ * `nominateCorpusRelationCandidates`'s own output order, unchanged) rather than mandatory batch
+ * splitting — the ruling rejects splitting as the PRIMARY mechanism, since it solves throughput
+ * but not the candidate-count blow-up a cap addresses directly.
+ */
+export const CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING = 200;
 
 export function emptyCorpusDropCounts(): Record<CorpusRelationDropReason, number> {
   const counts = {} as Record<CorpusRelationDropReason, number>;

@@ -10,7 +10,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
 import type { VaultPath } from '../../vault/types.js';
 import { runCorpusRelationBatch } from './batch.js';
-import type { CorpusConcept } from './types.js';
+import {
+  CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
+  type CorpusConcept,
+} from './types.js';
 import type { CorpusRelationVerdictPort } from './verdict.js';
 
 function anchor(sourcePath: VaultPath, start = 0, end = 10): Provenance {
@@ -115,6 +118,7 @@ describe('runCorpusRelationBatch', () => {
     expect(verdict).not.toHaveBeenCalled();
     expect(result.relations).toEqual([]);
     expect(result.candidatesNominated).toBe(0);
+    expect(result.candidatesCappedOut).toBe(0);
   });
 
   it('hands the port both endpoints’ passage TEXT, not just names (clause-compliant by construction)', async () => {
@@ -177,5 +181,48 @@ describe('runCorpusRelationBatch', () => {
     });
 
     expect(seen).toEqual([1, 1]); // each call independently saw exactly its own one candidate
+  });
+
+  it('ONT-R2 [ol-2zfj.89]: a nomination past the declared cap is truncated, not sent whole, and the excess is counted rather than lost silently', async () => {
+    const over = CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING + 50;
+    const hub = concept('Hub concept');
+    const others = Array.from({ length: over }, (_, i) => concept(`Spoke concept ${i}`));
+    const signals = others.map((o) => ({
+      kind: 'embedding-proximity' as const,
+      a: hub.name,
+      b: o.name,
+    }));
+
+    const verdict = vi.fn().mockResolvedValue({ verdicts: [] });
+    const port: CorpusRelationVerdictPort = { verdict };
+
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [hub],
+      allConcepts: [hub, ...others],
+      signals,
+      passageText: () => 'x',
+    });
+
+    expect(result.candidatesNominated).toBe(over);
+    expect(result.candidatesCappedOut).toBe(50);
+    expect(verdict).toHaveBeenCalledTimes(1);
+    const request = verdict.mock.calls[0]?.[0];
+    expect(request.candidates).toHaveLength(
+      CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
+    );
+  });
+
+  it('stays uncapped, with zero capped-out, for a batch under the declared cap', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({ verdicts: [] }),
+    };
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'x',
+    });
+    expect(result.candidatesNominated).toBe(1);
+    expect(result.candidatesCappedOut).toBe(0);
   });
 });
