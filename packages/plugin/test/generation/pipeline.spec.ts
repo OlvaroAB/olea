@@ -30,6 +30,7 @@ import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js'
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
 import { HOME_NOTE_MARKER_KEY, homeNotePathForSource } from '../../src/generation/home-note.js';
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
+import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
 
@@ -100,6 +101,7 @@ describe('runGenerationSweep', () => {
       attempted: 0,
       drafted: 0,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [],
@@ -124,6 +126,7 @@ describe('runGenerationSweep', () => {
       attempted: 1,
       drafted: 1,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
@@ -249,6 +252,7 @@ describe('runGenerationSweep', () => {
       attempted: 0,
       drafted: 0,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 1,
       skippedRouting: 0,
       routingObservations: [],
@@ -296,6 +300,15 @@ describe('runGenerationSweep', () => {
       attempted: 1,
       drafted: 0,
       refused: 1,
+      // `[H-1.8a]`: classified via `describeRefusal`, not merely counted.
+      refusals: [
+        {
+          courseCode: 'COGS214',
+          conceptName: 'Working memory',
+          reason: 'no-hits',
+          copy: describeRefusal('no-hits'),
+        },
+      ],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
@@ -315,6 +328,35 @@ describe('runGenerationSweep', () => {
       },
     });
     expect(secondCalls).toBe(1);
+  });
+
+  it('[H-1.8a]: a transient refusal (the check itself never ran) is classified distinctly from a checked-and-insufficient one', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const transientResponse: DraftQuizCardsResult = {
+      status: 'refused',
+      reason: 'composite-check-unavailable',
+    };
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async () => transientResponse,
+    });
+
+    expect(report.refusals).toEqual([
+      {
+        courseCode: 'COGS214',
+        conceptName: 'Working memory',
+        reason: 'composite-check-unavailable',
+        copy: describeRefusal('composite-check-unavailable'),
+      },
+    ]);
+    // `ol-riwn` / `[D-089]`'s whole point: never conflated with "not enough grounding".
+    expect(report.refusals[0]?.copy.transient).toBe(true);
+    expect(report.refusals[0]?.copy.headline).not.toBe(describeRefusal('no-hits').headline);
   });
 
   it('a concept the course listing does not name for THIS course is skipped', async () => {
@@ -340,6 +382,7 @@ describe('runGenerationSweep', () => {
       attempted: 0,
       drafted: 0,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [],
@@ -372,6 +415,7 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
       attempted: 1,
       drafted: 1,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
@@ -517,6 +561,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       attempted: 0,
       drafted: 0,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: false }],
@@ -561,6 +606,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       attempted: 1,
       drafted: 1,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: true, kind: 'category', deficit: 2, generated: true }],
@@ -615,6 +661,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       attempted: 0,
       drafted: 0,
       refused: 0,
+      refusals: [],
       skippedDuplicate: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: false }],

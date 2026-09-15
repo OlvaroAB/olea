@@ -61,6 +61,17 @@
  * price of not inventing a "give up after N refusals" policy nobody asked
  * for.
  *
+ * **A refused concept is classified, not just counted (`[H-1.8a]` /
+ * `ol-0r92.71`, component register row 1.8a, C4.7 / `[D-089]`).** Before this
+ * bead the refusal was dropped after incrementing `refused` — the reason
+ * string reached nowhere. Now `describeRefusal` (`draft-cards-copy.ts`)
+ * runs on every refusal and the result lands in
+ * `GenerationSweepReport.refusals`, still uncached (the paragraph above is
+ * unchanged). **This closes the classification half of row 1.8a's
+ * falsifier, not the reachability half**: no production caller reads
+ * `refusals` yet — see that field's own doc for why finishing the wiring
+ * sits outside this bead's owned paths.
+ *
  * **Routing consultation (`ol-tz7v` / `[WIRE-7]`), opt-in via `deps.routing`.**
  * When absent, every candidate is drafted exactly as before this bead —
  * `pipeline.spec.ts`'s whole existing suite never supplies it, so nothing
@@ -99,6 +110,7 @@ import type {
   VaultSource,
 } from 'olea-core';
 import { courseFromPath, DEFAULT_COURSES_FOLDER } from 'olea-core';
+import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,
@@ -189,6 +201,22 @@ export interface FormatMatchDecision {
   };
 }
 
+/**
+ * `[H-1.8a]` (`ol-0r92.71`, component register row 1.8a, C4.7 / `[D-089]`)
+ * — one refused concept's classification, computed by `describeRefusal`
+ * (`draft-cards-copy.ts`) instead of being dropped with only a count. *Not
+ * a cache entry* — a refused concept still gets none (F4.5's
+ * grounded-by-construction argument, unchanged by this bead) and is still
+ * retried next sweep; this is purely the copy a caller could render for the
+ * refusal she would otherwise never see.
+ */
+export interface GenerationRefusalNotice {
+  readonly courseCode: string;
+  readonly conceptName: string;
+  readonly reason: string;
+  readonly copy: RefusalCopy;
+}
+
 export interface GenerationSweepReport {
   /** Concepts a drafting call was actually made for this sweep — always `<= MAX_CONCEPTS_PER_SWEEP`. */
   readonly attempted: number;
@@ -196,6 +224,18 @@ export interface GenerationSweepReport {
   readonly drafted: number;
   /** Of those, how many refused (no transport send, per `draftQuizCardsForConcept`'s own guarantee) — retried on a later sweep. */
   readonly refused: number;
+  /**
+   * `[H-1.8a]` (`ol-0r92.71`): one entry per concept counted in `refused`
+   * above, carrying `describeRefusal`'s classified two-headline copy —
+   * component register row 1.8a's own falsifier is that this classification
+   * happens at all, rather than the refusal being dropped silently. **No
+   * production caller renders this field yet.** Register row 1.8a's own
+   * "Undecided" line reserves which surface shows it to her for David to
+   * name, and wiring that surface into `main.ts`'s `onUnitsLanded` sits
+   * outside this bead's owned paths (`pipeline.ts`, `draft-cards-copy.ts`)
+   * — see this bead's close evidence for the named follow-up.
+   */
+  readonly refusals: readonly GenerationRefusalNotice[];
   /** Concepts skipped because the cache already has a record for that (course, concept) pair. */
   readonly skippedDuplicate: number;
   /** Concepts routing (`deps.routing`) determined do not currently warrant this sweep's one generation capability — never drafted, never cached, so re-consulted next sweep. Always `0` when `deps.routing` is absent. */
@@ -223,6 +263,7 @@ const ZERO_REPORT: GenerationSweepReport = {
   skippedDuplicate: 0,
   skippedRouting: 0,
   routingObservations: [],
+  refusals: [],
 };
 
 function defaultGenerateDraftId(
@@ -326,6 +367,8 @@ export async function runGenerationSweep(
   let refused = 0;
   let skippedDuplicate = 0;
   let skippedRouting = 0;
+  // `[H-1.8a]`: one classified entry per refusal — see `GenerationSweepReport.refusals`' own doc.
+  const refusals: GenerationRefusalNotice[] = [];
 
   for (const courseCode of [...courseCodes].sort()) {
     if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
@@ -413,6 +456,13 @@ export async function runGenerationSweep(
 
       if (result.status === 'refused') {
         refused += 1;
+        // `[H-1.8a]`: classify rather than drop — see `GenerationRefusalNotice`'s own doc.
+        refusals.push({
+          courseCode,
+          conceptName: candidate.name,
+          reason: result.reason,
+          copy: describeRefusal(result.reason),
+        });
         continue;
       }
 
@@ -475,5 +525,13 @@ export async function runGenerationSweep(
     }
   }
 
-  return { attempted, drafted, refused, skippedDuplicate, skippedRouting, routingObservations };
+  return {
+    attempted,
+    drafted,
+    refused,
+    skippedDuplicate,
+    skippedRouting,
+    routingObservations,
+    refusals,
+  };
 }
