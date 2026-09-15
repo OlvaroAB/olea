@@ -57,6 +57,20 @@
  * is `z.unknown()` (`worker.ts`) and this repo hand-parses the per-task
  * response body itself, exactly as it already did for `direction`/
  * `confidence` above.
+ *
+ * **Sends the endpoint-dictionary shape, not the legacy inline one --
+ * `ol-2zfj.108` [NEW-24], ONT-R2/ONT-R3.** `concepts.relations.v1`'s request
+ * schema (`olea-service`'s `src/tasks/conceptsRelations.ts`) accepts either
+ * shape at the boundary, but this class -- the one production sender -- only
+ * ever builds the dictionary. Every endpoint travels the wire once, keyed by
+ * its own `name` (the flat, post-corroboration identity
+ * `nominateCorpusRelationCandidates` and `groundCorpusVerdicts` already treat
+ * as unique within one batch), and each candidate pair carries the two names
+ * as references into that dictionary rather than the two endpoints repeated
+ * in full. This is the exact saving ONT-R2/ONT-R3 asked for: a "hub" concept
+ * nominated against many others under the declared cap rides the wire once
+ * instead of once per pair. There is no flag and no fallback -- the inline
+ * shape is simply never built here.
  */
 
 import type {
@@ -117,10 +131,14 @@ interface WireEndpoint {
   readonly key?: string;
 }
 
-interface WireCandidate {
-  readonly a: WireEndpoint;
-  readonly b: WireEndpoint;
+/** One candidate pair as sent on the wire -- two references into `WireEndpointDictionary`, never the endpoints themselves. */
+interface WireCandidatePair {
+  readonly a: string;
+  readonly b: string;
 }
+
+/** Keyed by each endpoint's own `name` -- see the module doc's "Sends the endpoint-dictionary shape" note. */
+type WireEndpointDictionary = Readonly<Record<string, WireEndpoint>>;
 
 function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a']): WireEndpoint {
   return {
@@ -140,6 +158,29 @@ function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a'
   };
 }
 
+/**
+ * Builds the dictionary payload for one batch -- every distinct endpoint
+ * (by `name`) once, and each candidate pair as a reference into it. A "hub"
+ * endpoint reused across several candidates (the same `CorpusConcept`
+ * object, resolved by `nominateCorpusRelationCandidates`, olea-core) is
+ * written into `endpoints` on its first sighting only; later sightings only
+ * add another `WireCandidatePair` entry, which is the whole saving.
+ */
+function buildDictionaryPayload(candidates: CorpusVerdictRequest['candidates']): {
+  endpoints: WireEndpointDictionary;
+  candidates: readonly WireCandidatePair[];
+} {
+  const endpoints: Record<string, WireEndpoint> = {};
+  for (const candidate of candidates) {
+    if (!(candidate.a.name in endpoints)) endpoints[candidate.a.name] = toWireEndpoint(candidate.a);
+    if (!(candidate.b.name in endpoints)) endpoints[candidate.b.name] = toWireEndpoint(candidate.b);
+  }
+  return {
+    endpoints,
+    candidates: candidates.map((candidate) => ({ a: candidate.a.name, b: candidate.b.name })),
+  };
+}
+
 export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
   private readonly transport: WorkerTaskTransport;
 
@@ -155,17 +196,14 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
       return { verdicts: [] };
     }
 
-    const wireCandidates: readonly WireCandidate[] = request.candidates.map((candidate) => ({
-      a: toWireEndpoint(candidate.a),
-      b: toWireEndpoint(candidate.b),
-    }));
+    const { endpoints, candidates: wireCandidates } = buildDictionaryPayload(request.candidates);
 
     let body: unknown;
     try {
       body = await this.transport.send({
         contractVersion: CONCEPTS_RELATIONS_CONTRACT_VERSION,
         taskId: CONCEPTS_RELATIONS_TASK_ID,
-        payload: { candidates: wireCandidates },
+        payload: { endpoints, candidates: wireCandidates },
       });
     } catch (error) {
       throw new WorkerCorpusRelationVerdictError(

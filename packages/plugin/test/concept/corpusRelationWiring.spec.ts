@@ -774,24 +774,31 @@ function fixtureTransport(conventionNames: readonly string[]) {
       }
       // The service echoes each candidate's own key back on the verdict
       // (`CorpusVerdict.aKey`, olea-core) — modelled here by echoing the
-      // request's own endpoints, never by inventing a key.
+      // request's own endpoints, never by inventing a key. The wire request
+      // is the endpoint-dictionary shape (`ol-2zfj.108` [NEW-24]): candidates
+      // carry endpoint ids that resolve against `payload.endpoints`.
       const payload = request.payload as {
-        candidates: readonly {
-          a: { name: string; key?: string };
-          b: { name: string; key?: string };
-        }[];
+        endpoints: Record<string, { name: string; key?: string }>;
+        candidates: readonly { a: string; b: string }[];
       };
       return {
         ok: true,
         result: {
-          verdicts: payload.candidates.map((candidate) => ({
-            a: candidate.a.name,
-            b: candidate.b.name,
-            type: 'contrasts-with',
-            confidence: 0.9,
-            ...(candidate.a.key !== undefined ? { aKey: candidate.a.key } : {}),
-            ...(candidate.b.key !== undefined ? { bKey: candidate.b.key } : {}),
-          })),
+          verdicts: payload.candidates.map((candidate) => {
+            const a = payload.endpoints[candidate.a];
+            const b = payload.endpoints[candidate.b];
+            if (a === undefined || b === undefined) {
+              throw new Error('fixtureTransport: a candidate referenced an unknown endpoint id');
+            }
+            return {
+              a: a.name,
+              b: b.name,
+              type: 'contrasts-with',
+              confidence: 0.9,
+              ...(a.key !== undefined ? { aKey: a.key } : {}),
+              ...(b.key !== undefined ? { bKey: b.key } : {}),
+            };
+          }),
         },
       };
     },
@@ -867,12 +874,9 @@ describe('the production corpus-relations batch, over the fixture vault (`ol-282
 
     const endpoints = relationRequests.flatMap((request) => {
       const payload = request.payload as {
-        candidates: readonly {
-          a: { name: string; key?: string };
-          b: { name: string; key?: string };
-        }[];
+        endpoints: Record<string, { name: string; key?: string }>;
       };
-      return payload.candidates.flatMap((candidate) => [candidate.a, candidate.b]);
+      return Object.values(payload.endpoints);
     });
     expect(endpoints.length).toBeGreaterThan(0);
     for (const endpoint of endpoints) {

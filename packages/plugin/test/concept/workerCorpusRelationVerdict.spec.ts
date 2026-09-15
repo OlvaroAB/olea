@@ -84,24 +84,23 @@ describe('WorkerCorpusRelationVerdict — the request it builds, `key` on the wi
 
     const sent = transport.sent[0];
     expect(sent?.payload).toEqual({
-      candidates: [
-        {
-          a: {
-            name: 'Type I error',
-            aliases: [],
-            sourceChunks: ['A Type I error is a false positive: rejecting a true null hypothesis.'],
-            key: 'key-type-i',
-          },
-          b: {
-            name: 'Type II error',
-            aliases: [],
-            sourceChunks: [
-              'A Type II error is a false negative: failing to reject a false null hypothesis.',
-            ],
-            key: 'key-type-ii',
-          },
+      endpoints: {
+        'Type I error': {
+          name: 'Type I error',
+          aliases: [],
+          sourceChunks: ['A Type I error is a false positive: rejecting a true null hypothesis.'],
+          key: 'key-type-i',
         },
-      ],
+        'Type II error': {
+          name: 'Type II error',
+          aliases: [],
+          sourceChunks: [
+            'A Type II error is a false negative: failing to reject a false null hypothesis.',
+          ],
+          key: 'key-type-ii',
+        },
+      },
+      candidates: [{ a: 'Type I error', b: 'Type II error' }],
     });
     expect(JSON.stringify(sent?.payload)).not.toContain('Courses/COGS214');
   });
@@ -112,9 +111,11 @@ describe('WorkerCorpusRelationVerdict — the request it builds, `key` on the wi
 
     await port.verdict(request);
 
-    const sent = transport.sent[0] as { payload: { candidates: [{ a: object; b: object }] } };
-    expect(sent.payload.candidates[0]?.a).not.toHaveProperty('key');
-    expect(sent.payload.candidates[0]?.b).not.toHaveProperty('key');
+    const sent = transport.sent[0] as {
+      payload: { endpoints: Record<string, object>; candidates: [{ a: string; b: string }] };
+    };
+    expect(sent.payload.endpoints['Type I error']).not.toHaveProperty('key');
+    expect(sent.payload.endpoints['Type II error']).not.toHaveProperty('key');
   });
 });
 
@@ -130,24 +131,61 @@ describe('WorkerCorpusRelationVerdict — the request it builds', () => {
     expect(sent?.taskId).toBe('concepts.relations.v1');
     expect(sent?.contractVersion).toBe(2);
     expect(sent?.payload).toEqual({
-      candidates: [
-        {
-          a: {
-            name: 'Type I error',
-            aliases: [],
-            sourceChunks: ['A Type I error is a false positive: rejecting a true null hypothesis.'],
-          },
-          b: {
-            name: 'Type II error',
-            aliases: [],
-            sourceChunks: [
-              'A Type II error is a false negative: failing to reject a false null hypothesis.',
-            ],
-          },
+      endpoints: {
+        'Type I error': {
+          name: 'Type I error',
+          aliases: [],
+          sourceChunks: ['A Type I error is a false positive: rejecting a true null hypothesis.'],
         },
-      ],
+        'Type II error': {
+          name: 'Type II error',
+          aliases: [],
+          sourceChunks: [
+            'A Type II error is a false negative: failing to reject a false null hypothesis.',
+          ],
+        },
+      },
+      candidates: [{ a: 'Type I error', b: 'Type II error' }],
     });
     expect(JSON.stringify(sent?.payload)).not.toContain('Courses/COGS214');
+  });
+
+  it('sends a reused "hub" endpoint once in the dictionary, with one candidate entry per pair', async () => {
+    const thirdEndpoint: Endpoint = {
+      name: 'Type III error',
+      aliases: [],
+      anchor: {
+        sourcePath: 'Courses/COGS214/lecture-5.md',
+        location: { page: 1, charRange: { start: 0, end: 10 } },
+      },
+      passageText: 'A Type III error is answering the wrong question correctly.',
+    };
+    const hubRequest: CorpusVerdictRequest = {
+      candidates: [
+        { a: typeIEndpoint, b: typeIIEndpoint },
+        { a: typeIEndpoint, b: thirdEndpoint },
+      ],
+    };
+    const transport = new RecordingTransport(() => okResponse({ verdicts: [] }));
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    await port.verdict(hubRequest);
+
+    const sent = transport.sent[0] as {
+      payload: {
+        endpoints: Record<string, object>;
+        candidates: readonly { a: string; b: string }[];
+      };
+    };
+    expect(Object.keys(sent.payload.endpoints).sort()).toEqual([
+      'Type I error',
+      'Type II error',
+      'Type III error',
+    ]);
+    expect(sent.payload.candidates).toEqual([
+      { a: 'Type I error', b: 'Type II error' },
+      { a: 'Type I error', b: 'Type III error' },
+    ]);
   });
 
   it('never calls the transport for an empty candidate batch', async () => {
