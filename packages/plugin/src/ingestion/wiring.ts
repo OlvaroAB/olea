@@ -43,16 +43,25 @@ import {
   type ExtractedUnit,
   type ExtractedUnitSink,
   IngestionQueueEngine,
+  type JobRunner,
   type PersistedJob,
   type QueueStore,
   type VaultPath,
   type VaultSource,
+  type WorkerTaskTransport,
 } from 'olea-core';
 import { type QueueStatusCounts, summarizeQueueStatusCounts } from '../commands/diagnostics.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
+import {
+  isWorkerConfigured,
+  type ObsidianDataHost,
+  ObsidianWorkerConfigStore,
+} from '../worker/config-store.js';
+import type { WorkerConfig } from '../worker/transport.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
+import { createWorkerVisionPageRunner, WorkerVisionPageExtractor } from './vision-page-runner.js';
 
 export interface IngestionWiringDeps {
   readonly vault: VaultSource;
@@ -79,6 +88,44 @@ export interface IngestionWiringDeps {
    * pre-`ol-p3t07a` behaviour.
    */
   readonly onUnitsLanded?: (units: readonly ExtractedUnit[]) => Promise<void> | void;
+  /**
+   * `ol-15f8`: composes the real `visionRunner` for standalone image sources
+   * (C3.1/C3.3) exactly the way `concept/wiring.ts`'s `buildConceptWiring`
+   * composes its own Worker-backed port — load the persisted Worker config,
+   * build a real transport only when it's usable (F7.8), and hand
+   * `createExtractionJobRunner` a real `WorkerVisionPageExtractor`-backed
+   * `visionRunner`. Omitted (the pre-`ol-15f8` default, and today's actual
+   * `main.ts` call — see `vision-page-runner.ts`'s module doc for the named
+   * follow-up) leaves `visionRunner` unset, so a drained `'vision-page'` job
+   * keeps DF-21's honest, non-retryable "no visionRunner wired yet" failure
+   * rather than half-working.
+   */
+  readonly vision?: {
+    readonly dataHost: ObsidianDataHost;
+    readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+  };
+}
+
+/**
+ * `deps.vision`'s composition, split out of `buildIngestionRunner` only for
+ * readability — loads `ObsidianWorkerConfigStore`'s persisted config and
+ * builds a real `visionRunner` only when both a base URL and a token are
+ * present (F7.8's "everything else works regardless" grey-out), the same
+ * condition `concept/wiring.ts`'s `buildConceptWiring` and every sibling
+ * Worker-backed wiring function in this plugin already gate on.
+ */
+async function buildVisionRunner(
+  vision: NonNullable<IngestionWiringDeps['vision']>,
+  vault: VaultSource,
+  sink: ExtractedUnitSink,
+): Promise<JobRunner | undefined> {
+  const configStore = new ObsidianWorkerConfigStore(vision.dataHost);
+  const config = await configStore.load();
+  if (!isWorkerConfigured(config)) return undefined;
+
+  const transport = vision.createTransport({ baseUrl: config.baseUrl, token: config.token });
+  const extractor = new WorkerVisionPageExtractor({ transport });
+  return createWorkerVisionPageRunner({ vault, extractor, sink });
 }
 
 export interface IngestionWiring {
@@ -128,7 +175,15 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     ? withUnitsLandedHook(sink, deps.onUnitsLanded)
     : sink;
   const enqueuer = deferredEnqueuer();
-  const runner = createExtractionJobRunner({ vault: deps.vault, enqueuer, sink: runnerSink });
+  const visionRunner = deps.vision
+    ? await buildVisionRunner(deps.vision, deps.vault, runnerSink)
+    : undefined;
+  const runner = createExtractionJobRunner({
+    vault: deps.vault,
+    enqueuer,
+    sink: runnerSink,
+    ...(visionRunner ? { visionRunner } : {}),
+  });
   const composedRunner = deps.revision
     ? createRevisionAwareJobRunner({
         vault: deps.vault,

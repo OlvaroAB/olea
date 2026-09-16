@@ -27,6 +27,7 @@ import type {
   VaultEvent,
   VaultPath,
   VaultSource,
+  WorkerTaskRequest,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -36,6 +37,9 @@ import {
   firstReadFoldersJustFinished,
   summarizeFirstReadByFolder,
 } from '../../src/ingestion/wiring.js';
+import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
+import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
+import type { WorkerConfig } from '../../src/worker/transport.js';
 
 // ---- a tiny hand-built single-page PDF, same technique
 // `packages/core/src/ingestion/extraction-runner.spec.ts` uses (see its own
@@ -385,5 +389,142 @@ describe('firstReadFoldersJustFinished', () => {
     ];
 
     expect(firstReadFoldersJustFinished(previous, current)).toEqual(['A', 'D']);
+  });
+});
+
+// `ol-15f8`: `deps.vision`'s composition — the same F7.8 grey-out shape
+// `concept/wiring.ts`'s `buildConceptWiring` tests already use (see
+// `test/concept/wiring.spec.ts`'s `FakeDataHost`/`configuredHost`).
+
+class FakeDataHost {
+  blob: unknown = null;
+  async loadData(): Promise<unknown> {
+    return this.blob;
+  }
+  async saveData(data: unknown): Promise<void> {
+    this.blob = data;
+  }
+}
+
+function configuredHost(config: PersistedWorkerConfig): FakeDataHost {
+  const host = new FakeDataHost();
+  host.blob = { [WORKER_CONFIG_STORAGE_KEY]: config };
+  return host;
+}
+
+function fakeTransport(reply: (request: WorkerTaskRequest) => unknown) {
+  const calls: WorkerTaskRequest[] = [];
+  return {
+    calls,
+    send: async (request: WorkerTaskRequest) => {
+      calls.push(request);
+      return reply(request);
+    },
+  };
+}
+
+const FAKE_PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+function visionOkResponse(result: unknown) {
+  return { ok: true, stamp: { contractVersion: 2, promptVersion: '1.0.0', modelId: 'm' }, result };
+}
+
+/** The queue's own persisted `failedReason` for one job — `TickResult` itself carries no reason field, only `QueueStore`'s persisted record does. */
+async function failedReasonFor(
+  queueStore: QueueStore,
+  contentHash: string,
+): Promise<string | undefined> {
+  const queue = await queueStore.load();
+  return queue?.jobs.find((job) => job.contentHash === contentHash)?.failedReason;
+}
+
+describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
+  it('omitted (the default, and today\'s real main.ts call): a drained vision-page job keeps DF-21\'s honest "no visionRunner wired yet" failure', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const queueStore = new MemoryQueueStore();
+    const { engine } = await buildIngestionRunner({
+      vault,
+      queueStore,
+      capability: CAN_DRAIN,
+    });
+
+    await engine.enqueue({
+      contentHash: 'vision-no-deps',
+      label: 'a standalone image',
+      payload: { kind: 'vision-page', sourcePath: 'Slides/diagram.png', format: 'image', page: 1 },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'vision-no-deps', outcome: 'failed' });
+    expect(await failedReasonFor(queueStore, 'vision-no-deps')).toContain(
+      'no visionRunner wired yet',
+    );
+  });
+
+  it('supplied but the Worker is not configured yet (F7.8): visionRunner stays unset, same DF-21 failure', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const transport = fakeTransport(() => visionOkResponse({ readable: true, extractedText: 'x' }));
+    const queueStore = new MemoryQueueStore();
+    const { engine } = await buildIngestionRunner({
+      vault,
+      queueStore,
+      capability: CAN_DRAIN,
+      vision: {
+        dataHost: new FakeDataHost(), // never configured — loadData() resolves to null
+        createTransport: (_config: WorkerConfig) => transport,
+      },
+    });
+
+    await engine.enqueue({
+      contentHash: 'vision-unconfigured',
+      label: 'a standalone image',
+      payload: { kind: 'vision-page', sourcePath: 'Slides/diagram.png', format: 'image', page: 1 },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'vision-unconfigured', outcome: 'failed' });
+    expect(await failedReasonFor(queueStore, 'vision-unconfigured')).toContain(
+      'no visionRunner wired yet',
+    );
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('supplied and configured: a drained vision-page job for a standalone image reaches the real transport and lands a unit in the sink', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const transport = fakeTransport(() =>
+      visionOkResponse({
+        readable: true,
+        extractedText: 'Figure 3: the rock cycle',
+        unreadableReason: null,
+      }),
+    );
+    const { engine, sink } = await buildIngestionRunner({
+      vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      vision: {
+        dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+        createTransport: (_config: WorkerConfig) => transport,
+      },
+    });
+
+    await engine.enqueue({
+      contentHash: 'vision-configured',
+      label: 'a standalone image',
+      payload: { kind: 'vision-page', sourcePath: 'Slides/diagram.png', format: 'image', page: 1 },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'vision-configured', outcome: 'done' });
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.taskId).toBe('vision.extract.v1');
+
+    const units = sink.forSource('Slides/diagram.png');
+    expect(units).toHaveLength(1);
+    expect(units[0]?.text).toBe('Figure 3: the rock cycle');
+    expect(units[0]?.provenance.location.page).toBe(1);
   });
 });
