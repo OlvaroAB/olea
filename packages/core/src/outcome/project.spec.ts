@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { VaultPath } from '../vault/types.js';
-import type { OutcomeEvent } from './events.js';
+import type { OutcomeCreatedEvent, OutcomeEvent } from './events.js';
 import { applyOutcomeEvent, projectOutcomeRecords } from './project.js';
 
 // Scenarios: olea-service/features/F4-oracle.md — "Outcome events project into a record
@@ -9,7 +9,7 @@ import { applyOutcomeEvent, projectOutcomeRecords } from './project.js';
 const SOURCE = { path: '02 Assignments/Objectives.md' as VaultPath, blockIndex: 3 };
 const PROVENANCE = { promptVersion: 'v1', modelVersion: 'model-a' };
 
-function createdEvent(outcomeId: string, timestamp = '2026-09-16T00:00:00Z'): OutcomeEvent {
+function createdEvent(outcomeId: string, timestamp = '2026-09-16T00:00:00Z'): OutcomeCreatedEvent {
   return {
     kind: 'created',
     schemaVersion: 1,
@@ -43,6 +43,17 @@ describe('applyOutcomeEvent — created', () => {
     const first = applyOutcomeEvent(undefined, createdEvent('outcome-1', '2026-01-01T00:00:00Z'));
     const second = applyOutcomeEvent(first, createdEvent('outcome-1', '2099-01-01T00:00:00Z'));
     expect(second).toBe(first); // same reference — a true no-op, not merely an equal value
+  });
+
+  it('`[D-253]`: threads extractorSelfRating through when the event carries one, omitted (never undefined) otherwise', () => {
+    const withRating = applyOutcomeEvent(undefined, {
+      ...createdEvent('outcome-1'),
+      extractorSelfRating: 0.82,
+    });
+    expect(withRating?.extractorSelfRating).toBe(0.82);
+
+    const withoutRating = applyOutcomeEvent(undefined, createdEvent('outcome-2'));
+    expect(withoutRating !== undefined && 'extractorSelfRating' in withoutRating).toBe(false);
   });
 });
 

@@ -14,10 +14,16 @@
  *
  * **Confidence is asymmetric, by the same clause.** The parent (`label`, taken from the
  * objectives/assessment-brief material) is outcome-attested — the institution's own words. Each
- * child concept is Olea's inference, and is lower-confidence than its parent. This module does
- * not itself carry a confidence field (no component reads one yet — see the component register's
- * row 1.1b, "constants: none named yet"); the asymmetry lives in which text is stored where, not
- * in a numeric field this record adds unasked.
+ * child concept is Olea's inference, and is lower-confidence than its parent. The asymmetry
+ * lives in which text is stored where, not in a numeric field on the parent, its label having no
+ * confidence to attach a number to.
+ *
+ * **`extractorSelfRating` — added by `[D-253]`'s ratifying amendment, 2026-09-16, and NOT the
+ * same thing as the asymmetry above.** `OutcomeRecord` now does carry one numeric field: the
+ * extractor's own uncalibrated self-rating for THIS outcome candidate, verbatim from the Worker
+ * response. It is stored because dropping it at extraction time would lose information a later
+ * calibration (`[OUT-2]`) needs, and it is stored inert: see `OutcomeRecord.extractorSelfRating`'s
+ * own doc for the no-branching-until-calibrated rule this amendment attaches to it.
  *
  * **Persisted schema, Class C.** `docs/Olea_component_register.md` row 1.1b: "an Outcome record,
  * once shipped, is a persisted schema crossing per this register's own rule." This module ships
@@ -92,6 +98,20 @@ export interface OutcomeRecord {
   readonly conceptKeys: readonly string[];
   readonly status: OutcomeStatus;
   readonly provenance: OutcomeProvenance;
+  /**
+   * `[D-253]`'s ratifying amendment (David, 2026-09-16): the extractor's OWN per-outcome
+   * confidence, 0..1, verbatim from `outcomes.extract.v1`'s `OutcomeCandidate.confidence`
+   * (`packages/plugin/src/ingestion/outcomes-extract-adapter.ts`). **This is an uncalibrated
+   * model self-rating, and NO consumer may branch or threshold on it until it has been
+   * calibrated against a judged read** (`[OUT-2]`, the calibration bead this amendment spawned).
+   * Storing it verbatim, rather than dropping it at extraction time, preserves information a
+   * later calibration needs — a dropped number cannot be recovered from a re-run of a
+   * generative call, the same "storage over recomputation, once" argument the review log
+   * already makes for D7.1 events. Omitted (never present as `undefined`) when the extractor
+   * did not supply one, the same encoding discipline `ConceptRecord`'s optional fields already
+   * use.
+   */
+  readonly extractorSelfRating?: number;
   /** ISO date the outcome was first minted. Debugging only — not personal, no content. */
   readonly mintedAt: string;
   readonly schemaVersion: number;

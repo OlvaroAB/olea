@@ -36,6 +36,12 @@ function applyCreated(
     conceptKeys: [],
     status: 'active',
     provenance: event.provenance,
+    // `[D-253]`'s ratifying amendment: threaded through verbatim, never defaulted or
+    // recomputed — omitted entirely (never `extractorSelfRating: undefined`) when the event
+    // carried none, the same encoding discipline every optional field on this record uses.
+    ...(event.extractorSelfRating !== undefined
+      ? { extractorSelfRating: event.extractorSelfRating }
+      : {}),
     mintedAt: event.timestamp,
     schemaVersion: OUTCOME_RECORD_SCHEMA_VERSION,
   };

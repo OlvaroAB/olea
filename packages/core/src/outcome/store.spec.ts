@@ -60,6 +60,53 @@ describe('resolveOutcome — mint once, read back thereafter', () => {
     expect(records[0]?.path).toBe(outcomeRecordPath(record.id));
   });
 
+  it('`[D-253]`: threads extractorSelfRating through verbatim when the caller supplies one', async () => {
+    const record = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X',
+      provenance: PROVENANCE,
+      extractorSelfRating: 0.73,
+    });
+
+    expect(record.extractorSelfRating).toBe(0.73);
+    const [persisted] = await listOutcomeRecords(source);
+    expect(persisted?.record.extractorSelfRating).toBe(0.73);
+  });
+
+  it('`[D-253]`: omits extractorSelfRating entirely (never `undefined`) when the caller supplies none', async () => {
+    const record = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X',
+      provenance: PROVENANCE,
+    });
+
+    expect('extractorSelfRating' in record).toBe(false);
+    const [persisted] = await listOutcomeRecords(source);
+    expect(persisted !== undefined && 'extractorSelfRating' in persisted.record).toBe(false);
+  });
+
+  it('`[D-253]`: a re-extraction with a different self-rating never overwrites the stored one (conservation)', async () => {
+    const first = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X',
+      provenance: PROVENANCE,
+      extractorSelfRating: 0.6,
+    });
+    const second = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X (re-extracted)',
+      provenance: PROVENANCE,
+      extractorSelfRating: 0.95,
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second.extractorSelfRating).toBe(0.6);
+  });
+
   it('mints an opaque id, never a derivation of label, source or courses', async () => {
     const record = await resolveOutcome(source, {
       courses: ['COURSEA'],
@@ -134,6 +181,18 @@ describe('resolveOutcome — mint once, read back thereafter', () => {
     expect(bytesTwice).toBe(bytesOnce);
     const parsed: unknown = JSON.parse(bytesOnce);
     expect(isOutcomeRecord(parsed)).toBe(true);
+  });
+
+  it('`[D-253]`: isOutcomeRecord accepts a record with no extractorSelfRating and rejects a non-numeric one', async () => {
+    const record = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X',
+      provenance: PROVENANCE,
+    });
+    expect(isOutcomeRecord(record)).toBe(true);
+    expect(isOutcomeRecord({ ...record, extractorSelfRating: 'high' })).toBe(false);
+    expect(isOutcomeRecord({ ...record, extractorSelfRating: 0.5 })).toBe(true);
   });
 
   it('a corrupt sidecar file is skipped, never thrown, and does not block other lookups', async () => {

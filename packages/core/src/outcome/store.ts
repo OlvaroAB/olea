@@ -75,6 +75,12 @@ export function isOutcomeRecord(value: unknown): value is OutcomeRecord {
   if (!isStringArray(v.conceptKeys)) return false;
   if (!isOutcomeStatus(v.status)) return false;
   if (!isOutcomeProvenance(v.provenance)) return false;
+  // `[D-253]`'s ratifying amendment: optional, so ABSENT is valid (an older record minted
+  // before this field existed, or a caller that supplied none) — only a PRESENT value that
+  // fails the type check is rejected.
+  if (v.extractorSelfRating !== undefined && typeof v.extractorSelfRating !== 'number') {
+    return false;
+  }
   if (!isNonEmptyString(v.mintedAt)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
   return true;
@@ -148,6 +154,8 @@ export interface ResolveOutcomeInput {
   readonly source: OutcomeSourceReference;
   readonly label: string;
   readonly provenance: OutcomeProvenance;
+  /** `[D-253]`'s ratifying amendment — see `../outcome/types.ts`'s `OutcomeRecord.extractorSelfRating` doc. Threaded through only on the genuine-mint path (below); a source that already matches an existing record returns that record verbatim, per this function's own conservation rule, so a re-extraction never overwrites an already-stored self-rating with a fresh one. */
+  readonly extractorSelfRating?: number;
 }
 
 export interface ResolveOutcomeOptions {
@@ -194,6 +202,9 @@ export async function resolveOutcome(
     source: input.source,
     label: input.label,
     provenance: input.provenance,
+    ...(input.extractorSelfRating !== undefined
+      ? { extractorSelfRating: input.extractorSelfRating }
+      : {}),
   };
   const record = applyOutcomeEvent(undefined, event);
   // `applyOutcomeEvent` always returns a record for a `created` event — see its doc — so this

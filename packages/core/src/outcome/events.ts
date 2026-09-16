@@ -37,6 +37,8 @@ export interface OutcomeCreatedEvent extends OutcomeEventCommon {
   readonly source: OutcomeSourceReference;
   readonly label: string;
   readonly provenance: OutcomeProvenance;
+  /** `[D-253]`'s ratifying amendment — see `./types.ts`'s `OutcomeRecord.extractorSelfRating` for what this is and the no-branching-until-calibrated rule attached to it. Omitted (never `undefined`) when the extractor supplied none. */
+  readonly extractorSelfRating?: number;
 }
 
 /**
