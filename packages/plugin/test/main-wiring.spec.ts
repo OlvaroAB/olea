@@ -876,6 +876,28 @@ describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is
   });
 });
 
+describe('the standalone-image vision runner reaches production (ol-15f8 / ol-ua2f, C3.1/C3.3)', () => {
+  // `ol-15f8` composed `IngestionWiringDeps.vision` and unit-tested it
+  // against fakes, but its own boundary excluded `main.ts`, so the real
+  // `buildIngestionRunner` call here still omitted the field — the seam was
+  // wired and tested but not reachable. This is the source-level proof that
+  // the real call now supplies it, on the same F7.8 (`dataHost`/
+  // `createTransport`) terms as every other Worker-backed port in `onload`.
+
+  it('supplies vision.dataHost and vision.createTransport to the real buildIngestionRunner call', () => {
+    expect(main).toMatch(
+      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?vision:\s*\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,\s*\},\s*\}\);/,
+    );
+  });
+
+  it('the vision field is inside the same buildIngestionRunner call, not a second unrelated object literal', () => {
+    const match = main.match(/this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?\}\);/);
+    expect(match).not.toBeNull();
+    expect(match?.[0]).toContain('vision:');
+    expect(match?.[0]).toContain('revision:');
+  });
+});
+
 describe("retrieve()'s two production callers supply registryOverrides, so alias expansion is actually exercised (ol-r5j4)", () => {
   // `ol-l5og.11`'s own diagnosis: `retrieve()` expands keyword queries with
   // rename aliases when `RetrieveDeps.registryOverrides` is supplied, but

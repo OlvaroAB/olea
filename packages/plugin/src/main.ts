@@ -1226,6 +1226,19 @@ export default class OleaPlugin extends Plugin {
         cache: generationWiring.cache,
         draftDeps: () => this.draftQuizCardsDeps(),
       },
+      // `ol-15f8`/`ol-ua2f`: the standalone-image vision runner (C3.1/C3.3),
+      // wired the same F7.8 way every other Worker-backed port in this
+      // method is (`this.retrieval`/`this.grading`/`this.concept` below) —
+      // `this` satisfies `ObsidianDataHost`, and `createRecordingTransport`
+      // (defined above) is the one shared transport factory so vision calls
+      // land in the same F7.3 usage log as every other task. See
+      // `ingestion/wiring.ts`'s `buildVisionRunner` for the F7.8 grey-out
+      // gate (no Worker config yet ⇒ `visionRunner` stays unset, same DF-21
+      // honest failure as before this bead).
+      vision: {
+        dataHost: this,
+        createTransport: createRecordingTransport,
+      },
     });
 
     // `ol-0r92.21` [D-152]: the manual process-now timing override, built the
