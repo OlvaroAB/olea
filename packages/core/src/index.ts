@@ -152,6 +152,21 @@ export { reconcileCorpusVerdicts } from './concept/corpus-relations/verdict.js';
 // is the one place the derivation is defined). Does not touch course.ts
 // itself.
 export { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './concept/course.js';
+export type {
+  EdgeDispositionEvent,
+  EdgeDispositionKind,
+  EdgeDispositionLog,
+} from './concept/disposition.js';
+export {
+  appendEdgeDisposition,
+  currentDisposition,
+  EDGE_DISPOSITION_FOLDER,
+  edgeDispositionLogPath,
+  excludeDisposedRelationCacheRecords,
+  excludedPropositionKeys,
+  isExcludedAtReadTime,
+  listEdgeDispositionLogs,
+} from './concept/disposition.js';
 export { extractConcepts, foldReadAnchors } from './concept/extract.js';
 // The `ConceptKeyRecord` sidecar (`[D-174]`, `ol-2zfj.42`) and its two seams:
 // `resolveConceptKey` (anchor-match, mint-or-lookup) and `bindConceptKeyToNote`
