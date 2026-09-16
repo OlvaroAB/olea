@@ -1193,6 +1193,10 @@ export {
   evaluatePaperUnlock,
   nearestUpcomingAssessment as nearestUpcomingPaperAssessment,
 } from './oracle/paper-unlock.js';
+export {
+  PAPER_UNLOCK_COVERAGE_GATE_SHARE,
+  PAPER_UNLOCK_PROXIMITY_WINDOW_DAYS,
+} from './oracle/paper-unlock-constants.js';
 // F4.2's high-yield ranking (P5-T04). Not previously reachable from this entry
 // point — added here because `buildStudyPlan` takes a `RankOracleResult` and an
 // input type a consumer cannot name is an export in name only.
