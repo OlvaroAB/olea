@@ -241,11 +241,17 @@ describe('the budget seam is live, not pre-baked models', () => {
   it('deps.load rebuilds for whatever budget the view asks for', async () => {
     const scenario = await buildSessionScenario('session-tight-5', vault);
 
-    const tight = await scenario.deps.load({ budgetMinutes: 5 });
+    // 2 minutes (120s), not 5: `[HARD-2b]`'s per-session concept cap
+    // (`a5697a8`, `[D-187]`/`[D-240]`) means this course's four ranked
+    // concepts plateau at 165s combined once each has had its one slot, so
+    // 5 minutes (300s) and 90 minutes admit the identical four items —
+    // `ol-zfcq`. Two minutes is the smallest whole-minute request that still
+    // excludes a row, so it is the one that actually exercises the seam.
+    const tight = await scenario.deps.load({ budgetMinutes: 2 });
     const roomy = await scenario.deps.load({ budgetMinutes: 90 });
     if (tight.kind !== 'model' || roomy.kind !== 'model') throw new Error('expected models');
 
-    expect(tight.model.budgetMinutes).toBe(5);
+    expect(tight.model.budgetMinutes).toBe(2);
     // Not a ceiling check — `[D-091]` (`ol-zji3` [BUD-1]).
     expectBudgetOvershootBound(tight.model);
     expect(roomy.model.items.length).toBeGreaterThan(tight.model.items.length);

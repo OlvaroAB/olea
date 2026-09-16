@@ -98,25 +98,32 @@ test("session-short-20: F4.6's own example budget, no imminent quiz so the forma
   expect(items).toContain('formatPreference: written');
   expect(await inspectorItemCount(page)).toBeGreaterThan(0);
   // The default 20-minute button IS one of the three clickable options here
-  // (unlike session-tight-5's 5-minute default), so it should render active.
+  // (unlike session-tight-5's 2-minute default), so it should render active.
   await expect(budgetButton(page, '20 min')).toHaveClass(/olea-session-budget-active/);
 });
 
-test('session-tight-5: the budget actually bites — items are left out, and 5 minutes matches none of the three buttons', async ({
+test('session-tight-5: the budget actually bites — a row is left out, and 2 minutes matches none of the three buttons', async ({
   page,
 }) => {
+  // Was a 5-minute default (`ol-zfcq`): `[HARD-2b]`'s per-session concept cap
+  // (`a5697a8`, `[D-187]`/`[D-240]`) plateaus this course's four ranked
+  // concepts at 165s combined once each has had its one slot outside the
+  // final week, so 5 minutes (300s) no longer excludes anything — it reached
+  // the identical four items 20/45/90 minutes do. 2 minutes (120s) is the
+  // smallest whole-minute budget that still genuinely bites.
   await gotoState(page, 'session', 'session-tight-5', 'obsidian-dark');
   const items = await inspectorRowValue(page, 'items');
-  // `model.leftOut.length` (grouped by concept/row) stays 0 here — every
-  // ranked row still gets a slot — but the parenthetical instrument count is
-  // where the 5-minute budget actually shows: fewer instruments per row were
-  // included than the same rows get at 20/45/90 minutes (13 items there,
-  // fewer here — see the debug run this assertion was verified against).
+  // `model.leftOut.length` (grouped by concept/row) is 1 here — one whole
+  // ranked row, not just a secondary instrument, misses the target — and the
+  // parenthetical instrument count adds the cap's own exclusions on top of
+  // that (the other three rows' extra borrowed instruments, capped to one
+  // each outside the final week).
+  expect(items).toContain('1 left out');
   const leftOutInstrumentsMatch = /\((\d+) instrument\(s\)\)/.exec(items);
   expect(leftOutInstrumentsMatch).not.toBeNull();
   expect(Number(leftOutInstrumentsMatch?.[1])).toBeGreaterThan(0);
   // The view's three budget buttons are always 20/45/90 (SESSION_BUDGET_OPTIONS)
-  // regardless of this state's own 5-minute default, so none of them is the
+  // regardless of this state's own 2-minute default, so none of them is the
   // active one on load — a real, slightly surprising consequence of the
   // budget list being a Class B default independent of any one state.
   await expect(frame(page).locator('.olea-session-budget-active')).toHaveCount(0);
@@ -206,7 +213,7 @@ test('FLOW: clicking a budget button re-runs buildStudySession for real, over th
   await budgetButton(page, '20 min').click();
   await expect(budgetButton(page, '20 min')).toHaveClass(/olea-session-budget-active/);
 
-  // The 5-minute default matched none of the three buttons (previous test),
+  // The 2-minute default matched none of the three buttons (previous test),
   // so clicking any one of them is a real state change, not a no-op replay
   // of the URL's own pre-baked scenario — this is Playwright driving the
   // component, exactly as `keyboard-flows.spec.ts` and `generate.spec.ts`'s

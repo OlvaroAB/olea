@@ -165,11 +165,25 @@ export const SESSION_STATES: readonly SessionWorkbenchState[] = [
       'silent and the ordering is pure gap score. Instruments are borrowed; see the module doc.',
   },
   {
+    // Was `budgetMinutes: 5` / id `session-tight-5`. `[HARD-2b]` (`a5697a8`,
+    // `[D-187]`/`[D-240]`) made F2.17's per-session concept cap a real gate:
+    // outside the final week, a row that already won its one slot is skipped
+    // for the rest of the fill, full stop — F2.18's own words are "a session
+    // is as long as the course warrants, and ending early is the intended
+    // shape." This fixture course has exactly four ranked concepts (see this
+    // module's doc, "THE FINDING THIS FILE RAN INTO"), and their combined
+    // first-round cost is 165s — under every whole-minute budget from 3
+    // minutes up. Five minutes (300s) no longer excludes anything: it
+    // plateaus at the same four items `session-short-20` gets (`ol-zfcq`).
+    // Two minutes (120s) is the smallest whole-minute budget that still
+    // genuinely bites — it admits three of the four rows and leaves the
+    // fourth as a real, row-level `did-not-fit` omission, which is the thing
+    // this state exists to demonstrate.
     id: 'session-tight-5',
-    label: 'Five minutes between lectures',
+    label: 'Two minutes between lectures',
     group: 'session',
     asOf: '2026-09-14',
-    budgetMinutes: 5,
+    budgetMinutes: 2,
     instruments: 'borrowed',
     history: 'none',
     note:
