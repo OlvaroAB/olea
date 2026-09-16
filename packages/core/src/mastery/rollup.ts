@@ -325,18 +325,27 @@ export interface ConceptMasteryResult {
  * array is iterated, never the arithmetic, so the high-water-mark result for
  * any one concept is unchanged.
  *
- * **Cached in a `WeakMap` keyed by the `entries` array's own identity.**
- * This does not weaken the "no cache inside this module" purity claim the
- * module doc makes elsewhere: the index is a pure function of `entries`'
- * *content*, and the cache can only ever be hit by the exact same array
- * reference — a different log (even one that differs by a single appended
- * event) is a different array, hits a cold cache, and gets a fresh index.
- * There is nothing here for a rebuild to disagree with; it is memoisation of
- * a pure computation, not state. It exists because every caller in this
- * codebase passes the *same* `entries` reference into several of these
- * functions back to back for one view-open (the retrospective provider,
- * `computeAllConceptMastery`, `readAllConceptVitality`) — the case a WeakMap
- * on array identity is built for.
+ * **Cached in a `WeakMap` keyed by the `entries` array's own identity, guarded
+ * by the array's `length` at index-build time (`ol-i8ga`, fixing the
+ * regression `ol-95vv.9` introduced).** The original doc here claimed "a
+ * different log is a different array" — false for a caller that mutates the
+ * *same* array in place (`Array.prototype.push`, as
+ * `response-function.spec.ts`'s incremental-replay construction does, and as
+ * any in-memory event log appending to a live array would): the reference
+ * stays identical while the content it should be evidence for grows, so a
+ * bare identity-keyed cache silently served an index built from a shorter
+ * prefix of the log forever after. Storing `length` alongside the index and
+ * rebuilding whenever it no longer matches `entries.length` restores the
+ * "same entries, same conceptId, same answer" purity contract for the common
+ * append-only case without giving up the memoisation this module exists for:
+ * a caller that never mutates its `entries` reference (every production
+ * caller today) still hits a warm cache on every repeat call within one
+ * view-open. It does not protect an in-place mutation that leaves `length`
+ * unchanged (e.g. replacing an element at a fixed index) — no known caller
+ * does that, and the module doc's "single pass over `entries`" contract
+ * already assumes callers treat a given `entries` array as an immutable log
+ * once appended-to, matching `ReviewLogEntry`'s own append-only event-log
+ * semantics.
  */
 interface ReviewLogEntryIndex {
   /** Every `kind: 'review'` record naming a given concept id, in log order. */
@@ -350,11 +359,16 @@ interface ReviewLogEntryIndex {
   readonly conceptIds: readonly string[];
 }
 
-const entryIndexCache = new WeakMap<readonly ReviewLogEntry[], ReviewLogEntryIndex>();
+interface CachedReviewLogEntryIndex {
+  readonly length: number;
+  readonly index: ReviewLogEntryIndex;
+}
+
+const entryIndexCache = new WeakMap<readonly ReviewLogEntry[], CachedReviewLogEntryIndex>();
 
 function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
   const cached = entryIndexCache.get(entries);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined && cached.length === entries.length) return cached.index;
 
   const recordsByConcept = new Map<string, ReviewLogRecord[]>();
   const instrumentTypesByConcept = new Map<string, Map<string, InstrumentType>>();
@@ -387,7 +401,7 @@ function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
     instrumentTypesByConcept,
     conceptIds: [...conceptIdSet].sort(),
   };
-  entryIndexCache.set(entries, index);
+  entryIndexCache.set(entries, { length: entries.length, index });
   return index;
 }
 
