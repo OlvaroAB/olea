@@ -36,6 +36,8 @@
  */
 
 import {
+  type ConceptKeyRecord,
+  conceptRegistryEntryFromRecord,
   createExtractionJobRunner,
   DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
   type DeviceCapability,
@@ -44,11 +46,16 @@ import {
   type ExtractedUnitSink,
   IngestionQueueEngine,
   type JobRunner,
+  listConceptKeyRecords,
+  listOutcomeRecords,
+  type OutcomeConceptReconciliationReport,
+  type OutcomeConceptRegistryEntry,
   type OutcomeProvenance,
   type OutcomeRecord,
   type OutcomeSourceReference,
   type PersistedJob,
   type QueueStore,
+  reconcileOutcomeConcepts,
   resolveOutcome,
   type VaultPath,
   type VaultSource,
@@ -419,6 +426,11 @@ export function buildFirstReadFolderViews(
 // WHICH caller is the contract's to answer, not the brief's" (this repo's
 // own `CLAUDE.md`). Until both land, this composition is exercised by its
 // own unit tests alone.
+//
+// **`runOutcomesExtractAndReconcile`, added below (`[OUT-3]`), inherits this exact gate rather
+// than opening a second one.** It is a strict extension of `runOutcomesExtract` — same inputs,
+// same `[EXT-14]` wait — so its own reachability note sits with it, just below, instead of
+// repeating this one.
 
 /**
  * `deps.dataHost`/`deps.createTransport` compose exactly the way
@@ -524,4 +536,80 @@ export async function runOutcomesExtract(
   );
 
   return { outcomes, paperStructure: result.paperStructure };
+}
+
+// =============================================================================
+// `runOutcomesExtractAndReconcile` — `[OUT-3]` (F4.1, ONT-R1 `ol-2zfj.86`, component register row
+// 1.1b), composed here rather than inside `runOutcomesExtract` itself so that function's own
+// tests (and any future caller that genuinely only wants the read-and-persist seam) keep working
+// unchanged. This is the "later stage" `runOutcomesExtract`'s own doc names above: "Concept
+// attachment (`attachConceptToOutcome`) is deliberately NOT called here ... that is a later
+// stage's job, once one exists, not this read-and-persist seam's." `olea-core`'s
+// `outcome/reconcile.ts` is that stage; this function is its one composition root.
+//
+// **Course scoping happens here, not in `reconcileOutcomeConcepts`.** `olea-core`'s registry
+// entry type deliberately carries no course field (`reconcile.ts`'s own doc), because a
+// `NoteAnchor`-bound concept carries no course at this layer at all. `TopicAnchor` concepts DO
+// carry one, so `courseScopedConceptRegistry` below filters those to `options.courses` and passes
+// every `NoteAnchor` concept through unfiltered — an honest, named limitation (a note-anchored
+// concept from an unrelated course could theoretically be offered as a match here) rather than a
+// silent one, matching `key-store.ts`'s own course-scoping asymmetry between anchor kinds.
+//
+// **Reachability (`[D-072]`, plan §2.7 clause 5) — deliberately incomplete, same gate as
+// `runOutcomesExtract` above.** This function has no `main.ts` caller for the same two reasons
+// that section's doc already gives, plus the fact that it is a strict extension of that
+// function's own call: `[EXT-14]` (`ol-2zfj.126`) gates the plugin trigger on a measured
+// five-course real-model run first, and until that lands, this composition is exercised only by
+// `wiring.spec.ts`'s own unit tests.
+// =============================================================================
+
+export interface RunOutcomesExtractAndReconcileResult extends RunOutcomesExtractResult {
+  readonly reconciliation: OutcomeConceptReconciliationReport;
+}
+
+/**
+ * `TopicAnchor` concepts are scoped to `courses`; every `NoteAnchor` concept passes through
+ * unfiltered — see this section's module doc for why. `conceptRegistryEntryFromRecord` (`olea-
+ * core`) does the actual name/alias projection.
+ */
+function courseScopedConceptRegistry(
+  records: readonly { readonly record: ConceptKeyRecord }[],
+  courses: readonly string[],
+): readonly OutcomeConceptRegistryEntry[] {
+  const courseSet = new Set(courses);
+  return records
+    .filter(({ record }) => record.anchor.kind !== 'topic' || courseSet.has(record.anchor.course))
+    .map(({ record }) => conceptRegistryEntryFromRecord(record));
+}
+
+/**
+ * `runOutcomesExtract` (above), then `reconcileOutcomeConcepts` (`olea-core`) against every
+ * concept key record already on disk, scoped to `options.courses` (see this section's module
+ * doc). Concept extraction itself is not run here — this function reads whatever the concept
+ * key store already holds, the same "given a course's ... concept registry" input shape
+ * `reconcile.ts`'s own doc names, never triggering a fresh extraction pass of its own.
+ *
+ * **`outcomes` on the result is the POST-reconciliation state, not `runOutcomesExtract`'s own
+ * return value.** `reconcileOutcomeConcepts` writes concept attachments straight to the vault
+ * (`attachConceptToOutcome`) without handing back updated records, so the `outcomes` array
+ * `runOutcomesExtract` returns is a stale, pre-attachment snapshot by the time reconciliation has
+ * run. This function re-reads the store once reconciliation settles and returns that instead —
+ * a caller of this composition wants what is actually on disk, not the moment before it.
+ */
+export async function runOutcomesExtractAndReconcile(
+  vault: VaultSource,
+  reader: WorkerOutcomesExtractReader,
+  passages: readonly OutcomeSourcePassage<OutcomeSourceReference>[],
+  options: RunOutcomesExtractOptions,
+): Promise<RunOutcomesExtractAndReconcileResult> {
+  const { outcomes, paperStructure } = await runOutcomesExtract(vault, reader, passages, options);
+  const conceptRecords = await listConceptKeyRecords(vault);
+  const concepts = courseScopedConceptRegistry(conceptRecords, options.courses);
+  const reconciliation = await reconcileOutcomeConcepts(vault, outcomes, concepts);
+
+  const persisted = await listOutcomeRecords(vault);
+  const byId = new Map(persisted.map(({ record }) => [record.id, record]));
+  const reconciledOutcomes = outcomes.map((outcome) => byId.get(outcome.id) ?? outcome);
+
+  return { outcomes: reconciledOutcomes, paperStructure, reconciliation };
 }

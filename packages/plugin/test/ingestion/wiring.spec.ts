@@ -31,6 +31,7 @@ import type {
   VaultSource,
   WorkerTaskRequest,
 } from 'olea-core';
+import { resolveConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildFirstReadFolderViews,
@@ -39,6 +40,7 @@ import {
   type FirstReadFolderCounts,
   firstReadFoldersJustFinished,
   runOutcomesExtract,
+  runOutcomesExtractAndReconcile,
   summarizeFirstReadByFolder,
 } from '../../src/ingestion/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
@@ -727,5 +729,90 @@ describe('runOutcomesExtract — adapter plus outcome-store composition', () => 
       { label: 'Section A', questionForm: 'short-answer', itemCount: 5, marks: 10, anchor },
     ]);
     expect(await vault.list({ under: '.olea/outcomes', extensions: ['json'] })).toHaveLength(0);
+  });
+});
+
+// `runOutcomesExtractAndReconcile` (`[OUT-3]`) — `runOutcomesExtract` above, plus the outcome→
+// concept containment reconciliation (`olea-core`'s `outcome/reconcile.ts`) against whatever
+// concept key records already exist in the vault, scoped to the run's own courses. See
+// `wiring.ts`'s own module doc on this composition for the reachability note (same `[EXT-14]`
+// gate `runOutcomesExtract` carries, no `main.ts` caller yet).
+describe('runOutcomesExtractAndReconcile — outcome extraction plus concept containment ([OUT-3])', () => {
+  it('attaches an exact-matching concept and leaves an unmatched outcome unattached', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({
+        outcomes: [
+          { label: 'Cell biology', confidence: 0.9, anchorIndex: 1 },
+          { label: 'Unrelated topic', confidence: 0.8, anchorIndex: 1 },
+        ],
+        paperStructure: { sections: [] },
+      }),
+    );
+    const { reader } = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+    if (reader === null) throw new Error('expected a configured reader');
+
+    const vault = new WritableTextVault();
+    await resolveConceptKey(vault, 2, {
+      kind: 'topic',
+      course: 'TESTC101',
+      name: 'Cell biology',
+      aliases: [],
+    });
+
+    const anchor: OutcomeSourceReference = { path: 'Objectives/week1.md', blockIndex: 0 };
+    const passages = [{ text: 'Cell biology and an unrelated topic, with examples.', anchor }];
+
+    const result = await runOutcomesExtractAndReconcile(vault, reader, passages, {
+      documentKind: 'objectives',
+      courses: ['TESTC101'],
+      provenance: TEST_PROVENANCE,
+    });
+
+    expect(result.outcomes).toHaveLength(2);
+    const matched = result.outcomes.find((outcome) => outcome.label === 'Cell biology');
+    const unmatched = result.outcomes.find((outcome) => outcome.label === 'Unrelated topic');
+    expect(matched?.conceptKeys).toHaveLength(1);
+    expect(unmatched?.conceptKeys).toEqual([]);
+
+    expect(result.reconciliation.attached).toHaveLength(1);
+    expect(result.reconciliation.attached[0]?.outcomeId).toBe(matched?.id);
+    expect(result.reconciliation.unattachedOutcomeIds).toEqual([unmatched?.id]);
+  });
+
+  it('scopes a topic-anchored concept to its own course — a same-named concept in a different course never attaches', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({
+        outcomes: [{ label: 'Cell biology', confidence: 0.9, anchorIndex: 1 }],
+        paperStructure: { sections: [] },
+      }),
+    );
+    const { reader } = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+    if (reader === null) throw new Error('expected a configured reader');
+
+    const vault = new WritableTextVault();
+    await resolveConceptKey(vault, 2, {
+      kind: 'topic',
+      course: 'OTHERCOURSE',
+      name: 'Cell biology',
+      aliases: [],
+    });
+
+    const anchor: OutcomeSourceReference = { path: 'Objectives/week1.md', blockIndex: 0 };
+    const passages = [{ text: 'Cell biology, with examples.', anchor }];
+
+    const result = await runOutcomesExtractAndReconcile(vault, reader, passages, {
+      documentKind: 'objectives',
+      courses: ['TESTC101'],
+      provenance: TEST_PROVENANCE,
+    });
+
+    expect(result.reconciliation.attached).toEqual([]);
+    expect(result.reconciliation.unattachedOutcomeIds).toEqual([result.outcomes[0]?.id]);
   });
 });

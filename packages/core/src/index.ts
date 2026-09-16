@@ -1110,6 +1110,89 @@ export type {
   ComposeRetrievabilityInput,
 } from './oracle/compose.js';
 export { composeOracleRanking } from './oracle/compose.js';
+export type { BuildPaperBlueprintInput, PaperConceptWeight } from './oracle/paper-blueprint.js';
+export {
+  ALLOWED_HELD_SOURCE_KINDS as PAPER_ALLOWED_HELD_SOURCE_KINDS,
+  buildPaperBlueprint,
+  conceptWeight as paperConceptWeight,
+  dominantFormatClass as paperDominantFormatClass,
+  EMPHASIS_WEIGHT_BOOST_DECLARED,
+  EXTENT_FALLBACK_SLOT_COUNT_DECLARED,
+  extentSlotCountTarget,
+  isEligibleConcept as isEligiblePaperConcept,
+  MAX_BLUEPRINT_SLOTS_DECLARED,
+  matchesEmphasis,
+  PAPER_TAUGHT_ELIGIBLE_SIGNALS,
+  taskIdForFormatClass as paperTaskIdForFormatClass,
+  validatePaperScope,
+} from './oracle/paper-blueprint.js';
+export type {
+  FillPaperBlueprintResult,
+  PaperGeneratedItem,
+  PaperItemGenerationPort,
+  PaperItemGenerationRequest,
+  PaperItemGenerationResult,
+} from './oracle/paper-items.js';
+export { fillPaperBlueprintSlots } from './oracle/paper-items.js';
+export type {
+  CreatePaperInput,
+  PaperCompositionAccount,
+  PaperDepthReading,
+  PaperEvent,
+  PaperExplanationRecord,
+  PaperHandoffRecord,
+  PaperRecord,
+  PaperResponseRecord,
+  PaperStatus,
+  PaperStoreOptions,
+} from './oracle/paper-store.js';
+export {
+  applyPaperEvent,
+  createPaper,
+  handOffPaperItem,
+  isAnswerRevealed,
+  isPaperRecord,
+  listPaperRecords,
+  mintOpaquePaperId,
+  OPAQUE_PAPER_ID_PREFIX,
+  PAPER_DEPTH_READINGS,
+  PAPER_STATUSES,
+  PAPER_STORE_FOLDER,
+  paperCompositionAccountFromBlueprint,
+  paperRecordPath,
+  recordPaperExplanationResult,
+  recordPaperResponse,
+  retirePaper,
+} from './oracle/paper-store.js';
+// F4.11's practice-paper generation pipeline (`[D-250]`/`[D-252]`, component register row 2.11,
+// `[H-blueprint]` / `ol-0r92.75`, bead `[PAPER-3]`). No production caller yet — surfaces are a
+// separate lane's job (DP-7, `[D-255]`); see each module's own doc for the reachability note.
+export type {
+  PaperAssessment,
+  PaperBlueprint,
+  PaperBlueprintSlot,
+  PaperEmptySlot,
+  PaperExtent,
+  PaperFormatClass,
+  PaperGeneratorTaskId,
+  PaperGroundingLabel,
+  PaperGroundingTier,
+  PaperHeldSource,
+  PaperRecoveredSection,
+  PaperRecoveredSitting,
+  PaperRecoveredStructure,
+  PaperScopeConcept,
+  PaperScopeOutcome,
+  PaperSteering,
+  PaperTaughtSignal,
+  PaperWeightingAlpha,
+} from './oracle/paper-types.js';
+export type { PaperUnlockInput, PaperUnlockResult } from './oracle/paper-unlock.js';
+export {
+  daysUntilDue as paperDaysUntilDue,
+  evaluatePaperUnlock,
+  nearestUpcomingAssessment as nearestUpcomingPaperAssessment,
+} from './oracle/paper-unlock.js';
 // F4.2's high-yield ranking (P5-T04). Not previously reachable from this entry
 // point — added here because `buildStudyPlan` takes a `RankOracleResult` and an
 // input type a consumer cannot name is an export in name only.
@@ -1128,10 +1211,11 @@ export type {
 // The Outcome node (`[ONT-R5]`, knowledge model §4, functional scope F4.1, component register
 // row 1.1b): an examiner-declared unit of scope, the parent of the concepts inferred from how it
 // is taught and examined. `[D-253 / OUT-1]` proposes the field set for ratification; the module
-// ships it as the reversible default (`./outcome/types.js`'s module doc). No extraction adapter
-// calls this yet — `docs/Olea_component_register.md` row 1.1b is still "to build" — so these
-// exports have no production caller in this package; see the outcome bead's close evidence for
-// the reachability argument (`[D-072]` clause 5).
+// ships it as the reversible default (`./outcome/types.js`'s module doc). `docs/Olea_component_
+// register.md` row 1.1b is still "to build" for a live extraction trigger — `packages/plugin/src/
+// ingestion/wiring.ts`'s `runOutcomesExtract`/`runOutcomesExtractAndReconcile` compose against
+// these exports but have no `main.ts` caller yet, gated on `[EXT-14]` (`ol-2zfj.126`); see each
+// bead's own close evidence for the reachability argument (`[D-072]` clause 5).
 export type {
   OutcomeConceptAttachedEvent,
   OutcomeCreatedEvent,
@@ -1139,6 +1223,25 @@ export type {
   OutcomeRetiredEvent,
 } from './outcome/events.js';
 export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
+// `[OUT-3]` (F4.1, ONT-R1 `ol-2zfj.86`): the outcome→concept containment reconciliation and its
+// two coverage reads. See `./outcome/reconcile.js`'s own module doc for the three-bucket match
+// rule and the same-as reuse judgement call, and `./outcome/reconcile-coverage.js`'s for the two
+// named-but-unbuilt consumers (component register rows 1.1b and 2.11).
+export type {
+  OutcomeConceptAttachment,
+  OutcomeConceptMatchKind,
+  OutcomeConceptProposal,
+  OutcomeConceptReconciliationReport,
+  OutcomeConceptRegistryEntry,
+  ReconcileOutcomeConceptsOptions,
+} from './outcome/reconcile.js';
+export {
+  classifyOutcomeConceptMatch,
+  conceptRegistryEntryFromRecord,
+  reconcileOutcomeConcepts,
+} from './outcome/reconcile.js';
+export type { OutcomeConceptCoverage } from './outcome/reconcile-coverage.js';
+export { outcomeConceptCoverage } from './outcome/reconcile-coverage.js';
 export type {
   OpaqueIdNonceSource,
   ResolveOutcomeInput,
