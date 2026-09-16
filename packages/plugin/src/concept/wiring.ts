@@ -92,6 +92,7 @@ import {
   gatherCorpusRelationVaultContext,
 } from './corpusRelationSignals.js';
 import type { ObsidianCorpusRelationStateStore } from './corpusRelationStateStore.js';
+import { persistRelationCacheFromPass, readRelationSetWithCache } from './relation-wiring.js';
 import { WorkerConceptReader } from './workerConceptReader.js';
 import { WorkerCorpusRelationVerdict } from './workerCorpusRelationVerdict.js';
 import { WorkerKnowledgeKindClassifier } from './workerKnowledgeKindClassifier.js';
@@ -657,23 +658,33 @@ export interface ReadConceptsAndRelationsOptions {
  * the per-document edges alone, which is the correct answer rather than a
  * degraded one.
  *
- * **Reachability (`[D-072]`, plan §2.7 clause 5).** There is deliberately no
- * production caller in this package yet: the only site holding both an
- * `ingestionSessionClosed` transition and a configured wiring is
+ * **Reachability (`[D-072]`, plan §2.7 clause 5) — UPDATED, corrects stale text.**
+ * This paragraph previously said there was no production caller; that had
+ * already gone stale by the time of the `[D-119]` splice below —
  * `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations`
- * (`packages/plugin/src/main.ts:517`), which `ol-2zfj.12`'s declared file
- * ownership does not include. The one-hop replacement of that method's body
- * is handed to the orchestrator as a patch, the same procedure `[EXT-11]`
- * (`ol-kw4a`) used to make `runCorpusRelationBatchIfDue` itself reachable.
- * Until it is applied, this function is exercised by
- * `test/concept/corpusRelationWiring.spec.ts` alone.
+ * (`packages/plugin/src/main.ts`, the `readConceptsAndRelations(...)` call
+ * inside it) calls this function in production today. Corrected here rather
+ * than left to drift further, per the "every live document is current"
+ * rule: a citation that resolves to overturned text is worse than no
+ * citation.
  *
- * **What this function deliberately does not do.** It does not persist, does
- * not surface, and does not gate. `[D-097]` re-draws INV-6 with edges
- * explicitly still *gated* — "EDGES: stay gated for now... measured precision
- * of the corpus stage's verdicts is what would earn edges the concepts
- * treatment" — so nothing here may land an edge in her layer. Nothing here
- * does: the set is returned to the caller and forgotten when the pass ends.
+ * **Persistence, as of the splice below (`[D-119]`, ol-2zfj.14/.122/.124).**
+ * This function now composes `relation-wiring.ts`'s cache: it persists the
+ * corpus stage's own key-bearing edges via `persistRelationCacheFromPass`
+ * right after the corpus batch runs, then serves `relations` from
+ * `readRelationSetWithCache` rather than a bare `deriveRelationSet` over the
+ * two live inputs — so a tick whose corpus trigger does not fire still folds
+ * in every currently-un-disposed edge a PRIOR tick minted, with a
+ * declined/expired disposition excluded at read time (INV-6 as re-drawn by
+ * `[D-097]`). `[D-097]`'s gating of EDGES (not yet earning the concepts
+ * treatment) is unchanged — this is a vault-side cache of derived edges, not
+ * a landing in her authored layer, and remains the Class C boundary this
+ * lane does not cross. See `relation-wiring.ts`'s module doc for the full
+ * argument. **Because `readConceptsAndRelations` already has the production
+ * caller named above, this splice is what makes `persistRelationCacheFromPass`
+ * and `readRelationSetWithCache` themselves production-reachable** — see
+ * those two functions' own reachability notes in `relation-wiring.ts`, now
+ * superseded by this one-hop chain.
  */
 export async function readConceptsAndRelations(
   conceptWiring: ConceptWiring,
@@ -698,9 +709,19 @@ export async function readConceptsAndRelations(
       : {}),
   });
 
-  return {
+  // `persistRelationCacheFromPass` and `readRelationSetWithCache` both take a
+  // full `ConceptAndRelationPass`, but neither reads its `relations` field —
+  // only `read` and `corpus`. Fold once here to satisfy the type, persist the
+  // corpus stage's fresh edges into the vault-side cache, then re-derive
+  // `relations` from the now-updated cache so an edge minted on THIS tick is
+  // reflected immediately rather than lagging one tick behind its own write.
+  const passSoFar: ConceptAndRelationPass = {
     read,
     corpus,
     relations: deriveRelationSet(read.relations, corpus.relations ?? []),
   };
+  await persistRelationCacheFromPass(options.vault, passSoFar);
+  const relations = await readRelationSetWithCache(options.vault, passSoFar);
+
+  return { read, corpus, relations };
 }

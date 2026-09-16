@@ -6,6 +6,9 @@
  * Mirrors `test/concept/wiring.spec.ts`'s fakes and conventions — no
  * `obsidian` import anywhere in this file.
  */
+import { cp, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   ConceptRelation,
   CorpusConcept,
@@ -13,6 +16,7 @@ import type {
   EmbeddingProvider,
   EmbedRequest,
   EmbedResult,
+  ListOptions,
   PersistedEmbeddingCache,
   ReadConcept,
   RetrievalChunk,
@@ -22,7 +26,7 @@ import type {
   WorkerTaskRequest,
 } from 'olea-core';
 import { EmbeddingCacheEngine, FolderSource, hashText, resolveRelatedConceptKeys } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ObsidianCorpusRelationStateStore } from '../../src/concept/corpusRelationStateStore.js';
 import type { CorpusConceptSource } from '../../src/concept/wiring.js';
 import {
@@ -65,10 +69,35 @@ function fakeTransport(reply: (request: WorkerTaskRequest) => unknown) {
   };
 }
 
+/**
+ * Writable, so `readConceptsAndRelations`'s splice onto `relation-wiring.ts` (`[D-119]`,
+ * ol-2zfj.14/.122/.124) can persist the corpus stage's key-bearing edges into `.olea/relations/`
+ * during a test run — it started life read-only when the fold never wrote anywhere, and the
+ * splice's own module doc on `readConceptsAndRelations` explains why that changed.
+ *
+ * **Clones its constructor argument rather than aliasing it.** Several call sites hand this
+ * class the SAME module-level fixture object (`TWO_CONCEPT_VAULT`) across many `it()`s; a write
+ * mutating that shared object in place would leak a relation-cache record written by one test
+ * into every later test's "vault", which is exactly the kind of cross-test contamination that
+ * made `'a tick that crosses no batch boundary...'` fail nondeterministically-by-suite-order the
+ * first time this class became writable.
+ */
 class MemoryVault implements VaultSource {
-  constructor(private readonly files: Record<string, string> = {}) {}
-  list(): Promise<readonly VaultPath[]> {
-    return Promise.resolve(Object.keys(this.files).sort());
+  private readonly files: Record<string, string>;
+  constructor(files: Record<string, string> = {}) {
+    this.files = { ...files };
+  }
+  list(options?: ListOptions): Promise<readonly VaultPath[]> {
+    let paths = Object.keys(this.files);
+    if (options?.under !== undefined) {
+      const prefix = `${options.under}/`;
+      paths = paths.filter((path) => path.startsWith(prefix));
+    }
+    if (options?.extensions !== undefined) {
+      const exts = options.extensions;
+      paths = paths.filter((path) => exts.some((ext) => path.toLowerCase().endsWith(`.${ext}`)));
+    }
+    return Promise.resolve(paths.sort());
   }
   read(path: VaultPath): Promise<string> {
     const content = this.files[path];
@@ -78,8 +107,9 @@ class MemoryVault implements VaultSource {
   readBinary(path: VaultPath): Promise<Uint8Array> {
     return this.read(path).then((t) => new TextEncoder().encode(t));
   }
-  write(): Promise<void> {
-    return Promise.reject(new Error('read-only'));
+  write(path: VaultPath, content: string): Promise<void> {
+    this.files[path] = content;
+    return Promise.resolve();
   }
   exists(path: VaultPath): Promise<boolean> {
     return Promise.resolve(path in this.files);
@@ -669,7 +699,7 @@ describe('readConceptsAndRelations — both producers land in one fold', () => {
     expect(pass).toBeNull();
   });
 
-  it('nothing is persisted by the fold — the pass leaves no relation state behind (the Class C line)', async () => {
+  it('the fold persists key-bearing corpus edges into the vault-side cache, and NOTHING into non-vault plugin storage (the Class C line, updated for the [D-119] splice)', async () => {
     const transport = twoStageTransport();
     const dataHost = new FakeDataHost();
     const conceptWiring = await buildConceptWiring({
@@ -680,21 +710,33 @@ describe('readConceptsAndRelations — both producers land in one fold', () => {
       dataHost: configuredHost(READY_CONFIG),
       createTransport: () => transport,
     });
+    const vault = new MemoryVault(TWO_CONCEPT_VAULT);
 
     await readConceptsAndRelations(
       conceptWiring,
       corpusWiring,
       new ObsidianCorpusRelationStateStore(dataHost),
-      { vault: new MemoryVault(TWO_CONCEPT_VAULT), ingestionSessionClosed: true },
+      { vault, ingestionSessionClosed: true },
     );
 
-    // The corpus stage's own known-concept bookkeeping is all that persists —
-    // a rebuildable trigger cache, never the edges themselves. No relation,
-    // provenance, passage or confidence reaches any store.
+    // The corpus stage's own known-concept bookkeeping is all that persists
+    // to the PLUGIN's own (non-vault) storage — a rebuildable trigger cache,
+    // never the edges themselves. This is unchanged by the splice: the cache
+    // `persistRelationCacheFromPass` writes lands in HER VAULT, under
+    // `.olea/relations/` (`RELATION_CACHE_FOLDER`), never in `dataHost`.
     const blob = dataHost.blob as Record<string, unknown>;
     expect(Object.keys(blob)).toEqual(['corpusRelationState']);
     expect(JSON.stringify(blob)).not.toContain('contrasts-with');
     expect(JSON.stringify(blob)).not.toContain('is-a');
+
+    // The corpus stage's key-bearing edge (`contrasts-with`, both endpoints
+    // keyed by `corpusConceptsFrom`) DOES now land in the vault-side cache —
+    // the whole point of the splice. `.olea/relations/` is a dot-prefixed,
+    // Olea-owned folder (INV-6), never her authored notes.
+    const cachePaths = await vault.list({ under: '.olea/relations', extensions: ['json'] });
+    expect(cachePaths.length).toBeGreaterThan(0);
+    const cacheContents = await Promise.all(cachePaths.map((path) => vault.read(path)));
+    expect(cacheContents.some((content) => content.includes('contrasts-with'))).toBe(true);
   });
 });
 
@@ -806,8 +848,25 @@ function fixtureTransport(conventionNames: readonly string[]) {
 }
 
 describe('the production corpus-relations batch, over the fixture vault (`ol-282w` [REL-10])', () => {
+  // The splice landing `readRelationSetWithCache`/`persistRelationCacheFromPass` onto
+  // `readConceptsAndRelations` (`[D-119]`, ol-2zfj.122/.124) means this describe block's
+  // `readConceptsAndRelations` calls now WRITE `.olea/relations/` records. `FIXTURE_VAULT_ROOT`
+  // is the tracked, shared fixture vault (`packages/core/fixtures/vault`) — every test here
+  // therefore runs against a throwaway copy, never the real path, so a test run never leaves a
+  // generated cache file for `git status` to find.
+  let fixtureCopyRoot: string;
+
+  beforeEach(async () => {
+    fixtureCopyRoot = await mkdtemp(join(tmpdir(), 'olea-fixture-vault-'));
+    await cp(FIXTURE_VAULT_ROOT, fixtureCopyRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(fixtureCopyRoot, { recursive: true, force: true });
+  });
+
   it('every CorpusConcept the production expression builds carries a key', async () => {
-    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const vault = new FolderSource(fixtureCopyRoot);
     const conventionNames = await fixtureConventionNames(vault);
     const transport = fixtureTransport(conventionNames);
     const conceptWiring = await buildConceptWiring({
@@ -842,7 +901,7 @@ describe('the production corpus-relations batch, over the fixture vault (`ol-282
   });
 
   it('every endpoint that reaches the concepts.relations.v1 wire carries its key', async () => {
-    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const vault = new FolderSource(fixtureCopyRoot);
     const conventionNames = await fixtureConventionNames(vault);
     const transport = fixtureTransport(conventionNames);
     const conceptWiring = await buildConceptWiring({
@@ -885,7 +944,7 @@ describe('the production corpus-relations batch, over the fixture vault (`ol-282
   });
 
   it('the replies resolve by key: resolveRelatedConceptKeys needs no concept list at all', async () => {
-    const vault = new FolderSource(FIXTURE_VAULT_ROOT);
+    const vault = new FolderSource(fixtureCopyRoot);
     const conventionNames = await fixtureConventionNames(vault);
     const transport = fixtureTransport(conventionNames);
     const conceptWiring = await buildConceptWiring({
