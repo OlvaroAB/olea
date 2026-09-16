@@ -1,17 +1,31 @@
 /**
- * The provisional concept key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`).
+ * The provisional concept key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`), and — below,
+ * `mintOpaqueConceptKey` — the opaque mint that closes `ol-bo48` (ONT-R1 `ol-2zfj.86`, ONT-R6
+ * `ol-2zfj.88`, `[D-174]`).
  *
  * **The target, stated by the contract this seam is building toward
  * (C7.11): a concept's identity key is opaque, immutable, never displayed to
  * her, and — the clause's own words — "never derived from content, because a
  * content-derived key changes identity exactly when her material is most
- * alive."** This module does not yet deliver that. It mints a key that *is*
+ * alive."** `provisionalConceptKey` below does not deliver that — it mints a key that *is*
  * derived from content (her note's path, or failing that the topic string
  * itself), and it is honest about the gap rather than quiet about it — the
  * same shape `../session/instrument-id.ts` used for instrument identity
  * before D-030 ruled the stamped-identity mechanism: a pure, position/content
  * derived stand-in, visibly prefixed, that a later ruling replaces without
  * asking every caller of `ConceptIdSource` to change.
+ *
+ * **`mintOpaqueConceptKey` is that later ruling's mint, landed by `ol-bo48`.** ONT-R1/ONT-R6
+ * named the residual gap in `[D-174]`'s persisted sidecar: the sidecar's persistence and
+ * `[D-088]` conservation were already sound, but the minted `key` string itself was still her
+ * note path or her verbatim wording. `./key-store.ts`'s `resolveConceptKey` now calls
+ * `mintOpaqueConceptKey` — never `provisionalConceptKey` — on its genuine-mint path, so every
+ * key persisted from this landing forward is a random nonce, carrying no meaning and derived
+ * from nothing she wrote. `provisionalConceptKey` remains exactly what it always was: the
+ * transient, content-derived, non-persisted stand-in `extractConcepts` falls back to when
+ * `stampConceptKeys` is off (a call against the shared fixture vault, e.g.) — nothing about
+ * that path writes a `ConceptKeyRecord`, so its content-derivation was never the opacity gap
+ * `ol-bo48` names, and it is unchanged here.
  *
  * **Why a stand-in ships at all, rather than waiting for the real mechanism.**
  * `ol-il6m`'s own investigation (see the bead's notes) found the real fix —
@@ -73,8 +87,8 @@ export interface ConceptKeyInput {
 export type ConceptKeySource = (input: ConceptKeyInput) => string;
 
 /**
- * The provisional derivation (`[D-109]` unblocks shipping it; no ruling has
- * settled the persisted mechanism yet — see the module doc).
+ * The provisional derivation (`[D-109]` unblocked shipping it as a non-persisted stand-in;
+ * `ol-bo48`/`mintOpaqueConceptKey` below is the persisted, opaque mint — see the module doc).
  *
  * Pure, total and free of I/O: same input, same key, always, within one run.
  * `boundNotePath` wins over `name` where both could apply, but neither is
@@ -85,6 +99,52 @@ export const provisionalConceptKey: ConceptKeySource = (input) => {
   const root = input.boundNotePath ?? input.name;
   return `${PROVISIONAL_CONCEPT_KEY_PREFIX}:${root}`;
 };
+
+/**
+ * Marks every key minted by the opaque scheme below (ONT-R1 `ol-2zfj.86`, ONT-R6 `ol-2zfj.88`,
+ * `[D-174]`, `ol-bo48`) — the durable identity C7.11 requires: opaque, immutable, never
+ * displayed to her, never derived from her content. Distinct from
+ * `PROVISIONAL_CONCEPT_KEY_PREFIX` above, which keeps marking the transient, content-derived,
+ * non-persisted stand-in — only the persisted mint (`./key-store.ts`'s `resolveConceptKey`, on
+ * its genuine-mint path) uses this prefix.
+ */
+export const OPAQUE_CONCEPT_KEY_PREFIX = 'concept-key1';
+
+/**
+ * A source of randomness for `mintOpaqueConceptKey`. Injectable for deterministic tests, the
+ * same shape `../uid/stamp.ts`'s `StampUidOptions.generateId` and
+ * `../instrument/mcq-format.ts`'s `generateId` option already use for their own durable,
+ * random-by-default ids.
+ */
+export type OpaqueKeyNonceSource = () => string;
+
+/** Defaults to `crypto.randomUUID()` — the same primitive `../uid/stamp.ts`'s `stampUid` already uses to mint `olea-uid`. */
+function defaultOpaqueKeyNonceSource(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+/**
+ * Mints a durable, opaque concept key (`ol-bo48`, ONT-R1/ONT-R6, `[D-174]`): a random nonce —
+ * a UUIDv4 by default — never a hash or transform of her content, her wording, or her note
+ * path. `${OPAQUE_CONCEPT_KEY_PREFIX}:${nonce}`.
+ *
+ * **The only function in this package permitted to assemble a persisted `ConceptKeyRecord.key`
+ * string.** `./key-store.ts`'s `resolveConceptKey` is its one caller, and only on the
+ * not-found path — every other path in that module reads an existing key back verbatim rather
+ * than minting again (the conservation property, `[D-088]`), so calling this twice for what
+ * turns out to be the same real-world concept never happens by construction, not by luck.
+ *
+ * Content-independence, not determinism, is the property under test here: the default
+ * generator is deliberately impure (two calls never coincidentally collide, which a
+ * content-derived function could never promise), and `nonceSource` exists solely so a test can
+ * assert the *shape* (`OPAQUE_CONCEPT_KEY_PREFIX` plus whatever the nonce source returns)
+ * without asserting on real randomness.
+ */
+export function mintOpaqueConceptKey(
+  nonceSource: OpaqueKeyNonceSource = defaultOpaqueKeyNonceSource,
+): string {
+  return `${OPAQUE_CONCEPT_KEY_PREFIX}:${nonceSource()}`;
+}
 
 /**
  * ONT-R1's mint-time normalisation (`ol-2zfj.86`, closed 2026-09-15, C7.11):
@@ -100,9 +160,11 @@ export const provisionalConceptKey: ConceptKeySource = (input) => {
  * this only to list other existing keys whose wording collides, and nothing
  * in this module or that one ever substitutes one key for another on the
  * strength of a match here. The opaque `key` field itself is untouched by
- * this function — see that module's doc and `ol-bo48` for the separate,
- * still-open, Class C question of making `key` itself content-free (that
- * migration is out of this ruling's scope, and out of this function's).
+ * this function — that was the separate, now-landed `ol-bo48` question of
+ * making `key` itself content-free, delivered by `mintOpaqueConceptKey`
+ * above and out of this function's scope either way: this index stays a
+ * lookup over identities, never the identity itself, regardless of how the
+ * identity is minted.
  *
  * Steps, exactly the ones the ruling names and none beyond them:
  *

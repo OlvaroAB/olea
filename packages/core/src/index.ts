@@ -69,12 +69,18 @@ export {
   type RoutingSelectionMeasured,
   type RoutingSelectionObservation,
 } from './checks/routing-consumption.js';
-export type { ConceptKeyInput, ConceptKeySource } from './concept/concept-key.js';
-// The provisional concept-key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`).
-// See `./concept/concept-key.js`'s module doc for what this derivation can
-// and cannot yet promise.
+export type {
+  ConceptKeyInput,
+  ConceptKeySource,
+  OpaqueKeyNonceSource,
+} from './concept/concept-key.js';
+// The provisional concept-key seam (`ol-il6m`, C7.11, `[D-088]`, `[D-109]`) and the opaque mint
+// that closes `ol-bo48` (ONT-R1 `ol-2zfj.86`, ONT-R6 `ol-2zfj.88`, `[D-174]`).
+// See `./concept/concept-key.js`'s module doc for what each can and cannot promise.
 export {
   conceptIdentityNormalizationIndex,
+  mintOpaqueConceptKey,
+  OPAQUE_CONCEPT_KEY_PREFIX,
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept/concept-key.js';

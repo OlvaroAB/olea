@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
+import { OPAQUE_CONCEPT_KEY_PREFIX } from './concept-key.js';
 import { extractConcepts } from './extract.js';
 import {
   bindConceptKeyToNote,
@@ -200,6 +201,149 @@ describe('resolveConceptKey — mint once, read back thereafter ([D-174])', () =
       aliases: [],
     });
     expect(typeof key).toBe('string');
+  });
+});
+
+// Scenarios: olea-service/features/F8-concepts-scope.md — "A genuine mint is opaque, never
+// content-derived ([D-174], ONT-R1 ol-2zfj.86, ONT-R6 ol-2zfj.88, ol-bo48)", tagged
+// `@auto:core/concept/key-store.spec`.
+describe('resolveConceptKey — opaque mint (ol-bo48, ONT-R1, ONT-R6, [D-174])', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-concept-key-opaque-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a genuine mint carries the opaque prefix, never her course/wording/path', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+
+    expect(key.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
+    expect(key).not.toContain('COURSEA');
+    expect(key).not.toContain('Basalt');
+    expect(key).not.toContain('weathering');
+  });
+
+  it('a genuine mint for a bound note carries no trace of the note path', async () => {
+    const key = await resolveConceptKey(source, 1, {
+      kind: 'note',
+      noteUid: 'uid-abc',
+      notePath: '05 Zettelkasten/Imbrication.md',
+    });
+
+    expect(key.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
+    expect(key).not.toContain('Zettelkasten');
+    expect(key).not.toContain('Imbrication');
+    expect(key).not.toContain('uid-abc');
+  });
+
+  it('the mint nonce is injectable via generateKey, for deterministic tests', async () => {
+    const key = await resolveConceptKey(
+      source,
+      2,
+      { kind: 'topic', course: 'COURSEA', name: 'Isostasy', aliases: [] },
+      { generateKey: () => 'fixed-nonce-1' },
+    );
+    expect(key).toBe(`${OPAQUE_CONCEPT_KEY_PREFIX}:fixed-nonce-1`);
+  });
+
+  it('two distinct topic anchors, minted with the default generator, never collide', async () => {
+    const a = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    const b = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Isostasy',
+      aliases: [],
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it(
+    'MIGRATION: a pre-ol-bo48 record, minted content-derived before this landing, is read back ' +
+      'verbatim by anchor — its key is never rewritten opaque and her vault is never touched',
+    async () => {
+      const legacyKey = 'concept-prov1:COURSEA Basalt weathering';
+      await mkdir(join(root, CONCEPT_KEY_STORE_FOLDER), { recursive: true });
+      await writeFile(
+        join(root, conceptKeyRecordPath(legacyKey)),
+        `${JSON.stringify(
+          {
+            key: legacyKey,
+            tier: 2,
+            anchor: { kind: 'topic', course: 'COURSEA', name: 'Basalt weathering', aliases: [] },
+            mintedAt: '2026-08-01',
+            schemaVersion: 1,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const resolved = await resolveConceptKey(source, 2, {
+        kind: 'topic',
+        course: 'COURSEA',
+        name: 'Basalt weathering',
+        aliases: [],
+      });
+
+      expect(resolved).toBe(legacyKey);
+      const records = await listConceptKeyRecords(source);
+      expect(records).toHaveLength(1);
+      expect(records[0]?.record.key).toBe(legacyKey);
+    },
+  );
+
+  it('a new concept alongside a legacy record mints opaque, leaving the legacy record untouched', async () => {
+    const legacyKey = 'concept-prov1:COURSEA Basalt weathering';
+    await mkdir(join(root, CONCEPT_KEY_STORE_FOLDER), { recursive: true });
+    await writeFile(
+      join(root, conceptKeyRecordPath(legacyKey)),
+      `${JSON.stringify(
+        {
+          key: legacyKey,
+          tier: 2,
+          anchor: { kind: 'topic', course: 'COURSEA', name: 'Basalt weathering', aliases: [] },
+          mintedAt: '2026-08-01',
+          schemaVersion: 1,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const newKey = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Isostasy',
+      aliases: [],
+    });
+
+    expect(newKey.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
+    const records = await listConceptKeyRecords(source);
+    expect(records).toHaveLength(2);
+    const legacy = records.find((r) => r.record.key === legacyKey);
+    expect(legacy?.record).toEqual({
+      key: legacyKey,
+      tier: 2,
+      anchor: { kind: 'topic', course: 'COURSEA', name: 'Basalt weathering', aliases: [] },
+      mintedAt: '2026-08-01',
+      schemaVersion: 1,
+    });
   });
 });
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { VaultPath } from '../vault/types.js';
 import {
   conceptIdentityNormalizationIndex,
+  mintOpaqueConceptKey,
+  OPAQUE_CONCEPT_KEY_PREFIX,
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   provisionalConceptKey,
 } from './concept-key.js';
@@ -50,6 +52,48 @@ describe('provisionalConceptKey', () => {
       expect(afterRename).not.toBe(before);
     },
   );
+});
+
+describe('mintOpaqueConceptKey (ol-bo48, ONT-R1 ol-2zfj.86, ONT-R6 ol-2zfj.88, [D-174])', () => {
+  it('carries the opaque marker, distinct from the provisional prefix', () => {
+    expect(mintOpaqueConceptKey(() => 'fixed-nonce')).toBe(
+      `${OPAQUE_CONCEPT_KEY_PREFIX}:fixed-nonce`,
+    );
+    expect(OPAQUE_CONCEPT_KEY_PREFIX).not.toBe(PROVISIONAL_CONCEPT_KEY_PREFIX);
+  });
+
+  it('takes no content input at all — there is no name, path or wording parameter to derive from', () => {
+    // Structural, not merely behavioural: mintOpaqueConceptKey's only parameter is an optional
+    // nonce source (declared length 0, since it is defaulted), so unlike provisionalConceptKey's
+    // required `{ name, boundNotePath }` input, there is nothing content-shaped to pass in the
+    // first place.
+    expect(mintOpaqueConceptKey.length).toBe(0);
+    expect(provisionalConceptKey.length).toBe(1);
+  });
+
+  it('is content-independent: two mints for what would be the same content never coincide unless the nonce source says so', () => {
+    let calls = 0;
+    const nonceSource = () => `nonce-${++calls}`;
+    const first = mintOpaqueConceptKey(nonceSource);
+    const second = mintOpaqueConceptKey(nonceSource);
+    expect(first).not.toBe(second);
+  });
+
+  it('defaults to a real random nonce (crypto.randomUUID) — two default-generated keys never collide', () => {
+    const a = mintOpaqueConceptKey();
+    const b = mintOpaqueConceptKey();
+    expect(a).not.toBe(b);
+    expect(a).toMatch(new RegExp(`^${OPAQUE_CONCEPT_KEY_PREFIX}:`));
+  });
+
+  it('the injected nonce source is called exactly once per mint', () => {
+    let calls = 0;
+    mintOpaqueConceptKey(() => {
+      calls += 1;
+      return 'n';
+    });
+    expect(calls).toBe(1);
+  });
 });
 
 describe('conceptIdentityNormalizationIndex (ONT-R1, ol-2zfj.86, C7.11)', () => {

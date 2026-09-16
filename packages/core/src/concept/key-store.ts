@@ -45,10 +45,14 @@
  * ===========================================================================
  * FILE NAMING (Class A, left open by `[D-174]`/design doc §9) — `encodeURIComponent(key)`
  * ===========================================================================
- * The key itself cannot be used as a filename unescaped: today's key (still
- * `provisionalConceptKey`'s derivation — see `./concept-key.ts`) embeds a vault path or her
- * verbatim topic name, both of which may contain `/`, spaces, and other characters a filesystem
- * either forbids or treats as a path separator. Two shapes were considered:
+ * The key itself cannot be used as a filename unescaped in general, so a naming function is
+ * needed regardless of what the key contains. **`ol-bo48`'s opaque mint (`./concept-key.ts`'s
+ * `mintOpaqueConceptKey`) changed what a NEW key looks like — a `concept-key1:`-prefixed random
+ * nonce, no `/` or spaces — but every key minted before that landing is still on disk and still
+ * `provisionalConceptKey`'s derivation, embedding a vault path or her verbatim topic name.**
+ * Nothing here rewrites an old record's `key` or its filename (the conservation property,
+ * `[D-088]`, and the "do not rewrite her vault" constraint `ol-bo48` names) — this scheme has to
+ * keep working for both shapes forever, not just the new one. Two shapes were considered:
  *
  *   - A content hash of the key (sharded, e.g. `ab/cd1234….json`). Rejected for now: it buys
  *     nothing this module needs (there is no fan-out large enough for sharding to matter — a
@@ -56,10 +60,12 @@
  *     record for a given key can no longer be found by eye or by a plain `ls` while debugging.
  *   - `encodeURIComponent(key) + '.json'`, chosen here. It is a pure, total, injective function
  *     on the key (two distinct keys never collide, because percent-encoding is reversible), it
- *     needs no new dependency, and the encoded name stays legible for the common case — a bound
- *     concept's key derives from a note path, so its filename reads as a recognisably-escaped
- *     version of that path (`%20` for spaces, `%2F` for `/`), the same trade `stampMcqId`-style
- *     ids and content-store ids already make for readability over compactness.
+ *     needs no new dependency, and the encoded name stays legible for the common case — a
+ *     pre-`ol-bo48` bound concept's key derives from a note path, so its filename reads as a
+ *     recognisably-escaped version of that path (`%20` for spaces, `%2F` for `/`), the same
+ *     trade `stampMcqId`-style ids and content-store ids already make for readability over
+ *     compactness. A post-`ol-bo48` opaque key encodes just as cleanly (only its `:` separator
+ *     needs escaping), so the same function needs no branch for the two key shapes.
  *
  * `conceptKeyRecordPath` is the one function that encodes this choice; nothing else in the
  * module assembles a path itself, matching `content-store.ts` and `misconception/path.ts`'s own
@@ -80,7 +86,11 @@
  */
 
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './concept-key.js';
+import {
+  conceptIdentityNormalizationIndex,
+  mintOpaqueConceptKey,
+  type OpaqueKeyNonceSource,
+} from './concept-key.js';
 import type { ConceptTier } from './types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/reviews/` and `.olea/misconceptions/`. */
@@ -282,26 +292,28 @@ export async function listConceptKeyRecords(
 }
 
 /**
- * `key = "concept-prov1:" + (boundNotePath ?? name)`, per `./concept-key.ts`, for a note anchor.
- * This module writes that same string once into a durable record rather than treating it as
- * re-derivable every call — the instrument-id pattern (`../session/instrument-id.ts`): the
- * *prefix* keeps marking that no real opaque-id ruling has landed yet, but the *string*, once
- * minted here, is now read, never recomputed.
+ * `ol-bo48` (ONT-R1 `ol-2zfj.86`, ONT-R6 `ol-2zfj.88`, `[D-174]`): mints a durable, opaque key
+ * via `./concept-key.ts`'s `mintOpaqueConceptKey` — a random nonce, never a derivation of
+ * `anchor`. This module writes that string once into a durable record rather than treating it
+ * as re-derivable every call — the instrument-id pattern (`../session/instrument-id.ts`): once
+ * minted here, the string is read, never recomputed, exactly as it was before this landing.
  *
- * A topic anchor folds `course` into the root too, deliberately widening
- * `provisionalConceptKey`'s own derivation rather than reusing it verbatim: `anchorMatches`
- * below treats two topic anchors with the same name but different courses as distinct (the
- * lookup is course-scoped, matching `[D-088]`'s course/wording/alias precedence), and a mint
- * that ignored `course` would silently collide two unrelated concepts onto one key and one
- * sidecar file the moment both happened to share a name. `extractConcepts` itself never asks for
- * two records under one name in different courses (it dedupes at the name level before minting,
- * `./extract.ts`'s `byName`), so this only bites a caller that mints directly per course — but a
- * key derivation that is wrong in that case is wrong, not merely untested.
+ * **What changed and what did not, versus the pre-`ol-bo48` derivation.** `anchor` is no longer
+ * consulted to build the key at all — opacity means the key carries no trace of the note path
+ * or the course/wording pair that anchored it. What is unchanged: `anchor` still decides
+ * whether a mint happens in the first place (`resolveConceptKey`'s match against `existing`,
+ * below, runs before this function is ever called), and course-scoping of topic anchors is
+ * still enforced there, by `anchorMatches`, not by folding `course` into the key the way the
+ * pre-opaque derivation had to. A pre-`ol-bo48` record's `key` (still `concept-prov1:`-prefixed,
+ * still content-derived — and, on at least one historical record, corrupted by a NUL byte
+ * where a space was intended, `git show`-verifiable in this file's own history at the join
+ * this function used to perform) is read back verbatim by the match path and never touched by
+ * this function — this is the mint-only half; the read-back half is what makes old keys stay
+ * valid, corruption included, since rewriting an existing key is exactly what conservation
+ * (`[D-088]`) forbids.
  */
-function mintKey(anchor: ConceptKeyAnchor): string {
-  if (anchor.kind === 'note')
-    return provisionalConceptKey({ name: '', boundNotePath: anchor.notePath });
-  return provisionalConceptKey({ name: `${anchor.course} ${anchor.name}`, boundNotePath: null });
+function mintKey(nonceSource?: OpaqueKeyNonceSource): string {
+  return mintOpaqueConceptKey(nonceSource);
 }
 
 /** True when two anchors name the same lookup target (not necessarily byte-identical — see match rules below). */
@@ -470,6 +482,13 @@ export interface ResolveConceptKeyOptions {
    * than guessing the run is empty.
    */
   readonly runTopicNames?: ReadonlySet<string>;
+  /**
+   * `ol-bo48`: injectable nonce source for `./concept-key.ts`'s `mintOpaqueConceptKey`, the
+   * same shape `now` above already uses for determinism. Defaults to `crypto.randomUUID()` —
+   * omit this in production; tests inject a fixed generator to assert on the minted key's shape
+   * without asserting on real randomness.
+   */
+  readonly generateKey?: OpaqueKeyNonceSource;
 }
 
 function defaultNow(): string {
@@ -520,7 +539,7 @@ export async function resolveConceptKey(
     if (renameHit !== undefined) return renameHit.record.key;
   }
 
-  const key = mintKey(anchor);
+  const key = mintKey(options.generateKey);
   // ONT-R1's "at mint" normalisation index (`ol-2zfj.86`, C7.11): only meaningful for a topic
   // anchor (see `findNormalizationCollisions`'s doc for why a note anchor is excluded). Computed
   // against `existing` — the same listing already fetched above, no second vault read — over this
