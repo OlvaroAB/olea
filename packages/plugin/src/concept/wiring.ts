@@ -93,6 +93,7 @@ import {
 } from './corpusRelationSignals.js';
 import type { ObsidianCorpusRelationStateStore } from './corpusRelationStateStore.js';
 import { persistRelationCacheFromPass, readRelationSetWithCache } from './relation-wiring.js';
+import { resolveSameAsForPass } from './same-as-wiring.js';
 import { WorkerConceptReader } from './workerConceptReader.js';
 import { WorkerCorpusRelationVerdict } from './workerCorpusRelationVerdict.js';
 import { WorkerKnowledgeKindClassifier } from './workerKnowledgeKindClassifier.js';
@@ -685,6 +686,13 @@ export interface ReadConceptsAndRelationsOptions {
  * and `readRelationSetWithCache` themselves production-reachable** — see
  * those two functions' own reachability notes in `relation-wiring.ts`, now
  * superseded by this one-hop chain.
+ *
+ * **The confirmed same-as link's first read consumer, added here (`ol-2zfj.86` ONT-R1, F8.6).**
+ * Right after `relations` is folded, `./same-as-wiring.ts`'s `resolveSameAsForPass` runs over
+ * this same pass: `read.concepts` and `relations` both fold a confirmed pair to its canonical
+ * key — see that file's own module doc for exactly what changes and why
+ * `readRelationSetWithCache` above keeps being called with the same arguments either way, rather
+ * than being replaced. A `'proposed'` or `'severed'` link changes neither field.
  */
 export async function readConceptsAndRelations(
   conceptWiring: ConceptWiring,
@@ -723,5 +731,10 @@ export async function readConceptsAndRelations(
   await persistRelationCacheFromPass(options.vault, passSoFar);
   const relations = await readRelationSetWithCache(options.vault, passSoFar);
 
-  return { read, corpus, relations };
+  // The confirmed same-as link's first read consumer (`ol-2zfj.86` ONT-R1, F8.6) — see this
+  // function's own doc and `./same-as-wiring.ts`'s module doc. A `'proposed'`/`'severed'` link,
+  // or no link at all (the ordinary tick), returns `read.concepts`/`relations` unchanged.
+  const sameAs = await resolveSameAsForPass(options.vault, { read, corpus, relations });
+
+  return { read: { ...read, concepts: sameAs.concepts }, corpus, relations: sameAs.relations };
 }

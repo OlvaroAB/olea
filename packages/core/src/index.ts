@@ -354,6 +354,19 @@ export {
   sameAsLinkRecordPath,
   severSameAsLink,
 } from './concept/same-as.js';
+// The confirmed same-as link's first READ consumer (`ol-2zfj.86` ONT-R1, F8.6) — a pure,
+// read-time view over concept-like records and relation-cache records, never a write. See
+// `./concept/same-as-consumer.js`'s module doc for the canonical-key rule and why.
+export type {
+  ResolveConceptsWithSameAsResult,
+  SameAsResolvableConcept,
+} from './concept/same-as-consumer.js';
+export {
+  buildSameAsKeyRedirect,
+  canonicalKeyForLink,
+  resolveConceptsWithSameAsLinks,
+  resolveRelationCacheRecordsWithSameAsLinks,
+} from './concept/same-as-consumer.js';
 // Concept size (`[D-066]`, component register row 1.3) — a deterministic,
 // material-grounded floor read by two named consumers outside this package:
 // honest scope counting (F8.1, F8.3) and session composition (F2.17). See
