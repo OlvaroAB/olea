@@ -56,7 +56,7 @@
 // cloze and mcq through this exact composer on synthetic rows built to offer
 // them — it is just not reachable through *this* real vault's composed
 // session, which is what this suite runs. Follow-up filed rather than solved
-// here (out of this bead's owned files): `ol-egov.132.19` [SESS-17].
+// here (out of this bead's owned files): `ol-may1` [SESS-17].
 //
 // Four claims, and each is the reason a different failure would be invisible:
 //
@@ -694,7 +694,7 @@ describe('complete passes through the real ReviewSession', () => {
     // per-concept cap, vault order with no recall-style preference to
     // reorder it). This is a true fact about this fixture vault's composed
     // session, not a defect in the composer being weakened away — see
-    // `ol-egov.132.19` [SESS-17] for the filed follow-up on restoring
+    // `ol-may1` [SESS-17] for the filed follow-up on restoring
     // cross-format coverage to this real end-to-end suite.
     const types = new Set(rated.map((item) => item.type));
     expect(types).toEqual(new Set(['qa']));
