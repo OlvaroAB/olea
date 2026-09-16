@@ -132,7 +132,12 @@ describe('the states show what they advertise', () => {
   it('the exam-eve state prefers the quiz’s format and says so per item (F4.8)', async () => {
     const scenario = await buildSessionScenario('session-exam-eve-90', vault);
     const model = sessionModel(scenario);
-    expect(model.formatPreference).toBe('mcq');
+    // `[D-246]`/VOC-7 (`abb6d75`) widened the declared format-class map: the
+    // old two-value `'mcq'`/`unknown` code is now `'recall-style'` (quiz,
+    // test, exam, midterm, final all resolve here — `format-class.ts`'s word
+    // table). `typesMatching('recall-style')` still resolves to `['mcq']`,
+    // so the MCQ-preference behaviour below is unchanged.
+    expect(model.formatPreference).toBe('recall-style');
     expect(model.items.some((i) => i.formatMatch === 'preferred-format')).toBe(true);
     // MCQ first: the preferred-format item outranks the same concept's other
     // cards rather than merely being present.
@@ -143,7 +148,13 @@ describe('the states show what they advertise', () => {
   it('a mid-semester day with no imminent quiz expresses no format preference', async () => {
     const scenario = await buildSessionScenario('session-short-20', vault);
     const model = sessionModel(scenario);
-    expect(model.formatPreference).toBe('unknown');
+    // `[D-246]`/VOC-7 (`abb6d75`): `formatPreference` now resolves to
+    // `unknown` ONLY when there is no next assessment at all; an assessment
+    // whose type the declared-class word table does not recognise falls to
+    // `'written'` rather than `unknown` (`format-class.ts`'s own default).
+    // `typesMatching('written')` still resolves to `[]`, so every item is
+    // still `no-preference` below — the label changed, the matching did not.
+    expect(model.formatPreference).toBe('written');
     expect(model.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
   });
 

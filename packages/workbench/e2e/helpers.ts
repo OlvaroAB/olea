@@ -205,39 +205,40 @@ export type Surface =
  * states left out below all fit the default pane unaided.
  */
 export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; height: number }>> = {
-  // Oracle — all 10 states measure the same (RE-MEASURED 2026-09-05,
-  // `ol-qgac`: 1287px real content, up from the 779px this table originally
-  // carried). The growth is `[D-224]`/its build `ol-l5og.18.3` (STY-0c):
-  // GapView moved from a sidebar-hosted ranked list to full-tab per-concept
-  // detail pages (`main.ts`'s `revealGapView` now opens via
-  // `workspace.getLeaf('tab')`, the same door `revealReviewView` uses for
-  // F2.2), carrying the corrected kit's non-dismissible counterweight block,
-  // named past-paper chip rows and larger stage marks. This is the SAME
-  // "full-tab page, bump the viewport rather than fight it" treatment
-  // session's states already get below — not an exemption, because the
-  // point of this table is still "the golden must capture the whole page",
-  // and a full tab is exactly as entitled to be tall as a review session is.
-  // The host pane renders the identical real GapView/world per persona
-  // regardless of which plan-refresh regime the inspector (outside the pane)
-  // is reporting.
-  'oracle-ranked': { width: 1280, height: 1640 },
-  'oracle-abstained': { width: 1280, height: 1640 },
-  'gap-mastery': { width: 1280, height: 1640 },
-  'gap-coverage': { width: 1280, height: 1640 },
-  'gap-material': { width: 1280, height: 1640 },
-  'coverage-unreadable-source': { width: 1280, height: 1640 },
-  'plan-fresh': { width: 1280, height: 1640 },
-  'plan-stale-offline': { width: 1280, height: 1640 },
-  'plan-expired-offline': { width: 1280, height: 1640 },
-  'oracle-struggling': { width: 1280, height: 1640 },
-  // Timeline — all 4 states measure the same (RE-MEASURED 2026-09-05,
-  // `ol-qgac`: 1244px real content, up from 761px). Same cause as oracle
-  // above: `timeline-scenarios.ts` renders "time as an axis over the real
-  // GapView", so `[D-224]`'s full-tab restructuring grew this group too.
-  'timeline-steady': { width: 1280, height: 1600 },
-  'timeline-struggler': { width: 1280, height: 1600 },
-  'timeline-lapsed-returner': { width: 1280, height: 1600 },
-  'timeline-crammer': { width: 1280, height: 1600 },
+  // Oracle — all 10 states measure the same (RE-MEASURED 2026-09-16,
+  // `ol-z6x2`, this tranche: 1373px real content, up from the 1287px
+  // `ol-qgac` measured on 2026-09-05). The growth is `[D-246]`/VOC-7
+  // (commit `abb6d75`): the declared assessment-format-class map widened
+  // beyond `quiz` to also cover `test`/`exam`/`midterm`/`final`, and the
+  // synthetic curriculum's Vantrel/Quorbin final assessments are typed
+  // `'Test'` — previously unrecognised (format `unknown`, readiness note
+  // suppressed), now resolving to `recall-style` and firing `gap/copy.ts`'s
+  // `readinessNote()` sentence on rows it did not previously reach. Every
+  // oracle state mounts the same real GapView/world, so all ten grew
+  // together. (Earlier growth, still in force below it: `[D-224]`/
+  // `ol-l5og.18.3` (STY-0c) moved GapView from a sidebar-hosted ranked list
+  // to full-tab per-concept detail pages.) The host pane renders the
+  // identical real GapView/world per persona regardless of which
+  // plan-refresh regime the inspector (outside the pane) is reporting.
+  'oracle-ranked': { width: 1280, height: 1720 },
+  'oracle-abstained': { width: 1280, height: 1720 },
+  'gap-mastery': { width: 1280, height: 1720 },
+  'gap-coverage': { width: 1280, height: 1720 },
+  'gap-material': { width: 1280, height: 1720 },
+  'coverage-unreadable-source': { width: 1280, height: 1720 },
+  'plan-fresh': { width: 1280, height: 1720 },
+  'plan-stale-offline': { width: 1280, height: 1720 },
+  'plan-expired-offline': { width: 1280, height: 1720 },
+  'oracle-struggling': { width: 1280, height: 1720 },
+  // Timeline — all 4 states measure the same (RE-MEASURED 2026-09-16,
+  // `ol-z6x2`: 1373px real content, up from 1244px on 2026-09-05 — the
+  // identical `[D-246]`/VOC-7 cause as oracle above, since
+  // `timeline-scenarios.ts` renders "time as an axis over the real
+  // GapView" and shares its world).
+  'timeline-steady': { width: 1280, height: 1720 },
+  'timeline-struggler': { width: 1280, height: 1720 },
+  'timeline-lapsed-returner': { width: 1280, height: 1720 },
+  'timeline-crammer': { width: 1280, height: 1720 },
   // Trends — 908/1310/705px real content; `trends-healthy`,
   // `trends-course-behind-neutralised` and `trends-cramming-neutralised` fit
   // the default pane unaided and are deliberately absent.
@@ -300,7 +301,10 @@ export const WALK_STEP_VIEWPORTS: Partial<Record<number, { width: number; height
   1: { width: 1280, height: 950 },
   7: { width: 1280, height: 3650 },
   8: { width: 1280, height: 3650 },
-  10: { width: 1280, height: 1740 },
+  // Step 10 embeds `timeline-steady` (RE-MEASURED 2026-09-16, `ol-z6x2`: the
+  // same `[D-246]`/VOC-7 growth as `TALL_STATE_VIEWPORTS`'s timeline group
+  // above — see that comment).
+  10: { width: 1280, height: 1850 },
   11: { width: 1280, height: 3300 },
   12: { width: 1280, height: 1820 },
 };

@@ -82,12 +82,21 @@ test("FLOW: gap-mastery — clicking build-session navigates to the session surf
   // own doc says a concept absent from the ranking is not an error, and this
   // oracle state's synthetic corpus (`oracle-scenarios.ts`) and the session
   // surface's real fixture-vault corpus (`session-scenarios.ts`) are two
-  // different worlds by design, so the honest, real outcome here is
-  // `focusLine`'s "could not find" sentence — proof the request actually
-  // reached `buildStudySession`, not a false positive match.
-  await expect(frame(page).locator('.olea-session-copy')).toContainText(
-    `Olea could not find ${conceptName} in the current ranking`,
-  );
+  // different worlds by design, so the honest, real outcome here is that
+  // `buildStudySession` received exactly this concept as `focusConceptName`
+  // and echoed it back on `model.focusConcept` — proof the request actually
+  // reached the build, not a false positive match.
+  //
+  // Was: an assertion on `.olea-session-copy`'s "could not find X" text.
+  // `[D-243]` (`ol-egov.132.7` [SESS-8.7]) retired that copy from this
+  // route's DOM entirely — it moved to `HomeView`, which this workbench does
+  // not mount as a flat surface (see `session.spec.ts`'s module doc) — so
+  // `main.ts`'s `renderSessionInspector` now exposes the same fact directly
+  // off the model instead.
+  const focusRow = page.locator('[data-wb-inspector] .wb-inspector-row', {
+    has: page.locator('.wb-inspector-label', { hasText: 'focus concept' }),
+  });
+  await expect(focusRow.locator('.wb-inspector-value')).toHaveText(conceptName);
 });
 
 test('coverage-unreadable-source (ol-cvsc): an unreadable source renders, never a clean zero', async ({

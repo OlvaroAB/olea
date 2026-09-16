@@ -126,7 +126,7 @@ import {
   type RhythmScenario,
 } from './rhythm-scenarios.js';
 import { buildScenario, findState, REVIEW_STATES, type Scenario } from './scenarios.js';
-import { SessionBuilderView } from './session-bridge.js';
+import { type SessionBuilderRequest, SessionBuilderView } from './session-bridge.js';
 import {
   buildSessionScenario,
   findSessionState,
@@ -1615,7 +1615,33 @@ async function main(): Promise<void> {
         renderSyntheticProvisionalBadge(host);
       }
 
-      const view = new SessionBuilderView(makeLeaf(), scenario.deps);
+      // `[D-243]` (`ol-egov.132.7` [SESS-8.7]) retired `SessionBuilderView`'s
+      // own rendering of the composed session — it now draws only the three
+      // steering inputs, and a live budget/course-topic click never touches
+      // this pane's DOM at all any more (the ranked item list moved to
+      // `HomeView`, which this workbench does not mount as a flat surface —
+      // see `session.spec.ts`'s module doc). So the inspector panel below is
+      // the ONLY observable surface a click can still move, and it must
+      // track every `deps.load` the view makes — not just the first one — or
+      // a click looks like a no-op to anything watching from outside the
+      // view. `latestModel` starts at the scenario's own eager build so the
+      // very first inspector paint (before `onOpen` resolves) already shows
+      // real data, exactly as it did before this wrapper existed.
+      let latestModel = scenario.model;
+      const deps = {
+        ...scenario.deps,
+        load: async (request: SessionBuilderRequest) => {
+          const resolved = await scenario.deps.load(request);
+          latestModel = resolved.kind === 'model' ? resolved.model : null;
+          renderSessionInspector(inspector, {
+            setNote: activeSet.note,
+            scenario: { ...scenario, model: latestModel },
+          });
+          return resolved;
+        },
+      };
+
+      const view = new SessionBuilderView(makeLeaf(), deps);
       host.appendChild(view.containerEl);
       mounted = { view };
 
@@ -1637,7 +1663,10 @@ async function main(): Promise<void> {
         if (run !== generation) return;
       }
 
-      renderSessionInspector(inspector, { setNote: activeSet.note, scenario });
+      renderSessionInspector(inspector, {
+        setNote: activeSet.note,
+        scenario: { ...scenario, model: latestModel },
+      });
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
@@ -2864,6 +2893,19 @@ function renderSessionInspector(inspector: HTMLElement, input: SessionInspectorI
       `${String(model.items.length)} item(s), ${String(model.leftOut.length)} left out ` +
       `(${String(model.leftOutInstrumentCount)} instrument(s)), considered ${String(model.consideredRowCount)} row(s), ` +
       `formatPreference: ${model.formatPreference}`,
+  });
+
+  // `model.focusConcept` echoes `focusConceptName` back (`build.ts`'s own
+  // doc) — the honest, still-real proof (post-`[D-243]`) that a build-session
+  // click's concept name actually reached `buildStudySession`, since neither
+  // this route's DOM nor `focusLine`'s "could not find X" copy renders here
+  // any more (that copy moved to `HomeView`; see `session.spec.ts`'s module
+  // doc and `oracle.spec.ts`'s FLOW test).
+  const focusRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  focusRow.createSpan({ cls: 'wb-inspector-label', text: 'focus concept' });
+  focusRow.createSpan({
+    cls: 'wb-inspector-value',
+    text: model.focusConcept ?? '(none requested)',
   });
 
   const assessmentRow = inspector.createDiv({ cls: 'wb-inspector-row' });

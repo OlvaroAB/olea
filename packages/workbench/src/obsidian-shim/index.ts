@@ -247,6 +247,46 @@ export abstract class ItemView extends Component {
   }
 }
 
+/** Obsidian's `EditorPosition` — a line/column pair. Minimal: only the shape `Editor.getCursor`/`posToOffset` need. */
+export interface EditorPosition {
+  line: number;
+  ch: number;
+}
+
+/**
+ * Obsidian's `Editor`, shrunk to exactly the two methods anything in this
+ * plugin calls (`main.ts`'s `handleCreateCardCommand`, `ol-0r92.76`
+ * [F2.1, C1.4]) — grep the whole of `packages/plugin/src` before widening
+ * this, the same discipline `Workspace.on`'s single-event-name doc states
+ * for itself.
+ */
+export interface Editor {
+  getCursor(which?: 'from' | 'to' | 'head' | 'anchor'): EditorPosition;
+  posToOffset(pos: EditorPosition): number;
+}
+
+/**
+ * Obsidian's `MarkdownView` — never constructed by anything in this
+ * workbench (no flat surface or simulator journey opens a note for editing),
+ * so `Workspace.getActiveViewOfType(MarkdownView)` always resolves `null`
+ * here, honestly: there is no markdown-editing simulation to return instead
+ * of one. Exists purely so `packages/plugin/src/main.ts`'s import and
+ * `instanceof`-shaped lookup type-check against this shim, the same "type
+ * compatibility, not behaviour" posture `TFile`/`TFolder` already take.
+ */
+export class MarkdownView extends ItemView {
+  file: TFile | null = null;
+  editor!: Editor;
+
+  override getViewType(): string {
+    return 'markdown';
+  }
+
+  override getDisplayText(): string {
+    return this.file?.basename ?? 'Untitled';
+  }
+}
+
 /**
  * Obsidian's transient toast. The workbench renders it into a corner region so a
  * notice that the product would show is visible rather than swallowed — several
@@ -607,6 +647,18 @@ export class Workspace {
   /** §4 gap table: `main.ts:759`'s `processNoteNowCheckCallback` reads this. Set by whichever host renders the simulator's file list — see `setActiveFile` below. */
   getActiveFile(): TFile | null {
     return this.activeFile;
+  }
+
+  /**
+   * `main.ts`'s `handleCreateCardCommand` (`ol-0r92.76` [F2.1, C1.4]) reads
+   * this against `MarkdownView`. Honestly `null` in every state this
+   * workbench mounts: nothing here opens a leaf whose `view` actually is a
+   * `MarkdownView` (there is no note-editing simulation), so this checks the
+   * real active leaf's real view rather than special-casing the type away.
+   */
+  getActiveViewOfType<T extends ItemView>(type: new (...args: never[]) => T): T | null {
+    const view = this.activeLeaf?.view ?? null;
+    return view instanceof type ? view : null;
   }
 
   /** Not an Obsidian API name — the simulator's file-list door onto `getActiveFile()` above (design §4: "the simulator's selected file"). */

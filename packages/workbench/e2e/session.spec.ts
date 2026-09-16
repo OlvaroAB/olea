@@ -16,6 +16,23 @@
  * `retrieve.spec.ts` already use, filling the surface's remaining gap.
  *
  * Nothing here retags a `features/` scenario — see the run's handback note.
+ *
+ * **`[D-243]` (`ol-egov.132.7` [SESS-8.7], 2026-09-12) gutted this view's own
+ * DOM.** `SessionBuilderView.render()` now calls only `renderSteeringControls`
+ * — the three F4.6 steering inputs — and nothing else; the ranked item list,
+ * the "could not find X" copy line and the `kind: 'unavailable'` box all
+ * moved to `../home/view.ts`'s `HomeView`, which has no flat-surface mount in
+ * this workbench (only the simulator mounts a real `HomeView`, via the whole
+ * `OleaPlugin`). So `.olea-session-item`/`-line`/`-unavailable*`/`-copy`
+ * never render under `mountSession` any more, and this file no longer
+ * asserts on them — the still-real, still-computed facts (budget, items
+ * count, format preference, duration basis) are read from the workbench's
+ * own `renderSessionInspector` panel instead, which calls the identical
+ * `buildStudySession` the real view used to render, independent of which
+ * component draws it. **Gap this leaves**: nothing in `@auto-web` currently
+ * exercises `HomeView`'s own rendering of the composed session or its
+ * unavailable state — that needs a new `home-scenarios.ts` +
+ * `mountHome` flat-surface builder in a future tranche (filed on `ol-z6x2`).
  */
 import { expect, type Page, test } from '@playwright/test';
 import { frame, gotoState } from './helpers.js';
@@ -26,6 +43,20 @@ async function inspectorRowValue(page: Page, label: string): Promise<string> {
     has: page.locator('.wb-inspector-label', { hasText: label }),
   });
   return ((await row.locator('.wb-inspector-value').textContent()) ?? '').trim();
+}
+
+/**
+ * The real item count off the inspector's `items` row (`main.ts`'s
+ * `renderSessionInspector`, computed from the real `model.items.length` —
+ * never `.olea-session-item`, which `[D-243]` retired from this route; see
+ * this file's module doc).
+ */
+async function inspectorItemCount(page: Page): Promise<number> {
+  const items = await inspectorRowValue(page, 'items');
+  const match = /^(\d+) item\(s\)/.exec(items);
+  if (match === null)
+    throw new Error(`session.spec.ts: could not parse an item count from "${items}"`);
+  return Number(match[1]);
 }
 
 /** The real `SessionBuilderView`'s budget button carrying this label ("20 min", "45 min", "90 min"). */
@@ -40,8 +71,11 @@ test('session-exam-eve-90: F4.8 format preference resolves to MCQ ahead of Q&A/c
   const budget = await inspectorRowValue(page, 'budget');
   expect(budget).toContain('90 min');
   const items = await inspectorRowValue(page, 'items');
-  expect(items).toContain('formatPreference: mcq');
-  await expect(frame(page).locator('.olea-session-item')).not.toHaveCount(0);
+  // `[D-246]`/VOC-7 (`abb6d75`) widened the declared format-class map: the
+  // old two-value `'mcq'`/`unknown` code is now `'recall-style'` (quiz, test,
+  // exam, midterm, final all resolve here — `format-class.ts`'s word table).
+  expect(items).toContain('formatPreference: recall-style');
+  expect(await inspectorItemCount(page)).toBeGreaterThan(0);
   // Borrowed instruments — the illustrative label the workbench adds so a
   // reader never mistakes a re-bound fixture card for one that arrived that
   // way in her real vault (session-scenarios.ts's own module doc).
@@ -55,8 +89,14 @@ test("session-short-20: F4.6's own example budget, no imminent quiz so the forma
   const budget = await inspectorRowValue(page, 'budget');
   expect(budget).toContain('20 min');
   const items = await inspectorRowValue(page, 'items');
-  expect(items).toContain('formatPreference: unknown');
-  await expect(frame(page).locator('.olea-session-item')).not.toHaveCount(0);
+  // `[D-246]`/VOC-7 (`abb6d75`): `formatPreference` now resolves to `unknown`
+  // ONLY when there is no next assessment at all; an assessment whose type
+  // the declared-class word table does not recognise falls to `'written'`
+  // rather than `unknown` (`format-class.ts`'s own default) — this state has
+  // an assessment, just not an imminent quiz, so the preference is a real
+  // declared class now, not silence.
+  expect(items).toContain('formatPreference: written');
+  expect(await inspectorItemCount(page)).toBeGreaterThan(0);
   // The default 20-minute button IS one of the three clickable options here
   // (unlike session-tight-5's 5-minute default), so it should render active.
   await expect(budgetButton(page, '20 min')).toHaveClass(/olea-session-budget-active/);
@@ -113,11 +153,12 @@ test('session-no-cards-yet: ranked concepts exist, but none is practisable — a
   // them — `consideredRowCount` is what tells this apart from
   // session-nothing-to-build's zero ranked rows below.
   expect(Number(consideredMatch?.[1])).toBeGreaterThan(0);
-  await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
   // This state is a real empty MODEL — a session with zero items — never the
   // `kind: 'unavailable'` branch. `session-vault-unreadable` below is what
-  // reaches that branch (round 35 tranche, `ol-z6x2`).
-  await expect(frame(page).locator('.olea-session-unavailable')).toHaveCount(0);
+  // reaches that branch (round 35 tranche, `ol-z6x2`). The inspector's own
+  // `0 item(s)` above is the whole proof now; `[D-243]` retired the DOM this
+  // test used to also check (see the module doc).
+  expect(await inspectorItemCount(page)).toBe(0);
 });
 
 test('session-nothing-to-build: no past paper registered, rankOracle abstains — zero ranked rows, the OTHER emptiness', async ({
@@ -129,27 +170,22 @@ test('session-nothing-to-build: no past paper registered, rankOracle abstains �
   const consideredMatch = /considered (\d+) row/.exec(items);
   expect(consideredMatch).not.toBeNull();
   expect(Number(consideredMatch?.[1])).toBe(0);
-  await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
+  expect(await inspectorItemCount(page)).toBe(0);
 });
 
 test("session-vault-unreadable: SessionBuilderView's kind: 'unavailable' branch, reached through a real vault-list failure (round 35, ol-z6x2)", async ({
   page,
 }) => {
   await gotoState(page, 'session', 'session-vault-unreadable', 'obsidian-dark');
-  // The budget controls still render (SessionBuilderView.render calls
-  // renderBudgetControls before checking state.kind) but no items and no
-  // copy lines — sessionScreenCopy never runs on this branch.
+  // The steering controls still render (`SessionBuilderView.render` draws
+  // them unconditionally — `[D-243]` moved everything conditional on
+  // `state.kind`, including the unavailable box this test used to also
+  // assert in this view's own DOM, to `HomeView`, which has no flat-surface
+  // mount here; see the module doc). Real, still-testable proof of reaching
+  // the `kind: 'unavailable'` branch is the inspector's own line below,
+  // which reads `SessionScenario.model` directly rather than through a
+  // renderer.
   await expect(frame(page).locator('.olea-session-budget')).not.toHaveCount(0);
-  await expect(frame(page).locator('.olea-session-item')).toHaveCount(0);
-  await expect(frame(page).locator('.olea-session-line')).toHaveCount(0);
-  const unavailable = frame(page).locator('.olea-session-unavailable');
-  await expect(unavailable).toBeVisible();
-  await expect(unavailable.locator('.olea-session-unavailable-title')).toHaveText(
-    'Olea could not read your sources just now.',
-  );
-  await expect(unavailable.locator('.olea-session-unavailable-body')).toContainText(
-    'no session to build here',
-  );
   // The inspector's own honest counterpart: no world was composed, so it has
   // nothing independent to read — never a silent zero standing in for a
   // model (session-scenarios.ts's own doc on `SessionScenario.model`).
@@ -165,7 +201,7 @@ test('FLOW: clicking a budget button re-runs buildStudySession for real, over th
   page,
 }) => {
   await gotoState(page, 'session', 'session-tight-5', 'obsidian-dark');
-  const itemsBefore = await frame(page).locator('.olea-session-item').count();
+  const itemsBefore = await inspectorItemCount(page);
 
   await budgetButton(page, '20 min').click();
   await expect(budgetButton(page, '20 min')).toHaveClass(/olea-session-budget-active/);
@@ -174,8 +210,12 @@ test('FLOW: clicking a budget button re-runs buildStudySession for real, over th
   // so clicking any one of them is a real state change, not a no-op replay
   // of the URL's own pre-baked scenario — this is Playwright driving the
   // component, exactly as `keyboard-flows.spec.ts` and `generate.spec.ts`'s
-  // accept-button test do for their own surfaces.
-  const itemsAfter20 = await frame(page).locator('.olea-session-item').count();
+  // accept-button test do for their own surfaces. Read from the inspector,
+  // not `.olea-session-item` — `[D-243]` retired that DOM (module doc), and
+  // `main.ts`'s `mountSession` now re-renders the inspector from every
+  // `deps.load` a click makes, so this is still a live read of the click's
+  // real effect, not a stale one-shot snapshot.
+  const itemsAfter20 = await inspectorItemCount(page);
   expect(itemsAfter20).toBeGreaterThanOrEqual(itemsBefore);
 
   // Clicking a strictly larger budget can only ever add items or hold
@@ -183,6 +223,6 @@ test('FLOW: clicking a budget button re-runs buildStudySession for real, over th
   await budgetButton(page, '90 min').click();
   await expect(budgetButton(page, '90 min')).toHaveClass(/olea-session-budget-active/);
   await expect(budgetButton(page, '20 min')).not.toHaveClass(/olea-session-budget-active/);
-  const itemsAfter90 = await frame(page).locator('.olea-session-item').count();
+  const itemsAfter90 = await inspectorItemCount(page);
   expect(itemsAfter90).toBeGreaterThanOrEqual(itemsAfter20);
 });
