@@ -1071,22 +1071,33 @@ describe('loadTodayPanel', () => {
       // course (`concept/extract.ts`), which `ConceptKeyInput` alone does not
       // show — reading it back off a real walk is the honest way to get the
       // review log's `conceptIds` to actually correlate with this concept.
-      const extracted = await extractConceptsFromVault(
-        memoryVault({ [NOTE_PATH]: NOTE_CONTENT }),
-        {},
-      );
+      //
+      // **One vault instance, not two (`ol-bo48` fix-up).** `extractConceptsFromVault`
+      // defaults to `stampConceptKeys: true`, and since `ol-bo48` that mint is
+      // `mintOpaqueConceptKey` — a random nonce, content-independent by design (C7.11) — so two
+      // INDEPENDENT extractions of the identical note, each starting from an empty key-store,
+      // now mint two DIFFERENT keys. Before `ol-bo48` the mint was content-derived, so a second
+      // empty vault happened to land on the same string by coincidence of derivation, not by any
+      // property this test is actually supposed to be exercising. Real production only ever
+      // extracts against ONE vault (an `ObsidianSource`, always the same one), where the second
+      // extraction — `loadTodayPanel`'s own internal `extractConceptsFromVault` call — hits
+      // `resolveConceptKey`'s matched-anchor branch and reads the persisted key back verbatim
+      // (conservation, `[D-088]`, unaffected by `ol-bo48`). Reusing one vault here is what makes
+      // the test model that, rather than a coincidence the opaque mint was free to break.
+      const vault = memoryVault({ [NOTE_PATH]: NOTE_CONTENT });
+      const extracted = await extractConceptsFromVault(vault, {});
       const record = extracted[0];
       if (record === undefined) throw new Error('expected one extracted concept');
       const conceptId = record.key;
 
-      const vault = memoryVault({
-        [NOTE_PATH]: NOTE_CONTENT,
-        // Filed inside the read window (`windowDays` below), with a stale
-        // `timestamp` inside the record — the file's own day only gates
-        // which files `readReviewHistory` looks at; FSRS reads elapsed time
-        // from the event's own timestamp, so this is a five-year-stale
-        // review the panel still discovers.
-        [logPath('2024-06-01', DEVICE)]: `${JSON.stringify({
+      // Filed inside the read window (`windowDays` below), with a stale
+      // `timestamp` inside the record — the file's own day only gates
+      // which files `readReviewHistory` looks at; FSRS reads elapsed time
+      // from the event's own timestamp, so this is a five-year-stale
+      // review the panel still discovers.
+      await vault.write(
+        logPath('2024-06-01', DEVICE),
+        `${JSON.stringify({
           schemaVersion: 3,
           kind: 'review',
           eventId: 'stale1',
@@ -1106,7 +1117,7 @@ describe('loadTodayPanel', () => {
           },
           conceptIds: [conceptId],
         })}\n`,
-      });
+      );
 
       const vm = await loadTodayPanel({
         vault,
