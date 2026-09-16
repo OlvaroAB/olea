@@ -296,6 +296,29 @@ export {
   stageForRelationType,
   TRIAGE_STANDING_BY_PROVENANCE,
 } from './concept/relation.js';
+// The persisted half of [D-119] (ol-2zfj.14, ONT-R1 ol-2zfj.86, ONT-R8
+// ol-2zfj.87): a rebuildable vault-side relation cache keyed on opaque
+// concept keys (never names), a severable same-as link for a mint-time
+// normalisation collision, and her edge dispositions as append-only events
+// keyed to the proposition identity. See each module's own doc.
+export type {
+  KeyedConceptRelation,
+  RelationCacheAttestation,
+  RelationCacheRecord,
+  RelationCacheWriteMode,
+  RelationCacheWriteResult,
+  WriteRelationCacheOptions,
+} from './concept/relation-cache.js';
+export {
+  isRelationCacheRecord,
+  listRelationCacheRecords,
+  propositionKey,
+  RELATION_CACHE_FOLDER,
+  RELATION_CACHE_RECORD_SCHEMA_VERSION,
+  relationCacheRecordPath,
+  relationCacheRecordsAsConceptRelations,
+  writeRelationCache,
+} from './concept/relation-cache.js';
 // `[CORP-3]` (`ol-2zfj.2`) — citation-grain material-change detection and the
 // in-memory revision event; applied at the orchestrator's merge per the lane's
 // shared-file diff. See `./concept/revision/index.js`'s module doc.
