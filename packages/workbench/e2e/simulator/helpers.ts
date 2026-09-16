@@ -51,10 +51,26 @@ export const SIMULATOR_STATE_ID = 'simulator-live';
 /** `commands/ids.ts` — hardcoded here rather than imported, matching this suite's existing convention of addressing the app by its own stable ids without pulling plugin source into a Playwright spec. */
 export const COMMAND_TODAY_OPEN = 'olea-today-open';
 export const COMMAND_SESSION_BUILD = 'olea-session-build';
+export const COMMAND_GAP_OPEN = 'olea-gap-open';
 
-/** `today/view.ts` / `session-builder/view.ts` — the two view types this suite's goldens open. */
+/**
+ * `today/view.ts` / `home/view.ts` / `gap/view.ts` — the view types this
+ * suite's goldens and `whole-plugin.spec.ts` open.
+ *
+ * **`VIEW_TYPE_SESSION_BUILDER` is retired, not merely renamed** (`ol-f7ao`,
+ * `[D-243]`/`[HOME-4]`, `ol-egov.135`: "the session builder is a panel, not a
+ * destination"). `COMMAND_SESSION_BUILD`'s callback has opened `HomeView` in
+ * the MAIN pane since SESS-8.7 (`packages/plugin/src/main.ts`'s
+ * `buildSession` handler, `void this.revealHomeView()` — see
+ * `test/session-builder/wiring.spec.ts` in `packages/plugin`, which asserts
+ * exactly this and was green throughout). `'olea-session-builder'` is still
+ * a real, registered view type (a saved layout referencing it must not
+ * error), but nothing in the product opens one any more — asserting it here
+ * would assert dead code path, not product behaviour.
+ */
 export const VIEW_TYPE_TODAY = 'olea-today';
-export const VIEW_TYPE_SESSION_BUILDER = 'olea-session-builder';
+export const VIEW_TYPE_HOME = 'olea-home';
+export const VIEW_TYPE_GAP = 'olea-gap';
 
 export interface GotoSimulatorOptions {
   /**
@@ -308,8 +324,8 @@ export async function rateNextDue(page: Page): Promise<void> {
  * relocated into the ribbon by `controller.ts`'s `populateRibbon` since
  * `ol-3ux7.64.14` [WBX-12] — still the SAME real button, so this locator is
  * unaffected by where in the DOM it sits), invokes `commandId` by clicking
- * its `[data-wb-command-id]` button, and waits for the RIGHT sidebar's
- * active leaf to report `expectedViewType` (`[data-wb-right-pane]`'s
+ * its `[data-wb-command-id]` button, and waits for `pane`'s active leaf to
+ * report `expectedViewType` (`[data-wb-pane]`/`[data-wb-right-pane]`'s
  * `data-wb-active-view-type` — `obsidian-shim/index.ts`'s `Workspace`).
  * This is F9.S3's "commands are registered and reachable through the
  * palette... choosing one runs its callback" and "a registered view opens in
@@ -317,25 +333,34 @@ export async function rateNextDue(page: Page): Promise<void> {
  * separate DOM interactions, since the palette click IS the callback
  * invocation this suite can observe from outside the plugin.
  *
- * `[data-wb-right-pane]`, not `[data-wb-pane]` (WBX-12): every command this
- * suite invokes through this helper (`COMMAND_TODAY_OPEN`,
- * `COMMAND_SESSION_BUILD`) drives a `revealXxxView` that calls
- * `workspace.getRightLeaf`, which WBX-12 gave a REAL right-sidebar pool of
- * its own — before that bead it aliased the main pool, so `[data-wb-pane]`
- * was the only pane there was. The main pane now shows Home from the moment
- * of mount (`controller.ts`'s `remountPane`), so asserting against
- * `[data-wb-pane]` here would be asserting Home never left, not that the
- * command opened its view.
+ * `pane` defaults to `'right'`, the pool `COMMAND_TODAY_OPEN`'s
+ * `revealTodayView` targets via `workspace.getRightLeaf` (WBX-12 gave the
+ * right sidebar a REAL pool of its own — before that bead it aliased the
+ * main pool, so `[data-wb-pane]` was the only pane there was). Pass
+ * `'main'` for a command whose destination lives in the main working-area
+ * pool instead — `COMMAND_SESSION_BUILD` (`buildSession` →
+ * `revealHomeView`, `getLeaf('tab')`) and `COMMAND_GAP_OPEN`
+ * (`revealGapView`, same pool) since `[D-243]`/`[HOME-4]` (`ol-f7ao`): "the
+ * session builder is a panel, not a destination" moved that command's real
+ * destination off the right-sidebar `SessionBuilderView` it used to open.
+ * The main pane shows `HomeView` from the moment of mount
+ * (`controller.ts`'s `remountPane`), so a caller proving
+ * `COMMAND_SESSION_BUILD` actually does something must first move the main
+ * pane AWAY from Home (e.g. via `COMMAND_GAP_OPEN`) — otherwise the
+ * assertion would pass even if the command's callback silently did nothing,
+ * since Home was already the active main-pane view either way.
  */
 export async function openCommandViaPalette(
   page: Page,
   commandId: string,
   expectedViewType: string,
+  pane: 'main' | 'right' = 'right',
 ): Promise<void> {
+  const paneSelector = pane === 'main' ? '[data-wb-pane]' : '[data-wb-right-pane]';
   await frame(page).locator('[data-wb-palette-toggle]').click();
   await expect(frame(page).locator('[data-wb-palette]')).toBeVisible();
   await frame(page).locator(`[data-wb-command-id="${commandId}"]`).click();
-  await expect(frame(page).locator('[data-wb-right-pane]')).toHaveAttribute(
+  await expect(frame(page).locator(paneSelector)).toHaveAttribute(
     'data-wb-active-view-type',
     expectedViewType,
   );

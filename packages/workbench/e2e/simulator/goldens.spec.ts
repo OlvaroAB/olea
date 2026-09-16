@@ -53,7 +53,7 @@ import {
   gotoSimulator,
   openCommandViaPalette,
   resetSimulator,
-  VIEW_TYPE_SESSION_BUILDER,
+  VIEW_TYPE_HOME,
   VIEW_TYPE_TODAY,
 } from './helpers.js';
 
@@ -63,20 +63,32 @@ const WORLD = process.env.WB_SIM_WORLD ?? 'fixture';
 const PERSONA = 'none';
 const WEEKS = [0, 1, 2, 3] as const;
 
+/**
+ * `session`'s destination moved from the right-sidebar `SessionBuilderView`
+ * to the main-pane `HomeView` under `[D-243]`/`[HOME-4]` (`ol-f7ao`, see
+ * `whole-plugin.spec.ts`'s module doc for the fuller citation) — `pane`
+ * says which pool `openCommandViaPalette` reads back. Both surfaces'
+ * screenshots still capture the WHOLE host frame (`hostFrameElement`, both
+ * panes at once), so `session`'s golden is now legitimately closer to
+ * `today`'s than it was pre-`[D-243]` — Home occupies the main pane by
+ * default from the moment of mount either way — but it remains a real,
+ * independently regenerated golden of "what the whole frame looks like
+ * once this command has run", which is this file's own stated contract.
+ */
 const SURFACES = {
-  today: { commandId: COMMAND_TODAY_OPEN, viewType: VIEW_TYPE_TODAY },
-  session: { commandId: COMMAND_SESSION_BUILD, viewType: VIEW_TYPE_SESSION_BUILDER },
+  today: { commandId: COMMAND_TODAY_OPEN, viewType: VIEW_TYPE_TODAY, pane: 'right' },
+  session: { commandId: COMMAND_SESSION_BUILD, viewType: VIEW_TYPE_HOME, pane: 'main' },
 } as const;
 
 for (const week of WEEKS) {
-  for (const [surface, { commandId, viewType }] of Object.entries(SURFACES)) {
+  for (const [surface, { commandId, viewType, pane }] of Object.entries(SURFACES)) {
     test(`@auto-web:simulator/goldens simulator/${WORLD}/${PERSONA}/${week}--${surface}`, async ({
       page,
     }) => {
       await gotoSimulator(page, { world: WORLD, persona: PERSONA });
       await resetSimulator(page);
       if (week > 0) await advanceDays(page, week * 7);
-      await openCommandViaPalette(page, commandId, viewType);
+      await openCommandViaPalette(page, commandId, viewType, pane);
       await expect(hostFrameElement(page)).toHaveScreenshot([
         WORLD,
         PERSONA,
