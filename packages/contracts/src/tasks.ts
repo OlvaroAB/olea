@@ -160,6 +160,26 @@ export const TASK_IDS = {
    */
   MATERIALITY_JUDGE: 'materiality.judge.v1',
   /**
+   * W4 · Slot G — examiner-declared scope (Outcome) extraction and a past
+   * paper's own structure (sections, item counts, marks, question forms),
+   * one task id for both of component register row 1.1b's named outputs
+   * (F4.1), discriminated by a `documentKind` request field rather than
+   * split into two ids — the two outputs share one prompt, one grounding
+   * discipline, and one anti-confabulation pass, and the register names them
+   * as one component's two outputs, not two. Sits beside
+   * `concepts.extract.v1` above in the same family: both propose entities
+   * read out of her material with a required grounding contract, rather
+   * than judging something that already exists. Payload/response fixed by
+   * `olea-service/src/tasks/outcomesExtract.ts`'s `outcomesExtractRequest` /
+   * `outcomesExtractResponse`; the paper-structure half feeds the practice-
+   * paper generator (F4.11, `[D-252]`). Added by `[D-254]` (`ol-2jod.21`),
+   * closing the reservation `ol-4s30` [EXT-13] left named — the client-side
+   * reading stage and its production caller are still owed, and the
+   * plugin's own automatic trigger is gated separately, on a five-course
+   * measured run, by `[EXT-14]` (`ol-2zfj.126`).
+   */
+  OUTCOMES_EXTRACT: 'outcomes.extract.v1',
+  /**
    * Slot A — audio transcription for F5.1's spoken explain-back input
    * (`ol-p4t01`, `[D-007]`). Carries no W-number the way W1–W7 do: the cost
    * model doc's own Slot A entry

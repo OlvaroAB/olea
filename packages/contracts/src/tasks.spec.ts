@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these eighteen ids, spelled exactly this way', () => {
+  it('is exactly these nineteen ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -27,6 +27,7 @@ describe('the closed task-id catalogue', () => {
       'grounding.judge.v1',
       'materiality.judge.v1',
       'oracle.rank.v1',
+      'outcomes.extract.v1',
       'plan.governor.v1',
       'quiz.generate.v1',
       'retrieval.embed.v1',
@@ -99,7 +100,14 @@ describe('the closed task-id catalogue', () => {
     // `explain-back.author.v1` (`[D-165]`, `ol-c0rz`) likewise: it authors
     // synthetic answers for the tier-3 harness's supplementary source on a
     // different model family from the judge — harness-only, no W-number.
-    expect(ALL_TASK_IDS).toHaveLength(18);
+    //
+    // `outcomes.extract.v1` (`[D-254]`, `ol-2jod.21`) is W4's second entry,
+    // grouped with `concepts.extract.v1` and `concepts.relations.v1` for the
+    // same reason: it proposes entities (an Outcome, a paper section) read
+    // out of her material with a required grounding contract, rather than
+    // judging something that already exists. Reserved, not yet served with a
+    // production caller — see its own doc comment in `tasks.ts`.
+    expect(ALL_TASK_IDS).toHaveLength(19);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
