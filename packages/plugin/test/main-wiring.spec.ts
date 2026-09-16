@@ -160,11 +160,26 @@ describe('the placeholder is gone, not merely bypassed', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('card creation is still honestly a placeholder, because it is still unbuilt', () => {
-    // The rule is "no placeholder beside a built feature", not "no
-    // placeholders" — P2-T04 has not landed, and a silent no-op command would
-    // be worse than one that says so.
-    expect(main).toMatch(/createCard:\s*createCardPlaceholder/);
+  // `ol-0r92.76`: card creation (F2.1) is no longer a placeholder for its
+  // cloze branch — `createCardPlaceholder` and `commands/placeholders.ts`
+  // are both gone, the same "swap, don't leave both standing" shape this
+  // file's own module doc already states for `startReviewPlaceholder` above.
+  it('no module still imports or names createCardPlaceholder', () => {
+    const offenders = everySourceFile().filter((file) =>
+      /createCardPlaceholder/.test(codeOf(file)),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('"Olea: Create card" is wired to the real handler, not a placeholder', () => {
+    expect(main).toMatch(/createCard:\s*\(\)\s*=>\s*\{\s*void this\.handleCreateCardCommand\(\);/);
+  });
+
+  it('the create-card handler reads the active note and resolves through create-card.ts, not a re-implementation', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*createCardNoticeText,\s*resolveCreateCardOutcome\s*\}\s*from\s*'\.\/commands\/create-card\.js'/,
+    );
+    expect(main).toMatch(/resolveCreateCardOutcome\(source,\s*\{\s*start,\s*end\s*\}\)/);
   });
 });
 
@@ -964,7 +979,9 @@ describe('the manual process-now timing override is registered and reachable ([D
     expect(main).toMatch(
       /import\s*\{\s*buildAuthoredNoteUnit,\s*createProcessNowAction,\s*isProcessNowSupported,\s*type ProcessNowAction,\s*processNowNotice,?\s*\}\s*from\s*'\.\/ingestion\/process-now\.js'/,
     );
-    expect(main).toMatch(/import \{ Notice, Plugin, TFile, type WorkspaceLeaf \} from 'obsidian';/);
+    expect(main).toMatch(
+      /import \{ MarkdownView, Notice, Plugin, TFile, type WorkspaceLeaf \} from 'obsidian';/,
+    );
   });
 });
 

@@ -6,8 +6,9 @@
  * plugin/Obsidian/platform versions, loads the two persisted stores, and
  * puts the result on the clipboard.
  *
- * **No test file**, same reasoning as `commands/placeholders.ts`: this
- * module imports `Notice`, `Platform` and `apiVersion` from `obsidian`,
+ * **No test file**, same reasoning as `main.ts`'s
+ * `handleCreateCardCommand`: this module imports `Notice`, `Platform` and
+ * `apiVersion` from `obsidian`,
  * which has no runtime outside a real Obsidian host (`obsidian`'s own
  * `package.json` declares `main: ""`), so it cannot execute under Vitest.
  * Covered by the `@manual` scenarios in `features/F7-plugin-surface.md`

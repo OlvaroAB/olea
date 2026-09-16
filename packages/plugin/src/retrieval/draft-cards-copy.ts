@@ -61,7 +61,8 @@ export const AI_NOT_CONFIGURED_NOTICE =
  * `ol-p3t07a`'s full scope) — this is the disclosed seam, not a bug: the
  * ask this bead was built against is a reachable, honest ask-and-show
  * surface, not the full triage flow. Phrased the same "isn't built yet, not
- * broken" way `commands/placeholders.ts`'s `NOT_YET_BUILT_SUFFIX` is.
+ * broken" way `commands/create-card.ts`'s `CREATE_CARD_NO_SELECTION_NOTICE`
+ * is.
  */
 export const ACCEPT_NOT_WIRED_NOTICE =
   "Olea: saving accepted cards to your notes isn't built yet — it's coming in a later update. This card stays here, and rejecting or leaving it does nothing to your vault either way.";

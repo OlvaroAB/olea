@@ -1,4 +1,4 @@
-import { Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
+import { MarkdownView, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import type {
   ReviewLogEntry,
   SoloLevel,
@@ -47,8 +47,8 @@ import {
   type VaultSource,
   type WindowDeficitEntry,
 } from 'olea-core';
+import { createCardNoticeText, resolveCreateCardOutcome } from './commands/create-card.js';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
-import { createCardPlaceholder } from './commands/placeholders.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
 import { ingestionSessionJustClosed } from './concept/corpusRelationTrigger.js';
@@ -724,7 +724,9 @@ export default class OleaPlugin extends Plugin {
       startReview: () => {
         void this.revealReviewView();
       },
-      createCard: createCardPlaceholder,
+      createCard: () => {
+        void this.handleCreateCardCommand();
+      },
       openToday: () => {
         void this.revealTodayView();
       },
@@ -2885,6 +2887,38 @@ export default class OleaPlugin extends Plugin {
       settingController?.openTabById?.(this.manifest.id);
     } catch {
       // Best effort — see this method's doc.
+    }
+  }
+
+  /**
+   * `OLEA_COMMAND_CREATE_CARD`'s real destination (F2.1, C1.4, `ol-0r92.76`)
+   * — `commands/create-card.ts`'s own module doc explains the split and why
+   * only the cloze branch is wired here (no Q&A front/back entry surface
+   * exists yet). Reads the active note fresh through a throwaway
+   * `ObsidianSource`, the same "construct one per call, never cache" shape
+   * every other command handler in this file uses.
+   */
+  private async handleCreateCardCommand(): Promise<void> {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const file = view?.file ?? null;
+    if (view === null || file === null) {
+      new Notice('Olea: open a note first to create a card from it.');
+      return;
+    }
+
+    const editor = view.editor;
+    const start = editor.posToOffset(editor.getCursor('from'));
+    const end = editor.posToOffset(editor.getCursor('to'));
+
+    const vault = new ObsidianSource(this.app);
+    const source = await vault.read(file.path);
+    const outcome = resolveCreateCardOutcome(source, { start, end });
+
+    const notice = createCardNoticeText(outcome);
+    if (notice !== null) new Notice(notice);
+
+    if (outcome.kind === 'clozed') {
+      await vault.write(file.path, outcome.content);
     }
   }
 

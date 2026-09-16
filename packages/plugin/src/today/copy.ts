@@ -116,9 +116,10 @@ export const NOTHING_DUE = 'Nothing due today.';
  * same statement as zero, and must not be rendered as one (`today/panel.ts`).
  *
  * **It used to say the review queue wasn't built, and that stopped being true.**
- * When this string was written the queue genuinely did not exist and
- * `commands/placeholders.ts`'s "honest that a piece is missing" was the right
- * precedent. The queue exists now, so the only way to reach this line is a walk
+ * When this string was written the queue genuinely did not exist and an
+ * honest "this piece is missing" was the right precedent (the same posture
+ * `commands/create-card.ts`'s `CREATE_CARD_NO_SELECTION_NOTICE` takes for
+ * Q&A card creation today). The queue exists now, so the only way to reach this line is a walk
  * or a log read that failed — and telling her a shipped feature is unbuilt
  * sends her to look for a setup step that isn't there. `review/copy.ts`'s
  * `REVIEW_UNAVAILABLE_*` names itself this string's sibling and states the rule

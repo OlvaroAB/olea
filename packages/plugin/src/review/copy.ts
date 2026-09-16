@@ -153,11 +153,10 @@ export function ratingLabel(rating: Rating): string {
  * rendering — this is the same statement in the same voice on the other
  * surface.
  *
- * Three things this copy deliberately does not do, all of them mistakes
- * `commands/placeholders.ts` already names: it does not read as a crash, it
- * does not blame her, and it does not say a feature is missing — it is not
- * missing, the read failed. It says what happened and what to do, in that
- * order.
+ * Three things this copy deliberately does not do: it does not read as a
+ * crash, it does not blame her, and it does not say a feature is missing —
+ * it is not missing, the read failed. It says what happened and what to do,
+ * in that order.
  */
 export const REVIEW_UNAVAILABLE_TITLE = 'Olea could not read your vault just now.';
 export const REVIEW_UNAVAILABLE_BODY =
