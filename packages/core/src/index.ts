@@ -323,6 +323,22 @@ export {
 // in-memory revision event; applied at the orchestrator's merge per the lane's
 // shared-file diff. See `./concept/revision/index.js`'s module doc.
 export * from './concept/revision/index.js';
+export type {
+  SameAsLinkRecord,
+  SameAsLinkStatus,
+  SameAsProposalReason,
+} from './concept/same-as.js';
+export {
+  confirmSameAsLink,
+  edgesEligibleForSplitMigration,
+  isSameAsLinkRecord,
+  listSameAsLinkRecords,
+  proposeSameAsLink,
+  remapIncidentRelationCacheRecords,
+  SAME_AS_LINK_FOLDER,
+  sameAsLinkRecordPath,
+  severSameAsLink,
+} from './concept/same-as.js';
 // Concept size (`[D-066]`, component register row 1.3) — a deterministic,
 // material-grounded floor read by two named consumers outside this package:
 // honest scope counting (F8.1, F8.3) and session composition (F2.17). See
