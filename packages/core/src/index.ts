@@ -1071,6 +1071,43 @@ export type {
   RankOracleOptions,
   RankOracleResult,
 } from './oracle/types.js';
+// The Outcome node (`[ONT-R5]`, knowledge model §4, functional scope F4.1, component register
+// row 1.1b): an examiner-declared unit of scope, the parent of the concepts inferred from how it
+// is taught and examined. `[D-253 / OUT-1]` proposes the field set for ratification; the module
+// ships it as the reversible default (`./outcome/types.js`'s module doc). No extraction adapter
+// calls this yet — `docs/Olea_component_register.md` row 1.1b is still "to build" — so these
+// exports have no production caller in this package; see the outcome bead's close evidence for
+// the reachability argument (`[D-072]` clause 5).
+export type {
+  OutcomeConceptAttachedEvent,
+  OutcomeCreatedEvent,
+  OutcomeEvent,
+  OutcomeRetiredEvent,
+} from './outcome/events.js';
+export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
+export type {
+  OpaqueIdNonceSource,
+  ResolveOutcomeInput,
+  ResolveOutcomeOptions,
+} from './outcome/store.js';
+export {
+  attachConceptToOutcome,
+  isOutcomeRecord,
+  listOutcomeRecords,
+  mintOpaqueOutcomeId,
+  OPAQUE_OUTCOME_ID_PREFIX,
+  OUTCOME_STORE_FOLDER,
+  outcomeRecordPath,
+  resolveOutcome,
+  retireOutcome,
+} from './outcome/store.js';
+export type {
+  OutcomeProvenance,
+  OutcomeRecord,
+  OutcomeSourceReference,
+  OutcomeStatus,
+} from './outcome/types.js';
+export { OUTCOME_RECORD_SCHEMA_VERSION, OUTCOME_STATUSES } from './outcome/types.js';
 // The versioned study plan (A2.5, C5.5, C7.6, P5-T05) — the client half of
 // "the Worker computes the policy, the client caches it and runs review
 // against it". `executeStudyPlan` is the offline path and takes no port at
