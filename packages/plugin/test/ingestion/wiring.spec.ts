@@ -20,6 +20,8 @@ import type {
   ExtractedUnit,
   JobStatus,
   ListOptions,
+  OutcomeProvenance,
+  OutcomeSourceReference,
   PersistedJob,
   PersistedQueue,
   QueueStore,
@@ -33,8 +35,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFirstReadFolderViews,
   buildIngestionRunner,
+  buildOutcomesExtractWiring,
   type FirstReadFolderCounts,
   firstReadFoldersJustFinished,
+  runOutcomesExtract,
   summarizeFirstReadByFolder,
 } from '../../src/ingestion/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
@@ -526,5 +530,202 @@ describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
     expect(units).toHaveLength(1);
     expect(units[0]?.text).toBe('Figure 3: the rock cycle');
     expect(units[0]?.provenance.location.page).toBe(1);
+  });
+});
+
+// `buildOutcomesExtractWiring` / `runOutcomesExtract` (`ol-4s30` [EXT-13]) —
+// the adapter-plus-store composition landed by the orchestrator once
+// `packages/core/src/outcome/` and the client adapter both existed. Same
+// F7.8 grey-out shape as `deps.vision` above; see `wiring.ts`'s own module
+// doc on this composition for the reachability note (no production caller
+// yet — the task id is not in the frozen catalogue) and the known
+// `confidence`-field gap this section deliberately surfaces rather than
+// papering over.
+
+/** A small writable, text-capable `VaultSource` fake — `MemoryVaultSource` above is binary-only ("no text files in this fake"), and `resolveOutcome` needs real `list`/`read`/`write` over `.olea/outcomes/`. */
+class WritableTextVault implements VaultSource {
+  private readonly files = new Map<string, string>();
+
+  async list(options: ListOptions = {}): Promise<readonly VaultPath[]> {
+    let paths = [...this.files.keys()];
+    if (options.under !== undefined) {
+      const prefix = `${options.under}/`;
+      paths = paths.filter((path) => path.startsWith(prefix));
+    }
+    if (options.extensions !== undefined) {
+      const exts = options.extensions;
+      paths = paths.filter((path) => exts.some((ext) => path.toLowerCase().endsWith(`.${ext}`)));
+    }
+    return paths.sort();
+  }
+
+  async read(path: VaultPath): Promise<string> {
+    const content = this.files.get(path);
+    if (content === undefined) throw new Error(`not found: ${path}`);
+    return content;
+  }
+
+  async readBinary(path: VaultPath): Promise<Uint8Array> {
+    return new TextEncoder().encode(await this.read(path));
+  }
+
+  async write(path: VaultPath, content: string): Promise<void> {
+    this.files.set(path, content);
+  }
+
+  async exists(path: VaultPath): Promise<boolean> {
+    return this.files.has(path);
+  }
+
+  watch(_handler: (event: VaultEvent) => void): Unsubscribe {
+    return () => {};
+  }
+}
+
+function outcomesExtractResponse(result: unknown) {
+  return { ok: true, result };
+}
+
+const TEST_PROVENANCE: OutcomeProvenance = { promptVersion: 'v-test', modelVersion: 'm-test' };
+
+describe('buildOutcomesExtractWiring — F7.8 grey-out', () => {
+  it('the Worker is not configured yet: reader stays null, and the transport is never touched', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({ outcomes: [], paperStructure: { sections: [] } }),
+    );
+    const wiring = await buildOutcomesExtractWiring({
+      dataHost: new FakeDataHost(), // never configured — loadData() resolves to null
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+
+    expect(wiring.reader).toBeNull();
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('the Worker is configured: builds a real, usable reader', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({ outcomes: [], paperStructure: { sections: [] } }),
+    );
+    const wiring = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+
+    expect(wiring.reader).not.toBeNull();
+  });
+});
+
+describe('runOutcomesExtract — adapter plus outcome-store composition', () => {
+  it('resolves every outcome candidate into a persisted OutcomeRecord, courses and provenance threaded through from the caller', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({
+        outcomes: [
+          { label: 'Explain diffusion across a membrane', confidence: 0.9, anchorIndex: 1 },
+        ],
+        paperStructure: { sections: [] },
+      }),
+    );
+    const { reader } = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+    if (reader === null) throw new Error('expected a configured reader');
+
+    const vault = new WritableTextVault();
+    const anchor: OutcomeSourceReference = { path: 'Objectives/week1.md', blockIndex: 0 };
+    const passages = [{ text: 'Explain diffusion across a membrane, with examples.', anchor }];
+
+    const result = await runOutcomesExtract(vault, reader, passages, {
+      documentKind: 'objectives',
+      courses: ['TESTC101'],
+      provenance: TEST_PROVENANCE,
+    });
+
+    expect(result.outcomes).toHaveLength(1);
+    const [record] = result.outcomes;
+    expect(record).toMatchObject({
+      courses: ['TESTC101'],
+      source: anchor,
+      label: 'Explain diffusion across a membrane',
+      conceptKeys: [],
+      status: 'active',
+      provenance: TEST_PROVENANCE,
+      // `[D-253]`'s ratifying amendment: the candidate's own `confidence` lands verbatim as
+      // `extractorSelfRating` — never rounded, clamped or interpreted by this composition.
+      extractorSelfRating: 0.9,
+    });
+    // Persisted, not just returned — the whole point of composing the store.
+    expect(await vault.list({ under: '.olea/outcomes', extensions: ['json'] })).toHaveLength(1);
+  });
+
+  it('resolving the SAME source twice returns the SAME record rather than minting a duplicate ([D-088]-shaped conservation)', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({
+        outcomes: [
+          { label: 'Explain diffusion across a membrane', confidence: 0.9, anchorIndex: 1 },
+        ],
+        paperStructure: { sections: [] },
+      }),
+    );
+    const { reader } = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+    if (reader === null) throw new Error('expected a configured reader');
+
+    const vault = new WritableTextVault();
+    const anchor: OutcomeSourceReference = { path: 'Objectives/week1.md', blockIndex: 0 };
+    const passages = [{ text: 'Explain diffusion across a membrane, with examples.', anchor }];
+    const options = {
+      documentKind: 'objectives' as const,
+      courses: ['TESTC101'],
+      provenance: TEST_PROVENANCE,
+    };
+
+    const first = await runOutcomesExtract(vault, reader, passages, options);
+    const second = await runOutcomesExtract(vault, reader, passages, options);
+
+    expect(second.outcomes[0]?.id).toBe(first.outcomes[0]?.id);
+    expect(await vault.list({ under: '.olea/outcomes', extensions: ['json'] })).toHaveLength(1);
+  });
+
+  it('carries paper-structure sections through verbatim, resolved to the same OutcomeSourceReference anchor, without persisting them', async () => {
+    const transport = fakeTransport(() =>
+      outcomesExtractResponse({
+        outcomes: [],
+        paperStructure: {
+          sections: [
+            {
+              label: 'Section A',
+              questionForm: 'short-answer',
+              itemCount: 5,
+              marks: 10,
+              anchorIndex: 1,
+            },
+          ],
+        },
+      }),
+    );
+    const { reader } = await buildOutcomesExtractWiring({
+      dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+      createTransport: (_config: WorkerConfig) => transport,
+    });
+    if (reader === null) throw new Error('expected a configured reader');
+
+    const vault = new WritableTextVault();
+    const anchor: OutcomeSourceReference = { path: 'Papers/2024-past-paper.md', blockIndex: 2 };
+    const passages = [{ text: 'Section A: answer all questions.', anchor }];
+
+    const result = await runOutcomesExtract(vault, reader, passages, {
+      documentKind: 'past-paper',
+      courses: ['TESTC101'],
+      provenance: TEST_PROVENANCE,
+    });
+
+    expect(result.outcomes).toHaveLength(0);
+    expect(result.paperStructure.sections).toEqual([
+      { label: 'Section A', questionForm: 'short-answer', itemCount: 5, marks: 10, anchor },
+    ]);
+    expect(await vault.list({ under: '.olea/outcomes', extensions: ['json'] })).toHaveLength(0);
   });
 });

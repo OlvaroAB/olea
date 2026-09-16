@@ -44,8 +44,12 @@ import {
   type ExtractedUnitSink,
   IngestionQueueEngine,
   type JobRunner,
+  type OutcomeProvenance,
+  type OutcomeRecord,
+  type OutcomeSourceReference,
   type PersistedJob,
   type QueueStore,
+  resolveOutcome,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -60,6 +64,12 @@ import {
   ObsidianWorkerConfigStore,
 } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
+import type {
+  OutcomeSourcePassage,
+  OutcomesExtractDocumentKind,
+  PaperSectionCandidate,
+} from './outcomes-extract-adapter.js';
+import { WorkerOutcomesExtractReader } from './outcomes-extract-adapter.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
 import { createWorkerVisionPageRunner, WorkerVisionPageExtractor } from './vision-page-runner.js';
 
@@ -353,4 +363,165 @@ export function buildFirstReadFolderViews(
     counts,
     landedConcepts: landedConceptsByFolder.get(folder) ?? [],
   }));
+}
+
+// =============================================================================
+// `buildOutcomesExtractWiring` / `runOutcomesExtract` — the composition root
+// for `outcomes.extract.v1` (`ol-4s30` [EXT-13], component register row 1.1b,
+// `[ONT-R5]`, F4.1). This is step 4 of `outcomes-extract-adapter.ts`'s own
+// module doc ("A composition root ... still needs writing"), landed by the
+// orchestrator now that `packages/core/src/outcome/` (steps 1–3: a real
+// `OutcomeSourceReference` anchor, `OutcomeRecord`, and `resolveOutcome`) has
+// landed alongside it in the same round.
+// =============================================================================
+//
+// **`TAnchor` is instantiated here, at last, as `OutcomeSourceReference`**
+// (`olea-core`'s `../outcome/types.js`) — the concrete anchor the adapter's
+// own module doc named as point 1. `packages/core/src/outcome/` never grew an
+// `OutcomeReaderPort` (point 2 of that doc) to `implements` against, so
+// `WorkerOutcomesExtractReader` is used directly rather than through an
+// interface that does not exist; nothing here invents one on that module's
+// behalf, per its own note that the shape is `packages/core/src/outcome/`'s
+// call to make, not this file's.
+//
+// **Follows `buildVisionRunner`'s pattern exactly**: load the persisted
+// Worker config, build a real transport only when it is usable (F7.8's
+// grey-out — everything else keeps working when the Worker isn't
+// configured), and hand back `undefined`/`null` rather than a reader doomed
+// to fail its first call.
+//
+// **`OutcomeCandidate.confidence` lands as `OutcomeRecord.extractorSelfRating`
+// (`[D-253]`'s ratifying amendment, David, 2026-09-16).** This composition
+// originally surfaced a gap rather than papering over it: the adapter reads a
+// numeric `confidence` off every outcome candidate, and `OutcomeRecord` had
+// nowhere for it to land. David ruled it in, with a hard constraint carried
+// on the field itself, in `../outcome/types.js`'s `OutcomeRecord` doc and in
+// `ol-d37g`'s close notes: it is an uncalibrated model self-rating, and NO
+// consumer may branch or threshold on it until calibrated against a judged
+// read (`[OUT-2]`). `runOutcomesExtract` below threads it through unchanged —
+// it does not calibrate, gate or interpret the number, only carries it.
+//
+// **Reachability (`[D-072]`, plan §2.7 clause 5) — deliberately incomplete.**
+// `buildOutcomesExtractWiring` and `runOutcomesExtract` have no production
+// caller. Two things block one, in order: (1) `outcomes.extract.v1` is not in
+// the frozen task-id catalogue (`olea-contracts`'s `TASK_IDS`) — the adapter's
+// own module doc names this, and it is a Class C contract-schema change this
+// lane does not make unilaterally. `[D-254]` approves the catalogue addition
+// (David, 2026-09-16) but the landing itself (the contracts edit, the
+// service-side re-vendor, and the one registry line) is explicitly NOT done
+// by this commit — it is the next lane's work (`[EXT-14]` gates the
+// PLUGIN TRIGGER specifically, not the catalogue edit, on a measured
+// five-course real-model run first). (2) Even once the catalogue is amended,
+// WHERE in `main.ts` an outcomes-extraction run is triggered from (which
+// command, which ingestion event, sourced from which folder-scoped
+// documents) is a surface decision this bead was not asked to make — "a bead
+// saying 'needs a caller/surface' names a requirement for *some* caller;
+// WHICH caller is the contract's to answer, not the brief's" (this repo's
+// own `CLAUDE.md`). Until both land, this composition is exercised by its
+// own unit tests alone.
+
+/**
+ * `deps.dataHost`/`deps.createTransport` compose exactly the way
+ * `buildVisionRunner` above does: load the persisted Worker config and build
+ * a real transport only when a base URL and token are both present.
+ */
+export interface OutcomesExtractWiringDeps {
+  readonly dataHost: ObsidianDataHost;
+  readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+}
+
+export interface OutcomesExtractWiring {
+  /** `null` under F7.8's grey-out — the Worker has never been configured. */
+  readonly reader: WorkerOutcomesExtractReader | null;
+}
+
+/**
+ * Composes a real `WorkerOutcomesExtractReader` when (and only when) the
+ * Worker is configured — see this section's module doc.
+ */
+export async function buildOutcomesExtractWiring(
+  deps: OutcomesExtractWiringDeps,
+): Promise<OutcomesExtractWiring> {
+  const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
+  const config = await configStore.load();
+  if (!isWorkerConfigured(config)) return { reader: null };
+
+  const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
+  return { reader: new WorkerOutcomesExtractReader({ transport }) };
+}
+
+/**
+ * Context a single extraction run needs that the Worker response cannot
+ * supply itself: which course(s) the source document belongs to
+ * (`OutcomeRecord.courses`, M:N, mirroring `ConceptRecord.courses`) and the
+ * D7.3 provenance stamp (`OutcomeProvenance`) this run's prompt/model version
+ * carries. Never derived here — a caller one layer up (the eventual `main.ts`
+ * trigger this section's doc says does not exist yet) is the one that knows
+ * which course folder is being read and which prompt version it is running.
+ */
+export interface RunOutcomesExtractOptions {
+  readonly documentKind: OutcomesExtractDocumentKind;
+  readonly courses: readonly string[];
+  readonly provenance: OutcomeProvenance;
+}
+
+export interface RunOutcomesExtractResult {
+  /**
+   * Resolved through `resolveOutcome` (mint-or-lookup, `[D-088]`-shaped
+   * conservation) — never a bare `OutcomeCandidate`, so a caller always gets
+   * back the durable, opaque-id record rather than a transient proposal.
+   */
+  readonly outcomes: readonly OutcomeRecord[];
+  /**
+   * Paper-structure sections are NOT resolved through the outcome store —
+   * `[ONT-R5]`'s Outcome node is examiner-declared SCOPE, and a past paper's
+   * section/mark structure is a different shape with no sibling persistence
+   * decision yet (component register row 1.1b names outcomes and their
+   * concept children; it names no persisted paper-structure schema). Passed
+   * through verbatim so a caller has it without this function inventing
+   * somewhere to put it.
+   */
+  readonly paperStructure: {
+    readonly sections: readonly PaperSectionCandidate<OutcomeSourceReference>[];
+  };
+}
+
+/**
+ * Reads outcomes and paper-structure sections from `passages` through
+ * `reader`, then resolves every outcome candidate into a persisted
+ * `OutcomeRecord` via `resolveOutcome` — the adapter-plus-store composition
+ * this section's module doc names as step 3/4. Concept attachment
+ * (`attachConceptToOutcome`) is deliberately NOT called here: nothing in this
+ * function has inferred concept keys from the outcome yet — that is a later
+ * stage's job, once one exists, not this read-and-persist seam's.
+ *
+ * `candidate.confidence` is threaded through as `extractorSelfRating`
+ * verbatim (`[D-253]`'s ratifying amendment) — never rounded, clamped or
+ * interpreted here. See this section's module doc for the no-branching rule
+ * attached to that field.
+ */
+export async function runOutcomesExtract(
+  vault: VaultSource,
+  reader: WorkerOutcomesExtractReader,
+  passages: readonly OutcomeSourcePassage<OutcomeSourceReference>[],
+  options: RunOutcomesExtractOptions,
+): Promise<RunOutcomesExtractResult> {
+  const result = await reader.read<OutcomeSourceReference>({
+    documentKind: options.documentKind,
+    passages,
+  });
+
+  const outcomes = await Promise.all(
+    result.outcomes.map((candidate) =>
+      resolveOutcome(vault, {
+        courses: options.courses,
+        source: candidate.anchor,
+        label: candidate.label,
+        provenance: options.provenance,
+        extractorSelfRating: candidate.confidence,
+      }),
+    ),
+  );
+
+  return { outcomes, paperStructure: result.paperStructure };
 }
