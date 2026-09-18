@@ -13,6 +13,7 @@
 
 export type { InstrumentRevisionJobPayload } from './enqueue.js';
 export { buildSuccessorRevisionEnqueueInput } from './enqueue.js';
+export { checkItemValidation, evaluateItemValidationTrigger } from './item-validation.js';
 export { evaluateCitedPassageRevision } from './material-change.js';
 export type { RelocationMatch } from './relocate.js';
 export {
@@ -25,10 +26,19 @@ export type {
   CitedPassageInput,
   CitedPassageRevisionOutcome,
   CurrentPassageState,
+  ItemDefectEvidenceKind,
+  ItemValidationJudgeInput,
+  ItemValidationJudgePort,
+  ItemValidationJudgeVerdict,
+  ItemValidationOutcome,
+  ItemValidationProposal,
+  ItemValidationTriggerOutcome,
   RelocationCandidate,
   RevisionEvent,
   RevisionJudgeInput,
   RevisionJudgePort,
   RevisionJudgeVerdict,
+  SameClaimMismatchInput,
+  SameDayInstrumentOutcome,
   SuccessionEvent,
 } from './types.js';

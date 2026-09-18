@@ -184,3 +184,145 @@ export type CitedPassageRevisionOutcome =
       readonly predecessorInstrumentId: string;
       readonly successorEnqueueInput: EnqueueInput;
     };
+
+/**
+ * F2.23 (`[D-265]`, ruling 3) — item validation. Types for
+ * `item-validation.ts`'s mismatch trigger and defect-evidence list. See that
+ * module's doc for the full sequence; this block is the shape only.
+ *
+ * **Evidence about the ITEM, never about her.** Every shape below describes
+ * something suspected of the instrument (its key, its stem, its cited
+ * source) or a fact about two instruments' same-day outcomes. None of them
+ * is, or produces, a diagnosis, a state, or a judgement about the student —
+ * the component register's own prohibition (`docs/Olea_architecture_boundary.md`
+ * §4a): "measurement counts no offered help as used and no suspected cause
+ * as observed." A caller that stores one of these against the STUDENT rather
+ * than the item has misused this module.
+ */
+
+/**
+ * F2.23's own five-item list, in the clause's own order — the only defect
+ * categories a check may report. Deliberately closed (not a free-form
+ * string): the clause enumerates exactly these, and a check that suspects
+ * something outside the list has no route to say so through this shape,
+ * which is the point — validation checks for one of these five, or it has
+ * nothing to propose.
+ */
+export type ItemDefectEvidenceKind =
+  | 'key-conflicts-with-source'
+  | 'stem-satisfied-by-multiple-options'
+  | 'missing-central-assumption'
+  | 'corrupted-prompt-or-source'
+  | 'superseded-material';
+
+/**
+ * The two same-day outcomes F2.23's mismatch trigger reads on an instrument
+ * — nothing else about that day's attempt matters to this trigger. A
+ * partial, ungraded, or otherwise ambiguous outcome is out of scope; a
+ * caller folds its own richer outcome into one of these two before calling,
+ * or does not call at all.
+ */
+export type SameDayInstrumentOutcome = 'strong' | 'failed';
+
+/**
+ * What `evaluateItemValidationTrigger` needs to decide whether F2.23's
+ * mismatch PRECONDITION holds — not whether a defect exists, only whether
+ * the model may be asked to check. `sameClaim` and `sameDay` arrive already
+ * decided by the caller (this module never reads the vault or a claim graph
+ * — same discipline as `relocate.ts`'s candidate texts, supplied rather than
+ * searched for): whether two instruments "concern the same claim" is a
+ * judgement this module has no standing to make on its own.
+ */
+export interface SameClaimMismatchInput {
+  readonly harderInstrumentId: string;
+  readonly harderOutcome: SameDayInstrumentOutcome;
+  readonly easierInstrumentId: string;
+  readonly easierOutcome: SameDayInstrumentOutcome;
+  readonly sameDay: boolean;
+  readonly sameClaim: boolean;
+}
+
+/**
+ * `'no-trigger'` covers both an ordinary lapse (the clause's own first
+ * scenario: "forgetting happens and is not itself evidence of a problem")
+ * and a mismatch that fails `sameDay`/`sameClaim` — this trigger names no
+ * distinction between them because the clause draws none: either the
+ * precondition holds or ordinary failure handling proceeds.
+ */
+export type ItemValidationTriggerOutcome =
+  | { readonly kind: 'no-trigger' }
+  | { readonly kind: 'check-warranted'; readonly suspectInstrumentId: string };
+
+/**
+ * What the model is asked to read when a check is warranted — the suspected
+ * instrument's own text and the source it cites. Nothing about her or her
+ * history: F2.23's suspicion is about the item, and this is the whole input
+ * a check needs to evaluate it.
+ */
+export interface ItemValidationJudgeInput {
+  readonly instrumentText: string;
+  readonly citedSourceText: string;
+}
+
+/**
+ * `kind` is populated only when `suspected` is true, and is always one of
+ * {@link ItemDefectEvidenceKind} — never a free-form diagnosis. `reason` is
+ * content-free (D-005): a short structural note, never her wording and
+ * never the passage text itself.
+ */
+export interface ItemValidationJudgeVerdict {
+  readonly suspected: boolean;
+  readonly kind?: ItemDefectEvidenceKind | undefined;
+  readonly reason?: string | undefined;
+}
+
+/**
+ * The service seam `checkItemValidation` calls through — same shape
+ * discipline as `RevisionJudgePort` above: declared rather than imported so
+ * `olea-core` takes on no new dependency, kept in lockstep with its caller
+ * by this doc comment rather than a shared import.
+ */
+export interface ItemValidationJudgePort {
+  judge(input: ItemValidationJudgeInput): Promise<ItemValidationJudgeVerdict>;
+}
+
+/**
+ * What `checkItemValidation` produces on a suspected defect — always a
+ * PROPOSAL, never a verdict on the item's eligibility. F2.23 is explicit
+ * that validation itself never changes eligibility or moves weight: only
+ * `[D-093]`'s changed-evidence event, `[D-095]`'s contest mechanism, or her
+ * own confirmation may do that. This shape carries nothing else — no weight
+ * adjustment, no growth-stage change, no state about the student — because
+ * this module has no route to write any of those (`core` holds no such
+ * state) and none should be added here even if it did.
+ */
+export interface ItemValidationProposal {
+  readonly instrumentId: string;
+  readonly kind: ItemDefectEvidenceKind;
+  /** Epoch ms, from the caller's `Clock` — same discipline as {@link RevisionEvent.at}. */
+  readonly at: number;
+  readonly reason?: string | undefined;
+}
+
+/**
+ * Every outcome `checkItemValidation` can reach.
+ *
+ * - `'no-trigger'` — the mismatch precondition did not hold; ordinary
+ *   failure handling applies and nothing here runs.
+ * - `'not-suspected'` — the precondition held and the judge was asked, but
+ *   it found no defect; the item's weight and eligibility are untouched,
+ *   same as `'no-trigger'`.
+ * - `'judge-unavailable'` — the precondition held but no judge was
+ *   configured — mirrors `CitedPassageRevisionOutcome`'s own
+ *   `'judge-unavailable'` arm: never fabricate a verdict, never silently
+ *   drop the signal.
+ * - `'proposed'` — the judge suspects one of F2.23's five defect kinds. This
+ *   is a PROPOSAL for her to confirm, not a decision; nothing about the
+ *   item's weight, eligibility or growth stage moves as a result of this
+ *   outcome alone.
+ */
+export type ItemValidationOutcome =
+  | { readonly kind: 'no-trigger' }
+  | { readonly kind: 'not-suspected' }
+  | { readonly kind: 'judge-unavailable' }
+  | { readonly kind: 'proposed'; readonly proposal: ItemValidationProposal };
