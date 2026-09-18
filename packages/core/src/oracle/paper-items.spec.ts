@@ -61,17 +61,29 @@ describe('fillPaperBlueprintSlots', () => {
     const bp = blueprint({
       slots: [],
       emptySlots: [
-        { slotId: 'slot-0', conceptKey: 'a', conceptName: 'a', reason: 'no held source' },
+        {
+          slotId: 'slot-0',
+          conceptKey: 'a',
+          conceptName: 'a',
+          reasonCode: 'no-held-source',
+          reason: 'no held source',
+        },
       ],
     });
     const result = await fillPaperBlueprintSlots(bp, alwaysGenerates);
     expect(result.items).toHaveLength(0);
     expect(result.emptySlots).toEqual<readonly PaperEmptySlot[]>([
-      { slotId: 'slot-0', conceptKey: 'a', conceptName: 'a', reason: 'no held source' },
+      {
+        slotId: 'slot-0',
+        conceptKey: 'a',
+        conceptName: 'a',
+        reasonCode: 'no-held-source',
+        reason: 'no held source',
+      },
     ]);
   });
 
-  it('a port refusal becomes an empty slot, never an invented item (F4.10 at generation grain)', async () => {
+  it('a port refusal becomes an empty slot with reasonCode generator-refused, never an invented item (F4.10 at generation grain)', async () => {
     const refusing: PaperItemGenerationPort = async () =>
       ({
         status: 'refused',
@@ -81,6 +93,7 @@ describe('fillPaperBlueprintSlots', () => {
     const result = await fillPaperBlueprintSlots(bp, refusing);
     expect(result.items).toHaveLength(0);
     expect(result.emptySlots).toHaveLength(1);
+    expect(result.emptySlots[0]?.reasonCode).toBe('generator-refused');
     expect(result.emptySlots[0]?.reason).toContain('below-composite-threshold');
   });
 

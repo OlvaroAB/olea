@@ -119,6 +119,7 @@ export async function fillPaperBlueprintSlots(
         slotId: slot.slotId,
         conceptKey: slot.conceptKey,
         conceptName: slot.conceptName,
+        reasonCode: 'generator-refused',
         reason: `generator refused: ${result.reason}`,
       });
       continue;

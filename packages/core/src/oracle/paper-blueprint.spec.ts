@@ -141,7 +141,79 @@ describe('buildPaperBlueprint', () => {
     });
     expect(blueprint.slots.map((s) => s.conceptKey)).toEqual(['c']);
     expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['b']);
+    expect(blueprint.emptySlots[0]?.reasonCode).toBe('no-held-source');
     expect(blueprint.eligibleCount).toBe(2); // b and c are eligible; a is not (possible)
+  });
+
+  describe('[D-258] — slot-cap-excluded concepts named as empty slots', () => {
+    // 6 eligible concepts, slot cap 4 (extent 'shorter' with no recovered structure), alpha 0.25
+    // so weight = 0.25*coverageScore + 0.75*masteryScore. Ranked descending:
+    //   holdA (held, mastery 0.9) -> 0.925   \
+    //   holdB (held, mastery 0.7) -> 0.775    | inside the cap (4 slots)
+    //   noHeld (NO held source, mastery 0.9) -> 0.675
+    //   holdC (held, mastery 0.5) -> 0.625   /
+    //   holdD (held, mastery 0.3) -> 0.475   \ rank-excluded — each still HAS a held source,
+    //   holdE (held, mastery 0.1) -> 0.325   / proving rank-excluded is distinct from no-held-source
+    const heldSources = [{ kind: 'notes', sourceId: 's', chunks: ['x'] }] as const;
+    const rankExcludedInput = {
+      ...baseInput,
+      alpha: 0.25 as const,
+      steering: { extent: 'shorter' as const },
+      concepts: [
+        concept({ conceptKey: 'holdA', heldSources: [...heldSources], masteryScore: 0.9 }),
+        concept({ conceptKey: 'holdB', heldSources: [...heldSources], masteryScore: 0.7 }),
+        concept({ conceptKey: 'noHeld', heldSources: [], masteryScore: 0.9 }),
+        concept({ conceptKey: 'holdC', heldSources: [...heldSources], masteryScore: 0.5 }),
+        concept({ conceptKey: 'holdD', heldSources: [...heldSources], masteryScore: 0.3 }),
+        concept({ conceptKey: 'holdE', heldSources: [...heldSources], masteryScore: 0.1 }),
+      ],
+    };
+
+    it('names every concept ranked below the cap as empty with reasonCode rank-excluded, and none as filled', () => {
+      const blueprint = buildPaperBlueprint(rankExcludedInput);
+      expect(extentSlotCountTarget('shorter', null)).toBe(4);
+      expect(blueprint.slots.map((s) => s.conceptKey)).toEqual(['holdA', 'holdB', 'holdC']);
+      const rankExcluded = blueprint.emptySlots.filter((s) => s.reasonCode === 'rank-excluded');
+      expect(rankExcluded.map((s) => s.conceptKey).sort()).toEqual(['holdD', 'holdE']);
+      for (const key of ['holdD', 'holdE']) {
+        expect(blueprint.slots.some((s) => s.conceptKey === key)).toBe(false);
+      }
+    });
+
+    it('filled slots plus empty slots always equal the eligible count', () => {
+      const blueprint = buildPaperBlueprint(rankExcludedInput);
+      expect(blueprint.eligibleCount).toBe(6);
+      expect(blueprint.slots.length + blueprint.emptySlots.length).toBe(blueprint.eligibleCount);
+
+      // Also holds when eligibleCount <= slotCap (nothing to exclude by rank at all).
+      const smallBlueprint = buildPaperBlueprint({
+        ...baseInput,
+        concepts: [
+          concept({
+            conceptKey: 'a',
+            heldSources: [{ kind: 'notes', sourceId: 's', chunks: ['x'] }],
+          }),
+        ],
+      });
+      expect(smallBlueprint.slots.length + smallBlueprint.emptySlots.length).toBe(
+        smallBlueprint.eligibleCount,
+      );
+    });
+
+    it('a no-held-source concept inside the cap is unchanged by the cap fix, and the two reason codes never cross', () => {
+      const blueprint = buildPaperBlueprint(rankExcludedInput);
+      const noHeld = blueprint.emptySlots.find((s) => s.conceptKey === 'noHeld');
+      expect(noHeld?.reasonCode).toBe('no-held-source');
+
+      // A concept excluded by rank never receives no-held-source, and vice versa.
+      for (const empty of blueprint.emptySlots) {
+        if (empty.conceptKey === 'noHeld') {
+          expect(empty.reasonCode).not.toBe('rank-excluded');
+        } else {
+          expect(empty.reasonCode).not.toBe('no-held-source');
+        }
+      }
+    });
   });
 
   it('labels grounding by held-source kind (notes vs. everything else)', () => {

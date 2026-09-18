@@ -137,11 +137,31 @@ export interface PaperBlueprintSlot {
   readonly emphasised: boolean;
 }
 
+/**
+ * Machine-readable partition of WHY a slot could not be filled (`[D-258]` / `PAPER-5`) — kept
+ * alongside the existing free-text `reason` so a caller (an audit, or a future composition-account
+ * copy) can switch on the reason without string-matching prose (D-005: `reason` stays descriptive
+ * text; `reasonCode` is the field anything mechanical may branch on).
+ *
+ * - `'no-held-source'` — F4.10: the concept reached ranking inside the slot cap but carries no
+ *   held source at all (T2 exhausted; T3, the labelled model-extended margin, is not reachable
+ *   through the existing card/quiz generators — see `./paper-items.ts`).
+ * - `'generator-refused'` — the slot reached generation but the port refused (`./paper-items.ts`'s
+ *   `fillPaperBlueprintSlots`, e.g. a schema-validation failure or the task's own INV-5
+ *   groundedness/emptyContextGuard check).
+ * - `'rank-excluded'` — the concept was eligible (`isEligibleConcept`) but ranked at or below
+ *   `extentSlotCountTarget`'s slot cap, and so never became a candidate at all. Distinct from
+ *   `'no-held-source'`: a rank-excluded concept may well hold a source — it simply ranked too low
+ *   this time. This is the reason code `[D-258]` adds; the other two already existed as prose.
+ */
+export type PaperEmptySlotReasonCode = 'no-held-source' | 'generator-refused' | 'rank-excluded';
+
 /** A ranked, eligible concept the blueprint could not fill — F4.10's never-invent rule, named rather than silently dropped (mirrors `playback-paper.mjs`'s `emptySlots`). */
 export interface PaperEmptySlot {
   readonly slotId: string;
   readonly conceptKey: string;
   readonly conceptName: string;
+  readonly reasonCode: PaperEmptySlotReasonCode;
   readonly reason: string;
 }
 

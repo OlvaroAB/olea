@@ -40,6 +40,7 @@ import type {
   PaperBlueprint,
   PaperBlueprintSlot,
   PaperEmptySlot,
+  PaperEmptySlotReasonCode,
   PaperFormatClass,
   PaperGeneratorTaskId,
   PaperGroundingLabel,
@@ -238,6 +239,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
 
   const slotCap = extentSlotCountTarget(steering.extent, input.structure);
   const candidates = ranked.slice(0, slotCap);
+  const rankExcluded = ranked.slice(slotCap);
 
   const slots: PaperBlueprintSlot[] = [];
   const emptySlots: PaperEmptySlot[] = [];
@@ -250,6 +252,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
         slotId,
         conceptKey: concept.conceptKey,
         conceptName: concept.conceptName,
+        reasonCode: 'no-held-source' satisfies PaperEmptySlotReasonCode,
         reason:
           'no held source (T2 exhausted); the labelled model-extended margin (6d) is not ' +
           'reachable through the existing card/quiz generators — see ./paper-items.ts',
@@ -270,6 +273,22 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
       sourceChunks: held.chunks,
       weight,
       emphasised,
+    });
+  });
+
+  // [D-258]: every eligible concept the slot cap excluded is named here, never silently dropped —
+  // the same F4.10 "never invent, never disappear" discipline applied one step earlier, to ranking
+  // rather than to sourcing.
+  rankExcluded.forEach(({ concept }, offset) => {
+    const overallRank = slotCap + offset;
+    emptySlots.push({
+      slotId: `excluded-${overallRank}`,
+      conceptKey: concept.conceptKey,
+      conceptName: concept.conceptName,
+      reasonCode: 'rank-excluded' satisfies PaperEmptySlotReasonCode,
+      reason:
+        `ranked ${overallRank + 1} of ${eligible.length} eligible concepts; the extent-steered ` +
+        `slot cap (${slotCap}) excluded it before a held-source check was reached`,
     });
   });
 
