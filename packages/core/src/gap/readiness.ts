@@ -32,6 +32,20 @@
  * The copy is in `packages/plugin/src/gap/copy.ts`; nothing here produces
  * prose.
  *
+ * **Not to be conflated with C5.6's readiness (`[D-264]`; audited by
+ * `ol-v7r5.47`).** The word "readiness" names two distinct quantities in
+ * this codebase, and this module is the other one. C5.6's readiness
+ * (`../allocation/resolve-inputs.js`'s `PlanPolicyCourseInput.readiness`) is
+ * evidence-backed recall coverage against an assessment's scope, used to
+ * weight cross-course time allocation. `ReadinessFactors` here is R7's
+ * recognition/knowledge split: a per-row *weight* on the gap view's existing
+ * oracle ranking, based on whether the paper's format makes recognition
+ * evidence predictive. Neither reads the other's output, and no consumer
+ * imports both under one name — verified at audit time by checking every
+ * caller of `resolvePlanPolicyCourseInputs` and every caller of
+ * `readinessFactorsFor`/`GapRow.readiness` for overlap; the only shared file
+ * is `../index.js`'s barrel re-export, which is not a computation.
+ *
  * **Every number in this module is provisional and unratified (Class B).**
  * `DEFAULT_MCQ_RECOGNITION_WEIGHT` is a guess with an argument, not a
  * measurement, exactly like `rank.ts`'s parameters — and, like them, it may

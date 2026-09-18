@@ -115,7 +115,7 @@ describe('resolvePlanPolicyCourseInputs', () => {
     expect(result[0]?.assessmentWorth).toBe(1);
   });
 
-  it('averages readiness (sapling/tree share) and evidenceVolume (not-unknown share) over the ranked concepts', () => {
+  it('averages readiness (sapling/tree share) and evidenceVolume (sprout-or-better share) over the ranked concepts', () => {
     const result = resolvePlanPolicyCourseInputs(
       '2026-09-01',
       ranking([
@@ -139,15 +139,22 @@ describe('resolvePlanPolicyCourseInputs', () => {
               conceptName: 'c4',
               factors: { ...conceptPriority().factors, masteryState: 'sapling' },
             }),
+            conceptPriority({
+              conceptName: 'c5',
+              factors: { ...conceptPriority().factors, masteryState: 'sprout' },
+            }),
           ],
         },
       ]),
       [],
     );
 
-    // solid (sapling|tree): c1, c4 → 2/4 = 0.5; evidenced (not unknown): c1, c2, c4 → 3/4 = 0.75
-    expect(result[0]?.readiness).toBe(0.5);
-    expect(result[0]?.evidenceVolume).toBe(0.75);
+    // solid (sapling|tree): c1, c4 → 2/5 = 0.4;
+    // evidenced (sprout|sapling|tree, i.e. anything but unknown/seed): c1, c4, c5 → 3/5 = 0.6.
+    // `[D-264]` audit (`ol-v7r5.47`): `'seed'` (c2) is "no evidence at all"
+    // per `mastery/rollup.ts` and must NOT count as evidenced — it used to.
+    expect(result[0]?.readiness).toBe(0.4);
+    expect(result[0]?.evidenceVolume).toBe(0.6);
   });
 
   it('reads an abstained course as zero readiness and zero evidence — abstention already asserts "no evidence"', () => {
