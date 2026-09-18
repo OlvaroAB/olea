@@ -6,6 +6,7 @@ import { FolderSource } from '../vault/folder-source.js';
 import { listRelationCacheRecords, writeRelationCache } from './relation-cache.js';
 import {
   confirmSameAsLink,
+  declineSameAsLink,
   edgesEligibleForSplitMigration,
   isSameAsLinkRecord,
   listSameAsLinkRecords,
@@ -71,6 +72,44 @@ describe('proposeSameAsLink — a collision proposes, it never merges (ONT-R1)',
     const record = await proposeSameAsLink(source, 'x', 'y');
     expect(record.status).not.toBe('confirmed');
   });
+
+  it('bias to splits: a DECLINED pair with no evidence fingerprint given is left declined, never automatically re-proposed', async () => {
+    await proposeSameAsLink(source, 'key-a', 'key-b');
+    const declined = await declineSameAsLink(source, 'key-a', 'key-b');
+
+    const resolvedAgain = await proposeSameAsLink(source, 'key-a', 'key-b');
+    expect(resolvedAgain.status).toBe('declined');
+    expect(resolvedAgain).toEqual(declined);
+  });
+
+  it('a DECLINED pair re-proposed on the SAME evidence fingerprint stays declined ([D-257] ruling 3: "not re-proposed on the evidence it was declined from")', async () => {
+    await proposeSameAsLink(source, 'key-a', 'key-b', { evidenceFingerprint: 'fp-1' });
+    const declined = await declineSameAsLink(source, 'key-a', 'key-b', { now: () => '2026-09-17' });
+
+    const resolvedAgain = await proposeSameAsLink(source, 'key-a', 'key-b', {
+      evidenceFingerprint: 'fp-1',
+    });
+    expect(resolvedAgain.status).toBe('declined');
+    expect(resolvedAgain).toEqual(declined);
+  });
+
+  it('a DECLINED pair re-proposed with a CHANGED evidence fingerprint reopens ([D-093] event, [D-257] ruling 3), keeping decline history', async () => {
+    await proposeSameAsLink(source, 'key-a', 'key-b', {
+      now: () => '2026-09-15',
+      evidenceFingerprint: 'fp-1',
+    });
+    await declineSameAsLink(source, 'key-a', 'key-b', { now: () => '2026-09-16' });
+
+    const reopened = await proposeSameAsLink(source, 'key-a', 'key-b', {
+      now: () => '2026-09-18',
+      evidenceFingerprint: 'fp-2',
+    });
+    expect(reopened.status).toBe('proposed');
+    expect(reopened.proposedAt).toBe('2026-09-18');
+    expect(reopened.evidenceFingerprint).toBe('fp-2');
+    // Decline history kept — the record still shows it was declined once.
+    expect(reopened.declinedAt).toBe('2026-09-16');
+  });
 });
 
 describe('confirmSameAsLink / severSameAsLink — explicit, never automatic', () => {
@@ -113,6 +152,93 @@ describe('confirmSameAsLink / severSameAsLink — explicit, never automatic', ()
 
   it('the link record path is stable regardless of key order', () => {
     expect(sameAsLinkRecordPath('a', 'b')).toBe(sameAsLinkRecordPath('b', 'a'));
+  });
+});
+
+describe('isSameAsLinkRecord — the declined shape validates', () => {
+  it('accepts a declined record with declinedAt and evidenceFingerprint set', () => {
+    expect(
+      isSameAsLinkRecord({
+        keyA: 'a',
+        keyB: 'b',
+        status: 'declined',
+        reason: 'normalisation-collision',
+        proposedAt: '2026-09-15T00:00:00.000Z',
+        declinedAt: '2026-09-16T00:00:00.000Z',
+        evidenceFingerprint: 'fp-1',
+        schemaVersion: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a status outside the four-member union', () => {
+    expect(
+      isSameAsLinkRecord({
+        keyA: 'a',
+        keyB: 'b',
+        status: 'rejected',
+        reason: 'normalisation-collision',
+        proposedAt: '2026-09-15T00:00:00.000Z',
+        schemaVersion: 1,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('declineSameAsLink — the F8.4a triage "no" ([D-257] ruling 3)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-same-as-decline-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('throws declining a pair with no proposal — a decline must follow a proposal', async () => {
+    await expect(declineSameAsLink(source, 'a', 'b')).rejects.toThrow(/no proposed same-as link/);
+  });
+
+  it('declining records a hard labelled negative, never a claim the two concepts differ', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    const declined = await declineSameAsLink(source, 'a', 'b', { now: () => '2026-09-16' });
+    expect(declined.status).toBe('declined');
+    expect(declined.declinedAt).toBe('2026-09-16');
+    expect(declined.keyA).toBe('a');
+    expect(declined.keyB).toBe('b');
+  });
+
+  it('is idempotent — declining an already-declined pair writes nothing new', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    const first = await declineSameAsLink(source, 'a', 'b', { now: () => '2026-09-16' });
+    const second = await declineSameAsLink(source, 'a', 'b', { now: () => '2026-09-17' });
+    expect(second).toEqual(first);
+  });
+
+  it('a decline never blocks a future confirm — confirmSameAsLink on a declined record moves it to confirmed', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    await declineSameAsLink(source, 'a', 'b', { now: () => '2026-09-16' });
+    const confirmed = await confirmSameAsLink(source, 'a', 'b', { now: () => '2026-09-17' });
+    expect(confirmed.status).toBe('confirmed');
+    expect(confirmed.confirmedAt).toBe('2026-09-17');
+    // Decline history kept alongside the confirm.
+    expect(confirmed.declinedAt).toBe('2026-09-16');
+  });
+
+  it('declining a CONFIRMED link is rejected — that is a sever, not a decline', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    await confirmSameAsLink(source, 'a', 'b');
+    await expect(declineSameAsLink(source, 'a', 'b')).rejects.toThrow(/severSameAsLink instead/);
+  });
+
+  it('declining a SEVERED link is rejected — no pending proposal left to decline', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    await confirmSameAsLink(source, 'a', 'b');
+    await severSameAsLink(source, 'a', 'b');
+    await expect(declineSameAsLink(source, 'a', 'b')).rejects.toThrow(/no pending proposal/);
   });
 });
 

@@ -38,6 +38,19 @@ function proposedLink(overrides: Partial<SameAsLinkRecord> = {}): SameAsLinkReco
   };
 }
 
+function declinedLink(overrides: Partial<SameAsLinkRecord> = {}): SameAsLinkRecord {
+  return {
+    keyA: 'key-a',
+    keyB: 'key-b',
+    status: 'declined',
+    reason: 'normalisation-collision',
+    proposedAt: '2026-09-15T00:00:00.000Z',
+    declinedAt: '2026-09-16T00:00:00.000Z',
+    schemaVersion: 1,
+    ...overrides,
+  };
+}
+
 interface TestConcept extends SameAsResolvableConcept {
   readonly name: string;
 }
@@ -67,6 +80,12 @@ describe('canonicalKeyForLink / buildSameAsKeyRedirect — the canonical rule', 
     const severed = link({ status: 'severed', severedAt: '2026-09-17T00:00:00.000Z' });
     expect(canonicalKeyForLink(severed)).toBeUndefined();
     expect(buildSameAsKeyRedirect([severed]).size).toBe(0);
+  });
+
+  it('a declined link contributes no canonical key either ([D-257] ruling 3 — a decline never asserts the two are different, so a reader never folds it)', () => {
+    const declined = declinedLink();
+    expect(canonicalKeyForLink(declined)).toBeUndefined();
+    expect(buildSameAsKeyRedirect([declined]).size).toBe(0);
   });
 
   it('a confirmed link redirects keyB -> keyA only', () => {
@@ -112,6 +131,14 @@ describe('resolveConceptsWithSameAsLinks — concepts fold to the canonical key'
     const a = concept({ key: 'key-a' });
     const b = concept({ key: 'key-b', name: 'cells' });
     const result = resolveConceptsWithSameAsLinks([a, b], [proposedLink()]);
+    expect(result.merged).toBe(0);
+    expect(result.concepts).toEqual([a, b]);
+  });
+
+  it('a declined pair never reaches the identity fold — treated exactly like a proposed one, never folded', () => {
+    const a = concept({ key: 'key-a' });
+    const b = concept({ key: 'key-b', name: 'cells' });
+    const result = resolveConceptsWithSameAsLinks([a, b], [declinedLink()]);
     expect(result.merged).toBe(0);
     expect(result.concepts).toEqual([a, b]);
   });
@@ -224,6 +251,13 @@ describe('resolveRelationCacheRecordsWithSameAsLinks — read-time endpoint reso
     const record = cacheRecord({ fromKey: 'key-b', toKey: 'key-z' });
     const severed = link({ status: 'severed', severedAt: '2026-09-17T00:00:00.000Z' });
     const [resolved] = resolveRelationCacheRecordsWithSameAsLinks([record], [severed]);
+    expect(resolved).toBe(record);
+    expect(resolved?.fromKey).toBe('key-b');
+  });
+
+  it('a declined link never remaps relation-cache records — treated exactly like a proposed one, never folded into the relation-cache remap', () => {
+    const record = cacheRecord({ fromKey: 'key-b', toKey: 'key-z' });
+    const [resolved] = resolveRelationCacheRecordsWithSameAsLinks([record], [declinedLink()]);
     expect(resolved).toBe(record);
     expect(resolved?.fromKey).toBe('key-b');
   });

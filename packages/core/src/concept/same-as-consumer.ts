@@ -36,10 +36,12 @@
  * `'confirmed'` links (see below), and both keys go back to being read independently. Nothing was
  * rewritten, so nothing needs to be un-rewritten.
  *
- * **A `'proposed'` link changes nothing a consumer sees (requirement 3).**
- * `buildSameAsKeyRedirect` contributes an entry for a `'confirmed'` link only — a `'proposed'` or
- * `'severed'` one is read and discarded, mirroring `./same-as.ts`'s own "a collision proposes, it
- * never merges." This module is the read half of that same sentence.
+ * **A `'proposed'` link changes nothing a consumer sees (requirement 3), and neither does a
+ * `'declined'` one** (`[D-257]` ruling 3). `buildSameAsKeyRedirect` contributes an entry for a
+ * `'confirmed'` link only — `'proposed'`, `'declined'` and `'severed'` are all read and discarded,
+ * mirroring `./same-as.ts`'s own "a collision proposes, it never merges." This module is the read
+ * half of that same sentence; a decline is a hard labelled negative on the proposal, never a
+ * signal this module treats any differently from the proposal it declined.
  *
  * **Relation-cache resolution works even before the write-side remap ran (requirement 4).**
  * `resolveRelationCacheRecordsWithSameAsLinks` restates the same `fromKey`/`toKey` rewrite
@@ -85,7 +87,10 @@ export interface ResolveConceptsWithSameAsResult<T extends SameAsResolvableConce
 
 /**
  * The canonical key for a CONFIRMED link — see module doc for the rule and why. `undefined` for
- * a `'proposed'` or `'severed'` link: neither contributes a redirect (requirements 2 and 3).
+ * a `'proposed'`, `'declined'` or `'severed'` link: none of the three contributes a redirect
+ * (requirements 2 and 3). `'declined'` reads exactly like `'proposed'` here, deliberately —
+ * `[D-257]` ruling 3's "a decline never asserts the two are different" means a reader must never
+ * fold a declined pair, same as it never folds a merely-proposed one.
  */
 export function canonicalKeyForLink(link: SameAsLinkRecord): string | undefined {
   return link.status === 'confirmed' ? link.keyA : undefined;
@@ -93,9 +98,9 @@ export function canonicalKeyForLink(link: SameAsLinkRecord): string | undefined 
 
 /**
  * Every confirmed link's losing key (`keyB`) → canonical key (`keyA`), as a lookup a caller
- * applies to its own keyed records. `'proposed'` and `'severed'` links contribute nothing
- * (requirements 2 and 3) — this is the one seam through which every function below inherits that
- * discipline, rather than each re-checking `status` itself.
+ * applies to its own keyed records. `'proposed'`, `'declined'` and `'severed'` links contribute
+ * nothing (requirements 2 and 3) — this is the one seam through which every function below
+ * inherits that discipline, rather than each re-checking `status` itself.
  */
 export function buildSameAsKeyRedirect(
   links: readonly SameAsLinkRecord[],
