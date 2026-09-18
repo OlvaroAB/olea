@@ -11,6 +11,7 @@ function slot(overrides: Partial<PaperBlueprintSlot> & { slotId: string }): Pape
     conceptKey: overrides.slotId,
     conceptName: overrides.slotId,
     formatClass: 'recall-style',
+    intendedDemand: 'recall-a-fact',
     taskId: 'quiz.generate.v1',
     groundingTier: 'T2',
     groundingLabel: 'covered-by-her-material',
@@ -32,10 +33,13 @@ function blueprint(
     asOf: '2026-09-16',
     alpha: 0.5,
     formatClass: 'recall-style',
+    intendedDemand: 'recall-a-fact',
     steering: {},
     structureSummary: null,
     eligibleCount: overrides.slots.length,
     emptySlots: [],
+    unbuiltDemand: null,
+    partial: false,
     ...overrides,
   };
 }
@@ -54,6 +58,9 @@ describe('fillPaperBlueprintSlots', () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.groundingLabel).toBe('covered-by-her-material');
     expect(result.items[0]?.promptVersion).toBe('v1');
+    // [D-262] ruling 1: the slot's intended demand rides onto the generated item as a record of
+    // intent, never a check against what the generator actually produced.
+    expect(result.items[0]?.intendedDemand).toBe('recall-a-fact');
     expect(result.emptySlots).toHaveLength(0);
   });
 

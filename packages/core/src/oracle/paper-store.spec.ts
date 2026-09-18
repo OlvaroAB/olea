@@ -23,15 +23,23 @@ import {
 // Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Practice paper product scope", the
 // vault-object lifecycle block, tagged `@auto:core/oracle/paper-store.spec`.
 
+// `intendedDemand`/`unbuiltDemand`/`partial` (`[D-262]`, owned by `./paper-blueprint.ts`) are
+// mechanically required here because `PaperCompositionAccount` restates `PaperBlueprint`'s shape
+// minus `slots`/`emptySlots` — this fixture is not exercising the demand ruling itself (see
+// `./paper-blueprint.spec.ts` for that), just keeping this file's own type-checked fixture in
+// sync with the shared shape it restates.
 const ACCOUNT: PaperCompositionAccount = {
   formatVersion: 'paper-blueprint-v1',
   course: 'COURSEA',
   asOf: '2026-09-16',
   alpha: 0.5,
   formatClass: 'recall-style',
+  intendedDemand: 'recall-a-fact',
   steering: {},
   structureSummary: null,
   eligibleCount: 1,
+  unbuiltDemand: null,
+  partial: false,
 };
 
 function item(overrides: Partial<PaperGeneratedItem> & { slotId: string }): PaperGeneratedItem {
@@ -40,6 +48,7 @@ function item(overrides: Partial<PaperGeneratedItem> & { slotId: string }): Pape
     conceptName: overrides.slotId,
     taskId: 'quiz.generate.v1',
     promptVersion: 'v1',
+    intendedDemand: 'recall-a-fact',
     groundingTier: 'T2',
     groundingLabel: 'covered-by-her-material',
     heldSourceKind: 'notes',

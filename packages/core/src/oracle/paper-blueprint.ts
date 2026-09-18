@@ -33,14 +33,32 @@
  * **Format class and a specific past sitting are never steering dials** — ruling 3's own text.
  * `formatClass` is derived from `assessments` exactly as `dominantFormatClass` does in the harness
  * tier; nothing in `steering` can change it.
+ *
+ * **Rulings 1/4/7/8 — demand (`[D-262]`).** Input (b)'s reading of the course's own non-sealed
+ * past papers now includes demand — what a question asks her to do, read from the paper itself
+ * with the source that shows it (`flattenDemandReadings`) — and the composition's dominant demand
+ * (`dominantDemand`, mirroring `dominantFormatClass`'s tally-and-rank shape) is what every
+ * candidate slot in this composition intends, never the assessment-type word alone. Routing checks
+ * `demandServedByGenerator` BEFORE the held-source check: a slot is `demand-unsupported` even
+ * where a held source exists, because the gap is about what the routed generator kind can produce.
+ * Where the composition's own intended demand goes unserved, every candidate this composition
+ * ranked becomes a named `demand-unsupported` empty slot (`[D-258]`'s reason-code vocabulary,
+ * extended) and the blueprint's own `unbuiltDemand`/`partial` fields carry ruling 4's face-statement
+ * payload — never rendered to copy here (the vocabulary registry leaves the exact wording to a
+ * later surface), only the shape: which demand, and a pointer at the held non-sealed past papers
+ * that ask it. No item-level demand judge: the declaration plus this composition-wide intent is
+ * the whole contract, per ruling 1's own text.
  */
 
 import type {
   PaperAssessment,
   PaperBlueprint,
   PaperBlueprintSlot,
+  PaperDemand,
+  PaperDemandReading,
   PaperEmptySlot,
   PaperEmptySlotReasonCode,
+  PaperFaceDemandGap,
   PaperFormatClass,
   PaperGeneratorTaskId,
   PaperGroundingLabel,
@@ -202,6 +220,89 @@ function groundingLabelFor(held: PaperHeldSource): PaperGroundingLabel {
   return held.kind === 'notes' ? 'covered-by-her-material' : 'course-scope-only';
 }
 
+/**
+ * F4.11 ruling 1/7's per-generator declared demands (`[D-262]`) — "the declaration plus the
+ * slot's intent is the contract," never a self-graded check against what a generator actually
+ * produced. Both existing generators produce recall-style flashcard (`cards.generate.v1`) or MCQ
+ * (`quiz.generate.v1`) items only; neither has any notion of calculation, comparison, transfer to
+ * an unfamiliar case, or a printed-result stimulus — confirmed against
+ * `findings/paper-run-2026-09-16.md` (private repo), whose measured course-E mismatch (a sealed
+ * sitting entirely built from reading a printed statistical result, against generated cards that
+ * could only ask bare conceptual definitions) is the exact case ruling 7 names as "the exact
+ * mechanism of the measured miss."
+ *
+ * @provenance declared — a plain reading of what each generator's own request/response shape can
+ * produce, never fitted against any corpus.
+ */
+export const PAPER_GENERATOR_DECLARED_DEMANDS: Readonly<
+  Record<PaperGeneratorTaskId, readonly PaperDemand[]>
+> = Object.freeze({
+  'cards.generate.v1': Object.freeze(['recall-a-fact'] as const),
+  'quiz.generate.v1': Object.freeze(['recall-a-fact'] as const),
+});
+
+/** `true` when `taskId`'s own declared demands (above) include `demand` — the whole of ruling 7's routing check; never an item-level judge of what a generator actually produced. */
+export function demandServedByGenerator(
+  taskId: PaperGeneratorTaskId,
+  demand: PaperDemand,
+): boolean {
+  return PAPER_GENERATOR_DECLARED_DEMANDS[taskId].includes(demand);
+}
+
+/** The demand a composition intends when input (b) recovered nothing to read — the one demand every existing generator declares, so a course with no recovered past-paper demand data behaves exactly as it did before `[D-262]`. */
+export const DEFAULT_INTENDED_DEMAND: PaperDemand = 'recall-a-fact';
+
+/**
+ * Every `{ demand, sourceRef }` reading `structure`'s own non-sealed sittings/sections carry —
+ * F4.11 ruling 1, "read from the paper itself, with the source that shows it." A section's demand
+ * is skipped, never guessed, when its sitting carries no `sourceRef` to cite — an unattributable
+ * reading is not evidence.
+ */
+export function flattenDemandReadings(
+  structure: PaperRecoveredStructure | null,
+): readonly PaperDemandReading[] {
+  const readings: PaperDemandReading[] = [];
+  for (const sitting of structure?.sittings ?? []) {
+    if (sitting.sourceRef === undefined) continue;
+    const sourceRef = sitting.sourceRef;
+    for (const section of sitting.sections) {
+      for (const demand of section.demands ?? []) {
+        readings.push({ demand, sourceRef });
+      }
+    }
+  }
+  return readings;
+}
+
+/**
+ * The dominant demand across `structure`'s own recovered readings — mirrors `dominantFormatClass`'s
+ * tally-and-rank shape exactly (most-frequent reading wins; a reading with no citable source never
+ * enters the tally), falling to `DEFAULT_INTENDED_DEMAND` when nothing was recovered to read (no
+ * past-paper demand data yet, or no non-holdout past papers at all).
+ */
+export function dominantDemand(structure: PaperRecoveredStructure | null): PaperDemand {
+  const readings = flattenDemandReadings(structure);
+  if (readings.length === 0) return DEFAULT_INTENDED_DEMAND;
+  const tally = new Map<PaperDemand, number>();
+  for (const { demand } of readings) tally.set(demand, (tally.get(demand) ?? 0) + 1);
+  const [ranked] = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  // `readings.length > 0` guarantees at least one tally entry — the fallback is type-only,
+  // mirroring `dominantFormatClass`'s own unreachable `?? 'written'`.
+  return (ranked ?? [DEFAULT_INTENDED_DEMAND])[0];
+}
+
+/** Ruling 4's pointer set for `demand` — deduped, in reading order, drawn only from readings this exact demand word matched. */
+function pointerSourceRefsForDemand(
+  readings: readonly PaperDemandReading[],
+  demand: PaperDemand,
+): readonly string[] {
+  const seen = new Set<string>();
+  for (const reading of readings) {
+    if (reading.demand === demand) seen.add(reading.sourceRef);
+  }
+  return [...seen];
+}
+
 export interface BuildPaperBlueprintInput {
   readonly course: string;
   readonly asOf: string;
@@ -225,6 +326,14 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   const formatClass = dominantFormatClass(input.assessments, input.formatClassOf);
   const taskId = taskIdForFormatClass(formatClass);
 
+  // F4.11 ruling 1/7 (`[D-262]`): routing now asks which generator declares the slot's intended
+  // demand, never the format-class/assessment-type word alone. `demandReadings`/`intendedDemand`
+  // are read from input (b) — never from a sealed sitting, since `input.structure` is already the
+  // caller's blinded, non-holdout-only read (module doc).
+  const demandReadings = flattenDemandReadings(input.structure);
+  const intendedDemand = dominantDemand(input.structure);
+  const demandSupported = demandServedByGenerator(taskId, intendedDemand);
+
   const eligible = input.concepts.filter(isEligibleConcept);
   const ranked = eligible
     .map((concept) => {
@@ -246,6 +355,25 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
 
   candidates.forEach(({ concept, weight, emphasised }, index) => {
     const slotId = `slot-${index}`;
+
+    // Ruling 4: checked BEFORE the held-source check — a slot is `demand-unsupported` even where
+    // a held source exists, because the gap is about what the generator can produce, never about
+    // grounding. Every candidate in this composition shares the same `intendedDemand`
+    // (composition-wide, mirroring `formatClass`), so when the routed generator kind does not
+    // declare it, no candidate this composition ranked is ever filled.
+    if (!demandSupported) {
+      emptySlots.push({
+        slotId,
+        conceptKey: concept.conceptKey,
+        conceptName: concept.conceptName,
+        reasonCode: 'demand-unsupported' satisfies PaperEmptySlotReasonCode,
+        reason:
+          `intended demand "${intendedDemand}" is not declared served by the routed generator ` +
+          `kind "${taskId}" (declares: ${PAPER_GENERATOR_DECLARED_DEMANDS[taskId].join(', ')})`,
+      });
+      return;
+    }
+
     const held = concept.heldSources[0];
     if (held === undefined) {
       emptySlots.push({
@@ -265,6 +393,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
       conceptName: concept.conceptName,
       ...(concept.outcomeId !== undefined ? { outcomeId: concept.outcomeId } : {}),
       formatClass,
+      intendedDemand,
       taskId,
       groundingTier: 'T2',
       groundingLabel: groundingLabelFor(held),
@@ -292,12 +421,24 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     });
   });
 
+  // Ruling 4: the face-statement payload — non-null exactly when the composition's own intended
+  // demand went unserved. `pointerSourceRefs` is drawn from every reading of `intendedDemand`
+  // across `demandReadings`, never only the one candidate cycled past — "points at the held
+  // non-sealed past papers that ask it" (plural, and read wherever they were found).
+  const unbuiltDemand: PaperFaceDemandGap | null = demandSupported
+    ? null
+    : {
+        demand: intendedDemand,
+        pointerSourceRefs: pointerSourceRefsForDemand(demandReadings, intendedDemand),
+      };
+
   return {
     formatVersion: 'paper-blueprint-v1',
     course: input.course,
     asOf: input.asOf,
     alpha: input.alpha,
     formatClass,
+    intendedDemand,
     steering,
     structureSummary: input.structure
       ? {
@@ -309,5 +450,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     eligibleCount: eligible.length,
     slots,
     emptySlots,
+    unbuiltDemand,
+    partial: unbuiltDemand !== null,
   };
 }

@@ -34,11 +34,20 @@
  * "The T3-margin gap" section, private repo, `[NEW-E4]`). A blueprint's own `emptySlots` already
  * carry this reason from `buildPaperBlueprint`; this module does not attempt to synthesize a T3
  * item through either existing port, which would mean fabricating a mode neither generator has.
+ *
+ * **The demand gate runs one step earlier and this module never re-checks it (`[D-262]`).** A
+ * slot whose intended demand no generator declares is already an `emptySlot` with reasonCode
+ * `demand-unsupported` by the time `buildPaperBlueprint` hands its output here — `blueprint.slots`
+ * never contains one. This module's only demand-related job is forwarding
+ * `PaperBlueprintSlot.intendedDemand` onto the generated item (`PaperGeneratedItem.intendedDemand`)
+ * as a record of intent, never a check: ruling 1 is explicit that no item-level judge runs against
+ * what a generator actually produced.
  */
 
 import type {
   PaperBlueprint,
   PaperBlueprintSlot,
+  PaperDemand,
   PaperEmptySlot,
   PaperGeneratorTaskId,
   PaperGroundingTier,
@@ -77,6 +86,8 @@ export interface PaperGeneratedItem {
   readonly outcomeId?: string;
   readonly taskId: PaperGeneratorTaskId;
   readonly promptVersion: string;
+  /** F4.11 ruling 1 (`[D-262]`) — the demand this item's own slot intended, carried forward from `PaperBlueprintSlot.intendedDemand` for the same reason `groundingLabel` rides along: a later reader of this item should not have to re-derive what the composition already decided. Never a checked/judged demand (ruling 1: "no item-level check runs against a generator's own declaration") — a record of intent only. */
+  readonly intendedDemand: PaperDemand;
   readonly groundingTier: PaperGroundingTier;
   readonly groundingLabel: PaperBlueprintSlot['groundingLabel'];
   readonly heldSourceKind: PaperBlueprintSlot['heldSourceKind'];
@@ -132,6 +143,7 @@ export async function fillPaperBlueprintSlots(
       ...(slot.outcomeId !== undefined ? { outcomeId: slot.outcomeId } : {}),
       taskId: result.taskId,
       promptVersion: result.promptVersion,
+      intendedDemand: slot.intendedDemand,
       groundingTier: slot.groundingTier,
       groundingLabel: slot.groundingLabel,
       heldSourceKind: slot.heldSourceKind,

@@ -64,6 +64,48 @@ export interface PaperAssessment {
 }
 
 /**
+ * F4.11 ruling 1's declared demand vocabulary (`[D-262]`, vocabulary registry §13) — what a
+ * question asks her to do, independent of which generator serves it. Distinct from
+ * `PaperFormatClass` (§11): format class is coarse and derived mechanically from her assignments
+ * table; demand is finer-grained and read from the past papers' own questions, never from the
+ * `type` word alone. Named as a "small, extensible vocabulary" by the ruling — these five are all
+ * this release reads; a sixth is a Class C addition to this array, not a silent extension.
+ */
+export const PAPER_DEMANDS = Object.freeze([
+  'recall-a-fact',
+  'calculate',
+  'compare-or-choose',
+  'apply-to-unfamiliar-case',
+  'interpret-printed-result',
+] as const);
+
+/** One word from `PAPER_DEMANDS`. */
+export type PaperDemand = (typeof PAPER_DEMANDS)[number];
+
+/**
+ * One demand reading recovered from a non-sealed past paper's own question — F4.11 input (b),
+ * "read from the paper itself, with the source that shows it" (`[D-262]` ruling 1). `sourceRef`
+ * is an opaque pointer (never opened by this pipeline) to the sitting the reading came from, so a
+ * demand that ends up unbuilt (ruling 4) can be pointed at rather than merely named.
+ */
+export interface PaperDemandReading {
+  readonly demand: PaperDemand;
+  readonly sourceRef: string;
+}
+
+/**
+ * Ruling 4's face-statement payload: the one demand kind the composition's own evidence names
+ * that no generator declares, plus where it was read. `pointerSourceRefs` is deduped and never
+ * empty when this type is constructed — a demand with no citable source is never surfaced (see
+ * `./paper-blueprint.ts`'s `dominantDemand`/`flattenDemandReadings`).
+ */
+export interface PaperFaceDemandGap {
+  readonly demand: PaperDemand;
+  /** Opaque pointers (never opened by this pipeline) to the held, non-sealed past papers whose questions ask this demand — "points at the held non-sealed past papers that ask it." */
+  readonly pointerSourceRefs: readonly string[];
+}
+
+/**
  * One section of a recovered, NON-holdout past paper — the shape `outcomes.extract.v1`'s
  * `paperStructure.sections` response emits (`olea-service/src/tasks/outcomesExtract.ts`,
  * private), restated here since this package has no dependency on that Worker task's schema
@@ -75,12 +117,28 @@ export interface PaperRecoveredSection {
   readonly questionForm: string;
   readonly itemCount: number;
   readonly marks: number;
+  /**
+   * F4.11 ruling 1 — the demand(s) this section's own questions ask, read from the past paper
+   * itself. `undefined`/empty when not (yet) recovered at this grain — the same honest-placeholder
+   * posture `sections: []` already carries at the sitting level (`playback-paper.mjs`'s
+   * `recoverStructure` doc): full sub-part recovery, and now demand recovery within it, stays a
+   * real, named limitation rather than a guess.
+   */
+  readonly demands?: readonly PaperDemand[];
 }
 
 /** One recovered sitting, carrying F4.2's current/historical regime qualifier alongside its recovered sections (empty when only file existence, not content, was recoverable). */
 export interface PaperRecoveredSitting {
   readonly regime: 'current' | 'historical';
   readonly sections: readonly PaperRecoveredSection[];
+  /**
+   * An opaque pointer to this sitting's own source (never opened by this pipeline) — carried so a
+   * demand read from one of its sections can be named and pointed at from the paper's face
+   * (ruling 4, "with the source that shows it"). `undefined` when the caller has none to give; a
+   * section's `demands` are then never attributable to a source and `flattenDemandReadings`
+   * (`./paper-blueprint.ts`) skips them rather than pointing at nothing.
+   */
+  readonly sourceRef?: string;
 }
 
 /**
@@ -126,6 +184,8 @@ export interface PaperBlueprintSlot {
   readonly conceptName: string;
   readonly outcomeId?: string;
   readonly formatClass: PaperFormatClass;
+  /** F4.11 ruling 1/7 (`[D-262]`) — the demand this slot intends, read from input (b)'s non-sealed past-paper evidence. Composition-wide today: every slot in one paper shares the same reading, mirroring `formatClass`'s own uniform-per-composition shape (see `./paper-blueprint.ts`'s `dominantDemand`) — there is no per-concept question join to read a finer-grained assignment from. */
+  readonly intendedDemand: PaperDemand;
   readonly taskId: PaperGeneratorTaskId;
   readonly groundingTier: PaperGroundingTier;
   readonly groundingLabel: PaperGroundingLabel;
@@ -153,8 +213,19 @@ export interface PaperBlueprintSlot {
  *   `extentSlotCountTarget`'s slot cap, and so never became a candidate at all. Distinct from
  *   `'no-held-source'`: a rank-excluded concept may well hold a source — it simply ranked too low
  *   this time. This is the reason code `[D-258]` adds; the other two already existed as prose.
+ * - `'demand-unsupported'` — F4.11 ruling 4 (`[D-262]`): the slot's intended demand
+ *   (`PaperBlueprintSlot.intendedDemand`) is not declared served by the generator kind the slot
+ *   would otherwise route to. Checked BEFORE the held-source check — a slot can be
+ *   `demand-unsupported` even where a held source exists, since the gap is about what the
+ *   generator can produce, never about grounding. Distinct from `'generator-refused'`: that code
+ *   means the generator was asked and refused at generation time; this one means no generator
+ *   kind was ever asked, because none declares the demand.
  */
-export type PaperEmptySlotReasonCode = 'no-held-source' | 'generator-refused' | 'rank-excluded';
+export type PaperEmptySlotReasonCode =
+  | 'no-held-source'
+  | 'generator-refused'
+  | 'rank-excluded'
+  | 'demand-unsupported';
 
 /** A ranked, eligible concept the blueprint could not fill — F4.10's never-invent rule, named rather than silently dropped (mirrors `playback-paper.mjs`'s `emptySlots`). */
 export interface PaperEmptySlot {
@@ -180,6 +251,8 @@ export interface PaperBlueprint {
   readonly asOf: string;
   readonly alpha: PaperWeightingAlpha;
   readonly formatClass: PaperFormatClass;
+  /** F4.11 ruling 1/7 (`[D-262]`) — the demand this composition's slots intend (see `PaperBlueprintSlot.intendedDemand`). `'recall-a-fact'` when input (b) recovered nothing to read — the honest default every existing generator already serves, so a course with no demand data behaves exactly as it did before this ruling. */
+  readonly intendedDemand: PaperDemand;
   readonly steering: PaperSteering;
   readonly structureSummary: {
     readonly sittingCount: number;
@@ -189,4 +262,14 @@ export interface PaperBlueprint {
   readonly eligibleCount: number;
   readonly slots: readonly PaperBlueprintSlot[];
   readonly emptySlots: readonly PaperEmptySlot[];
+  /**
+   * F4.11 ruling 4 (`[D-262]`) — non-null exactly when `intendedDemand` is not declared served by
+   * the routed generator kind (every filled candidate becomes a `demand-unsupported` empty slot
+   * instead of an item): the demand kind and the held non-sealed past papers that ask it, for the
+   * paper's face statement. `null` when the composition's evidence names no demand any generator
+   * fails to serve — the vocabulary registry's "no such statement" case.
+   */
+  readonly unbuiltDemand: PaperFaceDemandGap | null;
+  /** `true` exactly when `unbuiltDemand !== null` — a named field for the word the ruling and vocabulary registry §13/§4 both use ("the paper is partial"), rather than asking every reader to null-check `unbuiltDemand` to learn it. */
+  readonly partial: boolean;
 }
