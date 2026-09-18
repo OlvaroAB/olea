@@ -692,7 +692,8 @@ export interface ReadConceptsAndRelationsOptions {
  * this same pass: `read.concepts` and `relations` both fold a confirmed pair to its canonical
  * key — see that file's own module doc for exactly what changes and why
  * `readRelationSetWithCache` above keeps being called with the same arguments either way, rather
- * than being replaced. A `'proposed'` or `'severed'` link changes neither field.
+ * than being replaced. A `'proposed'`, `'declined'`, or `'severed'` link changes neither field
+ * (`'declined'` added by `[D-257]`/`ol-egov.141.33` [TRIAGE-5]'s fourth status).
  */
 export async function readConceptsAndRelations(
   conceptWiring: ConceptWiring,

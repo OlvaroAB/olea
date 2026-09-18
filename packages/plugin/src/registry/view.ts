@@ -106,6 +106,22 @@
  * brief lists both of the latter as kit elements with no clause or existing
  * copy behind them, not elements to build; unchanged from this file's own
  * position above.
+ *
+ * **`[D-257]` (TRIAGE-6, `ol-egov.141.41`) adds one standing, top-level section: the F8.4a
+ * concept-identity triage.** `renderIdentitySection` draws it once, above the concept list,
+ * never interleaved with any per-concept row — F8.4a's own words: "a concept-identity section,
+ * kept apart from the relation candidates... the two are different questions." (There is no
+ * relation-candidate section built anywhere in this view yet — `[D-121]`'s own half of F8.4a has
+ * no UI in this codebase today — so "kept apart" is satisfied structurally: this section owns its
+ * own heading and never shares a list with a per-concept row.) Each proposal shows exactly the
+ * three things the clause names — the two concept names, the course each sits in, and the
+ * evidential read's passages as excerpts with an `Open` affordance reusing `[D-171]`'s existing
+ * `deps.openSourceLocation` — never a score, never `evidenceFingerprint`. Accept and decline are
+ * the only two verbs (vocabulary registry's "Identity-question wording" callout: "no third verb,
+ * and no student-facing word for the mechanism's `severed` state, which this surface never
+ * presents") — there is deliberately no sever affordance here. `./same-as-identity.ts` is the
+ * read/resolve/decide side (owned by this same bead); this file only renders what that module
+ * hands it and never itself decides whether a proposal is show-able.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -167,6 +183,7 @@ import {
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
 } from './copy.js';
+import type { SameAsIdentityProposal } from './same-as-identity.js';
 
 /**
  * The closed-row/open-detail split (`ol-l5og.18.1`, design-fidelity sweep against
@@ -233,6 +250,20 @@ type RenameProposal = NonNullable<RegistryConceptEntry['renameProposal']>;
 const RENAME_PROPOSAL_ACCEPT_ACTION = 'Use this wording';
 const RENAME_PROPOSAL_DECLINE_ACTION = 'Keep the current wording';
 
+/**
+ * `[D-257]`'s identity-question wording — the vocabulary registry's own "Identity-question
+ * wording ruled for the student surface" callout gives the question verbatim ("Are these one
+ * thing?") and rules the affordances "accept and decline — no third verb, and no student-facing
+ * word for the mechanism's `severed` state." `Yes`/`No` answer that exact question rather than
+ * coining a second pair of words for the same two verbs. LOCAL to this file, not `./copy.ts`,
+ * for the same reason the rename-proposal copy above is: that file sits outside this bead's
+ * `owns` (`[VOC-8]` holds it live) — move these there the moment that lane is free (Class A/B,
+ * self-ratified, logged here for retroactive review, mirroring the rename-proposal precedent).
+ */
+const IDENTITY_SECTION_QUESTION = 'Are these one thing?';
+const IDENTITY_ACCEPT_ACTION = 'Yes';
+const IDENTITY_DECLINE_ACTION = 'No';
+
 /** States which source proposed the wording and, when known, where — never why the tiers are ordered the way they are (that is the contract's business, not a sentence she reads). */
 function renameProposalLine(proposal: RenameProposal): string {
   const location = proposal.candidate.sourceLocation;
@@ -254,7 +285,12 @@ function renameProposalLine(proposal: RenameProposal): string {
 const FOCUSABLE_SELECTOR = 'button, input';
 
 export type RegistryViewState =
-  | { readonly kind: 'model'; readonly model: RegistryModel }
+  | {
+      readonly kind: 'model';
+      readonly model: RegistryModel;
+      /** `[D-257]` (TRIAGE-6): every currently-resolvable F8.4a concept-identity proposal — see `./same-as-identity.ts`'s own doc for how this is built and why an empty array is the honest, expected value until a propose-side signal exists. */
+      readonly identityProposals: readonly SameAsIdentityProposal[];
+    }
   | { readonly kind: 'unavailable' };
 
 /** `[D-171]`'s one-step affordance target: which row to scroll/highlight to when a caller reveals the registry — see `./obsidian-ports.ts`'s `openRegistryEntryFor`. Exactly one of the two is set. */
@@ -285,6 +321,10 @@ export interface RegistryViewDeps {
     entry: RegistryConceptEntry,
     proposal: RenameProposal,
   ) => Promise<void>;
+  /** F8.4a's identity-section accept (`[D-257]` TRIAGE-6) — confirms the underlying same-as link. */
+  readonly confirmIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
+  /** F8.4a's identity-section decline (`[D-257]` TRIAGE-6) — a hard labelled negative, never a claim the two concepts differ. */
+  readonly declineIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
@@ -479,6 +519,12 @@ export class RegistryView extends ItemView {
       text: registryAggregateLine(concepts.length, registryCourses(concepts).length),
     });
 
+    // `[D-257]` (TRIAGE-6): the F8.4a concept-identity section, drawn once here, above the
+    // filter chips and the concept list — never inside `renderConcept`'s per-row loop, and never
+    // gated by `this.filter` (a same-as proposal spans two concepts, not one row a chip could
+    // select). See this file's module doc for the "kept apart from relation candidates" argument.
+    this.renderIdentitySection(root, state.identityProposals);
+
     this.renderFilterChips(root, concepts);
 
     const visible = concepts.filter((entry) => matchesRegistryFilter(entry, this.filter));
@@ -546,6 +592,63 @@ export class RegistryView extends ItemView {
       REGISTRY_WITHDRAWN_FILTER_LABEL,
       concepts.filter((e) => e.pruned).length,
     );
+  }
+
+  /**
+   * `[D-257]` (TRIAGE-6): F8.4a's concept-identity section. Renders nothing when `proposals` is
+   * empty (the honest, expected state until a propose-side signal exists — see
+   * `./same-as-identity.ts`'s module doc) rather than an empty heading with nothing under it.
+   */
+  private renderIdentitySection(
+    root: HTMLElement,
+    proposals: readonly SameAsIdentityProposal[],
+  ): void {
+    if (proposals.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-registry-identity-section' });
+    section.createEl('h3', { text: IDENTITY_SECTION_QUESTION });
+    for (const proposal of proposals) this.renderIdentityProposal(section, proposal);
+  }
+
+  /**
+   * One proposal: F8.4a's exact three fields per side (name, course, passage excerpt with an
+   * `Open` affordance reusing `[D-171]`'s `deps.openSourceLocation` — the same click-through
+   * every source-location button in this view already calls), never a score, followed by the
+   * two standing affordances the vocabulary registry rules for this question (`Yes`/`No`, no
+   * third verb, no word for `severed`).
+   */
+  private renderIdentityProposal(root: HTMLElement, proposal: SameAsIdentityProposal): void {
+    const row = root.createDiv({ cls: 'olea-registry-identity-proposal' });
+
+    const renderSide = (
+      name: string,
+      courses: readonly string[],
+      passage: SameAsIdentityProposal['passageA'],
+    ): void => {
+      const side = row.createDiv({ cls: 'olea-registry-identity-side' });
+      side.createEl('h4', { text: name });
+      side.createDiv({ cls: 'olea-registry-courses', text: coursesLine(courses) });
+      side.createEl('p', { cls: 'olea-registry-identity-passage', text: passage.excerpt });
+      const openButton = side.createEl('button', {
+        cls: 'olea-button-quiet',
+        text: OPEN_SOURCE_LOCATION_ACTION,
+      });
+      openButton.addEventListener('click', () => {
+        void this.deps.openSourceLocation(passage.location);
+      });
+    };
+
+    renderSide(proposal.nameA, proposal.coursesA, proposal.passageA);
+    renderSide(proposal.nameB, proposal.coursesB, proposal.passageB);
+
+    const actions = row.createDiv({ cls: 'olea-registry-identity-actions' });
+    const acceptButton = actions.createEl('button', { text: IDENTITY_ACCEPT_ACTION });
+    acceptButton.addEventListener('click', () => {
+      void this.deps.confirmIdentityProposal(proposal).then(() => this.refresh());
+    });
+    const declineButton = actions.createEl('button', { text: IDENTITY_DECLINE_ACTION });
+    declineButton.addEventListener('click', () => {
+      void this.deps.declineIdentityProposal(proposal).then(() => this.refresh());
+    });
   }
 
   /**

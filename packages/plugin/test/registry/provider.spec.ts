@@ -14,6 +14,8 @@ import {
   appendReviewLogRecord,
   type ConceptRecord,
   contestClaim,
+  listSameAsLinkRecords,
+  proposeSameAsLink,
   type RegistryInstrumentSummary,
   type RegistrySourceLocation,
 } from 'olea-core';
@@ -613,5 +615,114 @@ describe('createLocalRegistryProvider — explain-back history wiring (F8.4b, [D
         contested: true,
       },
     ]);
+  });
+});
+
+// Scenarios: olea-service/features/F8-concepts-scope.md, "Feature: F8.4a / `[D-257]`" —
+// the identity-section wiring (`ol-egov.141.41` [TRIAGE-6]). `./same-as-identity.spec.ts`
+// covers `buildSameAsIdentityProposals`'s own resolve/withhold rules in isolation; this suite
+// proves `load()` actually calls it against a real vault walk's concepts, and that
+// confirm/decline reach the real `olea-core` functions and are reflected on the next load.
+function twoConceptFixtureVault() {
+  return memoryVault({
+    'Notes/one.md': [
+      '---',
+      'topic: [Concept One]',
+      'course: TESTC101',
+      '---',
+      '',
+      'A long enough introductory paragraph naming Concept One, for the excerpt to draw from.',
+      '',
+      'Front text one::Back text one',
+      '',
+    ].join('\n'),
+    'Notes/two.md': [
+      '---',
+      'topic: [Concept Two]',
+      'course: TESTC202',
+      '---',
+      '',
+      'A separate introductory paragraph naming Concept Two, on its own note.',
+      '',
+      'Front text two::Back text two',
+      '',
+    ].join('\n'),
+  });
+}
+
+describe('createLocalRegistryProvider — F8.4a concept-identity section ([D-257], TRIAGE-6)', () => {
+  it('load() reports no identity proposals when no same-as link exists', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.identityProposals).toEqual([]);
+  });
+
+  it('surfaces a resolvable proposed same-as link with both names, courses and passage excerpts', async () => {
+    const vault = twoConceptFixtureVault();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const [conceptOne, conceptTwo] = before.concepts;
+    if (conceptOne === undefined || conceptTwo === undefined) throw new Error('missing concepts');
+
+    await proposeSameAsLink(vault, conceptOne.key, conceptTwo.key, { now: () => '2026-09-18' });
+
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.identityProposals).toHaveLength(1);
+    const proposal = state.identityProposals[0];
+    expect([proposal?.nameA, proposal?.nameB].sort()).toEqual(['Concept One', 'Concept Two']);
+    expect([...(proposal?.coursesA ?? []), ...(proposal?.coursesB ?? [])].sort()).toEqual([
+      'TESTC101',
+      'TESTC202',
+    ]);
+    expect(proposal?.passageA.excerpt.length).toBeGreaterThan(0);
+    expect(proposal?.passageB.excerpt.length).toBeGreaterThan(0);
+  });
+
+  it('confirmIdentityProposal reaches the real confirmSameAsLink, and the proposal stops appearing', async () => {
+    const vault = twoConceptFixtureVault();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const [conceptOne, conceptTwo] = before.concepts;
+    if (conceptOne === undefined || conceptTwo === undefined) throw new Error('missing concepts');
+    await proposeSameAsLink(vault, conceptOne.key, conceptTwo.key, { now: () => '2026-09-18' });
+
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const proposal = state.identityProposals[0];
+    if (proposal === undefined) throw new Error('missing proposal');
+
+    await provider.confirmIdentityProposal(proposal);
+
+    const link = (await listSameAsLinkRecords(vault))[0]?.record;
+    if (link === undefined) throw new Error('missing same-as link record');
+    expect(link.status).toBe('confirmed');
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    expect(after.identityProposals).toEqual([]);
+  });
+
+  it('declineIdentityProposal reaches the real declineSameAsLink, and the proposal stops appearing', async () => {
+    const vault = twoConceptFixtureVault();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const [conceptOne, conceptTwo] = before.concepts;
+    if (conceptOne === undefined || conceptTwo === undefined) throw new Error('missing concepts');
+    await proposeSameAsLink(vault, conceptOne.key, conceptTwo.key, { now: () => '2026-09-18' });
+
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const proposal = state.identityProposals[0];
+    if (proposal === undefined) throw new Error('missing proposal');
+
+    await provider.declineIdentityProposal(proposal);
+
+    const link = (await listSameAsLinkRecords(vault))[0]?.record;
+    if (link === undefined) throw new Error('missing same-as link record');
+    expect(link.status).toBe('declined');
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    expect(after.identityProposals).toEqual([]);
   });
 });

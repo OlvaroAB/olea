@@ -28,9 +28,11 @@
  *    (`relation-wiring.ts`'s module doc) is unaffected: that function is still called, with the
  *    same arguments, on every tick.
  *
- * **A `'proposed'` or `'severed'` link changes neither** (requirements 2 and 3 of this lane's
- * brief) — `buildSameAsKeyRedirect` only ever contributes a `'confirmed'` pair, so the ordinary
- * case (no confirmed link touching this pass's concepts or edges) returns both inputs unchanged.
+ * **A `'proposed'`, `'declined'`, or `'severed'` link changes neither** (requirements 2 and 3 of
+ * this lane's brief, plus `'declined'` added by `[D-257]`/`ol-egov.141.33` [TRIAGE-5], which gave
+ * the same-as record a fourth status this module's own doc previously did not list) —
+ * `buildSameAsKeyRedirect` only ever contributes a `'confirmed'` pair, so the ordinary case (no
+ * confirmed link touching this pass's concepts or edges) returns both inputs unchanged.
  *
  * **No persisted shape changes here.** This composes three existing reads
  * (`listSameAsLinkRecords`, `listRelationCacheRecords`, `listEdgeDispositionLogs`) and two pure

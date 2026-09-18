@@ -130,6 +130,15 @@
  * write IS durable (`RegistryOverrides.renames`), so accepting a proposal —
  * and now, per `[D-206]`, the rank-gate baseline it establishes — survives
  * a restart.
+ *
+ * **`[D-257]` (TRIAGE-6, `ol-egov.141.41`) adds F8.4a's concept-identity section's read side.**
+ * `load()` below calls `listSameAsLinkRecords` and `./same-as-identity.ts`'s
+ * `buildSameAsIdentityProposals` against `gatedConcepts` (the SAME post-rename-gate list this
+ * load already built), and `confirmIdentityProposal`/`declineIdentityProposal` call that
+ * module's thin wrappers over `olea-core`'s `confirmSameAsLink`/`declineSameAsLink` directly
+ * against `deps.vault` — no new port, since neither needs Obsidian. See `./same-as-identity.ts`'s
+ * own module doc for why an empty `identityProposals` array is the honest, expected value on
+ * today's vault (nothing in this plugin calls `proposeSameAsLink` yet).
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -143,6 +152,7 @@ import {
   createFsrsScheduler,
   type DisputeLogRecord,
   enumerateVaultInstruments,
+  listSameAsLinkRecords,
   pruneConcept as pruneConceptOverride,
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
@@ -163,6 +173,12 @@ import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.
 import type { ObsidianDataHost } from './overrides-store.js';
 import { ObsidianRegistryOverridesStore } from './overrides-store.js';
 import { createVaultPruneInstrumentPort, type PruneInstrumentPort } from './ports.js';
+import {
+  buildSameAsIdentityProposals,
+  confirmSameAsIdentityProposal,
+  declineSameAsIdentityProposal,
+  type SameAsIdentityProposal,
+} from './same-as-identity.js';
 import type { RegistryViewDeps, RegistryViewState } from './view.js';
 
 /**
@@ -573,7 +589,18 @@ export function createLocalRegistryProvider(
         });
         const gatedModel: RegistryModel = { ...model, concepts: gatedConcepts };
 
-        return { kind: 'model', model: gatedModel };
+        // `[D-257]` (TRIAGE-6): F8.4a's concept-identity section — resolved against the SAME
+        // `gatedConcepts` this load already built (post-rename-gate, so a pending rename proposal
+        // and a pending identity proposal read consistent names), never a second vault walk. See
+        // `./same-as-identity.ts`'s own doc for why an empty result is the honest default today.
+        const sameAsLinks = await listSameAsLinkRecords(deps.vault);
+        const identityProposals = await buildSameAsIdentityProposals(
+          deps.vault,
+          sameAsLinks.map((entry) => entry.record),
+          gatedConcepts,
+        );
+
+        return { kind: 'model', model: gatedModel, identityProposals };
       } catch (error) {
         console.error('Olea: could not compose the registry', error);
         return { kind: 'unavailable' };
@@ -663,6 +690,14 @@ export function createLocalRegistryProvider(
       const next = recordDeclinedRenameProposal(overrides, proposal);
       await overridesStore.save(next);
       deps.onOverridesChanged?.(next);
+    },
+
+    async confirmIdentityProposal(proposal: SameAsIdentityProposal): Promise<void> {
+      await confirmSameAsIdentityProposal(deps.vault, proposal);
+    },
+
+    async declineIdentityProposal(proposal: SameAsIdentityProposal): Promise<void> {
+      await declineSameAsIdentityProposal(deps.vault, proposal);
     },
   };
 }
