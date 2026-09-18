@@ -404,8 +404,19 @@ export default class OleaPlugin extends Plugin {
    * confirmed is a `CourseRecord`-shaped, Class C schema addition
    * (`packages/core/src/course/lifecycle.ts`'s module doc); until that lands,
    * this set is empty on every plugin load and she is asked again about every
-   * course-shaped folder each time Obsidian restarts — an acknowledged gap
-   * this bead stops short of closing, not a silent one.
+   * course-shaped folder each time Obsidian restarts.
+   *
+   * **`[SET-1]` (`ol-egov.141.7.1`) closed this out as the declared path, not
+   * a gap left open.** The alternative — persisting confirmed codes — still
+   * needs the same `CourseRecord` schema this comment already named, for the
+   * same reason: a bare `Set<string>` written to the plugin's own
+   * `data.json` would fix a shape before the lifecycle work that also needs
+   * the running flip, the archive proposal, retake-is-a-new-record and the
+   * leaving-reason enum gets to design it once. That is a Class C call this
+   * bead does not make unilaterally, so the restart re-ask is instead
+   * recorded as expected behaviour in the exclusions list on
+   * `olea-service/docs/dev/alpha-first-user-disclosure.md` (owned by
+   * `[OPS-B1]` / `ol-ppxj.36`) — see that bead for the exact sentence.
    */
   private courseSetupSeenCodes = new Set<string>();
   /** At most one course-setup modal open at a time — a second detected course waits for this one to resolve rather than stacking prompts. */
