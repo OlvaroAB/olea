@@ -22,30 +22,28 @@
  *   subset of the other — "cell" is a near match for "cell biology" because {cell} ⊆ {cell,
  *   biology}. **Never attached.** ONT-R1 ruled containment unsafe as a mint-time identity signal
  *   ("no safe operating point"); it is exactly as unsafe as a direct attachment here, so a near
- *   match instead becomes a `proposeSameAsLink` proposal — bias to splits, structurally:
- *   `proposeSameAsLink` can only ever write a `'proposed'` record or leave an existing decision
- *   alone, never a confirmed link (`../concept/same-as.js`'s own doc). Turning a confirmed
- *   proposal into an attach is a later step this module does not perform.
+ *   match instead becomes a `proposeOutcomeConceptNearMatch` proposal — bias to a resolved
+ *   candidate rather than a silent attach: that function can only ever write a `'proposed'`
+ *   record or leave an existing decision alone, never a confirmed one (`./near-match.js`'s own
+ *   doc). Turning a confirmed proposal into an attach is a later step this module does not
+ *   perform.
  * - **Everything else.** No match at all. The outcome is not touched, and it is counted.
  *
- * **Reusing `same-as` across two entity types, not just two concept identities — a judgement
- * call, logged here rather than made silently.** `SameAsLinkRecord` is generic over two opaque
- * string keys and "never inspects, requires, or depends on how either was derived" (`same-as.ts`'s
- * own module doc) — nothing in its shape assumes both sides are `ConceptKeyRecord` keys. This
- * module proposes a link between an OUTCOME id (`OPAQUE_OUTCOME_ID_PREFIX`-prefixed) and a
- * CONCEPT key (`OPAQUE_CONCEPT_KEY_PREFIX`-prefixed) for a near match: "this outcome's own wording
- * may name the same thing as this concept" is exactly the kind of call ONT-R1 says should PROPOSE
- * rather than assert, whichever two entities the collision sits between. The alternative —
- * inventing a second, outcome-specific proposal shape — would duplicate the bias-to-splits
- * machinery `same-as.ts` already carries for an identically-shaped problem, for no gain. The
- * `reason` passed is the existing closed union's only member, `'normalisation-collision'`:
- * ONT-R1's ruling names this whole family "a normalisation collision," and token-set containment
- * is a normalisation-based match test, not a different phenomenon from the exact-equality one the
- * reason already names — widening the closed union over a difference of matching STRICTNESS
- * (equality vs. containment), rather than of underlying mechanism, would be exactly the kind of
- * "second nomination reason is a decision, not an implementation detail" call `same-as.ts`'s own
- * doc reserves for elsewhere. Class B (a reversible reuse of an existing mechanism, not a
- * schema/contract amendment) — flagged for retroactive review, not escalated.
+ * **Its own proposal record, never `same-as` — `[D-256]` (`ol-2zfj.129`), ruling `[OUT-4]`
+ * (`ol-2zfj.128`).** An earlier version of this module reused `../concept/same-as.js`'s
+ * `proposeSameAsLink` here, reasoning that `SameAsLinkRecord` is generic over two opaque string
+ * keys and "never inspects, requires, or depends on how either was derived." `[OUT-4]`'s review
+ * found that reasoning unsound: `same-as` is contracted (ONT-R1, the vocabulary registry) to mean
+ * CONCEPT IDENTITY, and an outcome-to-concept near match is a CONTAINMENT candidate
+ * (`[ONT-R5]`/F4.1: "different entities, never the same node read at a coarser grain") — not an
+ * identity claim, whatever the record's own shape happened to permit. Reusing the identity record
+ * also misrepresented its `reason` field: `'normalisation-collision'` names a concept-key
+ * mint-time collision (`../concept/key-store.js`'s `findNormalizationCollisions`), and an outcome
+ * id is never minted through that index. `[D-256]` ruled a new, additive record type
+ * (`./near-match.js`'s `OutcomeConceptNearMatchRecord`, its own folder and status vocabulary)
+ * rather than widening `same-as`'s own schema, so `same-as`'s identity read consumer never has to
+ * reason about outcome ids at all — the type confusion becomes unreachable rather than
+ * re-guarded. Full argument on `ol-2zfj.128`'s notes.
  *
  * **D-005: counts and opaque ids only, never a label or a wording.** Every report type below
  * carries outcome ids and concept keys — opaque strings, structural facts — and never an
@@ -60,8 +58,11 @@
 
 import { conceptIdentityNormalizationIndex } from '../concept/concept-key.js';
 import type { ConceptKeyRecord } from '../concept/key-store.js';
-import { proposeSameAsLink, type SameAsLinkStatus } from '../concept/same-as.js';
 import type { VaultSource } from '../vault/types.js';
+import {
+  type OutcomeConceptNearMatchStatus,
+  proposeOutcomeConceptNearMatch,
+} from './near-match.js';
 import { attachConceptToOutcome } from './store.js';
 import type { OutcomeRecord } from './types.js';
 
@@ -185,7 +186,7 @@ export interface OutcomeConceptAttachment {
 export interface OutcomeConceptProposal {
   readonly outcomeId: string;
   readonly conceptKey: string;
-  readonly status: SameAsLinkStatus;
+  readonly status: OutcomeConceptNearMatchStatus;
 }
 
 export interface OutcomeConceptReconciliationReport {
@@ -197,17 +198,18 @@ export interface OutcomeConceptReconciliationReport {
 }
 
 export interface ReconcileOutcomeConceptsOptions {
-  /** Threaded through to `attachConceptToOutcome`/`proposeSameAsLink`. Injectable for deterministic tests. */
+  /** Threaded through to `attachConceptToOutcome`/`proposeOutcomeConceptNearMatch`. Injectable for deterministic tests. */
   readonly now?: () => string;
 }
 
 /**
  * The reconciliation itself. For every ACTIVE outcome in `outcomes`, checks every entry in
  * `concepts`: an exact/alias match attaches directly (`attachConceptToOutcome`); a near match
- * proposes a same-as link between the outcome id and the concept key (`proposeSameAsLink`) rather
- * than attaching; no match at all leaves the outcome untouched and its id lands in
- * `unattachedOutcomeIds`. Both underlying writers are idempotent, so re-running this against a
- * course already partly reconciled writes nothing new for a pair already settled.
+ * proposes a near-match record between the outcome id and the concept key
+ * (`proposeOutcomeConceptNearMatch`) rather than attaching; no match at all leaves the outcome
+ * untouched and its id lands in `unattachedOutcomeIds`. Both underlying writers are idempotent, so
+ * re-running this against a course already partly reconciled writes nothing new for a pair
+ * already settled.
  *
  * `outcomes` and `concepts` are the caller's course-scoped views — this module's own brief is
  * "given a COURSE's Outcome records and its concept registry" — so no course filtering happens
@@ -241,13 +243,17 @@ export async function reconcileOutcomeConcepts(
         attached.push({ outcomeId: outcome.id, conceptKey: concept.key, kind });
         matchedAny = true;
       } else if (kind === 'near-token-containment') {
-        const link = await proposeSameAsLink(
+        const nearMatch = await proposeOutcomeConceptNearMatch(
           vault,
           outcome.id,
           concept.key,
           options.now !== undefined ? { now: options.now } : {},
         );
-        proposed.push({ outcomeId: outcome.id, conceptKey: concept.key, status: link.status });
+        proposed.push({
+          outcomeId: outcome.id,
+          conceptKey: concept.key,
+          status: nearMatch.status,
+        });
         matchedAny = true;
       }
     }

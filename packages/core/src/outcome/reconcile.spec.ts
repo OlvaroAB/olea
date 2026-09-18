@@ -8,9 +8,9 @@ import {
   listConceptKeyRecords,
   resolveConceptKey,
 } from '../concept/key-store.js';
-import { listSameAsLinkRecords } from '../concept/same-as.js';
 import { FolderSource } from '../vault/folder-source.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { listOutcomeConceptNearMatchRecords } from './near-match.js';
 import {
   classifyOutcomeConceptMatch,
   conceptRegistryEntryFromRecord,
@@ -20,8 +20,9 @@ import {
 import { listOutcomeRecords, resolveOutcome, retireOutcome } from './store.js';
 
 // Scenarios: olea-service/features/F8-concepts-scope.md — "F8.6/F4.1 [OUT-3] — Outcome-to-concept
-// containment: exact and alias attach, containment proposes, ONT-R1's bias to splits applies
-// across entity types", tagged `@auto:core/outcome/reconcile.spec`.
+// containment: exact and alias attach, containment proposes" and "[OUT-4] Outcome-to-concept near
+// match: its own proposal record, never a same-as link ([D-256])", tagged
+// `@auto:core/outcome/reconcile.spec`.
 
 const PROVENANCE = { promptVersion: 'v1', modelVersion: 'model-a' };
 
@@ -211,17 +212,16 @@ describe('reconcileOutcomeConcepts', () => {
     const persisted = await listOutcomeRecords(vault);
     const byId = new Map(persisted.map(({ record }) => [record.id, record]));
     expect(byId.get(exactOutcome.id)?.conceptKeys).toEqual([conceptRecord.key]);
-    // The near match is NOT attached until a confirmed same-as link (out of this module's scope).
+    // The near match is NOT attached until a confirmed near-match record (out of this module's scope).
     expect(byId.get(nearOutcome.id)?.conceptKeys).toEqual([]);
     expect(byId.get(missOutcome.id)?.conceptKeys).toEqual([]);
 
-    const links = await listSameAsLinkRecords(vault);
-    expect(links).toHaveLength(1);
-    expect(links[0]?.record.status).toBe('proposed');
-    expect(links[0]?.record.reason).toBe('normalisation-collision');
-    expect([links[0]?.record.keyA, links[0]?.record.keyB].sort()).toEqual(
-      [nearOutcome.id, conceptRecord.key].sort(),
-    );
+    const nearMatches = await listOutcomeConceptNearMatchRecords(vault);
+    expect(nearMatches).toHaveLength(1);
+    expect(nearMatches[0]?.record.status).toBe('proposed');
+    expect(nearMatches[0]?.record.reason).toBe('token-set-containment');
+    expect(nearMatches[0]?.record.outcomeId).toBe(nearOutcome.id);
+    expect(nearMatches[0]?.record.conceptKey).toBe(conceptRecord.key);
   });
 
   it('is idempotent: re-running against an already-reconciled course writes nothing new', async () => {
