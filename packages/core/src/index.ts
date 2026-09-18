@@ -345,6 +345,14 @@ export type {
 } from './concept/same-as.js';
 export {
   confirmSameAsLink,
+  // `declineSameAsLink` was omitted from this barrel when `'declined'` landed
+  // (`ol-egov.141.33` [TRIAGE-5]) — added here so F8.4a's identity section
+  // (`ol-egov.141.41` [TRIAGE-6], `packages/plugin/src/registry/
+  // same-as-identity.ts`) can call it through `olea-core` rather than a deep
+  // import. `index.ts` is a shared barrel (this repo's own concurrent-lanes
+  // note); this is a one-line, additive re-export of an already-ratified
+  // function, not a new capability.
+  declineSameAsLink,
   edgesEligibleForSplitMigration,
   isSameAsLinkRecord,
   listSameAsLinkRecords,
@@ -1603,6 +1611,7 @@ export type {
   AppendRetrospectiveOfferLogResult,
   AppendReviewLogOptions,
   AppendReviewLogResult,
+  AppendSourceRegisteredLogResult,
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
@@ -1610,6 +1619,7 @@ export type {
   MisconceptionObservedLogRecordInput,
   RetrospectiveOfferLogRecordInput,
   ReviewLogRecordInput,
+  SourceRegisteredLogRecordInput,
   SuccessionLogRecordInput,
   SuspendLogRecordInput,
   VerdictLogRecordInput,
@@ -1620,6 +1630,7 @@ export {
   appendMisconceptionObservedRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
+  appendSourceRegisteredRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
@@ -1846,7 +1857,12 @@ export {
   structuralNotHersFragment,
   UNKNOWN_MATERIALITY,
 } from './source/materiality.js';
-export { DEFAULT_SOURCES_FOLDER, registerSources } from './source/register.js';
+export {
+  DEFAULT_SOURCES_FOLDER,
+  isRegisterableDocument,
+  projectRegisteredFiles,
+  registerSources,
+} from './source/register.js';
 export type {
   NonQuestionHeading,
   PastPaperSegmentationResult,
@@ -1854,6 +1870,7 @@ export type {
 } from './source/segment-past-paper.js';
 export { segmentPastPaper } from './source/segment-past-paper.js';
 export type {
+  RegisteredFileSpec,
   RegisterSourcesOptions,
   Source,
   SourceRegistrationReport,
