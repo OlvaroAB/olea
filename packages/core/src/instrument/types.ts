@@ -17,7 +17,15 @@
  * one instrument in a note edits its span through `block/edit.ts`; a caller
  * that merely read a note has nothing to write back, because reading produced
  * no re-rendered text to write.
+ *
+ * A third section lives at the bottom of this file, below the vault-format
+ * types: **probe metadata** (`[D-263]`), which is not a vault format at all —
+ * it declares a probe's `purpose` and, conditionally, its `applicationBoundary`
+ * and exposure provenance, none of which are written into a note's bytes.
+ * See that section's own module-level comment for why it lives here anyway.
  */
+
+import type { InstrumentCitation } from './citation-store.js';
 
 /** A byte range in the note's source, in UTF-16 code units. */
 export interface SourceSpan {
@@ -216,4 +224,262 @@ export interface InvalidMcqBlock {
   readonly detail: string;
   readonly raw: string;
   readonly span: SourceSpan;
+}
+
+// ===========================================================================
+// PROBE METADATA — `[D-263 / PROBE-1]`, knowledge model's Instrument row,
+// vocabulary registry §14 ("Transfer probe vocabulary")
+// ===========================================================================
+//
+// `ol-egov.141.47` ratified two purposes a generated instrument can declare —
+// `wording-robustness` (same claim, new words) and `application` (a taught
+// principle applied to material her notes did not describe — the only shape
+// the registry allows calling a "transfer probe") — plus a first-recorded-
+// exposure check every probe carries regardless of purpose. The registry's
+// own words: "Class C: names the `purpose` and `applicationBoundary` fields
+// on the instrument record" — the two field names below are not a design
+// choice, they are already ratified vocabulary.
+//
+// **Metadata, never a fourth depth axis, never a number** (ruling 1's own
+// insistence, repeated three times in the decision text so it cannot be
+// missed): depth stays exactly R7's three response-form tiers
+// (recognition/recall/explanation). Nothing here is folded into a score,
+// averaged, or read by the mastery layer as evidence strength — a reader
+// checks `purpose` to know WHAT KIND of evidence a success is, the same way
+// `instrumentType` already says what FORM it took, and depth is unchanged
+// either way.
+//
+// **Schema-version decision, settled ON THIS BEAD per its own brief, mirroring
+// the review-log v5 precedent (`[D-117]`, `bd show ol-egov.41`):** this is a
+// wholly NEW, additive bundle — nothing existing (`McqInstrument`,
+// `CardInstrument`, `VaultInstrumentRecord` in `../session/types.js`) has its
+// shape touched by this bead, and no field on any of those types changes
+// meaning. `[D-117]`'s own reasoning for `ol-548w`'s `verdictLogRecordV4`
+// applies verbatim: a genuinely new, previously-absent kind of information is
+// added as its OWN schema-versioned unit rather than by bumping an unrelated
+// existing version — "nothing about an *existing* kind's shape changed, so no
+// bump was needed." `PROBE_METADATA_SCHEMA_VERSION` below is that unit's own
+// version, starting at 1, exactly like `CITATION_RECORD_SCHEMA_VERSION` and
+// `DISTRACTOR_PROVENANCE_RECORD_SCHEMA_VERSION` in this same directory did on
+// their first day — never a bump to those, nor to any existing kind.
+// Full argument and the migration story: `docs/dev/verdict-seam-design.md`
+// §9 (this repo's sibling copy) — the design record for both the v5 bump
+// this schema-version decision took as precedent AND this bundle's own
+// versioning call.
+//
+// **Where this bundle lives is deliberately NOT decided here.** `types.ts`
+// owns the shape; a persisted home (a `.olea/`-folder sidecar, mirroring
+// `citation-store.ts`/`distractor-provenance-store.ts` in this same
+// directory, keyed by the frozen instrument id) is `[PROBE-3]`'s
+// (`ol-0r92.79`) job, alongside the generator that actually produces probes
+// and the production caller that writes them — see that bead for the
+// reachability half of `[D-072]`'s Definition of Done. This bead is the
+// schema only.
+//
+// **D-005, applied at field-design time, not just at log time.** Every field
+// below is a fixed enum label, a concept id, a citation-shaped structural
+// pointer (`sourcePath`/`page`/`section` — the same non-content grain
+// `citation-store.ts` already established), or an opaque reference — never a
+// free-text description. This is a deliberate departure from the shape a
+// first draft reaches for: `[D-263]`'s own application-boundary wording
+// ("what changes from tasks she has already met, what stays constant, what
+// reasoning she must supply, what would exceed the taught scope") reads like
+// four prose fields, and prose is exactly the shape a scenario's specifics —
+// drawn from her held material — could leak through. So none of those four
+// live here as inline text: `ApplicationBoundary.boundarySpecRef` is an
+// opaque pointer at an Olea-authored artifact holding that description,
+// mirroring `explainBackGrade.contentRef`'s own reasoning in
+// `contracts/review-log.ts` (the verdict is replayable because the content it
+// graded is referenced, never inlined). The referent itself — a boundary-spec
+// store — is `[PROBE-3]`'s to build, for the same reason the persisted home
+// above is: nothing in THIS bead's owned files writes prose anywhere, so
+// there is nothing here that could carry her wording even by accident.
+
+/**
+ * The two purposes a probe declares (`[D-263]` ruling 1; vocabulary registry
+ * §14). `wording-robustness` asks the same claim under new words or framing;
+ * `application` asks a taught principle applied to material her notes did not
+ * describe, inside a declared `ApplicationBoundary` — the only one of the two
+ * the registry permits calling a transfer probe. An ordinary, non-probe
+ * instrument (everything written or generated before this decision, and
+ * every hand-authored card or MCQ after it) declares no purpose at all —
+ * there is no third enum member for "not a probe"; absence of
+ * `ProbeMetadata` on a record is that state. See this file's module-level
+ * "PROBE METADATA" comment for the schema-version and D-005 reasoning.
+ */
+export type InstrumentPurpose = 'wording-robustness' | 'application';
+
+/**
+ * The four dimensions `[D-263]` ruling 3 checks at generation to establish
+ * **first recorded exposure** — never "unseen" (vocabulary registry §14's own
+ * forbidden-framing rule): the exact item, the scenario with names or numbers
+ * changed, the decisive solution pattern, and the assistance already shown.
+ * Fixed at four, matching the ruling's own enumeration exactly — this is
+ * ratified vocabulary, not an open set a future probe kind extends casually.
+ */
+export type ExposureDimension =
+  | 'exact-item'
+  | 'scenario'
+  | 'decisive-solution-pattern'
+  | 'assistance-shown';
+
+/** Every `ExposureDimension`, in the order `[D-263]` ruling 3 lists them. */
+export const EXPOSURE_DIMENSIONS: readonly ExposureDimension[] = [
+  'exact-item',
+  'scenario',
+  'decisive-solution-pattern',
+  'assistance-shown',
+];
+
+/**
+ * What the exposure check found, one verdict per dimension, always all four —
+ * a `Record` rather than a list of matches so "did we check this dimension"
+ * can never drift from "how many matches came back": every key in
+ * `EXPOSURE_DIMENSIONS` is always present, checked or not.
+ *
+ * `null` on a dimension means first recorded exposure on that dimension for
+ * this probe. A string names the existing instrument (this concept's own
+ * item, by its frozen id — never a copy of its scenario or wording) whose
+ * prior exposure supplied that dimension — structural cross-reference only,
+ * per this file's D-005 reasoning above.
+ */
+export type ExposureDimensionResult = Readonly<Record<ExposureDimension, string | null>>;
+
+/**
+ * A probe's first-recorded-exposure provenance (`[D-263]` ruling 3),
+ * recorded at generation. Present on every probe regardless of `purpose` —
+ * the check is not scoped to `application` alone, ruling 3's own text
+ * describes it for "an additional item under the same concept, carrying its
+ * purpose" without narrowing to one purpose.
+ *
+ * "Nothing resets" (ruling 3's own words): once a dimension has a match, nothing
+ * here is ever recomputed to erase it. A later, separate generation call
+ * produces its own new `ExposureProvenance` rather than mutating this one.
+ */
+export interface ExposureProvenance {
+  readonly perDimension: ExposureDimensionResult;
+}
+
+/**
+ * The target principle and its held source, at citation grain — reusing
+ * `citation-store.ts`'s `InstrumentCitation` shape verbatim (`sourcePath`
+ * plus optional `page`/`section`) rather than a new scheme, for the same
+ * reason `[D-181]` gives there: this is a POINTER at held material, never the
+ * material's own text.
+ */
+export interface ApplicationBoundary {
+  /** The taught principle this boundary is drawn against — a concept id, never the principle's text. */
+  readonly targetConceptId: string;
+  /** Where in her held material that principle lives — citation grain, never quoted text. */
+  readonly heldSource: InstrumentCitation;
+  /**
+   * Opaque pointer at the Olea-authored boundary description — what changes
+   * from tasks she has already met, what stays constant, what reasoning she
+   * must supply, what would exceed the taught scope (`[D-263]`'s own four
+   * clauses). The prose itself is never inline here; see this file's
+   * module-level "PROBE METADATA" comment for why, and `[PROBE-3]` for where
+   * the referent is minted and stored.
+   */
+  readonly boundarySpecRef: string;
+}
+
+/**
+ * Purpose and, when applicable, the application boundary and exposure
+ * provenance `[D-263]` ruling 1 and 3 require every probe to carry —
+ * metadata on the instrument record, never a fourth depth axis (this file's
+ * module-level comment; `InstrumentPurpose`'s own doc).
+ *
+ * A discriminated union on `purpose` rather than an optional
+ * `applicationBoundary` on one flat shape: `applicationBoundary` is
+ * meaningful, and required, precisely when `purpose` is `'application'`, and
+ * a TS discriminated union makes "a wording-robustness probe carrying a
+ * boundary" and "an application probe carrying none" both unrepresentable
+ * rather than merely undocumented. `isProbeMetadata` below enforces the same
+ * invariant at the runtime/JSON boundary, matching this directory's existing
+ * hand-rolled-guard style (`citation-store.ts`, `distractor-provenance-store.ts`).
+ */
+export type ProbeMetadata =
+  | {
+      readonly purpose: 'wording-robustness';
+      readonly exposureProvenance: ExposureProvenance;
+    }
+  | {
+      readonly purpose: 'application';
+      readonly applicationBoundary: ApplicationBoundary;
+      readonly exposureProvenance: ExposureProvenance;
+    };
+
+/**
+ * `ProbeMetadata`'s own schema version, settled on `[PROBE-2]` (`ol-0r92.78`)
+ * per this file's module-level "PROBE METADATA" comment. Starts at 1 because
+ * nothing before this bead ever produced a `ProbeMetadata` value — there is
+ * no prior version to be compatible with, and no migration function is
+ * written for the same reason `[D-109]` gives review-log v5 none: nothing
+ * real exists to migrate FROM. Bump this, never `CITATION_RECORD_SCHEMA_VERSION`
+ * or `DISTRACTOR_PROVENANCE_RECORD_SCHEMA_VERSION`, if this bundle's own
+ * shape later changes — the three are independent per the decision above.
+ */
+export const PROBE_METADATA_SCHEMA_VERSION = 1;
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/** Runtime validation, matching this directory's hand-rolled-guard style (no schema library in this package). */
+export function isExposureDimensionResult(value: unknown): value is ExposureDimensionResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  for (const dimension of EXPOSURE_DIMENSIONS) {
+    const entry = v[dimension];
+    if (entry !== null && !isNonEmptyString(entry)) return false;
+  }
+  return true;
+}
+
+export function isExposureProvenance(value: unknown): value is ExposureProvenance {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isExposureDimensionResult(v.perDimension);
+}
+
+/**
+ * Validates the bare `ApplicationBoundary` shape — the embedded pointer, not
+ * a standalone file record, so unlike `citation-store.ts`'s `isCitationRecord`
+ * this checks no `instrumentId`/`schemaVersion` of its own.
+ */
+export function isApplicationBoundary(value: unknown): value is ApplicationBoundary {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!isNonEmptyString(v.targetConceptId)) return false;
+  if (!isNonEmptyString(v.boundarySpecRef)) return false;
+  if (typeof v.heldSource !== 'object' || v.heldSource === null) return false;
+  const source = v.heldSource as Record<string, unknown>;
+  if (!isNonEmptyString(source.sourcePath)) return false;
+  if (source.page !== undefined && typeof source.page !== 'number') return false;
+  if (source.section !== undefined && !isNonEmptyString(source.section)) return false;
+  return true;
+}
+
+/**
+ * Validates `ProbeMetadata` at the runtime/JSON boundary, enforcing the same
+ * purpose/boundary pairing the type already enforces at compile time — a
+ * malformed record (an `application` purpose with no boundary, or a
+ * `wording-robustness` purpose carrying one) is rejected rather than
+ * silently accepted with an absent field. `undefined`/absence is NOT this
+ * function's job: a caller holding an optional `probeMetadata?: ProbeMetadata`
+ * field checks presence itself (this bundle is metadata on a record, never
+ * the record itself — see the module-level comment) — this function only
+ * validates a value that IS present.
+ */
+export function isProbeMetadata(value: unknown): value is ProbeMetadata {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!isExposureProvenance(v.exposureProvenance)) return false;
+  if (v.purpose === 'wording-robustness') {
+    return v.applicationBoundary === undefined;
+  }
+  if (v.purpose === 'application') {
+    return isApplicationBoundary(v.applicationBoundary);
+  }
+  return false;
 }
