@@ -10,12 +10,13 @@
  * are `test/retrospective/offer-card.spec.ts`'s and `packages/core`'s own
  * job.
  */
+import type { SelectionContextV4 } from 'olea-contracts';
 import {
   GOVERNING_FRESH_FOR_SECONDS,
   GOVERNING_GOVERNS_FOR_SECONDS,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
-import { createFsrsScheduler } from 'olea-core';
+import { createFsrsScheduler, provisionalConceptKey, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
@@ -355,5 +356,109 @@ describe('createLocalHomeProvider — F4.6 steering inputs reach the headline se
     const narrow = sessionModel(await home.load({ budgetMinutes: 5 }));
 
     expect(narrow.model.items.length).toBeLessThan(wide.model.items.length);
+  });
+});
+
+// F4.6's once-asked course-avoidance question (`[D-265]`, `ol-egov.141.54`
+// [INTERV-5]). `./avoidance.ts` carries the decision logic's own unit tests
+// (`test/home/avoidance.spec.ts`); this suite proves the WIRING — that a
+// real `readReviewLogHistory` read, joined with a real `buildGroveModel`
+// read, actually reaches `HomeViewState.avoidanceQuestion` and the store.
+const AVOIDANCE_CONTEXT: SelectionContextV4 = {
+  dueState: 'new',
+  examProximity: null,
+  yieldRank: null,
+  instrumentTypesOffered: ['qa'],
+  planVersion: null,
+};
+
+/** `[D-248]` took the Zettelkasten folder out of tier-1 binding entirely (`../../src/concept/extract.ts`'s module doc), so `manyConcepts`'s zettel file does not bind its concept — the review-log join key is the plain, unbound provisional form. */
+function conceptKey(name: string): string {
+  return provisionalConceptKey({ name, boundNotePath: null });
+}
+
+function reviewLine(conceptKey: string, timestamp: string, eventId: string): string {
+  return JSON.stringify({
+    schemaVersion: 5,
+    kind: 'review',
+    eventId,
+    timestamp,
+    instrumentId: `instrument-${eventId}`,
+    instrumentType: 'qa',
+    conceptIds: [conceptKey],
+    rating: 'good',
+    wasUnsure: false,
+    durationMs: null,
+    selectionContext: AVOIDANCE_CONTEXT,
+  });
+}
+
+describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [INTERV-5])', () => {
+  it('never fires on a fresh vault with no review history anywhere (no "elsewhere" to point at)', async () => {
+    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH)).load(
+      DEFAULT_REQUEST,
+    );
+    expect(dashboard(state).avoidanceQuestion).toBeUndefined();
+  });
+
+  it('fires for the course with no review activity while the other was reviewed recently, and marks it asked', async () => {
+    const vault = fixtureVault({
+      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
+      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
+      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
+        conceptKey('Widget0'),
+        '2026-09-01T09:00:00Z',
+        'e1',
+      )}\n`,
+    });
+    const host = hostWithBasePath(BASE_PATH);
+    const state = dashboard(await provider(vault, host).load(DEFAULT_REQUEST));
+
+    expect(state.avoidanceQuestion?.course).toBe('TESTC202');
+  });
+
+  it('a second load never re-offers the same course — "at most once"', async () => {
+    const vault = fixtureVault({
+      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
+      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
+      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
+        conceptKey('Widget0'),
+        '2026-09-01T09:00:00Z',
+        'e1',
+      )}\n`,
+    });
+    const host = hostWithBasePath(BASE_PATH);
+    const home = provider(vault, host);
+
+    const first = dashboard(await home.load(DEFAULT_REQUEST));
+    expect(first.avoidanceQuestion?.course).toBe('TESTC202');
+
+    const second = dashboard(await home.load(DEFAULT_REQUEST));
+    expect(second.avoidanceQuestion).toBeUndefined();
+  });
+
+  it('onAnswer records her literal choice and a date — never a diagnosis', async () => {
+    const vault = fixtureVault({
+      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
+      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
+      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
+        conceptKey('Widget0'),
+        '2026-09-01T09:00:00Z',
+        'e1',
+      )}\n`,
+    });
+    const host = hostWithBasePath(BASE_PATH);
+    const state = dashboard(await provider(vault, host).load(DEFAULT_REQUEST));
+    const question = state.avoidanceQuestion;
+    if (question === undefined) throw new Error('expected an avoidance question');
+
+    await question.onAnswer('practise-differently');
+
+    const blob = host.blob as Record<string, unknown>;
+    const stored = blob.homeCourseAvoidance as {
+      courses: Record<string, { askedAt: string; answer?: { value: string; text: string } }>;
+    };
+    expect(stored.courses.TESTC202?.answer?.value).toBe('practise-differently');
+    expect(typeof stored.courses.TESTC202?.answer?.text).toBe('string');
   });
 });

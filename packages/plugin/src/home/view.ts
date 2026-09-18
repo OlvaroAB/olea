@@ -184,6 +184,12 @@ import {
 } from '../session-builder/view.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
+  COURSE_AVOIDANCE_LEAVE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_ACTION,
+  type CourseAvoidanceAnswer,
+  courseAvoidanceQuestionLine,
+} from './avoidance.js';
+import {
   DISMISS_OFFER_ACTION,
   HOME_CLEAR_FOCUS_ACTION,
   HOME_COURSES_PANEL_NOTE,
@@ -237,12 +243,32 @@ export interface HomeCourseRow {
   readonly quiet?: HomeQuietLine;
 }
 
+/**
+ * F4.6's once-asked course-avoidance steering question (`[D-265]`). The
+ * candidate `course` and the write closure both come from `./provider.ts`'s
+ * `load()` — never from a separate `HomeViewDeps` field — precisely so this
+ * bead needs no change to `main.ts`'s hand-wired `HomeView` construction
+ * (`./avoidance.ts`'s own module doc, "Scope"): `main.ts` already relays
+ * `load`'s return value unchanged, so a new fact living INSIDE that value is
+ * reachable through the exact same registered view (`main.ts`'s
+ * `registerView(VIEW_TYPE_OLEA_HOME, ...)`, command `olea-home-open`) with no
+ * new wiring line for it. `onAnswer` is the only
+ * write; dismissing needs none (see `./avoidance.ts`, "declining changes
+ * nothing"), so there is no `onDismiss` — `./view.ts` hides the card locally.
+ */
+export interface HomeAvoidanceQuestion {
+  readonly course: string;
+  readonly onAnswer: (answer: CourseAvoidanceAnswer) => Promise<void>;
+}
+
 export type HomeViewState =
   | { readonly kind: 'first-read'; readonly folders: readonly FirstReadFolderView[] }
   | {
       readonly kind: 'dashboard';
       readonly session: SessionBuilderState;
       readonly courses: readonly HomeCourseRow[];
+      /** `undefined` on every load after the first for a given course — see `./provider.ts`'s own "asked once, at render" discipline. */
+      readonly avoidanceQuestion?: HomeAvoidanceQuestion;
     }
   | { readonly kind: 'unavailable' };
 
@@ -287,6 +313,23 @@ export class HomeView extends ItemView {
   private focusConceptName: string | undefined;
   /** F4.6's second steering input. */
   private courseOrTopic: CourseOrTopicOption | undefined;
+  /**
+   * F4.6's avoidance question, held as sticky local state once `./
+   * provider.ts` first offers one — the same "hold it locally so an
+   * unrelated refresh cannot disturb it" reasoning this class already gives
+   * `budgetMinutes`/`focusConceptName`/`courseOrTopic`, applied to a fact
+   * this class receives from `load()` instead of one it sends. Without this,
+   * an unrelated `refresh()` (she moves the budget slider while reading the
+   * question) would silently yank the card away: `./provider.ts` marks the
+   * course "asked" at the very first `load()` that offers it, so every LATER
+   * `load()` correctly stops returning it — but she has not dismissed or
+   * answered anything yet. Holding the first offer here, and never asking
+   * `state.avoidanceQuestion` again once this is set, is what makes the card
+   * dismissible on her own timing rather than on the next unrelated redraw.
+   * Cleared on dismiss (no write — see `./avoidance.ts`, "declining changes
+   * nothing") and on answer (after the write resolves).
+   */
+  private activeAvoidanceQuestion: HomeAvoidanceQuestion | undefined;
 
   constructor(leaf: WorkspaceLeaf, deps: HomeViewDeps) {
     super(leaf);
@@ -294,6 +337,7 @@ export class HomeView extends ItemView {
     this.budgetMinutes = DEFAULT_SESSION_BUDGET_MINUTES;
     this.focusConceptName = undefined;
     this.courseOrTopic = undefined;
+    this.activeAvoidanceQuestion = undefined;
   }
 
   override getViewType(): string {
@@ -355,8 +399,67 @@ export class HomeView extends ItemView {
       return;
     }
 
+    // Adopt a freshly-offered question only while none is already active
+    // locally — see `activeAvoidanceQuestion`'s own doc for why a later
+    // `load()` legitimately stops returning the one already on screen.
+    if (this.activeAvoidanceQuestion === undefined && state.avoidanceQuestion !== undefined) {
+      this.activeAvoidanceQuestion = state.avoidanceQuestion;
+    }
+    if (this.activeAvoidanceQuestion !== undefined) {
+      this.renderAvoidanceQuestion(root, this.activeAvoidanceQuestion);
+    }
+
     this.renderOffer(root, state.session);
     this.renderCourses(root, state.courses);
+  }
+
+  /**
+   * F4.6's once-asked course-avoidance steering question (`[D-265]`). Two
+   * options, plus a dismiss — no free-text field, because the clause offers
+   * exactly two choices and "her own words" (principle 16, `./avoidance.ts`'s
+   * own module doc) means the literal option she picked, not a summary of a
+   * paragraph she typed. Rendered above the composed-session card: this
+   * question is itself a steering input to that composition (once wired —
+   * see `./avoidance.ts`'s "Scope" note), so it reads first.
+   */
+  private renderAvoidanceQuestion(root: HTMLElement, question: HomeAvoidanceQuestion): void {
+    const card = root.createDiv({ cls: 'olea-card' });
+    card.createDiv({
+      cls: 'olea-prose olea-home-offer-reason-line',
+      text: courseAvoidanceQuestionLine(question.course),
+    });
+    const actions = card.createDiv({ cls: 'olea-home-offer-actions' });
+
+    const answer = (value: CourseAvoidanceAnswer) => {
+      void question.onAnswer(value).then(() => {
+        this.activeAvoidanceQuestion = undefined;
+        void this.refresh();
+      });
+    };
+
+    const leave = actions.createEl('button', {
+      cls: 'olea-button olea-button-quiet',
+      text: COURSE_AVOIDANCE_LEAVE_ACTION,
+    });
+    leave.addEventListener('click', () => answer('leave-for-now'));
+
+    const practise = actions.createEl('button', {
+      cls: 'olea-button olea-button-quiet',
+      text: COURSE_AVOIDANCE_PRACTISE_ACTION,
+    });
+    practise.addEventListener('click', () => answer('practise-differently'));
+
+    // Dismiss writes nothing (F4.6: "declining changes nothing") — the
+    // course was already marked asked when `./provider.ts` first offered it,
+    // so hiding this card locally is the whole of what "dismissible" needs.
+    const dismiss = actions.createEl('button', {
+      cls: 'olea-button olea-button-quiet',
+      text: DISMISS_OFFER_ACTION,
+    });
+    dismiss.addEventListener('click', () => {
+      this.activeAvoidanceQuestion = undefined;
+      card.remove();
+    });
   }
 
   /**

@@ -50,9 +50,21 @@
  * course with nothing registered at all, which does not change read to
  * read). A course showing none of the three renders no quiet line, which is
  * F6.10's ordinary state, not a gap.
+ *
+ * **F4.6's once-asked course-avoidance question (`[D-265]`, `[INTERV-5]`).**
+ * `./avoidance.ts`'s own module doc carries the full argument; this module is
+ * the third concurrent read it needs (review-log history, the same
+ * `readReviewLogHistory`/probe-days shape `../retrospective/offer-events.ts`
+ * and `../today/data-source.ts` already use) and the glue that turns a
+ * candidate into a `HomeAvoidanceQuestion` the view can act on. The store
+ * write that marks a course "asked" happens HERE, at `load()`, the instant a
+ * candidate is chosen — matching `recordOfferedEvents`'s own "fired at
+ * render" discipline (`../grove/provider.ts`) — and is wrapped in its own
+ * `try`/`catch` so a write failure costs this one quiet feature, never the
+ * whole Home read (identical reasoning to that same call site).
  */
 
-import type { StudyPlanEnvelope } from 'olea-contracts';
+import type { ReviewLogEntry, StudyPlanEnvelope } from 'olea-contracts';
 import type {
   ConceptRelation,
   GroveCourseModel,
@@ -60,6 +72,7 @@ import type {
   VaultPath,
   VaultSource,
 } from 'olea-core';
+import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
 import type { FirstReadFolderView } from '../ingestion/wiring.js';
@@ -72,13 +85,27 @@ import {
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 import { createLocalSessionBuilderProvider } from '../session-builder/provider.js';
 import type { SessionBuilderRequest } from '../session-builder/view.js';
+import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import {
+  COURSE_AVOIDANCE_LEAVE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_ACTION,
+  courseActivityFromGrove,
+  findAvoidedCourse,
+  ObsidianHomeAvoidanceStore,
+} from './avoidance.js';
 import { HOME_SET_UP_WAITING, homeScopeGrewLine } from './copy.js';
 import {
   type HomeScopeSnapshot,
   homeScopeGrowthReceiptFor,
   ObsidianHomeScopeGrowthStore,
 } from './scope-growth-store.js';
-import type { HomeCourseRow, HomeGroveMark, HomeQuietLine, HomeViewState } from './view.js';
+import type {
+  HomeAvoidanceQuestion,
+  HomeCourseRow,
+  HomeGroveMark,
+  HomeQuietLine,
+  HomeViewState,
+} from './view.js';
 
 export interface CreateLocalHomeProviderDeps {
   readonly vault: VaultSource;
@@ -212,6 +239,75 @@ async function buildCourseRows(
   return rows;
 }
 
+/** Narrows a union member to review-kind lines — same shape `../retrospective/offer-events.ts#isRetrospectiveOfferEntry` uses for its own kind. */
+function isReviewEntry(
+  entry: ReviewLogEntry,
+): entry is Extract<ReviewLogEntry, { readonly kind: 'review' }> {
+  return entry.kind === 'review';
+}
+
+/**
+ * F4.6's once-asked course-avoidance question — see this module's own doc,
+ * "F4.6's once-asked course-avoidance question", and `./avoidance.ts`'s own
+ * doc for the full argument. Never throws: a failure anywhere in this read
+ * or write costs only this one quiet feature, not the rest of Home.
+ */
+async function findCourseAvoidanceQuestion(
+  deps: CreateLocalHomeProviderDeps,
+  sections: readonly GroveCourseSection[],
+  avoidanceStore: ObsidianHomeAvoidanceStore,
+): Promise<HomeAvoidanceQuestion | undefined> {
+  try {
+    const now = deps.now();
+    const additionalPaths: readonly VaultPath[] = calendarDaysEndingOn(
+      localToday(now),
+      SCHEDULING_HISTORY_PROBE_DAYS,
+    ).map((day) => reviewLogPath(day, deps.deviceId));
+    const { entries } = await readReviewLogHistory(deps.vault, { additionalPaths });
+
+    const reviewedAtMsByConceptKey = new Map<string, number>();
+    for (const entry of entries.filter(isReviewEntry)) {
+      const at = Date.parse(entry.timestamp);
+      if (Number.isNaN(at)) continue;
+      for (const conceptId of entry.conceptIds) {
+        const existing = reviewedAtMsByConceptKey.get(conceptId);
+        if (existing === undefined || at > existing) reviewedAtMsByConceptKey.set(conceptId, at);
+      }
+    }
+
+    const activity = courseActivityFromGrove(sections, reviewedAtMsByConceptKey);
+    const alreadyAsked = new Set((await avoidanceStore.load()).keys());
+    const candidate = findAvoidedCourse(activity, now.getTime(), alreadyAsked);
+    if (candidate === undefined) return undefined;
+
+    // "Asked once, at the point it matters" (F4.6) — marked the instant this
+    // course is chosen, before she has seen or reacted to anything; see
+    // `./avoidance.ts`'s own doc, "At most once, precisely".
+    try {
+      await avoidanceStore.markAsked(candidate, now.toISOString());
+    } catch (error) {
+      console.error('Olea: could not record course-avoidance "asked"', error);
+    }
+
+    return {
+      course: candidate,
+      onAnswer: async (answer) => {
+        await avoidanceStore.recordAnswer(candidate, {
+          value: answer,
+          text:
+            answer === 'leave-for-now'
+              ? COURSE_AVOIDANCE_LEAVE_ACTION
+              : COURSE_AVOIDANCE_PRACTISE_ACTION,
+          recordedAt: deps.now().toISOString(),
+        });
+      },
+    };
+  } catch (error) {
+    console.error('Olea: could not compute the course-avoidance question', error);
+    return undefined;
+  }
+}
+
 export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): HomeDataDeps {
   const sessionProvider = createLocalSessionBuilderProvider({
     vault: deps.vault,
@@ -230,6 +326,7 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
     ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
   });
   const scopeGrowthStore = new ObsidianHomeScopeGrowthStore(deps.settingsHost);
+  const avoidanceStore = new ObsidianHomeAvoidanceStore(deps.settingsHost);
   const offerStore: RetrospectiveOfferEventLog = createRetrospectiveOfferEventLog({
     vault: deps.vault,
     deviceId: deps.deviceId,
@@ -265,7 +362,20 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
         ]);
         const courses =
           grove.kind === 'model' ? await buildCourseRows(grove.courses, scopeGrowthStore) : [];
-        return { kind: 'dashboard', session, courses };
+        // F4.6 (`[D-265]`, `[INTERV-5]`): needs the same course→concept
+        // membership the coverage strips just read, so it runs after
+        // `grove` resolves rather than joining the `Promise.all` above —
+        // see `findCourseAvoidanceQuestion`'s own doc.
+        const avoidanceQuestion =
+          grove.kind === 'model'
+            ? await findCourseAvoidanceQuestion(deps, grove.courses, avoidanceStore)
+            : undefined;
+        return {
+          kind: 'dashboard',
+          session,
+          courses,
+          ...(avoidanceQuestion !== undefined ? { avoidanceQuestion } : {}),
+        };
       } catch (error) {
         console.error('Olea: could not compose Home', error);
         return { kind: 'unavailable' };
