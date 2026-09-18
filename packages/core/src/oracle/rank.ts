@@ -102,6 +102,59 @@
  * for a course with no evidence would be inferring a ranking from course
  * membership alone, which is exactly what P5-T03's edges refuse to do and
  * what this module must not undo.
+ *
+ * ## The comparable-observation tiebreak (C5.10 ruling 1, `[D-265]`,
+ * `ol-egov.141.52`)
+ *
+ * C5.10 was amended Sep 2026 to add one narrow rule ON TOP of the ordinary
+ * name-ascending tie-break above: "Where the blend leaves two concepts
+ * tied, a concept whose recent recall observations disagree — comparable in
+ * tier, support level shown, source version and recency, with nothing in
+ * the record explaining the split — may be served ahead of a tied concept
+ * whose evidence is tidy, but only where a different eligible ordinary
+ * instrument on the concept exists to resolve it." Two things this module
+ * does and does not do about that:
+ *
+ * **This module never decides WHETHER a concept qualifies.** Reading recent
+ * recall observations for tier/support-level/source-version/recency
+ * comparability, telling a genuine disagreement apart from an ordinary
+ * probabilistic pattern (the clause's own example: "a recall success
+ * followed by a failure on a harder instrument is not a conflict"), and
+ * checking whether a different eligible ordinary instrument still exists on
+ * the concept all require reading `review-log/` and instrument-eligibility
+ * state this module is never handed — `RankOracleInput` composes only
+ * evidence edges, mastery and (optionally) retrievability, none of which
+ * carry review-log history. That computation is a producer's job, outside
+ * `oracle/rank.ts` (this bead's one owned file), exactly the same
+ * "known gap, reachability" shape `RankOracleInput.retrievability`'s doc
+ * already carries: nothing supplies it today, and wiring one is a follow-on
+ * bead's reachability work, not this one's.
+ *
+ * **What this module DOES do is apply the tiebreak mechanically, once told
+ * which concepts qualify.** `RankOracleTiebreakInput.tiebreakEligible` (see
+ * below) is an opaque set of `conceptKey`s a caller has already determined
+ * satisfy BOTH halves of the clause (comparable-observation disagreement,
+ * AND a different eligible instrument to resolve it) — this module treats
+ * that determination as a single fact and never re-derives it. The rule it
+ * applies is exactly the clause's own bound: **it fires ONLY where
+ * `compareContributions`'s ordinary sort already left two concepts'
+ * `priorityScore` exactly tied**, so it can never move a concept ahead of
+ * one the blend actually preferred (never a re-weighting), it never adds a
+ * review or any new evidence (it only re-orders two already-eligible,
+ * already-scored `ConceptPriority` entries), and a concept absent from
+ * `tiebreakEligible` — including every concept when the field itself is
+ * omitted — reads as "tidy" and falls through to the ordinary
+ * conceptName-ascending tie-break unchanged. This is deliberately the
+ * NARROWEST possible reading of "may be served first": a boolean precedence
+ * among already-tied entries, nothing more.
+ *
+ * **This is not a new number.** Unlike every `DECLARED_FALLBACK_*` constant
+ * above, the tiebreak introduces no threshold, weight or magnitude of its
+ * own to declare or derive — it is a structural ordering rule, the same
+ * category as the veto/blend separation (C5.10's first half) rather than a
+ * tunable. Any NUMBER a future producer needs to decide "comparable" or
+ * "recency" (e.g. a recency window) is that producer's to declare or derive
+ * when it lands, and is explicitly out of this bead's scope.
  */
 
 import type { MasteryState } from 'olea-contracts';
@@ -201,6 +254,39 @@ const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState,
   tree: 0.15,
   unknown: 1,
 };
+
+/**
+ * C5.10 ruling 1's tiebreak input (`[D-265]`, `ol-egov.141.52`) — additive to
+ * `RankOracleInput`, and deliberately typed HERE rather than in `./types.js`
+ * so this bead's edits stay inside its one owned file. A follow-on bead may
+ * fold this into `RankOracleInput` proper once a real producer exists to
+ * wire it (see this file's module doc, "The comparable-observation
+ * tiebreak").
+ */
+export interface RankOracleTiebreakInput {
+  /**
+   * `conceptKey`s (never `conceptName` — the same opaque-join-key rule
+   * `RankOracleInput.mastery`/`retrievability` follow) for which C5.10's
+   * comparable-observation tiebreak is ELIGIBLE this pass. **Both halves of
+   * the clause are already folded into this one flag by whoever computes
+   * it**: the concept's recent recall observations disagree in a way that
+   * is comparable in tier, support level shown, source version and
+   * recency, with nothing in the record explaining the split — AND a
+   * different eligible ordinary instrument on the concept exists to
+   * resolve it. This module never inspects review-log entries, observation
+   * tiers or instrument eligibility itself; that reading is a producer's
+   * job outside `oracle/` (see the module doc).
+   *
+   * Omitted entirely, or a concept key absent from it, reads as **not
+   * eligible** — the ordinary, tidy case — so absence can never itself win
+   * a tie. Consulted ONLY where the blend has already tied two concepts'
+   * `priorityScore` exactly: this can never change the order of two
+   * concepts the blend did not tie, and it is never folded into
+   * `priorityScore` itself — a tiebreak, not a weight, matching C5.10's
+   * veto/blend separation.
+   */
+  readonly tiebreakEligible?: ReadonlySet<string>;
+}
 
 interface ResolvedOptions {
   readonly proximityHalfLifeDays: number;
@@ -556,6 +642,7 @@ function rankOneCourse(
   retrievability: ReadonlyMap<string, number> | undefined,
   asOf: Date,
   resolved: ResolvedOptions,
+  tiebreakEligible: ReadonlySet<string> | undefined,
 ): CourseOracleRanking {
   if (edgesForCourse.length === 0) {
     const paths = noEvidencePathsForCourse.slice().sort();
@@ -646,6 +733,15 @@ function rankOneCourse(
 
   entries.sort((a, b) => {
     if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
+    // C5.10 ruling 1 (`[D-265]`) — fires ONLY inside an exact tie the blend
+    // above already produced. A concept flagged eligible is served ahead of
+    // a tied concept that is not; absence (either field entirely) reads as
+    // "tidy", falling through to the ordinary name-ascending tie-break
+    // unchanged. See this file's module doc, "The comparable-observation
+    // tiebreak", for why the eligibility check itself is not this module's.
+    const aEligible = tiebreakEligible?.has(a.conceptKey) ?? false;
+    const bEligible = tiebreakEligible?.has(b.conceptKey) ?? false;
+    if (aEligible !== bEligible) return aEligible ? -1 : 1;
     return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
   });
   const ranked = entries.map((entry, index) => ({ ...entry, rank: index + 1 }));
@@ -663,7 +759,7 @@ function rankOneCourse(
  * clock, no I/O. See this file's module doc for the scoring shape and the
  * abstain rule.
  */
-export function rankOracle(input: RankOracleInput): RankOracleResult {
+export function rankOracle(input: RankOracleInput & RankOracleTiebreakInput): RankOracleResult {
   const asOfDate = dateFromCalendarDay(input.asOf);
   if (asOfDate === null) {
     throw new Error(
@@ -713,6 +809,7 @@ export function rankOracle(input: RankOracleInput): RankOracleResult {
       input.retrievability,
       asOfDate,
       resolved,
+      input.tiebreakEligible,
     ),
   );
 

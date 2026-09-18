@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { AssessmentReadReport, AssessmentRecord } from '../assessment/types.js';
 import type { ConceptAssessmentEdge, EvidenceQuestionCitation } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import type { RankOracleTiebreakInput } from './rank.js';
 import { rankOracle } from './rank.js';
 import type { RankOracleInput } from './types.js';
 
@@ -908,6 +909,121 @@ describe('rankOracle — deterministic tie-break', () => {
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+  });
+});
+
+describe('rankOracle — C5.10 ruling 1 comparable-observation tiebreak ([D-265], ol-egov.141.52)', () => {
+  // `RankOracleTiebreakInput.tiebreakEligible` is exported alongside
+  // `rankOracle` from `./rank.js`. This module never computes disagreement
+  // or instrument eligibility itself (see rank.ts's module doc) — these
+  // tests treat `tiebreakEligible` exactly as a caller-supplied fact, the
+  // same way `mastery`/`retrievability` are treated elsewhere in this file.
+  const tiedEdges = [
+    edge({
+      conceptName: 'concept-b',
+      conceptKey: 'concept-b',
+      assessmentPath: 'Assessments/Quiz1.md',
+    }),
+    edge({
+      conceptName: 'concept-a',
+      conceptKey: 'concept-a',
+      assessmentPath: 'Assessments/Quiz1.md',
+    }),
+  ];
+  const tiedInput = (
+    tiebreakEligible?: ReadonlySet<string>,
+  ): RankOracleInput & RankOracleTiebreakInput => ({
+    evidence: {
+      edges: tiedEdges,
+      assessmentsRead: readReport([assessment()]),
+      assessmentsWithNoEvidence: [],
+    },
+    asOf: ASOF,
+    ...(tiebreakEligible !== undefined ? { tiebreakEligible } : {}),
+  });
+
+  it('an eligible disagreeing concept is served ahead of a tied, tidy one — even against conceptName order', () => {
+    // concept-b is alphabetically SECOND, so this can only pass if the
+    // eligibility flag — not the name fallback — decided the order.
+    const result = rankOracle(tiedInput(new Set(['concept-b'])));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked[0]?.priorityScore).toBe(course.ranked[1]?.priorityScore);
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-b', 'concept-a']);
+  });
+
+  it('with neither concept eligible, the ordinary conceptName-ascending tie-break stands unchanged', () => {
+    const omitted = rankOracle(tiedInput());
+    const emptySet = rankOracle(tiedInput(new Set()));
+    const neitherEligible = rankOracle(tiedInput(new Set(['concept-nonexistent'])));
+    for (const result of [omitted, emptySet, neitherEligible]) {
+      const course = result.courses[0];
+      if (course?.status !== 'ranked') throw new Error('expected ranked');
+      expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+    }
+    // And all three are byte-identical to each other and to the pre-D-265
+    // baseline ('rankOracle — deterministic tie-break' above) — an absent,
+    // empty, or non-matching eligibility set is exactly the tidy case.
+    expect(omitted).toEqual(emptySet);
+    expect(omitted).toEqual(neitherEligible);
+  });
+
+  it('with BOTH tied concepts eligible, conceptName ascending still decides between them', () => {
+    const result = rankOracle(tiedInput(new Set(['concept-a', 'concept-b'])));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+  });
+
+  it('NEVER re-weights: flagging the already-losing concept eligible in an UNTIED case leaves the ranking byte-identical', () => {
+    // Same shape as the "assessment weight is load-bearing" suite above:
+    // concept-a's assessment is weighted far higher, so the blend alone
+    // already decides the order — no tie for a tiebreak to act on.
+    const heavyAssessment = assessment({
+      path: 'Assessments/Heavy.md',
+      weight: 80,
+      due: '2026-09-01',
+    });
+    const lightAssessment = assessment({
+      path: 'Assessments/Light.md',
+      weight: 5,
+      due: '2026-09-01',
+    });
+    const untiedEvidence = {
+      edges: [
+        edge({
+          conceptName: 'concept-a',
+          conceptKey: 'concept-a',
+          assessmentPath: 'Assessments/Heavy.md',
+        }),
+        edge({
+          conceptName: 'concept-b',
+          conceptKey: 'concept-b',
+          assessmentPath: 'Assessments/Light.md',
+        }),
+      ],
+      assessmentsRead: readReport([heavyAssessment, lightAssessment]),
+      assessmentsWithNoEvidence: [],
+    };
+    const without = rankOracle({ evidence: untiedEvidence, asOf: ASOF });
+    // concept-b is the lower-scoring, losing concept here — flagging it
+    // eligible must change NOTHING, since the blend never tied it with
+    // concept-a in the first place.
+    const withLoserFlagged = rankOracle({
+      evidence: untiedEvidence,
+      asOf: ASOF,
+      tiebreakEligible: new Set(['concept-b']),
+    });
+    expect(withLoserFlagged).toEqual(without);
+    const course = withLoserFlagged.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked.map((e) => e.conceptName)).toEqual(['concept-a', 'concept-b']);
+    expect(course.ranked[0]?.priorityScore).toBeGreaterThan(course.ranked[1]?.priorityScore ?? 0);
+  });
+
+  it('is purely a function of its input: the same tied+eligible input run twice is byte-identical', () => {
+    const input = tiedInput(new Set(['concept-b']));
+    expect(rankOracle(input)).toEqual(rankOracle(input));
   });
 });
 
