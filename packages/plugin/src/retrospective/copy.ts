@@ -97,7 +97,7 @@ export function tooEarlyCountLine(reading: RetrospectiveReading): string | null 
   const noun = reading.tooEarlyCount === 1 ? 'concept has' : 'concepts have';
   return (
     `${reading.tooEarlyCount} of the ${reading.scopeCount} ${noun} no completed practice ` +
-    'review yet — too early to say anything durable about them.'
+    'review yet — too early to say anything about them.'
   );
 }
 
