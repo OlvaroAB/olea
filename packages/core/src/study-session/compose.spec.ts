@@ -55,12 +55,20 @@ interface RowSpec {
   readonly targetAssessmentPath?: VaultPath | null;
   /** `[D-149]`'s cohort grain — `GapRow.notePaths` (`ConceptRecord.sourcePaths`). Defaults to none. */
   readonly notePaths?: readonly VaultPath[];
+  /**
+   * Defaults to `conceptName`, matching every other fixture in this file. Set explicitly to make
+   * `conceptKey` DIVERGE from `conceptName` — the shape production takes since `ol-bo48`'s opaque
+   * mint (`../concept/key-store.ts`) — needed by the `[D-265]`/`[INTERV-6]` residual-tie tests
+   * below, which would not be able to tell a `conceptName`-ordered result from a
+   * `conceptKey`-ordered one otherwise.
+   */
+  readonly conceptKey?: string;
 }
 
 function row(spec: RowSpec, rank: number): GapRow {
   return {
     conceptName: spec.conceptName,
-    conceptKey: spec.conceptName,
+    conceptKey: spec.conceptKey ?? spec.conceptName,
     course: spec.course ?? 'CRS101',
     gapClass: 'mastery-gap' as GapClass,
     rank,
@@ -1087,6 +1095,90 @@ describe('composeSessionRows', () => {
       });
 
       expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Zulu', 'Alpha']);
+    });
+  });
+
+  // `[D-265]` ruling 4 / `[INTERV-6]` (`ol-egov.141.55`): the audit asked whether the
+  // empty-history branch's residual tie order is "deterministic and stated, never import order
+  // or identifier". These tests establish the answer empirically rather than from reading the
+  // code: they construct the empty-history case (concepts never retrieved, no `arrivalDay`
+  // signal, an identical `gapScore`) and (a) show the OLD `conceptKey`-first order was reachable
+  // — `conceptKey` diverges from `conceptName` here on purpose, the one thing every other fixture
+  // in this file cannot show, since `row()` otherwise sets them equal — and (b) show the full
+  // comparator chain is invariant to the `rows` array's own iteration order, by permutation.
+  describe('[D-265] ruling 4 / [INTERV-6] — empty-history residual tie order', () => {
+    it('ties on conceptName, not on the opaque conceptKey, when overdueDays and gapScore both tie exactly', () => {
+      // Both concepts are pure empty-history: zero instruments ever reviewed
+      // (`emptyReplay()`), no `arrivalDays` signal, the same `gapScore` — the
+      // exact case `[D-265]` ruling 4 names ("concepts with no evidence").
+      // `conceptKey` is deliberately the REVERSE of `conceptName`'s
+      // alphabetical order (mirroring `mintOpaqueConceptKey`'s opaque,
+      // content-unrelated nonce in production): if the residual tie still
+      // read `conceptKey`, this would come back `['Zenith', 'Alpha']`.
+      const theRows = rows([
+        { conceptName: 'Alpha', conceptKey: 'zzz-opaque-nonce', gapScore: 5 },
+        { conceptName: 'Zenith', conceptKey: 'aaa-opaque-nonce', gapScore: 5 },
+      ]);
+      const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('z1', ['Zenith'])]);
+
+      const result = composeSessionRows({
+        rows: theRows,
+        instruments,
+        replay: emptyReplay(),
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        budgetSeconds: 1200,
+      });
+
+      expect(result.orderedRows.map((r) => r.conceptName)).toEqual(['Alpha', 'Zenith']);
+    });
+
+    it('the full comparator chain is stable under every ordering of the input `rows` array (permutation-tested)', () => {
+      // Four empty-history concepts, all tied on `overdueDays` (0, no
+      // `arrivalDays` signal) and `gapScore` (5) and distinct `conceptName`s
+      // whose alphabetical order disagrees with both their `conceptKey`
+      // order and their position in the base array below — so a result that
+      // depended on array/Map iteration order, rather than on the stated
+      // `conceptName` key, would show up as a different `orderedRows`
+      // sequence for at least one permutation.
+      const specs = [
+        { conceptName: 'Delta', conceptKey: 'k-2', gapScore: 5 },
+        { conceptName: 'Bravo', conceptKey: 'k-4', gapScore: 5 },
+        { conceptName: 'Charlie', conceptKey: 'k-1', gapScore: 5 },
+        { conceptName: 'Alpha', conceptKey: 'k-3', gapScore: 5 },
+      ];
+      const instruments = buildConceptInstrumentIndex(
+        specs.map((spec) => qa(`i-${spec.conceptName}`, [spec.conceptName])),
+      );
+
+      function permutations<T>(items: readonly T[]): readonly (readonly T[])[] {
+        if (items.length <= 1) return [items];
+        const out: T[][] = [];
+        for (let i = 0; i < items.length; i += 1) {
+          const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+          for (const perm of permutations(rest)) out.push([items[i] as T, ...perm]);
+        }
+        return out;
+      }
+
+      const orders = permutations(specs).map((permutedSpecs) => {
+        const result = composeSessionRows({
+          rows: rows(permutedSpecs),
+          instruments,
+          replay: emptyReplay(),
+          durations: flatDurations(60),
+          asOf: AS_OF,
+          budgetSeconds: 1200,
+        });
+        return result.orderedRows.map((r) => r.conceptName);
+      });
+
+      // Every one of the 4! = 24 input orderings produces the SAME output
+      // order — the property this audit exists to check, shown rather than
+      // assumed.
+      const distinctOutputs = new Set(orders.map((order) => order.join('|')));
+      expect(distinctOutputs.size).toBe(1);
+      expect(orders[0]).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
     });
   });
 

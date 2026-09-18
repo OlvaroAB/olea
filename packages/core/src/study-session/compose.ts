@@ -160,7 +160,7 @@
  * either or both omitted, {@link withinBlockGroupingScore} reads 0 for
  * every row (no relation entry, no assessment context), so every row in a
  * tie band scores equal and the stable sort falls through to
- * {@link overdueFirst}'s own `gapScore`/`conceptKey` tiebreak — byte-for-byte
+ * {@link overdueFirst}'s own `gapScore`/`conceptName`/`conceptKey` tiebreak — byte-for-byte
  * today's behaviour. `compose.spec.ts` pins this equivalence explicitly.
  *
  * **The proximity weight is continuous, never a "near" threshold.** A
@@ -500,10 +500,35 @@ interface ClassifiedRow {
   readonly cost: number;
 }
 
-/** `[D-113]` item 3: one key, defined for every class, comparing the same thing — days waiting, whatever the reason. Zero free parameters. */
+/**
+ * `[D-113]` item 3: one key, defined for every class, comparing the same thing — days waiting,
+ * whatever the reason. Zero free parameters.
+ *
+ * **The residual tie order — `[D-265]` ruling 4 / `[INTERV-6]` audit (`ol-egov.141.55`).** When
+ * `overdueDays` and `gapScore` both tie exactly (routine for concepts with no evidence at all: an
+ * empty history reads `overdueDays: 0` and the same neutral `gapScore` for every brand-new
+ * concept absent a caller-supplied `arrivalDay`), the ruling requires the residual order to be
+ * "deterministic and stated, never import order or identifier". `conceptKey` alone fails that:
+ * post-`ol-bo48` it is `mintOpaqueConceptKey`'s random nonce (`../concept/key-store.ts`'s module
+ * doc), so it carries no structural meaning and is not even stable across a re-mint of the SAME
+ * underlying note — two runs over identical vault content could tie-break in different orders.
+ * `conceptName` — the vault-facing display name, "source availability"/"scope" in the ruling's
+ * own list of legitimate structural inputs — sorts first and IS the stated key for this tie.
+ * `conceptKey` is kept only as the final fallback, to guarantee a total order in the residual
+ * (real but rare) case of two distinct concepts sharing one display name in the same course; it
+ * is never the tiebreak's stated reason, only its totality guard. Audited empirically:
+ * `compose.spec.ts`'s "`[D-265]` ruling 4 / `[INTERV-6]`" describe block shows the old
+ * `conceptKey`-first order was reachable and repairs it, and separately shows the full comparator
+ * chain is invariant to the input `rows` array's order (permutation-tested), so this was never an
+ * iteration-order bug — the defect was which stated key the residual tie read, not whether it was
+ * stable run to run.
+ */
 function overdueFirst(a: ClassifiedRow, b: ClassifiedRow): number {
   if (a.overdueDays !== b.overdueDays) return b.overdueDays - a.overdueDays;
   if (a.row.gapScore !== b.row.gapScore) return b.row.gapScore - a.row.gapScore;
+  if (a.row.conceptName !== b.row.conceptName) {
+    return a.row.conceptName < b.row.conceptName ? -1 : 1;
+  }
   return a.row.conceptKey < b.row.conceptKey ? -1 : a.row.conceptKey > b.row.conceptKey ? 1 : 0;
 }
 
@@ -695,8 +720,10 @@ function withinBlockGroupingScore(
  * row across bands (urgency is never overridden). Bands are scored
  * independently and concatenated back in `overdueFirst`'s own band order;
  * ties within a band fall back to `overdueFirst` itself (`gapScore`, then
- * `conceptKey`), so with no relatedness/assessment-context/arrival signal
- * this is `overdueFirst` unchanged.
+ * `conceptName`, then `conceptKey` — see that function's doc for the
+ * `[D-265]`/`[INTERV-6]` residual-tie audit), so with no
+ * relatedness/assessment-context/arrival signal this is `overdueFirst`
+ * unchanged.
  */
 function withinBlockOrder(
   bucket: readonly ClassifiedRow[],
