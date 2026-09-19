@@ -10,6 +10,7 @@ import {
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
   PAPER_GENERATOR_DECLARED_DEMANDS,
+  significantDemands,
   validatePaperScope,
 } from './paper-blueprint.js';
 import type {
@@ -349,7 +350,117 @@ describe('demand vocabulary [D-262]', () => {
       ).toBe('recall-a-fact');
     });
 
-    it('picks the most frequent demand across recovered sections', () => {
+    it('picks the highest mark-share demand across recovered sections', () => {
+      const structure: PaperRecoveredStructure = {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef: 'paper-A',
+            sections: [
+              {
+                label: 'A',
+                questionForm: 'x',
+                itemCount: 2,
+                marks: 10,
+                demands: ['interpret-printed-result', 'interpret-printed-result'],
+              },
+              { label: 'B', questionForm: 'y', itemCount: 1, marks: 5, demands: ['recall-a-fact'] },
+            ],
+          },
+        ],
+      };
+      expect(dominantDemand(structure)).toBe('interpret-printed-result');
+    });
+
+    // `[DEMAND-7]` (ol-egov.141.6.11): the tally unit is marks, not question count — a section
+    // with fewer questions but more marks wins over one with more questions but fewer marks. This
+    // is the discriminating case a pure-frequency tally would get backwards.
+    it('weighs by marks, not by question count — a mark-heavy minority section outranks a larger, lighter one', () => {
+      const structure: PaperRecoveredStructure = {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef: 'paper-A',
+            sections: [
+              {
+                label: 'Many short recall questions',
+                questionForm: 'short-answer',
+                itemCount: 10,
+                marks: 10,
+                demands: Array(10).fill('recall-a-fact'),
+              },
+              {
+                label: 'One mark-heavy question',
+                questionForm: 'essay',
+                itemCount: 1,
+                marks: 15,
+                demands: ['interpret-printed-result'],
+              },
+            ],
+          },
+        ],
+      };
+      // By question count, recall-a-fact wins 10 to 1. By marks, interpret-printed-result wins 15
+      // to 10 — proving the tally actually switched units rather than coincidentally agreeing.
+      expect(dominantDemand(structure)).toBe('interpret-printed-result');
+    });
+  });
+
+  describe('significantDemands [DEMAND-7]', () => {
+    it('returns [] with no recovered evidence', () => {
+      expect(significantDemands(null)).toEqual([]);
+      expect(
+        significantDemands({ sittingCount: 1, currentCount: 1, historicalCount: 0, sittings: [] }),
+      ).toEqual([]);
+    });
+
+    it('names every demand at or above the declared mark-share bar, ranked highest-share first', () => {
+      const structure: PaperRecoveredStructure = {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef: 'paper-A',
+            sections: [
+              {
+                label: 'Recall section',
+                questionForm: 'multiple-choice',
+                itemCount: 20,
+                marks: 60,
+                demands: Array(20).fill('recall-a-fact'),
+              },
+              {
+                label: 'Apply section',
+                questionForm: 'essay',
+                itemCount: 2,
+                marks: 20,
+                demands: Array(2).fill('apply-to-unfamiliar-case'),
+              },
+              {
+                label: 'Compare section — below the bar',
+                questionForm: 'short-answer',
+                itemCount: 1,
+                marks: 1,
+                demands: ['compare-or-choose'],
+              },
+            ],
+          },
+        ],
+      };
+      // Shares: recall 60/81 ≈ 74.1%, apply 20/81 ≈ 24.7%, compare 1/81 ≈ 1.2%. Only the first
+      // two clear `SIGNIFIANT_DEMAND_MARK_SHARE_DECLARED` (0.2).
+      expect(significantDemands(structure)).toEqual(['recall-a-fact', 'apply-to-unfamiliar-case']);
+    });
+
+    it('a higher minShare excludes a demand a lower one would have named', () => {
       const structure: PaperRecoveredStructure = {
         sittingCount: 1,
         currentCount: 1,
@@ -363,15 +474,64 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'A',
                 questionForm: 'x',
                 itemCount: 3,
-                marks: 10,
-                demands: ['interpret-printed-result', 'interpret-printed-result'],
+                marks: 75,
+                demands: Array(3).fill('recall-a-fact'),
               },
-              { label: 'B', questionForm: 'y', itemCount: 1, marks: 5, demands: ['recall-a-fact'] },
+              {
+                label: 'B',
+                questionForm: 'y',
+                itemCount: 1,
+                marks: 25,
+                demands: ['apply-to-unfamiliar-case'],
+              },
             ],
           },
         ],
       };
-      expect(dominantDemand(structure)).toBe('interpret-printed-result');
+      expect(significantDemands(structure, 0.2)).toEqual([
+        'recall-a-fact',
+        'apply-to-unfamiliar-case',
+      ]);
+      expect(significantDemands(structure, 0.3)).toEqual(['recall-a-fact']);
+    });
+
+    it('a section only partially read for demand splits marks by its own itemCount, never by how many demands were recovered — the known items are not inflated', () => {
+      const structure: PaperRecoveredStructure = {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef: 'paper-A',
+            sections: [
+              // 10 items, 100 marks, but only 1 item's demand was actually recovered.
+              {
+                label: 'Partially read',
+                questionForm: 'short-answer',
+                itemCount: 10,
+                marks: 100,
+                demands: ['recall-a-fact'],
+              },
+              {
+                label: 'Fully read',
+                questionForm: 'y',
+                itemCount: 1,
+                marks: 10,
+                demands: ['calculate'],
+              },
+            ],
+          },
+        ],
+      };
+      // Per-item mark for the partially-read section is 100/10 = 10 (its own itemCount), not
+      // 100/1 = 100 (its recovered demands' length) — so the one known recall item contributes 10
+      // marks, not 100, and the two demands end up evenly matched (50/50) rather than recall
+      // swamping calculate down below the significance bar (which the wrong denominator would do:
+      // 100/(100+10) ≈ 90.9% recall vs 9.1% calculate).
+      const named = significantDemands(structure);
+      expect(named).toHaveLength(2);
+      expect(named).toEqual(expect.arrayContaining(['recall-a-fact', 'calculate']));
     });
   });
 
@@ -485,6 +645,126 @@ describe('demand vocabulary [D-262]', () => {
         formatClassOf: recallFormatClassOf,
       };
       const structure = structureWithDemands(['recall-a-fact'], 'paper-ok');
+      const blueprint = buildPaperBlueprint({
+        ...baseInput,
+        structure,
+        concepts: [
+          concept({
+            conceptKey: 'a',
+            heldSources: [{ kind: 'notes', sourceId: 's', chunks: ['x'] }],
+          }),
+        ],
+      });
+      expect(blueprint.partial).toBe(false);
+      expect(blueprint.unbuiltDemand).toBeNull();
+      expect(blueprint.slots).toHaveLength(1);
+    });
+  });
+
+  // [DEMAND-7] (ol-egov.141.6.11): [DEMAND-6] measured a real course where the dominant demand
+  // (by EITHER question count or marks) is recall-a-fact and IS served, while a substantial
+  // minority demand — a section worth a quarter of the sitting's marks but only a couple of
+  // questions — is not served and, under the old per-dominant-demand-only check, never surfaced.
+  // Numbers below are synthetic (round, invented), not the real course's own figures — see
+  // `SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED`'s doc for the sensitivity check against the real
+  // five-course sample this bead measured.
+  describe('[DEMAND-7] — a served dominant demand does not mask a substantial served-elsewhere gap', () => {
+    const baseInput = {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      assessments: [{ type: 'exam', due: '2026-09-30' }],
+      alpha: 0.5 as const,
+      formatClassOf: recallFormatClassOf,
+    };
+
+    function twoSectionStructure(sourceRef: string): PaperRecoveredStructure {
+      return {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef,
+            sections: [
+              {
+                label: 'Many short recall questions',
+                questionForm: 'multiple-choice',
+                itemCount: 20,
+                marks: 60,
+                demands: Array(20).fill('recall-a-fact'),
+              },
+              {
+                label: 'A mark-heavy minority section',
+                questionForm: 'essay',
+                itemCount: 2,
+                marks: 20,
+                demands: Array(2).fill('apply-to-unfamiliar-case'),
+              },
+            ],
+          },
+        ],
+      };
+    }
+
+    it('the paper is built (recall slots fill normally) AND marked partial, naming the unserved minority demand', () => {
+      const structure = twoSectionStructure('paper-mixed');
+      const blueprint = buildPaperBlueprint({
+        ...baseInput,
+        structure,
+        concepts: [
+          concept({
+            conceptKey: 'a',
+            heldSources: [{ kind: 'notes', sourceId: 's', chunks: ['x'] }],
+          }),
+        ],
+      });
+
+      // The dominant demand (recall-a-fact, 60/80 = 75% of marks) IS served, so this is a
+      // PARTIAL paper, never an empty one — the fix must not stop the paper from building.
+      expect(blueprint.intendedDemand).toBe('recall-a-fact');
+      expect(blueprint.slots).toHaveLength(1);
+      expect(blueprint.slots[0]?.intendedDemand).toBe('recall-a-fact');
+      expect(blueprint.emptySlots).toEqual([]);
+
+      // ...but the substantial (25%-of-marks) apply-to-unfamiliar-case minority is named, not
+      // silently dropped — this is the actual gap [DEMAND-6] measured as invisible.
+      expect(blueprint.partial).toBe(true);
+      expect(blueprint.unbuiltDemand?.demand).toBe('apply-to-unfamiliar-case');
+      expect(blueprint.unbuiltDemand?.pointerSourceRefs).toEqual(['paper-mixed']);
+    });
+
+    it('a minority demand BELOW the significance bar does not false-fire a gap', () => {
+      const structure: PaperRecoveredStructure = {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sourceRef: 'paper-small-minority',
+            sections: [
+              {
+                label: 'Recall',
+                questionForm: 'multiple-choice',
+                itemCount: 19,
+                marks: 95,
+                demands: Array(19).fill('recall-a-fact'),
+              },
+              {
+                // 5/100 = 5% of the sitting's marks — well under
+                // SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED (0.2) — unsupported, but not substantial
+                // enough to be a claim the paper is making.
+                label: 'One small unsupported question',
+                questionForm: 'short-answer',
+                itemCount: 1,
+                marks: 5,
+                demands: ['calculate'],
+              },
+            ],
+          },
+        ],
+      };
       const blueprint = buildPaperBlueprint({
         ...baseInput,
         structure,

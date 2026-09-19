@@ -37,17 +37,32 @@
  * **Rulings 1/4/7/8 — demand (`[D-262]`).** Input (b)'s reading of the course's own non-sealed
  * past papers now includes demand — what a question asks her to do, read from the paper itself
  * with the source that shows it (`flattenDemandReadings`) — and the composition's dominant demand
- * (`dominantDemand`, mirroring `dominantFormatClass`'s tally-and-rank shape) is what every
- * candidate slot in this composition intends, never the assessment-type word alone. Routing checks
- * `demandServedByGenerator` BEFORE the held-source check: a slot is `demand-unsupported` even
- * where a held source exists, because the gap is about what the routed generator kind can produce.
- * Where the composition's own intended demand goes unserved, every candidate this composition
- * ranked becomes a named `demand-unsupported` empty slot (`[D-258]`'s reason-code vocabulary,
- * extended) and the blueprint's own `unbuiltDemand`/`partial` fields carry ruling 4's face-statement
- * payload — never rendered to copy here (the vocabulary registry leaves the exact wording to a
- * later surface), only the shape: which demand, and a pointer at the held non-sealed past papers
- * that ask it. No item-level demand judge: the declaration plus this composition-wide intent is
- * the whole contract, per ruling 1's own text.
+ * (`dominantDemand`) is what every candidate slot in this composition intends, never the
+ * assessment-type word alone. Routing checks `demandServedByGenerator` BEFORE the held-source
+ * check: a slot is `demand-unsupported` even where a held source exists, because the gap is about
+ * what the routed generator kind can produce. Where the composition's own intended demand goes
+ * unserved, every candidate this composition ranked becomes a named `demand-unsupported` empty
+ * slot (`[D-258]`'s reason-code vocabulary, extended). No item-level demand judge: the declaration
+ * plus this composition-wide intent is the whole contract, per ruling 1's own text.
+ *
+ * **`[DEMAND-7]` (ol-egov.141.6.11) — dominant is weighed by marks, and the gap check reads more
+ * than the dominant demand.** `[DEMAND-6]`'s real per-question readings measured a course whose
+ * sitting is overwhelmingly short recall-a-fact questions BY COUNT, but which also carries a
+ * two-item apply-to-unfamiliar-case section worth a quarter of the sitting's marks — a share large
+ * enough that she would notice its absence, invisible to a per-question tally either way (recall
+ * stays dominant under a mark-weighted tally too, on that course's numbers: the fix is not the
+ * unit alone). `dominantDemand` now tallies by marks (`demandMarkShares`) rather than by question
+ * count — still used, unchanged, for what a slot intends and what generator it routes to, since
+ * there is no per-concept join to a specific past-paper question to assign a finer-grained demand
+ * from. Separately, `unbuiltDemand`/`partial` no longer ask only whether the dominant demand is
+ * served: `significantDemands` names every demand crossing `SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED`
+ * of the sitting's marks, and the gap fires for the highest-share SIGNIFICANT demand that goes
+ * unserved — dominant or not. A paper can therefore be dominant-demand-served (its slots still
+ * fill, with recall items) and still be marked `partial` for a substantial minority demand the
+ * routed generator cannot touch. The schema this module does not own (`paper-types.ts`) still
+ * carries only ONE `unbuiltDemand`; when more than one significant demand is unserved, the
+ * highest-share one is named (see `significantDemands`'s doc) — naming both is a real
+ * `paper-types.ts` change, out of this file's ownership, and is not attempted here.
  */
 
 import type {
@@ -275,20 +290,111 @@ export function flattenDemandReadings(
 }
 
 /**
- * The dominant demand across `structure`'s own recovered readings — mirrors `dominantFormatClass`'s
- * tally-and-rank shape exactly (most-frequent reading wins; a reading with no citable source never
- * enters the tally), falling to `DEFAULT_INTENDED_DEMAND` when nothing was recovered to read (no
- * past-paper demand data yet, or no non-holdout past papers at all).
+ * Per-demand share of `structure`'s own attributed marks (`[DEMAND-7]`, ol-egov.141.6.11) — marks,
+ * not question count, because a mark-heavy minority demand is exactly what a per-question tally
+ * hides (a two-item section worth a quarter of the sitting's marks reads as noise against seventy
+ * short recall questions). Mirrors `flattenDemandReadings`'s own attribution rule: a sitting with
+ * no `sourceRef` contributes nothing, never a guessed source.
+ *
+ * Marks are recovered at SECTION grain only (`PaperRecoveredSection.marks`) — no per-question mark
+ * exists to read (the private repo's own recovery ceiling: full sub-part structure recovers for a
+ * minority of papers). A section carrying more than one demand splits its marks evenly across its
+ * own `itemCount` — the least-assumption reading available at this grain, and exact (not an
+ * assumption at all) for the common case this bead's five-course sample mostly is: a section whose
+ * every question shares one demand. `itemCount` is the denominator rather than the recovered
+ * `demands` array's own length, so a section only partially read for demand does not inflate the
+ * marks attributed to the items that were.
+ *
+ * Returns an empty map when nothing is attributable — the same "no evidence" case `dominantDemand`
+ * falls to `DEFAULT_INTENDED_DEMAND` for and `significantDemands` returns `[]` for.
+ */
+function demandMarkShares(
+  structure: PaperRecoveredStructure | null,
+): ReadonlyMap<PaperDemand, number> {
+  const totals = new Map<PaperDemand, number>();
+  let totalMarks = 0;
+  for (const sitting of structure?.sittings ?? []) {
+    if (sitting.sourceRef === undefined) continue;
+    for (const section of sitting.sections) {
+      const demands = section.demands ?? [];
+      if (demands.length === 0) continue;
+      const denom = section.itemCount > 0 ? section.itemCount : demands.length;
+      const perItemMarks = section.marks / denom;
+      for (const demand of demands) {
+        totals.set(demand, (totals.get(demand) ?? 0) + perItemMarks);
+        totalMarks += perItemMarks;
+      }
+    }
+  }
+  if (totalMarks <= 0) return new Map();
+  const shares = new Map<PaperDemand, number>();
+  for (const [demand, marks] of totals) shares.set(demand, marks / totalMarks);
+  return shares;
+}
+
+/**
+ * DECLARED, not derived (`[DEMAND-7]`, ol-egov.141.6.11) — a demand carrying at least a fifth of a
+ * sitting's own marks is not a rounding error in what she experiences the paper as testing; it is
+ * the order of share this bead's own motivating course crosses (a two-item section worth a quarter
+ * of that sitting's marks). This value is NOT fitted to that 25% figure: a sensitivity check
+ * against the bead's own five-course sample (four courses carry recovered demand data; the fifth
+ * has no past papers registered) shows every value from just above 0 up to 0.25 produces the
+ * IDENTICAL classification on this evidence — the motivating course's minority clears any bar at
+ * or below 0.25, the two single-demand courses sit at a full 1.0 and are insensitive to any bar
+ * below that, and the one course with several minor demands alongside its dominant one tops out
+ * its largest minority around 0.16, below even a substantially lower bar. The exact number in that
+ * range is therefore not load-bearing on the evidence in hand; 0.2 (one-fifth) is a plain, round
+ * choice inside it. Flagged for retroactive review (Class B, threshold tuning) rather than parked
+ * whole: the mechanism this gates — checking every substantial demand for support, not only the
+ * single dominant one — is what this bead is about, and only the number would move on review.
+ *
+ * @provenance declared — a bounded, round choice inside a range a sensitivity check found flat on
+ * the evidence in hand, not a value obtained by fitting; see this module's own
+ * `EMPHASIS_WEIGHT_BOOST_DECLARED` for the same declared-constant posture.
+ */
+export const SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED = 0.2;
+
+/**
+ * The dominant demand across `structure`'s own recovered readings, weighted by marks
+ * (`demandMarkShares`) rather than by question count (`[DEMAND-7]`) — highest mark-share wins,
+ * falling to `DEFAULT_INTENDED_DEMAND` when nothing was recovered to read (no past-paper demand
+ * data yet, or no non-holdout past papers at all). Still the single demand every slot in a
+ * composition intends and routes on (module doc) — the gap check below reads more than just this
+ * one demand.
  */
 export function dominantDemand(structure: PaperRecoveredStructure | null): PaperDemand {
-  const readings = flattenDemandReadings(structure);
-  if (readings.length === 0) return DEFAULT_INTENDED_DEMAND;
-  const tally = new Map<PaperDemand, number>();
-  for (const { demand } of readings) tally.set(demand, (tally.get(demand) ?? 0) + 1);
-  const [ranked] = [...tally.entries()].sort((a, b) => b[1] - a[1]);
-  // `readings.length > 0` guarantees at least one tally entry — the fallback is type-only,
-  // mirroring `dominantFormatClass`'s own unreachable `?? 'written'`.
+  const shares = demandMarkShares(structure);
+  if (shares.size === 0) return DEFAULT_INTENDED_DEMAND;
+  const [ranked] = [...shares.entries()].sort((a, b) => b[1] - a[1]);
+  // `shares.size > 0` guarantees at least one entry — the fallback is type-only, mirroring
+  // `dominantFormatClass`'s own unreachable `?? 'written'`.
   return (ranked ?? [DEFAULT_INTENDED_DEMAND])[0];
+}
+
+/**
+ * Every demand `structure`'s own evidence carries at `minShare` (default
+ * `SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED`) or more of its attributed marks — ranked highest share
+ * first, ties broken by first appearance in `structure`'s own reading order (`Map` insertion order,
+ * `Array#sort`'s stability). `[]` when nothing was recovered to read, the same case `dominantDemand`
+ * falls to `DEFAULT_INTENDED_DEMAND` for.
+ *
+ * This is `[DEMAND-7]`'s actual fix: a per-question OR per-mark tally of the single dominant demand
+ * both miss a substantial minority (on the motivating course, recall-a-fact stays dominant under
+ * either unit — the unit was never the whole defect). `buildPaperBlueprint` checks every demand
+ * named here for generator support, not only `dominantDemand`, so a paper can be dominant-demand
+ * -served and still be marked partial for a minority demand the routed generator cannot touch.
+ * Never consulted for routing or slot composition — `dominantDemand` alone still decides what a
+ * slot intends (module doc); this is read only for the gap check.
+ */
+export function significantDemands(
+  structure: PaperRecoveredStructure | null,
+  minShare: number = SIGNIFICANT_DEMAND_MARK_SHARE_DECLARED,
+): readonly PaperDemand[] {
+  const shares = demandMarkShares(structure);
+  return [...shares.entries()]
+    .filter(([, share]) => share >= minShare)
+    .sort((a, b) => b[1] - a[1])
+    .map(([demand]) => demand);
 }
 
 /** Ruling 4's pointer set for `demand` — deduped, in reading order, drawn only from readings this exact demand word matched. */
@@ -333,6 +439,19 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   const demandReadings = flattenDemandReadings(input.structure);
   const intendedDemand = dominantDemand(input.structure);
   const demandSupported = demandServedByGenerator(taskId, intendedDemand);
+
+  // `[DEMAND-7]` (ol-egov.141.6.11): the gap check reads every SIGNIFICANT demand the evidence
+  // carries, not only `intendedDemand` — a mark-heavy minority the dominant tally would never
+  // surface (module doc). `intendedDemand`/`demandSupported` above are UNCHANGED and still the
+  // only things that decide whether a candidate's slot gets filled; this is a second, separate
+  // read of the same evidence for the face-statement fields only. Falls back to `[intendedDemand]`
+  // when nothing cleared the significance bar (e.g. no recovered evidence at all), so a course
+  // with no demand data keeps exactly its pre-`[DEMAND-7]` behaviour.
+  const significant = significantDemands(input.structure);
+  const demandsForGapCheck = significant.length > 0 ? significant : [intendedDemand];
+  // Already ranked highest-share-first (`significantDemands`'s own doc), so the first unsupported
+  // entry is the highest-share significant demand the routed generator cannot serve.
+  const gapDemand = demandsForGapCheck.find((demand) => !demandServedByGenerator(taskId, demand));
 
   const eligible = input.concepts.filter(isEligibleConcept);
   const ranked = eligible
@@ -421,16 +540,18 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     });
   });
 
-  // Ruling 4: the face-statement payload — non-null exactly when the composition's own intended
-  // demand went unserved. `pointerSourceRefs` is drawn from every reading of `intendedDemand`
-  // across `demandReadings`, never only the one candidate cycled past — "points at the held
-  // non-sealed past papers that ask it" (plural, and read wherever they were found).
-  const unbuiltDemand: PaperFaceDemandGap | null = demandSupported
-    ? null
-    : {
-        demand: intendedDemand,
-        pointerSourceRefs: pointerSourceRefsForDemand(demandReadings, intendedDemand),
-      };
+  // Ruling 4 + `[DEMAND-7]`: the face-statement payload — non-null exactly when SOME significant
+  // demand (not only the composition's intended one) went unserved (see `gapDemand` above).
+  // `pointerSourceRefs` is drawn from every reading of `gapDemand` across `demandReadings`, never
+  // only the one candidate cycled past — "points at the held non-sealed past papers that ask it"
+  // (plural, and read wherever they were found).
+  const unbuiltDemand: PaperFaceDemandGap | null =
+    gapDemand === undefined
+      ? null
+      : {
+          demand: gapDemand,
+          pointerSourceRefs: pointerSourceRefsForDemand(demandReadings, gapDemand),
+        };
 
   return {
     formatVersion: 'paper-blueprint-v1',
