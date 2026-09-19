@@ -535,6 +535,130 @@ describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
   });
 });
 
+// `deps.generation` (`ol-2zfj.63` [GEN-3.1], `[D-238]`) — the client
+// ingestion-queue generation policy. Same F7.8-shaped opt-in composition as
+// `deps.vision` above: absent leaves this function untouched (proven by
+// every OTHER describe block in this file, which never supplies it), and
+// present wires both halves `generation-queue.ts` builds — see that module's
+// own doc and `wiring.ts`'s module doc's own `deps.generation` section.
+
+describe('buildIngestionRunner — deps.generation (ol-2zfj.63 [GEN-3.1], [D-238])', () => {
+  it('omitted (the default): a drained generation-kind job gets the extraction runner\'s own "not an extraction job" failure, never a crash', async () => {
+    const vault = new MemoryVaultSource();
+    const queueStore = new MemoryQueueStore();
+    const { engine } = await buildIngestionRunner({ vault, queueStore, capability: CAN_DRAIN });
+
+    await engine.enqueue({
+      contentHash: 'generation-no-deps',
+      label: 'a generation job with no runner composed for it',
+      payload: {
+        kind: 'generation',
+        courseCode: 'A',
+        conceptKey: 'ck-1',
+        conceptName: 'Osmosis',
+        instrumentKind: 'mcq',
+        trigger: 'arrival',
+      },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'generation-no-deps', outcome: 'failed' });
+    expect(await failedReasonFor(queueStore, 'generation-no-deps')).toBeDefined();
+  });
+
+  it('a landed unit (a drained source job) enqueues a primary-kind generation call, which itself drains through deps.generation.draft', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary(
+      '01 Courses/A/lecture.pdf',
+      buildOnePagePdf('Osmosis moves water across a semi-permeable membrane.'),
+    );
+    const queueStore = new MemoryQueueStore();
+    const draftCalls: unknown[] = [];
+
+    const { engine, sink } = await buildIngestionRunner({
+      vault,
+      queueStore,
+      capability: CAN_DRAIN,
+      generation: {
+        draft: async (job) => {
+          draftCalls.push(job.payload);
+          return { ok: true };
+        },
+        hasAnyBuiltKind: async () => false,
+        listConceptsForCourse: async (courseCode) => [
+          { name: 'Osmosis', key: 'ck-osmosis', courses: [courseCode] } as never,
+        ],
+      },
+    });
+
+    // Drain 1: the source (extraction) job — lands a unit, which the
+    // generation-enqueue hook turns into one primary-kind job on the SAME
+    // engine, entirely within this one `receive()` call, before `tick()`
+    // below ever returns.
+    await engine.enqueue({
+      contentHash: 'lecture-arrival',
+      label: 'a lecture PDF',
+      payload: { kind: 'source', sourcePath: '01 Courses/A/lecture.pdf', format: 'pdf' },
+    });
+    const firstTick = await engine.tick();
+    expect(firstTick).toEqual({ kind: 'ran', contentHash: 'lecture-arrival', outcome: 'done' });
+    expect(sink.forSource('01 Courses/A/lecture.pdf')).toHaveLength(1);
+    expect(draftCalls).toHaveLength(0); // enqueued, not yet drained
+
+    // Drain 2: the generation job the hook just enqueued — never at session
+    // time, never outside this engine's own tick loop.
+    const secondTick = await engine.tick();
+    expect(secondTick).toMatchObject({ kind: 'ran', outcome: 'done' });
+    expect(draftCalls).toHaveLength(1);
+    expect(draftCalls[0]).toMatchObject({
+      kind: 'generation',
+      courseCode: 'A',
+      conceptKey: 'ck-osmosis',
+      conceptName: 'Osmosis',
+      trigger: 'arrival',
+    });
+
+    // Nothing left to drain — the primary call fired exactly once.
+    const thirdTick = await engine.tick();
+    expect(thirdTick).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+  });
+
+  it('a concept hasAnyBuiltKind already reports built is never re-enqueued on a later arrival', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary(
+      '01 Courses/A/lecture.pdf',
+      buildOnePagePdf('Diffusion equalises concentration.'),
+    );
+    const draftCalls: unknown[] = [];
+
+    const { engine } = await buildIngestionRunner({
+      vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: {
+        draft: async (job) => {
+          draftCalls.push(job.payload);
+          return { ok: true };
+        },
+        hasAnyBuiltKind: async () => true, // already has an instrument — D-238's "one call," not one per sweep
+        listConceptsForCourse: async (courseCode) => [
+          { name: 'Diffusion', key: 'ck-diffusion', courses: [courseCode] } as never,
+        ],
+      },
+    });
+
+    await engine.enqueue({
+      contentHash: 'lecture-already-built',
+      label: 'a lecture PDF',
+      payload: { kind: 'source', sourcePath: '01 Courses/A/lecture.pdf', format: 'pdf' },
+    });
+    await engine.tick(); // drains extraction, runs the (no-op) generation-enqueue hook
+    const secondTick = await engine.tick();
+    expect(secondTick).toEqual({ kind: 'idle', reason: 'nothing-eligible' }); // nothing was enqueued
+    expect(draftCalls).toHaveLength(0);
+  });
+});
+
 // `buildOutcomesExtractWiring` / `runOutcomesExtract` (`ol-4s30` [EXT-13]) —
 // the adapter-plus-store composition landed by the orchestrator once
 // `packages/core/src/outcome/` and the client adapter both existed. Same

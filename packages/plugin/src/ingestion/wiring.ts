@@ -33,6 +33,21 @@
  * ingestion job it rode in on — a generation failure is not an extraction
  * failure, and `IngestionQueueEngine` has no notion of "extraction succeeded
  * but something downstream of it didn't."
+ *
+ * **`deps.generation` (`ol-2zfj.63` [GEN-3.1], `[D-238]`).** The same
+ * additive, opt-in shape as `deps.revision`/`deps.vision` above: absent
+ * (every caller before this bead) leaves `buildIngestionRunner`
+ * byte-identical. Present, it does two things — see `generation-queue.ts`'s
+ * own module doc for why that file, not `olea-core`, carries the decision
+ * logic this composes: (1) `createGenerationAwareJobRunner` is composed in
+ * front of whatever runner this function already built, so a drained
+ * `'generation'` job reaches `deps.generation.draft` instead of falling into
+ * `createExtractionJobRunner`'s honest "not an extraction job" failure; (2)
+ * every landed unit batch also runs
+ * `enqueuePrimaryGenerationCallsForLandedUnits` — D-238's "one call of the
+ * primary kind on arrival" — through the SAME `enqueuer` `arrival-watch.ts`
+ * uses, so a primary call is itself just another job this engine's own
+ * tick loop drains, never a call made directly at ingestion time.
  */
 
 import {
@@ -46,6 +61,8 @@ import {
   type ExtractedUnitSink,
   IngestionQueueEngine,
   type JobRunner,
+  type JobRunnerView,
+  type JobRunOutcome,
   listConceptKeyRecords,
   listOutcomeRecords,
   type OutcomeConceptReconciliationReport,
@@ -71,6 +88,12 @@ import {
   ObsidianWorkerConfigStore,
 } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
+import {
+  buildGenerationArrivalDeps,
+  createGenerationAwareJobRunner,
+  enqueuePrimaryGenerationCallsForLandedUnits,
+  type GenerationArrivalDeps,
+} from './generation-queue.js';
 import type {
   OutcomeSourcePassage,
   OutcomesExtractDocumentKind,
@@ -121,6 +144,26 @@ export interface IngestionWiringDeps {
     readonly dataHost: ObsidianDataHost;
     readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
   };
+  /**
+   * `ol-2zfj.63` [GEN-3.1] / `[D-238]`: when present, wires D-238's client
+   * ingestion-queue generation policy — see this module's doc and
+   * `generation-queue.ts`'s own. Omitted (every caller before this bead)
+   * leaves `buildIngestionRunner` byte-identical: no `'generation'` job kind
+   * is ever recognised and no primary-kind call is ever enqueued.
+   */
+  readonly generation?: {
+    /** Services one drained `'generation'` job — see `GenerationAwareJobRunnerDeps.draft` (`generation-queue.ts`). No production implementation is composed yet (named follow-up, this bead's close evidence): the real one calls `draftQuizCardsForConcept` for `instrumentKind === 'mcq'` and returns an honest, non-retryable failure for `'qa'`/`'cloze'` (component register row 2.1 — no client generation task exists for either yet). */
+    readonly draft: (job: JobRunnerView) => Promise<JobRunOutcome>;
+    /** See `GenerationArrivalDeps.hasAnyBuiltKind`'s own doc — no production implementation is wired yet either. */
+    readonly hasAnyBuiltKind: (courseCode: string, conceptKey: string) => Promise<boolean>;
+    /** Defaults to a real vault walk (`extractConcepts`) — see `buildGenerationArrivalDeps`. Injected here only so a test never needs a real vault. */
+    readonly listConceptsForCourse?: GenerationArrivalDeps['listConceptsForCourse'];
+    /** F4.8, opt-in. Absent means no known format for every course. */
+    readonly formatMatchFor?: GenerationArrivalDeps['formatMatchFor'];
+    /** F2.14's observed order (D7.1), opt-in. Absent means nothing observed yet for every course. */
+    readonly recordedPreferenceFor?: GenerationArrivalDeps['recordedPreferenceFor'];
+    readonly coursesFolder?: string;
+  };
 }
 
 /**
@@ -168,6 +211,30 @@ function withUnitsLandedHook(
 }
 
 /**
+ * Runs `inner` unchanged, then best-effort enqueues D-238's primary-kind
+ * generation calls for the landed units — `deps.generation`'s arrival half.
+ * Wraps whatever sink this function is given (`sink` alone, or `sink` already
+ * wrapped by `withUnitsLandedHook`), so `deps.onUnitsLanded` and
+ * `deps.generation` compose independently of each other. Never fails the
+ * ingestion job it rode in on, same posture as `withUnitsLandedHook`.
+ */
+function withGenerationEnqueueHook(
+  inner: ExtractedUnitSink,
+  generationArrivalDeps: GenerationArrivalDeps,
+): ExtractedUnitSink {
+  return {
+    async receive(units) {
+      await inner.receive(units);
+      try {
+        await enqueuePrimaryGenerationCallsForLandedUnits(units, generationArrivalDeps);
+      } catch (error) {
+        console.error('Olea: generation-enqueue hook failed (ingestion unaffected)', error);
+      }
+    },
+  };
+}
+
+/**
  * Builds one real, drainable ingestion pipeline: `createExtractionJobRunner`
  * wired to `deps.vault` and a fresh `PendingIndexingSink`, fed into
  * `IngestionQueueEngine.create` with `deps.queueStore`/`deps.capability`,
@@ -188,10 +255,39 @@ function withUnitsLandedHook(
  */
 export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<IngestionWiring> {
   const sink = new PendingIndexingSink();
-  const runnerSink: ExtractedUnitSink = deps.onUnitsLanded
+  const enqueuer = deferredEnqueuer();
+  let runnerSink: ExtractedUnitSink = deps.onUnitsLanded
     ? withUnitsLandedHook(sink, deps.onUnitsLanded)
     : sink;
-  const enqueuer = deferredEnqueuer();
+  // `deps.generation`'s arrival half: composed AFTER `onUnitsLanded`'s hook
+  // (if any) so the two are independent add-ons over the same base sink, in
+  // the order this file's own doc lists them. `enqueuer` is safe to close
+  // over here even though `bind()` hasn't run yet — this hook only ever
+  // fires from `receive()`, which only runs during a drain, which cannot
+  // happen before `enqueuer.bind(engine)` below (`deferredEnqueuer`'s own
+  // doc: "enqueue calls made before bind are a programmer error," and
+  // nothing calls `tick()` until the caller does, after this function
+  // returns).
+  if (deps.generation) {
+    const generationArrivalDeps = buildGenerationArrivalDeps(
+      {
+        enqueuer,
+        hasAnyBuiltKind: deps.generation.hasAnyBuiltKind,
+        ...(deps.generation.listConceptsForCourse
+          ? { listConceptsForCourse: deps.generation.listConceptsForCourse }
+          : {}),
+        ...(deps.generation.formatMatchFor
+          ? { formatMatchFor: deps.generation.formatMatchFor }
+          : {}),
+        ...(deps.generation.recordedPreferenceFor
+          ? { recordedPreferenceFor: deps.generation.recordedPreferenceFor }
+          : {}),
+        ...(deps.generation.coursesFolder ? { coursesFolder: deps.generation.coursesFolder } : {}),
+      },
+      deps.vault,
+    );
+    runnerSink = withGenerationEnqueueHook(runnerSink, generationArrivalDeps);
+  }
   const visionRunner = deps.vision
     ? await buildVisionRunner(deps.vision, deps.vault, runnerSink)
     : undefined;
@@ -209,10 +305,17 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
         fallback: runner,
       })
     : runner;
+  // `deps.generation`'s execution half: recognises a drained `'generation'`
+  // job and routes it to `deps.generation.draft`, falling through to
+  // `composedRunner` (extraction, optionally revision-aware) for anything
+  // else — see `createGenerationAwareJobRunner`'s own doc.
+  const generationAwareRunner = deps.generation
+    ? createGenerationAwareJobRunner({ draft: deps.generation.draft, fallback: composedRunner })
+    : composedRunner;
   const engine = await IngestionQueueEngine.create({
     store: deps.queueStore,
     capability: deps.capability,
-    runner: composedRunner,
+    runner: generationAwareRunner,
     // `ol-2zfj.38`: the ENQUEUE debounce is always in force from this
     // construction onward — see `enqueue-debounce.ts`'s own doc for why it
     // is declared, not derived, and `EngineDeps.enqueueDebounce`'s doc for
