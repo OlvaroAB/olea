@@ -19,6 +19,8 @@ import type {
   BuildSchedulingObservationFieldInput,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
+  ConfusionRoutingOfferKind,
+  DirectPrerequisiteEvidence,
   McqRating,
   QueueItemReason,
   Scheduler,
@@ -155,6 +157,47 @@ export interface ReviewSessionDeps {
    */
   readonly evaluateConfusionRouting?: (input: ConfusionRoutingInput) => ConfusionRoutingDecision;
   /**
+   * F2.12's prerequisite-aware branch ([D-265] ruling 2, `ol-egov.141.51`
+   * implemented the pure decision; this port closes the reachability gap
+   * `ol-egov.141.51.1` filed against it). Resolves the just-graded
+   * instrument's concept(s) to a direct prerequisite edge and that
+   * prerequisite's CURRENT evidence, freshly read from the local projection
+   * and already classified into a `PrerequisiteEvidenceReading` — the exact
+   * shape `evaluateConfusionRouting`'s `ConfusionRoutingInput.directPrerequisite`
+   * takes. `logAndAdvance` below calls this with the failing instrument's
+   * `conceptIds` and threads whatever comes back straight onto that input.
+   *
+   * **Same "needs whole-log mastery/vitality, which this class neither
+   * holds nor should learn to compute" reason `evaluateStrongRecallProposal`
+   * below already states for itself** — resolving a direct-prerequisite edge
+   * is `../concept/prerequisite-order.js`'s job, and reading that
+   * prerequisite's current mastery/vitality is `../mastery/rollup.js`'s;
+   * classifying the pair into one of the six `PrerequisiteEvidenceReading`
+   * values is a design question of its own ([D-265] ruling 2's "weak" /
+   * "unknown" / "strong" / "defective" / "provisional" / "inherited"
+   * vocabulary — `ol-egov.141.51`'s close evidence has the full argument for
+   * why nothing in the codebase already names it). None of that belongs in
+   * this presentation-layer class, so — mirroring `evaluateStrongRecallProposal`'s
+   * own composition seam exactly — a real production resolver is composed
+   * where the whole review log is already in hand (`../review/open-session.ts`,
+   * alongside `createStrongRecallProposalReader`), not threaded from
+   * `main.ts`.
+   *
+   * **No production composer wires this yet.** `open-session.ts` and a
+   * prerequisite-evidence reader analogous to `./strong-recall-wiring.ts`
+   * are both outside this port's owning bead's file ownership
+   * (`packages/core/src/index.ts` and this file only) — filed as a follow-up
+   * so the prerequisite branch this port makes reachable-by-type does not
+   * silently stay reachable-by-type only. Optional and absent by default,
+   * same "simply cannot offer it" posture every other optional port here
+   * has — an absent resolver reads as "no direct prerequisite known," which
+   * is exactly `ConfusionRoutingInput.directPrerequisite`'s own "absent"
+   * default (the ordinary offer stands, unchanged from before this bead).
+   */
+  readonly resolvePrerequisiteEvidence?: (
+    conceptIds: readonly string[],
+  ) => DirectPrerequisiteEvidence | undefined;
+  /**
    * F5.3a / R7's third trigger for the SAME on-demand offer (`ol-0r92.11`,
    * `[D-083]`/`[D-087]`): an unconsumed scheduling observation naming the
    * just-graded instrument's concept as a neighbour. Composed at
@@ -267,10 +310,22 @@ export interface ReviewSessionDeps {
  * F2.12's pending offer, as `ReviewSession` holds it: which instrument it is
  * about (the one that was JUST rated, not necessarily the one the view is
  * currently showing) and the offer's own prompt sentence.
+ *
+ * `offerKind`/`prerequisiteConceptId` ([D-265] ruling 2, `ol-egov.141.51.1`)
+ * mirror `ConfusionRoutingOffer`'s own two fields exactly — absent reads as
+ * `'explain-back'`, the ordinary offer, unchanged from before this ruling.
+ * Carried here (not just read off `ConfusionRoutingDecision` at the moment
+ * the offer is set) so the banner-shown/declined D7.1 pair below can still
+ * name the prerequisite among the concepts an offer concerned after
+ * `logAndAdvance` has moved on to grading further items — see
+ * `confusionOfferPrerequisiteByInstrumentId`'s own doc for why a second,
+ * longer-lived lookup exists rather than reading this field back directly.
  */
 export interface PendingConfusionRoutingOffer {
   readonly instrument: ReviewInstrument;
   readonly promptText: string;
+  readonly offerKind?: ConfusionRoutingOfferKind;
+  readonly prerequisiteConceptId?: string;
 }
 
 /**
@@ -337,6 +392,21 @@ export class ReviewSession {
   private pendingSchedulingObservationOffer: PendingSchedulingObservationOffer | null = null;
   /** F2.21's third trigger (`ol-v7r5.40`) — set by `logAndAdvance` after every graded review, cleared by `resolveStrongRecallOffer`. */
   private pendingStrongRecallOffer: PendingStrongRecallOffer | null = null;
+  /**
+   * F2.12's prerequisite-aware offer ([D-265] ruling 2, `ol-egov.141.51.1`):
+   * which instrument's confusion-routing offer named a prerequisite, and
+   * which one — keyed by `instrumentId`, never cleared on advance. Exists
+   * because `recordExplainBackOfferDeclined` fires only once `logAndAdvance`
+   * has moved past the offered instrument, by which point `pendingConfusionOffer`
+   * itself may already hold a *different* item's offer (or none) — the same
+   * gap that makes `resolveConfusionRoutingOffer`'s own state a render cache
+   * rather than the durable answer. A session-lifetime map, not the review
+   * log: this is provenance for the D7.1 write below, never a second source
+   * of truth for the judgement itself (the clause's "nothing persisted about
+   * the judgement" is unaffected — this records only WHICH concept an
+   * offer named, exactly what `recordOffered`/`recordDeclined` need).
+   */
+  private readonly confusionOfferPrerequisiteByInstrumentId = new Map<string, string>();
 
   constructor(private readonly deps: ReviewSessionDeps) {
     this.items = [...deps.queue];
@@ -730,6 +800,27 @@ export class ReviewSession {
   }
 
   /**
+   * F2.12's prerequisite-aware offer is "recorded the same way any other
+   * explain-back offer is... naming the prerequisite among the concepts it
+   * concerned" ([D-265] ruling 2, features/F2-review.md). Looks up
+   * `confusionOfferPrerequisiteByInstrumentId` (keyed by `instrumentId`,
+   * never `pendingConfusionOffer` directly — see that map's own doc for why)
+   * and appends the prerequisite concept id when this instrument's offer
+   * named one; otherwise returns `instrument.conceptIds` unchanged, exactly
+   * the pre-[D-265] behaviour. Shared by both halves of the D7.1 pair below
+   * so "shown" and "declined" always name the same concepts for the same
+   * offer.
+   */
+  private conceptIdsForConfusionOfferRecord(instrument: ReviewInstrument): readonly string[] {
+    const prerequisiteConceptId = this.confusionOfferPrerequisiteByInstrumentId.get(
+      instrument.instrumentId,
+    );
+    return prerequisiteConceptId === undefined
+      ? instrument.conceptIds
+      : [...instrument.conceptIds, prerequisiteConceptId];
+  }
+
+  /**
    * The D7.1 write for an F2.12 offer the instant it reaches the surface
    * (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). `view.ts`'s
    * `syncConfusionRoutingOffer` calls this from its offer-arrives branch and
@@ -745,7 +836,7 @@ export class ReviewSession {
   recordExplainBackOfferShown(instrument: ReviewInstrument): string | null {
     if (this.deps.explainBackOfferLog === undefined) return null;
     return this.deps.explainBackOfferLog.recordOffered({
-      conceptIds: instrument.conceptIds,
+      conceptIds: this.conceptIdsForConfusionOfferRecord(instrument),
       trigger: 'repeated-failure',
       instrumentId: instrument.instrumentId,
     });
@@ -764,7 +855,7 @@ export class ReviewSession {
   recordExplainBackOfferDeclined(instrument: ReviewInstrument, offerEventId: string | null): void {
     if (this.deps.explainBackOfferLog === undefined || offerEventId === null) return;
     this.deps.explainBackOfferLog.recordDeclined({
-      conceptIds: instrument.conceptIds,
+      conceptIds: this.conceptIdsForConfusionOfferRecord(instrument),
       trigger: 'repeated-failure',
       instrumentId: instrument.instrumentId,
       answers: offerEventId,
@@ -1183,13 +1274,41 @@ export class ReviewSession {
     // instrument that was just rated. An absent evaluator (no port wired)
     // never offers, matching every other optional port's "simply cannot
     // offer it" posture.
+    //
+    // F2.12's prerequisite-aware branch ([D-265] ruling 2, `ol-egov.141.51.1`):
+    // `resolvePrerequisiteEvidence` is read first, and only spread onto the
+    // decision input when it actually resolved something — an absent
+    // resolver, or one that finds no direct-prerequisite edge, leaves
+    // `directPrerequisite` unset, which `evaluateConfusionRouting` already
+    // treats as "no prerequisite recorded" (the ordinary offer stands,
+    // exactly as before this ruling).
+    const directPrerequisite = this.deps.resolvePrerequisiteEvidence?.(
+      stamped.instrument.conceptIds,
+    );
     const decision = this.deps.evaluateConfusionRouting?.({
       rating,
       lapses: scheduled.state.lapses,
+      ...(directPrerequisite !== undefined ? { directPrerequisite } : {}),
     });
     this.pendingConfusionOffer = decision?.shouldOffer
-      ? { instrument: stamped.instrument, promptText: decision.promptText }
+      ? {
+          instrument: stamped.instrument,
+          promptText: decision.promptText,
+          ...(decision.offerKind !== undefined ? { offerKind: decision.offerKind } : {}),
+          ...(decision.prerequisiteConceptId !== undefined
+            ? { prerequisiteConceptId: decision.prerequisiteConceptId }
+            : {}),
+        }
       : null;
+    // Recorded under the instrument's own id, session-lifetime — see
+    // `confusionOfferPrerequisiteByInstrumentId`'s own doc for why the
+    // D7.1 write pair below cannot rely on `pendingConfusionOffer` alone.
+    if (decision?.shouldOffer && decision.prerequisiteConceptId !== undefined) {
+      this.confusionOfferPrerequisiteByInstrumentId.set(
+        stamped.instrument.instrumentId,
+        decision.prerequisiteConceptId,
+      );
+    }
 
     // F5.3a / R7's third trigger (`ol-0r92.11`): evaluated after every
     // graded review, for the concept(s) the instrument just rated is

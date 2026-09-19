@@ -981,9 +981,19 @@ export { buildObservationEventsFromAcceptedGrading } from './misconception/accep
 // `confusion-routing.ts`'s own module doc for the full argument, and the
 // component register's open note that this bead currently has no dedicated
 // register row.
+//
+// `DirectPrerequisiteEvidence`, `PrerequisiteEvidenceReading` and
+// `ConfusionRoutingOfferKind` ([D-265] ruling 2, `ol-egov.141.51` /
+// `ol-egov.141.51.1`) re-exported alongside the pair above: the review-side
+// caller (`packages/plugin/src/review/session.ts`) needs all three by name
+// to build a `ConfusionRoutingInput.directPrerequisite` and to read
+// `ConfusionRoutingOffer.offerKind` off the resulting decision.
 export type {
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
+  ConfusionRoutingOfferKind,
+  DirectPrerequisiteEvidence,
+  PrerequisiteEvidenceReading,
 } from './misconception/confusion-routing.js';
 export {
   CONFUSION_ROUTING_LAPSE_THRESHOLD,

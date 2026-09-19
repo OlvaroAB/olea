@@ -958,6 +958,234 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
   });
 });
 
+describe('F2.12 — the prerequisite-aware offer wired into the review flow ([D-265] ruling 2, ol-egov.141.51.1)', () => {
+  it('resolvePrerequisiteEvidence is called with the failing instrument’s conceptIds, and its result is threaded onto directPrerequisite', async () => {
+    const instrument = qaFixture({ conceptIds: ['concept-b'] });
+    const item = queueItem(instrument);
+    const resolveCalls: (readonly string[])[] = [];
+    const evaluateCalls: unknown[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        resolvePrerequisiteEvidence: (conceptIds) => {
+          resolveCalls.push(conceptIds);
+          return { conceptId: 'concept-a', reading: 'weak' };
+        },
+        evaluateConfusionRouting: (input) => {
+          evaluateCalls.push(input);
+          return { shouldOffer: true, lapses: input.lapses, promptText: 'offer text' };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(resolveCalls).toEqual([['concept-b']]);
+    expect(evaluateCalls).toEqual([
+      {
+        rating: 'again',
+        lapses: 4,
+        directPrerequisite: { conceptId: 'concept-a', reading: 'weak' },
+      },
+    ]);
+  });
+
+  it('with no resolver wired, directPrerequisite is never set on the decision input — the ordinary offer stands, unchanged from before this ruling', async () => {
+    const item = queueItem(qaFixture());
+    const evaluateCalls: unknown[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => {
+          evaluateCalls.push(input);
+          return { shouldOffer: true, lapses: input.lapses, promptText: 'offer text' };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(evaluateCalls).toEqual([{ rating: 'again', lapses: 4 }]);
+    expect('directPrerequisite' in (evaluateCalls[0] as object)).toBe(false);
+  });
+
+  it('a resolver that finds no direct-prerequisite edge (returns undefined) leaves the ordinary offer standing, same as an absent resolver', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        resolvePrerequisiteEvidence: () => undefined,
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'ordinary offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toEqual({
+      instrument: item.instrument,
+      promptText: 'ordinary offer text',
+    });
+  });
+
+  it('a prerequisite-alternative decision carries offerKind and prerequisiteConceptId onto the pending offer', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        resolvePrerequisiteEvidence: () => ({ conceptId: 'concept-a', reading: 'weak' }),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'try concept A instead',
+          offerKind: 'prerequisite-alternative',
+          prerequisiteConceptId: 'concept-a',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toEqual({
+      instrument: item.instrument,
+      promptText: 'try concept A instead',
+      offerKind: 'prerequisite-alternative',
+      prerequisiteConceptId: 'concept-a',
+    });
+  });
+
+  it('the D7.1 write pair names the prerequisite among the concepts the offer concerned, for both "shown" and "declined" (features/F2-review.md: "the offer shown is recorded the same way any other explain-back offer is")', async () => {
+    const instrument = qaFixture({
+      instrumentId: 'inst-qa-prereq',
+      conceptIds: ['concept-b'],
+    });
+    const item = queueItem(instrument);
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        explainBackOfferLog,
+        resolvePrerequisiteEvidence: () => ({ conceptId: 'concept-a', reading: 'unknown' }),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'try concept A instead',
+          offerKind: 'prerequisite-alternative',
+          prerequisiteConceptId: 'concept-a',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+
+    const offerEventId = session.recordExplainBackOfferShown(instrument);
+    session.recordExplainBackOfferDeclined(instrument, offerEventId);
+
+    expect(explainBackOfferLog.offered).toEqual([
+      {
+        conceptIds: ['concept-b', 'concept-a'],
+        trigger: 'repeated-failure',
+        instrumentId: 'inst-qa-prereq',
+        eventId: offerEventId,
+      },
+    ]);
+    expect(explainBackOfferLog.declined).toEqual([
+      {
+        conceptIds: ['concept-b', 'concept-a'],
+        trigger: 'repeated-failure',
+        instrumentId: 'inst-qa-prereq',
+        answers: offerEventId,
+      },
+    ]);
+    // No separate record kind and no diagnosis attached — the write shape is
+    // exactly `ExplainBackOfferWriteInput`, nothing more.
+    expect(Object.keys(explainBackOfferLog.offered[0] ?? {}).sort()).toEqual(
+      ['conceptIds', 'eventId', 'instrumentId', 'trigger'].sort(),
+    );
+  });
+
+  it('an ordinary (non-prerequisite) offer records only the instrument’s own conceptIds, exactly as before this ruling', async () => {
+    const instrument = qaFixture({ instrumentId: 'inst-qa-ordinary', conceptIds: ['concept-b'] });
+    const item = queueItem(instrument);
+    const explainBackOfferLog = fakeExplainBackOfferLog();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        explainBackOfferLog,
+        resolvePrerequisiteEvidence: () => ({ conceptId: 'concept-a', reading: 'strong' }),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'ordinary offer text',
+          offerKind: 'explain-back',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+
+    session.recordExplainBackOfferShown(instrument);
+
+    expect(explainBackOfferLog.offered).toEqual([
+      {
+        conceptIds: ['concept-b'],
+        trigger: 'repeated-failure',
+        instrumentId: 'inst-qa-ordinary',
+        eventId: explainBackOfferLog.offered[0]?.eventId,
+      },
+    ]);
+  });
+
+  it('direct prerequisites only, one at a time: the resolver’s return shape is a single edge, never a list, so at most one prerequisite concept is ever named (features/F2-review.md: "never a tour")', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        resolvePrerequisiteEvidence: () => ({ conceptId: 'concept-a', reading: 'weak' }),
+        evaluateConfusionRouting: (input) => {
+          const prerequisiteConceptId = input.directPrerequisite?.conceptId;
+          return {
+            shouldOffer: true,
+            lapses: input.lapses,
+            promptText: 'try concept A instead',
+            offerKind: 'prerequisite-alternative',
+            ...(prerequisiteConceptId !== undefined ? { prerequisiteConceptId } : {}),
+          };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('again');
+
+    const offer = session.getConfusionRoutingOffer();
+    // Exactly one prerequisite id, never an array — enforced by
+    // `DirectPrerequisiteEvidence`'s own shape (one optional edge, not a
+    // list), not by a runtime check here.
+    expect(typeof offer?.prerequisiteConceptId).toBe('string');
+  });
+});
+
 describe('D-178 / LOG-3 item 2 — the F2.12 explain-back-offer write, threaded through session deps (ol-0r92.28)', () => {
   it('recordExplainBackOfferShown writes trigger repeated-failure with the instrument’s own conceptIds and instrumentId, and returns the port’s event id', async () => {
     const instrument = qaFixture({
