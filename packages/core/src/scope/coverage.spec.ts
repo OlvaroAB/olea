@@ -17,6 +17,7 @@ import {
   containerNamesToFold,
   GROUND_STALL_STREAK_THRESHOLD,
   isVolunteer,
+  resolveTeachingArrival,
 } from './coverage.js';
 
 function passage(sourcePath: string): Provenance {
@@ -44,7 +45,13 @@ describe('classifyDeclaredConcept — F8.2 ground', () => {
       instrumentCount: 0,
       priorGroundStreak: 0,
     });
-    expect(result).toEqual({ kind: 'cell', state: 'ground', stall: false, groundStreak: 1 });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: false,
+      groundStreak: 1,
+      teachingArrivalProvenance: 'yes',
+    });
   });
 
   it('never reads `ground` for a concept whose instruments exist and are simply unpractised — that is `seed`', () => {
@@ -54,7 +61,13 @@ describe('classifyDeclaredConcept — F8.2 ground', () => {
       masteryState: 'seed',
       priorGroundStreak: 0,
     });
-    expect(result).toEqual({ kind: 'cell', state: 'seed', stall: false, groundStreak: 0 });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'seed',
+      stall: false,
+      groundStreak: 0,
+      teachingArrivalProvenance: 'yes',
+    });
   });
 
   it('never reads `ground` where the material itself is absent — that is a material gap, not ground', () => {
@@ -100,6 +113,7 @@ describe('classifyDeclaredConcept — F4.5 stall, under [D-063]', () => {
       state: 'ground',
       stall: true,
       groundStreak: GROUND_STALL_STREAK_THRESHOLD,
+      teachingArrivalProvenance: 'yes',
     });
   });
 
@@ -110,13 +124,209 @@ describe('classifyDeclaredConcept — F4.5 stall, under [D-063]', () => {
       masteryState: 'sprout',
       priorGroundStreak: 5,
     });
-    expect(result).toEqual({ kind: 'cell', state: 'sprout', stall: false, groundStreak: 0 });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'sprout',
+      stall: false,
+      groundStreak: 0,
+      teachingArrivalProvenance: 'yes',
+    });
   });
 
   it('throws rather than guess a mastery state when an instrument exists but none was supplied', () => {
     expect(() =>
       classifyDeclaredConcept({ hasMaterial: true, instrumentCount: 1, priorGroundStreak: 0 }),
     ).toThrow(/requires a masteryState/);
+  });
+});
+
+describe('resolveTeachingArrival / classifyDeclaredConcept — the taught-signal chain, F8.2 [D-247]', () => {
+  it('her own note opens automatically, provenance `yes` — step one, unchanged from before this chain existed', () => {
+    expect(resolveTeachingArrival(true)).toEqual({ provenance: 'yes', opensAutomatically: true });
+
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: false,
+      groundStreak: 1,
+      teachingArrivalProvenance: 'yes',
+    });
+  });
+
+  it("the week's slide deck opens a material gap automatically, provenance `yes`, with no note at all", () => {
+    expect(
+      resolveTeachingArrival(false, {
+        inWeekSlideDeck: true,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      }),
+    ).toEqual({ provenance: 'yes', opensAutomatically: true });
+
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: true,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: false,
+      groundStreak: 1,
+      teachingArrivalProvenance: 'yes',
+    });
+  });
+
+  it('a calendar session plus slide sequence lowers provenance to `probable` but never opens the concept', () => {
+    expect(
+      resolveTeachingArrival(false, {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: true,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      }),
+    ).toEqual({ provenance: 'probable', opensAutomatically: false });
+
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: true,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap', teachingArrivalProvenance: 'probable' });
+  });
+
+  it("the outcomes document's own order lowers provenance to `possible` but never opens the concept", () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: true,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap', teachingArrivalProvenance: 'possible' });
+  });
+
+  it('manual confirmation in the grove lowers provenance but never opens the concept — the step of last resort', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: true,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap', teachingArrivalProvenance: 'possible' });
+  });
+
+  it('earlier steps win over later ones when more than one is present', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: true,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: true,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: false,
+      groundStreak: 1,
+      teachingArrivalProvenance: 'yes',
+    });
+  });
+
+  it('the calendar alone, with no slide sequence, is not a signal at all', () => {
+    // F8.2: "The calendar is optional, never a dependency" — and never sufficient by itself
+    // either. There is deliberately no separate calendar-only field on `TaughtSignalEvidence`;
+    // `calendarSessionWithSlideSequence` is the joint step, so a caller cannot even construct a
+    // calendar-only signal that fires.
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap' });
+  });
+
+  it('an examiner-attested concept with no taught signal at all stays a material gap — a past assessment never opens a concept', () => {
+    // The concept reaches `classifyDeclaredConcept` at all only because some registered source
+    // (an objectives document, a past paper) declared it in scope (`./grove.ts`'s denominator) —
+    // that is the ONLY reason a caller would ever ask this function about it. This test asserts
+    // that scope attestation alone, with every taught-signal field false, still yields no
+    // provenance and no auto-open: being in scope is never itself read as evidence of teaching,
+    // and `ClassifyDeclaredConceptInput` has no field through which a past-paper or
+    // objectives-citation count could enter this computation at all.
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: false,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap' });
+    expect(result).not.toHaveProperty('teachingArrivalProvenance');
+  });
+
+  it('omitting `taughtSignal` entirely behaves exactly as omitting every one of its fields', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+    expect(result).toEqual({ kind: 'material-gap' });
+  });
+
+  it('a nonzero prior ground streak does not survive into a material gap even under a lower-tier taught signal', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 3,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: true,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap', teachingArrivalProvenance: 'probable' });
   });
 });
 

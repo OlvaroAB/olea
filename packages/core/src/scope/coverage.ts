@@ -77,6 +77,57 @@
  * `edges`, nothing else. An edge naming a concept outside `declaredNames` is
  * dropped, not guessed at — the same posture `containment.ts` takes toward
  * an edge endpoint its own concept set does not resolve.
+ *
+ * ## The taught-signal chain (F8.2, `[D-247]`, CIM-3 / `ol-2zfj.81`)
+ *
+ * A material gap does not sit inert forever. F8.2 as amended: **"what turns a
+ * material gap into a live concept: a taught signal, sought in this
+ * order"** — her own note; the week's slide deck; a calendar session plus
+ * slide sequence; the outcomes document's own order; manual confirmation in
+ * the grove. Each step that fires yields a **teaching-arrival provenance**
+ * ({@link TeachingArrivalProvenance}) — `yes` (direct, from her note or the
+ * deck), `probable` (inferred from sequence), `possible` (from outcome
+ * order) — and **only the first two open a concept automatically; the later
+ * steps lower the provenance rather than change the rule.**
+ *
+ * **Step one is `hasMaterial`, unchanged.** "Her own note" is exactly the
+ * `notePaths.length > 0` reading this module already used before this
+ * amendment — no new field, just a second reading of the same fact. Steps
+ * two through five are new evidence, carried on the optional
+ * {@link TaughtSignalEvidence} input; `resolveTeachingArrival` below walks
+ * the chain in order and stops at the first step that fires, so a weaker
+ * later signal never overrides a stronger earlier one that also happens to
+ * be present.
+ *
+ * **The calendar is optional, never a dependency, and never a signal by
+ * itself.** F8.2's own wording pairs it with a slide sequence as one joint
+ * step ("a calendar session plus slide sequence") — there is deliberately no
+ * separate calendar-only field on {@link TaughtSignalEvidence}, so a caller
+ * cannot accidentally treat the calendar alone as sufficient.
+ *
+ * **A past assessment never opens a concept.** Examiner attestation (a past
+ * paper, an objectives document) is what makes a name a candidate for this
+ * whole chain in the first place — it is the reason `./grove.ts` calls
+ * `classifyDeclaredConcept` for this name at all — but it never doubles as
+ * evidence that the material has been *taught*. This is enforced by
+ * construction rather than by a runtime check: nothing about past-paper or
+ * objectives citation counts is accepted anywhere in
+ * {@link TaughtSignalEvidence} or `ClassifyDeclaredConceptInput`, so there is
+ * no field through which "in scope" could leak into "taught".
+ *
+ * **The fifth step (manual confirmation) is not named its own provenance
+ * word in F8.2's prose** — the clause names exactly three words (`yes`,
+ * `probable`, `possible`) for its five steps, explicitly tying `probable` to
+ * "inferred from sequence" (step three) and `possible` to "from outcome
+ * order" (step four). This module reads the unnamed fifth step as sharing
+ * the floor of the two steps CIM-3's own bead groups it with — "calendar+
+ * slide-sequence, outcomes order and manual grove confirmation stop at
+ * probable/possible provenance" — and assigns it `possible`: it is the step
+ * of last resort, reached only once every automated signal above has found
+ * nothing, and `probable` stays reserved for the one step the clause
+ * actually calls "inferred from sequence". This reading is a Class B
+ * vocabulary call, not a threshold; flagged here for visibility rather than
+ * silently assumed.
  */
 
 import type { MasteryState } from 'olea-contracts';
@@ -99,9 +150,88 @@ export type GroveDeclaredState = 'ground' | MasteryState;
  */
 export const GROUND_STALL_STREAK_THRESHOLD = 2;
 
+/**
+ * The three teaching-arrival provenance words F8.2 names, `[D-247]` — `yes`
+ * (direct: her own note or the week's slide deck), `probable` (inferred: a
+ * calendar session plus slide sequence), `possible` (the outcomes document's
+ * own order, or manual confirmation in the grove — see the module doc's note
+ * on why the fifth step shares this floor rather than getting a fourth
+ * word). Never a fourth value — "no new word is needed", the same economy
+ * F8.2 already applies to `volunteer`.
+ */
+export type TeachingArrivalProvenance = 'yes' | 'probable' | 'possible';
+
+/**
+ * Evidence for taught-signal steps TWO through FIVE (step one is
+ * `ClassifyDeclaredConceptInput.hasMaterial` itself — "her own note", read
+ * unchanged). Every field is a plain boolean: this module holds no clock and
+ * no I/O, so whether a slide deck names a concept, whether a calendar
+ * session paired with a slide sequence places it in a taught week, whether
+ * the outcomes document's order reaches it, and whether it has been manually
+ * confirmed in the grove are all facts the caller has already resolved
+ * before this module ever runs — matching `containerNamesToFold`'s own
+ * "zero free parameters, decided by the caller's input alone" discipline.
+ *
+ * Absent (the whole object, or any one field) reads as `false` — a caller
+ * that has not wired a given step's evidence yet gets exactly today's
+ * behaviour for that step, never a guess.
+ */
+export interface TaughtSignalEvidence {
+  /** Step two: the week's slide deck names or covers this concept. Direct evidence — opens automatically, exactly like `hasMaterial`. */
+  readonly inWeekSlideDeck: boolean;
+  /**
+   * Step three: a calendar session PLUS a slide sequence place this concept
+   * in a taught week — F8.2's own joint signal. There is deliberately no
+   * separate calendar-only field (see module doc): the calendar is never a
+   * signal by itself, only ever paired with a slide sequence as this one
+   * field.
+   */
+  readonly calendarSessionWithSlideSequence: boolean;
+  /** Step four: the outcomes document's own order places this concept at or before the current point in the term. Inferred — lowers to `possible`, never opens automatically. */
+  readonly outcomesDocumentOrder: boolean;
+  /** Step five: manual confirmation in the grove — the step of last resort, reached only once every step above has found nothing. Lowers to `possible` alongside outcome order (module doc). Never opens automatically. */
+  readonly manualGroveConfirmation: boolean;
+}
+
+/** `resolveTeachingArrival`'s result — see that function's doc. */
+export interface TeachingArrival {
+  /** `undefined` means no taught signal at all fired — not even the lowest tier. */
+  readonly provenance: TeachingArrivalProvenance | undefined;
+  /** `true` only when the provenance is `yes` — i.e. only for step one (her own note) or step two (the week's slide deck). Every other case, including no signal at all, is `false`. */
+  readonly opensAutomatically: boolean;
+}
+
+/**
+ * Walk F8.2's taught-signal chain in order and stop at the first step that
+ * fires — see the module doc's "taught-signal chain" section for the full
+ * argument. `hasOwnNote` is step one (`ClassifyDeclaredConceptInput
+ * .hasMaterial`, read again under its taught-signal name); `signal` carries
+ * steps two through five, and may be omitted entirely (every step then reads
+ * `false`, so a caller that has not wired any of this yet behaves exactly as
+ * it did before this chain existed — a plain material gap with no
+ * provenance recorded).
+ *
+ * A past assessment (examiner attestation) is not a parameter here at all —
+ * see the module doc's "a past assessment never opens a concept" note for
+ * why that omission is the enforcement mechanism, not an incidental gap.
+ */
+export function resolveTeachingArrival(
+  hasOwnNote: boolean,
+  signal?: TaughtSignalEvidence,
+): TeachingArrival {
+  if (hasOwnNote) return { provenance: 'yes', opensAutomatically: true };
+  if (signal?.inWeekSlideDeck) return { provenance: 'yes', opensAutomatically: true };
+  if (signal?.calendarSessionWithSlideSequence) {
+    return { provenance: 'probable', opensAutomatically: false };
+  }
+  if (signal?.outcomesDocumentOrder) return { provenance: 'possible', opensAutomatically: false };
+  if (signal?.manualGroveConfirmation) return { provenance: 'possible', opensAutomatically: false };
+  return { provenance: undefined, opensAutomatically: false };
+}
+
 /** What `classifyDeclaredConcept` needs to classify one in-scope concept. */
 export interface ClassifyDeclaredConceptInput {
-  /** Whether her vault has ANY material naming this concept — `ConceptMaterialPresence.notePaths.length > 0`. `false` means F4.10's material gap, never `ground` (the "week-one no-material" rule). */
+  /** Whether her vault has ANY material naming this concept — `ConceptMaterialPresence.notePaths.length > 0`. Also F8.2's taught-signal step one ("her own note"); see `resolveTeachingArrival`. `false` with no other taught signal means F4.10's material gap, never `ground` (the "week-one no-material" rule). */
   readonly hasMaterial: boolean;
   /** `ConceptMaterialPresence.instrumentCount` — INSTRUMENTS, not cards (a Q&A card, a cloze or an MCQ quiz item all count, per the registry's own correction). Zero with `hasMaterial: true` is `ground`. */
   readonly instrumentCount: number;
@@ -116,11 +246,17 @@ export interface ClassifyDeclaredConceptInput {
   readonly masteryState?: MasteryState;
   /** The ground-streak this concept carried INTO this evaluation — 0 for "never read ground before, or this is the first evaluation". See module doc for why this is a caller-supplied value rather than internal state. */
   readonly priorGroundStreak: number;
+  /** F8.2's taught-signal steps two through five (`[D-247]`) — see `TaughtSignalEvidence` and the module doc's "taught-signal chain" section. Absent means none of those steps have been checked yet; `hasMaterial` (step one) still applies on its own. */
+  readonly taughtSignal?: TaughtSignalEvidence;
 }
 
 /** One concept's classification — a material gap, named in plain language per the registry (never a `GroveDeclaredState`), or a real coverage cell. */
 export type DeclaredConceptClassification =
-  | { readonly kind: 'material-gap' }
+  | {
+      readonly kind: 'material-gap';
+      /** F8.2's teaching-arrival provenance (`[D-247]`) — absent means no taught signal fired at all, not even the lowest tier. Never `yes`: a `yes` provenance always opens the concept (see `resolveTeachingArrival`), so a material gap only ever carries `probable` or `possible` here. */
+      readonly teachingArrivalProvenance?: TeachingArrivalProvenance;
+    }
   | {
       readonly kind: 'cell';
       readonly state: GroveDeclaredState;
@@ -128,6 +264,8 @@ export type DeclaredConceptClassification =
       readonly stall: boolean;
       /** The ground-streak AFTER this evaluation — 0 for a growth-stage state (the streak resets the moment an instrument exists), incremented by one for `ground`. Hand this back to the next evaluation's `priorGroundStreak` for the same concept. */
       readonly groundStreak: number;
+      /** F8.2's teaching-arrival provenance (`[D-247]`) — always `yes` here: a cell only ever exists because step one (her own note) or step two (the week's slide deck) opened it (`resolveTeachingArrival`'s `opensAutomatically`). */
+      readonly teachingArrivalProvenance: TeachingArrivalProvenance;
     };
 
 /**
@@ -138,8 +276,19 @@ export type DeclaredConceptClassification =
 export function classifyDeclaredConcept(
   input: ClassifyDeclaredConceptInput,
 ): DeclaredConceptClassification {
-  if (!input.hasMaterial) return { kind: 'material-gap' };
+  const arrival = resolveTeachingArrival(input.hasMaterial, input.taughtSignal);
 
+  if (!arrival.opensAutomatically) {
+    return arrival.provenance === undefined
+      ? { kind: 'material-gap' }
+      : { kind: 'material-gap', teachingArrivalProvenance: arrival.provenance };
+  }
+
+  // `arrival.opensAutomatically` is only ever true for provenance `yes` — her
+  // own note (`input.hasMaterial`) or the week's slide deck
+  // (`input.taughtSignal?.inWeekSlideDeck`), F8.2's first two taught-signal
+  // steps. Everything from here down is unchanged from before this chain
+  // existed, except that every returned cell now carries that `yes`.
   if (input.instrumentCount === 0) {
     const groundStreak = input.priorGroundStreak + 1;
     return {
@@ -147,6 +296,7 @@ export function classifyDeclaredConcept(
       state: 'ground',
       stall: groundStreak >= GROUND_STALL_STREAK_THRESHOLD,
       groundStreak,
+      teachingArrivalProvenance: 'yes',
     };
   }
 
@@ -156,7 +306,13 @@ export function classifyDeclaredConcept(
         'every concept with an instrument has a growth-stage rollup, even if it is `seed`.',
     );
   }
-  return { kind: 'cell', state: input.masteryState, stall: false, groundStreak: 0 };
+  return {
+    kind: 'cell',
+    state: input.masteryState,
+    stall: false,
+    groundStreak: 0,
+    teachingArrivalProvenance: 'yes',
+  };
 }
 
 /**
