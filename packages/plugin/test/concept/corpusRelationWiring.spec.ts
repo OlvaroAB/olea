@@ -581,10 +581,19 @@ function twoStageTransport() {
 // block's her-link-nominated corpus edge nominating at all under the
 // corrected, course-scoped rule, rather than silently flipping a true pass
 // into a false one (the exact risk `findings/x3qg-batch-scope.md` named).
+//
+// **Both concepts live in ONE file (`ol-2zfj.62`, `[D-210]`).** Batching is
+// now unconditionally per document — two separate files never share a call
+// (see `read.ts`'s module doc) — so a per-document `is-a` relation between
+// "Bud" and "Scale" can only be proposed by a real reader if both anchor to
+// the SAME document; that is exactly what C7.10 requires for a per-document
+// edge ("the document still in context"). The `her-link` corpus signal is
+// unaffected by this: it resolves `[[Scale]]` against the WHOLE file a
+// concept's anchor sits in (`corpusRelationSignals.ts`'s `readCached`), which
+// still finds the link when both concepts share that file.
 const TWO_CONCEPT_VAULT = {
-  '01 Courses/CourseA/Bud.md':
-    'A bud is a kind of scale, and it sits beside [[Scale]] in the same margin.',
-  '01 Courses/CourseA/Scale.md': 'A scale is the covering a bud is made of.',
+  '01 Courses/CourseA/Concepts.md':
+    'A bud is a kind of scale, and it sits beside [[Scale]] in the same margin.\n\nA scale is the covering a bud is made of.\n',
 };
 
 describe('readConceptsAndRelations — both producers land in one fold', () => {
@@ -792,6 +801,16 @@ async function fixtureConventionNames(vault: FolderSource): Promise<readonly str
  * A reader that proposes her own filed wording (so the read corroborates and
  * CARRIES the record's key) alongside one wording only the read saw (so the
  * mint-through-the-one-seam branch is exercised in the same batch).
+ *
+ * **Clamped to whatever the request actually sent (`ol-2zfj.62`, `[D-210]`).**
+ * Batching is now unconditionally per document, so the real fixture vault's
+ * several documents each arrive as their own `concepts.extract.v1` call with
+ * their own, possibly-small `sourceChunks`. This reader is not trying to
+ * model which document really contains which wording — these tests only
+ * care that a key survives the round trip — so it proposes every name on
+ * every call, anchored to `min(index + 1, sourceChunks.length)` rather than
+ * a fixed index that could name a passage a smaller call never sent (which
+ * `WorkerConceptReader` correctly rejects as an ungrounded citation).
  */
 function fixtureTransport(conventionNames: readonly string[]) {
   const calls: WorkerTaskRequest[] = [];
@@ -801,13 +820,14 @@ function fixtureTransport(conventionNames: readonly string[]) {
       calls.push(request);
       if (request.taskId === 'concepts.extract.v1') {
         const names = [...conventionNames, 'A wording only the read saw'];
+        const chunkCount = (request.payload as { sourceChunks: string[] }).sourceChunks.length;
         return {
           ok: true,
           result: {
             concepts: names.map((name, index) => ({
               name,
               aliases: [],
-              anchorIndex: index + 1,
+              anchorIndex: Math.min(index + 1, chunkCount),
               alsoInIndexes: [],
             })),
             relations: [],

@@ -147,7 +147,22 @@ function buildUnreadableBytes(): Uint8Array {
   return pdfLatin1ToBytes('this is not a PDF, a PPTX or a DOCX — just bytes with nothing in them');
 }
 
-/** A reader that returns a fixed set and records every request it was handed. */
+/**
+ * A reader that returns a fixed set and records every request it was handed.
+ *
+ * **Scoped to the request it received, like a real per-document call
+ * (`[D-210]`).** `concepts` is filtered to only the ones anchored in a
+ * passage this particular request actually sent — a real reader has no
+ * business proposing a concept anchored to a document it was never shown,
+ * and since batching is now unconditionally per document, a fixture vault
+ * with more than one document means this reader IS called once per
+ * document. `relations` is attached only to a call that actually proposed at
+ * least one concept — a call proposing nothing has nothing to relate — and
+ * otherwise returned exactly as scripted, unfiltered. Tests that want a
+ * relation to survive reconciliation exactly once anchor both its endpoints'
+ * concepts to the SAME document, so only one call ever attaches it — the
+ * same constraint C7.10 places on per-document relations for real.
+ */
 class ScriptedReader implements ConceptReaderPort {
   readonly requests: ConceptReadRequest[] = [];
   constructor(
@@ -156,10 +171,11 @@ class ScriptedReader implements ConceptReaderPort {
   ) {}
   read(request: ConceptReadRequest): Promise<ConceptReadResponse> {
     this.requests.push(request);
+    const sent = new Set(request.passages.map((p) => p.anchor.sourcePath));
+    const concepts = this.concepts.filter((c) => sent.has(c.anchor.sourcePath));
+    const includeRelations = this.relations !== undefined && concepts.length > 0;
     return Promise.resolve(
-      this.relations !== undefined
-        ? { concepts: this.concepts, relations: this.relations }
-        : { concepts: this.concepts },
+      includeRelations ? { concepts, relations: this.relations } : { concepts },
     );
   }
 }
@@ -531,6 +547,95 @@ describe('readConcepts — budget-bounded (`[D-068]`, `[D-082]`)', () => {
   });
 });
 
+describe('readConcepts — per-document batching (`[D-210]`, `ol-2zfj.62`)', () => {
+  // Three documents of different sizes relative to a ceiling of 2: `One.md`
+  // (below it), `Two.md` (exactly at it) and `Five.md` (well past it) — no
+  // headings, so passage counts equal paragraph counts exactly.
+  const PER_DOCUMENT_VAULT = new MemoryVault({
+    '01 Courses/ABCD101/One.md': 'Alpha paragraph.\n',
+    '01 Courses/ABCD101/Two.md': 'Beta paragraph.\n\nGamma paragraph.\n',
+    '01 Courses/ABCD101/Five.md':
+      'Delta one.\n\nDelta two.\n\nDelta three.\n\nDelta four.\n\nDelta five.\n',
+  });
+
+  function requestsFor(reader: ScriptedReader, path: VaultPath): readonly ConceptReadRequest[] {
+    return reader.requests.filter((r) => r.passages[0]?.anchor.sourcePath === path);
+  }
+
+  it('a document never shares a call with another document', async () => {
+    const reader = new ScriptedReader([]);
+    await readConcepts(PER_DOCUMENT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 2 },
+    });
+
+    expect(reader.requests.length).toBeGreaterThan(0);
+    for (const request of reader.requests) {
+      const sources = new Set(request.passages.map((p) => p.anchor.sourcePath));
+      expect(sources.size).toBe(1);
+    }
+  });
+
+  it('an oversized document splits at the ceiling, in reading order, into ceil(n / ceiling) calls', async () => {
+    const reader = new ScriptedReader([]);
+    await readConcepts(PER_DOCUMENT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 2 },
+    });
+
+    const fiveRequests = requestsFor(reader, '01 Courses/ABCD101/Five.md');
+    expect(fiveRequests).toHaveLength(3); // ceil(5 / 2)
+    expect(fiveRequests.map((r) => r.passages.map((p) => p.text.trim()))).toEqual([
+      ['Delta one.', 'Delta two.'],
+      ['Delta three.', 'Delta four.'],
+      ['Delta five.'],
+    ]);
+  });
+
+  it('a small document stands alone, one call, never split just because a bigger document is also in scope', async () => {
+    const reader = new ScriptedReader([]);
+    await readConcepts(PER_DOCUMENT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 2 },
+    });
+
+    const oneRequests = requestsFor(reader, '01 Courses/ABCD101/One.md');
+    expect(oneRequests).toHaveLength(1);
+    expect(oneRequests[0]?.passages).toHaveLength(1);
+
+    const twoRequests = requestsFor(reader, '01 Courses/ABCD101/Two.md');
+    expect(twoRequests).toHaveLength(1);
+    expect(twoRequests[0]?.passages).toHaveLength(2);
+  });
+
+  it('the call count is recorded per document on the read result, never below one', async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(PER_DOCUMENT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 2 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const callsFor = (path: string) => result.coverage.find((c) => c.sourcePath === path)?.calls;
+    expect(callsFor('01 Courses/ABCD101/One.md')).toBe(1); // ceil(1 / 2)
+    expect(callsFor('01 Courses/ABCD101/Two.md')).toBe(1); // ceil(2 / 2)
+    expect(callsFor('01 Courses/ABCD101/Five.md')).toBe(3); // ceil(5 / 2)
+  });
+
+  it('no ceiling supplied means exactly one call per document, however large', async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(PER_DOCUMENT_VAULT, reader, {
+      budget: { maxPassages: 100 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Five.md')?.calls).toBe(
+      1,
+    );
+    const fiveRequests = requestsFor(reader, '01 Courses/ABCD101/Five.md');
+    expect(fiveRequests).toHaveLength(1);
+    expect(fiveRequests[0]?.passages).toHaveLength(5);
+  });
+});
+
 describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', () => {
   it('every passage anchors to a character range, not merely to a file', async () => {
     const passages = await gatherPassages(BARE_VAULT);
@@ -676,10 +781,13 @@ describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
   });
 
   it('an is-a / part-of relation between two concepts the same read returned is emitted', async () => {
+    // Both endpoints anchored to the SAME document (`[D-210]`, `ol-2zfj.62`):
+    // a per-document relation can only be proposed by a call that saw both
+    // concepts, and calls are now per document unconditionally.
     const reader = new ScriptedReader(
       [
         proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
-        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture One.md')),
       ],
       [{ type: 'part-of', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 }],
     );
@@ -712,10 +820,12 @@ describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
   });
 
   it('contrasts-with and prerequisite never reach the emitted set from the per-document stage, even if proposed', async () => {
+    // Same-document anchors as above — a real per-document call can only
+    // propose a relation between two concepts it saw together.
     const reader = new ScriptedReader(
       [
         proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
-        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+        proposal('Quintaris', anchorIn('01 Courses/ABCD101/Lecture One.md')),
       ],
       [
         { type: 'contrasts-with', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 },

@@ -195,7 +195,13 @@ describe('readConceptsFromVault', () => {
   it('declares the budget defaults it falls back to', () => {
     expect(DEFAULT_MAX_PASSAGES_PER_READ).toBeGreaterThan(0);
     expect(DEFAULT_PASSAGES_PER_CALL).toBeGreaterThan(0);
-    expect(DEFAULT_PASSAGES_PER_CALL).toBeLessThanOrEqual(DEFAULT_MAX_PASSAGES_PER_READ);
+    // No ordering invariant between the two any more (`ol-2zfj.62`,
+    // `[D-210]`): `DEFAULT_MAX_PASSAGES_PER_READ` bounds the WHOLE read
+    // across every document in scope, while `DEFAULT_PASSAGES_PER_CALL`
+    // bounds one document's OWN passages per call — the ceiling can
+    // legitimately exceed the whole-read budget without contradiction, since
+    // per-document batching (`read.ts`'s `batchesByDocument`) never lets a
+    // call span two documents regardless of either number.
   });
 
   it('a caller-supplied budget overrides the declared default', async () => {

@@ -62,6 +62,17 @@
  * posture as generation. Today the concept list exists regardless of
  * connectivity; after this it does not. `ConceptReaderUnavailableError` is
  * how that arrives, and it arrives as a *stated reason*, never as silence.
+ *
+ * **Batching is per document, unconditionally (`[D-210]`, `ol-2zfj.62`).**
+ * `ConceptReadBudget.passagesPerCall` bounds how many of ONE document's own
+ * passages ride in a single call; it never lets two documents share a call,
+ * and it never lets a large document consume more than its own
+ * `ceil(passagesInDocument / passagesPerCall)` calls. The stage used to slice
+ * the flat, budget-allocated passage list positionally, which meant a call
+ * boundary could (and typically did) fall inside one document while also
+ * spanning into the next — an instrument convenience `[D-210]` retires, not a
+ * reading-order guarantee anything downstream could rely on. See
+ * `batchesByDocument` below.
  */
 
 import { buildOutline } from '../block/outline.js';
@@ -279,6 +290,17 @@ export interface ConceptReadCoverage {
   /** How many of them the budget actually allowed through to the reader. */
   readonly passagesRead: number;
   readonly conceptsFound: number;
+  /**
+   * How many separate model calls this document's passages were split across
+   * (`[D-210]`, `ol-2zfj.62`) — `ceil(passagesRead / ceiling)`, never below
+   * one when `passagesRead > 0`. `0` for a document the budget offered but
+   * never actually read (`passagesRead === 0`), the same "measurement, not a
+   * fabricated floor" posture the rest of this row already holds. A
+   * structural fact (D-005: never content) so the sentence "reading this
+   * document took N passes" has a source — display is left to a future
+   * surface with its own clause; nothing here renders it.
+   */
+  readonly calls: number;
 }
 
 /** Why a read produced no concepts, when the cause was the run rather than the vault. */
@@ -361,10 +383,15 @@ export type ConceptReadResult = ConceptsRead | ConceptsUnrecognised;
 export interface ConceptReadBudget {
   readonly maxPassages: number;
   /**
-   * Passages per model call. `[D-082]` rules that "the same pass" means one
-   * *stage* with the material in working context, and that several calls
-   * inside that stage are permitted. Defaults to one call for the whole
-   * budgeted set.
+   * Passages per model call, applied PER DOCUMENT (`[D-210]`): one document's
+   * passages split into `ceil(passagesInDocument / passagesPerCall)` calls,
+   * and two documents never share a call regardless of this value — see the
+   * module doc's "Batching is per document" paragraph and `batchesByDocument`
+   * below. `[D-082]` rules that "the same pass" means one *stage* with the
+   * material in working context, and that several calls inside that stage
+   * are permitted; this is that permission, scoped to one document at a
+   * time. Undefined means no per-call cap: each document reads in exactly
+   * one call, however many passages it contributes.
    */
   readonly passagesPerCall?: number;
 }
@@ -827,6 +854,7 @@ function buildCoverage(
   offered: readonly ConceptPassage[],
   read: readonly ConceptPassage[],
   found: ReadonlyMap<VaultPath, number>,
+  calls: ReadonlyMap<VaultPath, number> = NO_CALLS,
 ): readonly ConceptReadCoverage[] {
   const rows = new Map<VaultPath, { offered: number; read: number }>();
   for (const passage of offered) {
@@ -845,11 +873,75 @@ function buildCoverage(
       passagesOffered: row.offered,
       passagesRead: row.read,
       conceptsFound: found.get(sourcePath) ?? 0,
+      calls: calls.get(sourcePath) ?? 0,
     }))
     .sort((a, b) => byCodeUnit(a.sourcePath, b.sourcePath));
 }
 
 const NO_CONCEPTS: ReadonlyMap<VaultPath, number> = new Map();
+const NO_CALLS: ReadonlyMap<VaultPath, number> = new Map();
+
+/**
+ * One call's worth of passages, all drawn from the same document, plus which
+ * document produced it — `readConcepts` needs the source below only to fold
+ * `calls` back onto `ConceptReadCoverage`; the request sent to the reader is
+ * `batch` alone.
+ */
+interface DocumentBatch {
+  readonly sourcePath: VaultPath;
+  readonly batch: readonly ConceptPassage[];
+}
+
+/**
+ * Groups `passages` by source document and splits each document's own
+ * passages into `ceil(count / perCall)` consecutive batches — the per-
+ * document batching `[D-210]` requires unconditionally (see the module doc's
+ * "Batching is per document" paragraph), not merely an option a caller can
+ * ask for.
+ *
+ * **Reading order is preserved, never re-sorted, within a document.**
+ * `passages` arrives here already budget-allocated (`allocateByBudget`'s
+ * round-robin), which interleaves documents but keeps each document's own
+ * passages in their original relative order — grouping by source below
+ * recovers that per-document order exactly, so a split document's calls read
+ * front-to-back with no passage seen twice and none skipped.
+ *
+ * **Document order across calls is deterministic** (`byCodeUnit` on
+ * `sourcePath`), independent of `passages`' own incoming interleaving, so two
+ * runs over the same material produce the same call sequence.
+ *
+ * A document with fewer passages than `perCall` — the common case — takes
+ * exactly one call of its own; `perCall === Infinity` (no ceiling supplied)
+ * makes every document exactly one call, however large.
+ */
+function batchesByDocument(
+  passages: readonly ConceptPassage[],
+  perCall: number,
+): readonly DocumentBatch[] {
+  const bySource = new Map<VaultPath, ConceptPassage[]>();
+  for (const passage of passages) {
+    const list = bySource.get(passage.anchor.sourcePath);
+    if (list === undefined) bySource.set(passage.anchor.sourcePath, [passage]);
+    else list.push(passage);
+  }
+
+  const batches: DocumentBatch[] = [];
+  for (const sourcePath of [...bySource.keys()].sort(byCodeUnit)) {
+    // biome-ignore lint/style/noNonNullAssertion: `sourcePath` came from `bySource`'s own keys.
+    const docPassages = bySource.get(sourcePath)!;
+    for (let i = 0; i < docPassages.length; i += perCall) {
+      batches.push({ sourcePath, batch: docPassages.slice(i, i + perCall) });
+    }
+  }
+  return batches;
+}
+
+/** `ConceptReadCoverage.calls` per source, derived from how many `DocumentBatch` rows actually ran for it — never below one for a document that produced at least one batch. */
+function callsBySource(batches: readonly DocumentBatch[]): ReadonlyMap<VaultPath, number> {
+  const calls = new Map<VaultPath, number>();
+  for (const { sourcePath } of batches) calls.set(sourcePath, (calls.get(sourcePath) ?? 0) + 1);
+  return calls;
+}
 
 /**
  * `is-a` and `part-of`'s named reader (C7.10): concept size (`./size.js`).
@@ -999,12 +1091,17 @@ export async function readConcepts(
     };
   }
 
-  const perCall = Math.max(budget.passagesPerCall ?? budgeted.length, 1);
+  // `[D-210]`: batched per document, never below one passage per call and
+  // never mixing two documents into one call — see `batchesByDocument`'s own
+  // doc. `passagesPerCall` undefined means no ceiling (`Number.POSITIVE_INFINITY`),
+  // which `batchesByDocument`'s `slice(i, i + Infinity)` resolves to exactly
+  // one call per document, however large.
+  const perCall = Math.max(budget.passagesPerCall ?? Number.POSITIVE_INFINITY, 1);
+  const documentBatches = batchesByDocument(budgeted, perCall);
   const proposals: ProposedConcept[] = [];
   const proposedRelations: ProposedRelation[] = [];
   try {
-    for (let i = 0; i < budgeted.length; i += perCall) {
-      const batch = budgeted.slice(i, i + perCall);
+    for (const { batch } of documentBatches) {
       const response = await reader.read({ passages: batch });
       proposals.push(...response.concepts);
       if (response.relations !== undefined) proposedRelations.push(...response.relations);
@@ -1113,7 +1210,7 @@ export async function readConcepts(
     concepts: sorted,
     relations: reconciled.relations,
     relationsDropped: totalDropped(reconciled.dropped),
-    coverage: buildCoverage(all, budgeted, found),
+    coverage: buildCoverage(all, budgeted, found, callsBySource(documentBatches)),
     ...base,
   };
 }

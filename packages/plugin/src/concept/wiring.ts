@@ -24,14 +24,13 @@
  * ("what invokes this, and why now") this file leaves open.
  *
  * ===========================================================================
- * THE BUDGET (`ConceptReadBudget.maxPassages`) — DECLARED, NOT DERIVED
+ * THE BUDGET (`ConceptReadBudget.maxPassages` / `.passagesPerCall`)
  * ===========================================================================
  * `readConcepts` requires a budget with no default, on purpose: the
  * component register rules a concept-extraction threshold DERIVED once one
  * exists, and a derived constant's derivation stays private while only the
- * number ships. Nobody has run that derivation yet, so the two numbers below
- * are declared placeholders with a stated, plain-English defence rather than
- * a guess dressed as one:
+ * number ships. `DEFAULT_MAX_PASSAGES_PER_READ` is still such an unmeasured
+ * placeholder — nobody has run that derivation yet:
  *
  * - `DEFAULT_MAX_PASSAGES_PER_READ` (60) keeps one full read within the same
  *   rough order of magnitude as an existing Slot G bulk-generation call
@@ -39,20 +38,34 @@
  *   worth of chunks per call) — roughly two to three typical lecture-note
  *   documents' worth of prose blocks, so a first end-to-end read costs
  *   about as much as one existing generation call rather than an
- *   unbounded corpus walk.
- * - `DEFAULT_PASSAGES_PER_CALL` (20) keeps each individual model call to
- *   roughly one document's worth of blocks, which is `[D-082]`'s "several
- *   calls inside one stage" read literally, and keeps any one call's
- *   anchor/alsoIn index range small enough that a client-side accounting
- *   bug (see `workerConceptReader.ts`) surfaces on a small batch rather
- *   than a sprawling one.
+ *   unbounded corpus walk. Not fitted against measured cost, latency or
+ *   extraction quality — that measurement is real work this module does not
+ *   do, and this comment says so rather than implying otherwise.
  *
- * Neither number is fitted against measured cost, latency or extraction
- * quality — that measurement is real work this bead does not do, and this
- * comment says so rather than implying otherwise. A caller may override both
- * via `ReadConceptOptions.budget`; these are only what `readConceptsFromVault`
- * falls back to when a caller supplies none. Revising them is a Class B
- * threshold tuning (run charter), not a Class C stop.
+ * `DEFAULT_PASSAGES_PER_CALL` (80, was 20) is different: it is now a
+ * **declared per-call ceiling**, `ol-2zfj.62` (`[D-210]`)'s constant, adopted
+ * from a measured provisional baseline rather than invented placeholder.
+ * Plain-English defence: 80 keeps almost every real course document — every
+ * one but the rare outlier — inside a single call under the now-unconditional
+ * per-document batching (`read.ts`'s `batchesByDocument`), which both
+ * minimises `[D-210]`'s own `k1 = ceil(passages / ceiling)` call-count
+ * multiplier and, on the sweep that measured it, cost no recall or
+ * mention-weighted precision within the tested range (20-80 passages per
+ * call). This is a `[D-194]`-form provisional baseline, not a fitted number
+ * whose derivation stays private — the derivation (methodology, sample,
+ * per-arm results) is cited by path only and never restated here:
+ * `olea-service/findings/per-call-ceiling-sweep-2026-09-16.md`.
+ *
+ * Revisit condition (either fires it): a production model call — not the
+ * frontier-oracle self-read the sweep used — is run against that same sweep
+ * design and shows a measurable quality difference from 80; or a course
+ * corpus is found where per-document call counts under an 80 ceiling
+ * routinely exceed 2-3.
+ *
+ * A caller may override both via `ReadConceptOptions.budget`; these are only
+ * what `readConceptsFromVault` falls back to when a caller supplies none.
+ * Revising either is a Class B threshold tuning (run charter) unless it
+ * crosses into a persisted schema or contract clause, not a Class C stop.
  */
 
 import {
@@ -100,8 +113,13 @@ import { WorkerKnowledgeKindClassifier } from './workerKnowledgeKindClassifier.j
 
 /** See the module doc's "THE BUDGET" section. */
 export const DEFAULT_MAX_PASSAGES_PER_READ = 60;
-/** See the module doc's "THE BUDGET" section. */
-export const DEFAULT_PASSAGES_PER_CALL = 20;
+/**
+ * The declared per-call ceiling (`[D-210]`, `ol-2zfj.62`) — see the module
+ * doc's "THE BUDGET" section for the plain-English defence, the findings
+ * path the derivation is cited by (never restated here), and the revisit
+ * condition.
+ */
+export const DEFAULT_PASSAGES_PER_CALL = 80;
 
 /**
  * The `embedding-proximity` nomination signal's cosine-similarity cutoff
