@@ -98,15 +98,37 @@ export interface PastPaperCluster {
 }
 
 export interface ExtractTier3EvidenceOptions extends RegisterSourcesOptions {
+  /**
+   * One of two sources unioned into the default vocabulary when `vocabulary`
+   * is not supplied (`ol-ps4f`, `./build.js`'s `defaultVocabulary`) — every
+   * markdown note title under this folder. **No longer the only default
+   * source**: the other half is `[D-248]`'s one-hop outward link closure from
+   * course-folder documents, computed unconditionally regardless of this
+   * option, so a vault with no folder by this name (or a different one) still
+   * gets real default vocabulary. Kept, not retired, because it costs a
+   * vault that DOES use this folder nothing (the union only grows the
+   * candidate set) and several existing callers/tests still pass it.
+   */
   readonly zettelkastenFolder?: VaultPath;
   /** Folder whose immediate subdirectories are course codes (F1.3). Defaults to `01 Courses` (`../concept/course.js`'s `DEFAULT_COURSES_FOLDER`). */
   readonly coursesFolder?: VaultPath;
   /**
+   * Per-course cap on `[D-248]`'s one-hop link closure, threaded into the
+   * default-vocabulary computation's own `resolveLinkClosure` call
+   * (`ol-ps4f`). Defaults to `resolveLinkClosure`'s own default
+   * (`../concept/extract.js`'s `DEFAULT_CLOSURE_DOCUMENT_CAP`) when omitted.
+   * Has no effect when the caller supplies an explicit `vocabulary`.
+   */
+  readonly closureDocumentCap?: number;
+  /**
    * Candidate concept names to match derived material against. Defaults to
-   * every Zettelkasten note title (`zettelkastenFolder`) — the module doc's
+   * the union of every Zettelkasten note title (`zettelkastenFolder`) and
+   * `[D-248]`'s one-hop outward link closure from course-folder documents
+   * (`ol-ps4f`, generalising the folder-only default) — the module doc's
    * "identity without inventing it." `../concept/extract.ts` passes a richer
-   * vocabulary (zettel titles plus every tier-1/2 name already found) so
-   * material that mentions an already-curated concept feeds it too.
+   * vocabulary of its own (its own zettel-folder titles plus every tier-1/2
+   * name already found) so material that mentions an already-curated concept
+   * feeds it too; that caller never reaches this default.
    */
   readonly vocabulary?: readonly string[];
 }

@@ -42,14 +42,35 @@
  * in the client-side library) and would produce exactly the kind of
  * unfalsifiable, untestable behaviour the knowledge model's R1/R2 rules
  * out. Instead, every citation is a **verbatim, case-insensitive,
- * word-boundary match** of a name already in `options.vocabulary` (default:
- * every Zettelkasten note title) against derived-material text. A caller
- * that wants matches against tier-1/2 names too — so a concept that already
- * has curated identity picks up extra evidence rather than staying
- * invisible to this pass — passes a richer `vocabulary` (`../concept/
- * extract.ts` does exactly this for its own tier-3 minting). The concept's
- * **display name** stays whatever the vocabulary said, never the derived
- * text's own casing (R2: speak in hers).
+ * word-boundary match** of a name already in `options.vocabulary` against
+ * derived-material text. A caller that wants matches against tier-1/2 names
+ * too — so a concept that already has curated identity picks up extra
+ * evidence rather than staying invisible to this pass — passes a richer
+ * `vocabulary` (`../concept/extract.ts` does exactly this for its own tier-3
+ * minting). The concept's **display name** stays whatever the vocabulary
+ * said, never the derived text's own casing (R2: speak in hers).
+ *
+ * **Default vocabulary, generalised past the folder name (`[D-248]`,
+ * `ol-ps4f`).** When a caller supplies no `vocabulary`, `defaultVocabulary`
+ * below unions two sources: every Zettelkasten-folder note title (the
+ * original mechanism, kept so a vault that has this folder loses nothing) and
+ * every note title reachable by `[D-248]`'s own one-hop outward link closure
+ * from her course-folder documents — the same closure tier-1 binding resolves
+ * against, via the same `resolveLinkClosure` (`../concept/extract.js`). A
+ * student who keeps no folder named `DEFAULT_ZETTELKASTEN_FOLDER` (or calls
+ * it something else) now gets real tier-3 vocabulary from the closure half
+ * alone, closing the gap `ol-ps4f` was filed over — this default is the *live*
+ * one for `../evidence-edge/build.js`'s `buildConceptAssessmentEdges`, which
+ * `../oracle/compose.js`'s `composeOracleRanking` calls unconditionally from
+ * three shipped-plugin call sites (F4.2's exam-likelihood ranking), so the
+ * folder-only version of this default was reachable in production, not only
+ * from the dead concept-mint path. See `defaultVocabulary`'s own doc for why
+ * this is a union rather than an outright replacement, and `ol-ps4f`'s close
+ * notes for the residual: `../concept/extract.ts`'s own internal tier-3-mint
+ * vocabulary/binding index (inside its `includeTier3` branch) is untouched by
+ * this and stays folder-bound — genuinely low-cost today since that branch has
+ * no production caller (`[EXT-2]`), filed as a follow-up rather than fixed
+ * here since this module does not own that file.
  *
  * **Headings are the third source-hierarchy leg this module does not
  * cover.** The knowledge model puts headings in tier 3 alongside past-paper
@@ -66,6 +87,7 @@
 import { parseDocument } from '../block/parse.js';
 import type { Block } from '../block/types.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from '../concept/course.js';
+import { resolveLinkClosure } from '../concept/extract.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER, noteTitle } from '../concept/zettelkasten.js';
 import { discoverEmbeddedSources } from '../extract/embeds.js';
 import { extractFromVault } from '../extract/registry.js';
@@ -115,12 +137,52 @@ function findMentionedTerms(text: string, vocabulary: readonly string[]): readon
   return hits;
 }
 
-async function zettelVocabulary(
+/**
+ * The default tier-3 vocabulary (`ol-ps4f`, generalising the gap `[D-248]`
+ * left open for tier 3 — see this file's module doc, "One user of the folder
+ * name survives").
+ *
+ * **A union, not a replacement.** It is every Zettelkasten-folder note title
+ * (the legacy source, kept so a vault that has this folder loses nothing) PLUS
+ * every note title reachable by `[D-248]`'s own one-hop outward link closure
+ * from her course-folder documents (`resolveLinkClosure`, `../concept/
+ * extract.js` — the exact function tier-1 binding now resolves against,
+ * reused rather than re-implemented so there is one tested closure rule, not
+ * two that can drift). A student who keeps no folder by that name now gets
+ * real tier-3 vocabulary via the closure half alone; a student who does keeps
+ * at least what she got before — the union only grows the candidate set, it
+ * never shrinks it, so this is a superset generalisation, not a behaviour
+ * change, for every vault that already has the folder.
+ *
+ * **Why a union and not a straight replacement of the folder source.** This
+ * function backs the default `options.vocabulary` for every caller that does
+ * not supply its own — which is not only the dead, off-in-production
+ * concept-mint path (`../concept/extract.js`'s `includeTier3` branch always
+ * passes an explicit `vocabulary` and never reaches here). It is also the
+ * *live* default for `../evidence-edge/build.js`'s `buildConceptAssessmentEdges`,
+ * which `../oracle/compose.js`'s `composeOracleRanking` calls with no
+ * vocabulary override and which has three confirmed production callers in the
+ * shipped plugin (F4.2 / foundation item 42, the exam-likelihood ranking —
+ * see `compose.ts`'s own module doc). Replacing the folder source outright
+ * would have been an unreviewed behaviour change to a live ranking feature;
+ * adding the closure alongside it closes the reported gap (no vocabulary at
+ * all for a student without the folder) without one.
+ */
+async function defaultVocabulary(
   vault: VaultSource,
   zettelkastenFolder: VaultPath,
+  coursesFolder: VaultPath,
+  closureDocumentCap: number | undefined,
 ): Promise<readonly string[]> {
-  const paths = await vault.list({ under: zettelkastenFolder, extensions: ['md'] });
-  return paths.map(noteTitle);
+  const [zettelPaths, notePaths] = await Promise.all([
+    vault.list({ under: zettelkastenFolder, extensions: ['md'] }),
+    vault.list({ extensions: ['md'] }),
+  ]);
+  const closure = await resolveLinkClosure(vault, notePaths, {
+    coursesFolder,
+    ...(closureDocumentCap !== undefined ? { closureDocumentCap } : {}),
+  });
+  return [...new Set([...zettelPaths.map(noteTitle), ...closure.byTitle.keys()])];
 }
 
 /**
@@ -746,7 +808,9 @@ export async function extractTier3Evidence(
 ): Promise<ExtractTier3EvidenceResult> {
   const zettelkastenFolder = options.zettelkastenFolder ?? DEFAULT_ZETTELKASTEN_FOLDER;
   const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
-  const vocabulary = options.vocabulary ?? (await zettelVocabulary(vault, zettelkastenFolder));
+  const vocabulary =
+    options.vocabulary ??
+    (await defaultVocabulary(vault, zettelkastenFolder, coursesFolder, options.closureDocumentCap));
 
   const sourcesReport = await registerSources(vault, {
     sourcesFolder: options.sourcesFolder ?? DEFAULT_SOURCES_FOLDER,
