@@ -8,7 +8,11 @@
 import type { MasteryState } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { AssessmentReadReport, AssessmentRecord } from '../assessment/types.js';
-import type { ConceptAssessmentEdge, EvidenceQuestionCitation } from '../evidence-edge/types.js';
+import type {
+  ConceptAssessmentEdge,
+  EvidenceObjectivesCitation,
+  EvidenceQuestionCitation,
+} from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { RankOracleTiebreakInput } from './rank.js';
 import { rankOracle } from './rank.js';
@@ -43,6 +47,19 @@ function edge(overrides: Partial<ConceptAssessmentEdge> = {}): ConceptAssessment
     yieldRank: 1,
     confidence: 1,
     citations: [citation()],
+    ...overrides,
+  };
+}
+
+function objectivesCitation(
+  overrides: Partial<EvidenceObjectivesCitation> = {},
+): EvidenceObjectivesCitation {
+  return {
+    sourcePath: '03 Research/objectives.md',
+    provenance: {
+      sourcePath: overrides.sourcePath ?? '03 Research/objectives.md',
+      location: { page: 1 },
+    },
     ...overrides,
   };
 }
@@ -137,6 +154,100 @@ describe('rankOracle — a single well-evidenced concept', () => {
     expect(entry.reasoning).toContain(`Priority score ${expectedPriority.toFixed(3)}`);
     expect(entry.reasoning).toContain('Strongest link: Assessments/Quiz1.md');
     expect(entry.reasoning).toContain(`due in ${daysUntilDue} days`);
+  });
+});
+
+// `[D-226]` ruling 2 / `ol-oxa2` — the downstream half of `ol-af3j`'s
+// objectives-basis admission: `buildReasoning` must name which evidence
+// actually drove a score, never a misleading "0 citations" line, and never
+// borrow the past-paper clause's frequency framing for objectives evidence.
+describe('rankOracle — objectives-basis reasoning ([D-226] ruling 2 / ol-oxa2)', () => {
+  it('an objectives-only concept never reads "0 citations" and names its own basis', () => {
+    const objectivesEdge = edge({
+      citations: [],
+      basis: 'objectives',
+      objectivesCitations: [objectivesCitation()],
+    });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [objectivesEdge],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry).toBeDefined();
+    if (entry === undefined) return;
+
+    // Data half: `citations` stays empty (never fabricated), and the
+    // objectives-basis sibling carries the real evidence.
+    expect(entry.citations).toEqual([]);
+    expect(entry.factors.citations).toEqual([]);
+    expect(entry.factors.objectivesCitations).toEqual([objectivesCitation()]);
+    expect(entry.factors.distinctObjectivesSourceCount).toBe(1);
+
+    // Presentation half — the bug this bead fixes.
+    expect(entry.reasoning).not.toContain('0 citations');
+    expect(entry.reasoning).not.toContain('0 past paper');
+    expect(entry.reasoning).toContain('declared in scope by 1 objectives document');
+    // Never wears a past paper's clothes: no invented citation count for
+    // objectives evidence, and no examiner-frequency framing.
+    expect(entry.reasoning).not.toContain('across 1 past paper');
+  });
+
+  it('a concept cited by both bases states each one, never blended', () => {
+    const pastPaperEdge = edge({ citations: [citation()] });
+    const objectivesEdge = edge({
+      assessmentPath: 'Assessments/Quiz1.md',
+      citations: [],
+      basis: 'objectives',
+      objectivesCitations: [
+        objectivesCitation({ sourcePath: '03 Research/objectives.md' }),
+        objectivesCitation({ sourcePath: '03 Research/syllabus.md' }),
+      ],
+    });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [pastPaperEdge, objectivesEdge],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry).toBeDefined();
+    if (entry === undefined) return;
+
+    expect(entry.factors.distinctSourceCount).toBe(1);
+    expect(entry.factors.distinctObjectivesSourceCount).toBe(2);
+    expect(entry.reasoning).toContain('1 citation across 1 past paper');
+    expect(entry.reasoning).toContain('declared in scope by 2 objectives documents');
+  });
+
+  it('a plain past-paper concept keeps the pre-existing sentence unchanged (regression)', () => {
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.objectivesCitations).toEqual([]);
+    expect(entry?.factors.distinctObjectivesSourceCount).toBe(0);
+    expect(entry?.reasoning).toContain('1 citation across 1 past paper');
+    expect(entry?.reasoning).not.toContain('objectives document');
   });
 });
 

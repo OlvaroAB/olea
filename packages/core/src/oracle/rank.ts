@@ -161,7 +161,11 @@ import type { MasteryState } from 'olea-contracts';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { normalizeAssessmentWeight } from '../assessment/weight.js';
 import { daysBetween } from '../dates.js';
-import type { ConceptAssessmentEdge, EvidenceQuestionCitation } from '../evidence-edge/types.js';
+import type {
+  ConceptAssessmentEdge,
+  EvidenceObjectivesCitation,
+  EvidenceQuestionCitation,
+} from '../evidence-edge/types.js';
 import type { VaultPath } from '../vault/types.js';
 import type {
   ConceptPriority,
@@ -486,6 +490,31 @@ function unionCitations(
   return [...seen.values()].sort(compareCitations);
 }
 
+function compareObjectivesCitations(
+  a: EvidenceObjectivesCitation,
+  b: EvidenceObjectivesCitation,
+): number {
+  return a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0;
+}
+
+/**
+ * `unionCitations`'s `'objectives'`-basis sibling (`[D-226]` ruling 2,
+ * `ol-af3j`). Deduplicated by `sourcePath` alone — an objectives mention
+ * carries no `questionLabel` to dedupe on, unlike its past-paper sibling —
+ * and deterministically sorted the same way.
+ */
+function unionObjectivesCitations(
+  edges: readonly ConceptAssessmentEdge[],
+): readonly EvidenceObjectivesCitation[] {
+  const seen = new Map<string, EvidenceObjectivesCitation>();
+  for (const edge of edges) {
+    for (const citation of edge.objectivesCitations ?? []) {
+      if (!seen.has(citation.sourcePath)) seen.set(citation.sourcePath, citation);
+    }
+  }
+  return [...seen.values()].sort(compareObjectivesCitations);
+}
+
 /**
  * `masteryState` for one concept. **Deliberately two different absences**:
  * `mastery` entirely omitted (the caller opted the whole ranking out of a
@@ -603,7 +632,50 @@ function compareContributions(a: OracleEdgeContribution, b: OracleEdgeContributi
  * `factors` itself, never recomputed or approximated, so a test that
  * independently recomputes `factors` and checks these exact substrings can
  * only pass if this function actually reports what drove the score.
+ *
+ * **The opening evidence clause is basis-aware (`[D-226]` ruling 2,
+ * `ol-oxa2`).** Before this bead, it always read `"N citations across M past
+ * papers"`; for an objectives-only concept (`ol-af3j`'s admission of
+ * objectives citations on their own basis) that produced a literal `"0
+ * citations across 0 past papers"` — internally consistent, but it silently
+ * dropped the objectives evidence that actually drove the score, which is
+ * exactly the "reasoning matches what actually drove it" property this
+ * function exists to guarantee. `buildEvidenceClause` below states each
+ * basis present (past-paper as citation frequency; objectives as declared
+ * scope, per its own attribution — never borrowing the past-paper clause's
+ * frequency framing, "never wears a past paper's clothes") and states BOTH
+ * when a concept is cited by both (F4.2: "each basis is stated for what it
+ * is").
  */
+function buildEvidenceClause(factors: OracleConceptFactors): string {
+  const objectivesCitations = factors.objectivesCitations ?? [];
+  const distinctObjectivesSourceCount = factors.distinctObjectivesSourceCount ?? 0;
+  const pastPaperClause =
+    factors.citations.length > 0
+      ? `${factors.citations.length} citation${factors.citations.length === 1 ? '' : 's'} ` +
+        `across ${factors.distinctSourceCount} past paper` +
+        `${factors.distinctSourceCount === 1 ? '' : 's'}`
+      : null;
+  // Never a citation count for objectives — an objectives document declares
+  // what is IN SCOPE, it does not evidence HOW OFTEN something is examined
+  // (F4.2, `[D-226]` ruling 2), so this names the document count only, never
+  // a mention/citation frequency that would read as examiner behaviour.
+  const objectivesClause =
+    objectivesCitations.length > 0
+      ? `declared in scope by ${distinctObjectivesSourceCount} objectives document` +
+        `${distinctObjectivesSourceCount === 1 ? '' : 's'}`
+      : null;
+  if (pastPaperClause !== null && objectivesClause !== null) {
+    return `${pastPaperClause}, and ${objectivesClause}`;
+  }
+  // The `?? ` fallback is unreachable in practice: `evidence-edge/build.ts`
+  // never emits an edge with no evidence at all (its own "evidential, not
+  // membership" rule), so a concept that reaches `buildReasoning` always has
+  // at least one non-empty clause. Typed defensively rather than asserted
+  // away, matching `top === undefined`'s handling just below.
+  return pastPaperClause ?? objectivesClause ?? 'no evidence recorded';
+}
+
 function buildReasoning(
   conceptName: string,
   course: string,
@@ -627,9 +699,7 @@ function buildReasoning(
     ? `weight score ${top.assessmentWeightScore.toFixed(2)}`
     : 'weight unknown';
   return (
-    `${conceptName} (${course}): ${factors.citations.length} citation` +
-    `${factors.citations.length === 1 ? '' : 's'} across ${factors.distinctSourceCount} past ` +
-    `paper${factors.distinctSourceCount === 1 ? '' : 's'}, spanning ${assessmentCount} ` +
+    `${conceptName} (${course}): ${buildEvidenceClause(factors)}, spanning ${assessmentCount} ` +
     `assessment${assessmentCount === 1 ? '' : 's'}. Strongest link: ${top.assessmentPath} ` +
     `(yield rank ${top.yieldRank}, confidence ${top.confidence.toFixed(2)}, ${weightClause}, ` +
     `${dueClause}). Mastery: ${factors.masteryState} (need weight ` +
@@ -719,10 +789,17 @@ function rankOneCourse(
     // evidence for it either (reasoning matches what actually drove it).
     const citations = unionCitations(survivingEdges);
     const distinctSourceCount = new Set(citations.map((c) => c.sourcePath)).size;
+    // `[D-226]` ruling 2's own-basis sibling — computed the same way, from
+    // the same SURVIVING edges, never mixed with the past-paper pair above.
+    const objectivesCitations = unionObjectivesCitations(survivingEdges);
+    const distinctObjectivesSourceCount = new Set(objectivesCitations.map((c) => c.sourcePath))
+      .size;
 
     const factors: OracleConceptFactors = {
       citations,
       distinctSourceCount,
+      objectivesCitations,
+      distinctObjectivesSourceCount,
       contributions,
       vetoedEdges,
       preMasteryScore,

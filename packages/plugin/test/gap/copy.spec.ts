@@ -16,6 +16,8 @@ import {
   masteryGapNarrative,
   materialGapMeta,
   materialGapNarrative,
+  OBJECTIVES_ATTRIBUTION_CLAUSE,
+  OBJECTIVES_ATTRIBUTION_SENTENCE,
   pastPaperChipLabel,
   pastPaperChips,
   pastPapersLabel,
@@ -348,6 +350,34 @@ describe('F4.9 — never implies knowledge of a real paper', () => {
   it('claims no past paper when none is cited', () => {
     expect(rankingAttribution([row({ citations: [] })])).not.toContain('past paper of yours');
     expect(rankingAttribution([])).toContain('no past paper is cited');
+  });
+});
+
+// `[D-226]` ruling 2 / `ol-oxa2` — an objectives-only ranked row's `citations`
+// is empty by design (`evidence-edge/build.ts` never fabricates a
+// past-paper-shaped citation for objectives evidence), and this attribution
+// sentence must name the objectives evidence rather than reprint the honest
+// but incomplete "no past paper is cited here" text.
+describe('D-226 ruling 2 — objectives-basis attribution', () => {
+  it('an all-objectives set of rows gets its own attribution sentence, never the past-paper one', () => {
+    const objectivesOnly = [row({ citations: [] }), row({ conceptName: 'Beta', citations: [] })];
+    const sentence = rankingAttribution(objectivesOnly);
+    expect(sentence).toBe(OBJECTIVES_ATTRIBUTION_SENTENCE);
+    expect(sentence).not.toContain('past paper');
+    expect(sentence).toContain('objectives');
+    // F4.2 / `[D-226]` ruling 2: never examiner-frequency framing.
+    expect(sentence.toLowerCase()).not.toMatch(/\basked\b/);
+  });
+
+  it('a mixed set of rows states each basis, never blending or dropping either', () => {
+    const mixed = [row(), row({ conceptName: 'Beta', citations: [] })];
+    const sentence = rankingAttribution(mixed);
+    expect(sentence).toContain('Ranked by what 1 past paper of yours has asked.');
+    expect(sentence).toContain(OBJECTIVES_ATTRIBUTION_CLAUSE);
+  });
+
+  it('a real (non-empty) rows list with no objectives-basis row is unaffected', () => {
+    expect(rankingAttribution([row()])).toBe('Ranked by what 1 past paper of yours has asked.');
   });
 });
 

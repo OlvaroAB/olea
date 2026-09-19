@@ -9,7 +9,11 @@
 
 import type { MasteryState } from 'olea-contracts';
 import type { AssessmentReadReport } from '../assessment/types.js';
-import type { ConceptAssessmentEdge, EvidenceQuestionCitation } from '../evidence-edge/types.js';
+import type {
+  ConceptAssessmentEdge,
+  EvidenceObjectivesCitation,
+  EvidenceQuestionCitation,
+} from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { VaultPath } from '../vault/types.js';
 
@@ -108,10 +112,42 @@ export interface OracleEdgeContribution {
 
 /** Every number that fed a concept's `priorityScore`, kept alongside it so the score is never asserted without its arithmetic on hand. */
 export interface OracleConceptFactors {
-  /** Every citation across every SURVIVING contributing edge, deduplicated by (sourcePath, questionLabel) and deterministically sorted. Never empty for a `ranked` entry — a concept with none survives no further than `OracleVetoedConcept`. */
+  /**
+   * Every past-paper citation across every SURVIVING contributing edge,
+   * deduplicated by (sourcePath, questionLabel) and deterministically
+   * sorted. **Empty is a real, reachable state as of `[D-226]` ruling 2**
+   * (`ol-af3j`) — an objectives-only concept's surviving evidence lives in
+   * {@link objectivesCitations} instead, never fabricated here
+   * (`ConceptAssessmentEdge`'s own "never both" rule: past-paper and
+   * objectives citations are never mixed into one array). A `ranked` entry
+   * with BOTH this and {@link objectivesCitations} empty cannot occur —
+   * `evidence-edge/build.ts`'s "evidential, not membership" rule never
+   * emits an edge with no evidence at all, so a concept surviving to
+   * `ConceptPriority` always has at least one non-empty basis.
+   */
   readonly citations: readonly EvidenceQuestionCitation[];
-  /** Distinct past-paper sources across `citations`. */
+  /** Distinct past-paper sources across `citations` — `'past-paper'`-basis only, never mixed with {@link distinctObjectivesSourceCount} (`[D-226]` ruling 2: "never folded into the past-paper denominator"). */
   readonly distinctSourceCount: number;
+  /**
+   * Every objectives-document citation across every SURVIVING contributing
+   * edge whose `basis` is `'objectives'` (`[D-226]` ruling 2, `ol-af3j`) —
+   * the `'objectives'`-basis sibling of {@link citations}, deduplicated by
+   * `sourcePath` (an objectives mention carries no `questionLabel`) and
+   * deterministically sorted. Empty, never omitted, for a concept with no
+   * surviving objectives-basis evidence — matching how `citations` reads
+   * for the opposite case. **Optional only so object literals built before
+   * this field existed still typecheck** (same reason `vetoedEdges` and
+   * `retrievabilityWeight` below are optional); `rankOracle` itself always
+   * sets it.
+   */
+  readonly objectivesCitations?: readonly EvidenceObjectivesCitation[];
+  /**
+   * Distinct objectives-document sources across `objectivesCitations` —
+   * never mixed with {@link distinctSourceCount}. **Optional for the same
+   * object-literal-compatibility reason as `objectivesCitations`** above;
+   * `rankOracle` itself always sets it.
+   */
+  readonly distinctObjectivesSourceCount?: number;
   /** One entry per SURVIVING (non-vetoed) assessment this concept has an edge to in this course, sorted by `contribution` descending (ties by `assessmentPath` ascending). */
   readonly contributions: readonly OracleEdgeContribution[];
   /** Edges REMOVED by a veto rather than folded into `contributions` — see `OracleVetoedEdge`. Always present (empty when nothing on this concept was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */

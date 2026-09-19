@@ -158,23 +158,74 @@ export const FULL_SYLLABUS_ADVICE =
   'This is where the evidence points, not where the exam will go. Cover the whole syllabus; let this decide what you do first.';
 
 /**
- * The gap view's ranking attribution — F4.9 half one's fix.
+ * The `[D-226]` ruling 2 objectives-basis attribution, drawn directly from
+ * F4.2's own ratified clause text ("An objectives document declares what is
+ * in scope; it does not evidence how often something is examined") rather
+ * than invented screen copy — no registry row exists yet for this sentence
+ * (checked `docs/Olea_vocabulary_registry.md`, 2026-09-19; `ol-af3j`'s own
+ * notes record the same gap as of 2026-09-07), so this is proposed copy for
+ * ratification, flagged rather than presented as final. It never states a
+ * count: unlike a past paper, an objectives document's evidence is not a
+ * citation frequency, and `GapRow` does not carry a distinct
+ * objectives-source count today (see {@link rankingAttribution}'s doc).
+ */
+export const OBJECTIVES_ATTRIBUTION_SENTENCE =
+  'Ranked by your registered course objectives — they declare what is in scope, not how often something is examined.';
+
+/** The mixed-course form of {@link OBJECTIVES_ATTRIBUTION_SENTENCE}, appended after the past-paper sentence rather than replacing it — F4.2: "each basis is stated for what it is." */
+export const OBJECTIVES_ATTRIBUTION_CLAUSE =
+  'Some of this ranking also draws on your registered course objectives, for what they declare in scope.';
+
+/**
+ * The gap view's ranking attribution — F4.9 half one's fix, extended for
+ * `[D-226]` ruling 2's own attribution sentence.
  *
  * Derived from the citations actually behind the rows, so the sentence names a
  * number of documents that exist and were read. Past tense, and the subject is
  * always the prior papers: the assessment ahead is never the thing that asked.
+ *
+ * **The objectives-basis branch, and the reachability gap it stops short
+ * of (`[D-226]` ruling 2, `ol-oxa2`).** A ranked `GapRow` whose `citations`
+ * array is empty is no longer "no evidence" as of the sibling core bead that
+ * admits objectives citations on their own basis (`ol-af3j`,
+ * `evidence-edge/build.ts`): that module's own "evidential, not membership"
+ * rule never emits an edge with no evidence at all, and every past-paper
+ * edge always carries at least one citation, so an EMPTY `citations` array
+ * on a row that survived to `ranked` can only mean every surviving edge
+ * behind it is `basis: 'objectives'` — a safe inference from data already on
+ * `GapRow`, not a guess. What it CANNOT do is name how many objectives
+ * documents, or which ones: `GapRow` does not carry
+ * `OracleConceptFactors.objectivesCitations`/`distinctObjectivesSourceCount`
+ * (`oracle/types.ts`) today, because threading them from `ConceptPriority`
+ * through `gap/build.ts`'s `buildRow` is out of this bead's owned files
+ * (`packages/core/src/gap/build.ts` is live-owned by another lane,
+ * `ol-2zfj.84`, as of 2026-09-19). Filed as follow-on `ol-oxa2.1`.
  */
 export function rankingAttribution(rows: readonly GapRow[]): string {
   const sources = new Set<string>();
   for (const row of rows) for (const citation of row.citations) sources.add(citation.sourcePath);
   const n = sources.size;
+  // See the objectives-basis paragraph above: a ranked row with zero
+  // citations can only be objectives-basis, never "no evidence" (an edge
+  // with no evidence at all is never built).
+  const hasObjectivesEvidence = rows.some((row) => row.citations.length === 0);
   if (n === 0) {
-    // Reachable whenever a ranked entry's citations are empty. Says what is
-    // true of that state instead of borrowing the sentence for the other one.
-    return 'Ranked by the evidence behind these concepts — no past paper is cited here.';
+    if (rows.length === 0) {
+      // Reachable whenever there are no rows at all. Says what is true of
+      // that state instead of borrowing the sentence for the other one.
+      return 'Ranked by the evidence behind these concepts — no past paper is cited here.';
+    }
+    // Every row present is objectives-basis. Never the past-paper sentence's
+    // frequency framing ("never wears a past paper's clothes", F4.2).
+    return OBJECTIVES_ATTRIBUTION_SENTENCE;
   }
-  if (n === 1) return 'Ranked by what 1 past paper of yours has asked.';
-  return `Ranked by what ${n} past papers of yours have asked.`;
+  const pastPaperSentence =
+    n === 1
+      ? 'Ranked by what 1 past paper of yours has asked.'
+      : `Ranked by what ${n} past papers of yours have asked.`;
+  return hasObjectivesEvidence
+    ? `${pastPaperSentence} ${OBJECTIVES_ATTRIBUTION_CLAUSE}`
+    : pastPaperSentence;
 }
 
 /**
