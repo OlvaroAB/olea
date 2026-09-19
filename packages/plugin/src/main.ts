@@ -66,6 +66,7 @@ import {
   readConceptsAndRelations,
   readConceptsFromVault,
 } from './concept/wiring.js';
+import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
@@ -1164,6 +1165,9 @@ export default class OleaPlugin extends Plugin {
           void this.revealRetrospectiveView();
         },
         dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
+        // `[D-226]` ruling 1, S1.
+        registerSource: (input) => provider.registerSource(input),
+        app: this.app,
       });
     });
 
@@ -1287,6 +1291,20 @@ export default class OleaPlugin extends Plugin {
         });
       }),
     );
+
+    // `[D-226]` ruling 1, S2: the document's own file-menu control — the
+    // "same control reachable from the document itself" F1.5(c) names, so
+    // registration stays available for the life of a course. See
+    // `course-setup/register-source-wiring.ts`'s own module doc for the
+    // gate and the documented flat-F7.9-folder scope cut.
+    wireDocumentSourceRegistration(this, {
+      vault,
+      deviceId,
+      now: () => new Date(),
+      onRegistered: () => {
+        void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_GROVE);
+      },
+    });
 
     // `ol-2zfj.38`: the vault-watch-to-`engine.enqueue` glue for the
     // multi-format ingestion path — see `ingestion/arrival-watch.ts`'s

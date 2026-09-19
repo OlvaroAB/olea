@@ -29,14 +29,29 @@
  * records; `../concept/evidence.js` is what runs them through
  * `../extract/registry.js`, and it runs registered and embedded material
  * through the same collector so there is no second-class path.
+ *
+ * **[D-226] ruling 1 answers `options.registeredFiles`'s own open question —
+ * "the durable-record question is left open for David rather than answered
+ * by implication" (`./types.js`'s doc) — with option A: a "source
+ * registered" event in her local event log, never a settings list.**
+ * `projectRegisteredFiles` below is the read half: it folds that event kind
+ * (`olea-contracts`' `sourceRegisteredLogRecordV5`) into exactly this
+ * module's own `RegisteredFileSpec[]` shape, so the persistence mechanism
+ * feeds the classification mechanism this module already had rather than
+ * inventing a second one. `isRegisterableDocument` is the shared gate both
+ * UI surfaces (`../../plugin/src/grove/`'s S1, `../../plugin/src/
+ * course-setup/`'s S2) use to offer only a file this module could actually
+ * register.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import { parseDocument } from '../block/parse.js';
 import { formatFromExtension } from '../extract/registry.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readScalar } from '../frontmatter/read.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type {
+  RegisteredFileSpec,
   RegisterSourcesOptions,
   Source,
   SourceRegistrationReport,
@@ -194,4 +209,70 @@ export async function registerSources(
     unregisterable,
     configErrors,
   };
+}
+
+/**
+ * Whether `path` is a candidate for [D-226] ruling 1's S1/S2 registration
+ * controls — a file that cannot carry frontmatter (never markdown; F1.3
+ * already owns declaring a role for those) and that some extractor can
+ * actually read (`formatFromExtension`). Matches the exact gate
+ * `registerSources` itself applies to `options.registeredFiles` above (the
+ * `'unsupported-format'` branch) — a file failing this check would only ever
+ * land in `unregisterable` if offered, so both UI surfaces decline to offer
+ * it in the first place rather than let her pick something that silently
+ * does nothing.
+ */
+export function isRegisterableDocument(path: VaultPath): boolean {
+  return !isMarkdown(path) && formatFromExtension(path) !== null;
+}
+
+/**
+ * [D-226] ruling 1's projection: the "source registered" events already in
+ * her local event log, folded into exactly the `RegisteredFileSpec[]` shape
+ * `options.registeredFiles` above already accepts — the persistence
+ * mechanism the ruling names (`olea-contracts`'
+ * `sourceRegisteredLogRecordV5`), feeding the mechanism this module already
+ * had for F3.1's manual "drop a file" gesture.
+ *
+ * **Latest event per path wins**, resolved by `(timestamp instant,
+ * eventId)` — the identical ordering `../review-log/
+ * suspension.ts#suspendedInstrumentIds` folds by for its own per-instrument
+ * projection. This is the whole mechanism behind "declared vs corrected
+ * provenance falls out for free" (knowledge model §3.2): a correction is
+ * simply a later event naming the same path, so it outranks the earlier
+ * declaration by ordering alone, and no separate provenance field is needed
+ * on the event itself.
+ *
+ * Every other `kind` is ignored — registering a source is not an opinion any
+ * other review-log event kind expresses.
+ */
+export function projectRegisteredFiles(
+  entries: readonly ReviewLogEntry[],
+): readonly RegisteredFileSpec[] {
+  const latest = new Map<
+    VaultPath,
+    { readonly instant: number; readonly eventId: string; readonly spec: RegisteredFileSpec }
+  >();
+
+  for (const entry of entries) {
+    if (entry.kind !== 'source-registered') continue;
+    const path = entry.path as VaultPath;
+    const instant = Date.parse(entry.timestamp);
+    const prior = latest.get(path);
+    const isLater =
+      prior === undefined ||
+      instant > prior.instant ||
+      (instant === prior.instant && entry.eventId > prior.eventId);
+    if (!isLater) continue;
+
+    latest.set(path, {
+      instant,
+      eventId: entry.eventId,
+      spec: { path, role: entry.role, course: entry.course },
+    });
+  }
+
+  return [...latest.values()]
+    .map((v) => v.spec)
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }

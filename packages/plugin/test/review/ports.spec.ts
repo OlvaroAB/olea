@@ -146,11 +146,16 @@ describe('createVaultSuspendPort', () => {
         | { kind: 'retrospective-offered' }
         | { kind: 'retrospective-opened' }
         | { kind: 'retrospective-dismissed' }
+        // `[D-226]` ruling 1: names a path, a role and a course — never an
+        // instrument, the same reason `succession`/the retrospective-offer
+        // trio are excluded above.
+        | { kind: 'source-registered' }
       > =>
         r.kind !== 'succession' &&
         r.kind !== 'retrospective-offered' &&
         r.kind !== 'retrospective-opened' &&
-        r.kind !== 'retrospective-dismissed',
+        r.kind !== 'retrospective-dismissed' &&
+        r.kind !== 'source-registered',
     );
     expect(suspensions.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
     expect(new Set(suspensions.map((r) => r.eventId)).size).toBe(2);

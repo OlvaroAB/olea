@@ -43,8 +43,10 @@ import {
   type ReviewLogRecord,
   retrospectiveOfferLogRecord,
   reviewLogRecord,
+  type SourceRegisteredLogRecord,
   type SuccessionLogRecord,
   type SuspendLogRecord,
+  sourceRegisteredLogRecord,
   successionLogRecord,
   suspendLogRecord,
   type VerdictLogRecord,
@@ -202,6 +204,25 @@ export interface AppendMisconceptionObservedOptions extends AppendReviewLogOptio
 export interface AppendMisconceptionObservedLogResult {
   /** The full, validated record actually written (schemaVersion, eventId and misconceptionId included). */
   readonly record: MisconceptionObservedLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+/**
+ * Every `SourceRegisteredLogRecord` field the caller supplies ([D-226]
+ * ruling 1); the writer stamps the rest. `kind` is stamped, not asked for —
+ * the same reason `ReviewLogRecordInput`/`VerdictLogRecordInput`/
+ * `SuccessionLogRecordInput` stamp it: this writer produces
+ * `source-registered` events and only those.
+ */
+export type SourceRegisteredLogRecordInput = Omit<
+  SourceRegisteredLogRecord,
+  'schemaVersion' | 'eventId' | 'kind'
+>;
+
+export interface AppendSourceRegisteredLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: SourceRegisteredLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -650,6 +671,60 @@ export async function appendMisconceptionObservedRecord(
   if (!parsed.success) {
     throw new Error(
       `appendMisconceptionObservedRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **source-registered** event
+ * — [D-226] ruling 1's persistence mechanism: naming a non-markdown document
+ * as a course's objectives or past paper, or correcting an earlier naming.
+ *
+ * The ninth sibling of `appendReviewLogRecord`/`appendSuspendRecord`/
+ * `appendVerdictRecord`/`appendSuccessionRecord`/`appendDisputeRecord`/
+ * `appendRetrospectiveOfferRecord`/`appendExplainBackOfferRecord`/
+ * `appendMisconceptionObservedRecord`, sharing the same append path and the
+ * same durability discipline. `kind` is stamped, not asked for — this writer
+ * produces `source-registered` events and only those, the same reason
+ * `appendReviewLogRecord`/`appendVerdictRecord`/`appendSuccessionRecord`/
+ * `appendMisconceptionObservedRecord` all stamp their own fixed `kind`.
+ *
+ * **Correction is the same call, not a different one.** F1.5's "correcting a
+ * document's classification is the same gesture as making it" means a
+ * caller simply appends a second event naming the same `path` with a new
+ * `role` — `./register.js#projectRegisteredFiles` folds "latest event per
+ * path wins," so the correction outranks the declaration without this
+ * writer, or the schema, needing to know which call is which.
+ *
+ * **Reachability.** `packages/plugin/src/grove/provider.ts`'s
+ * `createLocalGroveProvider(...).registerSource` (S1, the grove's evidenced
+ * no-source action) and `packages/plugin/src/course-setup/
+ * register-source-wiring.ts#wireDocumentSourceRegistration` (S2, the
+ * document's own file-menu control) are the two production callers — see
+ * each module's own doc.
+ */
+export async function appendSourceRegisteredRecord(
+  vault: VaultSource,
+  input: SourceRegisteredLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendSourceRegisteredLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'source-registered',
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = sourceRegisteredLogRecord.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendSourceRegisteredRecord: record failed schema validation: ${parsed.error.message}`,
     );
   }
   const record = parsed.data;

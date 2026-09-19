@@ -133,6 +133,16 @@ export const OPEN_RETROSPECTIVE_ACTION = 'Open';
 
 export const DISMISS_OFFER_ACTION = 'Not now';
 
+/**
+ * F1.5(b)'s "one action that fixes it," made real (`[D-226]` ruling 1): the
+ * evidenced no-source ask's own action — choose a file, choose its role.
+ * Rendered only on the `'no-registered-source'` designed state (S1); the
+ * document-side control (S2) is the continuous form that keeps this
+ * available for the rest of the course's life, `../course-setup/
+ * register-source-wiring.ts`'s own surface.
+ */
+export const GROVE_REGISTER_ACTION = 'Register objectives or past paper';
+
 /** `ground`'s own label — the one olive noun in this axis with no `MASTERY_DISPLAY` entry (it is not a growth stage). */
 const GROUND_LABEL = 'ground';
 
@@ -256,6 +266,7 @@ export function allGroveStrings(): readonly string[] {
     GROVE_GROUND_STALL_NOTE,
     OPEN_RETROSPECTIVE_ACTION,
     DISMISS_OFFER_ACTION,
+    GROVE_REGISTER_ACTION,
     GROUND_LABEL,
     GROVE_LEGEND_GROUND_NOTE,
     GROVE_LEGEND_MATERIAL_GAP_NOTE,

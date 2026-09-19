@@ -19,11 +19,12 @@
  * own corpus.
  */
 
-import type {
-  GroveCourseModel,
-  GroveCourseSection,
-  GroveViewDeps,
-  GroveViewState,
+import {
+  App,
+  type GroveCourseModel,
+  type GroveCourseSection,
+  type GroveViewDeps,
+  type GroveViewState,
 } from './grove-bridge.js';
 import { Notice } from './obsidian-shim/index.js';
 
@@ -114,6 +115,10 @@ export function buildGroveScenario(stateId: string): GroveScenario {
         // unreadable-file fixture exists here, so this is honestly empty
         // rather than invented.
         unreadableFiles: [],
+        // `[D-226]` ruling 1, S1: not this workbench pane's scenario either —
+        // the `'no-registered-source'` fixture state above exercises the
+        // designed empty state, never the file-picker's own contents.
+        registerCandidates: [],
       };
       return { kind: 'model', courses: [section] };
     },
@@ -126,6 +131,12 @@ export function buildGroveScenario(stateId: string): GroveScenario {
     async dismiss(assessmentPath): Promise<void> {
       dismissed.push(assessmentPath);
     },
+    // `[D-226]` ruling 1, S1: never wired to a real event log — same
+    // "canned deps, never the real pipeline" posture this file's module doc
+    // states for its surface. `registerCandidates: []` above means this
+    // fixture's own file-picker step never has anything to click anyway.
+    async registerSource(): Promise<void> {},
+    app: new App(),
   };
   return { stateId, deps, dismissed };
 }

@@ -1535,6 +1535,68 @@ export const misconceptionObservedLogRecordV5 = z.object({
 export type MisconceptionObservedLogRecordV5 = z.infer<typeof misconceptionObservedLogRecordV5>;
 
 /**
+ * The two roles [D-226]'s S1/S2 controls ever offer for a non-markdown
+ * document (F1.5(b)'s evidenced ask; the document-side control). Deliberately
+ * narrower than `olea-core`'s in-memory `SourceRole`, which also carries
+ * `'course-material'` for F3.1's manual-registration default — neither
+ * control ever offers that role, so this persisted enum never needs to carry
+ * it. Contracts does not depend on `olea-core` (the dependency runs the other
+ * way), so the two enums are declared independently rather than shared.
+ */
+export const sourceRegisteredRole = z.enum(['past-paper', 'objectives']);
+export type SourceRegisteredRole = z.infer<typeof sourceRegisteredRole>;
+
+/**
+ * One "source registered" event — [D-226] ruling 1 (`ol-egov.113`), landed as
+ * F1.5's "How she names a document, and where that naming lives" paragraph.
+ * A ninth `kind`, additive to the discriminated union exactly the way
+ * `misconceptionObservedLogRecordV5` was — no version bump, because nothing
+ * about the shape the union already carries changes; a new literal `kind`
+ * value is what additive means here.
+ *
+ * **What this records, and what it deliberately does not.** A markdown note
+ * still declares its own role with a `role` frontmatter property (F1.3: her
+ * stated property wins) — this event exists for exactly the case that
+ * property cannot cover, a file that carries no frontmatter at all. It names
+ * a fact about a PATH: which document, which of the two roles either control
+ * ever offers, and which course. **Document grain only — never a passage or
+ * whole-file split**, the ruling's own words.
+ *
+ * **Declared vs corrected provenance falls out for free (knowledge model
+ * §3.2), and needs no field of its own.** A correction is simply a LATER
+ * event naming the same `path`; `olea-core`'s
+ * `source/register.ts#projectRegisteredFiles` folds "latest event per path
+ * wins," the identical `(timestamp instant, eventId)` ordering
+ * `review-log/suspension.ts#suspendedInstrumentIds` already uses for its own
+ * per-instrument fold. A correction therefore outranks a declaration exactly
+ * as it does everywhere else in this project, by ordering alone — this
+ * record carries no separate provenance flag.
+ *
+ * **Never server-side** (architecture boundary §1). This lives in her local
+ * event log like every other kind in this union, and the Worker never sees
+ * it — the whole point of ruling 1's "option A".
+ *
+ * **No content, per D-005.** `path` is a vault location, not her wording; the
+ * two enums name a role and identify a course, never quote anything she or
+ * the document says.
+ */
+export const sourceRegisteredLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+  kind: z.literal('source-registered'),
+  /** Stable unique id for this event; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset. The offset matters: "when did she register this" is local. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The vault path of the document being named. */
+  path: z.string().min(1),
+  role: sourceRegisteredRole,
+  /** The course this document belongs to (F8.1's denominator, F7.9). */
+  course: z.string().min(1),
+});
+export type SourceRegisteredLogRecordV5 = z.infer<typeof sourceRegisteredLogRecordV5>;
+
+/**
  * Every shape a **current-version** review-log line can take, discriminated by
  * `kind` — the union readers parse v5 lines against.
  *
@@ -1551,6 +1613,7 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   retrospectiveOfferLogRecordV5,
   explainBackOfferLogRecordV5,
   misconceptionObservedLogRecordV5,
+  sourceRegisteredLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
@@ -1577,6 +1640,8 @@ export const explainBackOfferLogRecord = explainBackOfferLogRecordV5;
 export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV5>;
 export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV5;
 export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV5>;
+export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV5;
+export type SourceRegisteredLogRecord = z.infer<typeof sourceRegisteredLogRecordV5>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;

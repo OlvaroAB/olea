@@ -1,9 +1,15 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ReviewLogEntry } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
-import { DEFAULT_SOURCES_FOLDER, registerSources } from './register.js';
+import {
+  DEFAULT_SOURCES_FOLDER,
+  isRegisterableDocument,
+  projectRegisteredFiles,
+  registerSources,
+} from './register.js';
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 
@@ -255,5 +261,107 @@ describe('registerSources — tolerant role matching and honest reporting (synth
     // explicitly out of v0.9 scope.
     expect(report.sources.every((s) => s.kind === 'registered-file')).toBe(true);
     expect(report.sources.some((s) => s.kind === 'registered-url')).toBe(false);
+  });
+});
+
+describe('isRegisterableDocument — [D-226] ruling 1, the shared S1/S2 gate', () => {
+  it('accepts a supported non-markdown format', () => {
+    expect(isRegisterableDocument('03 Research/Scan.pdf')).toBe(true);
+  });
+
+  it('rejects markdown — F1.3 already owns declaring a role for those', () => {
+    expect(isRegisterableDocument('01 Courses/COURSEA/Notes.md')).toBe(false);
+  });
+
+  it('rejects a format no extractor claims, matching the unsupported-format gate above', () => {
+    expect(isRegisterableDocument('Media/lecture.mp3')).toBe(false);
+  });
+});
+
+describe('projectRegisteredFiles — [D-226] ruling 1, the review-log projection', () => {
+  function sourceRegistered(
+    over: Partial<{
+      eventId: string;
+      timestamp: string;
+      path: string;
+      role: 'past-paper' | 'objectives';
+      course: string;
+    }> = {},
+  ): ReviewLogEntry {
+    return {
+      schemaVersion: 5,
+      kind: 'source-registered',
+      eventId: 'evt-1',
+      timestamp: '2026-09-06T09:00:00.000+12:00',
+      path: '01 Courses/COURSEA/Past Paper 2024.pdf',
+      role: 'past-paper',
+      course: 'COURSEA',
+      ...over,
+    };
+  }
+
+  it('projects a single event into a RegisteredFileSpec', () => {
+    expect(projectRegisteredFiles([sourceRegistered()])).toEqual([
+      { path: '01 Courses/COURSEA/Past Paper 2024.pdf', role: 'past-paper', course: 'COURSEA' },
+    ]);
+  });
+
+  it('a later event for the same path outranks an earlier one — correction, not duplication', () => {
+    const entries = [
+      sourceRegistered({ eventId: 'evt-1', timestamp: '2026-09-06T09:00:00.000+12:00' }),
+      sourceRegistered({
+        eventId: 'evt-2',
+        timestamp: '2026-09-07T09:00:00.000+12:00',
+        role: 'objectives',
+      }),
+    ];
+    const projected = projectRegisteredFiles(entries);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({ role: 'objectives' });
+  });
+
+  it('the order entries arrive in does not change the result (order-independent fold)', () => {
+    const earlier = sourceRegistered({
+      eventId: 'evt-1',
+      timestamp: '2026-09-06T09:00:00.000+12:00',
+    });
+    const later = sourceRegistered({
+      eventId: 'evt-2',
+      timestamp: '2026-09-07T09:00:00.000+12:00',
+      role: 'objectives',
+    });
+    expect(projectRegisteredFiles([earlier, later])).toEqual(
+      projectRegisteredFiles([later, earlier]),
+    );
+  });
+
+  it('two different documents both project, independently', () => {
+    const entries = [
+      sourceRegistered({ path: 'A.pdf', course: 'COURSEA' }),
+      sourceRegistered({ path: 'B.pdf', course: 'COURSEB', role: 'objectives' }),
+    ];
+    expect(
+      projectRegisteredFiles(entries)
+        .map((s) => s.path)
+        .sort(),
+    ).toEqual(['A.pdf', 'B.pdf']);
+  });
+
+  it('every other review-log kind is ignored — registering a source is not an opinion those kinds express', () => {
+    const entries: ReviewLogEntry[] = [
+      {
+        schemaVersion: 5,
+        kind: 'suspend',
+        eventId: 'evt-suspend',
+        timestamp: '2026-09-06T09:00:00.000+12:00',
+        instrumentId: 'inst-1',
+        conceptIds: ['concept-1'],
+      },
+    ];
+    expect(projectRegisteredFiles(entries)).toEqual([]);
+  });
+
+  it('an empty log projects an empty list', () => {
+    expect(projectRegisteredFiles([])).toEqual([]);
   });
 });

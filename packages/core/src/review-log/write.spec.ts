@@ -13,6 +13,7 @@ import {
   appendMisconceptionObservedRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
+  appendSourceRegisteredRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
@@ -20,6 +21,7 @@ import {
   type MisconceptionObservedLogRecordInput,
   type RetrospectiveOfferLogRecordInput,
   type ReviewLogRecordInput,
+  type SourceRegisteredLogRecordInput,
   type SuccessionLogRecordInput,
   type SuspendLogRecordInput,
   type VerdictLogRecordInput,
@@ -672,6 +674,135 @@ describe('appendSuccessionRecord ([D-133])', () => {
     const source = new FolderSource(tempRoot);
     await expect(
       appendSuccessionRecord(source, successionInput(), { deviceId: 'has/slash' }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('appendSourceRegisteredRecord ([D-226] ruling 1)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-source-registered-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function sourceRegisteredInput(
+    overrides: Partial<SourceRegisteredLogRecordInput> = {},
+  ): SourceRegisteredLogRecordInput {
+    return {
+      timestamp: '2026-09-06T09:20:00-04:00',
+      path: '01 Courses/COURSEA/Past Paper 2024.pdf',
+      role: 'past-paper',
+      course: 'COURSEA',
+      ...overrides,
+    };
+  }
+
+  it('appends a source-registered event carrying path, role and course, into the same C5.2 daily file as reviews', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendSourceRegisteredRecord(source, sourceRegisteredInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'source-registered-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('source-registered');
+    expect(result.record.eventId).toBe('source-registered-1');
+    expect(result.record.path).toBe('01 Courses/COURSEA/Past Paper 2024.pdf');
+    expect(result.record.role).toBe('past-paper');
+    expect(result.record.course).toBe('COURSEA');
+    expect(result.path).toBe(reviewLogPath('2026-09-06', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('a correction is a second call for the same path, never a mutation of the first line', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendSourceRegisteredRecord(source, sourceRegisteredInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'declared',
+    });
+    const declaredLine = await readFile(
+      join(tempRoot, reviewLogPath('2026-09-06', 'desktop')),
+      'utf8',
+    );
+    const corrected = await appendSourceRegisteredRecord(
+      source,
+      sourceRegisteredInput({ role: 'objectives', timestamp: '2026-09-06T09:25:00-04:00' }),
+      { deviceId: 'desktop', generateEventId: () => 'corrected' },
+    );
+    const after = await readFile(join(tempRoot, corrected.path), 'utf8');
+
+    // Append-only: the declared line is untouched, still present as a
+    // literal prefix, and the correction is a second, distinct line.
+    expect(after.startsWith(declaredLine)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records).toHaveLength(2);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['source-registered', 'source-registered']);
+  });
+
+  it('interleaves with reviews in the one file, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-09-06T09:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    const beforeSourceRegistered = await readFile(
+      join(tempRoot, reviewLogPath('2026-09-06', 'desktop')),
+      'utf8',
+    );
+    const registered = await appendSourceRegisteredRecord(source, sourceRegisteredInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'sr1',
+    });
+    const after = await readFile(join(tempRoot, registered.path), 'utf8');
+
+    expect(after.startsWith(beforeSourceRegistered)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual(['review', 'source-registered']);
+  });
+
+  it('validates before writing: an empty path never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendSourceRegisteredRecord(source, sourceRegisteredInput({ path: '' }), {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-06', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: a role outside past-paper/objectives never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const withBadRole = {
+      ...sourceRegisteredInput(),
+      role: 'course-material',
+    } as unknown as SourceRegisteredLogRecordInput;
+    await expect(
+      appendSourceRegisteredRecord(source, withBadRole, { deviceId: 'desktop' }),
+    ).rejects.toThrow(/schema validation/);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendSourceRegisteredRecord(source, sourceRegisteredInput(), {
+      deviceId: 'desktop',
+    });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('rejects an invalid device id before writing', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendSourceRegisteredRecord(source, sourceRegisteredInput(), { deviceId: 'has/slash' }),
     ).rejects.toThrow();
   });
 });

@@ -182,6 +182,10 @@ type ConceptBearingEntry = Exclude<
   | { kind: 'retrospective-offered' }
   | { kind: 'retrospective-opened' }
   | { kind: 'retrospective-dismissed' }
+  // `[D-226]` ruling 1: names a path, a role and a course — never a concept,
+  // the same reason `succession`/the retrospective-offer trio are excluded
+  // above.
+  | { kind: 'source-registered' }
 >;
 
 function excludingSuccession(
@@ -192,7 +196,8 @@ function excludingSuccession(
       e.kind !== 'succession' &&
       e.kind !== 'retrospective-offered' &&
       e.kind !== 'retrospective-opened' &&
-      e.kind !== 'retrospective-dismissed',
+      e.kind !== 'retrospective-dismissed' &&
+      e.kind !== 'source-registered',
   );
 }
 

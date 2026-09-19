@@ -150,8 +150,10 @@
  * a stale prior either.
  */
 
+import type { SourceRegisteredRole } from 'olea-contracts';
 import {
   type AssessmentRecord,
+  appendSourceRegisteredRecord,
   buildGroveModel,
   buildMaterialPresence,
   buildRegistryModel,
@@ -159,11 +161,14 @@ import {
   type ConceptRelation,
   calendarDaysEndingOn,
   createFsrsScheduler,
+  DEFAULT_COURSES_FOLDER,
   discoverEmbeddedSources,
   enumerateVaultInstruments,
   extractTier3Evidence,
   findUnreadableFiles,
   type GroveCourseModel,
+  isRegisterableDocument,
+  projectRegisteredFiles,
   readAssessments,
   readReviewLogHistory,
   reviewLogPath,
@@ -227,6 +232,19 @@ export interface CreateLocalGroveProviderDeps {
 export interface GroveDataDeps {
   readonly load: () => Promise<GroveViewState>;
   readonly dismiss: (assessmentPath: VaultPath) => Promise<void>;
+  /**
+   * `[D-226]` ruling 1, S1: writes one "source registered" event and returns.
+   * `./view.ts`'s own caller re-reads the whole grove afterwards (`refresh`),
+   * so this never mutates `GroveViewState` itself — the next `load()` call
+   * picks the new event up through `projectRegisteredFiles`, the same
+   * "derive, never cache" discipline every other projection in this module
+   * already follows.
+   */
+  readonly registerSource: (input: {
+    readonly path: VaultPath;
+    readonly role: SourceRegisteredRole;
+    readonly course: string;
+  }) => Promise<void>;
 }
 
 /**
@@ -324,6 +342,42 @@ async function unreadableFilesByCourse(
       ];
       const unreadable = await findUnreadableFiles(vault, { files, linkedPaths });
       return [course, unreadable] as const;
+    }),
+  );
+  return new Map(entries);
+}
+
+/**
+ * `[D-226]` ruling 1, S1's own words: "choose a file from the course's own
+ * folders and the F7.9 location" — computed once per course, alongside the
+ * other per-course reads above, for the same reason
+ * `unreadableFilesByCourse` gives: a course whose grove never renders a real
+ * grid still gets a real candidate list rather than an unattempted one.
+ *
+ * Filtered to `olea-core#isRegisterableDocument` (never markdown, and only a
+ * format some extractor can read) — the same gate `register-source-
+ * wiring.ts`'s S2 applies, so neither surface ever offers a file that would
+ * only ever land in `unregisterable` if chosen. A course folder that does
+ * not exist yet simply contributes nothing (`VaultSource.list` returns an
+ * empty array for a path with no matches — it never throws), so the F7.9
+ * candidates still apply on their own.
+ */
+async function registerCandidatesByCourse(
+  vault: VaultSource,
+  coursesFolder: VaultPath,
+  sourcesFolder: VaultPath,
+  courseNames: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, readonly VaultPath[]>> {
+  const sourcesFiles = (await vault.list({ under: sourcesFolder })).filter(isRegisterableDocument);
+
+  const entries = await Promise.all(
+    [...courseNames].map(async (course) => {
+      const courseFolder = `${coursesFolder}/${course}` as VaultPath;
+      const courseFiles = (await vault.list({ under: courseFolder })).filter(
+        isRegisterableDocument,
+      );
+      const candidates = [...new Set([...courseFiles, ...sourcesFiles])].sort();
+      return [course, candidates] as const;
     }),
   );
   return new Map(entries);
@@ -449,7 +503,15 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // document naming a concept she only ever gave a `topic:` value is
         // still matchable.
         const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
-        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary });
+        // `[D-226]` ruling 1: the "source registered" events already in her
+        // local event log (`entries`, read above for the review-log reasons
+        // this module already had), folded into the exact
+        // `RegisteredFileSpec[]` shape `registerSources`'s own
+        // `options.registeredFiles` has accepted since F3.1 — the ruling's
+        // persistence mechanism feeding the classification mechanism this
+        // pipeline already had, never a second path.
+        const registeredFiles = projectRegisteredFiles(entries);
+        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary, registeredFiles });
 
         const registryModel = buildRegistryModel({
           concepts: enumeration.concepts,
@@ -518,6 +580,14 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           tier3.sourcesReport,
           courseNames,
         );
+        // `[D-226]` ruling 1, S1: computed once per course, same reasoning
+        // as `unreadableByCourse` immediately above.
+        const registerCandidatesByCourseMap = await registerCandidatesByCourse(
+          deps.vault,
+          DEFAULT_COURSES_FOLDER,
+          tier3.sourcesReport.sourcesFolder,
+          courseNames,
+        );
 
         // Only `'declared'` courses contribute a real ground-streak reading
         // back — see module doc for why the other two statuses' echoed
@@ -566,6 +636,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             model,
             offerCards: allCards.filter((card) => card.course === course),
             unreadableFiles: unreadableByCourse.get(course) ?? [],
+            registerCandidates: registerCandidatesByCourseMap.get(course) ?? [],
             ...(scopeCorrectionReceipt !== undefined ? { scopeCorrectionReceipt } : {}),
           };
         });
@@ -582,6 +653,21 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
 
     async dismiss(assessmentPath: VaultPath): Promise<void> {
       await retrospective.markDismissed(assessmentPath);
+    },
+
+    // `[D-226]` ruling 1, S1. Writes and returns — see `GroveDataDeps
+    // .registerSource`'s own doc for why this never touches
+    // `GroveViewState` itself.
+    async registerSource(input: {
+      readonly path: VaultPath;
+      readonly role: SourceRegisteredRole;
+      readonly course: string;
+    }): Promise<void> {
+      await appendSourceRegisteredRecord(
+        deps.vault,
+        { timestamp: deps.now().toISOString(), ...input },
+        { deviceId: deps.deviceId },
+      );
     },
   };
 }

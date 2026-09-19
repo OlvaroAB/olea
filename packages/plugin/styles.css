@@ -4689,6 +4689,26 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-brand);
 }
 
+/* `[D-226]` ruling 1, S1: the evidenced no-source ask's own action —
+   same button treatment `.olea-grove-offer-open` already uses (a bordered,
+   brand-coloured control on the designed empty state), never a filled
+   primary button — this is one action among several the empty state can
+   show, not the loudest thing on the screen. */
+.olea-grove-register-action {
+  margin-top: 12px;
+}
+
+.olea-grove-register-button {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--olea-host-brand);
+  background: transparent;
+  color: var(--olea-host-brand);
+  cursor: pointer;
+}
+
 /* ============================================================
    ---- The design system: panel, controls, type ramp (`[STY-1]`, ol-l5og.18.11) ----
    ============================================================

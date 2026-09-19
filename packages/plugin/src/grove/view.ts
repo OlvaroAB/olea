@@ -76,8 +76,14 @@
  * that without ceremony).
  */
 
+import type { App } from 'obsidian';
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import type { SourceRegisteredRole } from 'olea-contracts';
 import type { GroveCourseModel, UnreadableFile, VaultPath } from 'olea-core';
+import {
+  RegisterSourceFileModal,
+  RegisterSourceRoleModal,
+} from '../course-setup/register-source-modal.js';
 import type { RetrospectiveOfferCard } from '../retrospective/offer-card.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
@@ -93,6 +99,7 @@ import {
   GROVE_NO_COURSES_HEADING,
   GROVE_NO_SOURCE_BODY,
   GROVE_NO_SOURCE_HEADING,
+  GROVE_REGISTER_ACTION,
   GROVE_UNAVAILABLE,
   GROVE_UNREADABLE_HEADING,
   GROVE_VIEW_TITLE,
@@ -151,6 +158,14 @@ export interface GroveCourseSection {
    * `model.status === 'declared'`.
    */
   readonly scopeCorrectionReceipt?: GroveScopeCorrectionReceipt;
+  /**
+   * `[D-226]` ruling 1, S1: every file `./provider.ts` scoped as "the
+   * course's own folder and the F7.9 location" for THIS course, already
+   * filtered to `olea-core#isRegisterableDocument`. Rendered only on the
+   * `'no-registered-source'` branch (`renderRegisterAction` below) — the one
+   * F1.5(b) evidenced ask this whole control exists to make true.
+   */
+  readonly registerCandidates: readonly VaultPath[];
 }
 
 export type GroveViewState =
@@ -164,6 +179,26 @@ export interface GroveViewDeps {
   readonly openRetrospective: () => void;
   /** D-134 Q1's other ending — the offer's own dismiss, without opening. */
   readonly dismiss: (assessmentPath: VaultPath) => Promise<void>;
+  /**
+   * `[D-226]` ruling 1, S1: writes one "source registered" event (path +
+   * role + course, document grain only). A correction is the identical call,
+   * made again for the same path — see `./provider.ts`'s own doc.
+   */
+  readonly registerSource: (input: {
+    readonly path: VaultPath;
+    readonly role: SourceRegisteredRole;
+    readonly course: string;
+  }) => Promise<void>;
+  /**
+   * `[D-226]` ruling 1: the two register-source modals (`../course-setup/
+   * register-source-modal.ts`) need an `App` to construct, the same as any
+   * other Obsidian `Modal`. Carried on `deps` rather than read off `this.app`
+   * because the workbench's `obsidian-shim` `ItemView` does not carry `.app`
+   * (`ol-z6x2` [WB-2]'s "add a member only once a real view needs it") — this
+   * view is the first grove surface to need one, and `deps.app` is cheaper
+   * than widening the shim for a single field only this view reads.
+   */
+  readonly app: App;
 }
 
 export class GroveView extends ItemView {
@@ -240,6 +275,9 @@ export class GroveView extends ItemView {
         // F1.5(b): the same evidenced ask also lists unreadable files —
         // this IS the "grove unable to answer its own question" surface.
         this.renderUnreadableFiles(box, section.unreadableFiles);
+        // `[D-226]` ruling 1, S1: the one action F1.5(b) has always promised
+        // and never had — see `renderRegisterAction`'s own doc.
+        this.renderRegisterAction(box, section);
         break;
       case 'inferred':
         // F8.1 scenario 3: the `grove` label and its denominator claim are
@@ -474,6 +512,36 @@ export class GroveView extends ItemView {
         text: groveUnreadableReasonLabel(file.reason),
       });
     }
+  }
+
+  /**
+   * `[D-226]` ruling 1, S1 — F1.5(b)'s "one action that fixes it," made real.
+   * Rendered only on the `'no-registered-source'` designed state
+   * (`renderCourse`'s own case above). Two steps, both delegated to
+   * `../course-setup/register-source-modal.ts` so S1 and S2
+   * (`../course-setup/register-source-wiring.ts`) share the exact same
+   * gesture: choose a file from `section.registerCandidates` (already scoped
+   * by `./provider.ts` to this course's own folder plus the F7.9 location),
+   * then choose its role. The write itself is `this.deps.registerSource` —
+   * this view never touches the vault directly — and a successful write
+   * re-reads the whole grove so the no-source state clears the moment the
+   * projection sees the new event.
+   */
+  private renderRegisterAction(parent: HTMLElement, section: GroveCourseSection): void {
+    const wrap = parent.createDiv({ cls: 'olea-grove-register-action' });
+    const button = wrap.createEl('button', {
+      cls: 'olea-grove-register-button',
+      text: GROVE_REGISTER_ACTION,
+    });
+    button.addEventListener('click', () => {
+      new RegisterSourceFileModal(this.deps.app, section.registerCandidates, (path) => {
+        new RegisterSourceRoleModal(this.deps.app, path, (role) => {
+          void this.deps
+            .registerSource({ path, role, course: section.course })
+            .then(() => this.refresh());
+        }).open();
+      }).open();
+    });
   }
 
   private renderOfferCard(parent: HTMLElement, card: RetrospectiveOfferCard): void {

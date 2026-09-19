@@ -25,3 +25,7 @@ export type {
   GroveViewState,
 } from '../../plugin/src/grove/view.js';
 export { GroveView, VIEW_TYPE_OLEA_GROVE } from '../../plugin/src/grove/view.js';
+// `[D-226]` ruling 1: `GroveViewDeps.app` needs a constructible `App` —
+// re-exported here rather than reached for a second time, same convention
+// `explain-back-bridge.ts` uses for its own `Modal`-based surface.
+export { App } from './obsidian-shim/index.js';

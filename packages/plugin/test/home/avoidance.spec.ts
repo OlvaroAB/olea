@@ -144,7 +144,9 @@ function declaredModel(cells: readonly { conceptKey: string }[]): GroveCourseMod
 }
 
 function section(course: string, model: GroveCourseModel): GroveCourseSection {
-  return { course, model, offerCards: [], unreadableFiles: [] };
+  // `registerCandidates` ([D-226] ruling 1, S1) is irrelevant to this join
+  // test — always empty, matching every other fixture field here.
+  return { course, model, offerCards: [], unreadableFiles: [], registerCandidates: [] };
 }
 
 describe('courseActivityFromGrove — the grove/review-log join', () => {

@@ -509,6 +509,99 @@ describe('createLocalGroveProvider — load', () => {
     expect(modelOf(courses[0])).toEqual({ status: 'no-registered-source', course: 'TESTC303' });
   });
 
+  // `[D-226]` ruling 1, S1: `GroveDataDeps.registerSource` and
+  // `GroveCourseSection.registerCandidates` — the reachability path for the
+  // grove's evidenced no-source action (`../../src/grove/view.ts`'s
+  // `renderRegisterAction`).
+  it("lists a registerable file from the course's own folder as a candidate before anything is registered (F1.5(b), [D-226])", async () => {
+    const vault = memoryVault({
+      [BASE_PATH]: [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+      '02 Assignments/Quiz 1.md':
+        '---\nclass: TESTC303\ntype: Quiz\nweight: 10\ndue: 2026-08-20\nstatus: done\n---\n\n# Quiz 1\n',
+      '01 Courses/TESTC303/Past Paper 2024.pdf': '%PDF-1.4 bytes\n',
+      // A markdown file in the same folder must never appear as a candidate —
+      // F1.3's frontmatter role property already covers it.
+      '01 Courses/TESTC303/Lecture Notes.md': '# Notes\n',
+    });
+    const provider = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const courses = await sectionsFrom(await provider.load());
+    expect(courses[0]?.registerCandidates).toEqual(['01 Courses/TESTC303/Past Paper 2024.pdf']);
+  });
+
+  it('registerSource writes a "source registered" event that the next load projects into a declared course ([D-226] ruling 1)', async () => {
+    const vault = memoryVault({
+      [BASE_PATH]: [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+      '02 Assignments/Quiz 1.md':
+        '---\nclass: TESTC303\ntype: Quiz\nweight: 10\ndue: 2026-08-20\nstatus: done\n---\n\n# Quiz 1\n',
+      '01 Courses/TESTC303/Past Paper 2024.pdf': '%PDF-1.4 bytes\n',
+    });
+    const provider = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const before = await sectionsFrom(await provider.load());
+    expect(modelOf(before[0])).toEqual({ status: 'no-registered-source', course: 'TESTC303' });
+
+    await provider.registerSource({
+      path: '01 Courses/TESTC303/Past Paper 2024.pdf',
+      role: 'past-paper',
+      course: 'TESTC303',
+    });
+
+    const after = await sectionsFrom(await provider.load());
+    const model = modelOf(after[0]);
+    if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+    expect(model.summary.denominatorSourcePaths).toEqual([
+      '01 Courses/TESTC303/Past Paper 2024.pdf',
+    ]);
+
+    // A correction is a second call for the same path — the next load
+    // reflects the LATEST role, never a duplicate registration.
+    await provider.registerSource({
+      path: '01 Courses/TESTC303/Past Paper 2024.pdf',
+      role: 'objectives',
+      course: 'TESTC303',
+    });
+    const corrected = await sectionsFrom(await provider.load());
+    const correctedModel = modelOf(corrected[0]);
+    if (correctedModel.status !== 'declared') {
+      throw new Error(`expected declared, got ${correctedModel.status}`);
+    }
+    expect(correctedModel.summary.denominatorSourcePaths).toEqual([
+      '01 Courses/TESTC303/Past Paper 2024.pdf',
+    ]);
+  });
+
   it('filters the standing offer to each course, never pooling it either (D-134 Q1)', async () => {
     const provider = createLocalGroveProvider({
       vault: fixtureVaultWithRegisteredSource(),
