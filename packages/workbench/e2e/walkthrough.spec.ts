@@ -91,22 +91,64 @@ test('WBF-2: the trends screen never opens on the read-failure message', async (
  * that one state's golden now does carry ladder/sprig content and was
  * re-baselined for it; every other flat `today` state is unchanged and this
  * paragraph's claim still holds for them.
+ *
+ * **Rewritten for `[D-224]`/GAP-1 (`ol-h9fs`).** This test used to pin the
+ * first gap row (GEOL204, "Imbrication") as `seed` and assert its sprig drew
+ * exactly one `<ellipse>`. `[D-224]` replaced the sidebar list with full-tab
+ * per-concept pages where a *material-gap* row (no notes at all for the
+ * concept) draws the dotted-and-hatched "no stage" mark and no sprig element
+ * at all (`gap/view.ts`'s `renderMasteryMark`) — and, independently, the
+ * fixture's only seed-stage concept (Hummocky stratification, 0 events) is
+ * exactly that material-gap row (`fixture-oracle-vault.ts` picked it for
+ * material-gap deliberately, because removing it from `materialPresence`
+ * "orphans no review history"). So no row in the current fixture is both
+ * seed-stage and sprig-bearing, by construction, independent of whether the
+ * mastery fold or the D-224 render is correct.
+ *
+ * Rather than re-pin a specific row (which breaks again the next time the
+ * fixture or the ranking order changes — this is the second time), this
+ * checks every sprig-bearing row's geometry against its own displayed stage
+ * word, so it stays valid regardless of which concept the oracle ranks
+ * first. Seed-specific geometry (no stem, no leaves — the case no row here
+ * can currently exercise) is already pinned independently of any fixture, in
+ * `packages/plugin/test/sprig/render-sprig.spec.ts`'s "seed draws no stem and
+ * no leaves".
  */
 test('SPRIG-1: the sprig actually reaches the screen on the gap view (step 8)', async ({
   page,
 }) => {
   await gotoWalkStep(page, 8);
+
+  // Reachability — the one claim this test exists for (see module doc above).
   const sprigs = frame(page).locator('.olea-sprig');
   await expect(sprigs.first()).toBeVisible();
-  // D-048/D-049 retired the "five fixed leaf positions, filled vs. empty
-  // outline" reading this assertion used to pin (`ol-8bf9`) — geometry is
-  // parameterised per stage instead (`render-sprig.ts`'s `SPRIG_GEOMETRY`):
-  // `seed` draws one ellipse and no stem or leaves, `sprout` a stem plus one
-  // leaf ellipse, `sapling`/`tree` a stem plus three — never a fourth leaf,
-  // and never an empty outline. The first gap row in this fixture (GEOL204,
-  // "Imbrication") is `seed`, which is exactly one `<ellipse>` (the seed
-  // shape itself; `SPRIG_GEOMETRY.seed.leaves` is empty).
-  await expect(sprigs.first().locator('ellipse')).toHaveCount(1);
+
+  // Geometry — each sprig-bearing mark carries its own stage word right next
+  // to the mark (`renderMasteryMark`'s `masteryEl.createSpan({ text:
+  // row.masteryState })`), so this reads the row's OWN claimed stage rather
+  // than assuming which stage any particular row is. `seed`/`sprout` draw one
+  // ellipse (the seed shape, or the sole leaf); `sapling`/`tree` draw three
+  // leaves — never a fourth, never an empty outline (D-048/D-049, `ol-8bf9`).
+  const ellipsesForStage: Record<string, number> = {
+    seed: 1,
+    sprout: 1,
+    sapling: 3,
+    tree: 3,
+  };
+  const marks = frame(page)
+    .locator('.olea-gap-mastery')
+    .filter({ has: frame(page).locator('.olea-sprig') });
+  const markCount = await marks.count();
+  expect(markCount).toBeGreaterThan(0);
+  for (let i = 0; i < markCount; i++) {
+    const mark = marks.nth(i);
+    const stage = (await mark.textContent())?.trim() ?? '';
+    const expectedEllipses = ellipsesForStage[stage];
+    if (expectedEllipses === undefined) {
+      throw new Error(`unrecognised mastery stage word: ${stage}`);
+    }
+    await expect(mark.locator('ellipse')).toHaveCount(expectedEllipses);
+  }
 });
 
 // WB-7 (`ol-ppxj.30`) found this red; VIT-3 (`ol-l5og.17`) then built the
