@@ -289,6 +289,58 @@ export const TASK_IDS = {
    * required (it generates), `groundResponse` `null`.
    */
   EXPLAIN_BACK_AUTHOR: 'explain-back.author.v1',
+  /**
+   * Slot G — authors an application probe: a question applying a taught
+   * principle to material her notes did not describe, its application
+   * boundary (`whatChanges`/`whatStaysConstant`/`reasoningRequired`/
+   * `exceedsScope`), and its grading basis, fixed before any answer exists
+   * (`[D-263]` rulings 1 and 4, C4.8, `[PROBE-3]` `ol-0r92.79`). The
+   * "writer" half of the pair ruling 4 requires — see
+   * `probe-application.solve.v1` for the independent blind solve it is
+   * never allowed to see. Grouped with `cards.generate.v1`/
+   * `quiz.generate.v1` (same Slot G bulk-generation shape) rather than with
+   * `concepts.extract.v1`'s W4 family, since it authors a new instrument
+   * rather than reading one out of her material.
+   *
+   * Compound domain word hyphenated per this file's own naming law —
+   * originally minted as two dot-separated words and renamed before first
+   * registration (`[PROBE-7]` `ol-0r92.84`, discovered-from `[PROBE-6]`
+   * `ol-0r92.81`). Payload/response fixed by
+   * `olea-service/src/tasks/probeApplicationGenerate.ts`; INV-5 grounding
+   * contract required (it generates), `groundResponse` drops any probe
+   * with zero valid citations. Reserved and routed by `[PROBE-6]`
+   * (`ol-0r92.81`); a named production caller is still owed by `[PROBE-5]`
+   * (`ol-v7r5.46`)'s still-open design ruling on the client-side probe-offer
+   * flow.
+   */
+  PROBE_APPLICATION_GENERATE: 'probe-application.generate.v1',
+  /**
+   * Slot J — the independent blind solve `[D-263]` ruling 4 requires:
+   * solves `probe-application.generate.v1`'s question from its question and
+   * source material alone, never seeing that task's `boundary` or
+   * `gradingBasis` fields — there is no field in this task's own schema for
+   * either. Pinned to a different model family from Slot G's writer (the
+   * same "different family" fence `explain-back.author.v1` holds against
+   * `explain-back.judge.v1`); grouped with `explain-why.generate.v1`/
+   * `grounding.judge.v1`'s W6-adjacent reasoning-from-source shape rather
+   * than with the writer's bulk-generation shape. Comparing this task's
+   * output against the writer's grading basis is a separate, deterministic,
+   * non-model comparison (`olea-service/src/tasks/
+   * probeApplicationAgreement.ts`'s `checkProbeAgreementFromResponses`) —
+   * never a third model call, per `[D-231]`'s "decides no individual
+   * verdict."
+   *
+   * Compound domain word hyphenated for the same reason and by the same
+   * bead as `probe-application.generate.v1` above — see that id's comment.
+   * Payload/response fixed by `olea-service/src/tasks/
+   * probeApplicationSolve.ts`; INV-5 grounding contract required (solving
+   * is generation from source material, not judgment over an answer that
+   * already exists), `groundResponse` drops any solution with zero valid
+   * citations. Reserved and routed by `[PROBE-6]` (`ol-0r92.81`); a named
+   * production caller is still owed by `[PROBE-5]` (`ol-v7r5.46`)'s
+   * still-open design ruling.
+   */
+  PROBE_APPLICATION_SOLVE: 'probe-application.solve.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */

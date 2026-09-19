@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these nineteen ids, spelled exactly this way', () => {
+  it('is exactly these twenty-one ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -29,6 +29,8 @@ describe('the closed task-id catalogue', () => {
       'oracle.rank.v1',
       'outcomes.extract.v1',
       'plan.governor.v1',
+      'probe-application.generate.v1',
+      'probe-application.solve.v1',
       'quiz.generate.v1',
       'retrieval.embed.v1',
       'retrieval.rerank.v1',
@@ -107,7 +109,17 @@ describe('the closed task-id catalogue', () => {
     // out of her material with a required grounding contract, rather than
     // judging something that already exists. Reserved, not yet served with a
     // production caller — see its own doc comment in `tasks.ts`.
-    expect(ALL_TASK_IDS).toHaveLength(19);
+    //
+    // `probe-application.generate.v1`/`probe-application.solve.v1`
+    // (`[D-263]` rulings 1 and 4, C4.8, `[PROBE-3]` `ol-0r92.79`, reserved
+    // and routed by `[PROBE-6]` `ol-0r92.81`) carry no W-number as a pair:
+    // the writer is Slot G bulk generation and the independent blind
+    // solver is Slot J reasoning-from-source — see each id's own doc
+    // comment in `tasks.ts` for the "different family" fence and why the
+    // two are never resolved by a third model call (`[D-231]`). A named
+    // production caller is still owed by `[PROBE-5]` (`ol-v7r5.46`)'s
+    // still-open design ruling.
+    expect(ALL_TASK_IDS).toHaveLength(21);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
