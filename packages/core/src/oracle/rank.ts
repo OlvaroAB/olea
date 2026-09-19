@@ -508,20 +508,33 @@ function resolveMasteryState(
 
 /**
  * `retrievabilityWeight` for one concept — see `RankOracleInput.retrievability`'s
- * doc for what this is and why nothing supplies it today. Absence (the map
- * itself omitted, or this concept missing from it) reads as neutral (1),
- * the same "absent signal is neutral" rule `resolveMasteryState`'s
- * `'unknown'` and `computeAssessmentWeightScore`'s unresolved-weight case
- * both follow. A supplied value must be a genuine probability, `(0, 1]` —
- * never negative, never a silent >1 that would inflate a concept's priority
- * beyond what it earned from evidence alone.
+ * doc for what this is and why nothing supplies it today.
+ *
+ * **Returns `undefined`, never a defaulted `1`, when this concept has no
+ * supplied retrievability** (the map itself omitted, or this concept missing
+ * from it) — C5.6/`[D-264]`'s producer work (`ol-v7r5.52`). The two facts
+ * "no eligible recall evidence for this concept" and "eligible evidence
+ * whose measured value happens to be a genuinely neutral `1`" used to
+ * collapse to the identical stored number, which left a reader of
+ * `OracleConceptFactors.retrievabilityWeight` unable to tell them apart —
+ * exactly the distinction readiness's supported-only exclusion needs to
+ * apply a real policy zero rather than a measured one. The BLEND this
+ * feeds (`priorityScore`, below) still treats absence as neutral, per
+ * C5.10 ("retrievability is a signal, never a gate") — only the STORED
+ * factor now preserves the distinction; `resolveMasteryState`'s `'unknown'`
+ * and `computeAssessmentWeightScore`'s unresolved-weight case still default
+ * at the point they're consumed, the same as this one now does.
+ *
+ * A supplied value must be a genuine probability, `(0, 1]` — never negative,
+ * never a silent >1 that would inflate a concept's priority beyond what it
+ * earned from evidence alone.
  */
 function resolveRetrievabilityWeight(
   retrievability: ReadonlyMap<string, number> | undefined,
   conceptKey: string,
-): number {
+): number | undefined {
   const value = retrievability?.get(conceptKey);
-  if (value === undefined) return 1;
+  if (value === undefined) return undefined;
   if (!(value > 0 && value <= 1)) {
     throw new Error(`rankOracle: retrievability.${conceptKey} must be within (0, 1], got ${value}`);
   }
@@ -715,8 +728,15 @@ function rankOneCourse(
       preMasteryScore,
       masteryState,
       masteryNeedWeight,
-      retrievabilityWeight,
-      priorityScore: preMasteryScore * masteryNeedWeight * retrievabilityWeight,
+      // `exactOptionalPropertyTypes` — the key must be OMITTED, not set to
+      // `undefined`, for absence to read the same way an object literal
+      // that never mentioned this field would (see the field's own doc).
+      ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
+      // Neutral (1) exactly when no eligible retrievability evidence was
+      // supplied for this concept — the blend's own default, applied here
+      // rather than baked into `retrievabilityWeight` itself so the stored
+      // factor can stay absent (see `resolveRetrievabilityWeight`'s doc).
+      priorityScore: preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1),
     };
 
     entries.push({

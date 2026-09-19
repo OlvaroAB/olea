@@ -239,7 +239,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     expect(entry?.factors.masteryState).toBe('seed');
   });
 
-  it("with no `retrievability` input at all, every concept reads the documented neutral (1) — `RankOracleInput.retrievability`'s own default path", async () => {
+  it("with no `retrievability` input at all, the stored factor is absent (never a defaulted 1) though the blend still reads neutral — `ol-v7r5.52`'s reshape", async () => {
     const result = await composeOracleRanking({
       vault: source,
       basePath: BASE_PATH,
@@ -251,7 +251,9 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
-    expect(entry?.factors.retrievabilityWeight).toBe(1);
+    // Absent, not `1` — "no eligible evidence" is now distinguishable from
+    // "a genuine measured neutral value" (`OracleConceptFactors.retrievabilityWeight`'s doc).
+    expect(entry?.factors.retrievabilityWeight).toBeUndefined();
   });
 
   it('threads retrievability from a supplied Scheduler + instant into the ranking (register join 1-2, `[D-087]`, `ol-95vv.1`)', async () => {
@@ -285,9 +287,10 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const withEntry = findEntry(withRetrievability);
     const withoutEntry = findEntry(withoutRetrievability);
 
-    // Neutral without a scheduler (re-asserted here so this test stands on
-    // its own if the dedicated default-path test above is ever removed).
-    expect(withoutEntry.factors.retrievabilityWeight).toBe(1);
+    // Absent without a scheduler — the blend still reads neutral (re-asserted
+    // here so this test stands on its own if the dedicated default-path test
+    // above is ever removed), but the stored factor no longer fabricates a 1.
+    expect(withoutEntry.factors.retrievabilityWeight).toBeUndefined();
     // The stub's recall probability for `qa:widget-theory:1` — the review
     // fixture's `instrumentId` — flows straight through as the multiplier.
     expect(withEntry.factors.retrievabilityWeight).toBe(0.35);
@@ -300,7 +303,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     expect(withEntry.factors.priorityScore).not.toBe(withoutEntry.factors.priorityScore);
   });
 
-  it('a concept with no recall-tier instrument read (e.g. no review history) is left OUT of the map — reads neutral, never a fabricated value', async () => {
+  it('a concept with no recall-tier instrument read (e.g. no review history) is left OUT of the map — reads neutral in the blend, absent in the stored factor, never a fabricated value', async () => {
     const scheduler = stubScheduler({}); // never queried: no review events exist for widgetKey
     const now = new Date('2026-08-15T09:00:00.000Z');
 
@@ -316,7 +319,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
-    expect(entry?.factors.retrievabilityWeight).toBe(1);
+    expect(entry?.factors.retrievabilityWeight).toBeUndefined();
   });
 });
 

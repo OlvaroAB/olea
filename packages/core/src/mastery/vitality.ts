@@ -236,3 +236,110 @@ export function readVitality(input: ReadVitalityInput): VitalityReading {
     instrumentsRead,
   };
 }
+
+/**
+ * One of a concept's instruments, as {@link readReadinessRecall} needs to see
+ * it — {@link VitalityInstrument} plus the one extra fact readiness's
+ * eligibility test needs that vitality's own fold does not.
+ */
+export interface ReadinessRecallInstrument extends VitalityInstrument {
+  /**
+   * Whether this instrument has at least one completed review that succeeded
+   * at the `'independent'` support level (`../support-level/types.js`'
+   * `SupportLevel`) — `[D-264]` ruling 1's gap: FSRS retrievability is not
+   * adjusted by support level, so an instrument whose only successes were
+   * supported (`'prompted'` or `'guided'`) carries no eligible recall
+   * evidence for readiness, even though it still schedules and still counts
+   * toward mastery under `[D-094]`'s discount. `false` when every recorded
+   * success (if any at all — a never-succeeded instrument is also `false`)
+   * was supported; `true` the moment one independent success exists.
+   *
+   * This is the caller's fact to supply, computed from the review log —
+   * this module does not walk review history and never will (see the module
+   * doc's "nothing here is persisted"). Whether an instrument has ever
+   * succeeded independently is a question about its whole history, not
+   * about the single current `state` snapshot `VitalityInstrument` carries.
+   */
+  readonly hasIndependentSuccess: boolean;
+}
+
+/**
+ * One concept's weakest ELIGIBLE recall estimate, and how many eligible
+ * instruments fed it — C5.6/`[D-264]`'s readiness fold input (`ol-v7r5.52`,
+ * producer work). `weakest === null` means "no eligible recall evidence for
+ * this concept" (`OracleConceptFactors.retrievabilityWeight`'s `undefined`
+ * case, `./oracle/rank.ts`, is the sibling half of the same distinction on
+ * the ranking side) — never a measured zero, and never confused with a
+ * genuinely low recall probability that a real eligible instrument produced.
+ */
+export interface ReadinessRecallReading {
+  /** The eligible instrument whose recall probability was the minimum. `null` exactly when no instrument was eligible. */
+  readonly weakest: VitalityWeakest | null;
+  /** How many eligible instruments actually entered the fold. Zero exactly when `weakest` is `null`. */
+  readonly instrumentsRead: number;
+}
+
+export interface ReadReadinessRecallInput {
+  /** Every instrument attached to the concept — ineligible ones included; every filter (tier, review, support level) is applied here, not by the caller. */
+  readonly instruments: readonly ReadinessRecallInstrument[];
+  /** The port. Only `retrievability` is used; the fold never schedules anything. */
+  readonly scheduler: Scheduler;
+  /** Never read from `Date.now()` inside this module — the caller's instant, so a replay of a review log is deterministic. */
+  readonly now: Date;
+}
+
+/**
+ * Read a concept's weakest ELIGIBLE recall estimate for readiness
+ * (C5.6/`[D-264]` ruling 1) — a NEW sibling to {@link readVitality}, not an
+ * edit to it. `[D-264]` ruling 1 is explicit that vitality's own arithmetic
+ * is unchanged by the readiness work (it answers F2.11's decay reading, not
+ * readiness), so the supported-only exclusion lives in its own fold rather
+ * than growing a parameter on `readVitality` that would change what every
+ * existing vitality caller sees.
+ *
+ * Reuses exactly two things from `readVitality`, by name, per the bead this
+ * closes: R3's tier filter ({@link isRecallTier}, unchanged, imported by
+ * every caller from this same module) and minimum aggregation (strict `<`,
+ * same tie-break: the first instrument at the minimum is the one named).
+ * What it does NOT reuse is the holding/tending classification —
+ * readiness has no cut here. `[D-264]` folds concepts into an average of
+ * weakest-eligible-estimates over scope (that fold is `oracle/allocation`'s
+ * to build, out of this module's reach); this function's job stops at
+ * handing back one concept's weakest eligible number, or `null`.
+ *
+ * Pure: same instruments, same `now`, same reading. Never throws — there is
+ * no cut parameter here to validate.
+ */
+export function readReadinessRecall(input: ReadReadinessRecallInput): ReadinessRecallReading {
+  const { instruments, scheduler, now } = input;
+
+  let weakest: VitalityWeakest | null = null;
+  let instrumentsRead = 0;
+
+  for (const instrument of instruments) {
+    // R3's filter, reused unchanged — recognition-tier instruments say
+    // nothing about recall for readiness either.
+    if (!isRecallTier(instrument.instrumentType)) continue;
+    // No completed review at all — nothing to read.
+    if (instrument.state === null) continue;
+    // `[D-264]` ruling 1's gap: an instrument whose only successes were
+    // supported is not eligible recall evidence for readiness, though it
+    // still schedules and still counts toward mastery.
+    if (!instrument.hasIndependentSuccess) continue;
+
+    instrumentsRead += 1;
+    const { recallProbability } = scheduler.retrievability({
+      instrumentId: instrument.instrumentId,
+      state: instrument.state,
+      now,
+    });
+
+    // Same tie-break as `readVitality`: strict `<` keeps the first
+    // instrument at the minimum the one named, stable under reordering.
+    if (weakest === null || recallProbability < weakest.recallProbability) {
+      weakest = { instrumentId: instrument.instrumentId, recallProbability };
+    }
+  }
+
+  return { weakest, instrumentsRead };
+}

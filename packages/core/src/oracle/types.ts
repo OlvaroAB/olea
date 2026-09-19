@@ -124,10 +124,20 @@ export interface OracleConceptFactors {
   /**
    * Per-concept retrievability (FSRS recall probability at `asOf`) as a
    * blend multiplier — C5.10 names retrievability as one of the SIGNALS,
-   * never a gate. `1` (neutral) whenever `RankOracleInput.retrievability`
-   * omitted this concept or was omitted entirely, which is every caller
-   * today (see that field's doc for the reachability gap). Optional only so
-   * object literals built before this field existed still typecheck.
+   * never a gate.
+   *
+   * **`undefined` — never a defaulted `1` — whenever `RankOracleInput.retrievability`
+   * omitted this concept or was omitted entirely** (which is every caller
+   * today; see that field's doc for the reachability gap). This is a
+   * deliberate shape, not an artifact of optionality: absence here means "no
+   * eligible recall evidence for this concept", distinct from a supplied
+   * value that happens to equal a genuinely neutral `1` — a distinction a
+   * defaulted number could not carry (C5.6/`[D-264]`'s producer work,
+   * `ol-v7r5.52`). A consumer building the true readiness fold (`[D-264]`
+   * ruling 1's supported-only exclusion) reads `undefined` here as the
+   * policy-zero case; `rankOracle`'s own blend (`priorityScore`, below)
+   * still applies the neutral `1` fallback at the point of computing the
+   * score, so ranking behaviour is unchanged.
    */
   readonly retrievabilityWeight?: number;
   /** `preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1)` — restated on the entry itself as `ConceptPriority.priorityScore`. */

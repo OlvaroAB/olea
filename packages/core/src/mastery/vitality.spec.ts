@@ -13,7 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
-import { isRecallTier, readVitality, type VitalityInstrument } from './vitality.js';
+import {
+  isRecallTier,
+  type ReadinessRecallInstrument,
+  readReadinessRecall,
+  readVitality,
+  type VitalityInstrument,
+} from './vitality.js';
 
 const NOW = new Date('2026-03-01T09:00:00.000Z');
 
@@ -352,5 +358,108 @@ describe('readVitality — against the real ts-fsrs port', () => {
     expect(reading.value).toBe('tending');
     expect(reading.weakest?.instrumentId).toBe('stale');
     expect(reading.instrumentsRead).toBe(2);
+  });
+});
+
+/**
+ * `readReadinessRecall` — the NEW readiness-specific sibling fold
+ * (C5.6/`[D-264]` ruling 1, `ol-v7r5.52`). `readVitality`'s own arithmetic is
+ * untouched by this suite; these tests prove only the new function: it
+ * reuses the tier filter and the minimum aggregation, and adds the
+ * supported-only exclusion `readVitality` deliberately does not apply.
+ */
+describe('readReadinessRecall — the supported-only exclusion (C5.6/[D-264] ruling 1)', () => {
+  const scheduler = stubScheduler({ 'inst-1': 0.99, 'inst-2': 0.3, 'inst-mcq': 1 });
+
+  function eligible(
+    instrumentId: string,
+    overrides: Partial<ReadinessRecallInstrument> = {},
+  ): ReadinessRecallInstrument {
+    return {
+      instrumentId,
+      instrumentType: 'qa',
+      state: REVIEWED,
+      hasIndependentSuccess: true,
+      ...overrides,
+    };
+  }
+
+  it('an instrument whose only successes were supported carries no eligible evidence — excluded, not down-weighted', () => {
+    const reading = readReadinessRecall({
+      instruments: [eligible('inst-1', { hasIndependentSuccess: false })],
+      scheduler,
+      now: NOW,
+    });
+    // "No eligible evidence for this concept" — `null`, never a measured
+    // zero and never the instrument's actual (excluded) recall probability.
+    expect(reading.weakest).toBeNull();
+    expect(reading.instrumentsRead).toBe(0);
+  });
+
+  it('an instrument with at least one independent success is eligible, however many supported attempts sit alongside it', () => {
+    const reading = readReadinessRecall({
+      instruments: [eligible('inst-1', { hasIndependentSuccess: true })],
+      scheduler,
+      now: NOW,
+    });
+    expect(reading.weakest).toEqual({ instrumentId: 'inst-1', recallProbability: 0.99 });
+    expect(reading.instrumentsRead).toBe(1);
+  });
+
+  it('reuses R3s tier filter unchanged — recognition-tier (mcq) is excluded regardless of independent success', () => {
+    const reading = readReadinessRecall({
+      instruments: [
+        {
+          instrumentId: 'inst-mcq',
+          instrumentType: 'mcq',
+          state: REVIEWED,
+          hasIndependentSuccess: true,
+        },
+      ],
+      scheduler,
+      now: NOW,
+    });
+    expect(reading.weakest).toBeNull();
+    expect(reading.instrumentsRead).toBe(0);
+  });
+
+  it('an unreviewed instrument (state null) is excluded even if flagged as independently successful', () => {
+    const reading = readReadinessRecall({
+      instruments: [eligible('inst-1', { state: null, hasIndependentSuccess: true })],
+      scheduler,
+      now: NOW,
+    });
+    expect(reading.weakest).toBeNull();
+    expect(reading.instrumentsRead).toBe(0);
+  });
+
+  it('reuses minimum aggregation unchanged: one eligible-but-supported instrument does not drag down an eligible independent one', () => {
+    const reading = readReadinessRecall({
+      instruments: [
+        eligible('inst-1', { hasIndependentSuccess: true }), // 0.99 — eligible
+        eligible('inst-2', { hasIndependentSuccess: false }), // 0.3 — excluded (supported-only)
+      ],
+      scheduler,
+      now: NOW,
+    });
+    // If the supported-only instrument's 0.3 were folded in, this would read
+    // 0.3 — the exact confusion the exclusion exists to prevent.
+    expect(reading.weakest).toEqual({ instrumentId: 'inst-1', recallProbability: 0.99 });
+    expect(reading.instrumentsRead).toBe(1);
+  });
+
+  it('two independently-eligible instruments still fold to the minimum, same tie-break as readVitality', () => {
+    const reading = readReadinessRecall({
+      instruments: [eligible('inst-1'), eligible('inst-2')],
+      scheduler,
+      now: NOW,
+    });
+    expect(reading.weakest).toEqual({ instrumentId: 'inst-2', recallProbability: 0.3 });
+    expect(reading.instrumentsRead).toBe(2);
+  });
+
+  it('no instruments at all reads no eligible evidence, never a throw and never a fabricated value', () => {
+    const reading = readReadinessRecall({ instruments: [], scheduler, now: NOW });
+    expect(reading).toStrictEqual({ weakest: null, instrumentsRead: 0 });
   });
 });

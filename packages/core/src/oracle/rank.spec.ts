@@ -732,6 +732,68 @@ describe('rankOracle — mastery join, two distinct absences', () => {
   });
 });
 
+describe('rankOracle — retrievability weight: absence vs. a genuine neutral value (ol-v7r5.52, C5.6/[D-264] producer work)', () => {
+  const input = (retrievability?: ReadonlyMap<string, number>): RankOracleInput => ({
+    evidence: {
+      edges: [edge()],
+      assessmentsRead: readReport([assessment()]),
+      assessmentsWithNoEvidence: [],
+    },
+    ...(retrievability !== undefined ? { retrievability } : {}),
+    asOf: ASOF,
+  });
+
+  it('retrievability omitted entirely => the stored factor is absent, never a defaulted 1', () => {
+    const result = rankOracle(input(undefined));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.retrievabilityWeight).toBeUndefined();
+    // The blend still reads neutral — only the stored factor changed shape.
+    expect(entry?.priorityScore).toBeCloseTo(
+      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0),
+      10,
+    );
+  });
+
+  it('retrievability supplied but this concept absent from it => same absence, same neutral blend', () => {
+    const retrievability = new Map([['some-other-concept', 0.5]]);
+    const result = rankOracle(input(retrievability));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.retrievabilityWeight).toBeUndefined();
+    expect(entry?.priorityScore).toBeCloseTo(
+      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0),
+      10,
+    );
+  });
+
+  it('retrievability supplied for this concept as a genuine 1.0 => the stored factor is a DEFINED 1, distinguishable from absence though numerically identical to the neutral fallback', () => {
+    const retrievability = new Map([['concept-a', 1]]);
+    const result = rankOracle(input(retrievability));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.retrievabilityWeight).toBe(1);
+    expect('retrievabilityWeight' in (entry?.factors ?? {})).toBe(true);
+    expect(Object.hasOwn(entry?.factors ?? {}, 'retrievabilityWeight')).toBe(true);
+  });
+
+  it('retrievability supplied for this concept as a non-neutral value moves the score, and the stored factor carries it verbatim', () => {
+    const retrievability = new Map([['concept-a', 0.4]]);
+    const result = rankOracle(input(retrievability));
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.retrievabilityWeight).toBe(0.4);
+    expect(entry?.priorityScore).toBeCloseTo(
+      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0) * 0.4,
+      10,
+    );
+  });
+});
+
 describe('rankOracle — the abstain path (INV-5 shape)', () => {
   it('a course whose assessments have zero evidence edges abstains, and never fabricates an empty ranking', () => {
     const input: RankOracleInput = {
