@@ -317,6 +317,100 @@ export function formatPreferenceLine(
 }
 
 // ---------------------------------------------------------------------------
+// F2.22 — the per-item reason's own wording rule (`[HARD-22]` / `ol-egov.132.17`)
+//
+// F2.22 holds a per-item reason for every item and rules only WHERE it is
+// displayed ("available on request and never shown by default"), not its
+// wording. This is the wording rule for the moment it IS shown.
+//
+// **The finding.** `findings/sentence-read-2026-09-11.md` §4/§8 (olea-service,
+// private — cited by path, never quoted, per that repo's INV-3 rule): across
+// 21 blind-read pages, EXPLAINS held 21/21 but WANTED fell to 10/21 — every
+// sentence explains why, but 11 of 21 read as not wanted at the moment shown.
+// The read's own pattern line: the weaker sentences bury the immediate
+// decision under supporting evidence, caveat and assessment-context detail
+// that belongs in the reasoning underneath, not in the sentence itself. The
+// one closed-surface, one-clause sentence tested (C5.6's course-why/focus
+// sentence, `SESSION_ATTRIBUTION`'s neighbour on this same screen) was
+// wanted every time; the freeform, LLM-authored per-item reason is where the
+// length problem concentrates (274 distinct sentences in that run, zero code
+// template).
+//
+// **The rule: one clause naming the decisive factor.** Evidence, citations
+// and caveats stay in the reasoning the reason is drawn from; they never
+// reach the sentence she is shown.
+//
+// **Why this is a display-time backstop, not the whole fix.** Unlike
+// {@link masteryGapLine} (`../gap/copy.js`) — which replaced a raw oracle
+// string outright by composing a fresh sentence from a few counted,
+// structured fields — a per-item reason has no such structured decomposition
+// available client-side: it is a single freeform string, generated
+// server-side (`oracle.rank.v1` / the item-authoring task, private-repo
+// prompt), and there is no code-side way to reliably identify "the decisive
+// factor" inside prose it did not structure. {@link itemReasonLine} therefore
+// enforces the one MECHANICAL, non-lossy piece of the rule available at
+// render time — dropping any evidence appended as its own sentence or after
+// a semicolon — and stops there rather than attempting lossy surgery inside
+// a single clause, which risks cutting the decisive factor itself rather
+// than the evidence around it. **The rest of the rule — keeping the
+// generated sentence itself down to one clause in the first place — is a
+// generation-time (prompt) concern, parked; see this bead's close notes for
+// which bead should carry it.**
+// ---------------------------------------------------------------------------
+
+/**
+ * The index just past the first sentence-ending period in `text`, or `-1` if
+ * none qualifies.
+ *
+ * A period counts as a sentence boundary only when it is followed by
+ * whitespace then a capital letter, and is not itself preceded by a digit —
+ * the second guard is what keeps a decimal ("3.5 days") or a mid-number cite
+ * from being misread as a sentence break. Not a general-purpose sentence
+ * splitter (abbreviations like "e.g." can still fool it); it only needs to
+ * catch the common case this module's inputs actually produce: a decisive
+ * clause followed by one or more further sentences of evidence.
+ */
+function firstSentenceEnd(text: string): number {
+  for (let i = 1; i < text.length - 1; i++) {
+    if (text[i] !== '.') continue;
+    if (/\d/.test(text[i - 1] ?? '')) continue;
+    if (!/\s/.test(text[i + 1] ?? '')) continue;
+    const rest = text.slice(i + 1).trimStart();
+    if (rest.length > 0 && /[A-Z]/.test(rest[0] ?? '')) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * The per-item reason's wording rule applied to one freeform reason string:
+ * one clause naming the decisive factor, with any evidence appended as a
+ * further sentence or after a semicolon cut away. See the section doc above
+ * for what this function does and does not attempt.
+ *
+ * Idempotent, and a no-op on a reason that is already one clause — which
+ * covers every closed-surface, code-templated reason this module produces
+ * elsewhere (`sittingStaleReasonLine`, `focusLine`, …), so calling it
+ * defensively on a reason from any source never damages one that was already
+ * fine.
+ */
+export function itemReasonLine(reason: string): string {
+  const trimmed = reason.trim();
+  if (trimmed.length === 0) return trimmed;
+
+  const semicolonIndex = trimmed.indexOf(';');
+  if (semicolonIndex !== -1) {
+    return `${trimmed.slice(0, semicolonIndex).trim()}.`;
+  }
+
+  const sentenceEnd = firstSentenceEnd(trimmed);
+  if (sentenceEnd !== -1 && sentenceEnd < trimmed.length) {
+    return trimmed.slice(0, sentenceEnd).trim();
+  }
+
+  return trimmed;
+}
+
+// ---------------------------------------------------------------------------
 // The times, and whose estimate they are
 // ---------------------------------------------------------------------------
 

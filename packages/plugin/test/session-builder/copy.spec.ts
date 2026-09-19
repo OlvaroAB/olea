@@ -32,6 +32,7 @@ import {
   formatPreferenceLine,
   instrumentGroupHeading,
   instrumentTypeLabel,
+  itemReasonLine,
   leftOutLines,
   minutesLabel,
   newMaterialLines,
@@ -439,6 +440,65 @@ describe('the format line explains a preference only when one actually fired', (
         model({ formatPreference: 'recall-style', items: [item({ formatMatch: 'other-format' })] }),
       ),
     ).toBeNull();
+  });
+});
+
+// --------------------------------------------------------------------------
+// F2.22 — the per-item reason's own wording rule (`[HARD-22]` / `ol-egov.132.17`)
+// --------------------------------------------------------------------------
+
+describe('itemReasonLine — one clause, evidence stays underneath', () => {
+  it('leaves an already-one-clause reason unchanged', () => {
+    expect(itemReasonLine('You missed this twice in your last five attempts.')).toBe(
+      'You missed this twice in your last five attempts.',
+    );
+    // No sentence-ending punctuation at all — still a no-op.
+    expect(itemReasonLine('You missed this twice in your last five attempts')).toBe(
+      'You missed this twice in your last five attempts',
+    );
+  });
+
+  it('is a no-op on the closed-surface, code-templated reasons this module already produces', () => {
+    const stale = sittingStaleReasonLine(['items-due-in-scope']);
+    expect(itemReasonLine(stale)).toBe(stale);
+    const focus = focusLine(model({ focusConcept: 'Alpha' }));
+    expect(focus).not.toBeNull();
+    expect(itemReasonLine(focus as string)).toBe(focus);
+  });
+
+  it('cuts a second appended sentence of evidence away, keeping the first sentence', () => {
+    expect(
+      itemReasonLine(
+        'You missed this twice in your last five attempts. It is also cited in three of your five past papers, including the midterm.',
+      ),
+    ).toBe('You missed this twice in your last five attempts.');
+  });
+
+  it('cuts everything from a semicolon onward', () => {
+    expect(
+      itemReasonLine(
+        'You missed this twice in your last five attempts; it is also cited in three past papers and due in 4 days.',
+      ),
+    ).toBe('You missed this twice in your last five attempts.');
+  });
+
+  it('does not mistake a decimal for a sentence boundary', () => {
+    expect(itemReasonLine('It is worth 3.5% of your grade and due in 2 days.')).toBe(
+      'It is worth 3.5% of your grade and due in 2 days.',
+    );
+  });
+
+  it('trims surrounding whitespace and is a no-op on an empty reason', () => {
+    expect(itemReasonLine('  You missed this twice.  ')).toBe('You missed this twice.');
+    expect(itemReasonLine('')).toBe('');
+    expect(itemReasonLine('   ')).toBe('');
+  });
+
+  it('is idempotent — running it twice never removes a second sentence that a single pass already cut', () => {
+    const raw =
+      'You missed this twice in your last five attempts. It is also cited in three past papers.';
+    const once = itemReasonLine(raw);
+    expect(itemReasonLine(once)).toBe(once);
   });
 });
 
