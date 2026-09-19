@@ -48,70 +48,50 @@
  * available today, not a derived fit; sharpening it to the single-assessment
  * scope is a real follow-up, not silently assumed done here.
  *
- * **This is a growth-stage proxy, not C5.6's fold — and it carries that
- * qualifier rather than dropping it (`[D-264]` / `ol-v7r5.47`).** C5.6
- * defines readiness as the average, over scope, of each concept's *weakest
- * eligible recall estimate* (R3's tier filter — recall-tier instruments
- * only, minimum retrievability — further narrowed by `[D-264]`: an
- * instrument whose only successes were supported is not eligible either).
- * What this function actually reads is `masteryState`, a rollup over the
- * whole evidence log with no retrievability, no per-instrument tier, and no
- * support level anywhere in it. The two readings are related — a `sapling`
- * concept has produced spaced-out successes — but they are not the same
- * quantity, and neither the recall-tier exclusion nor `[D-264]`'s
- * supported-only exclusion is expressible from `masteryState` alone.
- *   - `readiness`: the fraction of ranked concepts whose `masteryState` is
- *     `'sapling'` or `'tree'` — R7/mastery's own words for "demonstrably
- *     solid" (`'seed'`/`'sprout'` read as not yet solid, `'unknown'` as no
- *     evidence at all, counted in the denominator either way since
- *     readiness is a fraction of the whole scope). **Unchanged by this
- *     reconciliation** — `sapling`/`tree` already exclude every concept
- *     with no evidence or below the spacing gate, which is the one part of
- *     the policy-zero requirement expressible at this grain.
- *   - `evidenceVolume`: the fraction of ranked concepts with *any scored
- *     review at all* — `masteryState` is `'sprout'`, `'sapling'` or
- *     `'tree'`. **Fixed by this reconciliation** (`[D-264]` audit): this
- *     used to also count `'seed'`, which `mastery/rollup.ts`'s own module
- *     doc defines as "no evidence at all: no scored review, and no graded
- *     explain-back" — the exact case C5.6 names as contributing "no credited
- *     evidence... a policy zero, never a measured zero." A `'seed'` concept
- *     was silently read as evidenced; it no longer is.
- *   - **What remains unreconciled, and why it cannot be closed inside this
- *     file.** Two gaps survive the fix above, both blocked on data this
- *     module's inputs (`CourseOracleRanking` → `ConceptPriority.factors`)
- *     do not carry:
- *     1. **No recognition-tier exclusion.** R7: "a concept may reach
- *        `sapling` on any evidence mix" — recognition-only (MCQ) practice
- *        can produce `sapling`/`sprout` by itself, but C5.6 requires
- *        recognition evidence to be excluded "explicitly, not incidentally."
- *        `OracleConceptFactors` (`../oracle/types.js`) carries only
- *        `masteryState`, never the per-tier `ConceptMasteryEvidence` the
- *        rollup already computes internally (`tiersPracticed.recall`) — so
- *        there is nothing here to filter on.
- *     2. **No `[D-264]` supported-only exclusion, and no real per-concept
- *        retrievability at all.** The closer signal,
- *        `OracleConceptFactors.retrievabilityWeight`, cannot serve this
- *        purpose as built: `oracle/rank.ts`'s `resolveRetrievabilityWeight`
- *        (around line 434) collapses "no eligible evidence for this
- *        concept" and "a genuinely neutral value" to the same `1`, which is
- *        the opposite of the policy-zero requirement. And even where it is
- *        populated, its producer — `mastery/vitality.ts`'s `readVitality`
- *        fold, threaded through `oracle/compose.ts`'s optional
- *        `retrievability` input — has no support-level awareness at all
- *        (`VitalityInstrument` carries no support field), so it cannot
- *        implement `[D-264]`'s exclusion even if wired through; `[D-264]`
- *        ruling 1 leaves vitality's own arithmetic unchanged, so this needs
- *        a readiness-specific fold, not an edit to `vitality.ts`. On top of
- *        that, **no production caller wires it today**: `oracle/compose.ts`'s
- *        own module doc says outright that none of its three production
- *        callers passes `retrievability` yet, and
- *        `packages/plugin/src/plan/provider.ts`'s `composeOracleRanking`
- *        call (the one call site that feeds this function) confirms it —
- *        no `retrievability` field in the call. Closing this needs new
- *        producer work in `oracle/types.ts`, `oracle/rank.ts`, a new
- *        readiness-eligibility fold, and that plugin call site — none of
- *        them owned by this bead. Filed rather than attempted here: see
- *        `ol-v7r5.47`'s close evidence.
+ * **This IS C5.6's fold now, reshaped from the `masteryState` proxy this
+ * function used to read (`[D-264]` / `ol-v7r5.47` audit, closed by
+ * `ol-v7r5.53` items 3-4).** C5.6 defines readiness as the average, over
+ * scope, of each concept's *weakest eligible recall estimate* (R3's tier
+ * filter — recall-tier instruments only, minimum retrievability — further
+ * narrowed by `[D-264]`: an instrument whose only successes were supported
+ * is not eligible either). `OracleConceptFactors.retrievabilityWeight`
+ * (`../oracle/types.js`) is now that estimate, per concept, with the
+ * undefined-vs-defined distinction `oracle/rank.ts`'s
+ * `resolveRetrievabilityWeight` preserves (`ol-v7r5.52`): `undefined` means
+ * "no eligible recall-tier evidence for this concept" (a policy zero for
+ * readiness, never a measured one); a defined number means a real reading,
+ * including a genuine `1`.
+ *   - `readiness`: the mean of `retrievabilityWeight ?? 0` over the course's
+ *     ranked concepts — `[D-264]`'s own "average... of each concept's
+ *     weakest eligible recall estimate", with an ineligible concept
+ *     contributing exactly the policy zero the ruling names, never the
+ *     `retrievabilityWeight ?? 1` neutral fallback `rankOracle`'s own blend
+ *     applies at the point of computing `priorityScore` — that fallback is
+ *     deliberately local to the ranking blend (C5.10: a signal, never a
+ *     gate) and does not apply to this fold's readiness value.
+ *   - `evidenceVolume`: the fraction of ranked concepts with a *defined*
+ *     `retrievabilityWeight` — i.e. recall-tier eligibility, not "any scored
+ *     review". **Closes both gaps the previous `masteryState` proxy left
+ *     open:** recognition-only (MCQ) practice never produces a
+ *     `retrievabilityWeight` reading (`mastery/vitality.ts`'s `isRecallTier`
+ *     filter, reused by the vitality fold this value is threaded from), so
+ *     R7's "a concept may reach `sapling` on any evidence mix" can no longer
+ *     count as readiness evidence here; and a `'seed'` concept (no evidence
+ *     at all) was already excluded by the prior fix and stays excluded, now
+ *     for the same underlying reason (no eligible instrument to read).
+ *   - **What is still open, named rather than silently assumed closed.**
+ *     `oracle/compose.ts`'s `resolveRetrievabilityScores` (the producer this
+ *     value is threaded from, as of `ol-v7r5.53`) still folds through
+ *     `mastery/rollup.ts`'s `readAllConceptVitality` — the plain
+ *     `readVitality` fold, not `mastery/vitality.ts`'s new
+ *     `readReadinessRecall` sibling (`ol-v7r5.52`) that applies `[D-264]`'s
+ *     supported-only exclusion. So a concept whose only successes were
+ *     supported (`'prompted'`/`'guided'`) still reads as eligible here today
+ *     — the recall-tier filter is applied, the supported-only filter is
+ *     not yet. Swapping `oracle/compose.ts`'s producer to
+ *     `readReadinessRecall` closes this; it touches `oracle/compose.ts` and
+ *     `mastery/rollup.ts`, neither owned by `ol-v7r5.53`, so it is filed
+ *     rather than done here (see that bead's close evidence for the id).
  *   - An **abstained** course (`status: 'abstained'`, P5-T03's "no evidence
  *     this pass") reads `readiness: 0, evidenceVolume: 0` — not a fallback
  *     guess but the honest floor: an abstained course by definition has
@@ -215,9 +195,10 @@ function nearestUpcomingAssessment(
 
 /**
  * `readiness`/`evidenceVolume` aggregated over a ranked course's concepts —
- * a `masteryState` proxy for C5.6's fold, not the fold itself; see the
- * module doc's `[D-264]` section for exactly what is and is not reconciled
- * here and why.
+ * C5.6's own fold as of `ol-v7r5.53` (items 3-4): the mean per-concept
+ * `retrievabilityWeight`, policy-zeroed on absence, and the fraction of
+ * concepts with a defined (recall-tier-eligible) reading. See the module
+ * doc's `[D-264]` section for what is and is not reconciled and why.
  */
 function readinessAndEvidenceVolume(course: CourseOracleRanking): {
   readonly readiness: number;
@@ -226,24 +207,22 @@ function readinessAndEvidenceVolume(course: CourseOracleRanking): {
   if (course.status === 'abstained' || course.ranked.length === 0) {
     return { readiness: 0, evidenceVolume: 0 };
   }
-  let solid = 0;
-  let evidenced = 0;
+  let readinessSum = 0;
+  let recallEligible = 0;
   for (const concept of course.ranked) {
-    const { masteryState } = concept.factors;
-    if (masteryState === 'sapling' || masteryState === 'tree') {
-      solid += 1;
-    }
-    // `'seed'` is `mastery/rollup.ts`'s own word for "no evidence at all: no
-    // scored review, and no graded explain-back" — it must read as no
-    // credited evidence here too (C5.6's policy zero), same as `'unknown'`.
-    // Fixed by `[D-264]`'s audit (`ol-v7r5.47`): this used to count `'seed'`
-    // as evidenced, which is the exact case the clause says contributes
-    // nothing.
-    if (masteryState !== 'unknown' && masteryState !== 'seed') evidenced += 1;
+    const { retrievabilityWeight } = concept.factors;
+    // `[D-264]`: absence means no eligible recall-tier evidence for this
+    // concept — a policy zero for readiness, never the neutral `1`
+    // `rankOracle`'s own blend falls back to when computing `priorityScore`
+    // (`oracle/rank.ts`'s `resolveRetrievabilityWeight` doc). A defined
+    // value, including a genuine `1`, is a real reading and counts as
+    // eligible for `evidenceVolume` below.
+    readinessSum += retrievabilityWeight ?? 0;
+    if (retrievabilityWeight !== undefined) recallEligible += 1;
   }
   return {
-    readiness: solid / course.ranked.length,
-    evidenceVolume: evidenced / course.ranked.length,
+    readiness: readinessSum / course.ranked.length,
+    evidenceVolume: recallEligible / course.ranked.length,
   };
 }
 

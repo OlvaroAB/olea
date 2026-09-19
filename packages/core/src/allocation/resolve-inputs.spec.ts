@@ -68,7 +68,13 @@ describe('resolvePlanPolicyCourseInputs', () => {
           course: 'COURSE-A',
           status: 'ranked',
           ranked: [
-            conceptPriority({ factors: { ...conceptPriority().factors, masteryState: 'tree' } }),
+            conceptPriority({
+              factors: {
+                ...conceptPriority().factors,
+                masteryState: 'tree',
+                retrievabilityWeight: 1,
+              },
+            }),
           ],
         },
       ]),
@@ -94,6 +100,32 @@ describe('resolvePlanPolicyCourseInputs', () => {
     ]);
   });
 
+  it('[D-264]/ol-v7r5.53: a defined retrievabilityWeight — even a genuine near-zero — counts as eligible for evidenceVolume and contributes its real value to readiness, never a policy zero', () => {
+    const result = resolvePlanPolicyCourseInputs(
+      '2026-09-01',
+      ranking([
+        {
+          course: 'COURSE-A',
+          status: 'ranked',
+          ranked: [
+            conceptPriority({
+              conceptName: 'weak-but-eligible',
+              factors: { ...conceptPriority().factors, retrievabilityWeight: 0.02 },
+            }),
+          ],
+        },
+      ]),
+      [],
+    );
+
+    // A real (if very low) reading is NOT the same fact as "no eligible
+    // evidence" — it must still count toward evidenceVolume and must
+    // contribute its own value to readiness, not the `undefined` case's
+    // policy zero.
+    expect(result[0]?.evidenceVolume).toBe(1);
+    expect(result[0]?.readiness).toBe(0.02);
+  });
+
   it('ignores assessments already past and reports null/neutral when nothing future is readable', () => {
     const result = resolvePlanPolicyCourseInputs(
       '2026-09-01',
@@ -115,7 +147,7 @@ describe('resolvePlanPolicyCourseInputs', () => {
     expect(result[0]?.assessmentWorth).toBe(1);
   });
 
-  it('averages readiness (sapling/tree share) and evidenceVolume (sprout-or-better share) over the ranked concepts', () => {
+  it('[D-264]/ol-v7r5.53: readiness is the mean of retrievabilityWeight (policy-zeroed on absence); evidenceVolume is the defined-vs-undefined (recall-tier-eligible) fraction', () => {
     const result = resolvePlanPolicyCourseInputs(
       '2026-09-01',
       ranking([
@@ -123,22 +155,37 @@ describe('resolvePlanPolicyCourseInputs', () => {
           course: 'COURSE-A',
           status: 'ranked',
           ranked: [
+            // A defined, full reading (e.g. a recall-tier instrument last
+            // reviewed at full confidence).
             conceptPriority({
               conceptName: 'c1',
-              factors: { ...conceptPriority().factors, masteryState: 'tree' },
+              factors: { ...conceptPriority().factors, retrievabilityWeight: 1 },
             }),
+            // `'seed'` — no evidence at all — has no retrievabilityWeight
+            // producer to read; still `undefined` under the new fold, same
+            // policy-zero outcome the `[D-264]` audit (`ol-v7r5.47`) already
+            // established for this case.
             conceptPriority({
               conceptName: 'c2',
               factors: { ...conceptPriority().factors, masteryState: 'seed' },
             }),
+            // `'unknown'` (no mastery data supplied at all) is likewise
+            // `undefined` here — no eligible recall-tier evidence.
             conceptPriority({
               conceptName: 'c3',
               factors: { ...conceptPriority().factors, masteryState: 'unknown' },
             }),
+            // A defined, partial reading.
             conceptPriority({
               conceptName: 'c4',
-              factors: { ...conceptPriority().factors, masteryState: 'sapling' },
+              factors: { ...conceptPriority().factors, retrievabilityWeight: 0.5 },
             }),
+            // R7's gap this reconciliation closes: a concept practised only
+            // through a recognition-tier (MCQ) instrument can still reach
+            // `sapling`/`sprout` on `masteryState` alone, but produces no
+            // recall-tier retrievability reading — `undefined` here, where
+            // the old `masteryState`-based fold would have counted it as
+            // evidenced.
             conceptPriority({
               conceptName: 'c5',
               factors: { ...conceptPriority().factors, masteryState: 'sprout' },
@@ -149,12 +196,11 @@ describe('resolvePlanPolicyCourseInputs', () => {
       [],
     );
 
-    // solid (sapling|tree): c1, c4 → 2/5 = 0.4;
-    // evidenced (sprout|sapling|tree, i.e. anything but unknown/seed): c1, c4, c5 → 3/5 = 0.6.
-    // `[D-264]` audit (`ol-v7r5.47`): `'seed'` (c2) is "no evidence at all"
-    // per `mastery/rollup.ts` and must NOT count as evidenced — it used to.
-    expect(result[0]?.readiness).toBe(0.4);
-    expect(result[0]?.evidenceVolume).toBe(0.6);
+    // readiness: (1 + 0 + 0 + 0.5 + 0) / 5 = 0.3 — c2/c3/c5's absence each
+    // contributes the policy zero, never a measured value.
+    // evidenceVolume: defined for c1, c4 only → 2/5 = 0.4.
+    expect(result[0]?.readiness).toBe(0.3);
+    expect(result[0]?.evidenceVolume).toBe(0.4);
   });
 
   it('reads an abstained course as zero readiness and zero evidence — abstention already asserts "no evidence"', () => {

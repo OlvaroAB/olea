@@ -10,11 +10,36 @@
  * time.
  */
 import { studyPlanEnvelope } from 'olea-contracts';
+import type { Scheduler } from 'olea-core';
+import {
+  createFsrsScheduler,
+  type RetrievabilityInput,
+  type RetrievabilityOutput,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { memoryVault } from '../review/memory-vault.js';
+
+/**
+ * A `Scheduler` whose `retrievability` always answers the same fixed
+ * probability, regardless of the instrument or state it is asked about.
+ * `schedule` delegates to a real FSRS scheduler unchanged — the vitality
+ * fold this suite is exercising (`readAllConceptVitality`) replays the
+ * review log through `schedule` first to rebuild each instrument's
+ * `SchedulerState` before ever calling `retrievability`, so only the one
+ * method under test is faked.
+ */
+function fixedRetrievabilityScheduler(recallProbability: number): Scheduler {
+  const real = createFsrsScheduler();
+  return {
+    schedule: (input) => real.schedule(input),
+    retrievability(input: RetrievabilityInput): RetrievabilityOutput {
+      return { instrumentId: input.instrumentId, recallProbability };
+    },
+  };
+}
 
 const DEVICE = 'olea-testdevice1';
 const BASE_PATH = '02 Assignments/Assignments.base';
@@ -295,5 +320,121 @@ describe('createLocalStudyPlanProvider — configured', () => {
     // No log at all — a fresh install's honest state — still produces a
     // usable, schema-valid plan rather than throwing or abstaining.
     expect(course.concepts).toHaveLength(1);
+  });
+});
+
+describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C5.6/[D-264], ol-v7r5.53)', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+
+  async function vaultWithOneReview() {
+    const vault = studyVault();
+    // Same fixture shape as the "configured" suite's real-review-log test
+    // above, factored out here so each test gets its own isolated vault.
+    await vault.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'r1',
+        timestamp: '2026-08-09T09:00:00-04:00',
+        instrumentId: 'qa:widget-theory:1',
+        instrumentType: 'qa',
+        conceptIds: ['Widget theory'],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`,
+    );
+    return vault;
+  }
+
+  function weightOf(raw: unknown): number {
+    const plan = studyPlanEnvelope.parse(raw);
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const weight = course.concepts[0]?.weight;
+    if (weight === undefined) throw new Error('expected a weight on the ranked concept');
+    return weight;
+  }
+
+  it('an injected Scheduler is actually consulted — a lower recall probability scales the concept weight down by exactly that factor', async () => {
+    const neutral = await createLocalStudyPlanProvider({
+      vault: await vaultWithOneReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(1),
+    }).fetchPlan();
+
+    const halved = await createLocalStudyPlanProvider({
+      vault: await vaultWithOneReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(0.5),
+    }).fetchPlan();
+
+    const neutralWeight = weightOf(neutral);
+    const halvedWeight = weightOf(halved);
+    expect(neutralWeight).toBeGreaterThan(0);
+    expect(halvedWeight).toBeCloseTo(neutralWeight * 0.5, 10);
+  });
+
+  it('a concept with no review history at all stays neutral even when the injected Scheduler would answer something else — absence, never a manufactured reading, reaches the ranking', async () => {
+    const withNoHistory = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(0.5),
+    }).fetchPlan();
+
+    const baseline = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(1),
+    }).fetchPlan();
+
+    // Never-practised: `readAllConceptVitality` reads `weakest: null`, so
+    // `oracle/compose.ts`'s `resolveRetrievabilityScores` leaves this
+    // concept OUT of the retrievability map entirely, `resolveRetrievabilityWeight`
+    // (`oracle/rank.ts`) reads it as `undefined`, and `rankOracle`'s own
+    // blend falls back to neutral (1) — identical to the fixed-`1`
+    // scheduler's result, NOT the `0.5` a Scheduler actually consulted for
+    // this concept would have produced.
+    expect(weightOf(withNoHistory)).toBe(weightOf(baseline));
+  });
+
+  it('with no scheduler override at all, production now defaults to a real FSRS Scheduler — retrievability is no longer always neutral', async () => {
+    const withHistory = await createLocalStudyPlanProvider({
+      vault: await vaultWithOneReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+    }).fetchPlan();
+
+    const neutralControl = await createLocalStudyPlanProvider({
+      vault: await vaultWithOneReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(1),
+    }).fetchPlan();
+
+    // A real FSRS read one day after a single 'good' rating is not exactly
+    // 1 (some decay has already happened), so the default (no override)
+    // path must differ from the neutral control — proof this call site now
+    // builds and consults a real `Scheduler` by default rather than
+    // silently staying at the pre-`ol-v7r5.53` always-omitted behaviour.
+    expect(weightOf(withHistory)).not.toBe(weightOf(neutralControl));
   });
 });

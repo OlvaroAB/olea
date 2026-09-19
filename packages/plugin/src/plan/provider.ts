@@ -50,11 +50,12 @@
  * module doc).
  */
 
-import type { RankOracleOptions, StudyPlanProvider, VaultSource } from 'olea-core';
+import type { RankOracleOptions, Scheduler, StudyPlanProvider, VaultSource } from 'olea-core';
 import {
   buildStudyPlan,
   calendarDaysEndingOn,
   composeOracleRanking,
+  createFsrsScheduler,
   readAssessments,
   readReviewLogHistory,
   resolvePlanPolicyCourseInputs,
@@ -98,6 +99,24 @@ export interface CreateLocalStudyPlanProviderDeps {
    * zero.
    */
   readonly readPlanPolicy?: (request: PlanPolicyRequest) => Promise<PlanPolicyResult | undefined>;
+  /**
+   * C5.6/`[D-264]` items 3-4 (`ol-v7r5.53`): the port `composeOracleRanking`'s
+   * `retrievability` input needs to read real per-concept recall probability
+   * (`oracle/compose.ts`'s `ComposeRetrievabilityInput.scheduler`) rather than
+   * the neutral default every production caller left it at until now.
+   * **Overridable for tests** (a fake `Scheduler` makes retrievability
+   * deterministic); production gets a fresh `createFsrsScheduler()` when this
+   * is omitted — the same stateless, weights-fixed construction `main.ts`
+   * already builds once for the Today panel/queue (see that file's own
+   * comment on why one instance there "makes that literally the same
+   * computation rather than two that match"). That reasoning is about two
+   * call sites at risk of drifting apart on the SAME replay; it does not
+   * apply here — `createFsrsScheduler()` takes no configuration and no
+   * mutable state carries between calls (`fsrs-scheduler.ts`'s module doc),
+   * so a second instance computes byte-identically to the first and this
+   * provider does not need `main.ts`'s to reach the same answer.
+   */
+  readonly scheduler?: Scheduler;
 }
 
 /**
@@ -109,6 +128,7 @@ export function createLocalStudyPlanProvider(
   deps: CreateLocalStudyPlanProviderDeps,
 ): StudyPlanProvider {
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
+  const scheduler = deps.scheduler ?? createFsrsScheduler();
 
   return {
     async fetchPlan(): Promise<unknown> {
@@ -158,6 +178,14 @@ export function createLocalStudyPlanProvider(
         reviewLog: entries,
         asOf: today,
         concepts,
+        // C5.6/`[D-264]` items 3-4 (`ol-v7r5.53`): this was the one production
+        // caller `oracle/compose.ts`'s own module doc named as still omitting
+        // `retrievability` — every ranked concept's `retrievabilityWeight`
+        // read as neutral (1, no adjustment) regardless of her real recall
+        // state. Wiring it here is what makes `readReadinessRecall`'s
+        // undefined-vs-defined distinction reach `resolvePlanPolicyCourseInputs`
+        // below, not just `rankOracle`'s own blend.
+        retrievability: { scheduler, now },
         ...(options !== undefined ? { options } : {}),
       });
 

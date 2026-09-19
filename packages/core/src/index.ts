@@ -951,7 +951,18 @@ export { masteryDistribution } from './mastery/sprig.js';
 // (`ol-95vv`), and until that lands nothing here renders. Exported now so the
 // fold and the scheduler accessor it depends on are nameable from one place
 // when it does, and so no surface is tempted to re-derive vitality locally.
+// C5.6/`[D-264]` ruling 1's readiness-specific sibling fold (`ol-v7r5.52`):
+// `readVitality`'s own arithmetic is untouched, but readiness needs the
+// supported-only exclusion vitality does not carry — see `vitality.ts`'s
+// own doc on why this is a new function rather than a parameter on
+// `readVitality`. `allocation/resolve-inputs.ts` (`ol-v7r5.53`) is not yet
+// this fold's consumer — it reads `OracleConceptFactors.retrievabilityWeight`
+// instead, `oracle/compose.ts`'s existing (non-`[D-264]`-aware) producer.
+// Exported now, alongside the fold it sits beside, for the same "nameable
+// from one place when its consumer lands" reason as `readVitality` above.
 export type {
+  ReadinessRecallInstrument,
+  ReadinessRecallReading,
   ReadVitalityInput,
   RecallTierInstrumentType,
   Vitality,
@@ -959,7 +970,7 @@ export type {
   VitalityReading,
   VitalityWeakest,
 } from './mastery/vitality.js';
-export { isRecallTier, readVitality } from './mastery/vitality.js';
+export { isRecallTier, readReadinessRecall, readVitality } from './mastery/vitality.js';
 // The misconception store (F5.6, knowledge model §4.1, D-008, M1-M4,
 // P4-T04): a local projection folded from its own append-only event log,
 // never a second source of truth — see misconception/types.ts's module doc.
