@@ -128,6 +128,46 @@
  * actually calls "inferred from sequence". This reading is a Class B
  * vocabulary call, not a threshold; flagged here for visibility rather than
  * silently assumed.
+ *
+ * ## Thin coverage is a sentence, never a state (F8.2, `[D-247]`, CIM-6 / `ol-2zfj.83`)
+ *
+ * "Thin coverage" — material present but not carrying enough to support the
+ * kind of question the course asks about a concept, judged against the
+ * **breadth the concept is expected to require, never document length** —
+ * reads today as a SENTENCE on an existing cell, not a new
+ * {@link GroveDeclaredState} and not a new enum value anywhere in this
+ * module. `[D-247]` is explicit that it becomes a further coverage *state*
+ * only after a `[D-194]` pre-commitment on her own explain-back outcomes
+ * survives (`findings/D194-thin-coverage-precommitment.md`, olea-service
+ * repo) — **that pre-commitment has not run**, so this module deliberately
+ * stops at the sentence.
+ *
+ * **The judgment is the caller's, not this module's** — same discipline as
+ * `resolveTeachingArrival`: whether a concept's material is thin against its
+ * expected breadth is a model read over the actual passages, which this
+ * pure, no-I/O module cannot make. {@link ClassifyDeclaredConceptInput
+ * .thinCoverageSignal} carries that already-resolved judgment in; when it is
+ * `true` AND the concept opened (a material gap can never be "thin" —
+ * thinness names material that is present but insufficient, never material's
+ * absence), the returned cell carries {@link THIN_COVERAGE_SENTENCE}
+ * verbatim, alongside its existing `state`. Omitting the signal (or a
+ * caller that has not wired this judgment yet) yields today's behaviour
+ * exactly — no sentence, nothing inferred from document length or any other
+ * structural stand-in for it.
+ *
+ * ## Four confidences, never collapsed (F8.2, F8.3, `[D-247]`, CIM-6)
+ *
+ * `[D-247]` names four confidences that must never be merged into one figure
+ * — scope, assessment, coverage and teaching-arrival confidence, each on its
+ * own basis and in its own sentence. F8.3 already bans a single coverage
+ * scalar; this is the same discipline applied to confidence. Scope and
+ * assessment confidence are written elsewhere (F4.1/F4.2 — CIM-5 / CIM-1,
+ * out of this bead's owned files) and arrive here as already-written
+ * sentences to be assembled, never recomputed; this module contributes only
+ * the assembly. {@link describeFourConfidences} does that assembling and is
+ * deliberately arithmetic-free: it takes four sentences and returns four
+ * sentences, with no numeric field anywhere on {@link FourConfidenceReading}
+ * for a caller to accidentally average or score.
  */
 
 import type { MasteryState } from 'olea-contracts';
@@ -149,6 +189,19 @@ export type GroveDeclaredState = 'ground' | MasteryState;
  * seen".
  */
 export const GROUND_STALL_STREAK_THRESHOLD = 2;
+
+/**
+ * F8.2's thin-coverage sentence, verbatim (`[D-247]`, CIM-6 / `ol-2zfj.83`).
+ * Rendered on a cell whose material opened it but whose caller-supplied
+ * judgment reads that material as insufficient against the breadth the
+ * concept is expected to require — **never against document length**. See
+ * the module doc's "Thin coverage is a sentence, never a state" section for
+ * why this is a sentence rather than a new {@link GroveDeclaredState}, and
+ * `findings/D194-thin-coverage-precommitment.md` (olea-service repo) for
+ * what must survive before it becomes one.
+ */
+export const THIN_COVERAGE_SENTENCE =
+  'your material mentions this but does not yet give enough to support the kind of question the course asks about it';
 
 /**
  * The three teaching-arrival provenance words F8.2 names, `[D-247]` — `yes`
@@ -248,6 +301,18 @@ export interface ClassifyDeclaredConceptInput {
   readonly priorGroundStreak: number;
   /** F8.2's taught-signal steps two through five (`[D-247]`) — see `TaughtSignalEvidence` and the module doc's "taught-signal chain" section. Absent means none of those steps have been checked yet; `hasMaterial` (step one) still applies on its own. */
   readonly taughtSignal?: TaughtSignalEvidence;
+  /**
+   * F8.2's thin-coverage judgment (`[D-247]`), already resolved by the
+   * caller — `true` means the caller's model read found this concept's
+   * material present but insufficient against the breadth it is expected to
+   * require (never document length). This module never derives the
+   * judgment itself; see the module doc's "Thin coverage is a sentence,
+   * never a state" section. `undefined`/`false` yields today's behaviour —
+   * no sentence. Ignored entirely for a concept that does not open (a
+   * material gap is never "thin" — see {@link THIN_COVERAGE_SENTENCE}'s
+   * doc).
+   */
+  readonly thinCoverageSignal?: boolean;
 }
 
 /** One concept's classification — a material gap, named in plain language per the registry (never a `GroveDeclaredState`), or a real coverage cell. */
@@ -266,6 +331,14 @@ export type DeclaredConceptClassification =
       readonly groundStreak: number;
       /** F8.2's teaching-arrival provenance (`[D-247]`) — always `yes` here: a cell only ever exists because step one (her own note) or step two (the week's slide deck) opened it (`resolveTeachingArrival`'s `opensAutomatically`). */
       readonly teachingArrivalProvenance: TeachingArrivalProvenance;
+      /**
+       * F8.2's thin-coverage sentence (`[D-247]`), present verbatim
+       * ({@link THIN_COVERAGE_SENTENCE}) only when the caller supplied
+       * `thinCoverageSignal: true` — absent otherwise. Layered on top of
+       * `state`, never a state or enum value of its own; see the module
+       * doc's "Thin coverage is a sentence, never a state" section.
+       */
+      readonly thinCoverageSentence?: string;
     };
 
 /**
@@ -288,7 +361,15 @@ export function classifyDeclaredConcept(
   // own note (`input.hasMaterial`) or the week's slide deck
   // (`input.taughtSignal?.inWeekSlideDeck`), F8.2's first two taught-signal
   // steps. Everything from here down is unchanged from before this chain
-  // existed, except that every returned cell now carries that `yes`.
+  // existed, except that every returned cell now carries that `yes`, and may
+  // also carry `[D-247]`'s thin-coverage sentence (see the module doc). The
+  // field is spread in only when the signal fires, rather than set to
+  // `undefined`, so a caller that never wired this signal sees exactly
+  // today's object shape — no key at all, not a key holding `undefined`.
+  const thinCoverage = input.thinCoverageSignal
+    ? { thinCoverageSentence: THIN_COVERAGE_SENTENCE }
+    : {};
+
   if (input.instrumentCount === 0) {
     const groundStreak = input.priorGroundStreak + 1;
     return {
@@ -297,6 +378,7 @@ export function classifyDeclaredConcept(
       stall: groundStreak >= GROUND_STALL_STREAK_THRESHOLD,
       groundStreak,
       teachingArrivalProvenance: 'yes',
+      ...thinCoverage,
     };
   }
 
@@ -312,7 +394,94 @@ export function classifyDeclaredConcept(
     stall: false,
     groundStreak: 0,
     teachingArrivalProvenance: 'yes',
+    ...thinCoverage,
   };
+}
+
+/**
+ * F8.2's four confidences, `[D-247]` (CIM-6 / `ol-2zfj.83`) — scope,
+ * assessment, coverage and teaching-arrival confidence, each a sentence on
+ * its own basis. Exactly these four named fields, every one a `string`
+ * (a sentence), and nothing else: F8.3's ban on a single coverage scalar
+ * applies here with the same force, and this type is how it is enforced in
+ * code rather than merely stated in a comment (see
+ * `coverage.spec.ts`'s "never collapse to a scalar" test, which asserts
+ * this shape directly and would fail the moment a fifth, numeric field were
+ * added).
+ */
+export interface FourConfidenceReading {
+  /** Confidence in the concept's own scope placement (F4.1/F4.2's basis — written elsewhere, carried here unchanged). */
+  readonly scopeConfidence: string;
+  /** Confidence in the assessment-directed ranking read for this concept (F4.2's basis — written elsewhere, carried here unchanged). */
+  readonly assessmentConfidence: string;
+  /** Confidence in this concept's coverage reading — this module's own basis (ground/growth-stage state, and F8.2's thin-coverage sentence where present). */
+  readonly coverageConfidence: string;
+  /** Confidence in this concept's teaching-arrival provenance — this module's own basis (`resolveTeachingArrival`'s `yes`/`probable`/`possible`, or its absence). */
+  readonly teachingArrivalConfidence: string;
+}
+
+/**
+ * Assembles the four confidence sentences into one {@link FourConfidenceReading}
+ * — assembly only, never combination. This function does no arithmetic and
+ * makes no judgment of its own: each sentence is written by whichever basis
+ * produced it (two of the four are this module's own — see
+ * `describeCoverageConfidence` and `describeTeachingArrivalConfidence` —
+ * and two arrive from elsewhere, F4.1/F4.2) and is returned unchanged
+ * alongside the other three. There is no path through this function, or
+ * anywhere else in this module, that reduces the four to a single score.
+ */
+export function describeFourConfidences(input: FourConfidenceReading): FourConfidenceReading {
+  return {
+    scopeConfidence: input.scopeConfidence,
+    assessmentConfidence: input.assessmentConfidence,
+    coverageConfidence: input.coverageConfidence,
+    teachingArrivalConfidence: input.teachingArrivalConfidence,
+  };
+}
+
+/**
+ * This module's own basis for coverage confidence — a sentence describing
+ * how well-founded the coverage reading itself is, never a number. `ground`
+ * carries a plain sentence naming Olea's own generation debt; a
+ * thin-coverage sentence present lowers the confidence sentence to name the
+ * breadth gap explicitly, because the coverage reading is then resting on a
+ * model judgment about sufficiency rather than on the presence/absence of
+ * material alone. A growth-stage state (an instrument exists, and mastery
+ * has its own separate reading, F2.11) reads as confidently covered.
+ */
+export function describeCoverageConfidence(classification: DeclaredConceptClassification): string {
+  if (classification.kind === 'material-gap') {
+    return 'no material is present yet, so there is nothing to read a coverage confidence against';
+  }
+  if (classification.thinCoverageSentence !== undefined) {
+    return 'material is present but its breadth against the course has not been confirmed — the reading rests on a model judgment, not yet on her own explain-back outcomes';
+  }
+  if (classification.state === 'ground') {
+    return "material is present and in scope; Olea's own generation debt, not a judgment about the material's breadth";
+  }
+  return 'material is present and at least one instrument has been built and read against it';
+}
+
+/**
+ * This module's own basis for teaching-arrival confidence — a sentence
+ * naming which step of F8.2's taught-signal chain produced the provenance,
+ * never a number. Mirrors `TeachingArrivalProvenance`'s three named steps
+ * plus the no-signal-at-all case; see `resolveTeachingArrival`'s doc for the
+ * chain itself.
+ */
+export function describeTeachingArrivalConfidence(
+  provenance: TeachingArrivalProvenance | undefined,
+): string {
+  switch (provenance) {
+    case 'yes':
+      return "direct evidence — her own note or the week's slide deck names this concept as taught";
+    case 'probable':
+      return 'inferred from a calendar session paired with a slide sequence, not from direct evidence of teaching';
+    case 'possible':
+      return "inferred from the outcomes document's own order, or confirmed manually in the grove — the weakest of the three taught-signal tiers";
+    default:
+      return 'no taught signal has fired at all; being in scope is not evidence of teaching';
+  }
 }
 
 /**

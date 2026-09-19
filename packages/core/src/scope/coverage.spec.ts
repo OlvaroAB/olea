@@ -12,12 +12,17 @@
 import { describe, expect, it } from 'vitest';
 import type { ConceptRelation, RelationType } from '../concept/relation.js';
 import type { Provenance } from '../extract/types.js';
+import * as coverageModule from './coverage.js';
 import {
   classifyDeclaredConcept,
   containerNamesToFold,
+  describeCoverageConfidence,
+  describeFourConfidences,
+  describeTeachingArrivalConfidence,
   GROUND_STALL_STREAK_THRESHOLD,
   isVolunteer,
   resolveTeachingArrival,
+  THIN_COVERAGE_SENTENCE,
 } from './coverage.js';
 
 function passage(sourcePath: string): Provenance {
@@ -383,5 +388,190 @@ describe('containerNamesToFold — C7.9, "a broad area and its own part are neve
   it('is a no-op over an empty edge set — the default for every caller that has not threaded relations through', () => {
     const declaredNames = new Set(['Invented Part', 'Invented Broad Area']);
     expect(containerNamesToFold([], declaredNames).size).toBe(0);
+  });
+});
+
+describe('classifyDeclaredConcept — F8.2 thin coverage is a sentence, never a state ([D-247], CIM-6 / ol-2zfj.83)', () => {
+  it('carries the thin-coverage sentence, verbatim, on a `ground` cell whose material the caller judged insufficient', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+    });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: false,
+      groundStreak: 1,
+      teachingArrivalProvenance: 'yes',
+      thinCoverageSentence: THIN_COVERAGE_SENTENCE,
+    });
+    expect(result).toMatchObject({
+      thinCoverageSentence:
+        'your material mentions this but does not yet give enough to support the kind of question the course asks about it',
+    });
+  });
+
+  it('carries the thin-coverage sentence on a growth-stage cell too — thinness is about material, not about whether an instrument has been built', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 1,
+      masteryState: 'sprout',
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+    });
+    expect(result).toEqual({
+      kind: 'cell',
+      state: 'sprout',
+      stall: false,
+      groundStreak: 0,
+      teachingArrivalProvenance: 'yes',
+      thinCoverageSentence: THIN_COVERAGE_SENTENCE,
+    });
+  });
+
+  it('never introduces a new state or enum value alongside the sentence — the growth-stage/`ground` state is unaffected', () => {
+    const thin = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+    });
+    const notThin = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: false,
+    });
+    expect(thin).toMatchObject({ state: 'ground' });
+    expect(notThin).toMatchObject({ state: 'ground' });
+    // The set of possible `state` values is unchanged by the signal — only
+    // an additional, optional sentence field differs between them.
+    expect('state' in thin ? thin.state : undefined).toBe(
+      'state' in notThin ? notThin.state : undefined,
+    );
+  });
+
+  it('carries no thin-coverage sentence absent a signal from the caller — this module never infers thinness from document length or any other structural fact', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+    expect(result).not.toHaveProperty('thinCoverageSentence');
+    expect((result as { thinCoverageSentence?: string }).thinCoverageSentence).toBeUndefined();
+  });
+
+  it('a thin-coverage signal never attaches to a material gap — thinness names material present but insufficient, never material absent', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+    });
+    expect(result).toEqual({ kind: 'material-gap' });
+    expect(result).not.toHaveProperty('thinCoverageSentence');
+  });
+
+  it('a thin-coverage signal never attaches to a material gap carrying a lower-tier teaching-arrival provenance either', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+      taughtSignal: {
+        inWeekSlideDeck: false,
+        calendarSessionWithSlideSequence: true,
+        outcomesDocumentOrder: false,
+        manualGroveConfirmation: false,
+      },
+    });
+    expect(result).toEqual({ kind: 'material-gap', teachingArrivalProvenance: 'probable' });
+    expect(result).not.toHaveProperty('thinCoverageSentence');
+  });
+});
+
+describe('F8.2 four confidences — scope, assessment, coverage, teaching-arrival — never collapse to a scalar ([D-247], CIM-6 / ol-2zfj.83)', () => {
+  it('describeFourConfidences returns exactly the four named sentence fields, unchanged, and nothing else', () => {
+    const reading = describeFourConfidences({
+      scopeConfidence: 'invented scope basis sentence',
+      assessmentConfidence: 'invented assessment basis sentence',
+      coverageConfidence: 'invented coverage basis sentence',
+      teachingArrivalConfidence: 'invented teaching-arrival basis sentence',
+    });
+
+    expect(Object.keys(reading).sort()).toEqual([
+      'assessmentConfidence',
+      'coverageConfidence',
+      'scopeConfidence',
+      'teachingArrivalConfidence',
+    ]);
+    expect(reading).toEqual({
+      scopeConfidence: 'invented scope basis sentence',
+      assessmentConfidence: 'invented assessment basis sentence',
+      coverageConfidence: 'invented coverage basis sentence',
+      teachingArrivalConfidence: 'invented teaching-arrival basis sentence',
+    });
+  });
+
+  it('every one of the four fields is a sentence (a string), never a number — the type this bead exists to pin down', () => {
+    const reading = describeFourConfidences({
+      scopeConfidence: 'a',
+      assessmentConfidence: 'b',
+      coverageConfidence: 'c',
+      teachingArrivalConfidence: 'd',
+    });
+    for (const value of Object.values(reading)) {
+      expect(typeof value).toBe('string');
+    }
+  });
+
+  it('cannot collapse: no export of this module computes or exposes a combined, averaged or scored confidence value', () => {
+    // A structural regression test, not a comment: if a future change adds a
+    // `combinedConfidence` / `confidenceScore` / `overallConfidence` export —
+    // the natural way F8.3's ban on a coverage scalar would get re-broken for
+    // confidence — this test fails without anyone having to notice by eye.
+    const scalarSuggestingName = /score|combined|overall|average|scalar|aggregate/i;
+    const offendingExports = Object.keys(coverageModule).filter((name) =>
+      scalarSuggestingName.test(name),
+    );
+    expect(offendingExports).toEqual([]);
+  });
+
+  it("describeCoverageConfidence and describeTeachingArrivalConfidence each produce this module's own two bases as sentences, not numbers", () => {
+    const groundCell = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+    const thinCell = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      thinCoverageSignal: true,
+    });
+    const builtCell = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 1,
+      masteryState: 'seed',
+      priorGroundStreak: 0,
+    });
+    const gap = classifyDeclaredConcept({
+      hasMaterial: false,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+
+    for (const classification of [groundCell, thinCell, builtCell, gap]) {
+      expect(typeof describeCoverageConfidence(classification)).toBe('string');
+    }
+    // The thin-coverage sentence changes the coverage-confidence sentence —
+    // it is not silently dropped once assembled into a confidence reading.
+    expect(describeCoverageConfidence(thinCell)).not.toBe(describeCoverageConfidence(groundCell));
+
+    for (const provenance of ['yes', 'probable', 'possible', undefined] as const) {
+      expect(typeof describeTeachingArrivalConfidence(provenance)).toBe('string');
+    }
   });
 });
