@@ -19,20 +19,28 @@ them. This repo's `docs/` holds only developer-facing material with no real cont
    private. Read §1 before writing any code that touches state. Its line is **storage, not
    processing**, and an artifact delivered to the client is not protected — merely absent from
    the source tree.
-1b. `../olea-service/docs/Olea_component_register.md` — **normative for where each component
-   runs**, and the per-item owner map for `[D-069]`. Check it before assuming a module belongs in
-   this repo because that is where the file happens to sit today.
+1b. **Where each component runs is normative at `../olea-service/docs/Olea_architecture_boundary.md`
+   §6** (one placement table per group), the per-item owner map for `[D-069]`. Check it before
+   assuming a module belongs in this repo because that is where the file happens to sit today.
+   `../olea-service/docs/design/component-baseline.md` (formerly `Olea_component_register.md`;
+   moved Sep 2026 — `[CORPUS-D1]`) is the design baseline for everything else about a component —
+   **authority: none**, amendable by ordinary work.
 1c. `../olea-service/docs/Olea_vocabulary_registry.md` — **normative for the words the student
    sees.** Reaching for a forbidden word, or using a listed word in another sense, is a conflict
    to flag rather than a judgement call.
 2. `../olea-service/docs/Olea_ai_workload_and_cost_model.md` — where the slots, the criteria
    for picking a model, and the five empirical eval questions are set out. It guides rather
    than binds: model picks are config (C4.6).
-3. `../olea-service/docs/Olea_v09_implementation_plan.md` — the quality approach, the invariants,
-   and **§2.7's five-clause Definition of Done** — clause 5 being the reachability rule
-   (`[D-072]`): a task delivering a capability names its production caller by `file:line`, or
-   records why there deliberately is not one yet and which bead adds it. Its **§3 "Phases" is
-   retired** — see the task protocol below.
+3. **The v0.9 implementation plan is archived** at
+   `../olea-service/docs/archive/Olea_v09_implementation_plan.md` — a finished plan is not a live
+   document. The quality approach and the invariants live here in this file; the **Definition of
+   Done's five clauses** moved verbatim into
+   `../olea-service/docs/Olea_alpha_functional_scope.md`'s **"How work is done"** section — clause
+   5 is the reachability rule (`[D-072]`): a task delivering a capability names its production
+   caller by `file:line`, or records why there deliberately is not one yet and which bead adds it.
+   The engineering conventions (ledgers, TDD, contract testing, CI/CD) extracted to
+   `../olea-service/docs/dev/engineering-conventions.md`. Its **§3 "Phases" is retired** — see the
+   task protocol below.
 3a. `../olea-service/docs/archive/foundation/` — **the foundation rounds, archived 2026-08-28 (`ol-egov.6`); the target state they ratified lives in the contract documents via `[D-076]`.** Where a
    contract document still describes the pre-foundation world, that gap is tracked work: file it,
    do not report it as a defect, and never treat it as a constraint on what may now be designed.
@@ -47,8 +55,8 @@ adopted deliberately or not at all.
 
 ## The six invariants — enforced, not remembered
 
-The normative wording is the implementation plan's invariants section
-(`../olea-service/docs/Olea_v09_implementation_plan.md`); what follows is this repo's own
+The normative wording is the implementation plan's invariants section, now archived at
+`../olea-service/docs/archive/Olea_v09_implementation_plan.md`; what follows is this repo's own
 restatement of what each one obliges an agent working here to do.
 
 - **INV-1** — no `obsidian` import outside `packages/plugin`. Biome rule + `scripts/check-inv1.mjs`

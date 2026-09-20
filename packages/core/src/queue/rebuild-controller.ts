@@ -530,7 +530,7 @@ export function decideRebuild<T>(
     const elapsedMs = input.now.getTime() - state.enteredAt.getTime();
     if (elapsedMs < 0) {
       throw new Error(
-        `decideRebuild: now (${input.now.toISOString()}) precedes the sitting's own entry time (${state.enteredAt.toISOString()})`,
+        `decideRebuild: now (${input.now.toISOString()}) precedes the session's own entry time (${state.enteredAt.toISOString()})`,
       );
     }
     const idleThresholdMs = input.idleThresholdMs ?? DEFAULT_SITTING_IDLE_THRESHOLD_MS;
