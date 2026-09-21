@@ -177,9 +177,24 @@ describe('the placeholder is gone, not merely bypassed', () => {
 
   it('the create-card handler reads the active note and resolves through create-card.ts, not a re-implementation', () => {
     expect(main).toMatch(
-      /import\s*\{\s*createCardNoticeText,\s*resolveCreateCardOutcome\s*\}\s*from\s*'\.\/commands\/create-card\.js'/,
+      /import\s*\{\s*createCardNoticeText,\s*createQaCardFromEntry,\s*resolveCreateCardOutcome,?\s*\}\s*from\s*'\.\/commands\/create-card\.js'/,
     );
     expect(main).toMatch(/resolveCreateCardOutcome\(source,\s*\{\s*start,\s*end\s*\}\)/);
+  });
+
+  // `ol-0r92.77` (`[D-268]` / [H-qa-card-modal]): F2.1's Q&A half is now
+  // reachable too — a no-selection invocation opens `QaCardModal` in place
+  // of the honest "not yet" notice this branch used to give, and confirming
+  // resolves through `create-card.ts`'s `createQaCardFromEntry`.
+  it('a no-selection outcome opens QaCardModal (F2.1 Q&A half, `[D-268]`), not a placeholder notice', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*QaCardModal\s*\}\s*from\s*'\.\/commands\/qa-card-modal\.js'/,
+    );
+    expect(main).toMatch(/outcome\.kind === 'no-selection'/);
+    expect(main).toMatch(/new QaCardModal\(this\.app,/);
+    expect(main).toMatch(
+      /createQaCardFromEntry\(\{\s*source,\s*cursorOffset,\s*front,\s*back\s*\}\)/,
+    );
   });
 });
 

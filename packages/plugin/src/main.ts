@@ -47,8 +47,13 @@ import {
   type VaultSource,
   type WindowDeficitEntry,
 } from 'olea-core';
-import { createCardNoticeText, resolveCreateCardOutcome } from './commands/create-card.js';
+import {
+  createCardNoticeText,
+  createQaCardFromEntry,
+  resolveCreateCardOutcome,
+} from './commands/create-card.js';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
+import { QaCardModal } from './commands/qa-card-modal.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
 import { ingestionSessionJustClosed } from './concept/corpusRelationTrigger.js';
@@ -2933,12 +2938,15 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * `OLEA_COMMAND_CREATE_CARD`'s real destination (F2.1, C1.4, `ol-0r92.76`)
-   * — `commands/create-card.ts`'s own module doc explains the split and why
-   * only the cloze branch is wired here (no Q&A front/back entry surface
-   * exists yet). Reads the active note fresh through a throwaway
-   * `ObsidianSource`, the same "construct one per call, never cache" shape
-   * every other command handler in this file uses.
+   * `OLEA_COMMAND_CREATE_CARD`'s real destination (F2.1, C1.4, `ol-0r92.76`;
+   * Q&A half `[D-268]`/`ol-0r92.77` [H-qa-card-modal]) —
+   * `commands/create-card.ts`'s own module doc explains the split. Reads the
+   * active note fresh through a throwaway `ObsidianSource`, the same
+   * "construct one per call, never cache" shape every other command handler
+   * in this file uses. A `'no-selection'` outcome now opens `QaCardModal`
+   * (`[D-268]`'s entry surface) in place of the honest "not yet" notice this
+   * branch used to give — `completeQaCardEntry` below is its confirm
+   * callback's destination.
    */
   private async handleCreateCardCommand(): Promise<void> {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -2956,12 +2964,49 @@ export default class OleaPlugin extends Plugin {
     const source = await vault.read(file.path);
     const outcome = resolveCreateCardOutcome(source, { start, end });
 
+    if (outcome.kind === 'no-selection') {
+      const path = file.path;
+      const cursorOffset = outcome.cursorOffset;
+      new QaCardModal(this.app, ({ front, back }) => {
+        void this.completeQaCardEntry(vault, path, source, cursorOffset, front, back);
+      }).open();
+      return;
+    }
+
     const notice = createCardNoticeText(outcome);
     if (notice !== null) new Notice(notice);
 
     if (outcome.kind === 'clozed') {
       await vault.write(file.path, outcome.content);
     }
+  }
+
+  /**
+   * `QaCardModal`'s confirm callback (F2.1, `[D-268]`) — resolves the
+   * confirmed front/back text through `create-card.ts`'s
+   * `createQaCardFromEntry` (which calls `olea-core#createQaCard`) and
+   * writes the result back through the vault on success; a rejection (a
+   * non-anchorable block, or blank text the modal's own disabled-Confirm
+   * state should already have prevented) surfaces as the same kind of
+   * `Notice` the cloze branch above uses, never a silent no-op. Kept as its
+   * own method, not inlined in the modal's `onConfirm`, only so a
+   * synchronous callback can hand off to this `async` write without making
+   * `handleCreateCardCommand` itself wait on the modal being answered.
+   */
+  private async completeQaCardEntry(
+    vault: VaultSource,
+    path: VaultPath,
+    source: string,
+    cursorOffset: number,
+    front: string,
+    back: string,
+  ): Promise<void> {
+    const outcome = createQaCardFromEntry({ source, cursorOffset, front, back });
+    if (outcome.kind === 'rejected') {
+      new Notice(`Olea: couldn't create a card there — ${outcome.message}`);
+      return;
+    }
+    await vault.write(path, outcome.content);
   }
 
   private async revealReviewView(): Promise<void> {
