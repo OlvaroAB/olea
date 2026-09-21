@@ -228,7 +228,7 @@ export function buildExplainBackScenario(stateId: string): ExplainBackScenario {
       pending: PendingExplainBackGrading,
       _context: AcceptExplainBackGradingWithObservationContext,
     ): Promise<AcceptExplainBackGradingWithObservationResult | null> {
-      return { accepted: acceptedFrom(pending), observations: [] };
+      return { status: 'accepted', accepted: acceptedFrom(pending), observations: [] };
     },
     async retrieveSourceBlocks(_query: string): Promise<readonly ExplainBackSourceBlock[]> {
       return FIXTURE_SOURCE_BLOCKS;

@@ -120,7 +120,6 @@ import {
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackSourceBlock,
-  retrieveExplainBackSourceBlocks,
 } from './request.js';
 
 /** What opened this view, and therefore whether the question is already known. */
@@ -175,7 +174,7 @@ export interface ExplainBackModalDeps {
     readonly answer: string;
     /** See this file's `now`/`presentedAtMs` doc just below for the definition. */
     readonly durationMs: number | null;
-  }) => Promise<SoloLevel | void>;
+  }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */

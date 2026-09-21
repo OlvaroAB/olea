@@ -777,7 +777,11 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
 
   const deps: RegistryViewDeps = {
     async load(): Promise<RegistryViewState> {
-      return { kind: 'model', model: buildModel() };
+      // `[D-257]` (TRIAGE-6): no scenario here drives the concept-identity
+      // section yet, so an empty array is the honest fixture value — same
+      // "nothing proposed" posture `./same-as-identity.ts`'s own doc names,
+      // not a stubbed-out feature.
+      return { kind: 'model', model: buildModel(), identityProposals: [] };
     },
     async rename(entry: RegistryConceptEntry, newDisplayName: string): Promise<void> {
       overrides = renameConcept(overrides, entry.key, entry.originalName, newDisplayName);
@@ -840,6 +844,10 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
       declinedRenameSignatures.add(renameProposalDeclineSignature(proposal.candidate));
       renameProposalDeclines.push(proposal);
     },
+    // `[D-257]` (TRIAGE-6) identity-section halves — no-ops, matching
+    // `identityProposals: []` above: there is nothing here for either to act on.
+    async confirmIdentityProposal(_proposal): Promise<void> {},
+    async declineIdentityProposal(_proposal): Promise<void> {},
   };
 
   return {
