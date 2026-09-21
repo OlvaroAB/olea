@@ -48,6 +48,16 @@ export interface BuildExplainBackObservationContextParams {
   readonly sourceBlocks: readonly ExplainBackSourceBlock[];
   readonly records: readonly MisconceptionRecord[];
   readonly now: () => Date;
+  /**
+   * `ol-gavc`: the caller's own verdict, already computed (typically via
+   * {@link hasExplainBackSourceRevisionChanged} against a fresh retrieval) —
+   * this function only threads it through to
+   * `AcceptExplainBackGradingWithObservationContext.sourceRevisionStale`,
+   * never re-derives it itself, since a fresh retrieval needs a
+   * `VaultSource` this pure module has no access to. Omitted or `false`
+   * means "no signal to the contrary," matching that field's own doc.
+   */
+  readonly sourceRevisionStale?: boolean;
 }
 
 export function buildExplainBackObservationContext(
@@ -70,6 +80,9 @@ export function buildExplainBackObservationContext(
       subjectConceptId !== null && concept === subjectConceptId ? subjectConceptId : null,
     candidateRecordsForConcept: (conceptId) =>
       params.records.filter((record) => record.conceptId === conceptId),
+    ...(params.sourceRevisionStale !== undefined
+      ? { sourceRevisionStale: params.sourceRevisionStale }
+      : {}),
   };
 }
 
@@ -90,12 +103,11 @@ export type { AcceptExplainBackGradingWithObservationResult };
  * changed at all, and that is not the drift this function exists to catch.
  * Order-independent (`Set`, not array equality) for the same reason.
  *
- * **No production caller yet** — see
- * `acceptExplainBackGradingWithObservation`'s own "STILL NO LIVE STALENESS
- * SIGNAL" doc for the named follow-up: `main.ts`'s
- * `buildExplainBackObservationContextFor` would call this with
- * (`prompt.sourceBlocks`, a fresh `retrieveExplainBackSourceBlocks` call over
- * the same query) just before building the accept context.
+ * **`ol-gavc` gives this its first production caller**: `main.ts`'s
+ * `buildExplainBackObservationContextFor` re-retrieves the source blocks via
+ * `composeExplainBackSourceBlocks(params.query)` and calls this with
+ * (`params.sourceBlocks`, that fresh retrieval) just before building the
+ * accept context, threading the verdict through as `sourceRevisionStale`.
  */
 export function hasExplainBackSourceRevisionChanged(
   gradedAgainst: readonly ExplainBackSourceBlock[],

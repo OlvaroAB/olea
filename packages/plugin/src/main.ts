@@ -6,6 +6,8 @@ import type {
   StudyPlanEnvelope,
 } from 'olea-contracts';
 import {
+  type AcceptedGradingObservationOutcome,
+  appendMisconceptionEvent,
   buildMisconceptionDigest,
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
@@ -75,7 +77,10 @@ import { wireDocumentSourceRegistration } from './course-setup/register-source-w
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
-import { buildExplainBackObservationContext } from './explain-back/observation.js';
+import {
+  buildExplainBackObservationContext,
+  hasExplainBackSourceRevisionChanged,
+} from './explain-back/observation.js';
 import {
   type ExplainBackSourceBlock,
   retrieveExplainBackSourceBlocks,
@@ -86,6 +91,7 @@ import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
 import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
 import { buildFormatMatch, type FormatMatchDecision } from './generation/format-match.js';
+import type { GenerationRefusalNotice } from './generation/pipeline.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
   type AcceptExplainBackGradingWithObservationContext,
@@ -310,6 +316,16 @@ export default class OleaPlugin extends Plugin {
   /** F3.3's automatic generation pipeline (`ol-p3t07a`) — built unconditionally (unlike `retrieval`/`keywordIndex`, it needs no Worker token: the cache and accept/reject flow work offline, and only the sweep itself is a no-op with no Worker configured, F7.8). */
   private generation: GenerationWiring | null = null;
   /**
+   * `[H-1.8a]` (`ol-0r92.71`, register row 1.8a): the last sweep's classified
+   * refusals, captured by `onUnitsLanded` from the `GenerationSweepReport`
+   * `this.generation.sweep` already returns and previously discarded. Read
+   * fresh by `BulkReviewView`'s `getRefusals` provider at the bulk-review
+   * construction site below — never cached beyond "most recent sweep," same
+   * posture the surrounding wiring fields (`registryOverridesCache`, etc.)
+   * already take toward "latest known projection, not a persisted store."
+   */
+  private lastGenerationRefusals: readonly GenerationRefusalNotice[] = [];
+  /**
    * F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
    * built unconditionally, same reason `generation` above is: the cache
    * write and the in-memory dismiss set need no Worker token, only `accept`'s
@@ -400,6 +416,17 @@ export default class OleaPlugin extends Plugin {
    * .registryOverrides` itself documents.
    */
   private registryOverridesCache: RegistryOverrides = EMPTY_REGISTRY_OVERRIDES;
+
+  /**
+   * `ol-0r92.90` (`[IL-P1c2]`): idempotency memo for persisting an accepted
+   * explain-back grading's misconception observation events to the vault —
+   * keyed on `originInstrumentId`, mirroring `GradingWiring
+   * .acceptedObservationsByAttempt`'s own "memoize the in-flight Promise
+   * itself" technique (`grading/wiring.ts`) one layer up, so a retry or a
+   * concurrent double-accept for the SAME attempt persists the event(s)
+   * exactly once rather than once per caller.
+   */
+  private readonly persistedMisconceptionObservationsByAttempt = new Map<string, Promise<void>>();
 
   /**
    * C7.8's course-detection surface (`[D-098]` point 1, F1.3, `ol-0r92.7`):
@@ -1052,6 +1079,12 @@ export default class OleaPlugin extends Plugin {
           // `conceptKey` here because a still-pending draft has no
           // `instrumentId` yet (see `BulkReviewView`'s own `openSource` doc).
           (conceptKey) => void openRegistryEntryFor(this.app, { conceptKey }),
+          // `ol-0r92.71` (`[H-1.8a]`): the classified-refusal render surface's
+          // last reachability hop — reads `this.lastGenerationRefusals` fresh
+          // on every render (`getRefusals` is called, never captured, by
+          // `BulkReviewView.renderRefusals`), so a sweep that lands while this
+          // view is open is reflected on the next render without a rebuild.
+          () => this.lastGenerationRefusals,
         ),
     );
 
@@ -2114,17 +2147,25 @@ export default class OleaPlugin extends Plugin {
    * `evaluateMaterialityChange`'s); `GenerationWiring.sweep` itself already
    * no-ops honestly when the Worker isn't configured (F7.8) or `units` is
    * empty.
+   *
+   * **`ol-0r92.71` (`[H-1.8a]`):** the `GenerationSweepReport` this already
+   * awaited and discarded — `report?.refusals` captured onto
+   * `this.lastGenerationRefusals` so `BulkReviewView`'s `getRefusals`
+   * provider (constructed below) has something real to read; `?? []` covers
+   * the F7.8 degrade (`report === null`, no Worker configured or `units`
+   * empty), never a stale prior sweep's refusals surviving a no-op one.
    */
   private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
     if (this.generation === null) return;
     try {
       const formatMatch = await this.buildFormatMatchProducer();
-      await this.generation.sweep(
+      const report = await this.generation.sweep(
         units,
         this.draftQuizCardsDeps(),
         { classifier: this.knowledgeKind?.classifier ?? null },
         formatMatch,
       );
+      this.lastGenerationRefusals = report?.refusals ?? [];
     } catch (error) {
       console.error('Olea: generation sweep failed', error);
     }
@@ -2657,13 +2698,65 @@ export default class OleaPlugin extends Plugin {
    * below builds the `AcceptExplainBackGradingWithObservationContext`
    * (`buildExplainBackObservationContextFor`) and calls this method when she
    * accepts a grading.
+   *
+   * **`ol-0r92.90` (`[IL-P1c2]`) gives the built-but-never-persisted
+   * observation event(s) their production write.** `ol-0r92.89` found that
+   * `buildObservationEventsFromAcceptedGrading`'s output reached this far and
+   * was then discarded — `appendMisconceptionEvent` (`olea-core`) had no
+   * caller anywhere in the plugin. When `wiring`'s result is `'accepted'`,
+   * this method now appends every non-skipped outcome's event to the vault
+   * through `persistMisconceptionObservations` below, awaited before
+   * returning — INV-6: this is Olea's own layer (the misconception log), not
+   * her authored notes, so nothing here needs her consent to land.
    */
   async acceptExplainBackGradingWithObservation(
     pending: PendingExplainBackGrading,
     context: AcceptExplainBackGradingWithObservationContext,
   ): Promise<AcceptExplainBackGradingWithObservationResult | null> {
     if (this.grading === null) return null;
-    return acceptExplainBackGradingWithObservation(this.grading, pending, context);
+    const result = await acceptExplainBackGradingWithObservation(this.grading, pending, context);
+    if (result !== null && result.status === 'accepted') {
+      await this.persistMisconceptionObservations(context.originInstrumentId, result.observations);
+    }
+    return result;
+  }
+
+  /**
+   * `ol-0r92.90`: appends every non-skipped `AcceptedGradingObservationOutcome`
+   * (`olea-core`'s `buildObservationEventsFromAcceptedGrading` output) to the
+   * vault's misconception log via `appendMisconceptionEvent`, idempotent on
+   * `originInstrumentId` — `this.persistedMisconceptionObservationsByAttempt`
+   * memoizes the in-flight `Promise` itself, the same technique
+   * `GradingWiring.acceptedObservationsByAttempt` (`grading/wiring.ts`) uses
+   * one layer up, so a sequential retry or a concurrent double-accept for the
+   * SAME attempt id persists at most once rather than re-appending a
+   * duplicate line per caller. A per-event append failure is logged (D-005:
+   * count only, never the event's own statement/correction text) and never
+   * rethrown — an observation-persistence failure must not surface as a
+   * failure of the grade acceptance it rode on, mirroring
+   * `buildObservationEventsFromAcceptedGrading`'s own embedder-failure
+   * isolation one layer down.
+   */
+  private persistMisconceptionObservations(
+    originInstrumentId: string,
+    outcomes: readonly AcceptedGradingObservationOutcome[],
+  ): Promise<void> {
+    const existing = this.persistedMisconceptionObservationsByAttempt.get(originInstrumentId);
+    if (existing !== undefined) return existing;
+    const promise = (async () => {
+      const vault = new ObsidianSource(this.app);
+      const deviceId = await ensureDeviceId(this);
+      for (const outcome of outcomes) {
+        if (outcome.skipped) continue;
+        try {
+          await appendMisconceptionEvent(vault, outcome.result.event, deviceId);
+        } catch (error) {
+          console.error('Olea: failed to persist a misconception observation event', error);
+        }
+      }
+    })();
+    this.persistedMisconceptionObservationsByAttempt.set(originInstrumentId, promise);
+    return promise;
   }
 
   /**
@@ -2701,16 +2794,31 @@ export default class OleaPlugin extends Plugin {
    * "load fresh, never cache" discipline `ingestSessionJustClosed`'s own
    * `misconceptionStore` read above already follows, since a projection this
    * cheap gains nothing from staleness risk.
+   *
+   * **`ol-gavc` gives `sourceRevisionStale` its first live producer.**
+   * `ol-0r92.89` built `hasExplainBackSourceRevisionChanged`
+   * (`explain-back/observation.ts`) and the reject-on-stale guard one layer
+   * down, but named this method — the only place a fresh retrieval can be
+   * composed — as the missing caller. `params.query` (the same string the
+   * view retrieved `params.sourceBlocks` against originally —
+   * `modal.ts`'s `acceptGrading` now threads `prompt.context.question`
+   * through) is re-run through `composeExplainBackSourceBlocks`, mirroring
+   * how `resolveInstrumentPrompt`/`resolveTopicPrompt` retrieved the graded
+   * blocks in the first place; the two block lists are compared and the
+   * verdict is passed through as `sourceRevisionStale`, never re-derived
+   * downstream.
    */
   private async buildExplainBackObservationContextFor(params: {
     readonly subjectConceptId: string | null;
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
+    readonly query: string;
   }): Promise<AcceptExplainBackGradingWithObservationContext> {
     const vault = new ObsidianSource(this.app);
     const deviceId = await ensureDeviceId(this);
     const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
     const records = (await store.load()) ?? [];
+    const freshSourceBlocks = await this.composeExplainBackSourceBlocks(params.query);
     return buildExplainBackObservationContext({
       subjectConceptId: params.subjectConceptId,
       originInstrumentId: params.originInstrumentId,
@@ -2721,6 +2829,10 @@ export default class OleaPlugin extends Plugin {
       sourceBlocks: params.sourceBlocks,
       records,
       now: () => new Date(),
+      sourceRevisionStale: hasExplainBackSourceRevisionChanged(
+        params.sourceBlocks,
+        freshSourceBlocks,
+      ),
     });
   }
 

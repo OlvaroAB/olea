@@ -87,3 +87,15 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
     expect(refusedPhaseBody).not.toMatch(/recordSoloGradeAndReview/);
   });
 });
+
+describe('ExplainBackModal — acceptGrading threads the graded query through for the live staleness check (ol-gavc)', () => {
+  it('passes prompt.context.question as query on the buildObservationContext call', () => {
+    const acceptGradingBody = modal.slice(
+      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private discardGrading('),
+    );
+    expect(acceptGradingBody).toMatch(
+      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.context\.question,\s*\}\);/,
+    );
+  });
+});

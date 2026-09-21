@@ -109,6 +109,36 @@ describe('buildExplainBackObservationContext', () => {
     expect(context.originReviewEventId).toBeNull();
     expect(context.timestamp).toBe('2026-08-31T00:00:00.000Z');
   });
+
+  // `ol-gavc`: this function only threads the caller's own verdict through —
+  // it never re-derives it — since a fresh retrieval needs a `VaultSource`
+  // this pure module has no access to.
+  it('threads sourceRevisionStale through unchanged when the caller supplies true', () => {
+    const context = buildExplainBackObservationContext({
+      subjectConceptId: 'concept-a',
+      originInstrumentId: 'inst-1',
+      originReviewEventId: null,
+      sourceBlocks: [],
+      records: [],
+      now: fixedNow,
+      sourceRevisionStale: true,
+    });
+
+    expect(context.sourceRevisionStale).toBe(true);
+  });
+
+  it('leaves sourceRevisionStale undefined when the caller omits it — never a false claim of freshness', () => {
+    const context = buildExplainBackObservationContext({
+      subjectConceptId: 'concept-a',
+      originInstrumentId: 'inst-1',
+      originReviewEventId: null,
+      sourceBlocks: [],
+      records: [],
+      now: fixedNow,
+    });
+
+    expect(context.sourceRevisionStale).toBeUndefined();
+  });
 });
 
 function sourceBlock(overrides: Partial<ExplainBackSourceBlock> = {}): ExplainBackSourceBlock {

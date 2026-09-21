@@ -123,15 +123,19 @@ describe('every port the session needs is the real one', () => {
     // (the accept-and-observe step's misconception-record lookup),
     // `ol-38kp`'s `recordExplainBackSoloGradeAndReview` awaits it a fifth
     // time to thread the same id into `recordSoloGradeAndReview`'s SOLO
-    // review-log write, and `ol-2zfj.75`'s
+    // review-log write, `ol-2zfj.75`'s
     // `buildExplainBackMisconceptionDigestFor` awaits it a sixth time to
     // thread the same id into its OWN `createVaultMisconceptionStore` read
-    // (the judge digest's misconception-record lookup) — there is no
-    // `this.deviceId` cache to reuse instead in any of the six. The count
-    // below tracks known call sites rather than asserting "exactly once", so
-    // a future accidental duplicate still has to be a deliberate edit to
-    // this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(6);
+    // (the judge digest's misconception-record lookup), and `ol-0r92.90`'s
+    // `persistMisconceptionObservations` awaits it a seventh time to thread
+    // the same id into `appendMisconceptionEvent`'s own vault write (the
+    // accepted observation event's persistence, keyed to the SAME device
+    // this attempt's misconception-record lookup above already used) —
+    // there is no `this.deviceId` cache to reuse instead in any of the
+    // seven. The count below tracks known call sites rather than asserting
+    // "exactly once", so a future accidental duplicate still has to be a
+    // deliberate edit to this test.
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(7);
   });
 });
 
@@ -393,6 +397,78 @@ describe('F2.12 confusion routing has a real production entry point (ol-p4t05)',
   });
 });
 
+describe('an accepted explain-back grading now persists its misconception observation event (ol-0r92.90, [IL-P1c2])', () => {
+  // `ol-0r92.89` found `buildObservationEventsFromAcceptedGrading`'s output
+  // reached `acceptExplainBackGradingWithObservation` below and was
+  // discarded — `appendMisconceptionEvent` (`olea-core`) had no caller
+  // anywhere in the plugin. These assertions are the source-level proof that
+  // an accepted result's observations now reach the vault, idempotent on
+  // `originInstrumentId`, through a persistence step this method's own
+  // wrapper composes.
+
+  it("persists every accepted result's observations before returning it", () => {
+    expect(main).toMatch(
+      /async acceptExplainBackGradingWithObservation\(\s*pending:\s*PendingExplainBackGrading,\s*context:\s*AcceptExplainBackGradingWithObservationContext,\s*\):\s*Promise<AcceptExplainBackGradingWithObservationResult \| null> \{\s*if \(this\.grading === null\) return null;\s*const result = await acceptExplainBackGradingWithObservation\(this\.grading, pending, context\);\s*if \(result !== null && result\.status === 'accepted'\) \{\s*await this\.persistMisconceptionObservations\(context\.originInstrumentId, result\.observations\);\s*\}\s*return result;/,
+    );
+  });
+
+  it('persistMisconceptionObservations is idempotent on originInstrumentId, memoizing the in-flight Promise itself', () => {
+    expect(main).toMatch(
+      /private persistMisconceptionObservations\(\s*originInstrumentId:\s*string,\s*outcomes:\s*readonly AcceptedGradingObservationOutcome\[\],\s*\):\s*Promise<void> \{\s*const existing = this\.persistedMisconceptionObservationsByAttempt\.get\(originInstrumentId\);\s*if \(existing !== undefined\) return existing;/,
+    );
+    expect(main).toMatch(
+      /this\.persistedMisconceptionObservationsByAttempt\.set\(originInstrumentId, promise\);\s*return promise;/,
+    );
+    expect(main).toMatch(
+      /private readonly persistedMisconceptionObservationsByAttempt = new Map<string, Promise<void>>\(\);/,
+    );
+  });
+
+  it('appends the real event through appendMisconceptionEvent for every non-skipped outcome, skipping skipped ones', () => {
+    expect(main).toMatch(
+      /for \(const outcome of outcomes\) \{\s*if \(outcome\.skipped\) continue;\s*try \{\s*await appendMisconceptionEvent\(vault, outcome\.result\.event, deviceId\);/,
+    );
+  });
+
+  it('never rethrows an append failure into the accept path it rode on', () => {
+    expect(main).toMatch(
+      /\} catch \(error\) \{\s*console\.error\('Olea: failed to persist a misconception observation event', error\);\s*\}/,
+    );
+  });
+
+  it('imports appendMisconceptionEvent and AcceptedGradingObservationOutcome from olea-core', () => {
+    expect(main).toMatch(/type AcceptedGradingObservationOutcome,\s*appendMisconceptionEvent,/);
+  });
+});
+
+describe('a fresh retrieval at accept time feeds the stale-source rejection for real (ol-gavc)', () => {
+  // `ol-0r92.89` built `hasExplainBackSourceRevisionChanged`
+  // (`explain-back/observation.ts`) and the reject-on-stale guard one layer
+  // down (`grading/wiring.ts`), but no production caller set
+  // `sourceRevisionStale` — this method is the named missing caller.
+
+  it('re-retrieves the source blocks against the same query the prompt was graded against', () => {
+    expect(main).toMatch(
+      /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
+    );
+    expect(main).toMatch(
+      /const freshSourceBlocks = await this\.composeExplainBackSourceBlocks\(params\.query\);/,
+    );
+  });
+
+  it('passes the comparison through as sourceRevisionStale, never re-derived downstream', () => {
+    expect(main).toMatch(
+      /sourceRevisionStale:\s*hasExplainBackSourceRevisionChanged\(\s*params\.sourceBlocks,\s*freshSourceBlocks,\s*\),/,
+    );
+  });
+
+  it('imports hasExplainBackSourceRevisionChanged alongside the observation-context builder', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildExplainBackObservationContext,\s*hasExplainBackSourceRevisionChanged,\s*\}\s*from\s*'\.\/explain-back\/observation\.js';/,
+    );
+  });
+});
+
 describe('F5.1 first-suggestion picker has a real production entry point (ol-0r92.22)', () => {
   // Same defect shape `gradeExplainBackAttempt` (ol-drfy) and
   // `evaluateConfusionRouting` (ol-p4t05) already document above: a pure
@@ -561,6 +637,16 @@ describe('the bulk-review triage view is registered and reachable (F3.3, ol-jie3
   it('reveals an existing leaf rather than stacking a second one, same shape as Gap/Today/Session', () => {
     expect(main).toMatch(/getLeavesOfType\(VIEW_TYPE_OLEA_BULK_REVIEW\)/);
     expect(main).toMatch(/refreshOpenTodayViews\(workspace,\s*VIEW_TYPE_OLEA_BULK_REVIEW\)/);
+  });
+
+  // `ol-0r92.71` (`[H-1.8a]`, register row 1.8a): `BulkReviewView` grew a 4th,
+  // optional `getRefusals` constructor param whose render surface was already
+  // built and tested, but `main.ts` still constructed it with only 3 args —
+  // this is the source-level proof the 4th arg now reaches a real provider.
+  it("passes lastGenerationRefusals as the getRefusals provider, register row 1.8a's last reachability hop", () => {
+    expect(main).toMatch(
+      /\(conceptKey\) => void openRegistryEntryFor\(this\.app, \{ conceptKey \}\),\s*\(\) => this\.lastGenerationRefusals,\s*\),/,
+    );
   });
 });
 
@@ -733,6 +819,34 @@ describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
       /import\s*\{\s*ObsidianTermWindowStore\s*\}\s*from\s*'\.\/today\/term-window-store\.js'/,
     );
     expect(main).toMatch(/createRhythmSource,/);
+  });
+});
+
+describe("a generation sweep's classified refusals are captured for the bulk-review render surface (ol-0r92.71, [H-1.8a])", () => {
+  // `ol-0r92.71`'s own close evidence named the exact remaining gap:
+  // `onUnitsLanded` awaited `GenerationSweepReport` and discarded it
+  // entirely, so `BulkReviewView`'s already-built `renderRefusals` never
+  // had anything real to read. These assertions are the source-level proof
+  // that the report's `refusals` field is now captured onto
+  // `this.lastGenerationRefusals`, degrading to `[]` on the F7.8 no-op path
+  // (`report === null`) rather than a stale prior sweep's refusals.
+
+  it('captures report?.refusals onto this.lastGenerationRefusals inside onUnitsLanded', () => {
+    expect(main).toMatch(
+      /const report = await this\.generation\.sweep\(\s*units,\s*this\.draftQuizCardsDeps\(\),\s*\{ classifier: this\.knowledgeKind\?\.classifier \?\? null \},\s*formatMatch,\s*\);\s*this\.lastGenerationRefusals = report\?\.refusals \?\? \[\];/,
+    );
+  });
+
+  it('declares the field typed on the real GenerationRefusalNotice shape, defaulting to empty', () => {
+    expect(main).toMatch(
+      /private lastGenerationRefusals:\s*readonly GenerationRefusalNotice\[\] = \[\];/,
+    );
+  });
+
+  it('imports GenerationRefusalNotice from the generation pipeline module', () => {
+    expect(main).toMatch(
+      /import type \{ GenerationRefusalNotice \} from '\.\/generation\/pipeline\.js';/,
+    );
   });
 });
 

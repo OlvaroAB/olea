@@ -139,6 +139,15 @@ export interface ExplainBackModalDeps {
     readonly subjectConceptId: string | null;
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
+    /**
+     * `ol-gavc`: the same query `sourceBlocks` was originally retrieved
+     * against (`retrieveSourceBlocks`'s own argument at prompt-resolution
+     * time) — a real caller re-retrieves against this at accept time and
+     * compares, to detect a source that changed while grading was
+     * outstanding. `acceptGrading` below passes `prompt.context.question`,
+     * the one query string every resolved prompt already carries.
+     */
+    readonly query: string;
   }) => Promise<AcceptExplainBackGradingWithObservationContext>;
   /**
    * `ol-cqz8`: runs the SOLO depth pipeline and appends the subject's own
@@ -440,6 +449,7 @@ export class ExplainBackModal extends Modal {
       subjectConceptId: prompt.subjectConceptId,
       originInstrumentId: prompt.originInstrumentId,
       sourceBlocks: prompt.sourceBlocks,
+      query: prompt.context.question,
     });
     const result = await this.deps.acceptWithObservation(pending, context);
     // `[D-217]`: whatever level comes back (or doesn't) is what
