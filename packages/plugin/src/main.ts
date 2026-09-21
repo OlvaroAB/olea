@@ -990,6 +990,13 @@ export default class OleaPlugin extends Plugin {
             deviceId,
             settingsHost: this,
             now: () => new Date(),
+            // `exactOptionalPropertyTypes`: omit the key entirely rather than
+            // assign `undefined` to it when the Worker isn't configured
+            // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
+            // `createLocalStudyPlanProvider`. [ol-v7r5.61 / IL-D7b]
+            ...(this.rankWeights?.readRankWeights
+              ? { readRankWeights: this.rankWeights.readRankWeights }
+              : {}),
             // `ol-p5t06b`: the `'build-session'` affordance has been a label
             // with nothing behind it since P5-T06a. This is what it does —
             // open Home seeded with the row's concept as F4.6's stated-
@@ -1021,6 +1028,13 @@ export default class OleaPlugin extends Plugin {
             deviceId,
             settingsHost: this,
             now: () => new Date(),
+            // `exactOptionalPropertyTypes`: omit the key entirely rather than
+            // assign `undefined` to it when the Worker isn't configured
+            // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
+            // `createLocalStudyPlanProvider`. [ol-v7r5.61 / IL-D7b]
+            ...(this.rankWeights?.readRankWeights
+              ? { readRankWeights: this.rankWeights.readRankWeights }
+              : {}),
             // F4.6 / F6.4, `[D-163]` (`ol-12gs`): this screen's own door onto
             // `ExplainBackModal` — nothing to refresh on close, since the
             // screen underneath is never torn down (hand-off, not a rebuild)
@@ -1227,6 +1241,13 @@ export default class OleaPlugin extends Plugin {
             deviceId,
             settingsHost: this,
             now: () => new Date(),
+            // `exactOptionalPropertyTypes`: omit the key entirely rather than
+            // assign `undefined` to it when the Worker isn't configured
+            // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
+            // `createLocalStudyPlanProvider`. [ol-v7r5.61 / IL-D7b]
+            ...(this.rankWeights?.readRankWeights
+              ? { readRankWeights: this.rankWeights.readRankWeights }
+              : {}),
             editPort: createObsidianEditInstrumentPort(this.app),
             // `[D-171]`/`ol-2zfj.43`: the open-source-location hand-off —
             // until this line the registry's "Open source" action logged an
@@ -2430,6 +2451,13 @@ export default class OleaPlugin extends Plugin {
         // her review log through C5.5's clustering — see
         // `windowDeficitFromReviewLog` above.
         windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
+        // `exactOptionalPropertyTypes`: omit the key entirely rather than
+        // assign `undefined` to it when the Worker isn't configured (F7.8) —
+        // same pattern `refreshCachedStudyPlan` below uses for
+        // `createLocalStudyPlanProvider`. [ol-v7r5.61 / IL-D7b]
+        ...(this.rankWeights?.readRankWeights
+          ? { readRankWeights: this.rankWeights.readRankWeights }
+          : {}),
       },
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
@@ -2484,6 +2512,13 @@ export default class OleaPlugin extends Plugin {
         // her review log through C5.5's clustering — see
         // `windowDeficitFromReviewLog` above.
         windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
+        // `exactOptionalPropertyTypes`: omit the key entirely rather than
+        // assign `undefined` to it when the Worker isn't configured (F7.8) —
+        // same pattern `refreshCachedStudyPlan` below uses for
+        // `createLocalStudyPlanProvider`. [ol-v7r5.61 / IL-D7b]
+        ...(this.rankWeights?.readRankWeights
+          ? { readRankWeights: this.rankWeights.readRankWeights }
+          : {}),
       },
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,

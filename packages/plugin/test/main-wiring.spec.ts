@@ -1255,3 +1255,77 @@ describe('[SESS-14] (ol-egov.132.15): windowDeficitFromReviewLog builds sharesBy
     );
   });
 });
+
+describe('every oracle-ranking caller receives the delivered weights, not just plan/provider.ts (ol-v7r5.61, [IL-D7b])', () => {
+  // `ol-v7r5.55` threaded `readRankWeights` through `gap/provider.ts`,
+  // `session-builder/provider.ts` and `registry/provider.ts` (client commit
+  // `dd8dcf7`), and proved with spies, in each provider's own spec, that the
+  // option reaches `composeOracleRanking` when supplied and is omitted when
+  // not. What that bead's own close evidence named as still missing —
+  // because `main.ts` was a live concurrent lane's file at the time — is
+  // that none of `main.ts`'s five construction/call sites actually passed
+  // `readRankWeights` in, so every one of these three views and both
+  // `composeStudySessionForRequest` calls ran on `DECLARED_FALLBACK_*`
+  // in production regardless of whether the Worker was configured.
+  //
+  // `main.ts` imports `obsidian` and cannot be instantiated under Vitest
+  // (this file's own module doc) — a spy on a running instance is not an
+  // available instrument here. The same exactOptionalPropertyTypes ternary
+  // this file already asserts for `readPlanPolicy` and for the study-plan
+  // provider's own `readRankWeights` spread is the proof available at this
+  // layer: the truthy branch is the "reaches the provider when configured"
+  // half, the `{}` branch is the "absent when not" half, and the assertion
+  // pins the exact call site so a future edit to any one of these five sites
+  // that drops the spread — while the others keep it, and while the
+  // studyPlan-provider assertion above keeps passing — still fails.
+
+  const spread =
+    '\\.\\.\\.\\(this\\.rankWeights\\?\\.readRankWeights\\s*\\?\\s*\\{ readRankWeights: this\\.rankWeights\\.readRankWeights \\}\\s*:\\s*\\{\\}\\)';
+
+  it('main.ts:988 — the gap view’s createLocalGapProvider receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalGapProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?buildSession:`,
+      ),
+    );
+  });
+
+  it('main.ts:1019 — the session builder view’s createLocalSessionBuilderProvider receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalSessionBuilderProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?openExplainBack:`,
+      ),
+    );
+  });
+
+  it('main.ts:1225 — the registry view’s createLocalRegistryProvider receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalRegistryProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?editPort:`,
+      ),
+    );
+  });
+
+  it('main.ts:2415 — composeDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);\\s*return result\\?\\.composed\\.full`,
+      ),
+    );
+  });
+
+  it('main.ts:2474 — extendDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `private async extendDefaultStudySession\\([\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
+      ),
+    );
+  });
+
+  it('all four production callers of composeOracleRanking now receive it — five construction sites, four callers (the session-builder view and both composeStudySessionForRequest calls share one provider)', () => {
+    const occurrences = main.match(new RegExp(spread, 'g')) ?? [];
+    // The study-plan provider (component 3.3, `[D-110]`, asserted above) plus
+    // the five sites this bead adds: 1 + 5 = 6.
+    expect(occurrences.length).toBe(6);
+  });
+});
