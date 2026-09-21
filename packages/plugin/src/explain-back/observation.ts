@@ -74,3 +74,40 @@ export function buildExplainBackObservationContext(
 }
 
 export type { AcceptExplainBackGradingWithObservationResult };
+
+/**
+ * `ol-0r92.89`: the pure comparison a caller uses to decide
+ * `AcceptExplainBackGradingWithObservationContext.sourceRevisionStale` —
+ * `../grading/wiring.js`'s accept step rejects outright when this is `true`
+ * rather than recording anything against a citation that may no longer say
+ * what it said when the grading request went out.
+ *
+ * Compares by `{path, blockIndex, text}` triples, not by `blockId` alone:
+ * `request.ts`'s `retrieveExplainBackSourceBlocks` mints `blockId` from
+ * `path#blockIndex#index`, where `index` is this call's position in the
+ * retrieved list — a re-embed that returns the same passages in a different
+ * order would change every `blockId` without the underlying source having
+ * changed at all, and that is not the drift this function exists to catch.
+ * Order-independent (`Set`, not array equality) for the same reason.
+ *
+ * **No production caller yet** — see
+ * `acceptExplainBackGradingWithObservation`'s own "STILL NO LIVE STALENESS
+ * SIGNAL" doc for the named follow-up: `main.ts`'s
+ * `buildExplainBackObservationContextFor` would call this with
+ * (`prompt.sourceBlocks`, a fresh `retrieveExplainBackSourceBlocks` call over
+ * the same query) just before building the accept context.
+ */
+export function hasExplainBackSourceRevisionChanged(
+  gradedAgainst: readonly ExplainBackSourceBlock[],
+  freshlyRetrieved: readonly ExplainBackSourceBlock[],
+): boolean {
+  const key = (entry: ExplainBackSourceBlock): string =>
+    `${entry.path}#${entry.blockIndex}#${entry.block.text}`;
+  const before = new Set(gradedAgainst.map(key));
+  const after = new Set(freshlyRetrieved.map(key));
+  if (before.size !== after.size) return true;
+  for (const entry of before) {
+    if (!after.has(entry)) return true;
+  }
+  return false;
+}

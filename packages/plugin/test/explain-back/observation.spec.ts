@@ -1,6 +1,10 @@
 import type { MisconceptionRecord } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { buildExplainBackObservationContext } from '../../src/explain-back/observation.js';
+import {
+  buildExplainBackObservationContext,
+  hasExplainBackSourceRevisionChanged,
+} from '../../src/explain-back/observation.js';
+import type { ExplainBackSourceBlock } from '../../src/explain-back/request.js';
 
 function record(overrides: Partial<MisconceptionRecord> = {}): MisconceptionRecord {
   return {
@@ -104,5 +108,65 @@ describe('buildExplainBackObservationContext', () => {
     expect(context.originInstrumentId).toBe('inst-42');
     expect(context.originReviewEventId).toBeNull();
     expect(context.timestamp).toBe('2026-08-31T00:00:00.000Z');
+  });
+});
+
+function sourceBlock(overrides: Partial<ExplainBackSourceBlock> = {}): ExplainBackSourceBlock {
+  return {
+    block: { blockId: 'note.md#0#0', text: 'original passage text' },
+    path: 'note.md',
+    blockIndex: 0,
+    ...overrides,
+  };
+}
+
+describe('hasExplainBackSourceRevisionChanged — ol-0r92.89', () => {
+  it('is false when a fresh retrieval returns the identical set of passages', () => {
+    const graded = [sourceBlock()];
+    const fresh = [sourceBlock()];
+    expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(false);
+  });
+
+  it('is true when the text at the same path/blockIndex has changed', () => {
+    const graded = [
+      sourceBlock({ block: { blockId: 'note.md#0#0', text: 'original passage text' } }),
+    ];
+    const fresh = [sourceBlock({ block: { blockId: 'note.md#0#0', text: 'edited passage text' } })];
+    expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(true);
+  });
+
+  it('is true when a passage disappears from a fresh retrieval', () => {
+    const graded = [sourceBlock(), sourceBlock({ path: 'note2.md', blockIndex: 1 })];
+    const fresh = [sourceBlock()];
+    expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(true);
+  });
+
+  it('is true when a passage is added on a fresh retrieval', () => {
+    const graded = [sourceBlock()];
+    const fresh = [sourceBlock(), sourceBlock({ path: 'note2.md', blockIndex: 1 })];
+    expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(true);
+  });
+
+  it('is false when only blockId shifts (re-embed reordering) but path/blockIndex/text are unchanged', () => {
+    // `blockId` is minted from the retrieved list's position (`request.ts`'s
+    // `path#blockIndex#index`) — a re-embed that returns the same two
+    // passages in the opposite order mints different blockIds for both
+    // without the underlying source having changed at all.
+    const passageA = {
+      block: { blockId: 'a.md#0#0', text: 'passage a' },
+      path: 'a.md',
+      blockIndex: 0,
+    };
+    const passageB = {
+      block: { blockId: 'b.md#0#1', text: 'passage b' },
+      path: 'b.md',
+      blockIndex: 0,
+    };
+    const graded = [passageA, passageB];
+    const fresh = [
+      { block: { blockId: 'b.md#0#0', text: 'passage b' }, path: 'b.md', blockIndex: 0 },
+      { block: { blockId: 'a.md#0#1', text: 'passage a' }, path: 'a.md', blockIndex: 0 },
+    ];
+    expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(false);
   });
 });

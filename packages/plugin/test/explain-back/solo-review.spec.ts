@@ -37,6 +37,7 @@ function wiringWithSoloReply(
     misconceptionEmbedder: null,
     misconceptionEmbeddingCache: null,
     soloTransport: { send: async (request) => reply(request) },
+    acceptedObservationsByAttempt: new Map(),
   };
 }
 
@@ -46,6 +47,7 @@ const UNCONFIGURED_WIRING: GradingWiring = {
   misconceptionEmbedder: null,
   misconceptionEmbeddingCache: null,
   soloTransport: null,
+  acceptedObservationsByAttempt: new Map(),
 };
 
 describe('recordSoloGradeAndReview — honest skips, never a fabricated write', () => {

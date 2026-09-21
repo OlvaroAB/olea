@@ -269,6 +269,24 @@ export interface GradingWiring {
    * grey-out condition as `judgeCaller`.
    */
   readonly soloTransport: WorkerTaskTransport | null;
+  /**
+   * `ol-0r92.89`: the idempotency guard `acceptExplainBackGradingWithObservation`
+   * below reads and writes, keyed on `context.originInstrumentId` — the
+   * closest thing to an attempt/draft id available at that call site
+   * (`PendingExplainBackGrading` itself carries none; see that function's
+   * own doc). One fresh, empty `Map` per `buildGradingWiring` call, held for
+   * the wiring's whole lifetime — the same "one instance, plugin lifetime"
+   * posture `judgeCaller`/`misconceptionEmbedder` already have on this same
+   * interface. Storing the in-flight `Promise` itself (not just its
+   * resolved value) is what makes this safe against a concurrent double
+   * accept, not only a sequential retry: two calls that arrive before the
+   * first resolves still share one execution, one embedder call, one set of
+   * observation events.
+   */
+  readonly acceptedObservationsByAttempt: Map<
+    string,
+    Promise<AcceptExplainBackGradingWithObservationResult>
+  >;
 }
 
 export async function buildGradingWiring(deps: GradingWiringDeps): Promise<GradingWiring> {
@@ -293,6 +311,7 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
       misconceptionEmbedder: misconception.embedder,
       misconceptionEmbeddingCache: misconception.cache,
       soloTransport: null,
+      acceptedObservationsByAttempt: new Map(),
     };
   }
 
@@ -307,6 +326,7 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
     // THIS IS A SEPARATE PIPELINE") but share one Worker config/transport —
     // same posture `misconception`'s embedder pair already takes above.
     soloTransport: transport,
+    acceptedObservationsByAttempt: new Map(),
   };
 }
 
@@ -359,13 +379,40 @@ export interface AcceptExplainBackGradingWithObservationContext {
   readonly resolveCitation: (blockId: string) => MisconceptionSourceCitation | null;
   readonly resolveConceptId: (concept: string) => string | null;
   readonly candidateRecordsForConcept: (conceptId: string) => readonly MisconceptionRecord[];
+  /**
+   * `ol-0r92.89`: true when the source material this grading was checked
+   * against has changed since the grading request went out — e.g. a caller
+   * comparing `explain-back/observation.ts`'s
+   * `hasExplainBackSourceRevisionChanged` against a fresh retrieval just
+   * before accept. Omitted or `false` means "no signal to the contrary,"
+   * never a claim of confirmed freshness — no current production caller
+   * supplies this yet (see `acceptExplainBackGradingWithObservation`'s own
+   * doc, "STILL NO LIVE STALENESS SIGNAL", for the named follow-up). When
+   * `true`, the accept step below rejects rather than recording anything —
+   * see that function's doc for why this is a reject, not a best-effort
+   * degrade like the embedder failure path.
+   */
+  readonly sourceRevisionStale?: boolean;
 }
 
-export interface AcceptExplainBackGradingWithObservationResult {
-  readonly accepted: AcceptedExplainBackGrading;
-  /** Empty when there were no misconceptionCandidates to observe, or when the observation step failed — see this function's doc. */
-  readonly observations: readonly AcceptedGradingObservationOutcome[];
-}
+/**
+ * `ol-0r92.89`: a caller-reported stale source (`context.sourceRevisionStale
+ * === true`) rejects outright — no `acceptExplainBackGrading` call, no
+ * observation attempt, nothing recorded — distinct from the `'accepted'`
+ * shape's `observations: []`, which means "accepted, but nothing worth
+ * observing," not "refused to accept." A caller (`modal.ts`'s
+ * `acceptGrading`) reads `status` before touching `accepted`/`observations`.
+ */
+export type AcceptExplainBackGradingWithObservationResult =
+  | {
+      readonly status: 'accepted';
+      readonly accepted: AcceptedExplainBackGrading;
+      /** Empty when there were no misconceptionCandidates to observe, or when the observation step failed — see this function's doc. */
+      readonly observations: readonly AcceptedGradingObservationOutcome[];
+    }
+  | {
+      readonly status: 'stale';
+    };
 
 /**
  * `ol-4053`: the accepted-grading path `buildObservationEventWithEmbedding`
@@ -380,18 +427,71 @@ export interface AcceptExplainBackGradingWithObservationResult {
  * **Failure isolation, mirroring `../ingestion/wiring.ts`'s
  * `withUnitsLandedHook`:** the observation step is wrapped in its own
  * try/catch. An embedding or observation failure never fails the grade
- * acceptance it rode on — the caller still gets back a valid `accepted`
- * grading, with `observations: []` and a content-free `console.error` line
+ * acceptance it rode on — the caller still gets back a valid `'accepted'`
+ * result, with `observations: []` and a content-free `console.error` line
  * (D-005: a count only, never the candidate's statement or correction).
+ *
+ * ===========================================================================
+ * `ol-0r92.89`: IDEMPOTENT ON RETRY, KEYED ON `context.originInstrumentId`
+ * ===========================================================================
+ * The first call for a given `originInstrumentId` runs for real and its
+ * in-flight `Promise` is stored on `wiring.acceptedObservationsByAttempt`
+ * before it is awaited; every later call for the SAME id — a sequential
+ * retry after success, or a second click that lands before the first
+ * resolves — is handed that same `Promise` rather than re-running
+ * `acceptExplainBackGrading`/the embedder/`buildObservationEventsFromAcceptedGrading`.
+ * That is what makes "exactly one observation event per attempt" true even
+ * under a retry: `buildObservationEvent` mints a fresh event id on every
+ * call it is not memoized against, so two real executions for one attempt
+ * would produce two distinct events for the identical misconception.
+ *
+ * ===========================================================================
+ * `ol-0r92.89`: REJECTS ON A STALE SOURCE, NEVER ACCEPTS SILENTLY
+ * ===========================================================================
+ * `context.sourceRevisionStale === true` short-circuits to `{ status:
+ * 'stale' }` before `acceptExplainBackGrading` is even called — no partial
+ * accept, no observation attempt, nothing written. This is a REJECT, not the
+ * embedder-failure path's best-effort degrade, because an embedder failure
+ * only loses M1's match signal (a fresh id is still honest), whereas a stale
+ * source means the citation itself may no longer say what it said — INV-5's
+ * grounding guarantee, not just M1's matching, is what would be violated by
+ * accepting anyway.
+ *
+ * **STILL NO LIVE STALENESS SIGNAL.** No current production caller sets
+ * `sourceRevisionStale` — `main.ts`'s `buildExplainBackObservationContextFor`
+ * (`~main.ts:2694`, outside this bead's `owns`) would need to re-retrieve the
+ * prompt's source blocks and pass
+ * `hasExplainBackSourceRevisionChanged(prompt.sourceBlocks, freshBlocks)`
+ * (`../explain-back/observation.js`) through. Until that lands, this
+ * function's honest behaviour is unchanged from before this update: absent a
+ * caller-reported signal, a stale source is not detected, only rejectable
+ * once detected.
  */
 export async function acceptExplainBackGradingWithObservation(
   wiring: GradingWiring,
   pending: PendingExplainBackGrading,
   context: AcceptExplainBackGradingWithObservationContext,
 ): Promise<AcceptExplainBackGradingWithObservationResult> {
+  const cached = wiring.acceptedObservationsByAttempt.get(context.originInstrumentId);
+  if (cached) return cached;
+
+  const outcome = computeAcceptExplainBackGradingWithObservation(wiring, pending, context);
+  wiring.acceptedObservationsByAttempt.set(context.originInstrumentId, outcome);
+  return outcome;
+}
+
+async function computeAcceptExplainBackGradingWithObservation(
+  wiring: GradingWiring,
+  pending: PendingExplainBackGrading,
+  context: AcceptExplainBackGradingWithObservationContext,
+): Promise<AcceptExplainBackGradingWithObservationResult> {
+  if (context.sourceRevisionStale === true) {
+    return { status: 'stale' };
+  }
+
   const accepted = acceptExplainBackGrading(pending);
   if (accepted.misconceptionCandidates.length === 0) {
-    return { accepted, observations: [] };
+    return { status: 'accepted', accepted, observations: [] };
   }
 
   try {
@@ -405,13 +505,13 @@ export async function acceptExplainBackGradingWithObservation(
           : {}),
       },
     );
-    return { accepted, observations };
+    return { status: 'accepted', accepted, observations };
   } catch (error) {
     console.error('Olea: misconception observation failed (grade acceptance unaffected)', {
       misconceptionCandidateCount: accepted.misconceptionCandidates.length,
       error,
     });
-    return { accepted, observations: [] };
+    return { status: 'accepted', accepted, observations: [] };
   }
 }
 

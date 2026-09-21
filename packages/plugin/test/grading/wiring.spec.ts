@@ -484,14 +484,11 @@ describe('acceptExplainBackGradingWithObservation', () => {
     const pending = await gradeExplainBackAttempt(wiring, baseInput);
     if (!pending) throw new Error('expected a pending grading');
 
-    const { accepted, observations } = await acceptExplainBackGradingWithObservation(
-      wiring,
-      pending,
-      fixedContext(),
-    );
+    const outcome = await acceptExplainBackGradingWithObservation(wiring, pending, fixedContext());
+    if (outcome.status !== 'accepted') throw new Error('expected an accepted outcome');
 
-    expect(accepted.status).toBe('accepted');
-    expect(observations).toEqual([]);
+    expect(outcome.accepted.status).toBe('accepted');
+    expect(outcome.observations).toEqual([]);
   });
 
   it('turns an accepted misconceptionCandidate into an observation event, no-embedder fallback when Worker is unconfigured', async () => {
@@ -533,15 +530,12 @@ describe('acceptExplainBackGradingWithObservation', () => {
       },
     };
 
-    const { accepted, observations } = await acceptExplainBackGradingWithObservation(
-      wiring,
-      pending,
-      fixedContext(),
-    );
+    const result = await acceptExplainBackGradingWithObservation(wiring, pending, fixedContext());
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
 
-    expect(accepted.misconceptionCandidates).toHaveLength(1);
-    expect(observations).toHaveLength(1);
-    const outcome = observations[0];
+    expect(result.accepted.misconceptionCandidates).toHaveLength(1);
+    expect(result.observations).toHaveLength(1);
+    const outcome = result.observations[0];
     if (!outcome || outcome.skipped) throw new Error('expected a resolved outcome');
     expect(outcome.result.matchedExisting).toBe(false); // no embedder -> always fresh
     expect(outcome.result.event.conceptId).toBe('concept-heap');
@@ -584,13 +578,10 @@ describe('acceptExplainBackGradingWithObservation', () => {
       },
     };
 
-    const { observations } = await acceptExplainBackGradingWithObservation(
-      wiring,
-      pending,
-      fixedContext(),
-    );
+    const result = await acceptExplainBackGradingWithObservation(wiring, pending, fixedContext());
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
 
-    expect(observations).toEqual([
+    expect(result.observations).toEqual([
       {
         candidate: pending.grading.misconceptionCandidates[0],
         skipped: true,
@@ -641,7 +632,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
       errorLines.push(args);
     };
     try {
-      const { accepted, observations } = await acceptExplainBackGradingWithObservation(
+      const result = await acceptExplainBackGradingWithObservation(
         wiring,
         pending,
         fixedContext({
@@ -650,8 +641,9 @@ describe('acceptExplainBackGradingWithObservation', () => {
           },
         }),
       );
-      expect(accepted.status).toBe('accepted');
-      expect(observations).toEqual([]);
+      if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+      expect(result.accepted.status).toBe('accepted');
+      expect(result.observations).toEqual([]);
       expect(errorLines).toHaveLength(1);
       const [message, detail] = errorLines[0] ?? [];
       expect(message).toBe('Olea: misconception observation failed (grade acceptance unaffected)');
@@ -660,5 +652,225 @@ describe('acceptExplainBackGradingWithObservation', () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+});
+
+// ---- ol-0r92.89: idempotent on retry, keyed on originInstrumentId --------
+
+function pendingWithOneMisconception() {
+  return {
+    status: 'pending-review' as const,
+    overlap: {
+      containment: 0,
+      ngramSize: 3,
+      matchedNgramCount: 0,
+      totalNgramCount: 0,
+      lcsRatio: 0,
+      jaccard: 0,
+      answerTokenCount: 0,
+      sourceTokenCount: 0,
+    },
+    grading: {
+      verdict: 'partial' as const,
+      feedback: 'Close, but check the heap property.',
+      missedPoints: [],
+      citedIssues: [],
+      misconceptionCandidates: [
+        {
+          concept: 'heap-property',
+          statement: 'Thinks a heap is always fully sorted.',
+          correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+          correctionSourceBlockIds: ['block-1'],
+        },
+      ],
+      citationsAvailable: true,
+      droppedCitationCount: 0,
+      droppedMisconceptionCount: 0,
+    },
+  };
+}
+
+function fixedContextFor(
+  originInstrumentId: string,
+  overrides: Partial<AcceptExplainBackGradingWithObservationContext> = {},
+): AcceptExplainBackGradingWithObservationContext {
+  return {
+    originInstrumentId,
+    originReviewEventId: 'review-event-1',
+    timestamp: '2026-08-29T09:00:00-04:00',
+    resolveCitation: (blockId) =>
+      blockId === 'block-1' ? { path: 'Courses/CS/notes.md', blockIndex: 2 } : null,
+    resolveConceptId: (concept) => (concept === 'heap-property' ? 'concept-heap' : null),
+    candidateRecordsForConcept: () => [],
+    ...overrides,
+  };
+}
+
+describe('acceptExplainBackGradingWithObservation — ol-0r92.89: idempotent on retry', () => {
+  it('a sequential retry with the same originInstrumentId returns the SAME observation event, not a second one', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    const context = fixedContextFor('explain-back:retry-attempt:1');
+
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      context,
+    );
+    const embedCallsAfterFirst = transport.calls.filter(
+      (call) => call.taskId === 'retrieval.embed.v1',
+    ).length;
+
+    // Retry: same attempt id, a fresh `pending` object (mirroring a real
+    // re-submit) — must not run the embedder or the observation builder a
+    // second time.
+    const second = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      context,
+    );
+
+    if (first.status !== 'accepted' || second.status !== 'accepted') {
+      throw new Error('expected both calls to accept');
+    }
+    expect(second).toBe(first); // memoized: the exact same result object comes back
+    expect(second.observations).toHaveLength(1);
+    const firstOutcome = first.observations[0];
+    const secondOutcome = second.observations[0];
+    if (!firstOutcome || firstOutcome.skipped || !secondOutcome || secondOutcome.skipped) {
+      throw new Error('expected resolved outcomes');
+    }
+    expect(secondOutcome.result.event.eventId).toBe(firstOutcome.result.event.eventId); // one event id, not two
+    expect(transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1').length).toBe(
+      embedCallsAfterFirst,
+    ); // no second embedder call on retry
+  });
+
+  it('a concurrent double-accept (both calls issued before either resolves) still produces exactly one observation event', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    const context = fixedContextFor('explain-back:concurrent-attempt:1');
+
+    const [first, second] = await Promise.all([
+      acceptExplainBackGradingWithObservation(wiring, pendingWithOneMisconception(), context),
+      acceptExplainBackGradingWithObservation(wiring, pendingWithOneMisconception(), context),
+    ]);
+
+    if (first.status !== 'accepted' || second.status !== 'accepted') {
+      throw new Error('expected both calls to accept');
+    }
+    expect(second).toBe(first);
+    expect(transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1')).toHaveLength(1);
+  });
+
+  it('a different originInstrumentId is NOT deduplicated against — a second attempt records its own event', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('explain-back:attempt-a'),
+    );
+    const second = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('explain-back:attempt-b'),
+    );
+
+    if (first.status !== 'accepted' || second.status !== 'accepted') {
+      throw new Error('expected both calls to accept');
+    }
+    expect(second).not.toBe(first);
+    expect(
+      transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---- ol-0r92.89: rejects on a stale source, never accepts silently -------
+
+describe('acceptExplainBackGradingWithObservation — ol-0r92.89: stale source revision', () => {
+  it('returns {status: "stale"} and never calls acceptExplainBackGrading or the embedder when the context reports staleness', async () => {
+    const transport = fakeMultiTaskTransport();
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('explain-back:stale-attempt', { sourceRevisionStale: true }),
+    );
+
+    expect(result).toEqual({ status: 'stale' });
+    expect(transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1')).toHaveLength(0);
+  });
+
+  it('a stale result is also memoized on retry for the same attempt id, not re-evaluated', async () => {
+    const transport = fakeMultiTaskTransport();
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => transport,
+    });
+    const context = fixedContextFor('explain-back:stale-retry', { sourceRevisionStale: true });
+
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      context,
+    );
+    const second = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      context,
+    );
+
+    expect(first).toEqual({ status: 'stale' });
+    expect(second).toBe(first);
+  });
+
+  it('omitting sourceRevisionStale (every current production caller) behaves exactly as before — accepts normally', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('explain-back:not-stale'),
+    );
+
+    expect(result.status).toBe('accepted');
   });
 });

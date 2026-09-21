@@ -468,7 +468,14 @@ export class ExplainBackModal extends Modal {
         });
       }
     }
-    const message = result === null ? null : explainBackFullDepthEncouragement(result.accepted);
+    // `ol-0r92.89`: a `'stale'` result — the source this grading cited has
+    // changed since the request went out — is treated the same as `null`
+    // here: no encouragement banner, and (per `acceptWithObservation`'s own
+    // doc) nothing was recorded, never a silent accept dressed up as one.
+    const message =
+      result === null || result.status !== 'accepted'
+        ? null
+        : explainBackFullDepthEncouragement(result.accepted);
     this.state = { phase: 'accepted', message, soloLevel };
     this.render();
   }
