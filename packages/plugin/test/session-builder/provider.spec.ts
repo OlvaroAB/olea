@@ -297,6 +297,99 @@ describe('createLocalSessionBuilderProvider — retrievability threading (RANK-3
   });
 });
 
+describe('createLocalSessionBuilderProvider — threads the delivered rank weights ([D-110], ol-v7r5.55 [IL-D7])', () => {
+  it('with readRankWeights absent, composes with the declared fallback (masteryNeedWeight.seed = 1)', async () => {
+    const vault = vaultWithReviewLog([]); // no review log — masteryState reads 'seed'
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected a model');
+    expect(findWidgetItem(state.model).gapScore).toBeGreaterThan(0);
+  });
+
+  it('with readRankWeights delivering a masteryNeedWeight, the fallback is NOT taken — gapScore scales by the delivered factor rather than the declared 1', async () => {
+    const vault = vaultWithReviewLog([]); // no review log — masteryState reads 'seed'
+    let calls = 0;
+    const readRankWeights = async () => {
+      calls += 1;
+      return {
+        masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+      };
+    };
+
+    const fallbackProvider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    });
+    const deliveredProvider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+      readRankWeights,
+    });
+
+    const [fallbackState, deliveredState] = await Promise.all([
+      fallbackProvider.load({ budgetMinutes: 60 }),
+      deliveredProvider.load({ budgetMinutes: 60 }),
+    ]);
+    if (fallbackState.kind !== 'model' || deliveredState.kind !== 'model') {
+      throw new Error('expected models');
+    }
+
+    const fallbackItem = findWidgetItem(fallbackState.model);
+    const deliveredItem = findWidgetItem(deliveredState.model);
+
+    // `readRankWeights` is read on every `load()`, mirroring `plan/
+    // provider.ts`'s/`gap/provider.ts`'s posture.
+    expect(calls).toBe(1);
+    // seed's delivered weight (0.2) vs. the declared fallback (1): the
+    // delivered gapScore must be exactly a fifth of the fallback's, since
+    // `readiness.weight` is unaffected by `masteryNeedWeight`.
+    expect(deliveredItem.gapScore).toBeCloseTo(fallbackItem.gapScore * 0.2, 10);
+    expect(deliveredItem.gapScore).not.toBeCloseTo(fallbackItem.gapScore, 5);
+  });
+
+  it('with readRankWeights resolving undefined (unconfigured/offline/expired), still falls back to the declared constants', async () => {
+    const vault = vaultWithReviewLog([]);
+    const readRankWeights = async () => undefined;
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+      readRankWeights,
+    });
+    const baseline = await createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    }).load({ budgetMinutes: 60 });
+
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model' || baseline.kind !== 'model') throw new Error('expected models');
+    expect(findWidgetItem(state.model).gapScore).toBeCloseTo(
+      findWidgetItem(baseline.model).gapScore,
+      10,
+    );
+  });
+});
+
 /** Full-shape lookup — `findWidgetItem` above narrows to `{ conceptName, gapScore }` for RANK-3's own suite, so `.supportLevel` needs its own finder rather than widening a helper other tests already rely on. */
 function widgetSessionItem(model: StudySessionModel) {
   const item = model.items.find((i) => i.conceptName === 'Widget theory');

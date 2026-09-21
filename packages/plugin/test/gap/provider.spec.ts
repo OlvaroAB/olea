@@ -326,3 +326,103 @@ describe('createLocalGapProvider — the concept-name join is case-sensitive on 
     expect(row?.notePaths).toEqual(['Notes/one.md']);
   });
 });
+
+describe('createLocalGapProvider — threads the delivered rank weights ([D-110], ol-v7r5.55 [IL-D7])', () => {
+  it('with readRankWeights absent, composes with the declared fallback (masteryNeedWeight.seed = 1)', async () => {
+    const provider = createLocalGapProvider({
+      vault: gapVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    // She has no review log yet, so masteryState is 'seed' (see the "fresh
+    // install" test above) — the declared fallback's `masteryNeedWeight.seed`
+    // is 1, the identity, so `priorityScore` equals the raw pre-mastery score.
+    expect(row?.masteryState).toBe('seed');
+    expect(row?.priorityScore).toBeGreaterThan(0);
+  });
+
+  it('with readRankWeights delivering a masteryNeedWeight, the fallback is NOT taken — priorityScore scales by the delivered factor rather than the declared 1', async () => {
+    let calls = 0;
+    const readRankWeights = async () => {
+      calls += 1;
+      return {
+        masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+      };
+    };
+
+    const fallbackProvider = createLocalGapProvider({
+      vault: gapVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+    const deliveredProvider = createLocalGapProvider({
+      vault: gapVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readRankWeights,
+    });
+
+    const fallbackState = await fallbackProvider.load();
+    const deliveredState = await deliveredProvider.load();
+    if (fallbackState.kind !== 'model' || deliveredState.kind !== 'model') {
+      throw new Error('expected models');
+    }
+
+    const fallbackCourse = fallbackState.model.courses.find((c) => c.course === 'TESTC101');
+    const deliveredCourse = deliveredState.model.courses.find((c) => c.course === 'TESTC101');
+    if (fallbackCourse?.status !== 'ranked' || deliveredCourse?.status !== 'ranked') {
+      throw new Error('expected TESTC101 to rank in both');
+    }
+
+    const fallbackRow = fallbackCourse.rows.find((r) => r.conceptName === 'Widget theory');
+    const deliveredRow = deliveredCourse.rows.find((r) => r.conceptName === 'Widget theory');
+
+    // `readRankWeights` is read on every `load()`, not cached, mirroring
+    // `plan/provider.ts`'s posture.
+    expect(calls).toBe(1);
+    // seed's delivered weight (0.2) vs. the declared fallback (1): the
+    // delivered priority score must be exactly a fifth of the fallback's —
+    // proving the delivered options object, not the declared constants,
+    // drove the arithmetic.
+    expect(deliveredRow?.priorityScore).toBeCloseTo((fallbackRow?.priorityScore ?? 0) * 0.2, 10);
+    expect(deliveredRow?.priorityScore).not.toBeCloseTo(fallbackRow?.priorityScore ?? 0, 5);
+  });
+
+  it('with readRankWeights resolving undefined (unconfigured/offline/expired), still falls back to the declared constants', async () => {
+    const readRankWeights = async () => undefined;
+    const provider = createLocalGapProvider({
+      vault: gapVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readRankWeights,
+    });
+
+    const baseline = await createLocalGapProvider({
+      vault: gapVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    }).load();
+
+    const state = await provider.load();
+    if (state.kind !== 'model' || baseline.kind !== 'model') throw new Error('expected models');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    const baselineCourse = baseline.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked' || baselineCourse?.status !== 'ranked') {
+      throw new Error('expected TESTC101 to rank in both');
+    }
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    const baselineRow = baselineCourse.rows.find((r) => r.conceptName === 'Widget theory');
+    expect(row?.priorityScore).toBeCloseTo(baselineRow?.priorityScore ?? -1, 10);
+  });
+});

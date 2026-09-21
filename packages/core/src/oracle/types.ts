@@ -5,6 +5,38 @@
  * why every number here is a **provisional, unratified parameter** rather
  * than a tuned threshold. Nothing in this module or its defaults has been
  * ratified against real data — see `RankOracleOptions` field-by-field.
+ *
+ * ## Two outputs, named apart (`ol-v7r5.55` [IL-D7])
+ *
+ * This module folds two genuinely different questions into one number per
+ * edge, and a third that combines them, and none of the three should be read
+ * as the others:
+ *
+ *  - **Assessment relevance** (the evidence question — "how strongly does
+ *    this past-paper/objectives evidence say this concept is examined?") is
+ *    `OracleEdgeContribution.evidenceStrength`/`.contribution` and
+ *    `OracleConceptFactors.preMasteryScore` — the yield/confidence/weight/
+ *    proximity blend, computed entirely from the assessment evidence and
+ *    never from anything about her. **This is a relevance score, not a
+ *    probability, until it is calibrated prospectively against real
+ *    outcomes** — nothing in this bead recalibrates it, and none of these
+ *    fields should be printed or reasoned about as "the chance this concept
+ *    is examined."
+ *  - **Learner priority** (the policy question — "given that relevance, and
+ *    given what SHE has shown about this concept, how much should she study
+ *    it now?") is `OracleConceptFactors.priorityScore` /
+ *    `ConceptPriority.priorityScore` — relevance multiplied by her
+ *    mastery-need and retrievability, i.e. policy applied over evidence.
+ *    This is the number ranking and ordering actually use.
+ *
+ * Naming is doc-only here — no field is renamed, since `priorityScore`,
+ * `preMasteryScore` and `evidenceStrength` are read by `./rank.ts` and
+ * `./compose.ts` (outside this bead's `owns`) and by every plugin caller.
+ * A student-facing surface choosing words for either concept must clear
+ * `docs/Olea_vocabulary_registry.md` (service repo) first — as of this bead
+ * the registry has no entry for either "assessment relevance" or "learner
+ * priority", so neither phrase is sanctioned copy yet; this doc names the
+ * distinction for the next lane that reaches for one.
  */
 
 import type { MasteryState } from 'olea-contracts';
@@ -152,7 +184,12 @@ export interface OracleConceptFactors {
   readonly contributions: readonly OracleEdgeContribution[];
   /** Edges REMOVED by a veto rather than folded into `contributions` — see `OracleVetoedEdge`. Always present (empty when nothing on this concept was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */
   readonly vetoedEdges?: readonly OracleVetoedEdge[];
-  /** Sum of `contributions[*].contribution` — the score before the mastery and retrievability multipliers. */
+  /**
+   * Sum of `contributions[*].contribution` — the score before the mastery
+   * and retrievability multipliers. **Assessment relevance** (see this
+   * module's own doc) — evidence alone, never a probability, never a
+   * reading of what she has shown.
+   */
   readonly preMasteryScore: number;
   readonly masteryState: OracleMasteryState;
   /** `options.masteryNeedWeight[masteryState]` — see `./rank.ts` for the ladder and why it is never zero. */
@@ -176,7 +213,13 @@ export interface OracleConceptFactors {
    * score, so ranking behaviour is unchanged.
    */
   readonly retrievabilityWeight?: number;
-  /** `preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1)` — restated on the entry itself as `ConceptPriority.priorityScore`. */
+  /**
+   * `preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1)` —
+   * restated on the entry itself as `ConceptPriority.priorityScore`.
+   * **Learner priority** (see this module's own doc) — assessment relevance
+   * with policy (her mastery, her retrievability) folded in; this is the
+   * number ranking and ordering use, never `preMasteryScore` alone.
+   */
   readonly priorityScore: number;
 }
 
@@ -189,6 +232,7 @@ export interface ConceptPriority {
   readonly course: string;
   /** 1-based, within this course's ranking only. */
   readonly rank: number;
+  /** **Learner priority** — see `OracleConceptFactors.priorityScore`'s doc and this module's own "Two outputs, named apart" section. */
   readonly priorityScore: number;
   readonly factors: OracleConceptFactors;
   /** Every citation backing this entry — restated from `factors.citations` at the top level, since acceptance is judged on "carries reasoning + citations" and both should be reachable without a second hop. */

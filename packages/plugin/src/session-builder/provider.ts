@@ -226,6 +226,7 @@ import type {
   ConceptRecord,
   ConceptRelation,
   OracleMasteryState,
+  RankOracleOptions,
   ReplayResult,
   Scheduler,
   SittingScopeSnapshot,
@@ -387,6 +388,20 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * calls it, only forwards it, the same pass-through `SessionBuilderViewDeps.endSitting`'s own construction below already is for a caller-supplied lifecycle hook.
    */
   readonly openExplainBack?: () => void;
+  /**
+   * `[D-110]` (`ol-v7r5.3`): reads the delivered `rank-weights` artifact —
+   * see `rank/wiring.ts`'s `RankWeightsWiring.readRankWeights`. Mirrors
+   * `plan/provider.ts`'s field of the same name exactly: absent, or
+   * resolving `undefined` (unconfigured, offline, an expired or unreadable
+   * envelope), means `composeOracleRanking` below runs with no `options` at
+   * all and `rank.ts`'s own `DECLARED_FALLBACK_*` constants apply — F7.8's
+   * degrade-not-half-work posture, nothing surfaced to her as an error.
+   * `ol-v7r5.55` [IL-D7]: filing-time verification found this view fell
+   * back to the declared defaults even when `main.ts` already held a
+   * delivered artifact, because nothing here read it — this field, and the
+   * `main.ts` wiring that passes it, close that gap.
+   */
+  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
 }
 
 /** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
@@ -746,10 +761,14 @@ export async function composeStudySessionForRequest(
 
   // Neither walk depends on the other's result and both read the same
   // read-only vault — the same concurrency `gap/provider.ts` uses, for
-  // the same reason.
-  const [{ entries }, enumeration] = await Promise.all([
+  // the same reason. The rank-weights read joins them: a same-tick
+  // `undefined` when `deps.readRankWeights` is absent, or a network call to
+  // the Worker when it is present — same three-way discipline
+  // `plan/provider.ts` and `gap/provider.ts` both use.
+  const [{ entries }, enumeration, options] = await Promise.all([
     readReviewLogHistory(deps.vault, { additionalPaths }),
     enumerateVaultInstruments(deps.vault),
+    deps.readRankWeights?.() ?? Promise.resolve(undefined),
   ]);
 
   const { ranking, edges, mastery } = await composeOracleRanking({
@@ -769,6 +788,11 @@ export async function composeStudySessionForRequest(
     // instance or a fresh clock read (`ComposeRetrievabilityInput`'s own
     // doc, `oracle/compose.ts`).
     retrievability: { scheduler: deps.scheduler, now },
+    // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered component 3.3
+    // weights when `deps.readRankWeights` resolved one —
+    // `exactOptionalPropertyTypes`: omit the key entirely rather than
+    // assign `undefined` to it, matching `plan/provider.ts`/`gap/provider.ts`.
+    ...(options !== undefined ? { options } : {}),
   });
 
   const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> = buildMaterialPresence(

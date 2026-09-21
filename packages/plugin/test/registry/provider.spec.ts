@@ -20,6 +20,7 @@ import {
   type RegistrySourceLocation,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
 import type { EditInstrumentPort, OpenSourceLocationPort } from '../../src/registry/provider.js';
 import { createLocalRegistryProvider } from '../../src/registry/provider.js';
@@ -724,5 +725,117 @@ describe('createLocalRegistryProvider — F8.4a concept-identity section ([D-257
     const after = await provider.load();
     if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
     expect(after.identityProposals).toEqual([]);
+  });
+});
+
+// [D-110] (`ol-v7r5.55` [IL-D7]): `courseRankingsForNoteOffer` (this module's
+// own doc names it the third production `composeOracleRanking` caller) fell
+// back to the declared constants unconditionally, because nothing here read
+// the delivered `rank-weights` artifact — unlike `plan/provider.ts` and
+// `gap/provider.ts`, both already wired. Unlike those two, this call passes
+// no `mastery` into `composeOracleRanking` (see the call site's own comment),
+// so every concept's `masteryState` reads `'unknown'` here regardless of her
+// real review history — a uniform `masteryNeedWeight` change can never
+// reorder concepts relative to each other, and `RegistryConceptEntry` only
+// ever surfaces the ranking through `noteOffer.eligible`'s rank-ORDER-derived
+// "top band" gate (`../concept/note-offer.ts`), not a raw score. So this
+// suite proves REACHABILITY — that `deps.readRankWeights` is read on every
+// `load()` exactly when the note-offer gate's own ranking call runs, and
+// never when it is skipped (no assignments Base configured) — rather than
+// re-asserting `rankOracle`'s own arithmetic, which `gap/provider.spec.ts`,
+// `session-builder/provider.spec.ts` and `oracle/rank.spec.ts` already cover
+// end-to-end for the identical `options` spread this file now shares.
+describe('createLocalRegistryProvider — threads the delivered rank weights ([D-110], ol-v7r5.55 [IL-D7])', () => {
+  const ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
+  const ASSIGNMENTS_BASE_FILE = [
+    'filters:',
+    '  and:',
+    '    - file.inFolder("02 Assignments")',
+    '    - file.ext == "md"',
+    'properties:',
+    '  class:',
+    '  type:',
+    '  weight:',
+    '  due:',
+    '  status:',
+  ].join('\n');
+
+  function hostWithAssignmentsBase(): FakeDataHost {
+    const host = new FakeDataHost();
+    host.blob = {
+      [STUDY_PLAN_SETTINGS_STORAGE_KEY]: { version: 1, assignmentsBasePath: ASSIGNMENTS_BASE_PATH },
+    };
+    return host;
+  }
+
+  function configuredFixtureVault() {
+    return memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      [ASSIGNMENTS_BASE_PATH]: ASSIGNMENTS_BASE_FILE,
+    });
+  }
+
+  it('with the assignments Base configured, readRankWeights is read once per load() — the fallback is not silently taken', async () => {
+    let calls = 0;
+    const readRankWeights = async () => {
+      calls += 1;
+      return { proximityHalfLifeDays: 21 };
+    };
+
+    const provider = createLocalRegistryProvider({
+      vault: configuredFixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithAssignmentsBase(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      readRankWeights,
+    });
+
+    await modelFrom(await provider.load());
+    expect(calls).toBe(1);
+
+    await modelFrom(await provider.load());
+    expect(calls).toBe(2);
+  });
+
+  it('with readRankWeights omitted, load() still composes cleanly (declared-fallback posture unchanged)', async () => {
+    const provider = createLocalRegistryProvider({
+      vault: configuredFixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithAssignmentsBase(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    });
+
+    const model = await modelFrom(await provider.load());
+    expect(model.concepts).toHaveLength(1);
+  });
+
+  it('with no assignments Base configured, readRankWeights is never called — the note-offer ranking call never runs', async () => {
+    let calls = 0;
+    const readRankWeights = async () => {
+      calls += 1;
+      return { proximityHalfLifeDays: 21 };
+    };
+
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(), // blob: null — unconfigured
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      readRankWeights,
+    });
+
+    await modelFrom(await provider.load());
+    expect(calls).toBe(0);
   });
 });

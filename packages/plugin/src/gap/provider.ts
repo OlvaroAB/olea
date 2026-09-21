@@ -56,7 +56,13 @@
  * does not make (`GapViewState` has no field to carry which case it was).
  */
 
-import type { ConceptMaterialPresence, GapRow, VaultPath, VaultSource } from 'olea-core';
+import type {
+  ConceptMaterialPresence,
+  GapRow,
+  RankOracleOptions,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import {
   buildGapView,
   buildMaterialPresence,
@@ -95,6 +101,20 @@ export interface CreateLocalGapProviderDeps {
    * as it did before this bead.
    */
   readonly buildSession?: (row: GapRow) => void;
+  /**
+   * `[D-110]` (`ol-v7r5.3`): reads the delivered `rank-weights` artifact —
+   * see `rank/wiring.ts`'s `RankWeightsWiring.readRankWeights`. Mirrors
+   * `plan/provider.ts`'s field of the same name exactly: absent, or
+   * resolving `undefined` (unconfigured, offline, an expired or unreadable
+   * envelope), means `composeOracleRanking` below runs with no `options` at
+   * all and `rank.ts`'s own `DECLARED_FALLBACK_*` constants apply — F7.8's
+   * degrade-not-half-work posture, nothing surfaced to her as an error.
+   * `ol-v7r5.55` [IL-D7]: filing-time verification found this view fell
+   * back to the declared defaults even when `main.ts` already held a
+   * delivered artifact, because nothing here read it — this field, and the
+   * `main.ts` wiring that passes it, close that gap.
+   */
+  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
 }
 
 /**
@@ -138,11 +158,16 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         );
 
         // Neither walk depends on the other's result — both read the same
-        // read-only vault — so they run concurrently rather than paying two
-        // walks' latency serially.
-        const [{ entries }, enumeration] = await Promise.all([
+        // read-only vault — and the rank-weights read is a same-tick
+        // `undefined` when `deps.readRankWeights` is absent (or a network
+        // call to the Worker when it is present) — so all three run
+        // concurrently rather than paying their latency serially, the same
+        // discipline `plan/provider.ts` uses for its own three-way
+        // `Promise.all`.
+        const [{ entries }, enumeration, options] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault),
+          deps.readRankWeights?.() ?? Promise.resolve(undefined),
         ]);
 
         const { ranking, edges, mastery } = await composeOracleRanking({
@@ -154,6 +179,11 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // (`ol-63e1`) — already extracted by the instrument walk above, so
           // this pays no second walk.
           concepts: enumeration.concepts,
+          // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered
+          // component 3.3 weights when `deps.readRankWeights` resolved one
+          // — `exactOptionalPropertyTypes`: omit the key entirely rather
+          // than assign `undefined` to it, matching `plan/provider.ts`.
+          ...(options !== undefined ? { options } : {}),
         });
 
         const materialPresence: ReadonlyMap<string, ConceptMaterialPresence> =

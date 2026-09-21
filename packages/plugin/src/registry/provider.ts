@@ -154,6 +154,7 @@ import {
   enumerateVaultInstruments,
   listSameAsLinkRecords,
   pruneConcept as pruneConceptOverride,
+  type RankOracleOptions,
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistryModel,
@@ -393,6 +394,22 @@ export interface CreateLocalRegistryProviderDeps {
    * touches.
    */
   readonly conceptRecords?: () => readonly ConceptRecord[] | null;
+  /**
+   * `[D-110]` (`ol-v7r5.3`): reads the delivered `rank-weights` artifact —
+   * see `rank/wiring.ts`'s `RankWeightsWiring.readRankWeights`. Mirrors
+   * `plan/provider.ts`'s field of the same name exactly: absent, or
+   * resolving `undefined` (unconfigured, offline, an expired or unreadable
+   * envelope), means `courseRankingsForNoteOffer`'s `composeOracleRanking`
+   * call below runs with no `options` at all and `rank.ts`'s own
+   * `DECLARED_FALLBACK_*` constants apply — F7.8's degrade-not-half-work
+   * posture, nothing surfaced to her as an error. `ol-v7r5.55` [IL-D7]:
+   * filing-time verification found this, the third production
+   * `composeOracleRanking` caller (see this module's own doc), fell back to
+   * the declared defaults even when `main.ts` already held a delivered
+   * artifact, because nothing here read it — this field, and the `main.ts`
+   * wiring that passes it, close that gap.
+   */
+  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
 }
 
 /**
@@ -475,16 +492,24 @@ async function courseRankingsForNoteOffer(
   entries: readonly ReviewLogEntry[],
   concepts: readonly ConceptRecord[],
   asOf: string,
+  readRankWeights: (() => Promise<RankOracleOptions | undefined>) | undefined,
 ): Promise<readonly CourseOracleRanking[]> {
   try {
     const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
     if (!isStudyPlanConfigured(config)) return [];
+    // `[D-110]` (`ol-v7r5.55` [IL-D7]): same-tick `undefined` when
+    // `readRankWeights` is absent, or a network call to the Worker when
+    // present — mirrors `plan/provider.ts`/`gap/provider.ts`'s own read.
+    const options = await (readRankWeights?.() ?? Promise.resolve(undefined));
     const { ranking } = await composeOracleRanking({
       vault,
       basePath: config.assignmentsBasePath,
       reviewLog: entries,
       asOf,
       concepts,
+      // `exactOptionalPropertyTypes`: omit the key entirely rather than
+      // assign `undefined` to it, matching the other two callers.
+      ...(options !== undefined ? { options } : {}),
     });
     return ranking.courses;
   } catch (error) {
@@ -558,6 +583,7 @@ export function createLocalRegistryProvider(
             entries,
             enumeration.concepts,
             today,
+            deps.readRankWeights,
           ),
         ]);
 
