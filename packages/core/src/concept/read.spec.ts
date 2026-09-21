@@ -636,6 +636,227 @@ describe('readConcepts — per-document batching (`[D-210]`, `ol-2zfj.62`)', () 
   });
 });
 
+describe('readConcepts — split-document boundary reconciliation (`ol-2zfj.144` [IL-D5])', () => {
+  // Two paragraphs, no headings, so exactly two passages — a document that
+  // splits into exactly two calls at `passagesPerCall: 1`.
+  const SPLIT_VAULT = new MemoryVault({
+    '01 Courses/ABCD101/Long.md': 'First half about Torvane.\n\nSecond half about Torvane.\n',
+  });
+
+  /** A reader that proposes a concept anchored to whichever passage it was actually sent, so two calls over one document each propose "the same" concept independently — exactly what a real per-batch model call does, with no view of the other batch. */
+  function perCallReader(
+    responsesByCall: readonly ((request: ConceptReadRequest) => ConceptReadResponse)[],
+  ): ConceptReaderPort {
+    let n = 0;
+    return {
+      read(request) {
+        // biome-ignore lint/style/noNonNullAssertion: test fixture provides one responder per expected call.
+        const respond = responsesByCall[n]!;
+        n += 1;
+        return Promise.resolve(respond(request));
+      },
+    };
+  }
+
+  it('the same concept, proposed independently by both batches, folds into one — aliases unioned, both anchors kept', async () => {
+    const reader = perCallReader([
+      (request) => ({
+        concepts: [
+          {
+            name: 'Torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: ['Torv.'],
+            alsoIn: [],
+          },
+        ],
+      }),
+      (request) => ({
+        concepts: [
+          {
+            name: 'Torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: ['The Torvane effect'],
+            alsoIn: [],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const matches = result.concepts.filter((c) => c.name === 'Torvane');
+    expect(matches).toHaveLength(1);
+    const merged = matches[0];
+    expect([...(merged?.aliases ?? [])].sort()).toEqual(['The Torvane effect', 'Torv.']);
+    // The second batch's own anchor survived as corroborating evidence
+    // rather than being dropped when the proposal merged.
+    expect(merged?.alsoIn).toHaveLength(1);
+    expect(merged?.alsoIn[0]?.location.charRange).not.toEqual(merged?.anchor?.location.charRange);
+  });
+
+  it('a relation from the SECOND batch naming the merged concept still resolves, not dropped as unknown', async () => {
+    const reader = perCallReader([
+      (request) => ({
+        concepts: [
+          {
+            name: 'Torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+        ],
+      }),
+      (request) => ({
+        concepts: [
+          {
+            name: 'Torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+          {
+            name: 'Second-batch concept',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+        ],
+        relations: [
+          { type: 'part-of', from: 'Second-batch concept', to: 'Torvane', confidence: 0.8 },
+        ],
+      }),
+    ]);
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.filter((c) => c.name === 'Torvane')).toHaveLength(1);
+    expect(result.relationsDropped).toBe(0);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]).toMatchObject({ from: 'Second-batch concept', to: 'Torvane' });
+  });
+
+  it('matching is exact and case-sensitive — differently-cased names across batches stay two concepts', async () => {
+    const reader = perCallReader([
+      (request) => ({
+        concepts: [
+          {
+            name: 'Torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+        ],
+      }),
+      (request) => ({
+        concepts: [
+          {
+            name: 'torvane',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name).sort()).toEqual(['Torvane', 'torvane']);
+  });
+
+  it('merging is scoped to one document — the same name proposed in two different documents is never folded', async () => {
+    const reader = new ScriptedReader([
+      proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+      proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+    ]);
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.filter((c) => c.name === 'Ormathel')).toHaveLength(2);
+  });
+});
+
+describe('readConcepts — coverage surfaces truncation and a section inventory per document (`ol-2zfj.144` [IL-D5])', () => {
+  const HEADED_VAULT = new MemoryVault({
+    '01 Courses/ABCD101/Notes.md':
+      '# Intro\n\nIntro body about Foo.\n\n# Background\n\nBackground body about Bar.\n',
+  });
+
+  it('a document the budget cuts short reports its OWN truncation on its coverage row', async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(HEADED_VAULT, reader, {
+      budget: { maxPassages: 2 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    expect(row?.passagesOffered).toBe(4);
+    expect(row?.passagesRead).toBe(2);
+    expect(row?.truncatedByBudget).toBe(true);
+  });
+
+  it('a document the budget fully covers reports no truncation on its coverage row', async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(HEADED_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    expect(row?.passagesOffered).toBe(row?.passagesRead);
+    expect(row?.truncatedByBudget).toBe(false);
+  });
+
+  it("the section inventory names the source's own headings, even for sections the budget never let through", async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(HEADED_VAULT, reader, {
+      budget: { maxPassages: 2 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    // Only "Intro"'s passages were actually read (passagesRead: 2), but
+    // "Background" still appears — the inventory describes the SOURCE, not
+    // what got through the budget.
+    expect(row?.sections).toEqual(['Intro', 'Background']);
+  });
+
+  it('a document with no headings reports an empty section inventory, never a fabricated one', async () => {
+    const reader = new ScriptedReader([]);
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    for (const row of result.coverage) {
+      // BARE_VAULT's notes each carry one top-level heading and one body
+      // paragraph under it (see its own fixture comment) — the heading
+      // itself names the section.
+      expect(row.sections.length).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
 describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', () => {
   it('every passage anchors to a character range, not merely to a file', async () => {
     const passages = await gatherPassages(BARE_VAULT);

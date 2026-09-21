@@ -73,6 +73,26 @@
  * spanning into the next — an instrument convenience `[D-210]` retires, not a
  * reading-order guarantee anything downstream could rely on. See
  * `batchesByDocument` below.
+ *
+ * **A split document's own batches are reconciled afterwards, deterministically
+ * (`ol-2zfj.144` [IL-D5]).** Two calls over the same document never share a
+ * passage, but each is answered by the model with no view of the other, so a
+ * concept genuinely explained across the split can be proposed independently
+ * by both, with the same name and different anchors — an expected consequence
+ * of `[D-210]`'s own shape, not a measured one. Left alone, that produced two `ReadConcept`
+ * entries for one concept and left `reconcileRelations`'s "first concept to
+ * claim a wording wins ties" picking an arbitrary one of the duplicates for
+ * a relation naming it. `mergeProposalsWithinDocument` below folds proposals
+ * that share a document and an EXACT name (never fuzzy — see this file's own
+ * "nothing here normalises" paragraph) into one, before corroboration ever
+ * runs. **What this does NOT recover**: an edge between two concepts
+ * introduced in *different* batches of the same document. `[D-210]`'s own
+ * ruling #3 already names that loss and accepts it — "the rest are the cost
+ * of the document being long, stated rather than faked" — and nothing here
+ * reopens it: no result is passed forward into a later call, and no extra
+ * call is added. `ConceptReaderPort` still sees exactly the calls
+ * `batchesByDocument` produces; reconciliation happens only on what already
+ * came back.
  */
 
 import { buildOutline } from '../block/outline.js';
@@ -301,6 +321,34 @@ export interface ConceptReadCoverage {
    * surface with its own clause; nothing here renders it.
    */
   readonly calls: number;
+  /**
+   * Whether the run-wide budget cut THIS document short (`passagesRead <
+   * passagesOffered`) — stated explicitly (`ol-2zfj.144` [IL-D5]) rather
+   * than left for a caller to re-derive by comparing the two counts above,
+   * so the coverage audit (component register row 4.1) can tell a
+   * genuinely absent concept from one the budget never let through. Wiring
+   * this into the coverage screen's own consumer is a later bead's (D9),
+   * noted here rather than done here — this field only makes the fact
+   * visible on the read result.
+   */
+  readonly truncatedByBudget: boolean;
+  /**
+   * The distinct section/heading names carried by every passage OFFERED for
+   * this document (`anchor.location.section`, deduped, first-encountered
+   * order) — not only the passages the budget let through, so this
+   * describes the source itself rather than what was actually read
+   * (`ol-2zfj.144` [IL-D5]). Gives the coverage second pass a structural map
+   * of the document — what sections it actually has — rather than only the
+   * concepts extraction already found in it, so a section with no concept
+   * can be checked against "was this section even offered" instead of
+   * assumed empty. Reuses `gatherPassages`'s existing `section` derivation
+   * rather than a second traversal; inherits its one honest limit — a
+   * heading with no passage carrying it as `section` (nothing but nested
+   * subheadings directly beneath it) will not appear — and its per-format
+   * absence: always `[]` for a format whose extractor never populates
+   * `location.section` (PDF, always).
+   */
+  readonly sections: readonly string[];
 }
 
 /** Why a read produced no concepts, when the cause was the run rather than the vault. */
@@ -856,16 +904,27 @@ function buildCoverage(
   found: ReadonlyMap<VaultPath, number>,
   calls: ReadonlyMap<VaultPath, number> = NO_CALLS,
 ): readonly ConceptReadCoverage[] {
-  const rows = new Map<VaultPath, { offered: number; read: number }>();
+  const rows = new Map<VaultPath, { offered: number; read: number; sections: Set<string> }>();
+  function rowFor(sourcePath: VaultPath) {
+    const existing = rows.get(sourcePath);
+    if (existing !== undefined) return existing;
+    const row = { offered: 0, read: 0, sections: new Set<string>() };
+    rows.set(sourcePath, row);
+    return row;
+  }
+  // `offered` is the superset `read` is always drawn from (`allocateByBudget`
+  // never invents a passage), so the section inventory — deliberately built
+  // from every OFFERED passage, not only the read ones — needs only this
+  // pass; see `ConceptReadCoverage.sections`'s own doc for why offered rather
+  // than read is the right set here.
   for (const passage of offered) {
-    const row = rows.get(passage.anchor.sourcePath) ?? { offered: 0, read: 0 };
+    const row = rowFor(passage.anchor.sourcePath);
     row.offered += 1;
-    rows.set(passage.anchor.sourcePath, row);
+    const section = passage.anchor.location.section;
+    if (section !== undefined) row.sections.add(section);
   }
   for (const passage of read) {
-    const row = rows.get(passage.anchor.sourcePath) ?? { offered: 0, read: 0 };
-    row.read += 1;
-    rows.set(passage.anchor.sourcePath, row);
+    rowFor(passage.anchor.sourcePath).read += 1;
   }
   return [...rows.entries()]
     .map(([sourcePath, row]) => ({
@@ -874,6 +933,8 @@ function buildCoverage(
       passagesRead: row.read,
       conceptsFound: found.get(sourcePath) ?? 0,
       calls: calls.get(sourcePath) ?? 0,
+      truncatedByBudget: row.read < row.offered,
+      sections: [...row.sections],
     }))
     .sort((a, b) => byCodeUnit(a.sourcePath, b.sourcePath));
 }
@@ -1042,6 +1103,85 @@ function allocateByBudget(
 }
 
 /**
+ * A stable identity for one passage anchor, used only to de-duplicate a
+ * concept's corroborating passage list when merging proposals across
+ * batches (`mergeProposalsWithinDocument` below) — never surfaced, never
+ * compared for anything else. Two provenances name the "same" passage when
+ * their document, page, char range and section text all agree; nothing here
+ * folds two genuinely different passages together on a partial match.
+ */
+function anchorKey(anchor: Provenance): string {
+  const range = anchor.location.charRange;
+  return [
+    anchor.sourcePath,
+    anchor.location.page,
+    range?.start ?? '',
+    range?.end ?? '',
+    anchor.location.section ?? '',
+  ].join('\u0000');
+}
+
+/**
+ * Folds proposals that share a document and an EXACT name into one, before
+ * corroboration ever runs (`ol-2zfj.144` [IL-D5]) — the concept-boundary
+ * half of reconciling a document `[D-210]` splits across several calls. See
+ * this file's module doc, "A split document's own batches are reconciled
+ * afterwards", for why this is needed and what it deliberately does not
+ * recover.
+ *
+ * Matching is exact string equality on `name`, scoped to one document
+ * (`anchor.sourcePath`, which every proposal from one document batch
+ * shares) — the same deliberately case-sensitive, no-fuzzy-matching
+ * discipline this module already holds for corroborating her conventions
+ * (this file's own "nothing here normalises" paragraph). Cross-document
+ * identity is a different, open question this function does not touch.
+ *
+ * The merged proposal keeps the FIRST proposal's `anchor` as the
+ * introducing passage — `proposals` arrives in call order, and
+ * `batchesByDocument` runs one document's own batches consecutively in
+ * reading order, so "first" is "earliest in the document" — and folds every
+ * later proposal's own anchor and `alsoIn` entries into `alsoIn`, deduped by
+ * `anchorKey`. `aliases` is unioned across every merged proposal, also
+ * deduped. Order is otherwise preserved: a name seen for the first time
+ * keeps its original position, and a later duplicate updates that position
+ * in place rather than appending a second entry.
+ */
+function mergeProposalsWithinDocument(
+  proposals: readonly ProposedConcept[],
+): readonly ProposedConcept[] {
+  const merged: ProposedConcept[] = [];
+  const indexByKey = new Map<string, number>();
+
+  for (const proposal of proposals) {
+    const key = `${proposal.anchor.sourcePath}\u0000${proposal.name}`;
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(proposal);
+      continue;
+    }
+    // biome-ignore lint/style/noNonNullAssertion: `existingIndex` came from `indexByKey`, which only ever records valid positions into `merged`.
+    const existing = merged[existingIndex]!;
+    const seen = new Set<string>([anchorKey(existing.anchor), ...existing.alsoIn.map(anchorKey)]);
+    const additions: Provenance[] = [];
+    for (const anchor of [proposal.anchor, ...proposal.alsoIn]) {
+      const id = anchorKey(anchor);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      additions.push(anchor);
+    }
+    merged[existingIndex] = {
+      name: existing.name,
+      aliases: dedupe([...existing.aliases, ...proposal.aliases], existing.name),
+      anchor: existing.anchor,
+      alsoIn: [...existing.alsoIn, ...additions],
+    };
+  }
+
+  return merged;
+}
+
+/**
  * Read her material and return the concepts inside it, corroborated by her
  * conventions where she keeps any.
  *
@@ -1146,9 +1286,15 @@ export async function readConcepts(
     if (passage.course !== undefined) courseByPath.set(passage.anchor.sourcePath, passage.course);
   }
 
+  // `ol-2zfj.144` [IL-D5]: fold same-document, same-name proposals from
+  // different batches into one BEFORE corroboration, so a document `[D-210]`
+  // split across several calls does not surface as duplicate concepts — see
+  // `mergeProposalsWithinDocument`'s own doc.
+  const mergedProposals = mergeProposalsWithinDocument(proposals);
+
   const concepts: ReadConcept[] = [];
   const claimed = new Set<string>();
-  for (const proposal of proposals) {
+  for (const proposal of mergedProposals) {
     const courses = new Set<string>();
     for (const anchor of [proposal.anchor, ...proposal.alsoIn]) {
       const course = courseByPath.get(anchor.sourcePath);
