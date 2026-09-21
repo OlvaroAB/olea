@@ -23,11 +23,18 @@
  * `accept()` forward it into `materializeAcceptedDraft`, which stamps the
  * successor's `predecessor:` field and appends the succession record — end
  * to end, from a cached draft through to both vault-visible facts.
+ *
+ * The `ol-0r92.87` describe block covers the stale-input guard: a draft
+ * whose `sourceContentHash` no longer matches the note's current content
+ * refuses rather than materializing against unreviewed content, leaves the
+ * record `rejected` (never `pending`) with a `rejected` verdict appended,
+ * and a retry on the same draft id still refuses rather than re-accepting.
  */
 import {
   buildReviewSession,
   composeQueue,
   createFsrsScheduler,
+  hashText,
   parseMcqBlocks,
   provisionalConceptKey,
   reviewLogPath,
@@ -35,6 +42,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
+import { StaleSourceRevisionError } from '../../src/generation/materialize-mcq.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import { MemoryVaultSource } from './fakes.js';
 
@@ -341,5 +349,96 @@ describe('createDraftAcceptPort — [D-133] predecessor threading', () => {
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(lines.find((line) => line.kind === 'succession')).toBeUndefined();
+  });
+});
+
+// `ol-0r92.87` — the stale-input guard. See this file's module doc.
+describe('createDraftAcceptPort — ol-0r92.87 stale-input guard', () => {
+  const ORIGINAL_NOTE = '# Week 2\n\nher prose\n';
+
+  async function setUpWithHash() {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: ORIGINAL_NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    let eventId = 0;
+    const port = createDraftAcceptPort({
+      vault,
+      cache,
+      deviceId: 'device-a',
+      now: () => NOW,
+      generateEventId: () => `event-${++eventId}`,
+    });
+    const sourceContentHash = await hashText(ORIGINAL_NOTE);
+    return { vault, cache, port, sourceContentHash };
+  }
+
+  it('refuses when the source note changed since drafting, writes nothing, and leaves the draft rejected rather than accepted silently', async () => {
+    const { vault, cache, port, sourceContentHash } = await setUpWithHash();
+    await cache.put(baseRecord({ sourceContentHash }));
+
+    // Her note changed while the draft was outstanding — a real edit, a sync
+    // from another device, doesn't matter which.
+    await vault.write(NOTE_PATH, `${ORIGINAL_NOTE}\nA line added after drafting.\n`);
+    const noteBeforeAccept = vault.raw(NOTE_PATH);
+
+    await expect(port.accept('draft-1', 'accepted')).rejects.toThrow(StaleSourceRevisionError);
+
+    // Nothing was inserted — the note is exactly what it was the instant before the call.
+    expect(vault.raw(NOTE_PATH)).toBe(noteBeforeAccept);
+    expect(vault.raw(NOTE_PATH)).not.toContain('olea-mcq');
+
+    const resolved = await cache.get('draft-1');
+    expect(resolved?.status).toBe('rejected');
+    expect(resolved?.instrumentId).toBeUndefined();
+
+    const verdicts = (await readVerdictLines(vault)) as Array<Record<string, unknown>>;
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]).toMatchObject({
+      kind: 'verdict',
+      instrumentId: 'draft-1', // the draft's own id — no instrument was ever materialized
+      verdict: 'rejected',
+      conceptIds: ['concept-key-1'],
+    });
+  });
+
+  it('a retry after the stale rejection still refuses, rather than re-accepting against whatever the note now contains', async () => {
+    const { vault, cache, port, sourceContentHash } = await setUpWithHash();
+    await cache.put(baseRecord({ sourceContentHash }));
+    await vault.write(NOTE_PATH, `${ORIGINAL_NOTE}\nchanged\n`);
+
+    await expect(port.accept('draft-1', 'accepted')).rejects.toThrow(StaleSourceRevisionError);
+    // Second call: the record is now 'rejected' with no instrumentId, so this
+    // hits the ordinary already-resolved branch and throws too — never a
+    // silent re-accept, and never a second write or a second verdict.
+    await expect(port.accept('draft-1', 'accepted')).rejects.toThrow(
+      /already 'rejected' with no instrumentId/,
+    );
+
+    expect(vault.raw(NOTE_PATH)).not.toContain('olea-mcq');
+    const verdicts = await readVerdictLines(vault);
+    expect(verdicts).toHaveLength(1);
+  });
+
+  it('an unchanged source still accepts normally when a hash is present', async () => {
+    const { vault, cache, port, sourceContentHash } = await setUpWithHash();
+    await cache.put(baseRecord({ sourceContentHash }));
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+    expect(instrumentId).toMatch(/^mcq-/);
+    expect(vault.raw(NOTE_PATH)).toContain('olea-mcq');
+
+    const resolved = await cache.get('draft-1');
+    expect(resolved?.status).toBe('accepted');
+    expect(resolved?.instrumentId).toBe(instrumentId);
+  });
+
+  it('a draft cached before this field existed (no sourceContentHash) still accepts normally — "no signal, no gate"', async () => {
+    const { vault, cache, port } = await setUpWithHash();
+    // No `sourceContentHash` override — `baseRecord()`'s own default, matching
+    // every draft cached before `ol-0r92.87`.
+    await cache.put(baseRecord());
+    await vault.write(NOTE_PATH, `${ORIGINAL_NOTE}\nchanged after drafting\n`);
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+    expect(instrumentId).toMatch(/^mcq-/);
   });
 });

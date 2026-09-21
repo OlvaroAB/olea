@@ -121,6 +121,22 @@ export interface DraftRecord {
    * that write entirely when this is absent.
    */
   readonly sourceCitation?: InstrumentCitation;
+  /**
+   * `ol-0r92.87`'s stale-input guard: the SHA-256 hex hash (`hashText`,
+   * `olea-core`) `pipeline.ts` took of `sourcePath`'s note content at the
+   * moment this draft was cached — the snapshot the drafted question was
+   * actually grounded against. `accept.ts` forwards this verbatim into
+   * `materializeAcceptedDraft`, which re-hashes the note fresh at accept
+   * time and refuses (never materializes) on a mismatch — the note changed
+   * under a still-pending draft while it was outstanding, and F3.3's
+   * passive accept must never write against content nobody reviewed.
+   * `undefined` only for a draft cached before this field existed;
+   * `materializeAcceptedDraft` treats that as "no signal" and proceeds
+   * exactly as before this bead — the same convention `sourceCitation`
+   * above and `predecessorInstrumentId` below already use for an optional
+   * field with no earlier producer.
+   */
+  readonly sourceContentHash?: string;
   /** ISO-8601 with offset — when the pipeline drafted this. */
   readonly createdAt: string;
   readonly question: DraftQuestion;
@@ -216,6 +232,7 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
     return false;
   }
   if (v.sourceCitation !== undefined && !isInstrumentCitationShape(v.sourceCitation)) return false;
+  if (v.sourceContentHash !== undefined && typeof v.sourceContentHash !== 'string') return false;
   return true;
 }
 

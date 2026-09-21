@@ -22,9 +22,15 @@
  * `toEqual` above carries `skippedRouting: 0` for exactly that reason —
  * proving the new field is inert, not just present, when routing is not
  * asked for.
+ *
+ * The `'stale-input guard snapshot'` test covers `ol-0r92.87`'s
+ * `DraftRecord.sourceContentHash`: this module hashes the note it just
+ * resolved as `notePath` at the moment a candidate's questions are cached —
+ * `accept.spec.ts`/`materialize-mcq.spec.ts` cover the accept-time half that
+ * reads this field back.
  */
 import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
-import { checkRoutingReachesSelection, provisionalConceptKey } from 'olea-core';
+import { checkRoutingReachesSelection, hashText, provisionalConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
@@ -147,6 +153,44 @@ describe('runGenerationSweep', () => {
       promptVersion: '1.0.0',
       modelId: 'test-model',
     });
+  });
+
+  it('ol-0r92.87: a cached draft carries sourceContentHash, matching a fresh hash of the note it was drafted against', async () => {
+    const noteContent = '# Week 2\n\nher prose about working memory\n';
+    const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: noteContent });
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    const pending = await cache.listPending();
+    expect(pending[0]?.sourceContentHash).toBe(await hashText(noteContent));
+  });
+
+  it('ol-0r92.87: a note not actually present in the vault yields no sourceContentHash rather than throwing ("never throws" holds)', async () => {
+    // Same fixture every other test above this one uses — the embedding
+    // note is referenced by the unit's provenance but never seeded into the
+    // vault. `sourceContentHash` has nothing to hash against, so it is left
+    // unset (the same "no signal" convention `sourceCitation` already uses)
+    // rather than the sweep throwing on a missing file.
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
+      draftForConcept: async () => groundedResponse('Working memory'),
+    });
+
+    const pending = await cache.listPending();
+    expect(pending[0]?.sourceContentHash).toBeUndefined();
   });
 
   it("[D-181]/`ol-2zfj.52`: threads the drafting unit's passage location into `sourceCitation` — the cited source document, never the embedding note", async () => {

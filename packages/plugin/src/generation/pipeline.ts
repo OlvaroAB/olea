@@ -100,6 +100,25 @@
  * `GenerationPipelineDeps.formatMatch`'s own doc for why no production
  * wiring exists yet and `draft-quiz-cards.ts`'s "PURPOSE / REGISTER" section
  * for the request-shaping half this consultation feeds.
+ *
+ * **`DraftRecord.sourceContentHash` (`ol-0r92.87`'s stale-input guard).**
+ * Immediately before a candidate's questions are cached, this reads
+ * `notePath` — already resolved above, embedding note or home note either
+ * way — and hashes it (`hashText`, `olea-core`) once per candidate. Every
+ * `DraftRecord` this sweep caches for that candidate carries the same hash:
+ * the snapshot the drafted questions were actually grounded against, not a
+ * later re-read. `accept.ts`/`materialize-mcq.ts` compare a fresh hash of
+ * the same note against this one at accept time and refuse rather than
+ * materialize on a mismatch — see `materialize-mcq.ts`'s module doc for the
+ * accept-time half. One extra vault read per candidate that reaches this
+ * point (bounded by `MAX_CONCEPTS_PER_SWEEP`, same as everything else in
+ * this loop), never per question. Guarded by `vault.exists` first — this
+ * module's own doc promises `runGenerationSweep` never throws, so a note
+ * that vanished between resolving `notePath` and this line (a real race,
+ * however unlikely) leaves `sourceContentHash` unset rather than failing
+ * the whole sweep; `undefined` is exactly the "no snapshot, no gate" signal
+ * `materialize-mcq.ts` already treats every other optional field on
+ * `DraftRecord` as.
  */
 
 import type {
@@ -109,7 +128,7 @@ import type {
   RoutingSelectionObservation,
   VaultSource,
 } from 'olea-core';
-import { courseFromPath, DEFAULT_COURSES_FOLDER } from 'olea-core';
+import { courseFromPath, DEFAULT_COURSES_FOLDER, hashText } from 'olea-core';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
@@ -500,6 +519,16 @@ export async function runGenerationSweep(
       }
       const sourceCitation = sourceUnit === undefined ? undefined : citationFromUnit(sourceUnit);
 
+      // `ol-0r92.87`: the snapshot the drafted questions were actually
+      // grounded against — see the module doc's own section. Read once per
+      // candidate, not per question, since nothing between here and the
+      // cache writes below touches the vault. `exists` guards the "never
+      // throws" promise above; `undefined` (no hash) is the same "no
+      // signal" this record already uses for `sourceCitation`.
+      const sourceContentHash = (await deps.vault.exists(notePath))
+        ? await hashText(await deps.vault.read(notePath))
+        : undefined;
+
       const createdAt = now().toISOString();
       let sequence = 0;
       for (const question of questions) {
@@ -513,6 +542,7 @@ export async function runGenerationSweep(
           conceptIds: [candidate.key],
           sourcePath: notePath,
           ...(sourceCitation !== undefined ? { sourceCitation } : {}),
+          ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
           createdAt,
           question,
           provenance,

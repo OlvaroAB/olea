@@ -30,9 +30,16 @@
  * (never position — `distractor-provenance-store.ts`'s own module doc
  * explains why), no sidecar at all when nothing was grounded, and never an
  * entry for the correct answer.
+ *
+ * The fifth `describe` below (`ol-0r92.87`) covers the stale-input guard
+ * directly at this function's own level: a supplied
+ * `expectedSourceContentHash` that disagrees with the note's current
+ * content throws `StaleSourceRevisionError` before anything is written;
+ * `accept.spec.ts` covers the caller-side bookkeeping once this throws.
  */
 import {
   enumerateVaultInstruments,
+  hashText,
   parseMcqBlocks,
   readDistractorProvenance,
   readInstrumentCitation,
@@ -40,7 +47,10 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { ensureHomeNoteForConcept } from '../../src/generation/home-note.js';
-import { materializeAcceptedDraft } from '../../src/generation/materialize-mcq.js';
+import {
+  materializeAcceptedDraft,
+  StaleSourceRevisionError,
+} from '../../src/generation/materialize-mcq.js';
 import { MemoryVaultSource } from './fakes.js';
 
 describe('materializeAcceptedDraft', () => {
@@ -433,5 +443,63 @@ describe('materializeAcceptedDraft — [D-133] succession hookup', () => {
     // leading frontmatter block gets the new block at literal offset zero,
     // so her original bytes survive whole, as a suffix — not a prefix.
     expect(content.endsWith(NOTE)).toBe(true);
+  });
+});
+
+// `ol-0r92.87` — see this file's module doc.
+describe('materializeAcceptedDraft — ol-0r92.87 stale-input guard', () => {
+  function question() {
+    return {
+      stem: 's',
+      correctAnswer: 'a',
+      distractors: ['w', 'x', 'y', 'z'],
+      feedback: 'f',
+    };
+  }
+
+  it('throws StaleSourceRevisionError and writes nothing when the note no longer matches the expected hash', async () => {
+    const notePath = 'note-stale.md';
+    const original = 'her original prose\n';
+    const vault = new MemoryVaultSource({ [notePath]: original });
+    const expectedSourceContentHash = await hashText('a completely different snapshot');
+
+    await expect(
+      materializeAcceptedDraft(vault, {
+        sourcePath: notePath,
+        question: question(),
+        expectedSourceContentHash,
+      }),
+    ).rejects.toThrow(StaleSourceRevisionError);
+
+    // Byte-identical — the mismatch is caught before insertMcqBlock/vault.write ever run.
+    expect(vault.raw(notePath)).toBe(original);
+  });
+
+  it('materializes normally when the supplied hash matches the note as read', async () => {
+    const notePath = 'note-fresh.md';
+    const original = 'her original prose\n';
+    const vault = new MemoryVaultSource({ [notePath]: original });
+    const expectedSourceContentHash = await hashText(original);
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+      expectedSourceContentHash,
+    });
+
+    expect(result.instrumentId).toMatch(/^mcq-/);
+    expect(vault.raw(notePath)).toContain('olea-mcq');
+  });
+
+  it('materializes normally when no hash is supplied at all — the pre-ol-0r92.87 default', async () => {
+    const notePath = 'note-no-guard.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const result = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+    });
+
+    expect(result.instrumentId).toMatch(/^mcq-/);
   });
 });

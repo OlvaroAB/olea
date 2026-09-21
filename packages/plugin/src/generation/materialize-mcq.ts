@@ -122,6 +122,26 @@
  * own `undefined`-means-skip. This never touches `stamped.content` and never lands in her note
  * (INV-6) — the vault's `McqInstrument.distractors` stays the bare `string[]` `[D-202]` left it
  * as; only `input.question.distractors`' TEXT reaches the block, exactly as before this bead.
+ *
+ * ## The `[ol-0r92.87]` stale-input guard
+ *
+ * F3.3's passive accept happens at first presentation, which can be minutes or days after
+ * `pipeline.ts` drafted the question against a snapshot of `sourcePath`'s note. If that note
+ * changed in between — her own edit, a sync from another device, a later sweep's own write —
+ * accepting the draft against whatever the note now contains would insert a block she never
+ * reviewed and record a verdict about a passage that no longer exists, silently. This function
+ * refuses instead: when `input.expectedSourceContentHash` is supplied, the note is re-hashed
+ * (`hashText`, `olea-core`, the same SHA-256-hex algorithm `ingestion/hash.ts` uses everywhere
+ * else in this codebase for "did the bytes change") immediately after the read above, and a
+ * mismatch throws `StaleSourceRevisionError` **before** `insertMcqBlock`/`vault.write` ever run
+ * — nothing is written to her vault on this path, matching the existing "a refusal writes
+ * nothing" posture the blank-feedback check just below already has. `accept.ts` is the one
+ * caller that supplies this hash (from `DraftRecord.sourceContentHash`, `generation/types.ts`)
+ * and is responsible for the bookkeeping once this throws: flipping the cached record off
+ * `pending` and appending a `rejected` verdict, so a retry does not re-materialize. `undefined`
+ * (the pre-`ol-0r92.87` default, and every draft cached before this field existed) skips the
+ * check entirely — no snapshot to compare against means no gate, the same "no signal" posture
+ * `sourceCitation`/`predecessorInstrumentId` below already use.
  */
 
 import {
@@ -129,6 +149,7 @@ import {
   appendSuccessionRecord,
   buildSuccessionEvent,
   type DistractorProvenanceEntry,
+  hashText,
   type InstrumentCitation,
   insertMcqBlock,
   parseDocument,
@@ -161,6 +182,25 @@ export interface MaterializeAcceptedDraftInput {
    * the sidecar write is skipped entirely rather than guessing one.
    */
   readonly sourceCitation?: InstrumentCitation;
+  /**
+   * `ol-0r92.87`'s stale-input guard — see the module doc's own section.
+   * `DraftRecord.sourceContentHash` (`generation/types.ts`), forwarded
+   * verbatim by `accept.ts`. `undefined` skips the check entirely.
+   */
+  readonly expectedSourceContentHash?: string;
+}
+
+/**
+ * Thrown by `materializeAcceptedDraft` when `expectedSourceContentHash` is supplied and disagrees
+ * with a fresh hash of `sourcePath`'s current content — see the module doc's stale-input section.
+ * Thrown before anything is written, so a caller catching this knows the vault is untouched.
+ * `accept.ts` is the one caller that catches it today, to do the reject bookkeeping.
+ */
+export class StaleSourceRevisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleSourceRevisionError';
+  }
 }
 
 /**
@@ -207,6 +247,18 @@ export async function materializeAcceptedDraft(
   deps: MaterializeAcceptedDraftDeps = {},
 ): Promise<MaterializeAcceptedDraftResult> {
   const source = await vault.read(input.sourcePath);
+
+  // `ol-0r92.87`'s stale-input guard — see the module doc's own section.
+  // Checked before anything else so a mismatch never reaches `insertMcqBlock`
+  // or `vault.write`: nothing is written to her vault on this path.
+  if (input.expectedSourceContentHash !== undefined) {
+    const currentHash = await hashText(source);
+    if (currentHash !== input.expectedSourceContentHash) {
+      throw new StaleSourceRevisionError(
+        `materializeAcceptedDraft: ${input.sourcePath} changed since this draft was cached — refusing to accept against content that was never reviewed (F3.3)`,
+      );
+    }
+  }
 
   const fields = acceptGeneratedMcq(
     {
