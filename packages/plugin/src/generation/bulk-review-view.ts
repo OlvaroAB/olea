@@ -107,6 +107,7 @@ import {
   sourceMarkerText,
 } from './bulk-review-copy.js';
 import { BULK_REVIEW_HINTS, resolveBulkReviewKey } from './bulk-review-keymap.js';
+import type { GenerationRefusalNotice } from './pipeline.js';
 
 export const VIEW_TYPE_OLEA_BULK_REVIEW = 'olea-bulk-review';
 
@@ -121,6 +122,17 @@ const ROW_DRAFT_ID_ATTR = 'data-olea-bulk-draft-id';
  * restores at startup show the vault as it is *now*.
  */
 export type BulkReviewControllerProvider = () => BulkReviewController;
+
+/**
+ * `[H-1.8a]` (`ol-0r92.71`, component register row 1.8a, C4.7 / `[D-089]`) —
+ * the notices `main.ts` would thread through from a `GenerationSweepReport`
+ * once it stops discarding one (see `GenerationSweepReport.refusals`' own
+ * doc, `pipeline.ts`, for the remaining composition-root step). Optional and
+ * unset by default, the same grey-out-via-omission posture `openSource`
+ * above uses: a plugin build with nothing wired here renders exactly as it
+ * did before this bead, never a broken or empty-looking section.
+ */
+export type BulkReviewRefusalsProvider = () => readonly GenerationRefusalNotice[];
 
 /**
  * One row of `[STY-6]`'s settled tier — what she decided, still legible,
@@ -146,6 +158,14 @@ export class BulkReviewView extends ItemView {
    * module doc.
    */
   private readonly openSource: ((conceptKey: string) => void) | undefined;
+  /**
+   * `[H-1.8a]`: the current sweep's classified refusals, read fresh on every
+   * `render()` — same "read whatever is current, never a value captured at
+   * construction" posture `main.ts`'s own `onUnitsLanded` doc describes for
+   * the rest of this composition. Optional and unset by default; see
+   * `BulkReviewRefusalsProvider`'s own doc.
+   */
+  private readonly getRefusals: BulkReviewRefusalsProvider | undefined;
   private controller: BulkReviewController | null = null;
   /**
    * `[STY-6]`: the settled tier's own backing list — one entry per draft she
@@ -184,10 +204,12 @@ export class BulkReviewView extends ItemView {
     leaf: WorkspaceLeaf,
     getController: BulkReviewControllerProvider,
     openSource?: (conceptKey: string) => void,
+    getRefusals?: BulkReviewRefusalsProvider,
   ) {
     super(leaf);
     this.getController = getController;
     this.openSource = openSource;
+    this.getRefusals = getRefusals;
     // A triage list isn't a file to navigate back/forward through, same
     // reasoning `review/view.ts` gives for its own tab.
     this.navigation = false;
@@ -428,6 +450,12 @@ export class BulkReviewView extends ItemView {
 
     root.createEl('h2', { cls: 'olea-bulk-review-title', text: 'Review drafts in bulk' });
 
+    // `[H-1.8a]`: ahead of the drafted-groups list, and rendered whether or
+    // not any group is pending — a sweep can refuse every concept it looked
+    // at this tick and still have nothing left in `vm.groups`, and she should
+    // not read an empty list as "nothing happened" when something did.
+    this.renderRefusals(root);
+
     const vm = controller.getViewModel();
     if (vm.groups.length === 0) {
       const resolvedAnything = this.settled.length > 0;
@@ -558,6 +586,59 @@ export class BulkReviewView extends ItemView {
       cls: 'olea-bulk-review-complete-tally',
       text: bulkReviewCompletionTally(this.tally(this.settled)),
     });
+  }
+
+  /**
+   * `[H-1.8a]` (`ol-0r92.71`, component register row 1.8a, C4.7 / `[D-089]`)
+   * — component register row 1.8a's own falsifier's second half, closed
+   * here: a classified refusal reaching a surface she can see, using
+   * `describeRefusal`'s two-headline copy, rather than staying computed but
+   * unrendered. Reads `getRefusals` fresh, same reasoning `pendingDraftIds`
+   * reads the controller's view model fresh rather than caching it.
+   *
+   * **The two states render distinct copy** (`RefusalCopy.headline` differs
+   * by construction, `draft-cards-copy.spec.ts`'s own guard) **and the
+   * transient flag is visible, not merely carried**: every row gets a
+   * `--transient`/`--insufficient` modifier class and a
+   * `data-olea-bulk-refusal-transient` attribute a future retry affordance
+   * could key on, rather than requiring a caller to re-derive the mapping
+   * from `reason` (the exact duplication `RefusalCopy.transient`'s own doc
+   * says it exists to avoid).
+   *
+   * **No standalone count (F6.7, matching this file's own batch-button and
+   * empty-state rule above):** each refusal is named individually, by
+   * course and concept, never rolled into an aggregate like "3 concepts
+   * couldn't be checked" — that would be exactly the "a count of material
+   * she has not yet met" pattern F6.7 forbids, just spelled with a
+   * different noun than "drafts pending".
+   *
+   * **Records no learning failure** — nothing here, or in the sweep this
+   * reads from, writes an evidence event or a lapse: `runGenerationSweep`'s
+   * own refusal branch (`pipeline.ts`) only pushes onto `refusals` and
+   * `continue`s, before any cache write or accept-path call exists for that
+   * concept, so a rendered refusal has no attempt behind it to score
+   * (`pipeline.spec.ts`'s "a refused concept caches nothing" case is the
+   * proof one layer down).
+   */
+  private renderRefusals(root: HTMLElement): void {
+    const refusals = this.getRefusals?.() ?? [];
+    if (refusals.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-bulk-review-refusals' });
+    for (const notice of refusals) {
+      const stateModifier = notice.copy.transient ? 'transient' : 'insufficient';
+      const row = section.createDiv({
+        cls: `olea-bulk-review-refusal-row olea-bulk-review-refusal-row--${stateModifier}`,
+      });
+      row.setAttr('data-olea-bulk-refusal-transient', String(notice.copy.transient));
+      row.createSpan({
+        cls: 'olea-bulk-review-refusal-source',
+        text: `${notice.courseCode} · ${notice.conceptName}`,
+      });
+      row.createSpan({
+        cls: 'olea-bulk-review-refusal-headline',
+        text: notice.copy.headline,
+      });
+    }
   }
 
   /** The on-screen hint row for `[D-216]`'s four bindings — built from `bulk-review-keymap.ts`'s own `BULK_REVIEW_HINTS` so this row and `resolveBulkReviewKey` cannot drift apart (that module's own doc). Mirrors `review/view.ts`'s `hints` method's shape (keycap span + label span per entry). */

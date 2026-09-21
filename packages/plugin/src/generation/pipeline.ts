@@ -247,11 +247,16 @@ export interface GenerationSweepReport {
    * `[H-1.8a]` (`ol-0r92.71`): one entry per concept counted in `refused`
    * above, carrying `describeRefusal`'s classified two-headline copy —
    * component register row 1.8a's own falsifier is that this classification
-   * happens at all, rather than the refusal being dropped silently. **No
-   * production caller renders this field yet.** Register row 1.8a's own
-   * "Undecided" line reserves which surface shows it to her for David to
-   * name, and wiring that surface into `main.ts`'s `onUnitsLanded` sits
-   * outside this bead's owned paths (`pipeline.ts`, `draft-cards-copy.ts`)
+   * happens at all, rather than the refusal being dropped silently.
+   * `BulkReviewView` (`generation/bulk-review-view.ts`) can now render this
+   * list — see its own `renderRefusals` doc for the two-state, transient-
+   * flagged copy it draws from this field. **Still no PRODUCTION caller
+   * populates the render, though**: `main.ts`'s `onUnitsLanded` awaits
+   * `GenerationWiring.sweep(...)` and discards the returned report (see that
+   * method's own call site), so nothing today carries a live sweep's
+   * `refusals` into the `BulkReviewView` it constructs. That capture-and-
+   * thread step is a `main.ts` composition-root change outside this bead's
+   * owned paths (`pipeline.ts`, `draft-cards-copy.ts`, `bulk-review-view.ts`)
    * — see this bead's close evidence for the named follow-up.
    */
   readonly refusals: readonly GenerationRefusalNotice[];
