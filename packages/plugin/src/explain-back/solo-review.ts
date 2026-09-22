@@ -133,8 +133,11 @@
  * `MintSoloGradingContentInput`'s own doc says whether a grading "surfaced a
  * misconception" is `misconception/`'s classification to make, not this
  * module's to guess at — out of `ol-cqz8`'s `owns` either way.
- * `masteryAtTime`/`supportLevelShown` are left absent for the same
- * "not recorded" reason every other non-computing caller leaves them.
+ * `masteryAtTime` is left absent for the same "not recorded" reason every
+ * other non-computing caller leaves it. `supportLevelShown` is no longer in
+ * that list (`ol-l7ew` [DOS-C5a]): `modal.ts` resolves it from what it
+ * actually renders and passes it in, and this module relays whatever it is
+ * given — absent still means unknown, never `'independent'`.
  *
  * ===========================================================================
  * REACHABILITY ([D-072] clause 5) — NAMED, NOT HIDDEN
@@ -222,11 +225,18 @@ export interface RecordSoloGradeAndReviewParams {
   /**
    * **`[D-281]` / `ol-95vv.10`: the support level actually shown on this
    * attempt**, which the fold reads to tell demonstration-with-help from
-   * independent demonstration. Optional and NEVER defaulted: explain-back has
-   * no support-ladder plumbing on the modal today, so production leaves it
-   * absent, which `[D-281]` rules is unknown and does not permit the top
-   * growth stage's claim. Inventing `'independent'` here to keep that stage
-   * reachable would be fabricating the very evidence the decision requires.
+   * independent demonstration. Optional and NEVER defaulted HERE: this
+   * module cannot see a screen, so a caller that does not know what was
+   * shown leaves it absent, which `[D-281]` rules is unknown and does not
+   * permit the top growth stage's claim.
+   *
+   * `ol-l7ew` [DOS-C5a] RETRACTS this field's earlier "no plumbing exists"
+   * note: `modal.ts` — the one rendering implementation of this exchange —
+   * now resolves the level from what its answering phase actually renders,
+   * via {@link supportLevelShownForExplainBack} just below, and passes it on
+   * the same call that carries `attemptId`. That is a reading of the view,
+   * not an assumption about it; the constant it reads lives beside the
+   * render method it describes.
    */
   readonly supportLevelShown?: SupportLevel;
 }
@@ -235,6 +245,47 @@ export interface RecordSoloGradeAndReviewParams {
 export interface RecordSoloGradeAndReviewOutcome {
   readonly result: AppendReviewLogResult;
   readonly soloLevel: SoloLevel;
+}
+
+/**
+ * What an explain-back view had on screen while she was composing her
+ * answer — the two affordances `[D-094]`'s ladder distinguishes, as
+ * `olea-contracts`' `supportLevel` doc names them: a targeted hint on
+ * demand, and the source expanded beside her.
+ *
+ * Deliberately a description of the PRESENTATION, never of the session's
+ * intent: `[D-094]` / principle 16 is "record what was shown, never what she
+ * said", and a level chosen upstream that no view ever rendered is not a
+ * level she was shown.
+ */
+export interface ExplainBackSupportShown {
+  /** A targeted hint was offered to her at any point before she submitted. */
+  readonly hintOffered: boolean;
+  /** The cited source was expanded, and readable, while she composed her answer. */
+  readonly sourceShownWhileAnswering: boolean;
+}
+
+/**
+ * The ladder value for one explain-back attempt, from what was on screen.
+ *
+ * `null` means the presentation is genuinely unobservable, and the answer is
+ * `undefined` — UNKNOWN, which `[D-281]` does not admit for the top growth
+ * stage. Never collapse that case to `'independent'`: an unknown support
+ * level and a demonstrably unaided one are exactly the two things the
+ * decision needs told apart, and guessing the second fabricates the evidence
+ * it asks for.
+ *
+ * The source outranks the hint because it is the stronger scaffold: with the
+ * text open beside her, an explanation may be a reading of it rather than her
+ * own account, which is precisely why `ADMITTED_SUPPORT_LEVELS`
+ * (`olea-core`'s `mastery/rollup.ts`) refuses `'guided'`.
+ */
+export function supportLevelShownForExplainBack(
+  shown: ExplainBackSupportShown | null,
+): SupportLevel | undefined {
+  if (shown === null) return undefined;
+  if (shown.sourceShownWhileAnswering) return 'guided';
+  return shown.hintOffered ? 'prompted' : 'independent';
 }
 
 /**

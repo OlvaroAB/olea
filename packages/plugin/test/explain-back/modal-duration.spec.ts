@@ -61,7 +61,11 @@ describe('ExplainBackModal times an attempt through its own injected clock, neve
 
   it('carries the computed durationMs through to the recordSoloGradeAndReview call, never re-deriving or dropping it', () => {
     expect(modal).toMatch(
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,300}?durationMs,[\s\S]{0,50}?\}\);/,
+      // The tail window widened from 50 to 300 characters when `ol-l7ew`
+      // [DOS-C5a] added the support level to this same call: the assertion
+      // is still "durationMs is inside the call object", not "durationMs is
+      // the last field in it".
+      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,300}?durationMs,[\s\S]{0,300}?\}\);/,
     );
   });
 });

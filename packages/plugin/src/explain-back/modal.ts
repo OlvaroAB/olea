@@ -73,7 +73,7 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
-import type { MasteryState, SoloLevel } from 'olea-contracts';
+import type { MasteryState, SoloLevel, SupportLevel } from 'olea-contracts';
 import {
   type CitedIssue,
   discardExplainBackGrading,
@@ -121,6 +121,31 @@ import {
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackSourceBlock,
 } from './request.js';
+import { type ExplainBackSupportShown, supportLevelShownForExplainBack } from './solo-review.js';
+
+/**
+ * `ol-l7ew` [DOS-C5a] — what this view has on screen while she composes an
+ * answer, which `[D-094]`'s ladder reads to say how much help she had, and
+ * which `[D-281]` item 3 makes one of the four pieces of evidence the top
+ * growth stage requires.
+ *
+ * Both false, and both are a statement about `renderAnsweringPhase` below,
+ * which any reader can check against it in one screen: it renders the
+ * question, a textarea and a submit button. No hint is offered, and the
+ * cited source appears only AFTER grading (`renderGradedPhase`'s regions,
+ * `renderFoundList`'s refusal), never open beside her while she writes.
+ *
+ * This is not a default standing in for a value nobody resolved — it is the
+ * resolved value, recorded where the render method it describes can be read
+ * next to it. Adding either affordance means flipping the flag in the same
+ * change, and the recorded level follows without anything else moving. The
+ * flags are NOT a control she can see or set: nothing renders them, and this
+ * bead adds no affordance (that would be David's call, not a lane's).
+ */
+const EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN: ExplainBackSupportShown = {
+  hintOffered: false,
+  sourceShownWhileAnswering: false,
+};
 
 /**
  * `ol-0r92.98`: an empty or whitespace-only typed answer, exported so the
@@ -188,6 +213,16 @@ export interface ExplainBackModalDeps {
     readonly answer: string;
     /** See this file's `now`/`presentedAtMs` doc just below for the definition. */
     readonly durationMs: number | null;
+    /**
+     * `ol-l7ew` [DOS-C5a]: the support level this view actually showed on
+     * this attempt, forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.supportLevelShown` and persisted onto
+     * the same review record the depth grade lands on. `undefined` only
+     * where the presentation is genuinely unobservable — `[D-281]` reads
+     * that as unknown and refuses the top growth stage, which is the honest
+     * outcome and never to be papered over with `'independent'`.
+     */
+    readonly supportLevelShown?: SupportLevel;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -551,6 +586,9 @@ export class ExplainBackModal extends Modal {
     // module doc and the deps field's own doc for why `void`/`undefined`
     // here means "no heading", never a fabricated one.
     let soloLevel: SoloLevel | null = null;
+    // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
+    // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
+    const supportLevelShown = supportLevelShownForExplainBack(EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN);
     if (this.deps.recordSoloGradeAndReview) {
       try {
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
@@ -560,6 +598,16 @@ export class ExplainBackModal extends Modal {
           context: prompt.context,
           answer,
           durationMs,
+          // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for
+          // THIS attempt, on the same call and the same `attemptId` the
+          // depth grade and the correctness verdict already travel on, so
+          // the fold can never read an assistance fact from one attempt
+          // against a demonstration from another.
+          // Spread conditionally rather than passed as a possibly-`undefined`
+          // value: under `exactOptionalPropertyTypes`, an absent key and a key
+          // set to `undefined` are different things, and "absent" is the one
+          // that means unknown all the way down to the persisted record.
+          ...(supportLevelShown !== undefined ? { supportLevelShown } : {}),
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {
