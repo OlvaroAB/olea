@@ -314,4 +314,103 @@ describe('resolvePlanPolicyCourseInputs', () => {
       expect(withDefault).toHaveLength(1);
     });
   });
+
+  // `ol-v7r5.63` (`[DOS-C4]`): `sittingsSinceFloorMet`'s new pure producer.
+  describe('sittingsSinceFloorMet', () => {
+    function sitting(
+      eligibleCourses: readonly string[],
+      received: Readonly<Record<string, number>>,
+    ) {
+      return {
+        asOf: '2026-09-01' as const,
+        eligibleCourses,
+        received: new Map(Object.entries(received)),
+      };
+    }
+
+    it('is omitted when the floor share for the course is unknown', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [sitting(['COURSE-A'], { 'COURSE-A': 0 })],
+        new Map(), // no floor share known for COURSE-A
+      );
+      expect(result[0]?.sittingsSinceFloorMet).toBeUndefined();
+    });
+
+    it('is omitted when the course never appears as eligible anywhere in the supplied history', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [sitting(['COURSE-B'], { 'COURSE-B': 100 })],
+        new Map([['COURSE-A', 0.25]]),
+      );
+      expect(result[0]?.sittingsSinceFloorMet).toBeUndefined();
+    });
+
+    it('counts back from the most recent sitting, stopping at the first (most recent) eligible sitting that met the floor', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [
+          // Oldest first. COURSE-A's floor is 0.5.
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 10, 'COURSE-B': 90 }), // share 0.10, below floor
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 60, 'COURSE-B': 40 }), // share 0.60, MEETS floor — most recent to do so
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 5, 'COURSE-B': 95 }), // share 0.05, below floor
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 20, 'COURSE-B': 80 }), // share 0.20, below floor — most recent
+        ],
+        new Map([['COURSE-A', 0.5]]),
+      );
+      // Walking back from the most recent: two sittings below floor, then
+      // the third-from-last sitting met the floor — count stops there.
+      expect(result[0]?.sittingsSinceFloorMet).toBe(2);
+    });
+
+    it('counts every eligible sitting when the floor was never met anywhere in the supplied history', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 5, 'COURSE-B': 95 }),
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 10, 'COURSE-B': 90 }),
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 0, 'COURSE-B': 100 }),
+        ],
+        new Map([['COURSE-A', 0.5]]),
+      );
+      expect(result[0]?.sittingsSinceFloorMet).toBe(3);
+    });
+
+    it('skips sittings where the course is not eligible, without breaking or counting them', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 60, 'COURSE-B': 40 }), // meets floor
+          sitting(['COURSE-B'], { 'COURSE-B': 100 }), // A not eligible — skipped, not counted
+          sitting(['COURSE-A', 'COURSE-B'], { 'COURSE-A': 10, 'COURSE-B': 90 }), // below floor
+        ],
+        new Map([['COURSE-A', 0.5]]),
+      );
+      expect(result[0]?.sittingsSinceFloorMet).toBe(1);
+    });
+
+    it('defaults (no history, no floor-share map) reproduce the pre-fix behaviour exactly — the field stays absent', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+      );
+      expect(result[0]).not.toHaveProperty('sittingsSinceFloorMet');
+    });
+  });
 });

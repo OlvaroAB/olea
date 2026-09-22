@@ -87,9 +87,13 @@ export interface InsightsInput {
    * `[D-081]`/`[D-092]`) — read from the cached study-plan artifact, never
    * recomputed here. Empty is a real and common state — no cached plan yet,
    * or one that predates this wiring — and produces `not-enough-history` on
-   * the effort half rather than a finding computed over nothing. **No
-   * production caller supplies this today** — see `effort.ts`'s module doc,
-   * "Reachability note".
+   * the effort half rather than a finding computed over nothing.
+   * **RETRACTED, `ol-v7r5.63` (`[DOS-C4]`): "no production caller supplies
+   * this today" was stale.** `ol-v7r5.38` (commit `2afcc76`) wired a real
+   * producer — `packages/plugin/src/today/data-source.ts`'s
+   * `createVaultTrendsSource` reads it through `deps.studyPlanStore`, and
+   * `main.ts:902-905` supplies that store in production. See `effort.ts`'s
+   * module doc, "Reachability note", for the full correction.
    */
   readonly floorShares: readonly CourseFloorShare[];
 }

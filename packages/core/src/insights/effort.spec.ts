@@ -18,7 +18,12 @@
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
-import { type CourseFloorShare, detectEffortImbalance, MIN_GAP } from './effort.js';
+import {
+  type CourseFloorShare,
+  detectEffortImbalance,
+  MIN_GAP,
+  SHORTFALL_RATIO_K,
+} from './effort.js';
 
 const MINUTE = 60_000;
 
@@ -26,12 +31,13 @@ function review(
   conceptIds: readonly string[],
   index: number,
   durationMs: number | null,
+  timestamp = '2026-09-01T18:00:00+00:00',
 ): ReviewLogRecord {
   return {
     schemaVersion: 5,
     kind: 'review',
     eventId: `e${index}`,
-    timestamp: '2026-09-01T18:00:00+00:00',
+    timestamp,
     instrumentId: `qa:${conceptIds[0] ?? 'x'}:${index}`,
     instrumentType: 'qa',
     conceptIds: [...conceptIds],
@@ -267,5 +273,219 @@ describe('detectEffortImbalance — what it measures', () => {
     });
     expect(second).toEqual(first);
     expect(JSON.stringify(entries)).toBe(snapshot);
+  });
+});
+
+/**
+ * `ol-v7r5.63` (`[DOS-C4]`): the dossier review found the OLD absolute
+ * `MIN_GAP` structurally unreachable at real floor magnitudes for four or
+ * five running courses (`max(0.12, 1/(n+2))` gives `0.167`/`0.143`, both
+ * below `MIN_GAP = 0.2`, and a course's own floor share is also the largest
+ * gap it can ever post). These tests use the REAL floor formula's magnitudes
+ * (not the old `0.3` fixture, which never occurs once four or more courses
+ * are running) and the new shortfall-RATIO criterion
+ * (`SHORTFALL_RATIO_K`) — see `findings/effort-gap-sweep.md` (`olea-service`)
+ * for the sweep behind the `0.5` pin.
+ */
+describe('detectEffortImbalance — the shortfall-ratio fix (ol-v7r5.63 / [DOS-C4])', () => {
+  it('n=4 real floor (0.167): a course with zero attention fires — structurally unreachable under the old absolute MIN_GAP', () => {
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare: 1 / 6 },
+      { course: 'B', floorShare: 1 / 6 },
+      { course: 'C', floorShare: 1 / 6 },
+      { course: 'D', floorShare: 1 / 6 },
+    ];
+    const concepts = [
+      { conceptId: 'a-1', courses: ['A'] },
+      { conceptId: 'b-1', courses: ['B'] },
+      { conceptId: 'c-1', courses: ['C'] },
+      { conceptId: 'd-1', courses: ['D'] },
+    ];
+    const result = detectEffortImbalance({
+      // A gets nothing; B/C/D split 60 timed reviews evenly — well clear of
+      // MIN_TIMED_REVIEWS. The maximum absolute gap A could ever post is its
+      // own floor share, 0.167 — below the old MIN_GAP=0.2, so the OLD
+      // criterion could never have fired here at any attention level.
+      entries: [...minutes('b-1', 20, 0), ...minutes('c-1', 20, 100), ...minutes('d-1', 20, 200)],
+      concepts,
+      floorShares: floors,
+    });
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('A');
+    const a = result.measured?.courses.find((c) => c.course === 'A');
+    expect(a?.timeShare).toBe(0);
+    // The absolute gap (0.167) never reached the old MIN_GAP (0.2) — proof
+    // this fixture is exactly the previously-unreachable case.
+    expect(a?.gap).toBeLessThan(MIN_GAP);
+  });
+
+  it('n=5 real floor (0.143): a course with zero attention fires — structurally unreachable under the old absolute MIN_GAP', () => {
+    const floorShare = 1 / 7;
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare },
+      { course: 'B', floorShare },
+      { course: 'C', floorShare },
+      { course: 'D', floorShare },
+      { course: 'E', floorShare },
+    ];
+    const concepts = [
+      { conceptId: 'a-1', courses: ['A'] },
+      { conceptId: 'b-1', courses: ['B'] },
+      { conceptId: 'c-1', courses: ['C'] },
+      { conceptId: 'd-1', courses: ['D'] },
+      { conceptId: 'e-1', courses: ['E'] },
+    ];
+    const result = detectEffortImbalance({
+      entries: [
+        ...minutes('b-1', 15, 0),
+        ...minutes('c-1', 15, 100),
+        ...minutes('d-1', 15, 200),
+        ...minutes('e-1', 15, 300),
+      ],
+      concepts,
+      floorShares: floors,
+    });
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('A');
+    const a = result.measured?.courses.find((c) => c.course === 'A');
+    expect(a?.gap).toBeLessThan(MIN_GAP);
+  });
+
+  it('equal attention across four real-floor courses (n=4) is measured and not observed', () => {
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare: 1 / 6 },
+      { course: 'B', floorShare: 1 / 6 },
+      { course: 'C', floorShare: 1 / 6 },
+      { course: 'D', floorShare: 1 / 6 },
+    ];
+    const concepts = [
+      { conceptId: 'a-1', courses: ['A'] },
+      { conceptId: 'b-1', courses: ['B'] },
+      { conceptId: 'c-1', courses: ['C'] },
+      { conceptId: 'd-1', courses: ['D'] },
+    ];
+    const result = detectEffortImbalance({
+      entries: [
+        ...minutes('a-1', 15, 0),
+        ...minutes('b-1', 15, 100),
+        ...minutes('c-1', 15, 200),
+        ...minutes('d-1', 15, 300),
+      ],
+      concepts,
+      floorShares: floors,
+    });
+    expect(result.status).toBe('not-observed');
+    expect(result.measured?.widestGapCourse).toBeNull();
+  });
+
+  it('a course under the ratio but still above MIN_GAP-scale attention does not fire once it clears SHORTFALL_RATIO_K', () => {
+    // A receives 60% of its own floor share worth of attention — a real
+    // shortfall, but not the "under half" the pin is set at.
+    const floorShare = 1 / 6;
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare },
+      { course: 'B', floorShare: 1 - floorShare },
+    ];
+    const concepts = [
+      { conceptId: 'a-1', courses: ['A'] },
+      { conceptId: 'b-1', courses: ['B'] },
+    ];
+    // total = 100 units; A's share = 0.6 * floorShare * 100.
+    const aMinutes = Math.round(0.6 * floorShare * 100);
+    const result = detectEffortImbalance({
+      entries: [...minutes('a-1', aMinutes, 0), ...minutes('b-1', 100 - aMinutes, 200)],
+      concepts,
+      floorShares: floors,
+    });
+    expect(result.status).toBe('not-observed');
+    const a = result.measured?.courses.find((c) => c.course === 'A');
+    expect(a !== undefined && a.timeShare / a.floorShare).toBeGreaterThanOrEqual(SHORTFALL_RATIO_K);
+  });
+
+  it('a changed policy mid-window: stale attention outside the D-092 sittings window does not save a course from firing', () => {
+    // Two courses, n=2 → window width = 2 + WINDOW_SLACK_SESSIONS(2) = 4
+    // sittings (`windowWidthSessions`). Two OLD sittings (well before the
+    // window, separated from the rest by a multi-hour silence) give course A
+    // substantial historical time; the four most RECENT sittings give A
+    // nothing at all. Reading the whole history unwindowed would show A with
+    // real, floor-clearing time overall — reading only the true D-092 window
+    // (this bead's fix) shows A completely neglected right now.
+    const floorShare = 0.25; // n=2 real floor: max(0.12, 1/(2+2)) = 0.25
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare },
+      { course: 'B', floorShare },
+    ];
+    const concepts = [
+      { conceptId: 'a-1', courses: ['A'] },
+      { conceptId: 'b-1', courses: ['B'] },
+    ];
+
+    const oldSittingA = (sittingIndex: number, baseHour: number) =>
+      Array.from({ length: 45 }, (_, i) =>
+        review(
+          ['a-1'],
+          sittingIndex * 100 + i,
+          MINUTE,
+          `2026-01-01T${String(baseHour).padStart(2, '0')}:${String(i).padStart(2, '0')}:00+00:00`,
+        ),
+      );
+    const recentSittingB = (sittingIndex: number, dayOffset: number) =>
+      Array.from({ length: 45 }, (_, i) =>
+        review(
+          ['b-1'],
+          1000 + sittingIndex * 100 + i,
+          MINUTE,
+          `2026-02-0${dayOffset}T09:${String(i).padStart(2, '0')}:00+00:00`,
+        ),
+      );
+
+    const entries: ReviewLogEntry[] = [
+      // Two old sittings (>45 minutes apart from everything else), all A.
+      ...oldSittingA(0, 0),
+      ...oldSittingA(1, 3),
+      // Four recent sittings (separate days, well over the 45-minute gap
+      // apart), all B — this is the D-092 window.
+      ...recentSittingB(0, 1),
+      ...recentSittingB(1, 2),
+      ...recentSittingB(2, 3),
+      ...recentSittingB(3, 4),
+    ];
+
+    const result = detectEffortImbalance({ entries, concepts, floorShares: floors });
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('A');
+    const a = result.measured?.courses.find((c) => c.course === 'A');
+    // Windowed correctly, A's in-window time is zero — the old sittings
+    // never entered the accounting.
+    expect(a?.timeMs).toBe(0);
+  });
+
+  it('shared-course concepts are counted once per course under the windowed accounting too', () => {
+    const floors: readonly CourseFloorShare[] = [
+      { course: 'A', floorShare: 1 / 6 },
+      { course: 'B', floorShare: 1 / 6 },
+      { course: 'C', floorShare: 1 / 6 },
+      { course: 'D', floorShare: 1 / 6 },
+    ];
+    const concepts = [
+      { conceptId: 'shared', courses: ['A', 'B'] },
+      { conceptId: 'c-1', courses: ['C'] },
+      { conceptId: 'd-1', courses: ['D'] },
+    ];
+    const result = detectEffortImbalance({
+      // One record, two concepts, both naming A and B: the record's minute
+      // counts once for A and once for B, never twice for either.
+      entries: [
+        ...Array.from({ length: 20 }, (_, i) => review(['shared'], i, MINUTE)),
+        ...minutes('c-1', 20, 100),
+        ...minutes('d-1', 20, 200),
+      ],
+      concepts,
+      floorShares: floors,
+    });
+    const a = result.measured?.courses.find((c) => c.course === 'A');
+    const b = result.measured?.courses.find((c) => c.course === 'B');
+    expect(a?.timeMs).toBe(20 * MINUTE);
+    expect(b?.timeMs).toBe(20 * MINUTE);
   });
 });

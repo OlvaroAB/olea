@@ -69,16 +69,48 @@
  * `computeAttentionShares` output (component 3.5 is server-only); see
  * `trends-scenarios.ts`'s own doc on `TRENDS_ASSESSMENTS`.**
  *
- * ## What it compares
+ * ## What it compares — now on ONE window, ONE unit (`ol-v7r5.63` / `[DOS-C4]`)
  *
- * Two shares, per course:
+ * **Re-specified again, this time for commensurability.** Before this fix,
+ * `timeShare` was computed over however much history a caller happened to
+ * hand in — production windows it at `DEFAULT_STREAK_WINDOW_DAYS` (120 days,
+ * `packages/plugin/src/today/data-source.ts`) — while `floorShare` is the
+ * service's own windowed-floor fraction, denominated in **sittings** over a
+ * `runningCourses + slack` window (`[D-092]`, `WINDOW_SLACK_SITTINGS = 2` in
+ * `olea-service`'s `src/plan/allocation.ts`, read-only reference here since
+ * component 3.5 is `boundary: service`). A 120-day calendar window and a
+ * `(n+2)`-sitting window are not the same window, and comparing shares taken
+ * over each as though they were commensurable is exactly the defect the
+ * dossier review found (review-response.md row 8): for `n=4` or `n=5`
+ * running courses the service's floor (`max(0.12, 1/(n+2))`, `0.167`/`0.143`)
+ * is *smaller* than the old absolute `MIN_GAP` itself, making the finding
+ * structurally unreachable regardless of how neglected a course really was.
  *
- * - **time share** — milliseconds of review time attributed to the course,
- *   over the total across the courses being compared. A record's `durationMs`
- *   is attributed **in full to every distinct course among its concepts**, not
- *   split between them (v3's many-to-many evidence, D-020/`ol-t3sd`): the time
- *   really was spent, and it really is evidence for each of them. The same rule
- *   `timeSpentMsByCourse` already documents.
+ * **The fix is internal to this detector, not a change to what a caller
+ * supplies.** `entries` may still arrive pre-windowed at whatever calendar
+ * width a caller chooses (120 days, or the whole log) — this module now
+ * clusters them into sittings itself (`../session/cluster.js`'s
+ * `clusterReviewSessions`, `[SESS-13]`/`[D-091]`'s own contract-grade
+ * clustering rule, the identical rule `floorShare`'s own `[D-092]` window is
+ * denominated in) and reads `timeShare` over only the most recent
+ * `windowWidthSessions(n)` sittings (`../study-session/window.js`, the same
+ * `runningCourses + slack` formula the service side declares independently —
+ * see that module's own doc on why the two declarations are not imported
+ * from one another), where `n` is the number of courses with a known floor
+ * share. A calendar pre-filter wider than the true window is harmless (this
+ * module narrows further, internally); a calendar pre-filter narrower than
+ * it would silently truncate sittings the window is owed, which is a caller
+ * contract this module's own doc now states explicitly, below.
+ *
+ * Two shares, per course, both now read over that same sittings window:
+ *
+ * - **time share** — milliseconds of review time attributed to the course
+ *   **within the windowed sittings only**, over the total across the courses
+ *   being compared, also windowed. A record's `durationMs` is attributed
+ *   **in full to every distinct course among its concepts**, not split
+ *   between them (v3's many-to-many evidence, D-020/`ol-t3sd`): the time
+ *   really was spent, and it really is evidence for each of them. The same
+ *   rule `timeSpentMsByCourse` already documents.
  * - **floor share** — the course's own windowed-floor fraction from the plan's
  *   most recent computation (`[D-092]`), `0..1`, **taken as given, never
  *   renormalised across the compared courses.** Unlike the old weight share,
@@ -95,26 +127,49 @@
  * than the floor) is measured too and deliberately **not** surfaced as a
  * finding: a course sitting above its floor while another dominates is, in
  * the ruling's own words, "correct concentration," not an imbalance.
+ * `gap` remains diagnostic only — see below for what actually fires the
+ * finding now.
  *
- * ## The parameter, and that it was not swept
+ * ## The parameter, re-expressed as a shortfall RATIO (`ol-v7r5.63` / `[DOS-C4]`)
  *
- * `MIN_GAP` is one declared constant: twenty percentage points, chosen before
- * any stream was measured because it is the smallest gap that survives being
- * described out loud ("a fifth of the window's attention short of what the
- * course was guaranteed"). Nothing fitted it (N-015), and the margin it
- * clears on the planted persona and her neutralised twin is reported by the
- * workbench spec rather than asserted here. **Its practical bite changed with
- * this re-spec, worth stating rather than discovering later:** a floor share
- * is typically smaller than a grade-weight share ever was (D-092's own
- * regime assumption is roughly one viable sitting per course per window, so a
- * floor is often in the 0.15–0.3 range rather than a grade's 0.3–0.6), so a
- * 0.2-point shortfall is a proportionally larger miss under this definition
- * than it was under the old one. `MIN_GAP` was not moved to compensate —
- * moving a threshold because the redefinition changed what it bites on would
- * be exactly the post-hoc tuning N-015 forbids. Whether 0.2 is still the
- * right operating point under the new definition is for whoever revalidates
- * the workbench health check once real floor-share fixtures replace the
- * pre-rename ones.
+ * **`MIN_GAP`'s absolute framing is retired as the firing criterion.** An
+ * absolute gap (`floorShare - timeShare >= 0.2`) can only ever reach as high
+ * as `floorShare` itself (at zero attention), so for any course whose floor
+ * is below `0.2` — every `n >= 4` under `max(0.12, 1/(n+2))`, and `n = 3`'s
+ * own floor sits exactly AT `0.2`, a single-point knife-edge reachable only
+ * at literally zero attention — the finding was structurally unreachable no
+ * matter how neglected the course really was. `findings/effort-gap-sweep.md`
+ * (`olea-service`)'s addendum sweeps this claim across `n = 2..6` at the
+ * real floor formula (no corpus needed — reachability here is a fact about
+ * the formula, not about any persona).
+ *
+ * The criterion is now a **shortfall ratio**: a course fires when its time
+ * share is under `SHORTFALL_RATIO_K` of its own floor share
+ * (`timeShare < SHORTFALL_RATIO_K * floorShare`, and only in the positive
+ * direction — `gap > 0` still gates it, per the honesty property above).
+ * This is reachable at every `n` by construction: zero attention gives
+ * `0 < K * floorShare` for any `floorShare > 0`, regardless of how small the
+ * floor itself is. `SHORTFALL_RATIO_K = 0.5` — "the course received under
+ * half of what its own floor guarantees it" — is the plain-English pin
+ * `findings/effort-gap-sweep.md`'s addendum picks inside the swept band,
+ * chosen the same way `MIN_GAP` itself was originally chosen (a statement
+ * that survives being said out loud), not fitted to a corpus (N-015). See
+ * that finding for the full sweep, the fact/inference split, and the revisit
+ * condition (real `sittingsSinceFloorMet` / floor-share history, once a term
+ * of it exists, re-sweeps `K` against measured shortfalls rather than the
+ * structural argument alone). **Class B, provisional per `[D-194]` bucket
+ * one** (a structural-fact number: sensitivity sweep plus a plain-English
+ * pin), same posture the session-clustering gap constant takes in
+ * `../session/cluster.js`.
+ *
+ * `MIN_GAP` (0.2) is **retained, unchanged, but no longer read by this
+ * module's own firing logic** — `packages/workbench/test/trends-scenarios
+ * .spec.ts` (outside this bead's owned paths) still imports it as a bare
+ * diagnostic comparison against `widestGap` (which is still computed
+ * identically, `floorShare - timeShare`), and removing the export would be a
+ * compile break in a file this bead cannot edit. Updating that spec to
+ * assert against `SHORTFALL_RATIO_K` instead is filed as a follow-up
+ * (`ol-1ojq` [DOS-C4-b]) rather than done here.
  *
  * Below this many timed reviews across the courses with a known floor share,
  * a split between them is noise and the detector declines.
@@ -160,36 +215,67 @@
  *
  * ## Reachability note (`[D-072]` clause 5)
  *
- * `packages/plugin/src/today/data-source.ts`'s `TodayTrendsSource` now carries
- * a `listCourseFloorShares` method (renamed from `listAssessmentWeights`,
- * outside this bead's owned paths but touched pragmatically so the rename
- * compiles), and its real implementation (`createVaultTrendsSource`) returns
- * `[]` unconditionally — there is no client-side way to produce a real
- * windowed floor honestly, since component 3.5 is `boundary: service`
- * (`docs/Olea_component_register.md` row 3.5). So this re-spec has **no
- * production caller supplying real floor shares today** — the honest state,
- * named rather than papered over: the shape this module now expects
- * (`CourseFloorShare`, read from the cached study-plan artifact's
- * `contributions` array) is correct and ready for a producer, exactly the
- * posture `resolvePlanPolicyCourseInputs`'s own doc already uses for
- * `tempoWeight`/`steeringWeight`/`sittingsSinceFloorMet`. Wiring
- * `createVaultTrendsSource` to read the cached plan's floors — most likely via
- * `packages/core/src/plan/cache.ts`'s already-cached `StudyPlanArtifact` — is
- * the follow-up this bead's close notes name; until then the effort insight
- * reports `not-enough-history` in the shipped app, which is the true
- * statement for "no floor share is known yet."
+ * **RETRACTED, `ol-v7r5.63` (`[DOS-C4]`) — the paragraph this replaces
+ * (visible in git history) was stale.** It said `createVaultTrendsSource`
+ * returns `[]` unconditionally and that this re-spec has "no production
+ * caller supplying real floor shares today". That has not been true since
+ * `ol-v7r5.38` (commit `2afcc76`): `packages/plugin/src/today/data-source.ts`'s
+ * `createVaultTrendsSource` reads a real allocation through
+ * `deps.studyPlanStore` when supplied, and `main.ts`'s Today-panel call site
+ * (`main.ts:902-905`) passes its cached `studyPlanStore` in production. The
+ * detector itself (`detectEffortImbalance`) is likewise wired end to end:
+ * `main.ts` builds the Today view → `loadTodayPanel` → `buildTodayPanel`
+ * (`packages/core/src/today/panel.ts:280`) → `buildInsights`
+ * (`./index.ts`) → `detectEffortImbalance`. **This module has a real
+ * production caller, and has since `ol-v7r5.38`.**
+ *
+ * What remains true, and is not a caller gap: `listCourseFloorShares`
+ * returns `[]` on a cold start (no plan cached yet), which correctly reads
+ * here as `not-enough-history` rather than a fabricated zero — the honest
+ * degrade, not an absent producer.
+ *
+ * **A real gap this bead's own scope does not close**, filed rather than
+ * silently left: `sittingsSinceFloorMet` (`../allocation/resolve-inputs.ts`)
+ * — the starvation counter the service side reads to decide whether a
+ * course's floor is *forced* this round — gains a pure producer function in
+ * this bead, but wiring a production caller to hand it real session history
+ * is a follow-up (`ol-feza` [DOS-C4-a]), the same posture this very
+ * paragraph used to (wrongly) claim about floor shares.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import { clusterReviewSessions } from '../session/cluster.js';
+import { windowWidthSessions } from '../study-session/window.js';
 import type { ConceptCourses, InsightResult } from './types.js';
 
 /**
- * The smallest gap between a course's windowed floor share and its share of
- * the hours that this reports as a pattern. Expressed as a share, not a
- * percentage: `0.2` is twenty points. See the module doc's note on how this
- * threshold's practical bite changed under the window-accounting re-spec.
+ * **No longer the live firing threshold** — see the module doc's "The
+ * parameter, re-expressed as a shortfall RATIO" section (`ol-v7r5.63` /
+ * `[DOS-C4]`). Retained, unchanged, only because
+ * `packages/workbench/test/trends-scenarios.spec.ts` (outside this bead's
+ * owned paths) imports it for a bare diagnostic comparison against
+ * `widestGap`, which is still computed identically
+ * (`floorShare - timeShare`) and so is unaffected by which criterion this
+ * module fires on internally. The smallest gap that survives being
+ * described out loud ("a fifth of the window's attention short of what the
+ * course was guaranteed") — see `SHORTFALL_RATIO_K` for the constant that
+ * actually decides `status` now.
  */
 export const MIN_GAP = 0.2;
+
+/**
+ * The shortfall ratio: a course fires when its time share is under this
+ * fraction of its own floor share (`timeShare < SHORTFALL_RATIO_K *
+ * floorShare`, only in the positive-gap direction). `0.5` — "the course
+ * received under half of what its own floor guarantees it" — is the
+ * plain-English pin `findings/effort-gap-sweep.md`'s addendum (`olea-service`)
+ * picks after sweeping `n = 2..6` at the real floor formula
+ * (`max(0.12, 1/(n+2))`); unlike an absolute gap, a ratio is reachable at
+ * zero attention for every `n`, closing row 8's structural-unreachability
+ * defect. Declared, not fitted (N-015) — `[D-194]` bucket one, Class B,
+ * provisional; revisit condition in the finding.
+ */
+export const SHORTFALL_RATIO_K = 0.5;
 
 /**
  * Below this many timed reviews across the courses with a known floor share,
@@ -260,8 +346,28 @@ export interface EffortInput {
   readonly floorShares: readonly CourseFloorShare[];
 }
 
-function reviewsOf(entries: readonly ReviewLogEntry[]): readonly ReviewLogRecord[] {
-  return entries.filter((entry): entry is ReviewLogRecord => entry.kind === 'review');
+/**
+ * The reviews `timeShare` is actually computed over: the local
+ * `[SESS-13]`/`[D-091]` sitting clustering, narrowed to the most recent
+ * `windowWidthSessions(coursesWithFloorShare)` sittings — the same window
+ * width formula (`runningCourses + slack`) `[D-092]`'s own service-side
+ * floor-share window is denominated in (`ol-v7r5.63` / `[DOS-C4]`; see the
+ * module doc's "What it compares" section). `entries` may arrive
+ * pre-windowed at a wider calendar cut (production windows at
+ * `DEFAULT_STREAK_WINDOW_DAYS`) — that is harmless, since this function only
+ * ever narrows further. A caller passing a calendar window NARROWER than
+ * this true sittings window would silently truncate sittings the window is
+ * owed, which is a contract on the caller this function cannot itself
+ * detect or repair.
+ */
+function windowedReviewsOf(
+  entries: readonly ReviewLogEntry[],
+  coursesWithFloorShare: number,
+): readonly ReviewLogRecord[] {
+  const sittings = clusterReviewSessions(entries);
+  const width = windowWidthSessions(coursesWithFloorShare);
+  const windowed = width > 0 ? sittings.slice(Math.max(0, sittings.length - width)) : sittings;
+  return windowed.flatMap((sitting) => sitting.reviews);
 }
 
 function abstain(reason: string): EffortInsight {
@@ -291,7 +397,7 @@ export function detectEffortImbalance(input: EffortInput): EffortInsight {
   const seenCourses = new Set<string>();
   let timedReviewCount = 0;
   let weightedReviewCount = 0;
-  for (const record of reviewsOf(input.entries)) {
+  for (const record of windowedReviewsOf(input.entries, floorShareByCourse.size)) {
     if (record.durationMs === null) continue;
     // Set semantics: two of a record's concepts sharing a course must not
     // attribute that record's time to it twice.
@@ -346,17 +452,28 @@ export function detectEffortImbalance(input: EffortInput): EffortInsight {
     coursesWithoutFloorShare,
   };
 
-  return widestGap >= MIN_GAP
+  // `[DOS-C4]` / `ol-v7r5.63`: the shortfall RATIO fires, not the absolute
+  // gap — `gap > 0` still gates the positive-only direction (the honesty
+  // property above), and `MIN_GAP` is no longer read here at all. See the
+  // module doc's "The parameter, re-expressed as a shortfall RATIO" section.
+  const widestRatio =
+    widest !== undefined && widest.floorShare > 0 ? widest.timeShare / widest.floorShare : 1;
+  const observed = widestGapCourse !== null && widestRatio < SHORTFALL_RATIO_K;
+
+  return observed
     ? {
         id: 'effort-balance',
         status: 'observed',
         measured,
-        reason: `widest floor-minus-time gap ${widestGap.toFixed(3)} reaches ${MIN_GAP}`,
+        reason: `${widestGapCourse}'s time share (${widest?.timeShare.toFixed(3)}) is under ${SHORTFALL_RATIO_K} of its floor share (${widest?.floorShare.toFixed(3)}) — ratio ${widestRatio.toFixed(3)}`,
       }
     : {
         id: 'effort-balance',
         status: 'not-observed',
         measured,
-        reason: `widest floor-minus-time gap ${widestGap.toFixed(3)} is below ${MIN_GAP}`,
+        reason:
+          widestGapCourse === null
+            ? 'no course is below its own floor share'
+            : `${widestGapCourse}'s shortfall ratio ${widestRatio.toFixed(3)} does not clear ${SHORTFALL_RATIO_K}`,
       };
 }

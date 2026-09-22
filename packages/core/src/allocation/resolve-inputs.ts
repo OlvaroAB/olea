@@ -125,8 +125,7 @@
  * A course present in NEITHER set is not running and gets no entry, same as
  * before this fix.
  *
- * **`tempoWeight`, `steeringWeight`, `sittingsSinceFloorMet`** — omitted
- * outright, never defaulted:
+ * **`tempoWeight`, `steeringWeight`** — omitted outright, never defaulted:
  *   - `tempoWeight` has no client-side producer today (the register's own
  *     words, verbatim) — nothing in this pipeline reads a course document's
  *     credit weight or expected weekly hours yet.
@@ -135,14 +134,39 @@
  *     composition time from her live input, not a persisted per-course
  *     number available at plan-computation time. There is nothing to read
  *     here without inventing a caching layer this bead does not own.
- *   - `sittingsSinceFloorMet` — the windowed-floor bookkeeping (`[D-092]`)
- *     is service-side per the component register's own "boundary: service"
- *     line, and no client-side session-count-since-floor producer exists to
- *     hand it a starting value.
+ *
+ * **`sittingsSinceFloorMet` now HAS a client-side producer (`ol-v7r5.63` /
+ * `[DOS-C4]`), pure and self-contained.** The windowed-floor bookkeeping
+ * itself (`[D-092]`'s forcing decision) stays service-side, per the
+ * component register's own "boundary: service" line — this module does not
+ * re-derive the floor or the forcing rule. What it DOES now compute: given a
+ * caller-supplied sittings history (`PastSessionRecord[]`, the same shape
+ * `../study-session/window.js`'s `computeWindowDeficit` already reads —
+ * `[SESS-13]`'s local session projection over her review log, a vault fact,
+ * never server state) and the previous plan's per-course floor shares, `
+ * sittingsSinceFloorMet(courseId)` walks the history backward from the most
+ * recent sitting, counting sittings in which the course was eligible but its
+ * received share of that sitting stayed below its floor share, and stops
+ * counting at the first (most recent) eligible sitting where the received
+ * share met or exceeded the floor. `undefined` — never a guessed `0` — when
+ * the floor share is unknown, or the course never appears as eligible
+ * anywhere in the supplied history (the same "absence, not a fabricated
+ * number" convention `CourseFloorShare.floorShare` itself uses).
+ *
+ * **What this bead does NOT close**, named rather than papered over: wiring
+ * a PRODUCTION caller to actually hand this function real sittings history
+ * and real floor shares is outside `resolve-inputs.ts`'s own file (it would
+ * touch `plan-policy-provider.ts`, not owned by this bead) — filed as a
+ * follow-up (`ol-feza` [DOS-C4-a]), the exact posture
+ * `studyPlanStore` was in before `ol-v7r5.38` closed that gap for
+ * `listCourseFloorShares`. Until that caller lands, `sittingsSinceFloorMet`
+ * is omitted here exactly as before (both new parameters default to empty),
+ * so every existing call site keeps compiling and behaving unchanged.
  * `PlanPolicyRequest.courses[number]` marks all three optional for exactly
  * this reason: their absence is a documented gap, not a bug, and the
  * service side's own confidence-ramp defaults (`[D-081]`) are what carries
- * week one before any of these three ever gets a producer.
+ * week one before `tempoWeight`/`steeringWeight` ever get a producer, and
+ * before `sittingsSinceFloorMet` gets a production caller.
  *
  * INV-1: pure, no `obsidian`, no I/O, no clock — `asOf` is caller-supplied,
  * same discipline as `rankOracle`/`buildStudyPlan`.
@@ -151,6 +175,7 @@
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { CourseOracleRanking, RankOracleResult } from '../oracle/types.js';
+import type { PastSessionRecord } from '../study-session/window.js';
 
 /** Mirrors `plan-policy-provider.ts`'s `PlanPolicyCourseInput` field-for-field (the plugin package cannot import from here without an ownership crossing, so the two are kept in sync by hand — same discipline `PLAN_POLICY_ENDPOINT_PATH` already uses). */
 export interface PlanPolicyCourseInput {
@@ -226,6 +251,45 @@ function readinessAndEvidenceVolume(course: CourseOracleRanking): {
   };
 }
 
+/**
+ * `sittingsSinceFloorMet`'s pure computation (`ol-v7r5.63` / `[DOS-C4]`): walk
+ * `history` backward from the most recent sitting, counting eligible sittings
+ * in which `courseId`'s received share stayed below `floorShare`, stopping
+ * (not counting) at the first eligible sitting — most recent first — where
+ * the received share met or exceeded it. See the module doc's own section
+ * for the full argument and what remains a follow-up.
+ *
+ * `undefined` when the floor share itself is unknown (mirrors
+ * `CourseFloorShare.floorShare`'s own absence convention) or when the course
+ * never appears as an eligible course anywhere in the supplied history —
+ * both are "no signal", never a guessed `0`.
+ */
+function sittingsSinceFloorMet(
+  courseId: string,
+  history: readonly PastSessionRecord[],
+  floorShare: number | undefined,
+): number | undefined {
+  if (floorShare === undefined || !Number.isFinite(floorShare) || floorShare <= 0) return undefined;
+
+  let count = 0;
+  let sawEligibleSitting = false;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const sitting = history[i];
+    if (sitting === undefined || !sitting.eligibleCourses.includes(courseId)) continue;
+    sawEligibleSitting = true;
+
+    let totalReceived = 0;
+    for (const seconds of sitting.received.values()) totalReceived += seconds;
+    const receivedShare =
+      totalReceived > 0 ? (sitting.received.get(courseId) ?? 0) / totalReceived : 0;
+
+    // This sitting paid the floor — the count stops here, not counting it.
+    if (receivedShare >= floorShare) break;
+    count += 1;
+  }
+  return sawEligibleSitting ? count : undefined;
+}
+
 /** Every course id named by any concept's `courses` attribution (F1.3) — "her material has arrived" for that course, the same reading F4.10/F8.2 already give it. */
 function coursesWithMaterial(concepts: readonly ConceptRecord[]): ReadonlySet<string> {
   const courses = new Set<string>();
@@ -241,17 +305,25 @@ function resolveCourseInput(
   courseId: string,
   ranked: CourseOracleRanking | undefined,
   assessments: readonly AssessmentRecord[],
+  sittingsHistory: readonly PastSessionRecord[],
+  floorSharesByCourse: ReadonlyMap<string, number>,
 ): PlanPolicyCourseInput {
   const courseRecords = assessments.filter((record) => record.course === courseId);
   const nearest = nearestUpcomingAssessment(asOf, courseRecords);
   const { readiness, evidenceVolume } =
     ranked === undefined ? { readiness: 0, evidenceVolume: 0 } : readinessAndEvidenceVolume(ranked);
+  const sittingsSince = sittingsSinceFloorMet(
+    courseId,
+    sittingsHistory,
+    floorSharesByCourse.get(courseId),
+  );
   return {
     courseId,
     daysToNextAssessment: nearest?.days ?? null,
     assessmentWorth: nearest?.record.weight ?? NEUTRAL_ASSESSMENT_WORTH,
     readiness,
     evidenceVolume,
+    ...(sittingsSince === undefined ? {} : { sittingsSinceFloorMet: sittingsSince }),
   };
 }
 
@@ -272,12 +344,20 @@ function resolveCourseInput(
  * ran for `composeOracleRanking`'s own `concepts` input (F1.3's course
  * attribution) — passing `[]` (the default) reproduces this function's
  * pre-fix behaviour exactly, for a caller not yet passing it.
+ *
+ * `sittingsHistory` and `floorSharesByCourse` (`ol-v7r5.63` / `[DOS-C4]`)
+ * feed `sittingsSinceFloorMet` — see the module doc's own section. Both
+ * default to empty, reproducing this function's pre-this-bead behaviour
+ * exactly for a caller not yet passing them (no production caller does yet
+ * — see the module doc for the filed follow-up).
  */
 export function resolvePlanPolicyCourseInputs(
   asOf: string,
   ranking: RankOracleResult,
   assessments: readonly AssessmentRecord[],
   concepts: readonly ConceptRecord[] = [],
+  sittingsHistory: readonly PastSessionRecord[] = [],
+  floorSharesByCourse: ReadonlyMap<string, number> = new Map(),
 ): readonly PlanPolicyCourseInput[] {
   const rankedById = new Map(ranking.courses.map((course) => [course.course, course]));
   const materialOnlyIds = [...coursesWithMaterial(concepts)]
@@ -286,10 +366,24 @@ export function resolvePlanPolicyCourseInputs(
 
   return [
     ...ranking.courses.map((course) =>
-      resolveCourseInput(asOf, course.course, course, assessments),
+      resolveCourseInput(
+        asOf,
+        course.course,
+        course,
+        assessments,
+        sittingsHistory,
+        floorSharesByCourse,
+      ),
     ),
     ...materialOnlyIds.map((courseId) =>
-      resolveCourseInput(asOf, courseId, undefined, assessments),
+      resolveCourseInput(
+        asOf,
+        courseId,
+        undefined,
+        assessments,
+        sittingsHistory,
+        floorSharesByCourse,
+      ),
     ),
   ];
 }
