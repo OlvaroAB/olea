@@ -8,6 +8,7 @@ import {
   assembleBandedGroundedContext,
   assembleGroundedContext,
   classifyGroundingBand,
+  type GateStage,
   type GroundingJudgePort,
   type GroundingJudgeRequest,
   type GroundingJudgeVerdict,
@@ -816,5 +817,139 @@ describe('IncumbentAssessSupport — the assessSupport seam wrapping the current
     const adapter = new IncumbentAssessSupport(failingJudge);
     const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
     expect(outcome).toEqual({ status: 'unavailable' });
+  });
+});
+
+/**
+ * `[JEV-11]` (`ol-3ux7.96`): every request that reaches the band gate is
+ * attributed to exactly one `GateStage`, and the recorded stage carries no
+ * content. Each `it` below exercises one exit point of
+ * `assembleBandedGroundedContext` and asserts `onStage` fired exactly once
+ * with the right stage — "exactly once" is what makes an unattributed
+ * request impossible to produce from this suite, not merely unobserved by
+ * it: a branch that forgot to call `onStage`, or one that called it twice,
+ * fails a test here rather than merely going unreported.
+ */
+describe('[JEV-11] onStage attributes every band-gate request to exactly one stage', () => {
+  function recorder() {
+    const stages: GateStage[] = [];
+    return { stages, onStage: (s: GateStage) => stages.push(s) };
+  }
+
+  const unciteableHits: HybridHit[] = [
+    hit({ path: 'a.md', blockIndex: 0, contentHash: 'h1', cosineScore: 0.1, keywordScore: null }),
+  ];
+
+  it('attributes an empty hit set to no-hits', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext([], { band: BAND, onStage: rec.onStage });
+    expect(rec.stages).toEqual(['no-hits']);
+  });
+
+  it('attributes a missing semantic signal to composite-unavailable', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      // no compositeSignals supplied at all
+    });
+    expect(rec.stages).toEqual(['composite-unavailable']);
+  });
+
+  it('attributes a fired requireComposite veto to composite-veto', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      requireComposite: true,
+      compositeSignals: { lexBest: 0, top1: ABOVE_BAND_TOP1, marginP99: 0.12 },
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+    });
+    expect(rec.stages).toEqual(['composite-veto']);
+  });
+
+  it('attributes a below-bar top1 to below-band', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(BELOW_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['below-band']);
+  });
+
+  it('attributes an above-bar top1 with a citable hit to above-band', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['above-band']);
+  });
+
+  it('attributes a tier pass with nothing citable to relevance-empty, never to above-band or escalated-to-judge', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(unciteableHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['relevance-empty']);
+  });
+
+  it('attributes an in-band query with a citable hit to escalated-to-judge', () => {
+    const rec = recorder();
+    assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['escalated-to-judge']);
+  });
+
+  it('never fires onStage more than once per call, across every branch above', () => {
+    const cases: Array<[HybridHit[], Parameters<typeof assembleBandedGroundedContext>[1]]> = [
+      [[], { band: BAND }],
+      [[...bandHits], { band: BAND }],
+      [[...bandHits], { band: BAND, compositeSignals: bandSignals(BELOW_BAND_TOP1) }],
+      [[...bandHits], { band: BAND, compositeSignals: bandSignals(ABOVE_BAND_TOP1) }],
+      [[...unciteableHits], { band: BAND, compositeSignals: bandSignals(ABOVE_BAND_TOP1) }],
+      [[...bandHits], { band: BAND, compositeSignals: bandSignals(IN_BAND_TOP1) }],
+    ];
+    for (const [hits, options] of cases) {
+      const rec = recorder();
+      assembleBandedGroundedContext(hits, { ...options, band: BAND, onStage: rec.onStage });
+      expect(rec.stages).toHaveLength(1);
+    }
+  });
+
+  it('carries no content — the stage is the whole payload, proved with a planted sentinel', () => {
+    const sentinel = 'sentinel-zx91-never-recorded';
+    const rec = recorder();
+    const sentinelHits: HybridHit[] = [
+      hit({ path: `${sentinel}.md`, blockIndex: 0, contentHash: sentinel, text: sentinel }),
+    ];
+    assembleBandedGroundedContext(sentinelHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    for (const s of rec.stages) {
+      expect(JSON.stringify(s)).not.toContain(sentinel);
+    }
+  });
+
+  it('resolveGroundedContext forwards onStage from its shared options through to the same band decision', async () => {
+    const rec = recorder();
+    const judge = countingJudge(true);
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      onStage: rec.onStage,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['escalated-to-judge']);
   });
 });

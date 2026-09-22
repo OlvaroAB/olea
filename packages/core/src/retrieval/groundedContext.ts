@@ -406,9 +406,45 @@ export function classifyGroundingBand(
   return 'above-band';
 }
 
+/**
+ * Which point inside `assembleBandedGroundedContext` decided a request
+ * (`[JEV-11]`, `ol-3ux7.96`). **Recording only — nothing here changes what
+ * the gate decides.** The set is not the four the bead names going in
+ * (composite veto / below band / above band / escalate); the real function
+ * has seven exit points, and forcing them into four would hide two real
+ * distinctions: a signals-unavailable fail-closed exit is not the same fact
+ * as a veto that ran and refused, and a query that clears the band but has
+ * nothing citable never reaches the judge at all. See each member's doc.
+ */
+export type GateStage =
+  /** `hits` was empty before any signal was even consulted. */
+  | 'no-hits'
+  /** The band's own signal (`top1`) was never computed — fail-closed, not a veto verdict. */
+  | 'composite-unavailable'
+  /** `requireComposite`'s veto ran and refused, ahead of band classification (`[D-192]`). */
+  | 'composite-veto'
+  /** `top1` sat below the band's lower bar; nothing left the device. */
+  | 'below-band'
+  /** `top1` cleared the band's upper bar — grounded from numbers alone, no judge consulted. */
+  | 'above-band'
+  /** The tier passed (above- or in-band) but no hit cleared the per-hit relevance filter, so there is nothing to cite or hand a judge. */
+  | 'relevance-empty'
+  /** The tier landed in-band and at least one hit is citable: this is the one stage that reaches the judge. */
+  | 'escalated-to-judge';
+
 export interface AssembleBandedGroundedContextOptions extends AssembleGroundedContextOptions {
   /** Required: there is no default operating point (see `PROVISIONAL_GROUNDING_BAND`). */
   readonly band: GroundingBandThresholds;
+  /**
+   * Recording only (`[JEV-11]`) — called exactly once per call, with the one
+   * `GateStage` that decided this request, before the function returns.
+   * Never carries the query, the chunks, or anything derived from her
+   * content: the stage name is the whole payload, so a caller can only ever
+   * count occurrences per stage. Optional and inert on the decision itself —
+   * omitting it reproduces byte-identical behaviour for every existing
+   * caller.
+   */
+  readonly onStage?: (stage: GateStage) => void;
 }
 
 /**
@@ -444,7 +480,10 @@ export function assembleBandedGroundedContext(
   hits: readonly HybridHit[],
   options: AssembleBandedGroundedContextOptions,
 ): BandDecision {
+  const stage = (s: GateStage): void => options.onStage?.(s);
+
   if (hits.length === 0) {
+    stage('no-hits');
     return { status: 'refused', reason: 'no-hits' };
   }
 
@@ -452,6 +491,7 @@ export function assembleBandedGroundedContext(
   if (!signals || !isCompositeSemanticSignalAvailable(signals)) {
     // The bars are placed on a signal that was never computed. Fail closed,
     // with the reason that is actually true: the check did not run.
+    stage('composite-unavailable');
     return { status: 'refused', reason: 'composite-check-unavailable' };
   }
 
@@ -465,6 +505,7 @@ export function assembleBandedGroundedContext(
   if (options.requireComposite) {
     const thresholds = options.compositeThresholds ?? RECOMMENDED_COMPOSITE_THRESHOLDS;
     if (!meetsCompositeThreshold(signals, thresholds)) {
+      stage('composite-veto');
       return { status: 'refused', reason: 'below-composite-threshold' };
     }
   }
@@ -473,6 +514,7 @@ export function assembleBandedGroundedContext(
   const diagnostic = buildDiagnostic(hits);
 
   if (tier === 'below-band') {
+    stage('below-band');
     return { status: 'refused', reason: 'below-band', diagnostic };
   }
 
@@ -482,13 +524,16 @@ export function assembleBandedGroundedContext(
     // Corpus-wide `top1` cleared a bar, but nothing that actually came back as
     // a hit is citable. There is nothing to hand a judge and nothing to cite,
     // so this is the per-hit gate's own verdict rather than the band's.
+    stage('relevance-empty');
     return { status: 'refused', reason: 'below-relevance-threshold', diagnostic };
   }
 
   const chunks = toGroundedChunks(relevant, options.topK ?? DEFAULT_TOP_K);
   if (tier === 'above-band') {
+    stage('above-band');
     return { status: 'grounded', chunks };
   }
+  stage('escalated-to-judge');
   return { status: 'escalate', chunks, diagnostic };
 }
 
