@@ -136,6 +136,7 @@ import {
   D112_GROUNDING_BAND,
   type GateStage,
   type GroundingRefusalReason,
+  type JudgeRequestRecord,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
   retrieve,
@@ -289,6 +290,21 @@ export interface DraftQuizCardsDeps {
    * pick where that instance is constructed.
    */
   readonly onStage?: (stage: GateStage) => void;
+  /**
+   * `[JEV-6]` (`ol-3ux7.89`) — the real-population case capture's hook, with
+   * exactly the same ownership argument as `onStage` above: this function
+   * does not decide where the recorder lives, it only gives the composition
+   * root somewhere to plug one in.
+   *
+   * **Absent in every ordinary session.** `main.ts` supplies it only when
+   * the hand-edited capture config says so (`./judge-case-capture.ts`), so
+   * the default path is byte-identical to having no capture at all — and
+   * unlike `onStage`, which fires on every call, this one fires only for the
+   * requests that actually reach the grounding judge, which is the operating
+   * population the study is defined over. Pointers only, never passages:
+   * `JudgeRequestRecord` has no field a passage could arrive in.
+   */
+  readonly onJudgeRequest?: (record: JudgeRequestRecord) => void;
 }
 
 /**
@@ -324,6 +340,7 @@ export async function draftQuizCardsForConcept(
     compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
     ...(deps.onStage !== undefined ? { onStage: deps.onStage } : {}),
+    ...(deps.onJudgeRequest !== undefined ? { onJudgeRequest: deps.onJudgeRequest } : {}),
   });
 
   if (grounding.status === 'refused') {

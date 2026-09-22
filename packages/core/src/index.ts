@@ -1451,12 +1451,15 @@ export {
 } from './retrieval/embeddingCache.js';
 export type { RetrieveDeps, RetrieveOptions } from './retrieval/engine.js';
 export { retrieve } from './retrieval/engine.js';
+export type { GateStageSummary } from './retrieval/gateStageRecorder.js';
+export { GateStageRecorder } from './retrieval/gateStageRecorder.js';
 export type {
   AssembleBandedGroundedContextOptions,
   AssembleGroundedContextOptions,
   BandDecision,
   GateStage,
   GroundedChunk,
+  GroundedChunkRef,
   GroundingBandThresholds,
   GroundingBandTier,
   GroundingDiagnostic,
@@ -1466,6 +1469,7 @@ export type {
   GroundingJudgeVerdict,
   GroundingRefusalReason,
   GroundingResult,
+  JudgeRequestRecord,
   ResolveGroundedContextOptions,
 } from './retrieval/groundedContext.js';
 export {
@@ -1475,8 +1479,6 @@ export {
   PROVISIONAL_GROUNDING_BAND,
   resolveGroundedContext,
 } from './retrieval/groundedContext.js';
-export type { GateStageSummary } from './retrieval/gateStageRecorder.js';
-export { GateStageRecorder } from './retrieval/gateStageRecorder.js';
 export type {
   HybridHit,
   HybridRetrievalOptions,

@@ -35,6 +35,7 @@ import {
   type GateStage,
   GateStageRecorder,
   type GradeExplainBackInput,
+  type JudgeRequestRecord,
   loadCachedStudyPlan,
   notePathCourses,
   type PendingExplainBackGrading,
@@ -168,11 +169,17 @@ import { createLocalRegistryProvider } from './registry/provider.js';
 import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
 import { buildClassifyPassageHook } from './retrieval/classify-passage.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
+import { GateStagePersistence } from './retrieval/gate-stage-persistence.js';
 import {
   type GateStagePeriodSummary,
   ObsidianGateStageStore,
 } from './retrieval/gate-stage-store.js';
-import { GateStagePersistence } from './retrieval/gate-stage-persistence.js';
+import {
+  type JudgeCaseCaptureConfig,
+  JudgeCaseCaptureRecorder,
+  ObsidianJudgeCaseCaptureStore,
+  type PersistedJudgeCaseCapture,
+} from './retrieval/judge-case-capture.js';
 import { SerializingDataHost } from './retrieval/serializing-data-host.js';
 import {
   buildRetrievalWiring,
@@ -391,7 +398,9 @@ export default class OleaPlugin extends Plugin {
    * below — only through `schedule()`/`flush()`, which is what gives every
    * write here its serialization and coalescing.
    */
-  private readonly gateStagePersistence = new GateStagePersistence<Readonly<Record<GateStage, number>>>({
+  private readonly gateStagePersistence = new GateStagePersistence<
+    Readonly<Record<GateStage, number>>
+  >({
     now: () => new Date().toISOString(),
     getCounts: () => this.gateStageRecorder.summary().counts,
     save: (counts, now) => this.gateStageStore.save(counts, now),
@@ -402,6 +411,25 @@ export default class OleaPlugin extends Plugin {
     onError: (error) => console.error('Olea: could not persist gate-stage counts', error),
     debounceMs: GATE_STAGE_PERSIST_DEBOUNCE_MS,
   });
+  /**
+   * `[JEV-6]` (`ol-3ux7.89`) — the real-population case capture.
+   *
+   * **`null` in every ordinary session, and that is the normal state.** It
+   * is constructed at `onload` only when `data.json` carries a hand-edited
+   * capture config whose `enabled` is exactly `true`
+   * (`./retrieval/judge-case-capture.ts`). Nothing in this plugin ever
+   * writes that config key, there is no setting for it, and no command
+   * touches it — David's ruling of 2026-09-22 is a hand-edit and no surface
+   * she can see, and the readback below follows `getGateStageSummary()`'s
+   * developer-console precedent for the same reason.
+   *
+   * While it is `null`, `draftQuizCardsDeps()` omits `onJudgeRequest`
+   * entirely, so the drafting path is byte-identical to having no capture in
+   * the codebase.
+   */
+  private judgeCaseCapture: JudgeCaseCaptureRecorder | null = null;
+  private readonly judgeCaseCaptureStore: ObsidianJudgeCaseCaptureStore =
+    new ObsidianJudgeCaseCaptureStore(this.dataFileHost);
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
@@ -1635,6 +1663,29 @@ export default class OleaPlugin extends Plugin {
       this.gateStageLastRecordedAt = persistedGateStagePeriod.lastRecordedAt;
     }
 
+    // `[JEV-6]` (`ol-3ux7.89`): the case capture, off unless `data.json`
+    // carries a deliberately hand-written config. Every failure path here
+    // leaves `judgeCaseCapture` null, which is the ordinary state anyway, so
+    // nothing about drafting depends on any of it succeeding.
+    const captureConfig: JudgeCaseCaptureConfig | null = await this.judgeCaseCaptureStore
+      .loadConfig()
+      .catch(() => null);
+    if (captureConfig !== null) {
+      const recorder = new JudgeCaseCaptureRecorder(captureConfig);
+      const persistedCapture = await this.judgeCaseCaptureStore.load().catch(() => null);
+      // Continue the window this config already started rather than opening a
+      // second one — a window that silently restarted every reload would make
+      // "sampled uniformly from the window" false without anything looking
+      // wrong, the same defect the gate-stage period exists to avoid.
+      if (persistedCapture !== null && persistedCapture.seed === captureConfig.seed) {
+        recorder.seed(persistedCapture);
+      }
+      this.judgeCaseCapture = recorder;
+      console.warn(
+        'Olea: grounding-judge case capture is ENABLED (see judge-case-capture.ts). Remove the config key in data.json to stop it.',
+      );
+    }
+
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'modify') return;
@@ -2319,7 +2370,51 @@ export default class OleaPlugin extends Plugin {
         this.gateStageRecorder.record(stage);
         this.gateStagePersistence.schedule();
       },
+      // `[JEV-6]` (`ol-3ux7.89`): omitted entirely unless the capture is
+      // switched on by hand, so the ordinary drafting path is unchanged. When
+      // it is on, `observe()` is synchronous, in-memory and cannot throw, and
+      // the save is fire-and-forget with its rejection swallowed here — a
+      // disk error costs this window's newest cases, never a drafted card.
+      // The gate swallows a throwing recorder anyway (`groundedContext.ts`'s
+      // `onJudgeRequest` block); both halves are deliberate.
+      ...(this.judgeCaseCapture !== null
+        ? {
+            onJudgeRequest: (record: JudgeRequestRecord) => {
+              const capture = this.judgeCaseCapture;
+              if (capture === null) return;
+              if (!capture.observe(record, new Date().toISOString())) return;
+              const snapshot = capture.snapshot();
+              if (snapshot !== null) void this.judgeCaseCaptureStore.save(snapshot).catch(() => {});
+            },
+          }
+        : {}),
     };
+  }
+
+  /**
+   * `[JEV-6]` (`ol-3ux7.89`) — the developer-console readback and controls
+   * for the case capture, following `getGateStageSummary()`'s precedent
+   * exactly: reached as `app.plugins.plugins['olea'].getJudgeCaseCapture()`,
+   * and **deliberately not a command, a view or a setting**. No clause
+   * defines a student-facing surface for a research capture and none should
+   * be invented for one; adding an affordance she can see is a stop.
+   *
+   * `stopJudgeCaseCapture()` ends recording for this session and closes the
+   * window; `clearJudgeCaseCapture()` deletes every captured case from
+   * `data.json` and leaves the config key alone, so "I stopped it" and "I
+   * deleted it" stay distinguishable afterwards.
+   */
+  getJudgeCaseCapture(): PersistedJudgeCaseCapture | null {
+    return this.judgeCaseCapture?.snapshot() ?? null;
+  }
+
+  stopJudgeCaseCapture(): void {
+    this.judgeCaseCapture?.stop(new Date().toISOString());
+  }
+
+  async clearJudgeCaseCapture(): Promise<void> {
+    this.judgeCaseCapture = null;
+    await this.judgeCaseCaptureStore.clear();
   }
 
   /**

@@ -75,6 +75,41 @@ export interface GroundedChunk {
   readonly text: string;
 }
 
+/**
+ * A POINTER at one grounded chunk — `GroundedChunk` with the text removed.
+ *
+ * **The type is the control** (`[JEV-6]` / `ol-3ux7.89`, David's ruling of
+ * 2026-09-22: capture pointers, never passages). A recorder wired to
+ * `onJudgeRequest` below is handed values of this shape, which has no field
+ * a passage could be put in — so "no passage text was written" is a property
+ * of the interface rather than a promise a recorder makes about itself. The
+ * pair `(path, blockIndex)` is exactly what `GroundedChunk` carries besides
+ * the text, so a context string is reconstructible from an ordered list of
+ * these against the same note content, and from nothing less.
+ */
+export interface GroundedChunkRef {
+  readonly path: VaultPath;
+  readonly blockIndex: number;
+}
+
+/**
+ * What `onJudgeRequest` hands a recorder, for a request that actually
+ * reached the judge.
+ *
+ * `query` is verbatim because the study it exists for
+ * (`olea-service/findings/jev-j1-preregistration.md` §2) holds the query
+ * byte-identical across arms, and unlike a passage a query is not
+ * reconstructible from a pointer — it is composed at call time and is not a
+ * span of any one note. That asymmetry is deliberate and is recorded in the
+ * capture note beside the study rather than being quietly absorbed here.
+ */
+export interface JudgeRequestRecord {
+  readonly query: string;
+  /** In the order they were assembled into the context string, which is what makes reconstruction byte-identical. */
+  readonly refs: readonly GroundedChunkRef[];
+  readonly intendedOperation?: GroundingJudgeRequest['intendedOperation'];
+}
+
 export type GroundingRefusalReason =
   /** Retrieval produced no hits at all — an empty index, or a query with no keyword or semantic match whatsoever. */
   | 'no-hits'
@@ -613,6 +648,20 @@ export interface ResolveGroundedContextOptions extends AssembleBandedGroundedCon
   /** The query text, needed only to escalate. A band query with no query text to send cannot be judged, so it refuses like any other unavailable check. */
   readonly query?: string;
   /**
+   * Recording only (`[JEV-6]`) — called at most once per call, immediately
+   * before the judge is consulted and never on any other path, so it
+   * observes exactly the operating population §1 of the pre-registration
+   * defines: requests that really reached the grounding judge.
+   *
+   * **Pointers, never passages** — see `GroundedChunkRef`. It is fail-open
+   * in the same way `onStage` is: a throwing recorder is swallowed, because
+   * measurement must not be able to change what it measures, and in
+   * particular must not be able to turn a draftable request into a refusal.
+   * Omitting it reproduces byte-identical behaviour for every existing
+   * caller.
+   */
+  readonly onJudgeRequest?: (record: JudgeRequestRecord) => void;
+  /**
    * Forwarded verbatim to `GroundingJudgeRequest.intendedOperation`
    * (`[JEV-5]` / `ol-3ux7.88`) when escalating. Optional and inert on this
    * function's own decision — see that field's doc.
@@ -641,6 +690,23 @@ export async function resolveGroundedContext(
   const query = options.query;
   if (!options.judge || query === undefined || query.trim() === '') {
     return { status: 'refused', reason: 'judge-unavailable', diagnostic: decision.diagnostic };
+  }
+
+  // Fail-open on the RECORDER, never on the gate — identical posture to
+  // `onStage` in `assembleBandedGroundedContext` above, and for the identical
+  // reason. Placed after the judge/query guard so it fires for requests that
+  // are genuinely about to be judged, not for ones that refuse as
+  // `judge-unavailable` without anything leaving the device.
+  try {
+    options.onJudgeRequest?.({
+      query,
+      refs: decision.chunks.map((chunk) => ({ path: chunk.path, blockIndex: chunk.blockIndex })),
+      ...(options.intendedOperation !== undefined
+        ? { intendedOperation: options.intendedOperation }
+        : {}),
+    });
+  } catch {
+    // Swallowed on purpose — see comment above.
   }
 
   const verdict = await judgeWithinBudget(
