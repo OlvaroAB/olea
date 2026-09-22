@@ -32,6 +32,8 @@ import {
   type ExtractedUnit,
   extendComposedStudySession,
   type FirstInvitationCandidate,
+  GateStageRecorder,
+  type GateStageSummary,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
   notePathCourses,
@@ -311,6 +313,30 @@ export default class OleaPlugin extends Plugin {
    * defect this bead exists to collapse.
    */
   private readonly studySessionHolder: StudySessionHolder = createStudySessionHolder();
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`): the one recorder for this plugin instance's
+   * whole session, same "constructed unconditionally at class-field init,
+   * never rebuilt" posture `studySessionHolder` above already takes — a
+   * per-call recorder would count exactly one event per call and answer
+   * nothing about a share, and a module-level singleton would be shared
+   * state living outside this instance's control (`gateStageRecorder.ts`'s
+   * own doc). `draftQuizCardsDeps()` below passes `.record` as `onStage` on
+   * every call, so every band-gate request this plugin instance makes
+   * accumulates into the same counts.
+   *
+   * **In-memory only, and that is the whole answer to "does it survive a
+   * session."** It is never written to the vault, never sent anywhere, and
+   * is not read by `groundedContext.ts`'s pure gate logic itself (which
+   * fails open if `onStage` ever throws — see that module). It resets to
+   * zero on every plugin reload (disable/enable, Obsidian restart, or a
+   * vault switch), which means **the judge-consulted share is PER SESSION**:
+   * a study reading it must either aggregate `getGateStageSummary()` across
+   * many sessions or collect over one long-running one, never assume a
+   * single read after the fact reflects a whole measurement period. This is
+   * stated on the bead itself, not only here, so the study lane cannot be
+   * surprised by it.
+   */
+  private readonly gateStageRecorder: GateStageRecorder = new GateStageRecorder();
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
@@ -2185,7 +2211,37 @@ export default class OleaPlugin extends Plugin {
           frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
         },
       }),
+      // `[JEV-11]` (`ol-3ux7.96`): `this.gateStageRecorder.record` is bound
+      // (see `GateStageRecorder`), so it can be passed directly. Every band
+      // request `retrieve()` makes through this deps object — from either
+      // production caller below — accumulates into the one recorder above.
+      onStage: this.gateStageRecorder.record,
     };
+  }
+
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`) — the diagnostic readback for the study's
+   * denominator. **Deliberately not a command, a view, or anything else she
+   * would see**: no clause defines a student-facing surface for "what share
+   * of grounding requests did the judge decide," and none should be invented
+   * to answer this bead (`docs/dev/CLAUDE-incidents-log.md`'s worked example
+   * is exactly this mistake made once already, for a different feature). The
+   * intended reader is a developer or the study harness, reaching this
+   * plugin instance through Obsidian's own developer console the way any
+   * plugin's internals are already reachable there —
+   * `app.plugins.plugins['olea'].getGateStageSummary()` — never a
+   * console.log this file emits on its own and never a UI element. Counts
+   * and a ratio only (`GateStageSummary`), per `[JEV-11]`'s own privacy
+   * rule.
+   *
+   * **Per session, not persisted (see `gateStageRecorder`'s own field doc).**
+   * A single read here reflects only what this plugin instance has recorded
+   * since it last loaded. The study must aggregate several reads across
+   * sessions, or collect over one session left running, to get a share worth
+   * reporting — this method does not and cannot do that aggregation itself.
+   */
+  getGateStageSummary(): GateStageSummary {
+    return this.gateStageRecorder.summary();
   }
 
   /**

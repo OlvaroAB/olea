@@ -5,6 +5,7 @@ import {
 } from './compositeSignals.js';
 import { cosinePercentile } from './cosine.js';
 import {
+  type AssembleBandedGroundedContextOptions,
   assembleBandedGroundedContext,
   assembleGroundedContext,
   classifyGroundingBand,
@@ -951,5 +952,50 @@ describe('[JEV-11] onStage attributes every band-gate request to exactly one sta
       compositeSignals: bandSignals(IN_BAND_TOP1),
     });
     expect(rec.stages).toEqual(['escalated-to-judge']);
+  });
+
+  /**
+   * "Measurement may not change the thing it measures." A recorder is
+   * caller-supplied and this module cannot trust it not to throw — so the
+   * gate's own decision (and, via `resolveGroundedContext`, whether the
+   * judge is ever consulted) must be identical whether `onStage` behaves or
+   * throws on every single call.
+   */
+  it('fails open on a throwing onStage — the decision is unaffected at every stage', () => {
+    const throwingOnStage = (): never => {
+      throw new Error('recorder exploded');
+    };
+    const cases: Array<[HybridHit[], AssembleBandedGroundedContextOptions['compositeSignals']]> = [
+      [[], undefined],
+      [[...bandHits], undefined],
+      [[...bandHits], bandSignals(BELOW_BAND_TOP1)],
+      [[...bandHits], bandSignals(ABOVE_BAND_TOP1)],
+      [[...unciteableHits], bandSignals(ABOVE_BAND_TOP1)],
+      [[...bandHits], bandSignals(IN_BAND_TOP1)],
+    ];
+    for (const [hits, compositeSignals] of cases) {
+      const base = { band: BAND, ...(compositeSignals !== undefined ? { compositeSignals } : {}) };
+      const quiet = assembleBandedGroundedContext(hits, base);
+      const withThrowingRecorder = assembleBandedGroundedContext(hits, {
+        ...base,
+        onStage: throwingOnStage,
+      });
+      expect(withThrowingRecorder).toEqual(quiet);
+    }
+  });
+
+  it('resolveGroundedContext still escalates to and consults the judge when onStage throws', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+      onStage: () => {
+        throw new Error('recorder exploded');
+      },
+    });
+    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(1);
   });
 });

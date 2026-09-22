@@ -480,7 +480,18 @@ export function assembleBandedGroundedContext(
   hits: readonly HybridHit[],
   options: AssembleBandedGroundedContextOptions,
 ): BandDecision {
-  const stage = (s: GateStage): void => options.onStage?.(s);
+  // Fail-open on the RECORDER, never on the gate: a caller-supplied onStage
+  // that throws must not turn a grounded/refused decision into an uncaught
+  // exception — measurement must not be able to change what it measures.
+  // The gate's own return value below is decided before and independent of
+  // this call either way.
+  const stage = (s: GateStage): void => {
+    try {
+      options.onStage?.(s);
+    } catch {
+      // Swallowed on purpose — see comment above.
+    }
+  };
 
   if (hits.length === 0) {
     stage('no-hits');
