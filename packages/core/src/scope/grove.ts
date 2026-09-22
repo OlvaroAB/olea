@@ -93,6 +93,7 @@
  * between "the walk" and "the pure compose").
  */
 
+import type { ConceptReadCoverage } from '../concept/read.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
@@ -161,6 +162,36 @@ export interface GroveCourseSummary {
    * a caller renders no papers mark at all in that case, rather than a "0 of 0".
    */
   readonly pastPaperSourcePaths: readonly VaultPath[];
+  /**
+   * Whether extraction's own read of this course's material finished, or was
+   * cut short by the corpus-wide budget (`ol-2zfj.144` [IL-D5]'s
+   * `ConceptReadCoverage.truncatedByBudget`, surfaced here per `ol-2zfj.157`
+   * [DOS-I15]) — the row 4.1 coverage-audit consumer that bead's own close
+   * evidence named as still missing.
+   *
+   * Three states, and the caller MUST NOT collapse the last two into a
+   * `'complete'` claim (baseline row 4.1's own health check: "a completeness
+   * claim is withheld unless every source actually read successfully"):
+   *  - `'complete'` — every offered passage of every read document was
+   *    actually let through the budget.
+   *  - `'truncated'` — at least one document's read was cut short; the
+   *    denominator above may therefore be undercounting a concept the
+   *    material genuinely has, not one that is genuinely absent.
+   *  - `'unknown'` — `BuildGroveModelInput.readCoverage` was not supplied at
+   *    all. This is the SAFE default for a caller that has not wired the
+   *    read result yet (see that field's own doc) — never read as
+   *    `'complete'`, exactly the same "absent means withheld, never
+   *    guessed" posture `denominatorSourcePaths` already holds.
+   */
+  readonly readCompleteness: 'complete' | 'truncated' | 'unknown';
+  /**
+   * The section/heading names `readCompleteness === 'truncated'` cut short —
+   * `ConceptReadCoverage.sections` from every row whose `truncatedByBudget`
+   * is `true`, deduped, first-encountered order across rows. Always `[]`
+   * when `readCompleteness` is `'complete'` or `'unknown'` — there is
+   * nothing pending to name in either case.
+   */
+  readonly pendingSections: readonly string[];
 }
 
 /** Names forbidden on any grove-facing shape (F8.3) — see this module's doc. */
@@ -212,6 +243,35 @@ function sortedUnique(paths: readonly VaultPath[]): readonly VaultPath[] {
   return [...new Set(paths)].sort();
 }
 
+/**
+ * `ol-2zfj.157` [DOS-I15]: read `readCoverage` into the summary's honest
+ * completeness claim — see `GroveCourseSummary.readCompleteness`'s own doc
+ * for the three states. Pure and total, matching this module's own INV-1
+ * discipline: no clock, no I/O, nothing beyond the array handed in.
+ */
+function readCompletenessFrom(readCoverage: readonly ConceptReadCoverage[] | undefined): {
+  readonly readCompleteness: GroveCourseSummary['readCompleteness'];
+  readonly pendingSections: readonly string[];
+} {
+  if (readCoverage === undefined) {
+    return { readCompleteness: 'unknown', pendingSections: [] };
+  }
+  const truncatedRows = readCoverage.filter((row) => row.truncatedByBudget);
+  if (truncatedRows.length === 0) {
+    return { readCompleteness: 'complete', pendingSections: [] };
+  }
+  const pendingSections: string[] = [];
+  const seen = new Set<string>();
+  for (const row of truncatedRows) {
+    for (const section of row.sections) {
+      if (seen.has(section)) continue;
+      seen.add(section);
+      pendingSections.push(section);
+    }
+  }
+  return { readCompleteness: 'truncated', pendingSections };
+}
+
 function byConceptName<T extends { readonly conceptName: string }>(a: T, b: T): number {
   return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
 }
@@ -243,6 +303,18 @@ export interface BuildGroveModelInput {
    * toward the same kind of input.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * `ConceptReadCoverage` rows for THIS course's material only — same
+   * "the caller filters vault-wide reads to `course`" discipline every other
+   * field on this interface already follows (this module's own convention,
+   * stated at the top of this doc comment). Optional, and absence is read as
+   * `'unknown'` on `GroveCourseSummary.readCompleteness` — the caller has not
+   * wired `ol-2zfj.144` [IL-D5]'s read result yet, which is exactly today's
+   * behaviour for every caller that predates this field. See that summary
+   * field's own doc for the three states and why `'unknown'` is the safe
+   * absent-value, never a guessed `'complete'`.
+   */
+  readonly readCoverage?: readonly ConceptReadCoverage[];
 }
 
 export interface BuildGroveModelResult {
@@ -373,6 +445,7 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     denominatorCount: cells.length + materialGaps.length,
     denominatorSourcePaths,
     pastPaperSourcePaths,
+    ...readCompletenessFrom(input.readCoverage),
   };
 
   return {

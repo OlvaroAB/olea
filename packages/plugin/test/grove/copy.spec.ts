@@ -14,24 +14,36 @@ import {
   GROVE_VIEW_TITLE,
   groveCoverageSplitLine,
   grovePapersLabel,
+  groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
 } from '../../src/grove/copy.js';
 
 const SUMMARIES: readonly GroveCourseSummary[] = [
-  { builtCount: 0, denominatorCount: 0, denominatorSourcePaths: [], pastPaperSourcePaths: [] },
+  {
+    builtCount: 0,
+    denominatorCount: 0,
+    denominatorSourcePaths: [],
+    pastPaperSourcePaths: [],
+    readCompleteness: 'unknown',
+    pendingSections: [],
+  },
   {
     builtCount: 1,
     denominatorCount: 1,
     denominatorSourcePaths: ['03 Research/Objectives.md'],
     pastPaperSourcePaths: [],
+    readCompleteness: 'complete',
+    pendingSections: [],
   },
   {
     builtCount: 3,
     denominatorCount: 7,
     denominatorSourcePaths: ['03 Research/Objectives.md', '03 Research/Past Paper 2024.md'],
     pastPaperSourcePaths: ['03 Research/Past Paper 2024.md'],
+    readCompleteness: 'truncated',
+    pendingSections: ['Invented Section One'],
   },
 ];
 
@@ -63,6 +75,9 @@ function everyProducibleString(): readonly string[] {
     ...SHRINK_RECEIPTS,
     ...PAPERS_LABELS,
     ...COVERAGE_SPLITS,
+    ...SUMMARIES.map(groveReadCompletenessLine).filter(
+      (line): line is string => line !== undefined,
+    ),
   ];
 }
 
@@ -115,6 +130,32 @@ describe('grove copy — F8.3 no scalar', () => {
     expect(line).toContain('7');
     expect(line).toContain('5');
     expect(line.toLowerCase()).not.toMatch(/\bwrong\b|\bmistake\b|\bfault\b/);
+  });
+
+  it('a complete read says nothing extra — no completeness claim was ever asserted for it to correct', () => {
+    expect(groveReadCompletenessLine(SUMMARIES[1] as GroveCourseSummary)).toBeUndefined();
+  });
+
+  it('a truncated read names the pending sections and never reads as complete (`ol-2zfj.157` [DOS-I15])', () => {
+    const line = groveReadCompletenessLine(SUMMARIES[2] as GroveCourseSummary);
+    expect(line).toBeDefined();
+    expect(line).toContain('Invented Section One');
+    expect(line?.toLowerCase()).not.toContain('complete');
+  });
+
+  it('an unknown read is distinguished from both complete and truncated — never silently read as either', () => {
+    const line = groveReadCompletenessLine(SUMMARIES[0] as GroveCourseSummary);
+    expect(line).toBeDefined();
+    expect(line?.toLowerCase()).not.toContain('complete');
+    // Must not fabricate pending sections it has no evidence for.
+    expect(line).not.toContain('Invented Section One');
+  });
+
+  it('three summaries differing only by readCompleteness produce three distinct outcomes', () => {
+    const unknown = groveReadCompletenessLine(SUMMARIES[0] as GroveCourseSummary);
+    const complete = groveReadCompletenessLine(SUMMARIES[1] as GroveCourseSummary);
+    const truncated = groveReadCompletenessLine(SUMMARIES[2] as GroveCourseSummary);
+    expect(new Set([unknown, complete, truncated]).size).toBe(3);
   });
 });
 

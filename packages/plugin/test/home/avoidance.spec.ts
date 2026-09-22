@@ -139,6 +139,8 @@ function declaredModel(cells: readonly { conceptKey: string }[]): GroveCourseMod
       denominatorCount: cells.length,
       denominatorSourcePaths: [],
       pastPaperSourcePaths: [],
+      readCompleteness: 'unknown',
+      pendingSections: [],
     },
   };
 }

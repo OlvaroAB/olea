@@ -8,6 +8,7 @@
  * Every concept name, course code and path below is invented, per INV-3.
  */
 import { describe, expect, it } from 'vitest';
+import type { ConceptReadCoverage } from '../concept/read.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { Provenance } from '../extract/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
@@ -312,6 +313,8 @@ describe('buildGroveModel — F8.3 no coverage scalar', () => {
       denominatorCount: 2,
       denominatorSourcePaths: [objectivesPath],
       pastPaperSourcePaths: [],
+      readCompleteness: 'unknown',
+      pendingSections: [],
     });
     for (const key of Object.keys(model.summary)) {
       expect(key.toLowerCase()).not.toMatch(/ratio|percent|quotient|completion/);
@@ -477,5 +480,94 @@ describe('buildGroveModel — C7.9 part-of fold (`ol-5phn`), relations input', (
     if (model.status !== 'declared') throw new Error('expected declared');
     expect(model.cells.map((c) => c.conceptName)).toEqual(['Invented Broad Area']);
     expect(model.summary.denominatorCount).toBe(1);
+  });
+});
+
+/** Minimal `ConceptReadCoverage` row — every field the tests below don't care about gets a plain default. */
+function coverageRow(
+  sourcePath: VaultPath,
+  overrides: Partial<ConceptReadCoverage> = {},
+): ConceptReadCoverage {
+  return {
+    sourcePath,
+    passagesOffered: 4,
+    passagesRead: 4,
+    conceptsFound: 1,
+    calls: 1,
+    truncatedByBudget: false,
+    sections: [],
+    ...overrides,
+  };
+}
+
+describe('buildGroveModel — readCoverage and the honest completeness claim (ol-2zfj.157 [DOS-I15])', () => {
+  function declaredInput(readCoverage?: readonly ConceptReadCoverage[]) {
+    const objectivesPath = '03 Research/objectives.md' as VaultPath;
+    const conceptA = concept('key-a', 'Invented Concept A');
+    return {
+      course: COURSE,
+      concepts: [conceptA],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [citation('Invented Concept A', 'objectives', objectivesPath)],
+      materialPresence: new Map([['key-a', presence(conceptA.sourcePaths, 1)]]),
+      mastery: new Map([['key-a', mastery('key-a', 'seed')]]),
+      ...(readCoverage !== undefined ? { readCoverage } : {}),
+    };
+  }
+
+  it('with no `readCoverage` supplied at all, the summary reads `unknown` — never a claimed `complete`', () => {
+    const { model } = buildGroveModel(declaredInput());
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.summary.readCompleteness).toBe('unknown');
+    expect(model.summary.pendingSections).toEqual([]);
+  });
+
+  it('every offered row fully read reports `complete`, with no pending sections', () => {
+    const path = 'Notes/a.md' as VaultPath;
+    const { model } = buildGroveModel(
+      declaredInput([coverageRow(path, { passagesRead: 4, passagesOffered: 4 })]),
+    );
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.summary.readCompleteness).toBe('complete');
+    expect(model.summary.pendingSections).toEqual([]);
+  });
+
+  it('a budget-truncated row reports `truncated` and names its pending sections — never read as complete', () => {
+    const path = 'Notes/a.md' as VaultPath;
+    const { model } = buildGroveModel(
+      declaredInput([
+        coverageRow(path, {
+          passagesRead: 2,
+          passagesOffered: 4,
+          truncatedByBudget: true,
+          sections: ['Invented Section One', 'Invented Section Two'],
+        }),
+      ]),
+    );
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.summary.readCompleteness).toBe('truncated');
+    expect(model.summary.pendingSections).toEqual(['Invented Section One', 'Invented Section Two']);
+  });
+
+  it('one truncated row among several outweighs the untruncated ones, and pending sections are deduped', () => {
+    const pathA = 'Notes/a.md' as VaultPath;
+    const pathB = 'Notes/b.md' as VaultPath;
+    const { model } = buildGroveModel(
+      declaredInput([
+        coverageRow(pathA, { truncatedByBudget: false, sections: ['Invented Section One'] }),
+        coverageRow(pathB, {
+          truncatedByBudget: true,
+          passagesRead: 1,
+          passagesOffered: 3,
+          sections: ['Invented Section One', 'Invented Section Three'],
+        }),
+      ]),
+    );
+    if (model.status !== 'declared') throw new Error('expected declared');
+    expect(model.summary.readCompleteness).toBe('truncated');
+    expect(model.summary.pendingSections).toEqual([
+      'Invented Section One',
+      'Invented Section Three',
+    ]);
   });
 });

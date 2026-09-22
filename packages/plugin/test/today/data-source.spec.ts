@@ -1269,6 +1269,8 @@ describe('loadTodayPanel', () => {
                 denominatorCount: 5,
                 denominatorSourcePaths: ['Sources/geo-objectives.pdf'],
                 pastPaperSourcePaths: [],
+                readCompleteness: 'unknown' as const,
+                pendingSections: [],
               },
             },
           ];

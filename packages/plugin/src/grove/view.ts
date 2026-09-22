@@ -107,6 +107,7 @@ import {
   GROVE_VOLUNTEER_SECTION_NOTE,
   groveCoverageSplitLine,
   grovePapersLabel,
+  groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
   groveStateLabel,
   groveSummaryLine,
@@ -379,6 +380,17 @@ export class GroveView extends ItemView {
           scopeCorrectionReceipt.priorDenominatorCount,
           scopeCorrectionReceipt.newDenominatorCount,
         ),
+      });
+    }
+    // `ol-2zfj.157` [DOS-I15]: row 4.1's honest completeness claim — silent
+    // on `'complete'`, a distinct sentence on `'truncated'` (never folded
+    // into the silence above) and a third, distinct sentence on `'unknown'`.
+    // See `groveReadCompletenessLine`'s own doc.
+    const completenessLine = groveReadCompletenessLine(model.summary);
+    if (completenessLine !== undefined) {
+      summaryEl.createSpan({
+        cls: 'olea-grove-read-completeness',
+        text: completenessLine,
       });
     }
     // F8.1: "the readiness view" — the same list F1.5(b)'s designed-state

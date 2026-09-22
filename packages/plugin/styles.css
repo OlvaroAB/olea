@@ -4396,6 +4396,14 @@ button.olea-review-mcq-option:hover {
   font-style: italic;
 }
 
+/* `ol-2zfj.157` [DOS-I15]: row 4.1's honest completeness claim — same
+   italic, provenance tone as the scope-correction receipt above (a fact
+   about the read, not a warning). */
+.olea-grove-read-completeness {
+  display: block;
+  font-style: italic;
+}
+
 .olea-grove-unreadable {
   margin-bottom: 14px;
   padding: 10px 12px;

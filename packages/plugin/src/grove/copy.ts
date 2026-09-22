@@ -195,6 +195,44 @@ export function groveCoverageSplitLine(
 }
 
 /**
+ * `ol-2zfj.157` [DOS-I15]: the row 4.1 coverage-audit consumer for
+ * `GroveCourseSummary.readCompleteness` that `ol-2zfj.144` [IL-D5]'s close
+ * evidence left open ("wiring either into the row 4.1 coverage screen's own
+ * consumer is D9's"). F8.1's own health check (baseline row 4.1) is that "a
+ * completeness claim is withheld unless every source actually read
+ * successfully" — this function is the withholding.
+ *
+ * **`'complete'` renders nothing** — same "silent on the unremarkable case"
+ * posture `groveScopeCorrectionReceiptLine` already holds for a growing
+ * denominator: `groveSummaryLine`'s own count never asserted completeness in
+ * the first place, so there is nothing to confirm.
+ *
+ * **`'truncated'` names the pending sections** — never folds into the
+ * `'complete'` silence, so a partial read can never be mistaken for a
+ * finished one. Names the sections themselves (structural facts — headings
+ * her own material carries, D-005's "never content" bar is about her
+ * WORDING inside a note, not the section titles she gave it) rather than a
+ * bare "reading is incomplete", so the student can tell what is still
+ * missing from what was actually found absent.
+ *
+ * **`'unknown'` gets its own sentence, never `'complete'`'s silence and
+ * never `'truncated'`'s pending-section claim** — this is the safe reading
+ * for a course whose read result has not reached this summary yet (see
+ * `GroveCourseSummary.readCompleteness`'s own doc), and the whole point of
+ * this state is that neither of the other two claims is honest to make.
+ */
+export function groveReadCompletenessLine(summary: GroveCourseSummary): string | undefined {
+  switch (summary.readCompleteness) {
+    case 'complete':
+      return undefined;
+    case 'truncated':
+      return `Still reading: ${summary.pendingSections.join(', ')} — cut short by this run's budget, not yet counted as absent.`;
+    case 'unknown':
+      return "Whether this course's material has been fully read has not been checked yet.";
+  }
+}
+
+/**
  * F8.1's "same honesty runs in reverse" receipt (`[D-184]`, `ol-v7r5.29`):
  * shown ONCE, beside `groveSummaryLine`'s own count, on the read
  * immediately after a correction to a document's classification has

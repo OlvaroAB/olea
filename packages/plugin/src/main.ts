@@ -12,6 +12,7 @@ import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
   type ComposedStudySession,
+  type ConceptReadCoverage,
   type ConceptRecord,
   type ConceptRelation,
   type ConfusionPairingVerdict,
@@ -21,7 +22,9 @@ import {
   calendarDayFromLocalDate,
   computeWindowDeficit,
   corroborateConfusionPairings,
+  courseFromPath,
   createFsrsScheduler,
+  DEFAULT_COURSES_FOLDER,
   type DeviceCapability,
   detectCourseProposals,
   EMPTY_REGISTRY_OVERRIDES,
@@ -103,6 +106,7 @@ import {
   gradeExplainBackAttempt,
 } from './grading/wiring.js';
 import { createLocalGroveProvider } from './grove/provider.js';
+import { ObsidianGroveReadCompletenessStore } from './grove/read-completeness-store.js';
 import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
@@ -1999,6 +2003,34 @@ export default class OleaPlugin extends Plugin {
       // this makes no new network call, and `this.conceptRecords`'s own doc
       // for what still has no consumer.
       this.conceptRecords = await extractConceptsWithAnchors(vault, pass.read.concepts);
+
+      // `ol-2zfj.157` [DOS-I15]: `pass.read.coverage` (`ol-2zfj.144`
+      // [IL-D5]'s `truncatedByBudget`/`sections`, per document) is the row
+      // 4.1 coverage-audit consumer that bead's own close evidence left
+      // open — grouped here by course (`courseFromPath`, F1.3) and saved to
+      // the durable store `./grove/provider.ts`'s `load()` reads back on a
+      // completely separate cadence (see `./grove/read-completeness-
+      // store.ts`'s module doc for why this seam has to exist). A row whose
+      // path resolves to no course is dropped, matching this method's own
+      // discovered-cause discipline elsewhere: nothing here guesses a
+      // course for a document outside the courses folder. A write failure
+      // is logged and swallowed — same posture the ground-streak/prior-
+      // denominator saves inside `./grove/provider.ts` already take for
+      // their own best-effort persistence, never turning a successful read
+      // into a failed tick.
+      try {
+        const readCompletenessByCourse = new Map<string, ConceptReadCoverage[]>();
+        for (const row of pass.read.coverage) {
+          const course = courseFromPath(row.sourcePath, DEFAULT_COURSES_FOLDER);
+          if (course === undefined) continue;
+          const rows = readCompletenessByCourse.get(course) ?? [];
+          rows.push(row);
+          readCompletenessByCourse.set(course, rows);
+        }
+        await new ObsidianGroveReadCompletenessStore(this).save(readCompletenessByCourse);
+      } catch (error) {
+        console.error('Olea: could not save read-coverage for the grove', error);
+      }
 
       // `ol-2zfj.32` (`[D-130]`): the confusion-pairing corroboration
       // reader's first production caller — makes `relation-reader-check.mjs`'s

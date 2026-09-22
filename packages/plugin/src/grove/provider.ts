@@ -195,6 +195,7 @@ import {
   type GrovePriorDenominatorEntry,
   ObsidianGrovePriorDenominatorStore,
 } from './prior-denominator-store.js';
+import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js';
 import type { GroveCourseSection, GroveScopeCorrectionReceipt, GroveViewState } from './view.js';
 
 /**
@@ -454,6 +455,12 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
   // `[D-184]`/`ol-v7r5.32`: the durable prior-denominator store for the
   // scope-correction receipt — see module doc.
   const priorDenominatorStore = new ObsidianGrovePriorDenominatorStore(deps.settingsHost);
+  // `ol-2zfj.157` [DOS-I15]: the durable per-course read-coverage store —
+  // see `./read-completeness-store.ts`'s module doc for why this seam has
+  // to exist (the ingestion tick that produces the read is transient; this
+  // read-only browse is on a completely separate cadence). `main.ts`'s
+  // ingestion tick is the writer; this module only ever reads it.
+  const readCompletenessStore = new ObsidianGroveReadCompletenessStore(deps.settingsHost);
   const retrospective = createLocalRetrospectiveProvider({
     vault: deps.vault,
     deviceId: deps.deviceId,
@@ -486,6 +493,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           overrides,
           priorGroundStreaks,
           priorDenominators,
+          readCompletenessByCourse,
         ] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault),
@@ -494,6 +502,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           overridesStore.load(),
           groundStreakStore.load(),
           priorDenominatorStore.load(),
+          readCompletenessStore.load(),
         ]);
 
         // Match against every concept she already has (topic-derived or
@@ -602,6 +611,12 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           const courseConcepts = visibleConcepts.filter((concept) =>
             concept.courses.includes(course),
           );
+          // `ol-2zfj.157` [DOS-I15]: absent (no key for this course yet —
+          // e.g. before the first ingestion tick has run) reads as
+          // `'unknown'` on `GroveCourseSummary.readCompleteness`, never a
+          // guessed `'complete'` — see `buildGroveModel`'s own doc for this
+          // field.
+          const courseReadCoverage = readCompletenessByCourse.get(course);
           const built = buildGroveModel({
             course,
             concepts: courseConcepts,
@@ -611,6 +626,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             mastery: masteryByKey,
             priorGroundStreaks,
             relations: deps.relations?.() ?? [],
+            ...(courseReadCoverage !== undefined ? { readCoverage: courseReadCoverage } : {}),
           });
           const model: GroveCourseModel = built.model;
           let scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined;
