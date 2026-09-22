@@ -28,6 +28,20 @@
  *    exempts a file from a later, larger change.
  *
  * Anything past all four is `'call-judge'` — the caller owes the model read.
+ *
+ * **`'below-floor'` is a ONE-TIME defer, never a verdict** (`[DOS-C3]`,
+ * ol-2zfj.152). This function only ever sees one save at a time and has no
+ * memory of a path's history, so it cannot itself tell "this is the first
+ * sub-floor edit" from "this is the fifth in a row" — that recurrence
+ * tracking lives in the caller (`wiring.ts`'s `MaterialityTrigger`, which
+ * escalates a path's *second* consecutive `'below-floor'` straight to
+ * `'call-judge'`, regardless of that edit's own delta). This matters because
+ * a same-length substitution (a sign flip, a digit swap, an inserted
+ * negation word) has a canonical delta of zero and would otherwise never
+ * accumulate past the floor no matter how many times it recurs. The floor
+ * may defer, batch or deprioritise a call; it may never, by itself or by
+ * the caller's bookkeeping, be the reason a real content change goes
+ * undecided forever.
  */
 
 import type { MaterialityConstants } from './constants.js';
