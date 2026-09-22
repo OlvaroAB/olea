@@ -179,6 +179,26 @@ export interface RecordSoloGradeAndReviewDeps {
 
 export interface RecordSoloGradeAndReviewParams {
   readonly instrumentId: string;
+  /**
+   * `ol-0r92.94` [DOS-C1]: the caller's per-attempt id, minted once at
+   * submit time (`modal.ts`'s `submitAnswer`) — distinct from
+   * `instrumentId`, which is the instrument's own id and is shared by every
+   * attempt at it. Forwarded to `recordGradedExplainBackReview`'s durable
+   * idempotency key; see that function's own doc for what it is checked
+   * against.
+   *
+   * Optional, not required: `main.ts`'s existing inline
+   * `recordExplainBackSoloGradeAndReview` params type (outside this bead's
+   * `owns`) does not declare it, the same structural-typing accommodation
+   * `durationMs` above already documents. Absent, this function falls back
+   * to `instrumentId` — the exact PRE-this-bead behaviour for that one
+   * un-updated call site (still collapses two genuine attempts at one
+   * instrument, but no worse than before this bead). `modal.ts`'s own
+   * production call always supplies a real one. Widening `main.ts`'s inline
+   * type to require and forward it is a named follow-up, not required for
+   * correctness here.
+   */
+  readonly attemptId?: string;
   /** `null` for a free-form entry point with no resolved concept — see this module's own "disclosed gap" doc. */
   readonly subjectConceptId: string | null;
   readonly context: ExplainBackPromptContext;
@@ -249,6 +269,7 @@ export async function recordSoloGradeAndReview(
       revisionOf: null,
       artifactProvenance: outcome.artifactProvenance,
       studentAnswer: params.answer,
+      attemptId: params.attemptId ?? params.instrumentId,
     },
     options,
   );

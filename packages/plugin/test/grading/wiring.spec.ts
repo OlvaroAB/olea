@@ -655,7 +655,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
   });
 });
 
-// ---- ol-0r92.89: idempotent on retry, keyed on originInstrumentId --------
+// ---- ol-0r92.89 / ol-0r92.94 [DOS-C1]: idempotent on retry, keyed on attemptId --------
 
 function pendingWithOneMisconception() {
   return {
@@ -691,11 +691,16 @@ function pendingWithOneMisconception() {
 }
 
 function fixedContextFor(
-  originInstrumentId: string,
+  attemptId: string,
   overrides: Partial<AcceptExplainBackGradingWithObservationContext> = {},
 ): AcceptExplainBackGradingWithObservationContext {
   return {
-    originInstrumentId,
+    // `ol-0r92.94` [DOS-C1]: a real instrument id, deliberately NOT varied
+    // per attempt in most tests below — see the "same instrument, two
+    // genuine attempts" test for why that distinction is exactly the bug
+    // this bead fixes.
+    originInstrumentId: 'explain-back:concept-heap:shared-instrument',
+    attemptId,
     originReviewEventId: 'review-event-1',
     timestamp: '2026-08-29T09:00:00-04:00',
     resolveCitation: (blockId) =>
@@ -706,8 +711,8 @@ function fixedContextFor(
   };
 }
 
-describe('acceptExplainBackGradingWithObservation — ol-0r92.89: idempotent on retry', () => {
-  it('a sequential retry with the same originInstrumentId returns the SAME observation event, not a second one', async () => {
+describe('acceptExplainBackGradingWithObservation — ol-0r92.89 / ol-0r92.94: idempotent on retry', () => {
+  it('a sequential retry with the same attemptId returns the SAME observation event, not a second one', async () => {
     const transport = fakeMultiTaskTransport(
       new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
     );
@@ -777,7 +782,7 @@ describe('acceptExplainBackGradingWithObservation — ol-0r92.89: idempotent on 
     expect(transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1')).toHaveLength(1);
   });
 
-  it('a different originInstrumentId is NOT deduplicated against — a second attempt records its own event', async () => {
+  it('a different attemptId is NOT deduplicated against — a second attempt records its own event', async () => {
     const transport = fakeMultiTaskTransport(
       new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
     );
@@ -803,6 +808,51 @@ describe('acceptExplainBackGradingWithObservation — ol-0r92.89: idempotent on 
       throw new Error('expected both calls to accept');
     }
     expect(second).not.toBe(first);
+    expect(
+      transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('ol-0r92.94 [DOS-C1] regression: TWO GENUINE ATTEMPTS AT THE SAME INSTRUMENT both persist — the old originInstrumentId key would have wrongly collapsed these', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+    const sameInstrumentId = 'explain-back:concept-heap:one-real-instrument';
+
+    // Same real instrument id both times (she tries explaining the same
+    // card twice, on two separate occasions) — a different, freshly minted
+    // attemptId each time, exactly as `modal.ts`'s `submitAnswer` mints one
+    // per submit.
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('attempt-1-of-2', { originInstrumentId: sameInstrumentId }),
+    );
+    const second = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingWithOneMisconception(),
+      fixedContextFor('attempt-2-of-2', { originInstrumentId: sameInstrumentId }),
+    );
+
+    if (first.status !== 'accepted' || second.status !== 'accepted') {
+      throw new Error('expected both calls to accept');
+    }
+    // Neither result is the memoized twin of the other — both ran for real.
+    expect(second).not.toBe(first);
+    const firstOutcome = first.observations[0];
+    const secondOutcome = second.observations[0];
+    if (!firstOutcome || firstOutcome.skipped || !secondOutcome || secondOutcome.skipped) {
+      throw new Error('expected resolved outcomes');
+    }
+    // Two distinct events for two distinct attempts, even though they share
+    // one instrument id.
+    expect(secondOutcome.result.event.eventId).not.toBe(firstOutcome.result.event.eventId);
     expect(
       transport.calls.filter((call) => call.taskId === 'retrieval.embed.v1').length,
     ).toBeGreaterThanOrEqual(2);

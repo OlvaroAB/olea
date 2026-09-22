@@ -75,6 +75,86 @@ describe('buildObservationEventWithEmbedding — no-embedder fallback', () => {
   });
 });
 
+describe('buildObservationEventWithEmbedding — ol-0r92.95: embedder failure degrades, never drops', () => {
+  it('falls back to the no-embedder path (fresh id, no match) after the embedder fails on every bounded-retry attempt, uncached', async () => {
+    const existing = record('existing-1', 'Thinks X always causes Y.');
+    const attempts: number[] = [];
+    const failingEmbedder: MisconceptionEmbedder = {
+      embed: async () => {
+        attempts.push(attempts.length + 1);
+        throw new Error('embedder unavailable');
+      },
+    };
+
+    const result = await buildObservationEventWithEmbedding(baseInput, {
+      embedder: failingEmbedder,
+      candidateRecords: [existing],
+      generateMisconceptionId: () => 'fresh-id-after-degrade',
+      delayBetweenEmbedAttempts: async () => {},
+    });
+
+    expect(result.matchedExisting).toBe(false);
+    expect(result.event.misconceptionId).toBe('fresh-id-after-degrade');
+    // Bounded, not unbounded or single-shot.
+    expect(attempts.length).toBe(3);
+  });
+
+  it('recovers without degrading when the embedder succeeds on a later bounded-retry attempt', async () => {
+    const existingStatement = 'Thinks X always causes Y, no exceptions.';
+    const vectors = new Map<string, EmbeddingVector>([
+      [baseInput.statement, [1, 0, 0]],
+      [existingStatement, [1, 0, 0.001]],
+    ]);
+    const existing = record('existing-1', existingStatement);
+    let calls = 0;
+    const flakyEmbedder: MisconceptionEmbedder = {
+      embed: async (texts) => {
+        calls++;
+        if (calls < 2) throw new Error('transient failure');
+        return texts.map((text) => vectors.get(text) ?? [0, 0, 0]);
+      },
+    };
+
+    const result = await buildObservationEventWithEmbedding(baseInput, {
+      embedder: flakyEmbedder,
+      candidateRecords: [existing],
+      delayBetweenEmbedAttempts: async () => {},
+    });
+
+    expect(calls).toBe(2);
+    expect(result.matchedExisting).toBe(true);
+    expect(result.event.misconceptionId).toBe('existing-1');
+  });
+
+  it('degrades honestly on the cached path too, when the fresh-statement embed call keeps failing', async () => {
+    const existingStatement = 'Thinks X always causes Y, no exceptions.';
+    const existing = record('existing-1', existingStatement);
+    const cache = await MisconceptionEmbeddingCacheEngine.create({
+      store: new MemoryStore(),
+      embedder: new ScriptedEmbedder(new Map([[existingStatement, [1, 0, 0]]])),
+      model: 'model-a',
+    });
+    await cache.candidatesFor([existing]);
+
+    const failingEmbedder: MisconceptionEmbedder = {
+      embed: async () => {
+        throw new Error('embedder unavailable');
+      },
+    };
+
+    const result = await buildObservationEventWithEmbedding(baseInput, {
+      embedder: failingEmbedder,
+      cache,
+      candidateRecords: [existing],
+      generateMisconceptionId: () => 'fresh-id-cached-path',
+      delayBetweenEmbedAttempts: async () => {},
+    });
+
+    expect(result.matchedExisting).toBe(false);
+    expect(result.event.misconceptionId).toBe('fresh-id-cached-path');
+  });
+});
+
 describe('buildObservationEventWithEmbedding — real similarity when the embedder is present', () => {
   it('matches an existing record when the embedder reports near-identical vectors (uncached path)', async () => {
     const existingStatement = 'Thinks X always causes Y, no exceptions.';

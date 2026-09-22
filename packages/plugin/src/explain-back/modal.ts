@@ -122,6 +122,18 @@ import {
   type ExplainBackSourceBlock,
 } from './request.js';
 
+/**
+ * `ol-0r92.98`: an empty or whitespace-only typed answer, exported so the
+ * guard on the submit button (`renderAnsweringPhase`) can be asserted
+ * directly rather than only by matching source text — the same emptiness
+ * rule `renderTopicPhase`'s own continue button already applies inline.
+ * Deliberately NOT a "skip": it only says whether a submit is a no-op, and
+ * carries no meaning about an explicit skip action (`[DOS-I9]`, SKIP-2/3/4).
+ */
+export function isBlankExplainBackAnswer(answer: string): boolean {
+  return answer.trim().length === 0;
+}
+
 /** What opened this view, and therefore whether the question is already known. */
 export type ExplainBackSeed =
   | { readonly kind: 'instrument'; readonly instrument: ReviewInstrument }
@@ -169,6 +181,8 @@ export interface ExplainBackModalDeps {
    */
   readonly recordSoloGradeAndReview?: (params: {
     readonly instrumentId: string;
+    /** `ol-0r92.94` [DOS-C1]: forwarded to `solo-review.ts`'s `RecordSoloGradeAndReviewParams.attemptId` — see that field's own doc for the fallback a not-yet-updated caller gets when it omits this. */
+    readonly attemptId: string;
     readonly subjectConceptId: string | null;
     readonly context: ExplainBackPromptContext;
     readonly answer: string;
@@ -242,6 +256,8 @@ type ModalState =
       readonly answer: string;
       /** `ol-yj0k`: computed once at submission, carried through to `acceptGrading` — see `submitAnswer`'s doc. */
       readonly durationMs: number | null;
+      /** `ol-0r92.94` [DOS-C1]: minted once per genuine attempt at submit time — see `submitAnswer`'s doc. */
+      readonly attemptId: string;
     }
   | {
       readonly phase: 'graded';
@@ -249,6 +265,7 @@ type ModalState =
       readonly answer: string;
       readonly pending: PendingExplainBackGrading;
       readonly durationMs: number | null;
+      readonly attemptId: string;
     }
   | {
       readonly phase: 'refused';
@@ -256,6 +273,7 @@ type ModalState =
       readonly answer: string;
       readonly reason: 'unavailable' | 'check-failed' | 'insufficient-notes';
       readonly durationMs: number | null;
+      readonly attemptId: string;
     }
   | {
       readonly phase: 'accepted';
@@ -312,6 +330,17 @@ export class ExplainBackModal extends Modal {
    * bookkeeping for the CURRENT attempt, not state the render tree needs.
    */
   private presentedAtMs: number | null = null;
+
+  /**
+   * `ol-0r92.94` [DOS-C1]: the in-flight-memo half of the idempotency
+   * guarantee — see `acceptGrading`'s own doc for why this is a SEPARATE
+   * guarantee from `recordGradedExplainBackReview`'s durable, restart-safe
+   * check, not a substitute for it. Keyed on `attemptId`, never
+   * `prompt.originInstrumentId`: two GENUINE attempts at the same instrument
+   * must never share a memo entry, only two calls for the identical attempt
+   * (a double-click before the first `acceptGrading` call resolves) may.
+   */
+  private readonly acceptInFlightByAttempt = new Map<string, Promise<void>>();
 
   constructor(app: App, deps: ExplainBackModalDeps, seed: ExplainBackSeed) {
     super(app);
@@ -373,13 +402,17 @@ export class ExplainBackModal extends Modal {
         sourceBlocks,
       };
       // Never shown an answer box — insufficient-notes is a refusal before
-      // any prompt existed to present, so no `presentedAtMs` is set here.
+      // any prompt existed to present, so no `presentedAtMs` is set here,
+      // and this `attemptId` is minted but never used for an accept (there
+      // is nothing to accept from this state — `renderRefusedPhase` offers
+      // no accept action for it).
       this.state = {
         phase: 'refused',
         prompt,
         answer: '',
         reason: 'insufficient-notes',
         durationMs: null,
+        attemptId: this.deps.generateInstrumentId(),
       };
       this.render();
       return;
@@ -408,18 +441,36 @@ export class ExplainBackModal extends Modal {
   private async submitAnswer(prompt: ResolvedPrompt, answer: string): Promise<void> {
     const durationMs =
       this.presentedAtMs !== null ? Math.max(0, this.now().getTime() - this.presentedAtMs) : null;
-    this.state = { phase: 'grading', prompt, answer, durationMs };
+    // `ol-0r92.94` [DOS-C1]: minted HERE, once per genuine attempt at
+    // submit — never `prompt.originInstrumentId`, which is the instrument's
+    // own id and is the SAME value across every attempt she makes at it
+    // (real instruments) or a per-prompt id that still does not distinguish
+    // a retry-after-discard from the attempt it replaces (topic prompts).
+    // `deps.generateInstrumentId` is reused rather than adding a new
+    // required dep field — it is already "a stable id... distinct from any
+    // card/MCQ id space" (its own doc), which is exactly what an attempt id
+    // needs, and reusing it keeps `main.ts`'s existing deps literal
+    // (outside this bead's `owns`) unchanged.
+    const attemptId = this.deps.generateInstrumentId();
+    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId };
     this.render();
 
     const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
     try {
       const pending = await this.deps.grade(input);
       if (pending === null) {
-        this.state = { phase: 'refused', prompt, answer, reason: 'unavailable', durationMs };
+        this.state = {
+          phase: 'refused',
+          prompt,
+          answer,
+          reason: 'unavailable',
+          durationMs,
+          attemptId,
+        };
         this.render();
         return;
       }
-      this.state = { phase: 'graded', prompt, answer, pending, durationMs };
+      this.state = { phase: 'graded', prompt, answer, pending, durationMs, attemptId };
       this.render();
     } catch (error) {
       // `UnusableGradingInputError` (empty referenceAnswer) reads as
@@ -433,23 +484,67 @@ export class ExplainBackModal extends Modal {
         answer,
         reason: isUnusableInput ? 'insufficient-notes' : 'check-failed',
         durationMs,
+        attemptId,
       };
       this.render();
     }
   }
 
-  private async acceptGrading(
+  /**
+   * `ol-0r92.94` [DOS-C1]: the in-flight-memo guard. A double-click before
+   * the first accept resolves is the concrete failure this closes — the
+   * graded phase's Accept button (`renderGradedPhase`) has no `disabled`
+   * state while `acceptGrading`'s promise is outstanding, so two clicks
+   * before the state transitions to `'accepted'` previously fired two
+   * independent runs: two `acceptWithObservation` calls (one guarded
+   * against by `wiring.ts`'s own attempt-keyed memo, see that file) AND,
+   * with no equivalent guard here before this bead, two
+   * `recordSoloGradeAndReview` calls each minting their own SOLO grade and
+   * appending their own review-log event. Memoizing HERE, by `attemptId`,
+   * makes a second concurrent call for the SAME attempt share the first
+   * call's one in-flight `Promise` rather than starting a second run —
+   * distinct from `recordGradedExplainBackReview`'s own durable check
+   * (`explain-back-grade-write.ts`'s doc), which is what protects a
+   * SEQUENTIAL retry after a restart, when no in-flight `Promise` survives
+   * to be shared.
+   */
+  private acceptGrading(
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
     durationMs: number | null,
+    attemptId: string,
   ): Promise<void> {
-    const context = await this.deps.buildObservationContext({
-      subjectConceptId: prompt.subjectConceptId,
-      originInstrumentId: prompt.originInstrumentId,
-      sourceBlocks: prompt.sourceBlocks,
-      query: prompt.context.question,
-    });
+    const inFlight = this.acceptInFlightByAttempt.get(attemptId);
+    if (inFlight) return inFlight;
+    const promise = this.computeAcceptGrading(prompt, answer, pending, durationMs, attemptId);
+    this.acceptInFlightByAttempt.set(attemptId, promise);
+    return promise;
+  }
+
+  private async computeAcceptGrading(
+    prompt: ResolvedPrompt,
+    answer: string,
+    pending: PendingExplainBackGrading,
+    durationMs: number | null,
+    attemptId: string,
+  ): Promise<void> {
+    const context = {
+      ...(await this.deps.buildObservationContext({
+        subjectConceptId: prompt.subjectConceptId,
+        originInstrumentId: prompt.originInstrumentId,
+        sourceBlocks: prompt.sourceBlocks,
+        query: prompt.context.question,
+      })),
+      // `ol-0r92.94` [DOS-C1]: attached here, after `buildObservationContext`
+      // resolves, rather than threaded through that dep's own params —
+      // widening those params would require `main.ts`'s real implementation
+      // (outside this bead's `owns`) to supply a field it has no reason to
+      // know about yet. `attemptId` is never the instrument id this context
+      // already carries; see `wiring.ts`'s `AcceptExplainBackGradingWithObser
+      // vationContext.attemptId` doc for what it keys.
+      attemptId,
+    };
     const result = await this.deps.acceptWithObservation(pending, context);
     // `[D-217]`: whatever level comes back (or doesn't) is what
     // `renderAcceptedPhase` renders the depth heading from — see this file's
@@ -460,6 +555,7 @@ export class ExplainBackModal extends Modal {
       try {
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
+          attemptId,
           subjectConceptId: prompt.subjectConceptId,
           context: prompt.context,
           answer,
@@ -530,6 +626,7 @@ export class ExplainBackModal extends Modal {
           this.state.answer,
           this.state.pending,
           this.state.durationMs,
+          this.state.attemptId,
         );
         return;
       case 'refused':
@@ -590,6 +687,12 @@ export class ExplainBackModal extends Modal {
     textarea.value = answer;
     const button = root.createEl('button', { text: EXPLAIN_BACK_SUBMIT_LABEL });
     button.addEventListener('click', () => {
+      // `ol-0r92.98`: mirrors `renderTopicPhase`'s own guard above — an empty
+      // or whitespace-only answer is a no-op, not a graded attempt. This is
+      // deliberately NOT the explicit "skip" action (`[DOS-I9]`, SKIP-2/3/4):
+      // it only stops an accidental empty submit from reaching `deps.grade`,
+      // it does not add a new named skip event or persist anything.
+      if (isBlankExplainBackAnswer(textarea.value)) return;
       void this.submitAnswer(prompt, textarea.value);
     });
   }
@@ -600,6 +703,7 @@ export class ExplainBackModal extends Modal {
     answer: string,
     pending: PendingExplainBackGrading,
     durationMs: number | null,
+    attemptId: string,
   ): void {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
@@ -636,7 +740,7 @@ export class ExplainBackModal extends Modal {
     const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
     accept.addEventListener(
       'click',
-      () => void this.acceptGrading(prompt, answer, pending, durationMs),
+      () => void this.acceptGrading(prompt, answer, pending, durationMs, attemptId),
     );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));

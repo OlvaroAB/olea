@@ -101,6 +101,10 @@ import {
   writeSoloGradingContent,
 } from '../grading/explainBackSolo.js';
 import type { WriteContentOptions } from '../review-log/content-store.js';
+import { readContentRecord } from '../review-log/content-store.js';
+import { explainBackGradeEvents } from '../review-log/explain-back-history.js';
+import { reviewLogPath } from '../review-log/path.js';
+import { readReviewLogFile } from '../review-log/read.js';
 import type {
   AppendReviewLogOptions,
   AppendReviewLogResult,
@@ -199,32 +203,148 @@ export interface RecordGradedExplainBackReviewInput
   readonly studentAnswer: string;
   /** Present only when this grading surfaced a misconception — the caller's own classification (`misconception/` territory, not re-derived here). */
   readonly misconceptionDetail?: string;
+  /**
+   * `ol-0r92.94` [DOS-C1]: a fresh id the caller mints once per genuine
+   * attempt at submit time (`packages/plugin/src/explain-back/modal.ts`'s
+   * `submitAnswer`) — NOT `subject.instrumentId`, which is the instrument's
+   * own id and, for a real instrument, is shared by every attempt she ever
+   * makes at it. This is the durable idempotency key: see this function's
+   * own "DURABLE IDEMPOTENCY" doc section for what it is checked and stamped
+   * against.
+   */
+  readonly attemptId: string;
+}
+
+/**
+ * `ol-0r92.94` [DOS-C1]: the `[D-077]` content id this attempt's evidence is
+ * (or will be) filed under. Deterministic in `attemptId` — never random —
+ * which is what makes both halves of durable idempotency possible below: a
+ * genuine retry of the SAME attempt always asks for the SAME content id, so
+ * the content store's own write-once refusal (`content-store.ts`'s
+ * `writeContentRecord`) becomes a crash-recovery signal rather than a bug,
+ * and the review log itself can be searched for this exact id without a new
+ * store. `${deviceId}.attempt-${attemptId}` keeps the existing
+ * `<deviceId>.<opaque>` convention `defaultGenerateContentId` already uses
+ * (`content-store.ts`'s own "two devices never conflict" doc) so two devices
+ * accepting concurrently still cannot collide even if a caller ever reused
+ * an `attemptId` across devices (it should not, but this makes that safe
+ * too).
+ *
+ * `attemptId` is sanitized before use — `content-store.ts`'s own
+ * `isValidContentId` only allows `[A-Za-z0-9._-]`, and `attemptId` is not
+ * guaranteed to be a fresh UUID by every caller: `solo-review.ts`'s optional
+ * fallback (see `RecordSoloGradeAndReviewParams.attemptId`'s own doc) can
+ * hand this a real `instrumentId`, and those routinely carry `:` (e.g.
+ * `explain-back:heap:1`). Any disallowed character becomes `_` — lossy, but
+ * only ever affects that fallback path's key, never a real, freshly minted
+ * `attemptId`, which is already a valid id by construction (a UUID).
+ */
+function attemptContentId(deviceId: string, attemptId: string): string {
+  const sanitized = attemptId.replace(/[^A-Za-z0-9._-]/g, '_');
+  return `${deviceId}.attempt-${sanitized}`;
 }
 
 /**
  * The one impure export in this module — see the module header's
- * "reachability" section for what calls it today (nothing, by design) and
- * what will. Mints a real `contentRef` (`writeSoloGradingContent`), composes
- * the full record ({@link composeGradedExplainBackReviewRecord}), and
- * appends it as the subject's own review event (`appendReviewLogRecord`) —
- * the whole `ol-95vv.3` chain in one call, over a real `VaultSource`.
+ * "reachability" section for its real production caller
+ * (`packages/plugin/src/explain-back/solo-review.ts`'s
+ * `recordSoloGradeAndReview`). Mints a real `contentRef`
+ * (`writeSoloGradingContent`), composes the full record
+ * ({@link composeGradedExplainBackReviewRecord}), and appends it as the
+ * subject's own review event (`appendReviewLogRecord`) — the whole
+ * `ol-95vv.3` chain in one call, over a real `VaultSource`.
+ *
+ * ===========================================================================
+ * `ol-0r92.94` [DOS-C1]: DURABLE IDEMPOTENCY, KEYED ON `input.attemptId`
+ * ===========================================================================
+ * TWO GUARANTEES, STATED SEPARATELY — NOT ONE:
+ *
+ * 1. **Sequential retry / restart never duplicates the accepted assessment.**
+ *    Before writing anything, this function reads today's review-log file
+ *    for `input.subject.timestamp`'s date and device
+ *    (`readReviewLogFile`/`explainBackGradeEvents`, both existing exports —
+ *    no new store) for a record whose `explainBackGrade.contentRef` already
+ *    equals `attemptContentId(deviceId, input.attemptId)`. If one exists,
+ *    THIS ATTEMPT WAS ALREADY DURABLY RECORDED — on a prior run, possibly
+ *    before a restart — and that exact record is returned, unchanged,
+ *    without writing content or appending a second event. This is what
+ *    makes the idempotency key durable rather than in-memory-only: the log
+ *    itself is the persisted check, and it survives a process restart
+ *    because it is read fresh off the vault every call.
+ * 2. **A crash between `writeSoloGradingContent` and `appendReviewLogRecord`
+ *    is recoverable, never doubly-written.** If step 1 finds no matching
+ *    review event yet, this function asks the content store to write under
+ *    the SAME deterministic id every retry of this attempt would ask for.
+ *    Two outcomes:
+ *    - The id is genuinely new: the ordinary path runs, exactly as before
+ *      this bead.
+ *    - The id already has a file (`writeContentRecord`'s own write-once
+ *      refusal) but step 1 found no review event citing it: the content
+ *      write from a PRIOR attempt at this exact `attemptId` landed, then the
+ *      process died before `appendReviewLogRecord` ran. This function
+ *      reclaims that orphaned content record (skips rewriting it — the text
+ *      is identical, it is the same attempt) and proceeds straight to
+ *      composing and appending the review-log record, so the crash costs a
+ *      retry, never a duplicate event or a permanently orphaned content
+ *      file.
+ *
+ * Neither guarantee claims an exactly-once WORKER call — `gradeSoloAttempt`
+ * itself has no retry budget, and re-grading is out of this function's
+ * reach. What is guaranteed is the durable EFFECT of one accepted attempt:
+ * one review event, one content record, regardless of how many times this
+ * function is called for the same `attemptId`.
+ *
+ * A `revisionOf` corrective grade is a DIFFERENT attempt (a fresh
+ * `attemptId`, minted at its own submit) and is never suppressed as a
+ * duplicate of the one it revises — this function's dedup is scoped to one
+ * `attemptId`, never to `instrumentId` or `revisionOf`.
  */
 export async function recordGradedExplainBackReview(
   vault: VaultSource,
   input: RecordGradedExplainBackReviewInput,
   options: AppendReviewLogOptions & WriteContentOptions,
 ): Promise<AppendReviewLogResult> {
-  const contentRef = await writeSoloGradingContent(
-    vault,
-    {
-      accepted: input.accepted,
-      studentAnswer: input.studentAnswer,
-      ...(input.misconceptionDetail !== undefined
-        ? { misconceptionDetail: input.misconceptionDetail }
-        : {}),
-    },
-    options,
+  const contentId = attemptContentId(options.deviceId, input.attemptId);
+  const dateOf = input.subject.timestamp.slice(0, input.subject.timestamp.indexOf('T'));
+  const path = reviewLogPath(dateOf, options.deviceId);
+
+  const existing = await readReviewLogFile(vault, path);
+  const alreadyRecorded = explainBackGradeEvents(existing.records).find(
+    (record) => record.explainBackGrade.contentRef === contentId,
   );
+  if (alreadyRecorded !== undefined) {
+    // Guarantee 1: this exact attempt is already durably recorded — return
+    // it verbatim rather than writing anything a second time.
+    return { record: alreadyRecorded, path };
+  }
+
+  let contentRef: string;
+  try {
+    contentRef = await writeSoloGradingContent(
+      vault,
+      {
+        accepted: input.accepted,
+        studentAnswer: input.studentAnswer,
+        ...(input.misconceptionDetail !== undefined
+          ? { misconceptionDetail: input.misconceptionDetail }
+          : {}),
+      },
+      { ...options, generateContentId: () => contentId },
+    );
+  } catch (error) {
+    // Guarantee 2: the only expected reason this specific, deterministic id
+    // can already have a file with no matching review event (just checked
+    // above) is a prior crash between the content write and the log append
+    // for this exact attempt — reclaim it rather than minting a new,
+    // orphan-producing id. Verified, not assumed: a genuine vault error
+    // (disk full, permission denied) also throws from `writeSoloGradingContent`,
+    // and must never be mistaken for a reclaimable duplicate — so this only
+    // reclaims when the content record actually exists on disk under this
+    // id; anything else rethrows the original error unchanged.
+    const existingContent = await readContentRecord(vault, contentId);
+    if (existingContent.status !== 'found') throw error;
+    contentRef = contentId;
+  }
 
   const record = composeGradedExplainBackReviewRecord({
     subject: input.subject,

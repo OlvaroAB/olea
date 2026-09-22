@@ -59,6 +59,7 @@ describe('recordSoloGradeAndReview — honest skips, never a fabricated write', 
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:00:00Z') },
       {
         instrumentId: 'explain-back:topic:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: null,
         context: CONTEXT,
         answer: 'her explanation',
@@ -81,6 +82,7 @@ describe('recordSoloGradeAndReview — honest skips, never a fabricated write', 
       },
       {
         instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: 'concept-heap',
         context: CONTEXT,
         answer: 'her explanation',
@@ -102,6 +104,7 @@ describe('recordSoloGradeAndReview — honest skips, never a fabricated write', 
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:00:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: 'concept-heap',
         context: CONTEXT,
         answer: 'her explanation',
@@ -122,6 +125,7 @@ describe('recordSoloGradeAndReview — the real write, one review event', () => 
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: 'concept-heap',
         context: CONTEXT,
         answer: 'A heap is a complete binary tree obeying the heap property.',
@@ -173,6 +177,7 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: 'concept-heap',
         context: CONTEXT,
         answer: 'A heap is a complete binary tree obeying the heap property.',
@@ -192,6 +197,7 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
       { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
       {
         instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
         subjectConceptId: 'concept-heap',
         context: CONTEXT,
         answer: 'A heap is a complete binary tree obeying the heap property.',
@@ -200,5 +206,81 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
 
     if (!outcome) throw new Error('expected a written review-log record');
     expect(outcome.result.record.durationMs).toBeNull();
+  });
+});
+
+describe('recordSoloGradeAndReview — ol-0r92.94 [DOS-C1]: attemptId threading', () => {
+  it('forwards a real attemptId into the durable idempotency key, distinct from instrumentId', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:shared-instrument',
+        attemptId: 'genuinely-distinct-attempt-id',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.explainBackGrade?.contentRef).toBe(
+      'device-a.attempt-genuinely-distinct-attempt-id',
+    );
+  });
+
+  it('two genuine attempts at the same instrumentId, each with its own attemptId, both persist as distinct events', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+    const deps = {
+      grading: wiring,
+      vault,
+      deviceId: 'device-a',
+      now: () => new Date('2026-08-31T09:05:00Z'),
+    };
+    const sharedInstrumentId = 'explain-back:heap:shared-instrument';
+
+    const first = await recordSoloGradeAndReview(deps, {
+      instrumentId: sharedInstrumentId,
+      attemptId: 'attempt-1-of-2',
+      subjectConceptId: 'concept-heap',
+      context: CONTEXT,
+      answer: 'A heap is a complete binary tree obeying the heap property.',
+    });
+    const second = await recordSoloGradeAndReview(deps, {
+      instrumentId: sharedInstrumentId,
+      attemptId: 'attempt-2-of-2',
+      subjectConceptId: 'concept-heap',
+      context: CONTEXT,
+      answer: 'A heap is a complete binary tree obeying the heap property, restated.',
+    });
+
+    if (!first || !second) throw new Error('expected both attempts to write a review-log record');
+    expect(second.result.record.eventId).not.toBe(first.result.record.eventId);
+    expect(second.result.record.explainBackGrade?.contentRef).not.toBe(
+      first.result.record.explainBackGrade?.contentRef,
+    );
+  });
+
+  it('falls back to instrumentId as the idempotency key when a not-yet-updated caller omits attemptId (main.ts today)', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:no-attempt-id-supplied',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.explainBackGrade?.contentRef).toBe(
+      'device-a.attempt-explain-back_heap_no-attempt-id-supplied',
+    );
   });
 });

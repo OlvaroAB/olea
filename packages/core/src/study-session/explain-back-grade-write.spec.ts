@@ -179,10 +179,10 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
           promptVersion: '1.0.0',
           modelId: 'test-model',
         },
+        attemptId: 'fixed-content',
       },
       {
         deviceId: 'desktop-1',
-        generateContentId: () => 'desktop-1.fixed-content',
         generateEventId: () => 'fixed-event-1',
       },
     );
@@ -192,15 +192,15 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
     expect(result.record.eventId).toBe('fixed-event-1');
     expect(result.record.instrumentType).toBe('explain-back');
     expect(result.record.rating).toBeNull();
-    expect(result.record.explainBackGrade?.contentRef).toBe('desktop-1.fixed-content');
+    expect(result.record.explainBackGrade?.contentRef).toBe('desktop-1.attempt-fixed-content');
     expect(result.record.explainBackGrade?.soloLevel).toBe('relational');
 
     // The content store actually holds the evidence the grade points at.
-    const stored = await readContentRecord(vault, 'desktop-1.fixed-content');
+    const stored = await readContentRecord(vault, 'desktop-1.attempt-fixed-content');
     expect(stored).toEqual({
       status: 'found',
       record: {
-        contentId: 'desktop-1.fixed-content',
+        contentId: 'desktop-1.attempt-fixed-content',
         studentAnswer: 'Answer text — never logged, only ever written to the content store.',
         feedback: 'Connects both mechanisms under one principle.',
       },
@@ -219,6 +219,7 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
         revisionOf: null,
         artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
         neighbourConceptId: 'porosity',
+        attemptId: 'attempt-neighbour',
       },
       { deviceId: 'desktop-1' },
     );
@@ -238,6 +239,7 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
         misconceptionDetail: 'confused cause with correlation',
         revisionOf: null,
         artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+        attemptId: 'attempt-misconception-detail',
       },
       { deviceId: 'desktop-1' },
     );
@@ -260,6 +262,7 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
           studentAnswer: 'x',
           revisionOf: null,
           artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+          attemptId: 'attempt-invalid-schema',
         },
         { deviceId: 'desktop-1' },
       ),

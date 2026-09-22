@@ -41,7 +41,7 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
     const calls = modal.match(/this\.deps\.acceptWithObservation\(/g) ?? [];
     expect(calls).toHaveLength(1);
     const acceptGradingBody = modal.slice(
-      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private acceptGrading('),
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(/this\.deps\.acceptWithObservation\(/);
@@ -51,7 +51,7 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
     const calls = modal.match(/this\.deps\.recordSoloGradeAndReview\(/g) ?? [];
     expect(calls).toHaveLength(1);
     const acceptGradingBody = modal.slice(
-      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private acceptGrading('),
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
@@ -70,9 +70,11 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
   it('neither refusal transition in submitAnswer calls acceptWithObservation or recordSoloGradeAndReview', () => {
     const submitAnswerBody = modal.slice(
       modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private acceptGrading('),
     );
-    expect(submitAnswerBody).toMatch(/phase: 'refused', prompt, answer, reason: 'unavailable'/);
+    expect(submitAnswerBody).toMatch(
+      /phase: 'refused',\s*prompt,\s*answer,\s*reason: 'unavailable'/,
+    );
     expect(submitAnswerBody).not.toMatch(/acceptWithObservation/);
     expect(submitAnswerBody).not.toMatch(/recordSoloGradeAndReview/);
   });
@@ -91,11 +93,11 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
 describe('ExplainBackModal — acceptGrading threads the graded query through for the live staleness check (ol-gavc)', () => {
   it('passes prompt.context.question as query on the buildObservationContext call', () => {
     const acceptGradingBody = modal.slice(
-      modal.indexOf('private async acceptGrading('),
+      modal.indexOf('private acceptGrading('),
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(
-      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.context\.question,\s*\}\);/,
+      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.context\.question,\s*\}\)\),\s*attemptId,\s*\};/,
     );
   });
 });

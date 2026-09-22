@@ -271,10 +271,12 @@ export interface GradingWiring {
   readonly soloTransport: WorkerTaskTransport | null;
   /**
    * `ol-0r92.89`: the idempotency guard `acceptExplainBackGradingWithObservation`
-   * below reads and writes, keyed on `context.originInstrumentId` — the
-   * closest thing to an attempt/draft id available at that call site
-   * (`PendingExplainBackGrading` itself carries none; see that function's
-   * own doc). One fresh, empty `Map` per `buildGradingWiring` call, held for
+   * below reads and writes. `ol-0r92.94` [DOS-C1]: keyed on
+   * `context.attemptId` — a real per-attempt id minted at submit time by the
+   * `modal.ts`/`main.ts` composition layer, NOT `context.originInstrumentId`
+   * (the instrument's own id, shared by every attempt at it — see that
+   * field's own doc for why keying on it was a bug, not just imprecise
+   * naming). One fresh, empty `Map` per `buildGradingWiring` call, held for
    * the wiring's whole lifetime — the same "one instance, plugin lifetime"
    * posture `judgeCaller`/`misconceptionEmbedder` already have on this same
    * interface. Storing the in-flight `Promise` itself (not just its
@@ -374,6 +376,27 @@ export async function gradeExplainBackAttempt(
  */
 export interface AcceptExplainBackGradingWithObservationContext {
   readonly originInstrumentId: string;
+  /**
+   * `ol-0r92.94` [DOS-C1]: the durable idempotency key `acceptExplainBackGradingWithObservation`
+   * below memoizes on — NOT `originInstrumentId`. `originInstrumentId` is the
+   * instrument's own id for a real instrument (shared by every attempt she
+   * ever makes at it, not a per-attempt value), so keying the memo on it
+   * would silently treat a second GENUINE attempt at the same instrument as
+   * a duplicate of the first and hand back the first's stale result. A
+   * caller mints a fresh `attemptId` once per genuine attempt at submit time
+   * (`modal.ts`'s `submitAnswer`) and attaches it to this context — see that
+   * file's `acceptGrading` doc.
+   *
+   * Optional, not required: `explain-back/observation.ts`'s
+   * `buildExplainBackObservationContext` (outside this bead's `owns`) does
+   * not attach one yet, and widening its return type is a `main.ts`-adjacent
+   * follow-up this bead does not reach into (per `[D-072]` clause 5's escape
+   * hatch). Absent, `acceptExplainBackGradingWithObservation` below falls
+   * back to `originInstrumentId` — the exact PRE-this-bead behaviour, bug
+   * and all, for any caller that has not yet been updated to supply a real
+   * `attemptId`. `modal.ts`'s own production call always supplies one.
+   */
+  readonly attemptId?: string;
   readonly originReviewEventId: string | null;
   readonly timestamp: string;
   readonly resolveCitation: (blockId: string) => MisconceptionSourceCitation | null;
@@ -426,24 +449,51 @@ export type AcceptExplainBackGradingWithObservationResult =
  *
  * **Failure isolation, mirroring `../ingestion/wiring.ts`'s
  * `withUnitsLandedHook`:** the observation step is wrapped in its own
- * try/catch. An embedding or observation failure never fails the grade
- * acceptance it rode on — the caller still gets back a valid `'accepted'`
- * result, with `observations: []` and a content-free `console.error` line
- * (D-005: a count only, never the candidate's statement or correction).
+ * try/catch. An observation failure never fails the grade acceptance it rode
+ * on — the caller still gets back a valid `'accepted'` result.
+ *
+ * `ol-0r92.95` UPDATE: **this try/catch is no longer what protects an
+ * embedder failure from dropping the observation** — `olea-core`'s
+ * `buildObservationEventWithEmbedding` (`misconception/observe.ts`) now
+ * gives a failing embedder call `MAX_EMBED_ATTEMPTS` bounded retries and then
+ * degrades to the honest no-embedder/unmatched-fresh-id path itself, so
+ * `buildObservationEventsFromAcceptedGrading` no longer throws for that
+ * reason at all — `observations` always comes back populated (skips are
+ * `'uncitable'`/`'unresolved-concept'` only, never "the embedder was down").
+ * What remains here is a defensive backstop for a genuinely unexpected
+ * error (a caller bug, not a flaky Worker call); `observations: []` on that
+ * path is now the rare case, not the embedder's ordinary failure mode, with
+ * a content-free `console.error` line (D-005: a count only, never the
+ * candidate's statement or correction).
  *
  * ===========================================================================
- * `ol-0r92.89`: IDEMPOTENT ON RETRY, KEYED ON `context.originInstrumentId`
+ * `ol-0r92.89`: IDEMPOTENT ON RETRY — `ol-0r92.94` [DOS-C1] UPDATE: KEYED ON
+ * `context.attemptId`, NOT `context.originInstrumentId`
  * ===========================================================================
- * The first call for a given `originInstrumentId` runs for real and its
- * in-flight `Promise` is stored on `wiring.acceptedObservationsByAttempt`
- * before it is awaited; every later call for the SAME id — a sequential
- * retry after success, or a second click that lands before the first
- * resolves — is handed that same `Promise` rather than re-running
+ * The first call for a given key runs for real and its in-flight `Promise`
+ * is stored on `wiring.acceptedObservationsByAttempt` before it is awaited;
+ * every later call for the SAME key — a sequential retry after success, or a
+ * second click that lands before the first resolves — is handed that same
+ * `Promise` rather than re-running
  * `acceptExplainBackGrading`/the embedder/`buildObservationEventsFromAcceptedGrading`.
  * That is what makes "exactly one observation event per attempt" true even
  * under a retry: `buildObservationEvent` mints a fresh event id on every
  * call it is not memoized against, so two real executions for one attempt
  * would produce two distinct events for the identical misconception.
+ *
+ * `ol-0r92.94` UPDATE: the key was originally `context.originInstrumentId`.
+ * That was wrong, not just imprecise — `originInstrumentId` is the
+ * instrument's own id for a real instrument, the SAME value across every
+ * attempt she ever makes at it, so the old key silently collapsed two
+ * GENUINE attempts at one instrument into "the same accept," handing the
+ * second attempt's caller the first attempt's stale, memoized result rather
+ * than running anything for real. `context.attemptId` (a fresh id minted
+ * once per genuine attempt, never reused across attempts, at the
+ * `modal.ts`/`main.ts` composition layer) is the correct key: one entry per
+ * attempt, shared only by calls that are genuinely the same attempt (a
+ * retry or a concurrent double-click), never by two different ones.
+ * `acceptedObservationsByAttempt`'s own name was already right; only the
+ * value it was keyed on was wrong.
  *
  * ===========================================================================
  * `ol-0r92.89`: REJECTS ON A STALE SOURCE, NEVER ACCEPTS SILENTLY
@@ -472,11 +522,12 @@ export async function acceptExplainBackGradingWithObservation(
   pending: PendingExplainBackGrading,
   context: AcceptExplainBackGradingWithObservationContext,
 ): Promise<AcceptExplainBackGradingWithObservationResult> {
-  const cached = wiring.acceptedObservationsByAttempt.get(context.originInstrumentId);
+  const key = context.attemptId ?? context.originInstrumentId;
+  const cached = wiring.acceptedObservationsByAttempt.get(key);
   if (cached) return cached;
 
   const outcome = computeAcceptExplainBackGradingWithObservation(wiring, pending, context);
-  wiring.acceptedObservationsByAttempt.set(context.originInstrumentId, outcome);
+  wiring.acceptedObservationsByAttempt.set(key, outcome);
   return outcome;
 }
 
