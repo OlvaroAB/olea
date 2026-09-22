@@ -727,6 +727,29 @@ export const explainBackGrade = z.object({
   /** The SOLO level this response reached. Never a number, never averaged — GLOSSARY rule 3. */
   soloLevel,
   /**
+   * **The INDEPENDENT correctness verdict for this same attempt (`[D-281]`,
+   * `ol-95vv.10`).** The explain-back judge's own correct/partial/incorrect
+   * classification of the answer, persisted here so the mastery fold can
+   * combine it with `soloLevel` — which is produced by a separate assessor,
+   * blind to this field, and stays that way. R9's argument against a FLAT
+   * verdict is untouched: this is not a replacement for `soloLevel`, it is
+   * the second of two independent readings of one attempt, and neither is
+   * derived from the other.
+   *
+   * **Optional, and absence means UNKNOWN — never `correct`.** Every record
+   * written before this field existed carries no verdict at all, and
+   * `[D-281]` rules that such a record can never newly qualify the top
+   * growth stage. Defaulting it, or letting a reader treat absence as
+   * success, is the one way this field can do harm; the fold's own gate
+   * (`packages/core/src/mastery/rollup.ts`) tests for the literal
+   * `'correct'` and nothing else.
+   *
+   * D-005 is untouched: this is a three-value classification, never her
+   * answer text or the grader's rationale — both of those stay behind
+   * `contentRef`.
+   */
+  correctness: z.enum(['correct', 'partial', 'incorrect']).optional(),
+  /**
    * Opaque reference into the `[D-077]` / `ol-2jod.8` immutable content
    * store — her answer text, the grader's feedback, and any misconception
    * detail, kept as immutable files Olea owns, referenced by id, never

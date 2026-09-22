@@ -151,6 +151,21 @@ export interface ComposeGradedExplainBackReviewRecordInput {
   readonly artifactProvenance: SoloArtifactProvenance;
   /** Required exactly when `accepted.neighbourUseDemonstrated` is `true` — checked by `buildExplainBackGradeReviewFields`, not re-checked here. */
   readonly neighbourConceptId?: string;
+  /**
+   * **`[D-281]` / `ol-95vv.10`: the INDEPENDENT correctness verdict for this
+   * same attempt**, from the explain-back correctness judge — the second of
+   * two independent readings of one answer, the first being
+   * `accepted.soloLevel`, which is produced blind to this one and stays that
+   * way (nothing here derives either from the other).
+   *
+   * **Optional, and omitted rather than defaulted when the caller has none.**
+   * `[D-281]` rules that a record carrying no verdict reads as unknown and can
+   * never newly qualify the top growth stage, so a caller that cannot resolve
+   * a verdict for this attempt — a grading rejected as stale, an attempt whose
+   * correctness pipeline did not run — leaves it absent. Writing a guess here
+   * is the one way this field can do harm.
+   */
+  readonly correctness?: 'correct' | 'partial' | 'incorrect';
 }
 
 /**
@@ -190,7 +205,14 @@ export function composeGradedExplainBackReviewRecord(
     ...(subject.supportLevelShown !== undefined
       ? { supportLevelShown: subject.supportLevelShown }
       : {}),
-    explainBackGrade: gradeFields.explainBackGrade,
+    explainBackGrade: {
+      ...gradeFields.explainBackGrade,
+      // `[D-281]`: merged here rather than inside
+      // `buildExplainBackGradeReviewFields` so that builder keeps its single
+      // job (turning an accepted SOLO grading into review fields) and stays
+      // blind to correctness, which is a different judge's output.
+      ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
+    },
     ...(gradeFields.schedulingObservation !== undefined
       ? { schedulingObservation: gradeFields.schedulingObservation }
       : {}),
@@ -355,6 +377,10 @@ export async function recordGradedExplainBackReview(
     ...(input.neighbourConceptId !== undefined
       ? { neighbourConceptId: input.neighbourConceptId }
       : {}),
+    // `[D-281]`: forwarded, never defaulted — absent here means the caller had
+    // no independent correctness verdict for this attempt, which the mastery
+    // fold reads as unknown.
+    ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
   });
 
   return appendReviewLogRecord(vault, record, options);

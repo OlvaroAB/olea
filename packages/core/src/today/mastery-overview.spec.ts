@@ -228,8 +228,11 @@ describe('buildMasteryOverview', () => {
           instrumentId: 'explain-back:a',
           instrumentType: 'explain-back',
           rating: null,
+          // `[D-281]`: all four pieces of qualifying evidence on one attempt.
+          supportLevelShown: 'independent',
           explainBackGrade: {
             soloLevel: 'relational',
+            correctness: 'correct',
             contentRef: 'content-ref-placeholder',
             revisionOf: null,
             artifactProvenance: {

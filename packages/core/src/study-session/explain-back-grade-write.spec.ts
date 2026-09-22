@@ -269,3 +269,31 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
     ).rejects.toThrow(/record failed schema validation/);
   });
 });
+
+// Scenario: features/F5-explain-it-back.md — "F5.8 — what the top growth
+// stage claims, and the evidence that qualifies it [D-281]".
+describe('composeGradedExplainBackReviewRecord — [D-281] the independent correctness verdict', () => {
+  it('carries a supplied verdict onto the grade record, beside the SOLO depth verdict', () => {
+    const record = composeGradedExplainBackReviewRecord({
+      subject: subject(),
+      accepted: ACCEPTED,
+      contentRef: 'content-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+      correctness: 'correct',
+    });
+    expect(record.explainBackGrade?.correctness).toBe('correct');
+    expect(record.explainBackGrade?.soloLevel).toBe('relational');
+  });
+
+  it('omits the field entirely when the caller has no verdict — unknown, never defaulted to correct', () => {
+    const record = composeGradedExplainBackReviewRecord({
+      subject: subject(),
+      accepted: ACCEPTED,
+      contentRef: 'content-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+    });
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+  });
+});

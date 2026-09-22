@@ -81,8 +81,14 @@ function gradedExplainBack(
     instrumentId: 'explain-back:concept-a',
     instrumentType: 'explain-back',
     rating: null,
+    // `[D-281]`: the four pieces of qualifying evidence travel together, so
+    // the default helper carries a qualifying attempt — an INDEPENDENT
+    // correctness verdict of `correct` and an admitted support level — and the
+    // tests below strip one piece at a time to show what each one is doing.
+    supportLevelShown: 'independent',
     explainBackGrade: {
       soloLevel,
+      correctness: 'correct',
       contentRef: 'content-ref-placeholder',
       revisionOf: null,
       artifactProvenance: {
@@ -813,5 +819,91 @@ describe('readConceptVitality — against the real ts-fsrs port (wire integratio
     expect(muchLater.weakest?.recallProbability).toBeLessThan(
       sameDay.weakest?.recallProbability ?? 1,
     );
+  });
+});
+
+// Scenario: features/F5-explain-it-back.md — "F5.8 — what the top growth
+// stage claims, and the evidence that qualifies it [D-281]", tagged
+// `@auto:MAT-C5-correctness-required`, `@auto:MAT-C5-legacy-unknown`,
+// `@auto:MAT-C5-assistance`, `@auto:MAT-C5-instrument-validity` and
+// `@auto:MAT-C5-revision-supersedes`. Structural placeholders throughout
+// (INV-3).
+describe('computeConceptMastery — [D-281] qualifying evidence for the top stage', () => {
+  it('@auto:MAT-C5-correctness-required — a structurally deep but INCORRECT answer never reaches `tree`', () => {
+    for (const verdict of ['partial', 'incorrect'] as const) {
+      const entry = gradedExplainBack('relational');
+      const wrong = {
+        ...entry,
+        explainBackGrade: { ...entry.explainBackGrade!, correctness: verdict },
+      };
+      const result = computeConceptMastery([wrong], 'concept-a');
+      expect(result.evidence.depthGateCleared).toBe(true);
+      expect(result.evidence.topStageQualified).toBe(false);
+      expect(result.state).toBe('sprout');
+    }
+  });
+
+  it('@auto:MAT-C5-legacy-unknown — a record written before the correctness field existed reads as unknown, never as correct', () => {
+    const entry = gradedExplainBack('extended-abstract');
+    const { correctness: _dropped, ...legacyGrade } = entry.explainBackGrade!;
+    const legacy = { ...entry, explainBackGrade: legacyGrade };
+    const result = computeConceptMastery([legacy], 'concept-a');
+    expect(result.evidence.topStageQualified).toBe(false);
+    expect(result.state).toBe('sprout');
+  });
+
+  it('@auto:MAT-C5-assistance — an admitted support level reaches `tree`; `guided` and an unrecorded level do not', () => {
+    expect(
+      computeConceptMastery(
+        [gradedExplainBack('relational', { supportLevelShown: 'prompted' })],
+        'concept-a',
+      ).state,
+    ).toBe('tree');
+
+    expect(
+      computeConceptMastery(
+        [gradedExplainBack('relational', { supportLevelShown: 'guided' })],
+        'concept-a',
+      ).state,
+    ).toBe('sprout');
+
+    const entry = gradedExplainBack('relational');
+    const { supportLevelShown: _none, ...noSupport } = entry;
+    expect(computeConceptMastery([noSupport], 'concept-a').state).toBe('sprout');
+  });
+
+  it('@auto:MAT-C5-instrument-validity — an attempt on a withdrawn or rejected instrument qualifies nothing', () => {
+    const entries = [gradedExplainBack('relational')];
+    expect(computeConceptMastery(entries, 'concept-a').state).toBe('tree');
+    expect(
+      computeConceptMastery(entries, 'concept-a', {
+        invalidInstrumentIds: ['explain-back:concept-a'],
+      }).state,
+    ).toBe('sprout');
+  });
+
+  it('@auto:MAT-C5-revision-supersedes — a corrected grade supersedes the one it corrects, whatever order the log is folded in', () => {
+    const original = gradedExplainBack('relational', { eventId: 'g1' });
+    const correction = gradedExplainBack('multistructural', {
+      eventId: 'g2',
+      timestamp: '2026-02-01T09:00:00-04:00',
+    });
+    const corrected = {
+      ...correction,
+      explainBackGrade: { ...correction.explainBackGrade!, revisionOf: 'g1' },
+    };
+    expect(computeConceptMastery([original], 'concept-a').state).toBe('tree');
+    expect(computeConceptMastery([original, corrected], 'concept-a').state).toBe('sprout');
+    expect(computeConceptMastery([corrected, original], 'concept-a').state).toBe('sprout');
+  });
+
+  it('a correction that itself qualifies still grants the stage — supersession replaces, it does not punish', () => {
+    const original = gradedExplainBack('relational', { eventId: 'g1' });
+    const correction = gradedExplainBack('extended-abstract', { eventId: 'g2' });
+    const corrected = {
+      ...correction,
+      explainBackGrade: { ...correction.explainBackGrade!, revisionOf: 'g1' },
+    };
+    expect(computeConceptMastery([original, corrected], 'concept-a').state).toBe('tree');
   });
 });

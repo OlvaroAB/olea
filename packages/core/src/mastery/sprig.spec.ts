@@ -41,8 +41,13 @@ function gradedExplainBack(conceptId: string, eventId: string, day: string): Rev
     instrumentId: `explain-back:${conceptId}`,
     instrumentType: 'explain-back',
     rating: null,
+    // `[D-281]`: the top stage now needs all four pieces of qualifying
+    // evidence on one attempt — this fixture supplies them so it keeps
+    // meaning "a concept that reached the top stage".
+    supportLevelShown: 'independent',
     explainBackGrade: {
       soloLevel: 'relational',
+      correctness: 'correct',
       contentRef: 'content-ref-placeholder',
       revisionOf: null,
       artifactProvenance: {

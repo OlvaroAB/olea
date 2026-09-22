@@ -34,7 +34,14 @@
  *   review-log home of its own today, by design — GLOSSARY's SOLO rule 5
  *   ("level names are never exposed to the student") and R9's whole
  *   argument against a flat correct/incorrect field mean the review log's
- *   evidence-of-success comes from SOLO depth alone. So there is exactly
+ *   evidence-of-success comes from SOLO depth alone. **Superseded in part by
+ *   `[D-281]` (`ol-95vv.10`), 2026-09-22:** the correctness verdict now DOES
+ *   have a persisted home — `explainBackGrade.correctness`, on this same one
+ *   event — because depth without correctness is a confident wrong answer and
+ *   the mastery fold must never promote one. R9 is untouched: the two verdicts
+ *   remain independent assessments of one attempt, the depth assessor blind to
+ *   correctness, and neither is derived from the other. What is unchanged is
+ *   the shape of the write: still exactly
  *   ONE review-log write to make here, not a second one to reconcile with
  *   an existing first: `recordGradedExplainBackReview` (`olea-core`,
  *   `ol-95vv.3`) IS that one write.
@@ -153,7 +160,7 @@
  * from `Promise<void>` to `Promise<SoloLevel | void>` to match).
  */
 
-import type { SoloLevel } from 'olea-contracts';
+import type { SoloLevel, SupportLevel } from 'olea-contracts';
 import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
@@ -212,6 +219,16 @@ export interface RecordSoloGradeAndReviewParams {
    * type-checks; always relayed as `null`, never inferred, when absent.
    */
   readonly durationMs?: number | null;
+  /**
+   * **`[D-281]` / `ol-95vv.10`: the support level actually shown on this
+   * attempt**, which the fold reads to tell demonstration-with-help from
+   * independent demonstration. Optional and NEVER defaulted: explain-back has
+   * no support-ladder plumbing on the modal today, so production leaves it
+   * absent, which `[D-281]` rules is unknown and does not permit the top
+   * growth stage's claim. Inventing `'independent'` here to keep that stage
+   * reachable would be fabricating the very evidence the decision requires.
+   */
+  readonly supportLevelShown?: SupportLevel;
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
@@ -243,6 +260,8 @@ export async function recordSoloGradeAndReview(
 
   const accepted = acceptSoloGrading(outcome.pending);
   const timestamp = isoWithLocalOffset(deps.now());
+  const attemptId = params.attemptId ?? params.instrumentId;
+  const correctness = await resolveIndependentCorrectness(deps.grading, attemptId);
 
   const subject: GradedExplainBackReviewSubject = {
     instrumentId: params.instrumentId,
@@ -250,6 +269,9 @@ export async function recordSoloGradeAndReview(
     timestamp,
     wasUnsure: false,
     durationMs: params.durationMs ?? null,
+    ...(params.supportLevelShown !== undefined
+      ? { supportLevelShown: params.supportLevelShown }
+      : {}),
     selectionContext: {
       dueState: 'new',
       examProximity: null,
@@ -269,10 +291,56 @@ export async function recordSoloGradeAndReview(
       revisionOf: null,
       artifactProvenance: outcome.artifactProvenance,
       studentAnswer: params.answer,
-      attemptId: params.attemptId ?? params.instrumentId,
+      attemptId,
+      ...(correctness !== undefined ? { correctness } : {}),
     },
     options,
   );
 
   return { result, soloLevel: accepted.soloLevel };
+}
+
+/**
+ * **`[D-281]` / `ol-95vv.10`: the independent correctness verdict for THIS
+ * attempt, read from the accept the modal has already run.**
+ *
+ * The correctness judge and the SOLO depth judge are separate Worker tasks by
+ * design (this module's header), and the accept flow runs the correctness one
+ * first: `modal.ts`'s `acceptGrading` awaits `acceptWithObservation` before it
+ * calls this module, and `wiring.ts` memoises that accept's result on
+ * `wiring.acceptedObservationsByAttempt`, keyed by the SAME per-attempt id
+ * this function is handed. So the verdict is already resolved, for this exact
+ * attempt, and is read here rather than re-graded — one attempt, one
+ * correctness judgement, and no second Worker call.
+ *
+ * Reading it here rather than taking it as a parameter is deliberate: it keeps
+ * the depth pipeline's own caller (`modal.ts`) unchanged and, more
+ * importantly, makes it structurally impossible for a caller to hand this
+ * writer a correctness verdict from a DIFFERENT attempt — the key is the
+ * attempt.
+ *
+ * `undefined` — recorded as unknown, never as correct — in every case where
+ * the verdict is not a standing judgement about this attempt:
+ * - no memoised accept for this attempt (the correctness pipeline did not run,
+ *   or a caller supplied no real per-attempt id);
+ * - the accept came back `'stale'` (`ol-0r92.89`): the source the grading cited
+ *   has changed, so nothing about it still stands — `[D-281]`'s instrument
+ *   validity limb, refused at write time rather than left for the fold;
+ * - the accept threw (an ungrounded citation, a caller bug): no verdict
+ *   survives a refused accept, and this function never fails the depth write
+ *   that rode on it.
+ */
+async function resolveIndependentCorrectness(
+  wiring: RecordSoloGradeAndReviewDeps['grading'],
+  attemptId: string,
+): Promise<'correct' | 'partial' | 'incorrect' | undefined> {
+  const pendingAccept = wiring.acceptedObservationsByAttempt.get(attemptId);
+  if (pendingAccept === undefined) return undefined;
+  try {
+    const accepted = await pendingAccept;
+    if (accepted.status !== 'accepted') return undefined;
+    return accepted.accepted.verdict;
+  } catch {
+    return undefined;
+  }
 }

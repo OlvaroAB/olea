@@ -48,8 +48,14 @@ function review(overrides: {
       planVersion: null,
     },
     conceptIds: [...overrides.conceptIds],
+    // `[D-281]`: a graded explain-back only qualifies the top stage with all
+    // four pieces of evidence on the one attempt — this fixture's graded
+    // events are meant to be qualifying ones, so they carry them.
     ...(overrides.explainBackGrade !== undefined
-      ? { explainBackGrade: overrides.explainBackGrade }
+      ? {
+          supportLevelShown: 'independent',
+          explainBackGrade: { ...overrides.explainBackGrade, correctness: 'correct' },
+        }
       : {}),
   } as ReviewLogEntry;
 }

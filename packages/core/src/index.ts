@@ -1455,6 +1455,7 @@ export type {
   AssembleBandedGroundedContextOptions,
   AssembleGroundedContextOptions,
   BandDecision,
+  GateStage,
   GroundedChunk,
   GroundingBandThresholds,
   GroundingBandTier,
@@ -1474,6 +1475,8 @@ export {
   PROVISIONAL_GROUNDING_BAND,
   resolveGroundedContext,
 } from './retrieval/groundedContext.js';
+export type { GateStageSummary } from './retrieval/gateStageRecorder.js';
+export { GateStageRecorder } from './retrieval/gateStageRecorder.js';
 export type {
   HybridHit,
   HybridRetrievalOptions,

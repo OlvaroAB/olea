@@ -284,3 +284,75 @@ describe('recordSoloGradeAndReview — ol-0r92.94 [DOS-C1]: attemptId threading'
     );
   });
 });
+
+// Scenario: features/F5-explain-it-back.md — "F5.8 — what the top growth
+// stage claims, and the evidence that qualifies it [D-281]".
+describe('recordSoloGradeAndReview — [D-281] the independent correctness verdict on the same attempt', () => {
+  function acceptedFor(verdict: 'correct' | 'partial' | 'incorrect') {
+    return Promise.resolve({
+      status: 'accepted' as const,
+      accepted: {
+        status: 'accepted' as const,
+        verdict,
+        feedback: 'Clear on both halves.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [],
+      },
+      observations: [],
+    });
+  }
+
+  async function writeWith(accept: Promise<unknown> | undefined) {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+    if (accept !== undefined) {
+      // biome-ignore lint/suspicious/noExplicitAny: the memo's value type is the accept result this test scripts.
+      wiring.acceptedObservationsByAttempt.set('attempt-1', accept as any);
+    }
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:00:00Z') },
+      {
+        instrumentId: 'explain-back:concept-a:1',
+        attemptId: 'attempt-1',
+        subjectConceptId: 'concept-a',
+        context: CONTEXT,
+        answer: 'her explanation',
+        supportLevelShown: 'independent',
+      },
+    );
+    if (!outcome) throw new Error('expected a written review-log record');
+    return outcome.result.record;
+  }
+
+  it('persists the accepted correctness verdict for this attempt onto the grade record', async () => {
+    const record = await writeWith(acceptedFor('correct'));
+    expect(record.explainBackGrade?.correctness).toBe('correct');
+  });
+
+  it('persists a non-correct verdict just as faithfully — the fold decides, not the writer', async () => {
+    const record = await writeWith(acceptedFor('partial'));
+    expect(record.explainBackGrade?.correctness).toBe('partial');
+  });
+
+  it('records NO verdict when no accept for this attempt exists — unknown, never correct', async () => {
+    const record = await writeWith(undefined);
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+  });
+
+  it('records NO verdict when the accept came back stale (the cited source has since changed)', async () => {
+    const record = await writeWith(Promise.resolve({ status: 'stale' as const }));
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+  });
+
+  it('records NO verdict when the accept rejected, and still writes the depth evidence', async () => {
+    const record = await writeWith(Promise.reject(new Error('ungrounded citation')));
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+    expect(record.explainBackGrade?.soloLevel).toBe('relational');
+  });
+
+  it('carries the support level shown through to the record, and omits it when none was recorded', async () => {
+    const record = await writeWith(acceptedFor('correct'));
+    expect(record.supportLevelShown).toBe('independent');
+  });
+});

@@ -78,11 +78,23 @@
  *    stays `sprout`"* (Karpicke & Roediger 2008; N-037). Recognition-tier
  *    evidence counts toward this — R7: *"a concept may reach `sapling` on
  *    any evidence mix"* — and `sapling` is the ceiling it can reach.
- * 4. **`tree`** — a graded explain-back for this concept ever reached the
- *    **depth threshold** (`DEPTH_GATE_SOLO_LEVEL`, below). R7: *"`tree` is
- *    reachable only through an explain-back graded at sufficient depth —
- *    separate ideas integrated under a principle, rather than listed
- *    alongside one another — and recall alone can never reach it."*
+ * 4. **`tree`** — **what it claims, per `[D-281]` (`ol-95vv.10`): that on a
+ *    specific occasion she explained the concept correctly and deeply, in her
+ *    own account of it.** A record of something that happened, never a
+ *    prediction of what she could do now — readiness for an assessment is a
+ *    different question, answered by a demand-aware calculation elsewhere, and
+ *    the two are permanently separate. A concept she genuinely understood
+ *    months ago is still understood and may simultaneously be one she is not
+ *    ready to be assessed on; both are true at once.
+ *
+ *    R7 remains the depth half — *"`tree` is reachable only through an
+ *    explain-back graded at sufficient depth — separate ideas integrated under
+ *    a principle, rather than listed alongside one another — and recall alone
+ *    can never reach it"* — but depth alone no longer grants it. `[D-281]`
+ *    requires FOUR pieces of qualifying evidence on the SAME attempt and the
+ *    same instrument version — correctness, depth, assistance, instrument
+ *    validity — plus correction; see `qualifiesForTopStage` below, which is
+ *    the single place that predicate lives.
  *
  * **`tree` does not additionally require `sapling`.** The stage is the
  * high-water mark of evidence *strength*, and R7 orders the tiers
@@ -135,6 +147,7 @@ import type {
   ReviewLogEntry,
   ReviewLogRecord,
   SoloLevel,
+  SupportLevel,
 } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
@@ -218,6 +231,27 @@ export const DEPTH_GATE_SOLO_LEVEL: SoloLevel = 'relational';
 export const MIN_SPACED_RETRIEVAL_DAYS = 3;
 
 /**
+ * **THE ADMITTED SUPPORT LEVELS — declared, `[D-281]` / `ol-95vv.10`.** Which
+ * `supportLevelShown` values still permit the top stage's claim.
+ *
+ * `[D-281]` fixes the meaning of the top stage as **demonstrated deep
+ * understanding on a specific occasion** — explicitly *not* durable retention
+ * and *not* independent performance in the general case. So assistance is read
+ * to tell demonstration-with-help from independent demonstration, not to
+ * require the latter: `independent` (no support) and `prompted` (a targeted
+ * hint on demand, D-094) both leave the explanation hers. `guided` does not:
+ * D-094's guided rung expands the SOURCE beside her while she answers, so the
+ * explanation may be a reading of the text rather than an account of her own
+ * understanding — the one thing the stage claims.
+ *
+ * **Unknown is not a level and never admits the claim** (`[D-281]` item 3, in
+ * its own words: "where the level is unknown, it does not"). A record with no
+ * `supportLevelShown` qualifies nothing, the same discipline `correctness`'s
+ * absence follows.
+ */
+export const ADMITTED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 'prompted'];
+
+/**
  * Tunable parameters for `computeConceptMastery`. Both defaults are
  * **declared** — argued in plain English where the constant is defined above,
  * never fitted from data (`eval/CLAUDE.md` forbids tuning any threshold from
@@ -235,11 +269,37 @@ export interface MasteryRollupOptions {
    * into `tree`. Defaults to `DEPTH_GATE_SOLO_LEVEL` (`relational`, R7).
    */
   readonly depthGate?: SoloLevel;
+  /**
+   * `[D-281]` item 3: the `supportLevelShown` values that still permit the
+   * top stage. Defaults to `ADMITTED_SUPPORT_LEVELS`; a record whose support
+   * level is absent is never admitted, whatever this list holds.
+   */
+  readonly admittedSupportLevels?: readonly SupportLevel[];
+  /**
+   * `[D-281]` item 4 — instrument validity: the ids of instruments that are
+   * **withdrawn, rejected, or built on evidence that has gone stale**, whose
+   * graded attempts therefore qualify nothing. Her ACCEPTANCE of an
+   * instrument is not validity and must never be passed here as if it were.
+   *
+   * Supplied by the caller rather than derived here, because validity is a
+   * fact about the instrument's current standing (F8.5 withdrawal, a
+   * rejected draft, a source that has since changed) and not about the
+   * review event, so it can change long after the event was written — a fold
+   * that cached it on the record would be reading a stale answer. Empty by
+   * default: a caller that knows of no invalidated instrument states that by
+   * saying nothing, and the write side refuses to record a correctness
+   * verdict at all when the grading it came from was rejected as stale
+   * (`packages/plugin/src/explain-back/solo-review.ts`), so a stale-source
+   * attempt cannot qualify even where no caller supplies this list.
+   */
+  readonly invalidInstrumentIds?: readonly string[];
 }
 
 interface ResolvedOptions {
   readonly minSpacedRetrievalDays: number;
   readonly depthGate: SoloLevel;
+  readonly admittedSupportLevels: ReadonlySet<SupportLevel>;
+  readonly invalidInstrumentIds: ReadonlySet<string>;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
@@ -253,7 +313,12 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
   if (soloRank(depthGate) < 0) {
     throw new Error(`computeConceptMastery: depthGate must be a SOLO level, got ${depthGate}`);
   }
-  return { minSpacedRetrievalDays, depthGate };
+  return {
+    minSpacedRetrievalDays,
+    depthGate,
+    admittedSupportLevels: new Set(options?.admittedSupportLevels ?? ADMITTED_SUPPORT_LEVELS),
+    invalidInstrumentIds: new Set(options?.invalidInstrumentIds ?? []),
+  };
 }
 
 /**
@@ -293,8 +358,25 @@ export interface ConceptMasteryEvidence {
   readonly successfulScoredDays: number;
   /** The deepest SOLO verdict ever recorded for this concept; `null` when none was. */
   readonly deepestSoloLevel: SoloLevel | null;
-  /** `deepestSoloLevel` reached the depth threshold — the `tree` gate, R7. */
+  /**
+   * `deepestSoloLevel` reached the depth threshold. **Depth alone, and since
+   * `[D-281]` no longer the `tree` gate on its own** — it is kept as the
+   * honest evidence fact ("she has explained this at that depth at least
+   * once") that the concept-detail line reads, while
+   * `topStageQualified` below is what the stage is actually set from.
+   */
   readonly depthGateCleared: boolean;
+  /**
+   * **`[D-281]` / `ol-95vv.10`: at least one attempt carries ALL FOUR pieces
+   * of qualifying evidence, on the SAME attempt** — an independent
+   * correctness verdict of `correct`, a structural depth verdict at or above
+   * the depth threshold, a support level this decision admits
+   * (`ADMITTED_SUPPORT_LEVELS`; unknown never admits), and an instrument that
+   * still stands (`MasteryRollupOptions.invalidInstrumentIds`) — and has not
+   * been superseded by a later corrective grade (`explainBackGrade.revisionOf`).
+   * This, not depth alone, is what sets the top stage.
+   */
+  readonly topStageQualified: boolean;
 }
 
 /** One concept's rolled-up mastery: the state, and the evidence it was read from. */
@@ -425,6 +507,7 @@ function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
 function conceptEvidence(
   entries: readonly ReviewLogEntry[],
   conceptId: string,
+  resolved: ResolvedOptions,
 ): ConceptMasteryEvidence {
   const tiersPracticed: Record<EvidenceTier, boolean> = {
     recognition: false,
@@ -438,8 +521,21 @@ function conceptEvidence(
   let explainBackAttempts = 0;
   let gradedExplainBackCount = 0;
   let deepestSoloLevel: SoloLevel | null = null;
+  let topStageQualified = false;
 
   const records = indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
+
+  // `[D-281]` correction: "where a grade supersedes an earlier one, the later
+  // grade wins in the projection." `revisionOf` names the event a corrective
+  // re-grade replaces, so the replaced event stops supporting anything —
+  // collected before the fold below so a correction recorded later in the log
+  // still disqualifies the attempt it corrects, whatever order the records
+  // arrive in (this fold has no total order and needs none).
+  const supersededEventIds = new Set<string>();
+  for (const record of records) {
+    const revisionOf = record.explainBackGrade?.revisionOf;
+    if (revisionOf !== undefined && revisionOf !== null) supersededEventIds.add(revisionOf);
+  }
   for (const record of records) {
     tiersPracticed[evidenceTierOf(record.instrumentType)] = true;
 
@@ -450,6 +546,9 @@ function conceptEvidence(
         gradedExplainBackCount += 1;
         if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
           deepestSoloLevel = grade.soloLevel;
+        }
+        if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
+          topStageQualified = true;
         }
       }
       continue;
@@ -473,8 +572,58 @@ function conceptEvidence(
     recognitionOnly: scoredEventCount > 0 && recognitionScoredCount === scoredEventCount,
     successfulScoredDays: successDays.size,
     deepestSoloLevel,
-    depthGateCleared: false,
+    depthGateCleared:
+      deepestSoloLevel !== null && soloRank(deepestSoloLevel) >= soloRank(resolved.depthGate),
+    topStageQualified,
   };
+}
+
+/**
+ * **`[D-281]` / `ol-95vv.10`: the four pieces of qualifying evidence, all read
+ * off the SAME attempt, plus correction.** The top growth stage claims that on
+ * a specific occasion she explained the concept correctly and deeply, in her
+ * own account of it — so no one of these is sufficient and all of them are
+ * read together:
+ *
+ * 1. **Correctness** — the judge's INDEPENDENT verdict, persisted on the grade
+ *    record (`explainBackGrade.correctness`). `'correct'` and nothing else:
+ *    depth without correctness is a confident wrong answer, and a record
+ *    written before the field existed carries no verdict and reads as
+ *    **unknown, never as correct**.
+ * 2. **Depth** — the structural assessment (`soloLevel`), produced blind to
+ *    correctness and unchanged by this decision, at or above the depth
+ *    threshold.
+ * 3. **Assistance** — the support level actually shown at the time
+ *    (`supportLevelShown`), admitted per `ADMITTED_SUPPORT_LEVELS`. Absent is
+ *    unknown and does not permit the claim.
+ * 4. **Instrument validity** — the instrument is not withdrawn, not rejected,
+ *    and not built on evidence that has gone stale
+ *    (`MasteryRollupOptions.invalidInstrumentIds`). Her acceptance of an
+ *    instrument is not validity and is never read as such here.
+ *
+ * Plus correction: an attempt a later grade supersedes (`revisionOf`) supports
+ * nothing, so a wrongly high grade that was afterwards corrected does not keep
+ * the stage it was awarded in error.
+ *
+ * **This is the one place the stage is no longer a pure high-water mark**, and
+ * deliberately so: `[D-281]` rules that a corrected judgement *replaces* the
+ * one it corrects rather than sitting beside it. Every other predicate in this
+ * fold is monotone as before, and nothing here lowers a stage for a lapse, a
+ * fresh misconception or the passage of time — decay remains vitality's job.
+ */
+function qualifiesForTopStage(
+  record: ReviewLogRecord,
+  grade: NonNullable<ReviewLogRecord['explainBackGrade']>,
+  resolved: ResolvedOptions,
+  supersededEventIds: ReadonlySet<string>,
+): boolean {
+  if (grade.correctness !== 'correct') return false;
+  if (soloRank(grade.soloLevel) < soloRank(resolved.depthGate)) return false;
+  const support = record.supportLevelShown;
+  if (support === undefined || !resolved.admittedSupportLevels.has(support)) return false;
+  if (resolved.invalidInstrumentIds.has(record.instrumentId)) return false;
+  if (supersededEventIds.has(record.eventId)) return false;
+  return true;
 }
 
 /**
@@ -492,12 +641,9 @@ export function computeConceptMastery(
   if (conceptId.length === 0) {
     throw new Error('computeConceptMastery: conceptId must be non-empty');
   }
-  const { minSpacedRetrievalDays, depthGate } = resolveOptions(options);
-  const facts = conceptEvidence(entries, conceptId);
-
-  const depthGateCleared =
-    facts.deepestSoloLevel !== null && soloRank(facts.deepestSoloLevel) >= soloRank(depthGate);
-  const evidence: ConceptMasteryEvidence = { ...facts, depthGateCleared };
+  const resolved = resolveOptions(options);
+  const { minSpacedRetrievalDays } = resolved;
+  const evidence = conceptEvidence(entries, conceptId, resolved);
 
   // The high-water mark: the strongest stage any monotone predicate unlocks.
   // Each predicate can only turn from false to true as events are appended,
@@ -506,7 +652,9 @@ export function computeConceptMastery(
   let state: MasteryState = 'seed';
   if (evidence.scoredEventCount > 0 || evidence.gradedExplainBackCount > 0) state = 'sprout';
   if (evidence.successfulScoredDays >= minSpacedRetrievalDays) state = 'sapling';
-  if (depthGateCleared) state = 'tree';
+  // `[D-281]`: depth alone no longer grants the top stage — all four pieces of
+  // qualifying evidence must sit on one un-superseded attempt.
+  if (evidence.topStageQualified) state = 'tree';
 
   return { conceptId, state, evidence };
 }
