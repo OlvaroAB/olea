@@ -75,6 +75,7 @@ import {
   type EmbeddingProvider,
   type EmbedRequest,
   type EmbedResult,
+  type GateStage,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
@@ -656,5 +657,133 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
 
   it('sanity: RECOMMENDED_COMPOSITE_THRESHOLDS is the ratified point this call site is pinned to', () => {
     expect(RECOMMENDED_COMPOSITE_THRESHOLDS).toEqual({ lex: 0.18, top1: 0.545, marginP99: 0.055 });
+  });
+});
+
+/**
+ * `[JEV-11]` (`ol-3ux7.96`) — proves the traced path from this real call
+ * site down to an attributed `GateStage`, through the actual band and
+ * composite options this function passes (`D112_GROUNDING_BAND`,
+ * `RECOMMENDED_COMPOSITE_THRESHOLDS`), not a re-derived fixture. Each test
+ * reuses a fixture already pinned above (BELOW_COMPOSITE/BELOW_BAND/IN_BAND/
+ * ABOVE_BAND) so the stage asserted here is the SAME decision the sibling
+ * describe block already proved by transport-call count — this block adds
+ * only the new assertion, `deps.onStage`'s recorded stage.
+ */
+describe('draftQuizCardsForConcept — [JEV-11] onStage attributes the real call site to a GateStage', () => {
+  function recorder() {
+    const stages: GateStage[] = [];
+    return { stages, onStage: (s: GateStage) => stages.push(s) };
+  }
+
+  it('is inert when no onStage is supplied — byte-identical to every deps object above', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+    // No throw, no behaviour change: the field is optional and nothing here
+    // requires it.
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+    expect(result.status).toBe('drafted');
+  });
+
+  it('attributes the composite-veto refusal to composite-veto, exactly once', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_COMPOSITE_COSINE);
+    const transport = fakeTransport({});
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+    expect(rec.stages).toEqual(['composite-veto']);
+  });
+
+  it('attributes the below-band refusal to below-band, exactly once', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
+    const transport = fakeTransport({});
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(rec.stages).toEqual(['below-band']);
+  });
+
+  it('attributes an above-the-upper-bar grant to above-band, exactly once', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({});
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result.status).toBe('drafted');
+    expect(rec.stages).toEqual(['above-band']);
+  });
+
+  it('attributes an in-band, judge-supported grant to escalated-to-judge, exactly once — this is the one stage counted in the judge-consulted share', async () => {
+    const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result.status).toBe('drafted');
+    expect(rec.stages).toEqual(['escalated-to-judge']);
+  });
+
+  it('attributes an in-band, judge-rejected refusal to escalated-to-judge too — the stage names which GATE decided, not the judge verdict', async () => {
+    const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(false) });
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'judge-rejected' });
+    expect(rec.stages).toEqual(['escalated-to-judge']);
+  });
+
+  it('carries no content through the real call site — a planted sentinel course/concept name appears nowhere in the recorded stages', async () => {
+    const sentinel = 'SENTINEL-COURSE-9f2';
+    const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const rec = recorder();
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onStage: rec.onStage,
+    };
+
+    await draftQuizCardsForConcept(deps, { ...REQUEST, courseCode: sentinel });
+
+    for (const stage of rec.stages) {
+      expect(JSON.stringify(stage)).not.toContain(sentinel);
+    }
   });
 });

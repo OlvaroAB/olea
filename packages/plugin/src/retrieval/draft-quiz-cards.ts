@@ -134,6 +134,7 @@ import type {
 import {
   assembleVoiceExemplars,
   D112_GROUNDING_BAND,
+  type GateStage,
   type GroundingRefusalReason,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
@@ -266,6 +267,28 @@ export interface DraftQuizCardsDeps {
         readonly curationAuthority: PassageCurationAuthority;
       }
     | undefined;
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`) — records which of `retrieve()`'s band-gate
+   * stages decided this call, when `retrieve()` is run with a `band` (this
+   * function always passes `D112_GROUNDING_BAND`, so this fires on every
+   * call once supplied). Recording only: this function's control flow does
+   * not change whether or not a recorder is supplied, and a call made
+   * without one behaves byte-identically to before this field existed.
+   *
+   * **Lifetime, deliberately not decided here.** A recorder passed fresh per
+   * call would count exactly one event and answer nothing about a share; a
+   * recorder held in a module-level variable in this file would be shared
+   * state living outside any composition root's control, indistinguishable
+   * from the server-side state this project's execution model forbids
+   * (`docs/Olea_architecture_boundary.md` §1, private repo). Neither is this
+   * function's call to make. The right home is a single instance that lives
+   * as long as whatever assembles `DraftQuizCardsDeps` does — the plugin
+   * session, in production — constructed once there and threaded through on
+   * every call, the same way `deps.transport` already is. This field exists
+   * so that composition root has somewhere to plug it in; it does not itself
+   * pick where that instance is constructed.
+   */
+  readonly onStage?: (stage: GateStage) => void;
 }
 
 /**
@@ -300,6 +323,7 @@ export async function draftQuizCardsForConcept(
     requireComposite: true,
     compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
+    ...(deps.onStage !== undefined ? { onStage: deps.onStage } : {}),
   });
 
   if (grounding.status === 'refused') {

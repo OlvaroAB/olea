@@ -51,6 +51,7 @@ import { computeCompositeGroundingSignals } from './compositeSignals.js';
 import type { EmbeddingCacheEngine } from './embeddingCache.js';
 import {
   assembleGroundedContext,
+  type GateStage,
   type GroundingBandThresholds,
   type GroundingJudgePort,
   type GroundingResult,
@@ -122,6 +123,16 @@ export interface RetrieveOptions {
    */
   readonly judge?: GroundingJudgePort;
   readonly judgeTimeoutMs?: number;
+  /**
+   * Recording only (`[JEV-11]`, `ol-3ux7.96`) — forwarded to
+   * `assembleBandedGroundedContext`/`resolveGroundedContext` when `band` is
+   * set, and never consulted otherwise: the single-gate mechanism
+   * (`assembleGroundedContext`) has no band tiers to attribute, so this is
+   * inert unless a caller has also opted into the band. Optional and inert
+   * on the decision itself, same posture as `judge` — a caller that never
+   * supplies it sees byte-identical behaviour to before this option existed.
+   */
+  readonly onStage?: (stage: GateStage) => void;
 }
 
 /**
@@ -172,6 +183,7 @@ export async function retrieve(
       ...(options.minCosineScore !== undefined ? { minCosineScore: options.minCosineScore } : {}),
       ...(options.judge !== undefined ? { judge: options.judge } : {}),
       ...(options.judgeTimeoutMs !== undefined ? { judgeTimeoutMs: options.judgeTimeoutMs } : {}),
+      ...(options.onStage !== undefined ? { onStage: options.onStage } : {}),
       // `[D-192]`: composed with the band, not replaced by it — see
       // `AssembleBandedGroundedContextOptions`'s `requireComposite` doc.
       ...(options.requireComposite !== undefined
