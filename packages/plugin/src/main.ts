@@ -32,8 +32,8 @@ import {
   type ExtractedUnit,
   extendComposedStudySession,
   type FirstInvitationCandidate,
+  type GateStage,
   GateStageRecorder,
-  type GateStageSummary,
   type GradeExplainBackInput,
   loadCachedStudyPlan,
   notePathCourses,
@@ -169,6 +169,12 @@ import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
 import { buildClassifyPassageHook } from './retrieval/classify-passage.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
 import {
+  type GateStagePeriodSummary,
+  ObsidianGateStageStore,
+} from './retrieval/gate-stage-store.js';
+import { GateStagePersistence } from './retrieval/gate-stage-persistence.js';
+import { SerializingDataHost } from './retrieval/serializing-data-host.js';
+import {
   buildRetrievalWiring,
   drainIntoEmbeddingCache,
   type RetrievalWiring,
@@ -250,6 +256,9 @@ import { createObsidianWorkerTransport, obsidianHttpRequest } from './worker/obs
  */
 const INGESTION_TICK_INTERVAL_MS = 30_000;
 
+/** `[JEV-11]` (`ol-3ux7.96`) — the gate-stage recorder's write-coalescing quiet period. See `scheduleGateStagePersist`'s own doc for why 2000ms. */
+const GATE_STAGE_PERSIST_DEBOUNCE_MS = 2_000;
+
 /** Raised when the vault could not be walked at all, beside the view's own unavailable screen. */
 const REVIEW_UNAVAILABLE_NOTICE =
   'Olea could not read your vault to build today’s review. Nothing has been changed.';
@@ -292,6 +301,22 @@ interface ReviewWiring {
 // tab, reveal or open — and it is the only part that cannot be tested,
 // because a `WorkspaceLeaf` has no runtime outside Obsidian.
 export default class OleaPlugin extends Plugin {
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`) — serializes EVERY `data.json` read/write this
+   * plugin instance issues, closing the exposure `GateStagePersistence`
+   * alone cannot: every `ObsidianDataHost`-pattern store in this plugin
+   * (`./grove/ground-streak-store.ts`, `./plan/settings-store.ts`,
+   * `./registry/overrides-store.ts`, and others) is constructed with `this`
+   * as its host and calls `loadData()`/`saveData()` directly on it — see
+   * `override loadData`/`override saveData` below, and
+   * `./retrieval/serializing-data-host.ts`'s own doc for the full argument
+   * and what this does not fix (each store still has no serialization of
+   * its own if ever given a different host).
+   */
+  private readonly dataFileHost = new SerializingDataHost({
+    loadData: () => super.loadData(),
+    saveData: (data) => super.saveData(data),
+  });
   private ingestion: IngestionWiring | null = null;
   /**
    * `[D-152]` (F3.3, `ol-0r92.21`): the manual process-now timing override —
@@ -314,29 +339,69 @@ export default class OleaPlugin extends Plugin {
    */
   private readonly studySessionHolder: StudySessionHolder = createStudySessionHolder();
   /**
-   * `[JEV-11]` (`ol-3ux7.96`): the one recorder for this plugin instance's
-   * whole session, same "constructed unconditionally at class-field init,
-   * never rebuilt" posture `studySessionHolder` above already takes — a
-   * per-call recorder would count exactly one event per call and answer
-   * nothing about a share, and a module-level singleton would be shared
-   * state living outside this instance's control (`gateStageRecorder.ts`'s
-   * own doc). `draftQuizCardsDeps()` below passes `.record` as `onStage` on
-   * every call, so every band-gate request this plugin instance makes
-   * accumulates into the same counts.
+   * `[JEV-11]` (`ol-3ux7.96`): the one recorder for this plugin instance,
+   * same "constructed unconditionally at class-field init, never rebuilt"
+   * posture `studySessionHolder` above already takes — a per-call recorder
+   * would count exactly one event per call and answer nothing about a share,
+   * and a module-level singleton would be shared state living outside this
+   * instance's control (`gateStageRecorder.ts`'s own doc). `draftQuizCardsDeps()`
+   * below passes `.record` as `onStage` on every call, so every band-gate
+   * request this plugin instance makes accumulates into the same counts.
    *
-   * **In-memory only, and that is the whole answer to "does it survive a
-   * session."** It is never written to the vault, never sent anywhere, and
-   * is not read by `groundedContext.ts`'s pure gate logic itself (which
-   * fails open if `onStage` ever throws — see that module). It resets to
-   * zero on every plugin reload (disable/enable, Obsidian restart, or a
-   * vault switch), which means **the judge-consulted share is PER SESSION**:
-   * a study reading it must either aggregate `getGateStageSummary()` across
-   * many sessions or collect over one long-running one, never assume a
-   * single read after the fact reflects a whole measurement period. This is
-   * stated on the bead itself, not only here, so the study lane cannot be
-   * surprised by it.
+   * **Seeded from `gateStageStore` at `onload` and persisted after every
+   * record — not session-only.** A per-session, in-memory-only recorder
+   * answers nothing about a share once she restarts the application, which
+   * she does routinely inside any real collection window: a single read
+   * would sample one session and be reported as though it covered the
+   * whole window, exactly the quietly-wrong number the pre-registration
+   * exists to prevent. `restore()` seeds this instance from
+   * `gateStageStore.load()`'s counts at `onload` (see there); persisting the
+   * running total back after each stage is `persistGateStageCounts()`'s job,
+   * called fire-and-forget from `draftQuizCardsDeps()`'s `onStage`, below.
+   *
+   * **Failing to read or write the store must never touch the gate's own
+   * decision.** Every persistence step here is best-effort and wrapped so it
+   * cannot throw into the caller — same posture `groundedContext.ts`'s
+   * `onStage` already takes toward a throwing callback, extended to cover a
+   * disk error too: a failed load seeds zero (an honestly empty period, not
+   * a crash), and a failed save leaves this in-memory total correct and
+   * simply not yet written — the next successful save catches it up, since
+   * every save writes the CURRENT total, not a delta.
    */
   private readonly gateStageRecorder: GateStageRecorder = new GateStageRecorder();
+  // `this.dataFileHost` (declared above, first in this class) provides
+  // `readModifyWrite`, so `gateStageStore.save` below runs atomically
+  // against every other write this plugin issues — see that host's own doc.
+  private readonly gateStageStore: ObsidianGateStageStore = new ObsidianGateStageStore(
+    this.dataFileHost,
+  );
+  /** Set once, at `onload`, from `gateStageStore.load()` — `null` only before that first load resolves, or when nothing has ever been persisted. Never rewritten afterward; see `gateStageStore`'s own module doc on what resets it (nothing, in production). */
+  private gateStagePeriodStartedAt: string | null = null;
+  private gateStageLastRecordedAt: string | null = null;
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`) — the serializing, coalescing write scheduler
+   * for `gateStageStore.save()`, split into `./retrieval/gate-stage-
+   * persistence.ts` so its overlap/coalescing behaviour is unit-testable
+   * without an Obsidian host (this file has no runtime under Vitest). See
+   * that module's own doc for why serialization and coalescing are both
+   * required: `data.json` is ONE file shared with every other
+   * `ObsidianDataHost`-pattern store in this plugin, so an unserialized
+   * write here can silently discard a SIBLING key another store just wrote,
+   * not only its own count. `deps.save` never runs directly from `onStage`
+   * below — only through `schedule()`/`flush()`, which is what gives every
+   * write here its serialization and coalescing.
+   */
+  private readonly gateStagePersistence = new GateStagePersistence<Readonly<Record<GateStage, number>>>({
+    now: () => new Date().toISOString(),
+    getCounts: () => this.gateStageRecorder.summary().counts,
+    save: (counts, now) => this.gateStageStore.save(counts, now),
+    onSaved: (now) => {
+      this.gateStagePeriodStartedAt ??= now;
+      this.gateStageLastRecordedAt = now;
+    },
+    onError: (error) => console.error('Olea: could not persist gate-stage counts', error),
+    debounceMs: GATE_STAGE_PERSIST_DEBOUNCE_MS,
+  });
   private keywordIndex: KeywordIndexWiring | null = null;
   private retrieval: RetrievalWiring | null = null;
   private grading: GradingWiring | null = null;
@@ -586,6 +651,21 @@ export default class OleaPlugin extends Plugin {
    */
   private servedRelationEdges(): readonly ConceptRelation[] {
     return this.relations === null ? [] : servedRelations(this.relations);
+  }
+
+  /**
+   * `[JEV-11]` (`ol-3ux7.96`) — routes every `data.json` read through
+   * `dataFileHost`, so it queues behind any write already in flight from
+   * ANY store built with `this` as its host, not only `gateStageStore`. See
+   * `dataFileHost`'s own field doc.
+   */
+  override loadData(): Promise<unknown> {
+    return this.dataFileHost.loadData();
+  }
+
+  /** The write half of the same routing — see `override loadData` just above. */
+  override saveData(data: unknown): Promise<void> {
+    return this.dataFileHost.saveData(data);
   }
 
   override async onload(): Promise<void> {
@@ -1540,6 +1620,21 @@ export default class OleaPlugin extends Plugin {
         return EMPTY_REGISTRY_OVERRIDES;
       });
 
+    // `[JEV-11]` (`ol-3ux7.96`): seed the gate-stage recorder from whatever
+    // period is already persisted, so counts continue across this reload
+    // rather than restarting at zero. A load failure or a first-ever run
+    // both degrade to an honestly empty period — never a crashed `onload`,
+    // same posture the registry-overrides load just above already takes.
+    const persistedGateStagePeriod = await this.gateStageStore.load().catch((error: unknown) => {
+      console.error('Olea: could not load gate-stage counts', error);
+      return null;
+    });
+    if (persistedGateStagePeriod !== null) {
+      this.gateStageRecorder.restore(persistedGateStagePeriod.counts);
+      this.gateStagePeriodStartedAt = persistedGateStagePeriod.periodStartedAt;
+      this.gateStageLastRecordedAt = persistedGateStagePeriod.lastRecordedAt;
+    }
+
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'modify') return;
@@ -2211,37 +2306,65 @@ export default class OleaPlugin extends Plugin {
           frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
         },
       }),
-      // `[JEV-11]` (`ol-3ux7.96`): `this.gateStageRecorder.record` is bound
-      // (see `GateStageRecorder`), so it can be passed directly. Every band
-      // request `retrieve()` makes through this deps object — from either
-      // production caller below — accumulates into the one recorder above.
-      onStage: this.gateStageRecorder.record,
+      // `[JEV-11]` (`ol-3ux7.96`): `this.gateStageRecorder.record` runs
+      // synchronously and in-memory — the gate's decision never waits on
+      // disk I/O. `gateStagePersistence.schedule()` only ever arms (or
+      // leaves armed) a debounce timer; it never writes synchronously and
+      // never throws, so a save failure or a slow disk cannot affect
+      // whether a card is drafted, exactly as a throwing recorder already
+      // cannot (`groundedContext.ts`'s `stage` helper). See
+      // `./retrieval/gate-stage-persistence.ts` for the serialization and
+      // coalescing this delegates to.
+      onStage: (stage) => {
+        this.gateStageRecorder.record(stage);
+        this.gateStagePersistence.schedule();
+      },
     };
   }
 
   /**
    * `[JEV-11]` (`ol-3ux7.96`) — the diagnostic readback for the study's
-   * denominator. **Deliberately not a command, a view, or anything else she
-   * would see**: no clause defines a student-facing surface for "what share
-   * of grounding requests did the judge decide," and none should be invented
-   * to answer this bead (`docs/dev/CLAUDE-incidents-log.md`'s worked example
-   * is exactly this mistake made once already, for a different feature). The
-   * intended reader is a developer or the study harness, reaching this
-   * plugin instance through Obsidian's own developer console the way any
-   * plugin's internals are already reachable there —
-   * `app.plugins.plugins['olea'].getGateStageSummary()` — never a
-   * console.log this file emits on its own and never a UI element. Counts
-   * and a ratio only (`GateStageSummary`), per `[JEV-11]`'s own privacy
-   * rule.
+   * denominator, and its operating procedure in full (the study lane should
+   * not have to reconstruct this):
    *
-   * **Per session, not persisted (see `gateStageRecorder`'s own field doc).**
-   * A single read here reflects only what this plugin instance has recorded
-   * since it last loaded. The study must aggregate several reads across
-   * sessions, or collect over one session left running, to get a share worth
-   * reporting — this method does not and cannot do that aggregation itself.
+   * - **How the share is obtained.** A developer or the study harness reaches
+   *   this live plugin instance through Obsidian's own developer console, the
+   *   way any plugin's internals are already reachable there —
+   *   `app.plugins.plugins['olea'].getGateStageSummary()`. **Deliberately not
+   *   a command, a view, or anything else she would see**: no clause defines
+   *   a student-facing surface for "what share of grounding requests did the
+   *   judge decide," and none should be invented to answer this bead
+   *   (`docs/dev/CLAUDE-incidents-log.md`'s worked example is exactly this
+   *   mistake made once already, for a different feature).
+   * - **What window it covers.** `periodStartedAt`/`lastRecordedAt` on the
+   *   returned `GateStagePeriodSummary` name the window `counts`/`judgeShare`
+   *   actually cover — the first and most recent stage this store has ever
+   *   recorded, across every session since. A reader states the share
+   *   ALONGSIDE that window, never as a bare number: "62% judge-consulted
+   *   over N=340 requests, `periodStartedAt`..`lastRecordedAt`," not "62%."
+   * - **What resets it.** Nothing in production code — see
+   *   `gate-stage-store.ts`'s own module doc. The count accumulates
+   *   indefinitely across every plugin reload, restart and vault switch
+   *   until she clears `data.json`, reinstalls the plugin, or a future
+   *   deliberate developer action calls `ObsidianGateStageStore.clear()`
+   *   (never wired to production).
+   * - **What it will never give you.** A single read taken once mid-study is
+   *   the running total as of that moment, not a period boundary the study
+   *   chose — if the study wants a bounded window (e.g. "the 90 days after
+   *   toggling the candidate judge"), it must read `periodStartedAt` once at
+   *   the start and diff two reads, since this store never resets on its
+   *   own to mark a new window.
+   *
+   * Counts and the two ISO timestamps only (`GateStagePeriodSummary`), per
+   * `[JEV-11]`'s own privacy rule — never a query, a path, or anything
+   * derived from her content.
    */
-  getGateStageSummary(): GateStageSummary {
-    return this.gateStageRecorder.summary();
+  getGateStageSummary(): GateStagePeriodSummary {
+    return {
+      ...this.gateStageRecorder.summary(),
+      periodStartedAt: this.gateStagePeriodStartedAt,
+      lastRecordedAt: this.gateStageLastRecordedAt,
+    };
   }
 
   /**
@@ -3458,6 +3581,16 @@ export default class OleaPlugin extends Plugin {
     // `Component.onunload` detaches; the ingestion tick interval goes through
     // `registerInterval`, which it clears; the keyword index's vault-event
     // subscription goes through `register`, which runs its callback
-    // (`unsubscribe`) on teardown. Nothing else to tear down.
+    // (`unsubscribe`) on teardown.
+    //
+    // `[JEV-11]` (`ol-3ux7.96`): flush a pending COALESCED gate-stage write
+    // rather than losing a session's tail to `GateStagePersistence`'s
+    // debounce window — without this, a reload landing inside that window
+    // would discard whatever attributions triggered it. `onunload` is
+    // synchronous (`Component`'s own contract), so this cannot be awaited
+    // here; it is fired and left to settle on whatever time Obsidian
+    // actually gives teardown, same best-effort posture every write on this
+    // path already takes.
+    this.gateStagePersistence.flush();
   }
 }

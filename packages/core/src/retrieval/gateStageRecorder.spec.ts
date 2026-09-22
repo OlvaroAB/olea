@@ -44,6 +44,24 @@ describe('GateStageRecorder — the aggregation half of [JEV-11] (ol-3ux7.96)', 
     expect(rec.summary().counts['no-hits']).toBe(1);
   });
 
+  it('restore seeds counts wholesale, for continuing a persisted period rather than starting from zero', () => {
+    const rec = new GateStageRecorder();
+    rec.record('no-hits'); // pre-existing in-memory state, should be replaced
+    rec.restore({ 'below-band': 5, 'escalated-to-judge': 2 });
+    const summary = rec.summary();
+    expect(summary.counts['below-band']).toBe(5);
+    expect(summary.counts['escalated-to-judge']).toBe(2);
+    expect(summary.counts['no-hits']).toBe(0);
+    expect(summary.total).toBe(7);
+  });
+
+  it('restore treats a stage missing from the given counts as zero', () => {
+    const rec = new GateStageRecorder();
+    rec.restore({ 'above-band': 3 });
+    expect(rec.summary().total).toBe(3);
+    expect(rec.summary().counts['composite-veto']).toBe(0);
+  });
+
   it('holds only integer counts keyed by stage — no field or method can carry content', () => {
     const rec = new GateStageRecorder();
     rec.record('composite-veto');

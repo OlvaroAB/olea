@@ -61,4 +61,15 @@ export class GateStageRecorder {
   reset(): void {
     for (const s of ALL_STAGES) this.counts.set(s, 0);
   }
+
+  /**
+   * Replaces every count with `counts` wholesale — for seeding this instance
+   * from a persisted period at construction time (`[JEV-11]`), never for
+   * ordinary recording (`record` is what every gate call uses). Any stage
+   * missing from `counts` is treated as 0, the same "absent means zero"
+   * reading `zeroGateStageCounts` already assumes.
+   */
+  restore(counts: Readonly<Partial<Record<GateStage, number>>>): void {
+    for (const s of ALL_STAGES) this.counts.set(s, counts[s] ?? 0);
+  }
 }
