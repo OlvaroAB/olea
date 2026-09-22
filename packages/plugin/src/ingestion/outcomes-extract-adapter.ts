@@ -35,12 +35,18 @@
  *      yet; this bead's own service-side bead (`ol-4s30`) names both as
  *      explicitly undone follow-up, not silently deferred.
  *
- * **Not yet wired anywhere** — `outcomes.extract.v1` is not yet in the frozen
- * task-id catalogue (`olea-contracts`'s `TASK_IDS`), so the constants below
- * are this adapter's own reservation, not (yet) a value pinned equal to one
- * there the way `WorkerConceptReader`'s own constants are — see
- * `outcomesExtract.ts`'s module doc in `olea-service` for the full reasoning
- * on why routing was deliberately left for a follow-up bead.
+ * **RETRACTED, `ol-ppxj.43` [DOS-C9]: "not yet in the frozen task-id
+ * catalogue" is stale.** `outcomes.extract.v1` landed in the catalogue via
+ * `ol-2jod.21` [D-254] (three commits: `olea`'s `TASK_IDS.OUTCOMES_EXTRACT`,
+ * the `olea-service` re-vendor, and one registry line in
+ * `olea-service/src/tasks/registry.ts`) — the constants below are pinned to
+ * a real catalogue entry now, not a private reservation. **Still not wired
+ * to a production caller, and that part remains true**: `ol-2jod.21`'s own
+ * ruling explicitly withheld the plugin's automatic trigger, gating it on a
+ * measured five-course real-model run (`[EXT-14]`) rather than landing it
+ * alongside the catalogue addition. See `wiring.ts`'s
+ * `buildOutcomesExtractWiring`/`runOutcomesExtract` module doc for that
+ * still-open half.
  *
  * Mirrors `WorkerConceptReader`'s shape throughout (local mirrored task-id/
  * contract-version constants rather than a value import — `olea-contracts`'

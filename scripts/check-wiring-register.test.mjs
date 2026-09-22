@@ -1064,6 +1064,125 @@ test('WORKBENCH-ONLY CALLER: a row citing BOTH a workbench ref and a real produc
   assert.match(out, /OK/);
 });
 
+// ------------------------------------------------------------------------------------------
+// STALE "NO PRODUCTION CALLER" CLAIMS — D-280 / `ol-egov.153`, `ol-ppxj.43` [DOS-C9]. Fixtures
+// built from the two real false positives found while writing the checker (concept/wiring.ts's
+// "Nothing calls THIS method yet" and groundedContext.ts's two-symbols-one-sentence shape),
+// invented here rather than named — nothing below is a real repo path or bead.
+// ------------------------------------------------------------------------------------------
+
+/** `baselineFixture()` plus a doc comment on `FooPort`'s implementation claiming no production
+ * caller — the shape this section exists to catch, on a port this same fixture's register
+ * already says is wired. */
+function staleClaimFixture() {
+  const root = baselineFixture();
+  // The claim lives in `FooPort`'s own declaring file, not `impl.ts` — `impl.ts:2` is cited by
+  // the register as `RealFoo`'s declaration line and must not move, or this fixture would trip
+  // the unrelated "Production implementation" resolvability check instead of the one under test.
+  write(
+    root,
+    'packages/core/src/foo/types.ts',
+    '/** `FooPort` has no production caller today; this note is stale. */\n' +
+      'export interface FooPort {\n  get(): string;\n}\n',
+  );
+  return root;
+}
+
+function statusArg(root, ids) {
+  const p = join(root, 'status.json');
+  const statuses = {};
+  for (const id of ids) statuses[id] = 'open';
+  writeFileSync(p, JSON.stringify(statuses));
+  return ['--task-status', p];
+}
+
+test('a "no production caller" claim naming a port the register shows wired is flagged STALE (exit 2)', () => {
+  const root = staleClaimFixture();
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    ...statusArg(root, ['ol-fixture-foo', 'ol-fixture-bar']),
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 2, out);
+  assert.match(out, /claims no production caller for `FooPort`/);
+  assert.match(out, /STALE/);
+});
+
+test('the same claim, once marked RETRACTED, is no longer flagged (exit 0)', () => {
+  const root = staleClaimFixture();
+  write(
+    root,
+    'packages/core/src/foo/types.ts',
+    '/** RETRACTED (ol-fixture-retraction): `FooPort` has no production caller today; this note is stale. */\n' +
+      'export interface FooPort {\n  get(): string;\n}\n',
+  );
+  const { code, out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    ...statusArg(root, ['ol-fixture-foo', 'ol-fixture-bar']),
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  assert.equal(code, 0, out);
+});
+
+test('a "no production caller" claim about an UNWIRED port is left alone (no false alarm on a genuine gap)', () => {
+  const root = fixtureRepo();
+  write(
+    root,
+    'packages/core/src/baz/types.ts',
+    '/** `BazPort` has no production caller yet — deliberately unbuilt for this fixture. */\n' +
+      'export interface BazPort {\n  get(): string;\n}\n',
+  );
+  const register =
+    REGISTER_HEADER +
+    '| `BazPort` | `packages/core/src/baz/types.ts:2` | none | none | `ol-fixture-baz` | P2 |\n';
+  write(root, 'docs/dev/wiring-register.md', register);
+  const { out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    ...statusArg(root, ['ol-fixture-baz']),
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  // `BazPort` is a genuine, still-open finding (unwired, task open — not yet a reachability
+  // failure), never a STALE-claim one: the claim matches the register's own current truth.
+  assert.doesNotMatch(out, /is STALE/);
+});
+
+test('a claim phrase sharing a PARAGRAPH (but not a LINE) with an unrelated wired symbol does not false-positive', () => {
+  // The real groundedContext.ts shape found while building this section: "No production caller
+  // uses this today" wraps onto its own line, and the unrelated, already-wired symbol
+  // (`GroundingJudgePort` there, `FooPort` here) is named on the NEXT line, still part of the
+  // same sentence. Same-line-only matching must not credit that citation to this claim.
+  const root = baselineFixture();
+  write(
+    root,
+    'packages/core/src/foo/types.ts',
+    '/**\n' +
+      ' * `SomeOtherThing` has no production caller today — this still calls\n' +
+      ' * `FooPort` directly, which is unrelated and already wired.\n' +
+      ' */\n' +
+      'export interface FooPort {\n  get(): string;\n}\n',
+  );
+  const { out } = runGuard([
+    '--repo-root',
+    root,
+    ...registerArg(root),
+    ...statusArg(root, ['ol-fixture-foo', 'ol-fixture-bar']),
+    '--known-findings',
+    emptyKnownFindings(root),
+  ]);
+  // `SomeOtherThing` has no register row at all, so this is correctly left alone — the whole
+  // point of same-line matching plus a registry lookup rather than "nearest port on the page".
+  assert.doesNotMatch(out, /is STALE/);
+});
+
 test('the real register in this repo parses without a structural error (read-only, no --task-status)', () => {
   // Not asserting exit 0 here — the real register may legitimately have reachability findings
   // (exit 1) when a real port's owning task has closed with no production caller and no cited

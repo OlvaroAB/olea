@@ -512,23 +512,23 @@ export function buildFirstReadFolderViews(
 // it does not calibrate, gate or interpret the number, only carries it.
 //
 // **Reachability (`[D-072]`, plan §2.7 clause 5) — deliberately incomplete.**
-// `buildOutcomesExtractWiring` and `runOutcomesExtract` have no production
-// caller. Two things block one, in order: (1) `outcomes.extract.v1` is not in
-// the frozen task-id catalogue (`olea-contracts`'s `TASK_IDS`) — the adapter's
-// own module doc names this, and it is a Class C contract-schema change this
-// lane does not make unilaterally. `[D-254]` approves the catalogue addition
-// (David, 2026-09-16) but the landing itself (the contracts edit, the
-// service-side re-vendor, and the one registry line) is explicitly NOT done
-// by this commit — it is the next lane's work (`[EXT-14]` gates the
-// PLUGIN TRIGGER specifically, not the catalogue edit, on a measured
-// five-course real-model run first). (2) Even once the catalogue is amended,
-// WHERE in `main.ts` an outcomes-extraction run is triggered from (which
-// command, which ingestion event, sourced from which folder-scoped
-// documents) is a surface decision this bead was not asked to make — "a bead
+// **RETRACTED IN PART, `ol-ppxj.43` [DOS-C9]: the catalogue half of this note
+// went stale.** `outcomes.extract.v1` landed in the frozen task-id catalogue
+// via `ol-2jod.21` [D-254] (three commits: `olea`'s `TASK_IDS.OUTCOMES_EXTRACT`,
+// the `olea-service` re-vendor, and the registry line in
+// `olea-service/src/tasks/registry.ts`) — that blocker is closed, and it was
+// never this bead's own service-side bead that closed it. **Still true, and
+// still the reason there is no production caller:** `ol-2jod.21`'s own ruling
+// explicitly withheld the PLUGIN TRIGGER (this file calling
+// `buildOutcomesExtractWiring`/`runOutcomesExtract` from somewhere real in
+// `main.ts`), gating it on a measured five-course real-model run (`[EXT-14]`)
+// rather than landing it alongside the catalogue addition. WHERE in `main.ts`
+// that trigger belongs (which command, which ingestion event, sourced from
+// which folder-scoped documents) is a surface decision still unmade — "a bead
 // saying 'needs a caller/surface' names a requirement for *some* caller;
 // WHICH caller is the contract's to answer, not the brief's" (this repo's
-// own `CLAUDE.md`). Until both land, this composition is exercised by its
-// own unit tests alone.
+// own `CLAUDE.md`). Until `[EXT-14]` lands that trigger, this composition is
+// exercised by its own unit tests alone.
 //
 // **`runOutcomesExtractAndReconcile`, added below (`[OUT-3]`), inherits this exact gate rather
 // than opening a second one.** It is a strict extension of `runOutcomesExtract` — same inputs,

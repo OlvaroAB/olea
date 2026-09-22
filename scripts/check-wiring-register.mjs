@@ -332,6 +332,103 @@
 // against invented fixture ports rather than this repo's real ones.
 //
 // ==============================================================================================
+// STALE "NO PRODUCTION CALLER" CLAIMS — D-280 / `ol-egov.153`, implemented `ol-ppxj.43` [DOS-C9]
+// ==============================================================================================
+// A wiring gap that gets fixed does not erase the doc comment that announced it. Three
+// reachability verdicts in the 2026-09-21 dossier review were wrong for exactly this reason: a
+// bead wires a real caller, the fix commit does not touch the "no production caller" prose
+// sitting a few lines above the function it just wired, and every later reader trusts the
+// comment because presence is treated as currency by every control this project has (see this
+// repo's own CLAUDE.md, "Every live document is current..."). `[D-280]` amends `[D-072]` clause 5
+// with a RETRACTION DUTY: a bead that creates a production caller must retract every "no
+// production caller" claim about that capability in the same commit. This section is the
+// mechanical half.
+//
+// WHAT COUNTS AS A CLAIM. A source line matching one of a small, literal set of phrasings this
+// codebase actually uses for "no production caller" (see `STALE_CLAIM_RE` below — extend it by
+// adding another literal phrase found in the wild, never by loosening it to something fuzzier).
+// Deliberately narrow: a checker that flags every mention of the word "caller" cries wolf within
+// a day and gets routed around, which is the exact failure this whole file's module doc already
+// warns about for every other section. Missing a genuinely stale claim phrased in a novel way is
+// an acceptable false negative; flagging a live, honest "not yet wired" note as stale is not.
+// `"nothing calls this"` was tried and DROPPED while building this section: it fired on
+// `concept/wiring.ts`'s "Nothing calls THIS method yet" — a live, correct, and unrelated claim
+// about a DIFFERENT function (`readConceptsFromVault`) that happens to share a sentence with a
+// `ConceptReaderPort` citation earlier in the same line. The phrase is generic enough to attach to
+// whichever port name is nearest on the page rather than the one it is actually about, so only the
+// phrasings that explicitly say "production caller" (or its "no caller exists" sibling) survive.
+//
+// WHAT MAKES A CLAIM STALE. The claim phrase and a backticked symbol appear ON THE SAME LINE —
+// deliberately not "somewhere in the next few lines": `corpus-relations/batch.ts`'s own (correct,
+// already-corrected) reachability note is a worked counterexample found while building this
+// section — it says the OLD claim ("no production caller yet") was stale two lines before it
+// names `WorkerCorpusRelationVerdict`, and a multi-line lookahead window credited that citation to
+// the phrase it was actually retracting. Same-line-only trades a little recall (a symbol wrapped
+// onto the next line is missed) for not doing that. The symbol named must be EITHER a register
+// row's port name OR its extracted implementation symbol (`row.implSymbol` — see "WHAT COUNTS AS
+// A 'PRODUCTION CALLER'" above), AND that row must be independently confirmed WIRED by everything
+// this script already computes this run: not `callerIsNone`, not `workbenchOnlyCaller`, and (if
+// gated) `gateEnabledInProd`. This reuses the existing wired/unwired computation rather than
+// re-deriving it — a claim about a port this script cannot itself confirm wired is left alone,
+// same "prefer a false negative" bias as above.
+//
+// RETRACTION IS NOT DELETION. A retracted claim keeps the record that it was made — see
+// `outcomes-extract-adapter.ts`'s own retraction (`ol-ppxj.43`) for the house style. So a claim
+// line is skipped, not flagged, when the word `RETRACTED` (case-sensitive, matching the convention
+// already in use) appears anywhere in the `STALE_CLAIM_LOOKBACK`-line window ending at the claim
+// line itself — the retraction note is expected to sit right above the old phrase it corrects,
+// quoting it for the record.
+//
+// WHAT THIS DELIBERATELY DOES NOT DO: it does not try to resolve a claim about a symbol this
+// register has no row for at all (the observe.ts/effort.ts incidents this bead was filed to fix
+// were about *other* functions near a registered port, not the port symbol itself — this checker
+// cannot chase an arbitrary function name through the tree without the same false-positive risk
+// the module doc's every other section already declines to take). Retracting those is Half Two's
+// job, done by a human reading the file, not something this mechanical check can discover unaided.
+// It also does not touch `packages/workbench` (developer tooling, not the shipped product, same
+// corpus boundary as everywhere else here) or test/spec files — same production corpus every
+// other check in this file already uses.
+const STALE_CLAIM_RE =
+  /\bno production caller\b|\bhas no production caller\b|\bno caller exists\b/i;
+const STALE_CLAIM_LOOKBACK = 8; // lines, including the claim line itself
+
+/** Scans `files` for a stale "no production caller" claim about a port this run has already
+ * confirmed wired. See the module doc section above for the full rule. Returns
+ * `{file, line, symbol, portName}[]`, repo-root-relative. */
+function findStaleNoCallerClaims(repoRoot, files, registerRows) {
+  const byName = new Map();
+  for (const row of registerRows) {
+    byName.set(row.name, row);
+    if (row.implSymbol) byName.set(row.implSymbol, row);
+  }
+  const isRowWired = (row) =>
+    !row.callerIsNone && !row.workbenchOnlyCaller && (!row.gate || !!row.gateEnabledInProd);
+
+  const findings = [];
+  for (const file of files) {
+    const rel = relative(repoRoot, file);
+    const lines = readFileSync(file, 'utf8').split('\n');
+    for (let idx = 0; idx < lines.length; idx++) {
+      if (!STALE_CLAIM_RE.test(lines[idx])) continue;
+      const lookbackStart = Math.max(0, idx - STALE_CLAIM_LOOKBACK + 1);
+      const lookback = lines.slice(lookbackStart, idx + 1).join('\n');
+      if (lookback.includes('RETRACTED')) continue; // the record stays; see module doc
+
+      // Same line only — see "WHAT MAKES A CLAIM STALE" above for the counterexample that ruled
+      // out a lookahead window.
+      for (const m of lines[idx].matchAll(/`([A-Za-z0-9]+)`/g)) {
+        const row = byName.get(m[1]);
+        if (row && isRowWired(row)) {
+          findings.push({ file: rel, line: idx + 1, symbol: m[1], portName: row.name });
+          break; // one finding per claim line is enough to force a look
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+// ==============================================================================================
 // EXIT CODES
 //   0  register complete, every reference resolves, and this run's findings are EXACTLY the
 //      `KNOWN_FINDINGS` set — no new finding, no known finding that has quietly disappeared
@@ -1070,6 +1167,19 @@ function main() {
     row.gateEnabledInWorkbench = row.gateEnabledInProd
       ? null
       : findEnablingCallSite(opts.repoRoot, row.gate.option, workbenchFiles);
+  }
+
+  // --- Stale "no production caller" claims (D-280 retraction duty) — see the module doc
+  // section above. Scoped to the same production corpus as everything else in this file, run
+  // after gate evaluation so `isRowWired` can use `gateEnabledInProd`.
+  const staleClaims = findStaleNoCallerClaims(opts.repoRoot, productionFiles, rows);
+  for (const c of staleClaims) {
+    problems.push(
+      `${c.file}:${c.line} claims no production caller for \`${c.symbol}\`, but the register's ` +
+        `'${c.portName}' row is wired this run — this claim is STALE (the D-280 retraction duty: ` +
+        `a bead that creates a production caller must retract every "no production caller" claim ` +
+        `about that capability in the same commit)`,
+    );
   }
 
   // Structural problems (parse-adjacent) are environment/register-quality failures — exit 2,
