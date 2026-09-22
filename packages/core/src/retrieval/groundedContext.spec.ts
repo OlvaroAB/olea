@@ -11,6 +11,7 @@ import {
   type GroundingJudgePort,
   type GroundingJudgeRequest,
   type GroundingJudgeVerdict,
+  IncumbentAssessSupport,
   resolveGroundedContext,
 } from './groundedContext.js';
 import type { HybridHit } from './hybrid.js';
@@ -758,5 +759,62 @@ describe('[D-192] the composite composes with the band as an additional lower-ba
     if (decision.status === 'refused') {
       expect(['composite-check-unavailable', 'judge-unavailable']).not.toContain(decision.reason);
     }
+  });
+});
+
+describe('resolveGroundedContext forwards intendedOperation to the judge only on escalation (`[JEV-5]` / ol-3ux7.88)', () => {
+  it('is absent from the judge request when the caller never set it', async () => {
+    const judge = countingJudge(true);
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+      query: 'q',
+      judge: judge.port,
+    });
+    expect(judge.calls[0]).not.toHaveProperty('intendedOperation');
+  });
+
+  it('is forwarded verbatim when the caller set it', async () => {
+    const judge = countingJudge(true);
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      compositeSignals: bandSignals(IN_BAND_TOP1),
+      query: 'q',
+      judge: judge.port,
+      intendedOperation: 'apply',
+    });
+    expect(judge.calls[0]?.intendedOperation).toBe('apply');
+  });
+});
+
+describe('IncumbentAssessSupport — the assessSupport seam wrapping the current Slot J judge (`[JEV-5]` / ol-3ux7.88)', () => {
+  it('maps a supported verdict to assessed(supported: true)', async () => {
+    const adapter = new IncumbentAssessSupport(countingJudge(true).port);
+    const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
+    expect(outcome).toEqual({ status: 'assessed', supported: true, reason: 'because' });
+  });
+
+  it('maps an unsupported verdict to assessed(supported: false), not to a refusal outcome', async () => {
+    const adapter = new IncumbentAssessSupport(countingJudge(false).port);
+    const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
+    expect(outcome).toEqual({ status: 'assessed', supported: false, reason: 'because' });
+  });
+
+  it('forwards intendedOperation to the wrapped judge', async () => {
+    const judge = countingJudge(true);
+    const adapter = new IncumbentAssessSupport(judge.port);
+    await adapter.assessSupport({ query: 'q', context: 'c', intendedOperation: 'compare' });
+    expect(judge.calls[0]?.intendedOperation).toBe('compare');
+  });
+
+  it('fails closed to unavailable when the wrapped judge throws — this adapter never produces insufficient-evidence or could-not-decide, which the wrapped judge has no way to report', async () => {
+    const failingJudge: GroundingJudgePort = {
+      judge: async () => {
+        throw new Error('network unreachable');
+      },
+    };
+    const adapter = new IncumbentAssessSupport(failingJudge);
+    const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
+    expect(outcome).toEqual({ status: 'unavailable' });
   });
 });

@@ -61,6 +61,19 @@ describe('WorkerGroundingJudge — the request it builds', () => {
     });
   });
 
+  it('forwards intendedOperation only when the caller set it (`[JEV-5]` / ol-3ux7.88)', async () => {
+    const transport = new RecordingTransport(() => okResponse({ supported: true, reason: 'ok' }));
+    const judge = new WorkerGroundingJudge({ transport });
+
+    await judge.judge({ query: 'q', context: 'c', intendedOperation: 'define' });
+
+    expect(transport.sent[0]?.payload).toEqual({
+      query: 'q',
+      context: 'c',
+      intendedOperation: 'define',
+    });
+  });
+
   it('sends an empty context string as-is — a first-class value for this task, never coerced or dropped', async () => {
     const transport = new RecordingTransport(() =>
       okResponse({ supported: false, reason: 'no context' }),

@@ -518,6 +518,14 @@ const DIAGNOSTIC_HIT_LIMIT = 5;
 export interface GroundingJudgeRequest {
   readonly query: string;
   readonly context: string;
+  /**
+   * Which operation the caller was about to perform (`[JEV-5]` /
+   * `ol-3ux7.88`) — optional, field-for-field with the service task's own
+   * `intendedOperation` (`olea-service/src/tasks/groundingJudge.ts`). Purely
+   * a stratification input for later measurement; omitting it changes
+   * nothing about how a verdict is produced or read.
+   */
+  readonly intendedOperation?: 'define' | 'explain' | 'calculate' | 'apply' | 'compare';
 }
 
 /** `grounding.judge.v1`'s response, field-for-field. */
@@ -548,6 +556,12 @@ export interface ResolveGroundedContextOptions extends AssembleBandedGroundedCon
   readonly judgeTimeoutMs?: number;
   /** The query text, needed only to escalate. A band query with no query text to send cannot be judged, so it refuses like any other unavailable check. */
   readonly query?: string;
+  /**
+   * Forwarded verbatim to `GroundingJudgeRequest.intendedOperation`
+   * (`[JEV-5]` / `ol-3ux7.88`) when escalating. Optional and inert on this
+   * function's own decision — see that field's doc.
+   */
+  readonly intendedOperation?: GroundingJudgeRequest['intendedOperation'];
 }
 
 const DEFAULT_JUDGE_TIMEOUT_MS = 20_000;
@@ -575,7 +589,13 @@ export async function resolveGroundedContext(
 
   const verdict = await judgeWithinBudget(
     options.judge,
-    { query, context: decision.chunks.map((chunk) => chunk.text).join('\n\n') },
+    {
+      query,
+      context: decision.chunks.map((chunk) => chunk.text).join('\n\n'),
+      ...(options.intendedOperation !== undefined
+        ? { intendedOperation: options.intendedOperation }
+        : {}),
+    },
     options.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
   );
 
@@ -612,5 +632,91 @@ async function judgeWithinBudget(
     return null;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The `assessSupport` capability (`[JEV-5]` / `ol-3ux7.88`)
+// ---------------------------------------------------------------------------
+
+/**
+ * A task-shaped input to a support assessment — deliberately narrower than
+ * `GroundingJudgeRequest` is wide: nothing here is `grounding.judge.v1`-
+ * specific, so a later provider whose contract differs (e.g. Jev's
+ * `supported`/`unsupported`/`unknown` three-way label,
+ * `scripts/harness/jev-feasibility-core.mjs` in `olea-service`) can still
+ * implement this port without adopting the Slot J wire shape.
+ */
+export interface AssessSupportRequest {
+  readonly query: string;
+  readonly context: string;
+  readonly intendedOperation?: GroundingJudgeRequest['intendedOperation'];
+}
+
+/**
+ * Task-specific outcomes for a support assessment — a strict superset of
+ * what any one provider can currently produce, on purpose: this is the
+ * contract the SEAM promises, not the contract today's incumbent fulfils.
+ *
+ * - `assessed` — a definite verdict was reached.
+ * - `insufficient-evidence` — the provider looked and found the evidence did
+ *   not settle the question (distinct from `could-not-decide`: this is a
+ *   fact about the material, that one is a fact about the judge's own
+ *   confidence). No provider wired today produces this; it exists so a
+ *   three-way judge (Jev's `unknown` is close but not identical) has
+ *   somewhere to land it without a contract change.
+ * - `unavailable` — the provider could not be reached, timed out, or
+ *   returned something unusable. Same fail-closed posture as
+ *   `judge-unavailable` above.
+ * - `could-not-decide` — the provider ran and reported it could not settle
+ *   the question with adequate confidence.
+ */
+export type AssessSupportOutcome =
+  | { readonly status: 'assessed'; readonly supported: boolean; readonly reason: string }
+  | { readonly status: 'insufficient-evidence' }
+  | { readonly status: 'unavailable' }
+  | { readonly status: 'could-not-decide' };
+
+/**
+ * The injected capability a caller measures a provider swap through
+ * (review-response.md §9.4 Stage J0 point 3: "the seam: assessSupport only,
+ * with the current Slot J judge wrapped behind it first so the swap is
+ * measured on a like-for-like transport"). No production caller uses this
+ * today — `resolveGroundedContext` still calls `GroundingJudgePort` directly
+ * — this exists so a future measurement run can call one incumbent adapter
+ * and one candidate adapter through the identical interface.
+ */
+export interface AssessSupportPort {
+  assessSupport(request: AssessSupportRequest): Promise<AssessSupportOutcome>;
+}
+
+/**
+ * The incumbent adapter: wraps any `GroundingJudgePort` (production today is
+ * `WorkerGroundingJudge`, `olea/packages/plugin/src/retrieval/
+ * workerGroundingJudge.ts`) behind `AssessSupportPort`, translating its
+ * binary `supported`/`reason` verdict into the wider outcome union above.
+ * It never produces `insufficient-evidence` or `could-not-decide` — the
+ * wrapped judge has no way to report either — only `assessed` (mapping
+ * `supported` straight through) or `unavailable` on any throw, exactly
+ * mirroring the fail-closed posture `resolveGroundedContext` already applies
+ * to the same port.
+ */
+export class IncumbentAssessSupport implements AssessSupportPort {
+  constructor(private readonly judge: GroundingJudgePort) {}
+
+  async assessSupport(request: AssessSupportRequest): Promise<AssessSupportOutcome> {
+    try {
+      const verdict = await this.judge.judge({
+        query: request.query,
+        context: request.context,
+        ...(request.intendedOperation !== undefined
+          ? { intendedOperation: request.intendedOperation }
+          : {}),
+      });
+      if (typeof verdict?.supported !== 'boolean') return { status: 'unavailable' };
+      return { status: 'assessed', supported: verdict.supported, reason: verdict.reason };
+    } catch {
+      return { status: 'unavailable' };
+    }
   }
 }

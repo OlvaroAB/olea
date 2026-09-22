@@ -83,7 +83,15 @@ export class WorkerGroundingJudge implements GroundingJudgePort {
     const body = await this.transport.send({
       contractVersion: GROUNDING_JUDGE_CONTRACT_VERSION,
       taskId: GROUNDING_JUDGE_TASK_ID,
-      payload: { query: request.query, context: request.context },
+      payload: {
+        query: request.query,
+        context: request.context,
+        // `[JEV-5]` / `ol-3ux7.88`: forwarded only when the caller set it,
+        // so a request built before this field existed is byte-identical.
+        ...(request.intendedOperation !== undefined
+          ? { intendedOperation: request.intendedOperation }
+          : {}),
+      },
     });
     return readVerdict(body);
   }
