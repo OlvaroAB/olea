@@ -129,8 +129,13 @@ const AUX_VERBS: ReadonlySet<string> = new Set([
  * decoration around a bolded or italicised heading, not part of the words —
  * so `**What is X?**` is read the same as `What is X?`. Nothing inside the
  * text is touched.
+ *
+ * Exported (additive, `[ILB-PRA-4]`) so `./operation.js`'s heading-operation
+ * mapping reuses this exact normalisation rather than a parallel copy —
+ * both modules read the same heading text and should strip decoration the
+ * same way.
  */
-function stripEmphasis(text: string): string {
+export function stripEmphasis(text: string): string {
   return text
     .replace(/^[*_]+/, '')
     .replace(/[*_]+$/, '')
