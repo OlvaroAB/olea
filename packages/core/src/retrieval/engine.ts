@@ -30,6 +30,18 @@
  * exactly the kind of seam a caller forgets to handle on one of the two
  * paths. One return type, always.
  *
+ * **The degradation is silent to `retrieve`'s own return type, but not
+ * invisible (`[ILB-EVD-4]`).** `GroundingResult` carries no field for it —
+ * changing that shape is out of this bead's scope, and every existing
+ * refusal/grounded assertion in this package's tests depends on the shape
+ * staying exact. What changed instead is one layer down: every `HybridHit`
+ * this function's own `hits` variable holds now carries `semantic: 'used' |
+ * 'unavailable'` (`hybrid.ts`), set once per call from whether
+ * `embedQuery` below actually produced a vector. A caller working from
+ * `hits` directly — rather than from the assembled `GroundingResult` — can
+ * already tell the two "keyword-only" causes apart; folding that into
+ * `GroundingResult` itself is future work, not this one.
+ *
  * **Alias-aware keyword search, when `deps.registryOverrides` is supplied
  * (`ol-l5og.11`).** `aliasExpansion.ts`'s `expandQueryWithAliases` runs
  * against `query` before it reaches `searchKeywordIndex` — see that

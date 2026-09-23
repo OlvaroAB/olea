@@ -626,6 +626,16 @@ export interface GroundingJudgeVerdict {
 }
 
 /**
+ * The task's own five operations (`[JEV-5]` / `ol-3ux7.88`), named so other
+ * modules in this directory can reuse it rather than re-typing the literal
+ * union `GroundingJudgeRequest.intendedOperation` already carries — see that
+ * field's doc for what it means and where it flows. Purely additive:
+ * `GroundingJudgeRequest` itself is untouched, this is just a name for its
+ * existing field's type.
+ */
+export type IntendedOperation = NonNullable<GroundingJudgeRequest['intendedOperation']>;
+
+/**
  * The injected port the band escalates through. An interface rather than a
  * direct transport call so this module keeps the property its header claims —
  * the band decides, something else sends — and so the judge can be swapped for
@@ -776,11 +786,29 @@ export interface AssessSupportRequest {
 }
 
 /**
+ * The four-verdict sufficiency outcome (`docs/dev/intelligence-build/evd.md`
+ * §3, `[ILB-EVD-4]`) an `assessed` support assessment carries, alongside the
+ * pre-existing binary `supported`/`reason` fields.
+ *
+ * - `sufficient` — the package supports the operation as asked.
+ * - `partial` — it supports some of what the operation needs; `missing`
+ *   names what (a condition, a value, a step) when the provider can say.
+ * - `insufficient` — it does not support the operation.
+ * - `conflicting` — passages in the package disagree on what the operation
+ *   needs.
+ */
+export type AssessSupportVerdict = 'sufficient' | 'partial' | 'insufficient' | 'conflicting';
+
+/**
  * Task-specific outcomes for a support assessment — a strict superset of
  * what any one provider can currently produce, on purpose: this is the
  * contract the SEAM promises, not the contract today's incumbent fulfils.
  *
- * - `assessed` — a definite verdict was reached.
+ * - `assessed` — a definite verdict was reached. `verdict` is the
+ *   four-way sufficiency call (`evd.md` §3); `supported`/`reason` are the
+ *   pre-existing binary fields every wrapped judge already produces, kept
+ *   so this is additive rather than a breaking rename. `missing` is present
+ *   only when the provider can name what a `partial` verdict is missing.
  * - `insufficient-evidence` — the provider looked and found the evidence did
  *   not settle the question (distinct from `could-not-decide`: this is a
  *   fact about the material, that one is a fact about the judge's own
@@ -794,7 +822,13 @@ export interface AssessSupportRequest {
  *   the question with adequate confidence.
  */
 export type AssessSupportOutcome =
-  | { readonly status: 'assessed'; readonly supported: boolean; readonly reason: string }
+  | {
+      readonly status: 'assessed';
+      readonly supported: boolean;
+      readonly reason: string;
+      readonly verdict: AssessSupportVerdict;
+      readonly missing?: readonly string[];
+    }
   | { readonly status: 'insufficient-evidence' }
   | { readonly status: 'unavailable' }
   | { readonly status: 'could-not-decide' };
@@ -819,9 +853,11 @@ export interface AssessSupportPort {
  * binary `supported`/`reason` verdict into the wider outcome union above.
  * It never produces `insufficient-evidence` or `could-not-decide` — the
  * wrapped judge has no way to report either — only `assessed` (mapping
- * `supported` straight through) or `unavailable` on any throw, exactly
- * mirroring the fail-closed posture `resolveGroundedContext` already applies
- * to the same port.
+ * `supported` straight through, and deriving `verdict` from it: `supported`
+ * → `sufficient`, not `supported` → `insufficient` — the binary judge has no
+ * way to distinguish `partial` or `conflicting` from a flat "no") or
+ * `unavailable` on any throw, exactly mirroring the fail-closed posture
+ * `resolveGroundedContext` already applies to the same port.
  */
 export class IncumbentAssessSupport implements AssessSupportPort {
   constructor(private readonly judge: GroundingJudgePort) {}
@@ -836,7 +872,12 @@ export class IncumbentAssessSupport implements AssessSupportPort {
           : {}),
       });
       if (typeof verdict?.supported !== 'boolean') return { status: 'unavailable' };
-      return { status: 'assessed', supported: verdict.supported, reason: verdict.reason };
+      return {
+        status: 'assessed',
+        supported: verdict.supported,
+        reason: verdict.reason,
+        verdict: verdict.supported ? 'sufficient' : 'insufficient',
+      };
     } catch {
       return { status: 'unavailable' };
     }

@@ -190,3 +190,63 @@ describe('hybridRetrieve (C2.5: hybrid keyword + cosine)', () => {
     expect(hits).toEqual([]);
   });
 });
+
+// `[ILB-EVD-4]`: making an embedding failure visible to a caller reading
+// `HybridHit[]` directly, without changing ranking or any existing field.
+describe('hybridRetrieve — semantic availability is visible on every hit (`[ILB-EVD-4]`)', () => {
+  it('marks every hit "unavailable" when no query vector was supplied at all', async () => {
+    const chunks = [chunk('a.md', 0, 'mitochondria is the powerhouse')];
+    const hits = await hybridRetrieve({
+      query: 'mitochondria',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'mitochondria is the powerhouse', 1)],
+      queryVector: null,
+      embeddings: new Map(),
+    });
+
+    expect(hits[0]?.semantic).toBe('unavailable');
+  });
+
+  it('marks every hit "used" once a query vector is supplied, even for a hit only found by keyword', async () => {
+    const chunks = [
+      chunk('a.md', 0, 'mitochondria is the powerhouse', 'h1'),
+      chunk('b.md', 0, 'unrelated block', 'h2'),
+    ];
+    const hits = await hybridRetrieve({
+      query: 'mitochondria',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'mitochondria is the powerhouse', 1)],
+      queryVector: [1, 0],
+      embeddings: new Map([['h2', [0, 1]]]),
+    });
+
+    // The keyword-only hit ('a.md') carries no cosine score of its own, but
+    // `semantic` is a per-call fact, not a per-hit one — it still reads
+    // 'used' because a query vector genuinely was available to fuse with.
+    const keywordOnlyHit = hits.find((h) => h.path === 'a.md');
+    expect(keywordOnlyHit?.cosineScore).toBeNull();
+    expect(keywordOnlyHit?.semantic).toBe('used');
+    expect(hits.every((h) => h.semantic === 'used')).toBe(true);
+  });
+
+  it('preserves semantic across a rerank pass, alongside every other pre-existing field', async () => {
+    const chunks = [chunk('a.md', 0, 'text', 'h1')];
+    const rerank: RerankProvider = {
+      async rerank(request) {
+        return { scores: request.candidates.map((c) => ({ id: c.id, score: 1 })) };
+      },
+    };
+
+    const hits = await hybridRetrieve({
+      query: 'text',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'text', 1)],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { rerank },
+    });
+
+    expect(hits[0]?.semantic).toBe('unavailable');
+    expect(hits[0]?.matchedBy).toContain('rerank');
+  });
+});

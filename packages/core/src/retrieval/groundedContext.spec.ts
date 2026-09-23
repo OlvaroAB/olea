@@ -28,6 +28,7 @@ function hit(overrides: Partial<HybridHit> = {}): HybridHit {
     keywordScore: null,
     cosineScore: null,
     matchedBy: [],
+    semantic: 'used',
     ...overrides,
   };
 }
@@ -793,13 +794,23 @@ describe('IncumbentAssessSupport — the assessSupport seam wrapping the current
   it('maps a supported verdict to assessed(supported: true)', async () => {
     const adapter = new IncumbentAssessSupport(countingJudge(true).port);
     const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
-    expect(outcome).toEqual({ status: 'assessed', supported: true, reason: 'because' });
+    expect(outcome).toEqual({
+      status: 'assessed',
+      supported: true,
+      reason: 'because',
+      verdict: 'sufficient',
+    });
   });
 
   it('maps an unsupported verdict to assessed(supported: false), not to a refusal outcome', async () => {
     const adapter = new IncumbentAssessSupport(countingJudge(false).port);
     const outcome = await adapter.assessSupport({ query: 'q', context: 'c' });
-    expect(outcome).toEqual({ status: 'assessed', supported: false, reason: 'because' });
+    expect(outcome).toEqual({
+      status: 'assessed',
+      supported: false,
+      reason: 'because',
+      verdict: 'insufficient',
+    });
   });
 
   it('forwards intendedOperation to the wrapped judge', async () => {
