@@ -9,15 +9,22 @@
  * chain-4 wiring bead (`[ILB-EVD-5]`) share one vocabulary rather than each
  * inventing its own strings for the same four consumers.
  *
- * **`operation` reuses `groundedContext.ts`'s existing five-way union
- * (`IntendedOperation`) rather than a second enum** — `evd.md` §2's request
- * shape (`request {purpose, conceptKey, conceptName, operation, scope}`)
- * names the same "define/explain/calculate/apply/compare" operation
- * `GroundingJudgeRequest.intendedOperation` already carries; inventing a
- * parallel union here would let the two drift.
+ * **`operation` reuses `PaperDemand`, `[D-262]`'s ruled demand vocabulary
+ * (`../oracle/paper-types.js`) — `recall-a-fact` / `calculate` /
+ * `compare-or-choose` / `apply-to-unfamiliar-case` / `interpret-printed-result`
+ * — rather than `groundedContext.ts`'s older `IntendedOperation`
+ * stratification enum.** `IntendedOperation` still types
+ * `GroundingJudgeRequest.intendedOperation` exactly as before — that is the
+ * judge's own existing wire field, untouched by this change. What this
+ * chain's own request and the heading mapping (`../heading-offer/
+ * operation.ts`) speak is the ruled vocabulary directly, not the judge's
+ * older enum. `./demand.ts` carries the two-way mapping between the two
+ * unions for the one caller that needs to cross from a judge-shaped signal
+ * into a demand (and back) — the mapping is necessarily partial in both
+ * directions (see that module's doc).
  */
 
-import type { IntendedOperation } from './groundedContext.js';
+import type { PaperDemand } from '../oracle/paper-types.js';
 
 /**
  * Which of `evd.md` §1's four consumers is asking. Named for the consumer's
@@ -57,6 +64,6 @@ export interface RetrievalScope {
  */
 export interface RetrievalRequest {
   readonly purpose: RetrievalPurpose;
-  readonly operation?: IntendedOperation;
+  readonly operation?: PaperDemand;
   readonly scope: RetrievalScope;
 }
