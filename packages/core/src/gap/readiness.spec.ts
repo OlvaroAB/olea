@@ -15,10 +15,17 @@ import {
 const QUIZ_PATH = '02 Assessments/quiz-1.md' as VaultPath;
 const ESSAY_PATH = '02 Assessments/essay-1.md' as VaultPath;
 
+// `tiers` names tiers PRACTISED (any outcome); `succeeded` names tiers with
+// at least one SUCCESSFUL event and defaults to `tiers` itself, so existing
+// callers that mean "practised and succeeded" (the common case) need no
+// change — ol-lfhj's fix reads `tiersSucceeded`, not `tiersPracticed`, and
+// the two are made to diverge explicitly, via `succeeded`, wherever a test
+// needs a tier that was attempted but never got right.
 function mastery(
   conceptId: string,
   tiers: Partial<Record<EvidenceTier, boolean>>,
   recognitionOnly = false,
+  succeeded: Partial<Record<EvidenceTier, boolean>> = tiers,
 ): ConceptMasteryResult {
   return {
     conceptId,
@@ -31,6 +38,11 @@ function mastery(
         recognition: tiers.recognition ?? false,
         recall: tiers.recall ?? false,
         explanation: tiers.explanation ?? false,
+      },
+      tiersSucceeded: {
+        recognition: succeeded.recognition ?? false,
+        recall: succeeded.recall ?? false,
+        explanation: succeeded.explanation ?? false,
       },
       gradedExplainBackCount: 0,
       recognitionOnly,
@@ -205,6 +217,24 @@ describe('readinessFactorsFor', () => {
     expect(readinessFactorsFor(undefined, 'recall-style').weight).toBe(1);
   });
 
+  it('a wrong MCQ answer, and nothing else, never discounts need — ol-lfhj, R7, review 3.4', () => {
+    // Worked case from the bead: recognition was PRACTISED (an MCQ was
+    // answered) but never SUCCEEDED (the answer was wrong). Before the fix,
+    // `applied` read `tiersPracticed.recognition` and turned true here too,
+    // discounting the row exactly as a right answer would.
+    const wrongMcqOnly = mastery('Alpha', { recognition: true }, false, { recognition: false });
+    const factors = readinessFactorsFor(wrongMcqOnly, 'recall-style');
+    expect(factors.applied).toBe(false);
+    expect(factors.weight).toBe(1);
+  });
+
+  it('a right MCQ answer still discounts need at the configured weight', () => {
+    const rightMcq = mastery('Alpha', { recognition: true }, false, { recognition: true });
+    const factors = readinessFactorsFor(rightMcq, 'recall-style');
+    expect(factors.applied).toBe(true);
+    expect(factors.weight).toBe(DEFAULT_MCQ_RECOGNITION_WEIGHT);
+  });
+
   it('never zeroes a row out, whatever it is configured to', () => {
     expect(() =>
       readinessFactorsFor(mastery('Alpha', { recognition: true }), 'recall-style', {
@@ -281,6 +311,30 @@ describe('R7 in the gap view — the readiness/knowledge split', () => {
     // one may never rewrite the other.
     expect(alphaIn(mcq)).toBe(alphaIn(written));
     expect(alphaIn(mcq)).toBe('sprout');
+  });
+
+  it("a wrong-answer-only concept keeps the oracle ordering — ol-lfhj's worked case", () => {
+    // Alpha practised recognition (an MCQ was answered) but never succeeded
+    // at it (the answer was wrong) — nothing else. Before the fix this
+    // multiplied Alpha's gap score by 0.6, the same discount a RIGHT answer
+    // gets, making a wrong answer read as less urgent to revisit than no
+    // evidence at all.
+    const wrongOnlyMasteryMap = new Map([
+      ['Alpha', mastery('Alpha', { recognition: true }, false, { recognition: false })],
+    ]);
+    const model = buildGapView({
+      ranking: ranking(entries),
+      assessments: [assessment(QUIZ_PATH, 'Quiz')],
+      mastery: wrongOnlyMasteryMap,
+      materialPresence: PRESENCE,
+      sourceCoverage: COVERAGE,
+    });
+    const course = model.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected a ranked course');
+    expect(course.rows.map((r) => r.conceptName)).toEqual(['Alpha', 'Beta']);
+    const alpha = course.rows.find((r) => r.conceptName === 'Alpha');
+    expect(alpha?.readiness.applied).toBe(false);
+    expect(alpha?.gapScore).toBe(alpha?.priorityScore);
   });
 
   it('is reversible from the outside — weight 1 returns the oracle ordering exactly', () => {

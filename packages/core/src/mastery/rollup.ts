@@ -350,8 +350,25 @@ export interface ConceptMasteryEvidence {
   readonly explainBackAttempts: number;
   /** Explain-back review events for this concept that carry an `explainBackGrade`. */
   readonly gradedExplainBackCount: number;
-  /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated. */
+  /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated, whatever its outcome. */
   readonly tiersPracticed: Readonly<Record<EvidenceTier, boolean>>;
+  /**
+   * Every R7 tier at least one event for this concept **succeeded** at —
+   * a scored review whose rating was not `again`, or a graded explain-back
+   * whose independent correctness verdict was `correct`. Deliberately
+   * separate from `tiersPracticed`, which is true on attempt alone and stays
+   * that way for its own documented readers (the concept-detail "what
+   * practice produced this state" line, BRIEF §3): a caller that discounts
+   * need on *demonstrated* recognition — ol-lfhj, R7, review 3.4's "a wrong
+   * answer never lowers need" — reads this field, never `tiersPracticed`.
+   *
+   * **Optional** so a fixture built before this field existed, elsewhere in
+   * this codebase, still type-checks without editing every one of them —
+   * `computeConceptMastery` always populates it; an absent value reads as no
+   * demonstrated success, the conservative default a discounting reader
+   * needs.
+   */
+  readonly tiersSucceeded?: Readonly<Record<EvidenceTier, boolean>>;
   /** True when every scored event is recognition (MCQ) — such a concept can never exceed `sapling`. */
   readonly recognitionOnly: boolean;
   /** Distinct calendar days, over the WHOLE log, on which a scored review succeeded — the spacing gate's input. */
@@ -514,6 +531,11 @@ function conceptEvidence(
     recall: false,
     explanation: false,
   };
+  const tiersSucceeded: Record<EvidenceTier, boolean> = {
+    recognition: false,
+    recall: false,
+    explanation: false,
+  };
   const successDays = new Set<string>();
   let scoredEventCount = 0;
   let scoredSuccessCount = 0;
@@ -547,6 +569,10 @@ function conceptEvidence(
         if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
           deepestSoloLevel = grade.soloLevel;
         }
+        // Same success test `qualifiesForTopStage` reads first — an
+        // independent verdict of `correct`, absent reads as unknown and
+        // never counts as demonstrated.
+        if (grade.correctness === 'correct') tiersSucceeded.explanation = true;
         if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
           topStageQualified = true;
         }
@@ -558,6 +584,7 @@ function conceptEvidence(
     if (record.instrumentType === 'mcq') recognitionScoredCount += 1;
     if (isSuccessRating(record.rating)) {
       scoredSuccessCount += 1;
+      tiersSucceeded[evidenceTierOf(record.instrumentType)] = true;
       const day = calendarDayOfTimestamp(record.timestamp);
       if (day !== null) successDays.add(day);
     }
@@ -569,6 +596,7 @@ function conceptEvidence(
     explainBackAttempts,
     gradedExplainBackCount,
     tiersPracticed,
+    tiersSucceeded,
     recognitionOnly: scoredEventCount > 0 && recognitionScoredCount === scoredEventCount,
     successfulScoredDays: successDays.size,
     deepestSoloLevel,

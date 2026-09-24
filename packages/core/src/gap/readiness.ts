@@ -128,7 +128,14 @@ export interface ReadinessOptions {
  */
 export interface ReadinessFactors {
   readonly assessmentFormat: AssessmentFormat;
-  /** At least one scored recognition (MCQ) event exists for this concept — `ConceptMasteryEvidence.tiersPracticed.recognition`. */
+  /**
+   * At least one scored recognition (MCQ) event **succeeded** for this
+   * concept — `ConceptMasteryEvidence.tiersSucceeded.recognition`. A wrong
+   * MCQ answer is not demonstrated recognition and must never set this
+   * (ol-lfhj, R7, review 3.4: "a wrong answer never lowers need") — reading
+   * `tiersPracticed` here instead would make a wrong answer discount need
+   * the same as a right one.
+   */
   readonly recognitionEvidence: boolean;
   /** Every scored event is recognition — carried for the surface, never used to zero a row (R7's framing clause). */
   readonly recognitionOnly: boolean;
@@ -160,7 +167,7 @@ export function readinessFactorsFor(
     );
   }
 
-  const recognitionEvidence = mastery?.evidence.tiersPracticed.recognition ?? false;
+  const recognitionEvidence = mastery?.evidence.tiersSucceeded?.recognition ?? false;
   const recognitionOnly = mastery?.evidence.recognitionOnly ?? false;
   const applied = assessmentFormat === 'recall-style' && recognitionEvidence;
 

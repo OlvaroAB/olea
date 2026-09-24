@@ -342,6 +342,57 @@ describe('computeConceptMastery — a concept whose evidence disagrees sharply',
   });
 });
 
+describe('computeConceptMastery — tiersSucceeded (ol-lfhj, R7, review 3.4: "a wrong answer never lowers need")', () => {
+  it('a single wrong MCQ answer PRACTISES recognition but does not SUCCEED at it', () => {
+    const entries = [
+      review({ instrumentType: 'mcq', instrumentId: 'mcq:concept-a:1', rating: 'again' }),
+    ];
+    const result = computeConceptMastery(entries, 'concept-a');
+    expect(result.evidence.tiersPracticed.recognition).toBe(true);
+    expect(result.evidence.tiersSucceeded?.recognition).toBe(false);
+  });
+
+  it('a single right MCQ answer succeeds at recognition too', () => {
+    const entries = [
+      review({ instrumentType: 'mcq', instrumentId: 'mcq:concept-a:1', rating: 'good' }),
+    ];
+    const result = computeConceptMastery(entries, 'concept-a');
+    expect(result.evidence.tiersPracticed.recognition).toBe(true);
+    expect(result.evidence.tiersSucceeded?.recognition).toBe(true);
+  });
+
+  it('a wrong answer among an all-failure history never sets tiersSucceeded, for any tier', () => {
+    const entries = onConsecutiveDays('2026-01-01', 4, () => ({ rating: 'again' }));
+    const result = computeConceptMastery(entries, 'concept-a');
+    expect(result.evidence.tiersPracticed.recall).toBe(true);
+    expect(result.evidence.tiersSucceeded?.recall).toBe(false);
+  });
+
+  it('an explain-back graded incorrect practises explanation but does not succeed at it', () => {
+    const entries = [
+      gradedExplainBack('relational', {
+        explainBackGrade: {
+          soloLevel: 'relational',
+          correctness: 'incorrect',
+          contentRef: 'content-ref-placeholder',
+          revisionOf: null,
+          artifactProvenance: {
+            taskId: 'explain-back-grade',
+            promptVersion: 'v0',
+            modelId: 'model-placeholder',
+          },
+        },
+      }),
+    ];
+    const result = computeConceptMastery(entries, 'concept-a');
+    expect(result.evidence.tiersPracticed.explanation).toBe(true);
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    // R3/R7: correctness alone does not open the depth gate (assistance and
+    // instrument validity gate it too), but it must never claim success.
+    expect(result.state).not.toBe('tree');
+  });
+});
+
 describe('computeConceptMastery — the two declared constants are honoured and validated (MAT-6)', () => {
   it('the shipped defaults are the declared ones: 3 spaced days, and `relational` on the depth gate', () => {
     expect(MIN_SPACED_RETRIEVAL_DAYS).toBe(3);
