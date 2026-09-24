@@ -231,6 +231,32 @@ export const DEPTH_GATE_SOLO_LEVEL: SoloLevel = 'relational';
 export const MIN_SPACED_RETRIEVAL_DAYS = 3;
 
 /**
+ * **THE HOLDING/TENDING CUT — declared, `[D-115]` / `ol-0t3b`, provisional.**
+ * The recall probability at or above which vitality's fold (`./vitality.ts`'s
+ * `readVitality`) reads a concept's weakest recall-tier instrument as
+ * `holding` rather than `tending`. `[D-115]` ratified 0.90, defined as
+ * IDENTITY with the scheduler's own `request_retention` parameter — the two
+ * cannot drift apart, and "needs tending" means exactly "the weakest
+ * recall-tier instrument is past due" (`createFsrsScheduler` leaves
+ * `request_retention` at `ts-fsrs`'s own default, which is this same 0.90).
+ * Reclassified from derived to declared in the ratifying commit: defensible
+ * in plain English ("tending = past due"), never fitted — the measured band
+ * at the due instant across a real corpus is `[0.8956, 0.9040]`, 0.008 wide,
+ * which is evidence the identity holds, not a fit of the number itself.
+ * Provisional; revisit event is one real term of her review log read against
+ * her own sense of what "holding" should have meant — see
+ * `findings/VIT-1-holding-cut.md` in the private repo.
+ *
+ * **`readVitality` itself still takes `holdingCut` as a required parameter
+ * with no default** (see that module's doc for why a default is the fastest
+ * way to harden an undecided number). This constant is the one place the
+ * ratified value is declared; every production caller with no better number
+ * to hand in defaults to it here rather than declaring its own local
+ * fallback.
+ */
+export const HOLDING_CUT = 0.9;
+
+/**
  * **THE ADMITTED SUPPORT LEVELS — declared, `[D-281]` / `ol-95vv.10`.** Which
  * `supportLevelShown` values still permit the top stage's claim.
  *
@@ -786,9 +812,10 @@ export function conceptVitalityInstruments(
  * evidence for `conceptId`, and folds them through `readVitality`.
  *
  * Unlike `computeConceptMastery`, this is not a pure function of `entries`
- * alone — vitality is a current reading and needs `now` and the (derived,
- * handed-in, never-defaulted — see `./vitality.ts`) holding cut. See this
- * module's doc, "computeConceptMastery still computes one axis, not two."
+ * alone — vitality is a current reading and needs `now` and the (declared,
+ * `[D-115]`/`HOLDING_CUT` above, handed-in, never-defaulted here — see
+ * `./vitality.ts`) holding cut. See this module's doc, "computeConceptMastery
+ * still computes one axis, not two."
  *
  * Replays the whole log on every call. A caller reading vitality for many
  * concepts from the same log should call `readAllConceptVitality` instead,

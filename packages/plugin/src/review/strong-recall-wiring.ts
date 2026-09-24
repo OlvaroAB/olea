@@ -80,23 +80,10 @@ import {
   computeAllConceptMastery,
   conceptVitalityInstruments,
   evaluateStrongRecallProposal,
+  HOLDING_CUT,
   readVitality,
   replaySchedulerStates,
 } from 'olea-core';
-
-/**
- * F2.11/`[D-116]`'s vitality axis needs a holding cut it cannot compute
- * itself. `today/data-source.ts`, `registry/provider.ts` and
- * `retrospective/provider.ts` each already declare this identical fallback
- * independently rather than share one module (see the first of those for the
- * argument) — this is a fourth, for the review session, and it is a
- * plain-English default (Class B) rather than a derivation for exactly the
- * same reason: ratifying a real value needs a semester of her review log.
- *
- * Exported so a caller that has a better number can hand it in, the same
- * `?? DECLARED_FALLBACK_HOLDING_CUT` shape those three providers use.
- */
-export const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 export interface StrongRecallProposalReaderDeps {
   /**
@@ -109,7 +96,14 @@ export interface StrongRecallProposalReaderDeps {
   readonly scheduler: Scheduler;
   /** The session's own instant, read once by its caller — never `Date.now()` inside this module. */
   readonly now: Date;
-  /** Overrides {@link DECLARED_FALLBACK_HOLDING_CUT}. */
+  /**
+   * F2.11/`[D-116]`'s vitality axis needs a holding cut it cannot compute
+   * itself. `today/data-source.ts`, `registry/provider.ts`,
+   * `retrospective/provider.ts` and `grove/provider.ts` used to each declare
+   * an independent `0.8` fallback for it; all five now default to
+   * `HOLDING_CUT`, `olea-core`'s one exported declaration of `[D-115]`'s
+   * ratified 0.90 (`ol-owyn`). Overrides {@link HOLDING_CUT}.
+   */
   readonly holdingCut?: number;
 }
 
@@ -188,7 +182,7 @@ function misconceptionSinceLastGradedExplainBack(
 export function createStrongRecallProposalReader(
   deps: StrongRecallProposalReaderDeps,
 ): (input: StrongRecallProposalReaderInput) => StrongRecallProposalDecision {
-  const holdingCut = deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT;
+  const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const memo = new Map<string, StrongRecallProposalDecision>();
   let replayed: ReplayResult | null = null;
 

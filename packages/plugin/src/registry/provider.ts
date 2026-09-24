@@ -152,6 +152,7 @@ import {
   createFsrsScheduler,
   type DisputeLogRecord,
   enumerateVaultInstruments,
+  HOLDING_CUT,
   listSameAsLinkRecords,
   pruneConcept as pruneConceptOverride,
   type RankOracleOptions,
@@ -185,15 +186,12 @@ import type { RegistryViewDeps, RegistryViewState } from './view.js';
 /**
  * Vitality's own module doc (`../../core/mastery/rollup.ts`) names the
  * mastery surface that would show a stage beside its vitality as still
- * unbuilt when it was written. This provider, and `retrospective/
- * provider.ts` before it, are both that surface now — two independent Class
- * B declarations of the same unmeasured constant rather than one shared
- * module, matching this codebase's existing convention (no shared
- * `holdingCut` constant exists anywhere else in `packages/plugin`).
- * Ratifying it needs a real semester of her review log (see that module's
- * own doc); until then this is a plain-English default, not a derivation.
+ * unbuilt when it was written. This provider is one of that surface's
+ * readers now. It used to declare its own independent `0.8` fallback here,
+ * same as four sibling readers (`ol-owyn`); all five now default to
+ * `HOLDING_CUT`, `olea-core`'s one exported declaration of `[D-115]`'s
+ * ratified 0.90, instead of each carrying an un-ratified guess.
  */
-const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 /** `RegistryConceptEntry['renameProposal']`'s non-null shape, derived by indexed access rather than a direct import — `RenameProposal`/`RenameProposalCandidate` (`../../core/registry/types.ts`) are not exported from `olea-core`'s index (out of `ol-2zfj.58`'s `owns`; see `./copy.ts`'s doc for the same technique used for the identical reason). */
 type RenameProposal = NonNullable<RegistryConceptEntry['renameProposal']>;
@@ -366,6 +364,7 @@ export interface CreateLocalRegistryProviderDeps {
   readonly acceptNoteOfferPort?: AcceptNoteOfferPort;
   /** Overridable for tests; defaults to the window every other provider probes by. */
   readonly probeDays?: number;
+  /** Overrides `HOLDING_CUT` (`[D-115]`) for F2.11's vitality axis — injected for determinism under test. */
   readonly holdingCut?: number;
   /**
    * `ol-r5j4`: best-effort notification of a freshly-saved `RegistryOverrides`
@@ -530,7 +529,7 @@ export function createLocalRegistryProvider(
     deps.vault,
     deps.deviceId,
   );
-  const holdingCut = deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT;
+  const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const scheduler = createFsrsScheduler();
   const openSourceLocationPort: OpenSourceLocationPort = deps.openSourceLocationPort ?? {
     async open(location: RegistrySourceLocation) {

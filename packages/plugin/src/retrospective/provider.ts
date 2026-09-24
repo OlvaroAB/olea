@@ -49,6 +49,7 @@ import {
   buildRetrospective,
   type ConceptRecord,
   createFsrsScheduler,
+  HOLDING_CUT,
   hasAssessmentPassed,
   REQUIRED_ASSESSMENT_FIELDS,
   type RetrospectiveConceptCoverage,
@@ -71,9 +72,6 @@ import type { RetrospectiveOfferEventLog } from './offer-events.js';
 
 /** How far back the review-log read spans — a whole academic year with margin, matching `today/data-source.ts`'s own `SCHEDULING_HISTORY_PROBE_DAYS` bound for the same reason: a term's worth of evidence, not the Today panel's shorter streak window. */
 const RETROSPECTIVE_HISTORY_WINDOW_DAYS = 400;
-
-/** `0.8` — the same DECLARED fallback shape `oracle/rank.ts`'s constants use: a plain-English default for when no derived, delivered value is available. Plain-English defense: a concept recalled with at least 4-in-5 probability is one the registry's own evidence table calls "recalled reliably" — this is a shape, not a corpus-fitted number, so it is safe to declare here rather than derive. Replace with a delivered artifact value the day one exists (`[D-110]`'s pattern), same follow-up gap `oracle/rank.ts` already names for its own weights. */
-const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 export interface RetrospectiveLoadResult {
   readonly reading: RetrospectiveReading;
@@ -101,6 +99,7 @@ export interface RetrospectiveProviderDeps {
    */
   readonly settingsHost: ObsidianDataHost;
   readonly now: () => Date;
+  /** Overrides `HOLDING_CUT` (`[D-115]`) for F2.11's vitality axis — injected for determinism under test. */
   readonly holdingCut?: number;
 }
 
@@ -228,7 +227,7 @@ export interface RetrospectiveProvider {
 export function createLocalRetrospectiveProvider(
   deps: RetrospectiveProviderDeps,
 ): RetrospectiveProvider {
-  const holdingCut = deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT;
+  const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const scheduler = createFsrsScheduler();
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
 

@@ -167,6 +167,7 @@ import {
   extractTier3Evidence,
   findUnreadableFiles,
   type GroveCourseModel,
+  HOLDING_CUT,
   isRegisterableDocument,
   projectRegisteredFiles,
   readAssessments,
@@ -197,14 +198,6 @@ import {
 } from './prior-denominator-store.js';
 import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js';
 import type { GroveCourseSection, GroveScopeCorrectionReceipt, GroveViewState } from './view.js';
-
-/**
- * Same DECLARED shape `registry/provider.ts` and `retrospective/
- * provider.ts` each already carry — a plain-English default
- * (`buildRegistryModel` requires a holding cut to compute vitality), never
- * read by this module: F8.1's grove reads growth stage, not vitality.
- */
-const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 export interface CreateLocalGroveProviderDeps {
   readonly vault: VaultSource;
@@ -528,7 +521,11 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           entries,
           scheduler,
           now,
-          holdingCut: DECLARED_FALLBACK_HOLDING_CUT,
+          // `HOLDING_CUT` (`[D-115]`, `olea-core`) — inert today, since F8.1's
+          // grove reads growth stage, not vitality (`ol-owyn`), but still the
+          // ratified value rather than an independent local guess if grove
+          // ever reads vitality.
+          holdingCut: HOLDING_CUT,
           overrides,
           suspendedInstrumentIds: suspendedInstrumentIds(entries),
         });

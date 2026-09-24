@@ -333,3 +333,30 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     expect(decision).not.toHaveProperty('dueAt');
   });
 });
+
+/**
+ * `ol-owyn`: this reader used to fall back to a locally declared `0.8`,
+ * never the `[D-115]`-ratified `0.90`, whenever no `holdingCut` override was
+ * supplied — which production never does. `evaluateStrongRecallProposal`
+ * requires `vitality === 'holding'` to propose at all (`strong-recall-
+ * proposal.ts:330`), which makes the wrong fallback directly observable
+ * here: the SAME four-spaced-day log `strongRecallLog` builds above, read 25
+ * days after its last review, lands the real FSRS scheduler's retrievability
+ * at roughly 0.87 (`>= 0.8`, `< 0.9`). The old fallback would read `holding`
+ * and wrongly offer the extra explain-back; the ratified cut must read
+ * `tending` and decline it.
+ */
+describe('createStrongRecallProposalReader — the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
+  it('does not propose once retrievability has faded into the 0.8–0.9 gap — the ratified cut, not the old 0.8 guess', () => {
+    const lastReviewedAt = new Date('2026-08-20T08:00:00+00:00');
+    const read = createStrongRecallProposalReader({
+      entries: strongRecallLog('concept-owyn'),
+      scheduler: createFsrsScheduler(),
+      now: new Date(lastReviewedAt.getTime() + 25 * 24 * 60 * 60 * 1000),
+    });
+
+    const decision = read({ conceptIds: ['concept-owyn'] });
+
+    expect(decision).toEqual({ shouldPropose: false, because: 'recall-not-holding' });
+  });
+});

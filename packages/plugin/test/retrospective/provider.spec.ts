@@ -313,3 +313,69 @@ describe('createLocalRetrospectiveProvider — D-134 Q6 scope resolution (ol-0r9
     expect(result.reading.scopeCount).toBe(0);
   });
 });
+
+/**
+ * `ol-owyn`: this provider used to fall back to a locally declared `0.8`,
+ * never the `[D-115]`-ratified `0.90`, whenever no `holdingCut` override was
+ * supplied — which production never does. A single `good`-rated `qa` review,
+ * read five days after it was recorded, lands the real FSRS scheduler's
+ * retrievability at roughly 0.84 (`>= 0.8`, `< 0.9`) — the old fallback would
+ * read `holding`; the ratified cut must read `tending`.
+ */
+describe('createLocalRetrospectiveProvider — the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
+  it('a concept whose weakest instrument sits between 0.8 and 0.9 reads "faded" (tending), not "held"', async () => {
+    const reviewedAt = '2026-01-01T09:00:00Z';
+    const providerNow = new Date(Date.parse(reviewedAt) + 5 * 24 * 60 * 60 * 1000);
+    const reviewDay = localToday(providerNow);
+
+    const vault = memoryVault({
+      // `assessmentNote`'s fixture hardcodes `class: TESTC101` — the concept
+      // must share that course, or D-134 Q6's course-scoped resolver (and the
+      // evidenced fallback, both course-gated) never puts it in scope.
+      'Notes/owyn-retro.md': conceptNote('Owyn Retro Concept', 'TESTC101'),
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz Owyn.md': assessmentNote({ due: '2025-12-20', status: 'done' }),
+    });
+    const concepts = await extractConceptsFromVault(vault, {});
+    const conceptId = concepts.find((c) => c.name === 'Owyn Retro Concept')?.key;
+    if (conceptId === undefined) throw new Error('missing concept key');
+
+    await vault.write(
+      reviewLogPath(reviewDay, DEVICE),
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'owyn1',
+        timestamp: reviewedAt,
+        instrumentId: `qa:${conceptId}:1`,
+        instrumentType: 'qa',
+        conceptIds: [conceptId],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 1000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`,
+    );
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      // Exactly five days after the review's own timestamp — no `holdingCut`
+      // override, so this exercises whatever the provider defaults to.
+      now: () => providerNow,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+    expect(result.reading.faded.map((l) => l.conceptName)).toEqual(['Owyn Retro Concept']);
+    expect(result.reading.held).toEqual([]);
+  });
+});

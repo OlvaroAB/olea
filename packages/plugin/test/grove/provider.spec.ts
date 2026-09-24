@@ -9,14 +9,35 @@
  * `buildGroveModel`'s own acceptance criteria, which is `packages/core/
  * src/scope/grove.spec.ts` and `coverage.spec.ts`'s job.
  */
-import type { ConceptRelation, GroveCourseModel, Provenance } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import {
+  buildRegistryModel,
+  type ConceptRelation,
+  type GroveCourseModel,
+  type Provenance,
+} from 'olea-core';
+import { describe, expect, it, vi } from 'vitest';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
 import type { GroveCourseSection, GroveViewState } from '../../src/grove/view.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { createRetrospectiveOfferEventLog } from '../../src/retrospective/offer-events.js';
 import { memoryVault, unreadableVault } from '../review/memory-vault.js';
+
+/**
+ * `ol-owyn`: `createLocalGroveProvider` always calls `buildRegistryModel`
+ * with a holding cut, but nothing in `GroveViewState` reads
+ * `RegistryConceptEntry.vitality` back out — F8.1's grove reads growth
+ * stage, not vitality, so there is no OBSERVABLE behavioural difference
+ * through this provider's public surface for the wrong value to show up in.
+ * Spying on the real `buildRegistryModel` (never replaced, just wrapped) is
+ * how the "no override, ratified value" regression below can be tested at
+ * all here — the same wiring check the other four readers' suites make
+ * observable through vitality's actual classification.
+ */
+vi.mock('olea-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('olea-core')>();
+  return { ...actual, buildRegistryModel: vi.fn(actual.buildRegistryModel) };
+});
 
 const DEVICE = 'olea-testdevice1';
 const BASE_PATH = '02 Assignments/Assignments.base';
@@ -977,5 +998,29 @@ describe('createLocalGroveProvider — retrospective-offered logging (D7.1, `[D-
     const log = createRetrospectiveOfferEventLog({ vault, deviceId: DEVICE, now: () => NOW });
     const offered = (await log.load()).filter((event) => event.kind === 'retrospective-offered');
     expect(offered).toHaveLength(1);
+  });
+});
+
+/**
+ * `ol-owyn`: this provider used to fall back to a locally declared `0.8`,
+ * never the `[D-115]`-ratified `0.90`, whenever no `holdingCut` override was
+ * supplied — which production never does. Inert today (see the mock's own
+ * doc, above, for why this has to be asserted on the call rather than on
+ * `GroveViewState`), but still wrong if grove ever reads vitality.
+ */
+describe('createLocalGroveProvider — the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
+  it('hands buildRegistryModel the ratified holding cut, not a local 0.8 guess', async () => {
+    vi.mocked(buildRegistryModel).mockClear();
+    const provider = createLocalGroveProvider({
+      vault: fixtureVaultGroundOnly(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    await provider.load();
+
+    expect(buildRegistryModel).toHaveBeenCalled();
+    const call = vi.mocked(buildRegistryModel).mock.calls[0]?.[0];
+    expect(call?.holdingCut).toBe(0.9);
   });
 });

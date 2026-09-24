@@ -934,9 +934,16 @@ export type { ConceptMasteryResult } from './mastery/rollup.js';
 // vitality locally. `readConceptVitality` is deliberately NOT exported beside
 // it: it replays the whole log on every call, and F2.21's review-session
 // reader replays once per opened session and folds one concept per grade.
+// `HOLDING_CUT` (`ol-owyn`): the one place `[D-115]`'s ratified 0.90 holding/
+// tending cut is declared. Exported here so every plugin-side reader of
+// vitality (`today/data-source.ts`, `registry/provider.ts`,
+// `retrospective/provider.ts`, `grove/provider.ts`,
+// `review/strong-recall-wiring.ts`) defaults to the SAME ratified value
+// instead of each declaring its own independent fallback.
 export {
   computeAllConceptMastery,
   conceptVitalityInstruments,
+  HOLDING_CUT,
   masteryAtTimeForConceptIds,
 } from './mastery/rollup.js';
 // The sprig data (F2.3, F2.11, P4-T06) and the distribution F6.2's overview is

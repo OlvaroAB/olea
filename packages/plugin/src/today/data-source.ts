@@ -116,6 +116,7 @@ import {
   enumerateVaultInstruments,
   extractTier3Evidence,
   type GroveCourseModel,
+  HOLDING_CUT,
   loadCachedStudyPlan,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
@@ -151,15 +152,14 @@ export const DEFAULT_STREAK_WINDOW_DAYS = 120;
 /**
  * F2.11/D-116's vitality axis needs a scheduler, a clock and a holding cut
  * (`[D-115]`) it cannot compute itself — `../mastery/rollup.ts`'s own doc
- * says why growth stage is pure and vitality is not. `registry/provider.ts`
- * and `retrospective/provider.ts` each already declare this identical
- * fallback independently rather than share one module (that file's own doc:
- * "no shared `holdingCut` constant exists anywhere else in
- * `packages/plugin`") — this is a third, for the Today panel, same reason:
- * ratifying a real value needs a semester of her review log, so until then
- * this is a plain-English default (Class B), not a derivation.
+ * says why growth stage is pure and vitality is not. This provider,
+ * `registry/provider.ts`, `retrospective/provider.ts`, `grove/provider.ts`
+ * and `review/strong-recall-wiring.ts` used to each declare an independent
+ * `0.8` fallback here (`ol-owyn` found none of the five ever received an
+ * override, so all five ran on the un-ratified guess in production). They now
+ * default to `HOLDING_CUT`, `olea-core`'s one exported declaration of
+ * `[D-115]`'s ratified 0.90, instead.
  */
-const DECLARED_FALLBACK_HOLDING_CUT = 0.8;
 
 export interface ReviewHistory {
   readonly entries: readonly ReviewLogEntry[];
@@ -952,10 +952,10 @@ export interface TodayPanelDeps {
   /** Absent means no F6.2 cross-course scope reading — see `TodayScopeSource`. */
   readonly scope?: TodayScopeSource;
   /**
-   * Overrides `DECLARED_FALLBACK_HOLDING_CUT` for F2.11/D-116's vitality
-   * axis (`[D-115]`) — injected for determinism under test, the same
-   * `?? DECLARED_FALLBACK_HOLDING_CUT` pattern `registry/provider.ts`'s
-   * `CreateLocalRegistryProviderDeps.holdingCut` already uses.
+   * Overrides `HOLDING_CUT` for F2.11/D-116's vitality axis (`[D-115]`) —
+   * injected for determinism under test, the same `?? HOLDING_CUT` pattern
+   * `registry/provider.ts`'s `CreateLocalRegistryProviderDeps.holdingCut`
+   * already uses.
    */
   readonly holdingCut?: number;
 }
@@ -1010,7 +1010,7 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   const vitality: TodayPanelVitalityInputs = {
     scheduler: createFsrsScheduler(),
     now,
-    holdingCut: deps.holdingCut ?? DECLARED_FALLBACK_HOLDING_CUT,
+    holdingCut: deps.holdingCut ?? HOLDING_CUT,
   };
 
   const base: TodayPanelInput = {

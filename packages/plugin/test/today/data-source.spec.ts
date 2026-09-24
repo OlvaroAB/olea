@@ -1037,6 +1037,80 @@ describe('loadTodayPanel', () => {
   });
 
   /**
+   * `ol-owyn`: `loadTodayPanel` used to fall back to a locally declared
+   * `0.8`, never the `[D-115]`-ratified `0.90`, whenever no override was
+   * supplied — which production never does (`main.ts` passes none). This
+   * reading sits precisely in the gap between the two: a single `good`-rated
+   * `qa` review, read five days after it was recorded, lands the real FSRS
+   * scheduler's retrievability at roughly 0.84 (`>= 0.8`, `< 0.9`). The old
+   * fallback would read `holding`; the ratified cut must read `tending`.
+   * INV-3: every course code and concept id below is invented.
+   */
+  describe('F2.11 the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
+    it('a concept whose weakest instrument sits between 0.8 and 0.9 reads "tending", not "holding"', async () => {
+      // Extraction, not `provisionalConceptKey` called directly, mints the
+      // real key — a topic-derived (non-bound) concept's key is a random
+      // opaque nonce since `ol-bo48`, so the review log's `conceptIds` must
+      // correlate against the key a real vault walk actually mints, the same
+      // technique `ol-95vv.6`'s suite below uses and explains.
+      const NOTE_PATH = 'Notes/owyn-probe.md';
+      const NOTE_CONTENT = [
+        '---',
+        'topic: [Owyn Probe Concept]',
+        'course: TESTC909',
+        '---',
+        '',
+      ].join('\n');
+      const vault = memoryVault({ [NOTE_PATH]: NOTE_CONTENT });
+      const extracted = await extractConceptsFromVault(vault, {});
+      const record = extracted[0];
+      if (record === undefined) throw new Error('expected one extracted concept');
+      const conceptId = record.key;
+
+      const reviewedAt = '2026-01-01T09:00:00Z';
+      await vault.write(
+        logPath('2026-01-01', DEVICE),
+        `${JSON.stringify({
+          schemaVersion: 3,
+          kind: 'review',
+          eventId: 'owyn1',
+          timestamp: reviewedAt,
+          instrumentId: `qa:${conceptId}:1`,
+          instrumentType: 'qa',
+          rating: 'good',
+          wasUnsure: false,
+          durationMs: 1200,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            masteryAtTime: null,
+            instrumentTypesOffered: ['qa'],
+            planVersion: null,
+          },
+          conceptIds: [conceptId],
+        })}\n`,
+      );
+
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        // Exactly five days after the review's own timestamp — no `holdingCut`
+        // override, so this exercises whatever `loadTodayPanel` defaults to.
+        now: () => new Date(Date.parse(reviewedAt) + 5 * 24 * 60 * 60 * 1000),
+        windowDays: 30,
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC909');
+      if (course === undefined) throw new Error('expected TESTC909 in the mastery overview');
+      expect(course.vitality?.tending).toHaveLength(1);
+      expect(course.vitality?.tending[0]?.conceptId).toBe(conceptId);
+    });
+  });
+
+  /**
    * `ol-95vv.6`: the tending line used to name a concept by its opaque,
    * never-displayed key. `loadTodayPanel` now resolves each tending
    * concept's `displayName` from the same `listConceptCourses()` read

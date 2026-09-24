@@ -106,6 +106,59 @@ describe('createLocalRegistryProvider — load', () => {
   });
 });
 
+/**
+ * `ol-owyn`: this provider used to fall back to a locally declared `0.8`,
+ * never the `[D-115]`-ratified `0.90`, whenever no `holdingCut` override was
+ * supplied — which production never does. A single `good`-rated `qa` review,
+ * read five days after it was recorded, lands the real FSRS scheduler's
+ * retrievability at roughly 0.84 (`>= 0.8`, `< 0.9`) — the old fallback would
+ * read `holding`; the ratified cut must read `tending`.
+ */
+describe('createLocalRegistryProvider — the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
+  it('a concept whose weakest instrument sits between 0.8 and 0.9 reads "tending", not "holding"', async () => {
+    const vault = fixtureVault();
+    const before = await modelFrom(
+      await makeProvider(vault, new FakeDataHost(), new FakeEditPort()).load(),
+    );
+    const conceptId = before.concepts[0]?.key;
+    if (conceptId === undefined) throw new Error('missing concept key');
+
+    const reviewedAt = '2026-01-01T09:00:00Z';
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: reviewedAt,
+        instrumentId: 'qa:owyn-probe:1',
+        instrumentType: 'qa',
+        conceptIds: [conceptId],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'owyn1' },
+    );
+
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      // Exactly five days after the review's own timestamp — no `holdingCut`
+      // override, so this exercises whatever the provider defaults to.
+      now: () => new Date(Date.parse(reviewedAt) + 5 * 24 * 60 * 60 * 1000),
+      editPort: new FakeEditPort(),
+    });
+    const after = await modelFrom(await provider.load());
+    expect(after.concepts[0]?.vitality.value).toBe('tending');
+  });
+});
+
 describe('createLocalRegistryProvider — rename (F8.4)', () => {
   it('persists across a reload, and the old name becomes an alias', async () => {
     const host = new FakeDataHost();
