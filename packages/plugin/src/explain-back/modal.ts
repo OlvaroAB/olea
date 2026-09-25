@@ -733,10 +733,24 @@ export class ExplainBackModal extends Modal {
     // module doc and the deps field's own doc for why `void`/`undefined`
     // here means "no heading", never a fabricated one.
     let soloLevel: SoloLevel | null = null;
-    // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
-    // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
-    const supportLevelShown = supportLevelShownForExplainBack(EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN);
-    if (this.deps.recordSoloGradeAndReview) {
+    // `ol-egov.141.89.6.15`: the depth write is gated on the SAME
+    // `result` the correctness accept just produced, never run
+    // unconditionally whenever `recordSoloGradeAndReview` happens to be
+    // wired. `result === null` or `result.status === 'stale'` both mean
+    // `acceptWithObservation` (`grading/wiring.ts`'s own `ol-0r92.89`
+    // doc, "REJECTS ON A STALE SOURCE, NEVER ACCEPTS SILENTLY") recorded
+    // nothing at all for the correctness half of this accept — a stale
+    // accept must write no review event of any kind, correctness or
+    // depth-only, so the depth write is skipped on exactly the same
+    // condition rather than running unconditionally and leaving a
+    // depth-only event as the sole trace of a source that had already
+    // changed underneath her.
+    if (result !== null && result.status === 'accepted' && this.deps.recordSoloGradeAndReview) {
+      // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
+      // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
+      const supportLevelShown = supportLevelShownForExplainBack(
+        EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,
+      );
       try {
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
