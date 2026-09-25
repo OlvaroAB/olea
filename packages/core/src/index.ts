@@ -6,8 +6,14 @@
 // Component 3.5's client-side input resolution (`ol-v7r5.25`) — see
 // `./allocation/resolve-inputs.js`'s module doc for what each input is and
 // why the rest are declared absent rather than fabricated.
-export type { PlanPolicyCourseInput } from './allocation/resolve-inputs.js';
-export { resolvePlanPolicyCourseInputs } from './allocation/resolve-inputs.js';
+export type {
+  CourseAvoidanceSteeringAnswer,
+  PlanPolicyCourseInput,
+} from './allocation/resolve-inputs.js';
+export {
+  COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT,
+  resolvePlanPolicyCourseInputs,
+} from './allocation/resolve-inputs.js';
 export {
   extractDeclaredProperties,
   extractExtFilters,

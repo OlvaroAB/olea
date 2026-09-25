@@ -3,7 +3,10 @@ import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptPriority, CourseOracleRanking, RankOracleResult } from '../oracle/types.js';
 import type { VaultPath } from '../vault/types.js';
-import { resolvePlanPolicyCourseInputs } from './resolve-inputs.js';
+import {
+  COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT,
+  resolvePlanPolicyCourseInputs,
+} from './resolve-inputs.js';
 
 /**
  * `ol-v7r5.25`. Synthetic vocabulary throughout (INV-3): course ids and
@@ -411,6 +414,61 @@ describe('resolvePlanPolicyCourseInputs', () => {
         [],
       );
       expect(result[0]).not.toHaveProperty('sittingsSinceFloorMet');
+    });
+  });
+
+  // `ol-egov.141.64` [INTERV-15]: F4.6's course-avoidance answer, read back
+  // as `steeringWeight` — see `resolveCourseInput`'s own doc for why only
+  // `'leave-for-now'` has a defined effect today.
+  describe('avoidance-answer steeringWeight (F4.6, [D-265])', () => {
+    it('a course she said to leave for now gets the declared deprioritising steeringWeight', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [],
+        new Map(),
+        new Map([['COURSE-A', 'leave-for-now']]),
+      );
+      expect(result[0]?.steeringWeight).toBe(COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT);
+      expect(COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT).toBeLessThan(1);
+    });
+
+    it('applies to a course reachable only via concept course-attribution too (the F4.7 material-only fallback branch)', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([]),
+        [],
+        [concept({ courses: ['COURSE-Z'] })],
+        [],
+        new Map(),
+        new Map([['COURSE-Z', 'leave-for-now']]),
+      );
+      expect(result[0]?.courseId).toBe('COURSE-Z');
+      expect(result[0]?.steeringWeight).toBe(COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT);
+    });
+
+    it("a course she said to practise differently gets no steeringWeight — the allocation has no defined mechanism for that answer yet, only the within-course ranking might, which this bead leaves unbuilt (see this bead's close evidence)", () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+        [],
+        [],
+        new Map(),
+        new Map([['COURSE-A', 'practise-differently']]),
+      );
+      expect(result[0]).not.toHaveProperty('steeringWeight');
+    });
+
+    it('a course with no recorded avoidance answer gets no steeringWeight, unchanged from before this bead', () => {
+      const result = resolvePlanPolicyCourseInputs(
+        '2026-09-01',
+        ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        [],
+      );
+      expect(result[0]).not.toHaveProperty('steeringWeight');
     });
   });
 });

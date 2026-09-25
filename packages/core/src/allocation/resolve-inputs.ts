@@ -125,15 +125,58 @@
  * A course present in NEITHER set is not running and gets no entry, same as
  * before this fix.
  *
- * **`tempoWeight`, `steeringWeight`** — omitted outright, never defaulted:
- *   - `tempoWeight` has no client-side producer today (the register's own
- *     words, verbatim) — nothing in this pipeline reads a course document's
- *     credit weight or expected weekly hours yet.
- *   - `steeringWeight` — F4.6's stated steering is a per-SESSION filter
- *     (`SessionSteeringRequest`, `study-session/compose.ts`), resolved at
- *     composition time from her live input, not a persisted per-course
- *     number available at plan-computation time. There is nothing to read
- *     here without inventing a caching layer this bead does not own.
+ * **`tempoWeight`** — omitted outright, never defaulted: it has no
+ * client-side producer today (the register's own words, verbatim) — nothing
+ * in this pipeline reads a course document's credit weight or expected
+ * weekly hours yet.
+ *
+ * **`steeringWeight` now HAS one client-side producer (`ol-egov.141.64`
+ * [INTERV-15]), and one deliberately does not exist yet.** C5.6 names "her
+ * stated steering (F4.6)" as the allocation's fourth input, honoured exactly
+ * like the other three — this had no producer here before because the three
+ * ORIGINAL steering inputs (time budget, course-or-topic filter, stated
+ * interest) are all per-SESSION, resolved live at composition time
+ * (`SessionSteeringRequest`, `study-session/compose.ts`), with nothing
+ * persisted for this module to read at plan-computation time. F4.6's
+ * once-asked course-avoidance question (`[D-265]`) is different: her answer
+ * IS a persisted, durable per-course record
+ * (`packages/plugin/src/home/avoidance.ts`'s `ObsidianHomeAvoidanceStore`,
+ * built by `ol-egov.141.54` [INTERV-5]) — exactly the kind of caching layer
+ * the note above used to say did not exist. `avoidanceAnswersByCourse`
+ * (below) reads it back:
+ *   - `'leave-for-now'` resolves to `COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT`
+ *     — a soft deprioritising MULTIPLIER on the course's discretionary
+ *     desire, never an exclusion (the allocation has no exclusion primitive
+ *     today, and C5.6's windowed floor is computed independently of
+ *     steering and keeps being paid regardless of this weight — "the floor
+ *     is honoured over a rolling window" holds unchanged). Declared, not
+ *     derived: see that constant's own doc for the reasoning and its Class B
+ *     status.
+ *   - `'practise-differently'` resolves to no `steeringWeight` at all
+ *     (omitted, same as an unanswered course) — this bead found no clause or
+ *     ruling defining a concrete allocation or within-course-ranking
+ *     mechanism for it that does not collide with F4.8's own `[D-187]`
+ *     amendment ("format matching... never changes the instrument mix
+ *     itself"), so nothing is built for it here. Filed as a proposed
+ *     decision rather than guessed at — see `ol-egov.141.64`'s close
+ *     evidence.
+ *   - No avoidance answer on file for a course (the common case: most
+ *     courses are never asked, per F4.6's own trigger gates) — omitted,
+ *     byte-for-byte the same as this module's behaviour before this bead.
+ *
+ * **What THIS bead does NOT close**, named rather than papered over: wiring
+ * a PRODUCTION caller to actually hand this function real avoidance answers
+ * is outside `resolve-inputs.ts`'s own file — the one call site is
+ * `packages/plugin/src/plan/provider.ts:272`
+ * (`resolvePlanPolicyCourseInputs(today, ranking, ...)`), inside
+ * `packages/plugin/src/plan/`, not owned by this bead (owns:
+ * `packages/plugin/src/session-builder/`, `packages/core/src/oracle/`,
+ * `packages/core/src/allocation/`). That caller would need to load
+ * `ObsidianHomeAvoidanceStore` (or an equivalent read already threaded to
+ * it) and pass a `courseId → answer` map as this function's new last
+ * argument. Until that lands, `avoidanceAnswersByCourse` defaults to empty
+ * and every existing call site keeps compiling and behaving exactly as
+ * before this bead.
  *
  * **`sittingsSinceFloorMet` now HAS a client-side producer (`ol-v7r5.63` /
  * `[DOS-C4]`), pure and self-contained.** The windowed-floor bookkeeping
@@ -165,8 +208,8 @@
  * `PlanPolicyRequest.courses[number]` marks all three optional for exactly
  * this reason: their absence is a documented gap, not a bug, and the
  * service side's own confidence-ramp defaults (`[D-081]`) are what carries
- * week one before `tempoWeight`/`steeringWeight` ever get a producer, and
- * before `sittingsSinceFloorMet` gets a production caller.
+ * week one before `tempoWeight` ever gets a producer, and before
+ * `sittingsSinceFloorMet` or `steeringWeight` get a production caller.
  *
  * INV-1: pure, no `obsidian`, no I/O, no clock — `asOf` is caller-supplied,
  * same discipline as `rankOracle`/`buildStudyPlan`.
@@ -188,6 +231,39 @@ export interface PlanPolicyCourseInput {
   readonly steeringWeight?: number;
   readonly sittingsSinceFloorMet?: number;
 }
+
+/**
+ * The two answers F4.6's course-avoidance question can record (`[D-265]`).
+ * Mirrors `packages/plugin/src/home/avoidance.ts`'s own
+ * `CourseAvoidanceAnswer` field-for-field — kept in sync by hand rather than
+ * imported, same discipline `PlanPolicyCourseInput`'s own doc above already
+ * uses for `plan-policy-provider.ts` (this package cannot depend on the
+ * plugin package). Only `'leave-for-now'` has a defined effect in this
+ * module today — see `resolveCourseInput`'s own comment for why
+ * `'practise-differently'` deliberately resolves to nothing here.
+ */
+export type CourseAvoidanceSteeringAnswer = 'leave-for-now' | 'practise-differently';
+
+/**
+ * F4.6/`[D-265]`'s "leave the course for now" answer, read back as a soft
+ * deprioritising MULTIPLIER on `steeringWeight` — see the module doc's
+ * `steeringWeight` section for the full argument. `1` is neutral
+ * (`DEFAULT_STEERING_WEIGHT`, `olea-service/src/plan/allocation.ts`); this
+ * is deliberately well below `1` so the course visibly recedes from the
+ * session's discretionary desire (`risk + tempo`) without being multiplied
+ * away to zero, and deliberately well above `0` because the allocation has
+ * no exclusion primitive and this bead does not invent one — the course's
+ * windowed floor share is computed independently of this weight and keeps
+ * being paid regardless (C5.6: "the floor is honoured over a rolling
+ * window"). Declared, not derived: no replay corpus exists yet for how a
+ * real student's allocation should move after this specific answer, so
+ * `0.25` is a plain-English choice ("costs the course three quarters of its
+ * ordinary pull for more time, without erasing it") rather than a fitted
+ * number. Class B (reversible default) — flagged for David's retroactive
+ * review and a sensitivity sweep once a real avoidance answer exists to
+ * replay against.
+ */
+export const COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT = 0.25;
 
 /** Unresolved-weight neutral default — see the module doc's `assessmentWorth` section. */
 const NEUTRAL_ASSESSMENT_WORTH = 1;
@@ -299,6 +375,21 @@ function coursesWithMaterial(concepts: readonly ConceptRecord[]): ReadonlySet<st
   return courses;
 }
 
+/**
+ * `[D-265]`'s two answers resolved to a `steeringWeight`, or `undefined`
+ * when there is none to apply — see the module doc's `steeringWeight`
+ * section. `'practise-differently'` deliberately resolves to `undefined`
+ * here: this bead found no clause or ruling defining a concrete allocation
+ * or within-course-ranking mechanism for it that does not collide with
+ * F4.8's `[D-187]` amendment ("format matching... never changes the
+ * instrument mix itself"), so nothing is guessed at in its place.
+ */
+function steeringWeightForAvoidanceAnswer(
+  answer: CourseAvoidanceSteeringAnswer | undefined,
+): number | undefined {
+  return answer === 'leave-for-now' ? COURSE_AVOIDANCE_LEAVE_FOR_NOW_STEERING_WEIGHT : undefined;
+}
+
 /** Resolves one course's `PlanPolicyCourseInput`, whether or not `rankOracle` reported on it — see the module doc's F4.7 fallback section. */
 function resolveCourseInput(
   asOf: string,
@@ -307,6 +398,7 @@ function resolveCourseInput(
   assessments: readonly AssessmentRecord[],
   sittingsHistory: readonly PastSessionRecord[],
   floorSharesByCourse: ReadonlyMap<string, number>,
+  avoidanceAnswer: CourseAvoidanceSteeringAnswer | undefined,
 ): PlanPolicyCourseInput {
   const courseRecords = assessments.filter((record) => record.course === courseId);
   const nearest = nearestUpcomingAssessment(asOf, courseRecords);
@@ -317,6 +409,7 @@ function resolveCourseInput(
     sittingsHistory,
     floorSharesByCourse.get(courseId),
   );
+  const steeringWeight = steeringWeightForAvoidanceAnswer(avoidanceAnswer);
   return {
     courseId,
     daysToNextAssessment: nearest?.days ?? null,
@@ -324,6 +417,7 @@ function resolveCourseInput(
     readiness,
     evidenceVolume,
     ...(sittingsSince === undefined ? {} : { sittingsSinceFloorMet: sittingsSince }),
+    ...(steeringWeight === undefined ? {} : { steeringWeight }),
   };
 }
 
@@ -350,6 +444,13 @@ function resolveCourseInput(
  * default to empty, reproducing this function's pre-this-bead behaviour
  * exactly for a caller not yet passing them (no production caller does yet
  * — see the module doc for the filed follow-up).
+ *
+ * `avoidanceAnswersByCourse` (`ol-egov.141.64` [INTERV-15]) feeds
+ * `steeringWeight` — see the module doc's own `steeringWeight` section for
+ * which answer does what and why. Defaults to empty, reproducing this
+ * function's pre-this-bead behaviour exactly for a caller not yet passing it
+ * (no production caller does yet — see the module doc for the filed
+ * follow-up).
  */
 export function resolvePlanPolicyCourseInputs(
   asOf: string,
@@ -358,6 +459,7 @@ export function resolvePlanPolicyCourseInputs(
   concepts: readonly ConceptRecord[] = [],
   sittingsHistory: readonly PastSessionRecord[] = [],
   floorSharesByCourse: ReadonlyMap<string, number> = new Map(),
+  avoidanceAnswersByCourse: ReadonlyMap<string, CourseAvoidanceSteeringAnswer> = new Map(),
 ): readonly PlanPolicyCourseInput[] {
   const rankedById = new Map(ranking.courses.map((course) => [course.course, course]));
   const materialOnlyIds = [...coursesWithMaterial(concepts)]
@@ -373,6 +475,7 @@ export function resolvePlanPolicyCourseInputs(
         assessments,
         sittingsHistory,
         floorSharesByCourse,
+        avoidanceAnswersByCourse.get(course.course),
       ),
     ),
     ...materialOnlyIds.map((courseId) =>
@@ -383,6 +486,7 @@ export function resolvePlanPolicyCourseInputs(
         assessments,
         sittingsHistory,
         floorSharesByCourse,
+        avoidanceAnswersByCourse.get(courseId),
       ),
     ),
   ];
