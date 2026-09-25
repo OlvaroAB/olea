@@ -1048,7 +1048,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     }
     const items = [studySessionItemFor(betaRecord, 1), studySessionItemFor(alphaQaRecord, 2)];
 
-    const queueItems = queueItemsFromComposedSession({
+    const { items: queueItems } = queueItemsFromComposedSession({
       items,
       recordsById: session.recordsById,
       candidates: session.candidates,
@@ -1115,7 +1115,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     const dayAfter = new Date(due.getTime() + 24 * 60 * 60 * 1000);
     const items = [studySessionItemFor(record, 1)];
 
-    const early = queueItemsFromComposedSession({
+    const { items: early } = queueItemsFromComposedSession({
       items,
       recordsById: session.recordsById,
       candidates: session.candidates,
@@ -1123,7 +1123,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     });
     expect(early[0]?.selectionContext.dueState).toBe('early');
 
-    const onDue = queueItemsFromComposedSession({
+    const { items: onDue } = queueItemsFromComposedSession({
       items,
       recordsById: session.recordsById,
       candidates: session.candidates,
@@ -1131,7 +1131,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     });
     expect(onDue[0]?.selectionContext.dueState).toBe('due');
 
-    const overdue = queueItemsFromComposedSession({
+    const { items: overdue } = queueItemsFromComposedSession({
       items,
       recordsById: session.recordsById,
       candidates: session.candidates,
@@ -1140,12 +1140,27 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     expect(overdue[0]?.selectionContext.dueState).toBe('overdue');
   });
 
-  it('throws when a composed item names an instrument the kept enumeration does not have', async () => {
+  // `ol-egov.141.89.10.24`: a held sitting's item can outlive the note that
+  // backed it — she deletes the instrument's note (or the note stops
+  // parsing as one) between when the sitting was composed and when this
+  // translation runs. The composed row still names the old `instrumentId`;
+  // `recordsById` (read fresh off THIS open) no longer has it. Before this
+  // bead, that mismatch threw and the whole review tab failed to open —
+  // see `open-session.ts`'s own "a failure is reported, not rendered as an
+  // empty queue" doc, which was never meant to fire over one stale item.
+  it('drops a composed item whose instrument left the kept enumeration, rather than throwing, and reports the drop', async () => {
     const session = await buildReviewSession({
       vault: smallVault(),
       scheduler: createFsrsScheduler(),
       now: NOW,
     });
+    const alphaQa = session.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    if (alphaQa === undefined) throw new Error('fixture vault missing Alpha qa candidate');
+    const survivingRecord = session.recordsById.get(alphaQa.instrumentId);
+    if (survivingRecord === undefined) throw new Error('fixture vault missing Alpha qa record');
+
     const ghost: StudySessionItem = {
       position: 1,
       instrumentId: 'not-a-real-instrument',
@@ -1161,15 +1176,58 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
       durationSource: 'assumed',
       formatMatch: 'no-preference',
     };
+    const surviving = studySessionItemFor(survivingRecord, 2);
 
+    // Calling this the old way, as `open-session.ts` still does today, must
+    // no longer throw. This is the failing assertion against the
+    // pre-fix code: it raised
+    // "queueItemsFromComposedSession: composed item's instrument
+    // \"not-a-real-instrument\" is not in the kept enumeration" instead of
+    // returning.
     expect(() =>
       queueItemsFromComposedSession({
-        items: [ghost],
+        items: [ghost, surviving],
         recordsById: session.recordsById,
         candidates: session.candidates,
         now: NOW,
       }),
-    ).toThrow(/not-a-real-instrument/);
+    ).not.toThrow();
+
+    const result = queueItemsFromComposedSession({
+      items: [ghost, surviving],
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: NOW,
+    });
+
+    // The ghost item is dropped; the surviving item is unaffected and keeps
+    // its own position in the remaining order — never re-thrown, never
+    // silently substituted with a placeholder.
+    expect(result.items.map((i) => i.instrumentId)).toEqual([alphaQa.instrumentId]);
+
+    // The drop is counted in the result, not silent — the same "reported,
+    // never silently dropped" posture `duplicateInstrumentIds` and
+    // `containmentDropped` already take on `ReviewSession` itself.
+    expect(result.droppedMissingRecordInstrumentIds).toEqual(['not-a-real-instrument']);
+  });
+
+  it('reports no drops when every composed item has a kept record', async () => {
+    const vault = smallVault();
+    const session = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const alphaQa = session.candidates.find(
+      (c) => c.instrumentType === 'qa' && c.conceptIds.includes(unboundKey('Alpha')),
+    );
+    if (alphaQa === undefined) throw new Error('fixture vault missing Alpha qa candidate');
+    const record = session.recordsById.get(alphaQa.instrumentId);
+    if (record === undefined) throw new Error('fixture vault missing Alpha qa record');
+
+    const result = queueItemsFromComposedSession({
+      items: [studySessionItemFor(record, 1)],
+      recordsById: session.recordsById,
+      candidates: session.candidates,
+      now: NOW,
+    });
+    expect(result.droppedMissingRecordInstrumentIds).toEqual([]);
   });
 
   // `[SESS-8.9]` (`ol-egov.132.9`): `dedupeReason` threads straight through
@@ -1189,7 +1247,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
       dedupeReason: 'recall-overdue',
     };
 
-    const queueItems = queueItemsFromComposedSession({
+    const { items: queueItems } = queueItemsFromComposedSession({
       items: [item],
       recordsById: session.recordsById,
       candidates: session.candidates,
@@ -1211,7 +1269,7 @@ describe('queueItemsFromComposedSession — translating composed rows off the ke
     const item = studySessionItemFor(record, 1);
     expect(item.dedupeReason).toBeUndefined();
 
-    const queueItems = queueItemsFromComposedSession({
+    const { items: queueItems } = queueItemsFromComposedSession({
       items: [item],
       recordsById: session.recordsById,
       candidates: session.candidates,

@@ -432,7 +432,11 @@ export async function openReviewSession(
     // second vault walk, no second replay), then executed — C5.5's "core
     // executes it", with no cross-course sort of its own (C5.7, F6.4). A
     // `null` plan is the Phase A shape, not a branch — see the module doc.
-    const queueItems = queueItemsFromComposedSession({
+    // A held item whose instrument left the enumeration since composition
+    // (her note was deleted) is dropped, not thrown on, and reported in
+    // droppedMissingRecordInstrumentIds (ol-egov.141.89.10.24); nothing reads
+    // that report yet, like core's duplicateInstrumentIds.
+    const { items: queueItems } = queueItemsFromComposedSession({
       items: composedSession.model.items,
       recordsById: composed.recordsById,
       candidates: composed.candidates,

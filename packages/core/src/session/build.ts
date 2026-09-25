@@ -487,24 +487,50 @@ export interface ComposedSessionQueueItemsInput {
  * already takes for the ordinary case.
  *
  * A `StudySessionItem` naming an `instrumentId` absent from `recordsById`
- * would mean the composer's own enumeration and this call's kept one
- * disagreed about what the vault holds, even though both are built from the
- * same walk within one `openReviewSession` call — an inconsistency worth
- * failing loudly on rather than silently dropping the row.
+ * means the held sitting outlived the note that backed it: she deleted the
+ * instrument (or it stopped parsing as one) between when the sitting was
+ * composed and when this translation runs against a freshly-read
+ * enumeration — a real, expected case for a held sitting (`[SESS-8.6]`'s
+ * "Keep going" extension above can hold a sitting open across a session),
+ * not an inconsistency within one walk. **`ol-egov.141.89.10.24`:** that
+ * item is dropped from {@link ComposedSessionQueueItemsResult.items} —
+ * never thrown, which used to fail the whole review tab open over one
+ * stale row (`open-session.ts`'s own "an empty queue still opens" doc makes
+ * the identical argument for zero items; this is the same posture for one
+ * missing one) — and its `instrumentId` is reported in {@link
+ * ComposedSessionQueueItemsResult.droppedMissingRecordInstrumentIds} so the
+ * drop is counted, not silent (C7.10), the same "reported, never silently
+ * dropped" posture `ReviewSession.duplicateInstrumentIds` and
+ * `.containmentDropped` already take for their own structural cases. Order
+ * is otherwise unchanged: the surviving items keep exactly `items`' own
+ * relative order.
  */
+export interface ComposedSessionQueueItemsResult {
+  /** `input.items`' own order, minus any item {@link droppedMissingRecordInstrumentIds} names. */
+  readonly items: readonly QueueItem[];
+  /**
+   * Every `instrumentId` an `input.items` row named that `input.recordsById`
+   * no longer had — the instrument left the vault since the sitting was
+   * composed. Empty in the ordinary case. See this function's own doc.
+   */
+  readonly droppedMissingRecordInstrumentIds: readonly string[];
+}
+
 export function queueItemsFromComposedSession(
   input: ComposedSessionQueueItemsInput,
-): readonly QueueItem[] {
+): ComposedSessionQueueItemsResult {
   const candidatesById = new Map(
     input.candidates.map((candidate) => [candidate.instrumentId, candidate]),
   );
 
-  return input.items.map((item): QueueItem => {
+  const items: QueueItem[] = [];
+  const droppedMissingRecordInstrumentIds: string[] = [];
+
+  for (const item of input.items) {
     const record = input.recordsById.get(item.instrumentId);
     if (record === undefined) {
-      throw new Error(
-        `queueItemsFromComposedSession: composed item's instrument "${item.instrumentId}" is not in the kept enumeration`,
-      );
+      droppedMissingRecordInstrumentIds.push(item.instrumentId);
+      continue;
     }
     const state = candidatesById.get(item.instrumentId)?.state ?? null;
     const selectionContext: QueueSelectionContext = {
@@ -521,13 +547,15 @@ export function queueItemsFromComposedSession(
         input.candidates,
       ),
     };
-    return {
+    items.push({
       instrumentId: item.instrumentId,
       instrumentType: item.instrumentType,
       conceptIds: record.conceptIds,
       priorState: state,
       selectionContext,
       ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
-    };
-  });
+    });
+  }
+
+  return { items, droppedMissingRecordInstrumentIds };
 }
