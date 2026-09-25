@@ -784,10 +784,23 @@ export async function appendSourceRegisteredRecord(
  * a record this writer accepts is by construction one the reader returns as a
  * non-attempt, never an `invalidLines` entry.
  *
- * **Reachability.** No production caller yet: the explain-back modal's named
- * skip and its close handler are the callers `ol-0r92.104` wires
- * (`packages/plugin/src/explain-back/modal.ts`), which this record's absence
- * was blocking.
+ * **The offer reference (`[D-369]`).** `input.offerEventId` is the
+ * `explain-back-offered` record's own `eventId`, passed only when a real offer
+ * record stands behind the prompt she left — the id `recordOffered` returned
+ * when the offer was written. This writer never looks one up, derives one or
+ * defaults one: a caller with no offer passes nothing, and the record then
+ * carries no such key at all, never `null` or an empty string (the schema
+ * refuses both). A self-initiated prompt (`trigger: 'on-demand'`) carrying one
+ * is refused before any byte is written. An `undefined` value that reaches
+ * here past the types is dropped rather than kept as a key, so the returned
+ * record's absence is a true absence.
+ *
+ * **Reachability.** Production caller: `packages/plugin/src/main.ts`'s
+ * `recordExplainBackNonAttempt`, reached from the explain-back modal's named
+ * skip and close handler (`ol-0r92.104`). That caller does not yet thread an
+ * offer reference, so every record it writes today carries none — true, and
+ * never a fabricated link; threading the offer's id through is the plugin's
+ * follow-up to `[D-369]`, not this writer's.
  */
 export async function appendNonAttemptRecord(
   vault: VaultSource,
@@ -796,11 +809,13 @@ export async function appendNonAttemptRecord(
 ): Promise<AppendNonAttemptLogResult> {
   const generateEventId = options.generateEventId ?? defaultGenerateEventId;
 
+  const { offerEventId, ...fields } = input;
   const candidate: unknown = {
     schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
     kind: 'non-attempt',
     eventId: generateEventId(),
-    ...input,
+    ...fields,
+    ...(offerEventId !== undefined ? { offerEventId } : {}),
   };
 
   const parsed = reviewLogEntry.safeParse(candidate);

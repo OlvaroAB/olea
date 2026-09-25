@@ -87,6 +87,14 @@
  * that is a schema-shape change (optional → required-nullable), not a value
  * change, and belongs in its own version.
  *
+ * **v6 (`ol-95vv.8`) is defined in this file but not yet current.** It is the
+ * one migration carrying the fields ruled since v5 (the mastery stamp's
+ * vitality and arithmetic version, explain-back correctness in its own place,
+ * a suspension's reason, hint use, the presented source revision), and it is
+ * an ordinary additive hop: v5 stays readable. It leaves `supportLevelShown`
+ * optional. See the v6 block after `reviewLogEntryV5` for what is staged and
+ * what the flip that makes it current has to move together.
+ *
  * **What v3's migration can and cannot do.** `upgradeV2` maps `conceptId` to
  * `[conceptId]` and nothing cleverer. A v2 record on disk names one concept
  * because one is all that was ever captured; the co-listed names it might have
@@ -161,9 +169,10 @@ export type Rating = z.infer<typeof rating>;
  * values, with vitality — `holding` / `needs tending` / `too early to say`,
  * `docs/Olea_vocabulary_registry.md` §1 axis 2 — carrying retention
  * separately as an overlay that never lowers a stage. **This enum is the
- * growth-stage axis only.** Vitality is not yet a persisted field; nothing
- * here should be read as encoding it, and nothing should default a missing
- * vitality reading to any one of its three values.
+ * growth-stage axis only.** Vitality is its own enum, `vitalityValue`,
+ * persisted from schema version 6 beside the stage (`masteryAtTimeV6`,
+ * `ol-95vv.8`); nothing here encodes it, and nothing should default a
+ * missing vitality reading to any one of its three values.
  *
  * The old five collapse onto the new four as: `new` → `seed`, `shaky` and
  * `coming` both → `sprout` (the new vocabulary has one bucket for "practised,
@@ -568,28 +577,34 @@ export type ReviewLogEntryV3 = z.infer<typeof reviewLogEntryV3>;
  * guess which arm it was holding would guess wrong exactly once, permanently,
  * in an append-only log.
  */
+const masteryAtTimePerConcept = z.object({
+  attribution: z.literal('per-concept'),
+  /**
+   * One entry per concept the record names, keyed by concept id.
+   *
+   * Agreement with `conceptIds` is enforced on the **record**
+   * (`reviewLogRecordV5`'s `refineMasteryAgreesWithConcepts` refinement,
+   * inherited unchanged from v4) and cannot be enforced here: this object
+   * cannot see `conceptIds`, which is the structural reason the whole field
+   * moved out of `selectionContext`.
+   */
+  byConcept: z.record(z.string().min(1), masteryState),
+});
+
+const masteryAtTimeNotAttributable = z.object({
+  attribution: z.literal('not-attributable'),
+  /**
+   * The state that was on the record, kept verbatim. Its concept is not
+   * recoverable and is not guessed at.
+   */
+  recorded: masteryState,
+});
+
+// The two arms are named (module-private) only so `masteryAtTimeV6` below can
+// derive from them; the v5 union is the same two objects it always was.
 export const masteryAtTime = z.discriminatedUnion('attribution', [
-  z.object({
-    attribution: z.literal('per-concept'),
-    /**
-     * One entry per concept the record names, keyed by concept id.
-     *
-     * Agreement with `conceptIds` is enforced on the **record**
-     * (`reviewLogRecordV5`'s `refineMasteryAgreesWithConcepts` refinement,
-     * inherited unchanged from v4) and cannot be enforced here: this object
-     * cannot see `conceptIds`, which is the structural reason the whole field
-     * moved out of `selectionContext`.
-     */
-    byConcept: z.record(z.string().min(1), masteryState),
-  }),
-  z.object({
-    attribution: z.literal('not-attributable'),
-    /**
-     * The state that was on the record, kept verbatim. Its concept is not
-     * recoverable and is not guessed at.
-     */
-    recorded: masteryState,
-  }),
+  masteryAtTimePerConcept,
+  masteryAtTimeNotAttributable,
 ]);
 export type MasteryAtTime = z.infer<typeof masteryAtTime>;
 
@@ -733,6 +748,16 @@ export const supportLevel = z.enum(['independent', 'prompted', 'guided']);
 export type SupportLevel = z.infer<typeof supportLevel>;
 
 /**
+ * The explain-back correctness judge's three verdicts (`[D-281]`) — declared
+ * once and used by both homes the verdict has had: the nested
+ * `explainBackGrade.correctness` (v5) and the top-level
+ * `explainBackCorrectness.verdict` (v6, `[D-303]`), so a reader that meets
+ * either can never meet a fourth value in one of them.
+ */
+export const explainBackCorrectnessVerdict = z.enum(['correct', 'partial', 'incorrect']);
+export type ExplainBackCorrectnessVerdict = z.infer<typeof explainBackCorrectnessVerdict>;
+
+/**
  * The grading verdict for one explain-back review (`ol-tka5`) — R9's "the
  * grader emits a SOLO verdict" made a persisted fact. Present only on
  * `review`-kind records whose `instrumentType` is `'explain-back'` (enforced
@@ -771,8 +796,16 @@ export const explainBackGrade = z.object({
    * D-005 is untouched: this is a three-value classification, never her
    * answer text or the grader's rationale — both of those stay behind
    * `contentRef`.
+   *
+   * **Its v6 successor is `explainBackCorrectness` (`[D-303]`).** The ruling
+   * gives the verdict its own top-level field with its own stamp, because
+   * nested here it can only be recorded when a depth grade also exists. Once
+   * v6 is current, new writes go there; this nested field stays in the v6
+   * shape, unchanged, only so a record that already carries one keeps it
+   * verbatim through the v5 → v6 hop, and `reviewLogRecordV6` refuses a
+   * record carrying both.
    */
-  correctness: z.enum(['correct', 'partial', 'incorrect']).optional(),
+  correctness: explainBackCorrectnessVerdict.optional(),
   /**
    * Opaque reference into the `[D-077]` / `ol-2jod.8` immutable content
    * store — her answer text, the grader's feedback, and any misconception
@@ -797,9 +830,14 @@ export const explainBackGrade = z.object({
    * so a plain new attempt superseding an old one needs no field at all.
    * `revisionOf` exists only for the narrower case ordering alone cannot
    * distinguish: a re-grade of the *same* recorded answer under a changed
-   * rubric, as opposed to a genuinely new attempt — audit metadata a reader
-   * may show her, never an input the fold needs (strip-invariance, knowledge
-   * model §8 test 5).
+   * rubric, as opposed to a genuinely new attempt.
+   *
+   * **A fold input, not a stamp.** The mastery and attainment folds read it
+   * for supersession (`[D-281]`: a corrective re-grade disqualifies the
+   * attempt it names — `packages/core/src/mastery/rollup.ts` and
+   * `mastery/attainment.ts`), so it is NOT covered by knowledge model §8 test
+   * 5 (strip-invariance), which strips scheduling observations and stamped
+   * beliefs only. Stripping it would change the readings, correctly.
    */
   revisionOf: z.string().min(1).nullable(),
   /**
@@ -831,9 +869,11 @@ export type ExplainBackGrade = z.infer<typeof explainBackGrade>;
  *
  * **The mastery fold must never read this field.** Knowledge model §8 test 5
  * (strip-invariance) is the contract test: folding a log and a copy of it
- * with every `schedulingObservation` (and every `explainBackGrade.revisionOf`)
- * stripped must produce byte-identical scoring readings, for a log built from
- * any mix of instrument kinds. Exclusion is enforced by no fold function
+ * with every `schedulingObservation` and every stamped belief
+ * (`masteryAtTime`) stripped must produce byte-identical scoring readings,
+ * for a log built from any mix of instrument kinds. (`explainBackGrade
+ * .revisionOf` is not in that set: the fold reads it for supersession — see
+ * its own doc.) Exclusion is enforced by no fold function
  * importing this field, not by filtering an event kind — the same mechanism
  * the knowledge model already names for this exact type.
  */
@@ -1609,35 +1649,77 @@ export type ExplainBackOfferLogRecordV5 = z.infer<typeof explainBackOfferLogReco
  * §19) and is never printed; the word she sees for the action is *skip*,
  * which is not the literal here because the record does not say she took it.
  *
- * **Not carried, because D7.1's paragraph does not name them:**
- * `instrumentId`/`instrumentType`, `selectionContext`, and a pointer to the
- * offer event behind the prompt (the `answers` a decline carries). Each could
- * land later as an optional field without a version bump; none is added
- * ahead of a ruling, because a field on records already on disk cannot be
- * taken back.
+ * **The offer reference (`[D-369]`, `ol-egov.141.89.6.53`).** `offerEventId`
+ * names the `explain-back-offered` record behind the prompt, by that record's
+ * own `eventId` — a stable identifier, never a key derived from timing or
+ * from the concept list — so "offered, then opened and left" is joinable
+ * exactly rather than by time proximity. It is **present exactly when a real
+ * offer record stands behind the prompt**, and absent — no key at all, never
+ * `null` or an empty string — when she opened the prompt herself: a
+ * `trigger: 'on-demand'` record carrying one is refused by
+ * `refineNonAttemptOfferReference` below, because there is no offer behind a
+ * self-initiated prompt to point at. Never invented and never backfilled: a
+ * record written before this field existed carries none, and that absence
+ * means only that no reference was recorded. Additive on v5 with no version
+ * bump, as the ruling states and this paragraph's predecessor anticipated —
+ * an optional field whose absence every older record already satisfies.
  *
- * **No content, per D-005.** Opaque concept ids and one enum.
+ * **Still not carried, because D7.1's paragraph does not name them:**
+ * `instrumentId`/`instrumentType` and `selectionContext`. Each could land
+ * later as an optional field without a version bump; neither is added ahead
+ * of a ruling, because a field on records already on disk cannot be taken
+ * back. (The instrument is recoverable through the offer, which is why
+ * `[D-369]` declined to add it beside the reference.)
+ *
+ * **No content, per D-005.** Opaque concept ids, one enum and, where present,
+ * one opaque event id.
  */
-export const nonAttemptLogRecordV5 = z.object({
-  schemaVersion: z.literal(5),
-  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
-  kind: z.literal('non-attempt'),
-  /** Stable unique id; makes two-device merges idempotent. */
-  eventId: z.string().min(1),
-  /**
-   * ISO-8601 with offset, the moment the prompt was left (the skip taken or
-   * the prompt closed). The offset matters: "when did she leave it" is local.
-   */
-  timestamp: z.string().datetime({ offset: true }),
-  /**
-   * Every concept the prompt concerned. Non-empty for the same reason
-   * `explainBackOfferLogRecordV5.conceptIds` is: a record naming no concept
-   * is invisible to every later question, including the per-concept count.
-   */
-  conceptIds: z.array(z.string().min(1)).min(1),
-  /** The trigger the offer behind this prompt was made under (D7.1). */
-  trigger: explainBackOfferTrigger,
-});
+function refineNonAttemptOfferReference(
+  value: {
+    readonly trigger: ExplainBackOfferTrigger;
+    readonly offerEventId?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.trigger !== 'on-demand' || value.offerEventId === undefined) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['offerEventId'],
+    message:
+      'a self-initiated (on-demand) prompt has no offer behind it, so it carries no ' +
+      '`offerEventId` ([D-369])',
+  });
+}
+
+export const nonAttemptLogRecordV5 = z
+  .object({
+    schemaVersion: z.literal(5),
+    /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+    kind: z.literal('non-attempt'),
+    /** Stable unique id; makes two-device merges idempotent. */
+    eventId: z.string().min(1),
+    /**
+     * ISO-8601 with offset, the moment the prompt was left (the skip taken or
+     * the prompt closed). The offset matters: "when did she leave it" is local.
+     */
+    timestamp: z.string().datetime({ offset: true }),
+    /**
+     * Every concept the prompt concerned. Non-empty for the same reason
+     * `explainBackOfferLogRecordV5.conceptIds` is: a record naming no concept
+     * is invisible to every later question, including the per-concept count.
+     */
+    conceptIds: z.array(z.string().min(1)).min(1),
+    /** The trigger the offer behind this prompt was made under (D7.1). */
+    trigger: explainBackOfferTrigger,
+    /**
+     * The `eventId` of the `explain-back-offered` record behind this prompt
+     * (`[D-369]`). Present exactly when such an offer record exists; absent
+     * for a self-initiated prompt and on every record written before the
+     * field existed. See this record's own doc above.
+     */
+    offerEventId: z.string().min(1).optional(),
+  })
+  .superRefine(refineNonAttemptOfferReference);
 export type NonAttemptLogRecordV5 = z.infer<typeof nonAttemptLogRecordV5>;
 
 /**
@@ -1818,6 +1900,409 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   sourceRegisteredLogRecordV5,
 ]);
 export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
+
+/*
+ * ---------------------------------------------------------------------------
+ * Schema version 6 (`ol-95vv.8`) — DEFINED HERE, NOT YET CURRENT.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * **Schema version 6 is the one evidence-format migration every ruled field
+ * rides together, so her log migrates once** (`ol-95vv.8`): MAT-7's vitality
+ * and arithmetic version on the mastery stamp (`[D-087]`, `[D-116]`),
+ * `[D-303]`'s top-level explain-back correctness, `[D-345]`'s reason on a
+ * suspension plus its rule-version marker, `[D-350]`'s hint-opened fact and
+ * `[D-358]`'s presented source-revision stamp.
+ *
+ * **An ordinary additive hop, not `[D-109]`'s migrate-in-place exception.**
+ * v5 records exist, so v5 stays readable forever, exactly as v1–v3 do. The
+ * v5 → v6 hop is a pure restamp: every v5 field keeps the meaning v5 gave it,
+ * and every field new at v6 is simply absent on a migrated record — which
+ * every one of them reads as *not recorded*, i.e. unknown, never as a default
+ * value. That is why each new field is `.optional()`, and why no v6 field is a
+ * v5 field bolted on: a v5 parse strips all of them.
+ *
+ * **Staged: the shapes land before any line can be written.**
+ * `REVIEW_LOG_SCHEMA_VERSION` is still 5, `REVIEW_LOG_READABLE_VERSIONS` does
+ * not yet list 6, and every current alias below still names a v5 schema. No
+ * writer may produce a v6 line until core's `parse.ts` reads 6 and
+ * `upgrade.ts` gains the one v5 → v6 hop; those, the aliases, the version
+ * constant and the writers move together in one change (the flip), because a
+ * line this build's reader would refuse is a line lost.
+ *
+ * **Key order.** Every v6 object spreads its v5 shape first and re-declares
+ * `schemaVersion` (and, for the review, `masteryAtTime`) in place — an object
+ * literal that re-assigns an existing key keeps that key's position — so a v5
+ * record restamped to 6 serialises byte-identically apart from the version
+ * digit, and every field new at v6 lands after the last v5 field.
+ */
+
+/**
+ * Vitality, the retention axis (F2.11, `[D-049]`, `[D-087]`): the vocabulary
+ * registry's three internal names (§1 axis 2) — `holding`, `tending` (shown as
+ * *needs tending*) and `early` (shown as *too early to say*), matching
+ * `olea-core`'s `mastery/vitality.ts` `Vitality` exactly. Display words live
+ * in core's display module and nowhere here. `early` is a real reading, not a
+ * missing one: absence of a vitality stamp means *not recorded*, and nothing
+ * may default it to any of the three.
+ */
+export const vitalityValue = z.enum(['holding', 'tending', 'early']);
+export type VitalityValue = z.infer<typeof vitalityValue>;
+
+/**
+ * `masteryAtTime` at **v6**: both axes plus the arithmetic version that
+ * produced them (MAT-7, `ol-95vv.8`; `[D-087]`'s "both axes stamped").
+ *
+ * **Why the stage map stays as it was.** `byConcept` keeps its v5 type
+ * exactly, and vitality rides beside it as a parallel map keyed the same way,
+ * so a v5 stamp restamped to 6 is already a valid v6 stamp (the legacy,
+ * stage-only form) and every reader of the stage reads it unchanged.
+ *
+ * **The stamp is whole or it is the legacy one.** A writer that stamps
+ * vitality stamps the arithmetic version with it, and the reverse
+ * (`refineBeliefStampComplete`): a vitality reading with no version cannot be
+ * reproduced, and a version stamped over a stage alone would repeat, in the
+ * durable record, the stage-without-vitality defect `[D-116]`'s co-presence
+ * clause forbids on display. The only stage-only stamp a v6 record carries is
+ * one migrated from v5.
+ *
+ * **Stamped at write time, never recomputed, never an input.** The same rule
+ * as v4's stamp (`masteryAtTime`'s doc above): these record what the system
+ * believed when it offered the item, passed through from the reading the
+ * writer already had — nothing computes a second reading to stamp — and no
+ * fold reads them back as evidence (knowledge model §8 test 5,
+ * strip-invariance, covers every stamped belief).
+ *
+ * The `not-attributable` arm is unchanged: only a v3 migration produces it,
+ * and a v3 record never carried vitality or a version.
+ */
+export const masteryAtTimeV6 = z.discriminatedUnion('attribution', [
+  masteryAtTimePerConcept.extend({
+    /**
+     * The vitality reading for each concept the record names, beside its
+     * stage in `byConcept`. Keyed exactly like `byConcept`
+     * (`refineVitalityAgreesWithConcepts`). Absent on a legacy stamp.
+     */
+    vitalityByConcept: z.record(z.string().min(1), vitalityValue).optional(),
+    /**
+     * The arithmetic version that produced this stamp's stage and vitality:
+     * `olea-core`'s `attainmentArithmeticVersion` string
+     * (`packages/core/src/mastery/attainment.ts` — fold rule, sapling rule,
+     * withheld-evidence policy and scheduler configuration), opaque here.
+     *
+     * **Also `[D-345]`'s rule-version marker.** Stamped on every review whose
+     * belief a writer recorded, it is the dated trail of which rules were in
+     * force when, so a historical award can be reproduced under the rule
+     * version that produced it. A stamp, never scoring evidence. Absent on a
+     * legacy stamp.
+     */
+    arithmeticVersion: z.string().min(1).optional(),
+  }),
+  masteryAtTimeNotAttributable,
+]);
+export type MasteryAtTimeV6 = z.infer<typeof masteryAtTimeV6>;
+
+/**
+ * A v6 vitality map names **exactly** the concepts the record names — the
+ * same set rule, for the same reasons, as `refineMasteryAgreesWithConcepts`
+ * applies to the stage map: an extra key is a reading for a concept this
+ * review was not evidence for, a missing key a reading the writer dropped.
+ */
+function refineVitalityAgreesWithConcepts(
+  value: {
+    readonly conceptIds: readonly string[];
+    readonly masteryAtTime?: MasteryAtTimeV6 | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const mastery = value.masteryAtTime;
+  if (mastery === undefined || mastery.attribution !== 'per-concept') return;
+  const vitality = mastery.vitalityByConcept;
+  if (vitality === undefined) return;
+
+  const expected = expectedMasteryKeys(value.conceptIds);
+  const missing = expected.filter((id) => !Object.hasOwn(vitality, id));
+  const extra = Object.keys(vitality).filter((id) => !expected.includes(id));
+  if (missing.length === 0 && extra.length === 0) return;
+
+  ctx.addIssue({
+    code: 'custom',
+    path: ['masteryAtTime', 'vitalityByConcept'],
+    message:
+      'masteryAtTime.vitalityByConcept must name exactly the record’s conceptIds' +
+      (missing.length > 0 ? `; missing ${JSON.stringify(missing)}` : '') +
+      (extra.length > 0 ? `; unexpected ${JSON.stringify(extra)}` : ''),
+  });
+}
+
+/**
+ * Vitality and the arithmetic version travel together or not at all — see
+ * `masteryAtTimeV6`'s doc ("the stamp is whole or it is the legacy one").
+ */
+function refineBeliefStampComplete(
+  value: { readonly masteryAtTime?: MasteryAtTimeV6 | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  const mastery = value.masteryAtTime;
+  if (mastery === undefined || mastery.attribution !== 'per-concept') return;
+  const hasVitality = mastery.vitalityByConcept !== undefined;
+  const hasVersion = mastery.arithmeticVersion !== undefined;
+  if (hasVitality === hasVersion) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['masteryAtTime', hasVitality ? 'arithmeticVersion' : 'vitalityByConcept'],
+    message:
+      'a v6 mastery stamp carries vitalityByConcept and arithmeticVersion together, or ' +
+      'neither (the stage-only form a v5 record migrates to)',
+  });
+}
+
+/**
+ * The explain-back correctness verdict in its own place (`[D-303]`, ruled
+ * 2026-09-24, option b): the correctness judge's verdict for this attempt,
+ * with the stamp of the call that produced it, as a top-level field of the
+ * explain-back review record — mirroring how `mcqCorrectness` records a
+ * multiple-choice answer.
+ *
+ * **Why it left `explainBackGrade`.** Nested there, the verdict could only be
+ * recorded when the depth pass also returned a grade (`soloLevel`,
+ * `contentRef`, `revisionOf` and the grade's stamp are all required), so an
+ * accepted verdict was lost whenever depth grading failed or was unavailable.
+ * Here it stands alone: the first grading pass writes it, and the depth record
+ * stays exactly as strict as before.
+ *
+ * **Its own stamp** (`artifactProvenance`, D7.3) names the correctness call —
+ * never borrowed from the depth grade's, which names a different call.
+ *
+ * **Absent means UNKNOWN, never `correct`** (`[D-281]`, unchanged): a reader
+ * that does not know this field sees no verdict and treats it as unknown, the
+ * safe direction. Only an explain-back review carries it, and never beside a
+ * nested `explainBackGrade.correctness` (`refineExplainBackCorrectness`).
+ * D-005: a three-value verdict and a provenance stamp, never her answer or
+ * the grader's rationale.
+ */
+export const explainBackCorrectness = z.object({
+  verdict: explainBackCorrectnessVerdict,
+  artifactProvenance,
+});
+export type ExplainBackCorrectness = z.infer<typeof explainBackCorrectness>;
+
+/**
+ * `explainBackCorrectness` appears only on an explain-back review, and never
+ * on a record whose depth grade still carries the nested v5 verdict — one
+ * attempt has one correctness judgement, in one place.
+ */
+function refineExplainBackCorrectness(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly explainBackCorrectness?: ExplainBackCorrectness | undefined;
+    readonly explainBackGrade?: ExplainBackGrade | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.explainBackCorrectness === undefined) return;
+  if (value.instrumentType !== 'explain-back') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['explainBackCorrectness'],
+      message: 'explainBackCorrectness may only appear on an explain-back review',
+    });
+  }
+  if (value.explainBackGrade?.correctness !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['explainBackCorrectness'],
+      message:
+        'explainBackCorrectness never appears beside a nested explainBackGrade.correctness — ' +
+        'one attempt, one correctness verdict ([D-303])',
+    });
+  }
+}
+
+/**
+ * One review event, **schema version 6** (`ol-95vv.8`) — defined, not yet
+ * current (see the v6 block's opening doc).
+ *
+ * Every v5 field, by derivation, with `masteryAtTime` widened in place to
+ * `masteryAtTimeV6`, plus three optional top-level fields. Every v5
+ * refinement is re-applied unchanged (a refined object's refinements do not
+ * travel with its `.shape`), plus the three v6 adds.
+ */
+export const reviewLogRecordV6 = z
+  .object({
+    ...reviewLogRecordV5.shape,
+    schemaVersion: z.literal(6),
+    /** Both axes plus the arithmetic version (MAT-7) — see `masteryAtTimeV6`. */
+    masteryAtTime: masteryAtTimeV6.optional(),
+    /** Explain-back reviews only (`[D-303]`) — see `explainBackCorrectness`. */
+    explainBackCorrectness: explainBackCorrectness.optional(),
+    /**
+     * Whether she opened the hint on this review (`[D-350]`, D-094's ratchet,
+     * R7's discount). A writer that could observe it records an explicit
+     * `true` or `false`. **Absent means UNKNOWN** — on every record written
+     * before the field existed and on any review whose surface did not
+     * observe it — never `false` and never inferred from
+     * `supportLevelShown`, which records that a hint was *offered*, not
+     * taken; and an absent value alone never lowers or corrects a past award.
+     */
+    hintOpened: z.boolean().optional(),
+    /**
+     * Which revision of the source this review was read against (`[D-358]`):
+     * the digest of the cited passage **as presented to her**, which may
+     * differ from the file's state when she submitted, in the same digest
+     * space as the citation store's `passageDigest`
+     * (`packages/core/src/instrument/citation-store.ts`, `[D-292]`). Named
+     * for what it holds so it is never confused with that store's
+     * `sourceRevision`, a hash of the whole source file. **Absent means
+     * UNKNOWN**, never backfilled or inferred; C5.10's tie-break
+     * (`packages/core/src/review-log/tiebreak.ts`) treats unknown as never
+     * comparable. Opaque: a digest, never the passage (D-005).
+     */
+    presentedPassageDigest: z.string().min(1).optional(),
+  })
+  .superRefine(refineMasteryAgreesWithConcepts)
+  .superRefine(refineVitalityAgreesWithConcepts)
+  .superRefine(refineBeliefStampComplete)
+  .superRefine(refineExplainBackGradeInstrumentType)
+  .superRefine(refineSchedulingObservationNotSubject)
+  .superRefine(refineCorrectnessInstrumentType)
+  .superRefine(refineAnswerEditsInstrumentType)
+  .superRefine(refineExplainBackCorrectness);
+export type ReviewLogRecordV6 = z.infer<typeof reviewLogRecordV6>;
+
+/**
+ * Why an instrument stopped standing (`[D-345]`, ruled 2026-09-25): the one
+ * new persisted fact the award-history ruling needs, on the event that takes
+ * an instrument out of standing.
+ *
+ * - `defect` — proven invalid: rejected after use, found defective with her
+ *   confirmation (F2.23), withdrawn as defective.
+ * - `source-revision` — its cited passage changed, or a successor was
+ *   authored.
+ * - `own-choice` — she suspended or withdrew it, no defect found.
+ *
+ * **Absence is the only unknown.** A suspension with no reason — every one
+ * written before v6, and any whose writer did not know — reads as unknown:
+ * never presented as her choice, never as a defect. There is no `unknown`
+ * literal, so the one fact has one encoding.
+ *
+ * **Nothing here can revoke an award.** `defect` is the only value that proves
+ * a defect, and so the only one that may ever correct a displayed stage;
+ * forgetting has no event at all, and `own-choice` or `source-revision` alone
+ * never revoke or lower a past award (`[D-345]` item 4). What a reader does
+ * with each value is the attainment fold's
+ * (`packages/core/src/mastery/attainment.ts`), never this schema's. An enum of
+ * causes, never text she typed.
+ */
+export const suspensionReason = z.enum(['defect', 'source-revision', 'own-choice']);
+export type SuspensionReason = z.infer<typeof suspensionReason>;
+
+/**
+ * A `reason` rides only a `suspend`: an `unsuspend` returns the instrument to
+ * standing, and there is no "why it stopped" to record on it.
+ */
+function refineSuspensionReasonOnSuspendOnly(
+  value: { readonly kind: SuspendEventKind; readonly reason?: SuspensionReason | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.kind === 'suspend' || value.reason === undefined) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['reason'],
+    message:
+      'only a suspend event carries a reason; an unsuspend returns an instrument to standing',
+  });
+}
+
+/** One suspend or unsuspend event, **schema version 6**: v5 plus `[D-345]`'s optional `reason`. */
+export const suspendLogRecordV6 = z
+  .object({
+    ...suspendLogRecordV5.shape,
+    schemaVersion: z.literal(6),
+    /** Why the instrument stopped standing — see `suspensionReason`. Absent means unknown. */
+    reason: suspensionReason.optional(),
+  })
+  .superRefine(refineSuspensionReasonOnSuspendOnly);
+export type SuspendLogRecordV6 = z.infer<typeof suspendLogRecordV6>;
+
+// Every other kind moves to v6 with no shape change — "one version per line,
+// one current version" (`suspendLogRecordV5`'s doc) — derived from its v5
+// shape with only the version restamped, and with its v5 refinements
+// re-applied where it has any.
+
+/** One verdict event, **schema version 6**: `verdictLogRecordV5`, version restamped. */
+export const verdictLogRecordV6 = z.object({
+  ...verdictLogRecordV5.shape,
+  schemaVersion: z.literal(6),
+});
+export type VerdictLogRecordV6 = z.infer<typeof verdictLogRecordV6>;
+
+/** One succession event, **schema version 6**: `successionLogRecordV5`, version restamped. */
+export const successionLogRecordV6 = z.object({
+  ...successionLogRecordV5.shape,
+  schemaVersion: z.literal(6),
+});
+export type SuccessionLogRecordV6 = z.infer<typeof successionLogRecordV6>;
+
+/** One dispute event, **schema version 6**: `disputeLogRecordV5`, version restamped, pairings kept. */
+export const disputeLogRecordV6 = z
+  .object({ ...disputeLogRecordV5.shape, schemaVersion: z.literal(6) })
+  .superRefine(refineDisputeResolutionPairing)
+  .superRefine(refineOpenRoutingPairing);
+export type DisputeLogRecordV6 = z.infer<typeof disputeLogRecordV6>;
+
+/** One retrospective-offer event, **schema version 6**: its v5 shape, version restamped. */
+export const retrospectiveOfferLogRecordV6 = z.object({
+  ...retrospectiveOfferLogRecordV5.shape,
+  schemaVersion: z.literal(6),
+});
+export type RetrospectiveOfferLogRecordV6 = z.infer<typeof retrospectiveOfferLogRecordV6>;
+
+/** One explain-back-offer event, **schema version 6**: its v5 shape, version restamped, pairing kept. */
+export const explainBackOfferLogRecordV6 = z
+  .object({ ...explainBackOfferLogRecordV5.shape, schemaVersion: z.literal(6) })
+  .superRefine(refineExplainBackOfferPairing);
+export type ExplainBackOfferLogRecordV6 = z.infer<typeof explainBackOfferLogRecordV6>;
+
+/** One non-attempt event, **schema version 6**: its v5 shape (`[D-369]`'s offer reference included), version restamped. */
+export const nonAttemptLogRecordV6 = z
+  .object({ ...nonAttemptLogRecordV5.shape, schemaVersion: z.literal(6) })
+  .superRefine(refineNonAttemptOfferReference);
+export type NonAttemptLogRecordV6 = z.infer<typeof nonAttemptLogRecordV6>;
+
+/** One misconception-observed event, **schema version 6**: its v5 shape, version restamped. */
+export const misconceptionObservedLogRecordV6 = z.object({
+  ...misconceptionObservedLogRecordV5.shape,
+  schemaVersion: z.literal(6),
+});
+export type MisconceptionObservedLogRecordV6 = z.infer<typeof misconceptionObservedLogRecordV6>;
+
+/** One source-registered event, **schema version 6**: its v5 shape, version restamped. */
+export const sourceRegisteredLogRecordV6 = z.object({
+  ...sourceRegisteredLogRecordV5.shape,
+  schemaVersion: z.literal(6),
+});
+export type SourceRegisteredLogRecordV6 = z.infer<typeof sourceRegisteredLogRecordV6>;
+
+/**
+ * Every shape a **v6** review-log line can take, discriminated by `kind` —
+ * the same ten members as `reviewLogEntryV5`, each at version 6. Not yet the
+ * union readers parse current lines against (see the v6 block's opening doc).
+ */
+export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
+  reviewLogRecordV6,
+  suspendLogRecordV6,
+  verdictLogRecordV6,
+  successionLogRecordV6,
+  disputeLogRecordV6,
+  retrospectiveOfferLogRecordV6,
+  explainBackOfferLogRecordV6,
+  nonAttemptLogRecordV6,
+  misconceptionObservedLogRecordV6,
+  sourceRegisteredLogRecordV6,
+]);
+export type ReviewLogEntryV6 = z.infer<typeof reviewLogEntryV6>;
 
 /**
  * Aliases for the current shapes, so consumers that only ever meant "a review
