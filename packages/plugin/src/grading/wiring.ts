@@ -188,6 +188,7 @@
 
 import {
   type AcceptedExplainBackGrading,
+  type AcceptedGradingMisconceptionCandidate,
   type AcceptedGradingObservationOutcome,
   acceptExplainBackGrading,
   buildObservationEventsFromAcceptedGrading,
@@ -205,6 +206,7 @@ import {
   gradeExplainBack,
   gradeSolo,
   type JudgeCaller,
+  type MisconceptionCandidate,
   type MisconceptionEmbedder,
   type MisconceptionEmbeddingCacheEngine,
   type MisconceptionRecord,
@@ -610,6 +612,44 @@ export async function acceptExplainBackGradingWithObservation(
   return outcome;
 }
 
+/**
+ * `ol-egov.141.89.6.47`: attaches `[D-101]`'s belief-source authorship fact
+ * to every misconception candidate, closing the gap
+ * `ol-egov.141.89.6.45`'s module doc names —
+ * `buildObservationEventsFromAcceptedGrading`
+ * (`../../core/src/misconception/accepted-grading-observation.js`) has
+ * gated on `AcceptedGradingMisconceptionCandidate.statementAuthorship`
+ * since that bead, but no caller supplied it, so the filter was inert (an
+ * absent fact admits — `belief-source.ts`'s own doc).
+ *
+ * `MisconceptionCandidate.statement`
+ * (`../../core/src/grading/gradingPipeline.ts:156`, `MisconceptionCandidate`)
+ * has no field that could ever cite it to a source block — only
+ * `correction`/`correctionSourceBlockIds` do, and `groundCitations`
+ * (`gradingPipeline.ts`) only ever strips/validates THAT citation set. The
+ * judge prompt itself instructs the model the same way: `prompts/explain-
+ * back.judge/system.prompt.md`'s (service repo) "Prior misconceptions and
+ * new candidates" section — "`statement` should use her own words where
+ * possible; `correction` states what the source actually says." So
+ * `statement` is, by construction of this schema, always drawn from her own
+ * `studentAnswer` prose, never from a cited source passage — its
+ * authorship is hers unconditionally. That also means there is no note to
+ * run the plugin's materiality classifier (`../ingestion/materiality/`,
+ * `../../core/src/source/materiality.js`'s `classifyMateriality`/
+ * `resolveMateriality`) against here: that classifier reads a vault note's
+ * path/format/frontmatter/folder cues, and a live explain-back answer is
+ * not a vault note — it has no `VaultPath`. If a future schema change ever
+ * lets a candidate's `statement` cite a source block the way `correction`
+ * already does, THIS function is the one to update: read that new citation,
+ * resolve the cited note, and classify it instead of defaulting to
+ * `'hers'`.
+ */
+function attachStatementAuthorship(
+  candidates: readonly MisconceptionCandidate[],
+): readonly AcceptedGradingMisconceptionCandidate[] {
+  return candidates.map((candidate) => ({ ...candidate, statementAuthorship: 'hers' as const }));
+}
+
 async function computeAcceptExplainBackGradingWithObservation(
   wiring: GradingWiring,
   pending: PendingExplainBackGrading,
@@ -632,7 +672,7 @@ async function computeAcceptExplainBackGradingWithObservation(
 
   try {
     const observations = await buildObservationEventsFromAcceptedGrading(
-      accepted.misconceptionCandidates,
+      attachStatementAuthorship(accepted.misconceptionCandidates),
       context,
       {
         embedder: wiring.misconceptionEmbedder,

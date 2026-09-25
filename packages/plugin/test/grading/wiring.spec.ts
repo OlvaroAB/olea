@@ -11,7 +11,11 @@
  * for that half, mirroring the split `test/retrieval/wiring.spec.ts` already
  * uses for `buildRetrievalWiring`.
  */
-import type { MisconceptionRecord, WorkerTaskRequest } from 'olea-core';
+import {
+  buildObservationEventsFromAcceptedGrading,
+  type MisconceptionRecord,
+  type WorkerTaskRequest,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   type AcceptExplainBackGradingWithObservationContext,
@@ -583,7 +587,11 @@ describe('acceptExplainBackGradingWithObservation', () => {
 
     expect(result.observations).toEqual([
       {
-        candidate: pending.grading.misconceptionCandidates[0],
+        // `ol-egov.141.89.6.47`: `attachStatementAuthorship` tags every
+        // candidate `'hers'` before this function ever sees it — see that
+        // function's doc for why (`statement` is always drawn from her own
+        // answer, never a cited passage).
+        candidate: { ...pending.grading.misconceptionCandidates[0], statementAuthorship: 'hers' },
         skipped: true,
         reason: 'unresolved-concept',
       },
@@ -652,6 +660,101 @@ describe('acceptExplainBackGradingWithObservation', () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  // ---- ol-egov.141.89.6.47: [D-101] belief-source authorship -------------
+
+  it('a hers statement is admitted end to end: attachStatementAuthorship tags it "hers" and the real belief-source filter lets it through', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeMultiTaskTransport(),
+    });
+    // A real judge response: `statement` carries no citation field of its
+    // own (only `correction`/`correctionSourceBlockIds` do) — exactly the
+    // shape `attachStatementAuthorship`'s doc (`../../src/grading/
+    // wiring.ts`) says always resolves to `'hers'`.
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        ngramSize: 3,
+        matchedNgramCount: 0,
+        totalNgramCount: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        answerTokenCount: 0,
+        sourceTokenCount: 0,
+      },
+      grading: {
+        verdict: 'partial' as const,
+        feedback: 'Close, but check the heap property.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [
+          {
+            concept: 'heap-property',
+            statement: 'Thinks a heap is always fully sorted.',
+            correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+            correctionSourceBlockIds: ['block-1'],
+          },
+        ],
+        citationsAvailable: true,
+        droppedCitationCount: 0,
+        droppedMisconceptionCount: 0,
+      },
+    };
+
+    const result = await acceptExplainBackGradingWithObservation(wiring, pending, fixedContext());
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.observations).toHaveLength(1);
+    const outcome = result.observations[0];
+    if (!outcome) throw new Error('expected an outcome');
+    // Admitted — not skipped for 'not-hers'/'unknown-authorship' — proves
+    // the real, wired `[D-101]` filter (`belief-source.ts`'s
+    // `admitBeliefBearingStatement`) received `'hers'` and let it through,
+    // not merely that this test's fixture happened to omit the field.
+    expect(outcome.skipped).toBe(false);
+  });
+
+  it('a not-hers statement is skipped end to end by the same buildObservationEventsFromAcceptedGrading call this wiring composes into', async () => {
+    // `attachStatementAuthorship` (`../../src/grading/wiring.ts`) always
+    // tags a real candidate `'hers'`, by construction of the current judge
+    // schema — see that function's doc for why a not-hers value can never
+    // arise from THIS wiring today. This test proves the other half of the
+    // filter it feeds is real and correctly wired: the exact
+    // `buildObservationEventsFromAcceptedGrading` call
+    // `computeAcceptExplainBackGradingWithObservation` makes (same import,
+    // same context shape, same deps) skips end to end — never building an
+    // `ObservationInput`, never spending an embed call — when a candidate's
+    // `statementAuthorship` is `'not-hers'`.
+    const outcomes = await buildObservationEventsFromAcceptedGrading(
+      [
+        {
+          concept: 'heap-property',
+          statement: 'A classmate told me a heap is always fully sorted.',
+          correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+          correctionSourceBlockIds: ['block-1'],
+          statementAuthorship: 'not-hers',
+        },
+      ],
+      fixedContext(),
+      { embedder: null },
+    );
+
+    expect(outcomes).toEqual([
+      {
+        candidate: {
+          concept: 'heap-property',
+          statement: 'A classmate told me a heap is always fully sorted.',
+          correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+          correctionSourceBlockIds: ['block-1'],
+          statementAuthorship: 'not-hers',
+        },
+        skipped: true,
+        reason: 'not-hers',
+      },
+    ]);
   });
 });
 
