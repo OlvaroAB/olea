@@ -88,6 +88,8 @@
  * "no longer held" notice — never a thrown error, never a fabricated verdict.
  */
 
+import type { ExplainBackJudgeLearningTarget } from 'olea-contracts';
+import type { SourceBlockRef } from '../grading/gradingPipeline.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** The vault folder this module owns. Dot-prefixed, matching `.olea/reviews/` and `.olea/drafts/`. */
@@ -113,9 +115,41 @@ export function contentStorePath(contentId: string): VaultPath {
 }
 
 /**
- * What one content record holds — C6.2a's own list: the text she wrote when
- * explaining a concept back, the grader's feedback on it, and misconception
- * detail (optional: not every graded attempt surfaces a misconception).
+ * What one content record holds — C6.2a's own list, widened by `[D-277]`
+ * (`ol-0r92.93`; `docs/Olea_alpha_functional_scope.md`'s C6.2a, "What the
+ * record holds for a graded answer, in full"): her answer as submitted, the
+ * grader's feedback, misconception detail, **the applied learning-target
+ * specification (F5.2b) with its digest, the reference answer, the source
+ * context the grader held, any misconception digest supplied, and the
+ * grading contract and rubric-policy versions** — a snapshot of what
+ * actually governed the judgement, so it is re-readable and re-gradable.
+ *
+ * **No event-schema change**: D-277 states this explicitly, and it holds
+ * here too — every field below lives in this per-record content-store file,
+ * never on the review-log event, which still carries only the verdict, its
+ * depth and a `contentRef` pointer to this record (`../review-log.js`'s
+ * `explainBackGrade`, unchanged by this widening).
+ *
+ * **Every widened field is optional, and absence is an ordinary, permanent
+ * state** (`[D-277]` clause f: "no backfill"). A caller that has no
+ * specification for this grading — no learning target was authored for the
+ * instrument, or the grading path predates this widening — supplies nothing,
+ * exactly as `misconceptionDetail` already worked for a grading that surfaced
+ * no misconception. `appliedSpecificationDigest` is meaningful only alongside
+ * `appliedSpecification`: the digest identifies WHICH TEXT was applied
+ * (`[D-277]` clause b), never sameness of asks, so a record cannot carry a
+ * digest for a specification it does not also hold.
+ *
+ * **Wiring not yet done.** No production caller populates the six new fields
+ * yet — `../grading/explainBackSolo.ts`'s `writeSoloGradingContent` (the
+ * production caller of `writeContentRecord`, outside this bead's `owns`)
+ * still writes only `studentAnswer`, `feedback` and `misconceptionDetail`.
+ * This type and the read/write path below accept the wider shape now so that
+ * caller — and the correctness-grading path
+ * (`../grading/gradingPipeline.ts`'s `gradeExplainBack`, which already holds
+ * `referenceAnswer`, `sourceBlocks` and `misconceptionDigest` as call
+ * inputs) — can start supplying it without a second migration; see this
+ * bead's report for the follow-up that does the actual wiring.
  *
  * Never logged, never quoted in a bead or a report (D-005) — this type
  * exists to be written to and read from the vault, nothing else.
@@ -125,6 +159,73 @@ export interface ContentStoreRecord {
   readonly studentAnswer: string;
   readonly feedback: string;
   readonly misconceptionDetail?: string;
+  /**
+   * `[D-277]` / F5.2b: the validated learning-target specification actually
+   * applied to this grading — `explain-back.judge.v1`'s optional
+   * `learningTarget` bundle (`olea-contracts`'
+   * `ExplainBackJudgeLearningTarget`), stored exactly as sent, never
+   * re-derived. Absent when no specification was applied (D-277f: an
+   * ordinary, permanent state, not an error).
+   */
+  readonly appliedSpecification?: ExplainBackJudgeLearningTarget;
+  /**
+   * `[D-277]` clause b: the digest identifying which text of
+   * `appliedSpecification` was applied — never sameness of asks. Present
+   * exactly when `appliedSpecification` is (checked by `isContentStoreRecord`
+   * below, not merely documented).
+   */
+  readonly appliedSpecificationDigest?: string;
+  /** C6.2a: the reference answer the grader held for this attempt. */
+  readonly referenceAnswer?: string;
+  /** C6.2a: the source context (retrieved passages) the grader held. */
+  readonly sourceContext?: readonly SourceBlockRef[];
+  /**
+   * C6.2a: any misconception digest supplied to the grader as context for
+   * this call — the transient, per-call input `gradingPipeline.ts`'s
+   * `toWireMisconceptionDigest` produces (D-008), distinct from
+   * `misconceptionDetail` above, which is this grading's own surfaced
+   * classification, not the context it was handed.
+   */
+  readonly misconceptionDigest?: readonly { concept: string; statement: string }[];
+  /** C6.2a: the grading contract version (D-011) this call was made under. */
+  readonly contractVersion?: number;
+  /**
+   * C6.2a: the rubric-policy version (D7.3's prompt-version stamp) actually
+   * applied to this grading — the grading rubric's own version, not the
+   * envelope's `contractVersion` above.
+   */
+  readonly rubricPolicyVersion?: string;
+}
+
+function isSourceBlockRef(value: unknown): value is SourceBlockRef {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.blockId === 'string' && typeof v.text === 'string';
+}
+
+function isMisconceptionDigestEntry(
+  value: unknown,
+): value is { concept: string; statement: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.concept === 'string' && typeof v.statement === 'string';
+}
+
+/**
+ * Deliberately shallow for `appliedSpecification`: this store round-trips
+ * whatever was sent verbatim (see the type's own doc, "stored exactly as
+ * sent") rather than re-validating it against `explain-back-judge-target.ts`'s
+ * zod schema — that schema already ran, at the wire boundary, before this
+ * value ever reached here, and re-running it here would be a second source of
+ * truth for the same shape. Only "is this an object with a schemaVersion
+ * string" is checked, matching the referential-integrity posture the rest of
+ * this module already takes: a value that fails even this loose check reads
+ * as `missing`, never throws.
+ */
+function isAppliedSpecification(value: unknown): value is ExplainBackJudgeLearningTarget {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.schemaVersion === 'string';
 }
 
 function isContentStoreRecord(value: unknown): value is ContentStoreRecord {
@@ -134,6 +235,36 @@ function isContentStoreRecord(value: unknown): value is ContentStoreRecord {
   if (typeof v.studentAnswer !== 'string') return false;
   if (typeof v.feedback !== 'string') return false;
   if (v.misconceptionDetail !== undefined && typeof v.misconceptionDetail !== 'string') {
+    return false;
+  }
+  if (v.appliedSpecification !== undefined && !isAppliedSpecification(v.appliedSpecification)) {
+    return false;
+  }
+  if (
+    v.appliedSpecificationDigest !== undefined &&
+    typeof v.appliedSpecificationDigest !== 'string'
+  ) {
+    return false;
+  }
+  // `[D-277]` clause b: a digest is meaningful only alongside the
+  // specification it identifies — never one with no other.
+  if ((v.appliedSpecification === undefined) !== (v.appliedSpecificationDigest === undefined)) {
+    return false;
+  }
+  if (v.referenceAnswer !== undefined && typeof v.referenceAnswer !== 'string') return false;
+  if (v.sourceContext !== undefined) {
+    if (!Array.isArray(v.sourceContext) || !v.sourceContext.every(isSourceBlockRef)) return false;
+  }
+  if (v.misconceptionDigest !== undefined) {
+    if (
+      !Array.isArray(v.misconceptionDigest) ||
+      !v.misconceptionDigest.every(isMisconceptionDigestEntry)
+    ) {
+      return false;
+    }
+  }
+  if (v.contractVersion !== undefined && typeof v.contractVersion !== 'number') return false;
+  if (v.rubricPolicyVersion !== undefined && typeof v.rubricPolicyVersion !== 'string') {
     return false;
   }
   return true;

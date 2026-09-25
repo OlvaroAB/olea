@@ -132,6 +132,136 @@ describe('content-store', () => {
     expect(readB.status === 'found' && readB.record.studentAnswer).toBe('from mobile');
   });
 
+  describe('[D-277] the full applied context (C6.2a widened)', () => {
+    const specification = {
+      schemaVersion: 'explain-back-target.v1' as const,
+      declaredDemand: 'recall-a-fact' as const,
+      conditions: 'closed-book explain-back, no notes',
+      permittedSupport: 'nothing beyond the question text',
+      adequacyCriteria: [{ id: 'a1', text: 'names what cementation does' }],
+      disqualifiers: [],
+      sourceBasis: ['block-1'],
+      questionBinding: 'explains how cementation binds grains',
+    };
+
+    it('round-trips every widened field exactly (applied specification, digest, reference answer, source context, misconception digest, contract and rubric-policy versions)', async () => {
+      const vault = new FolderSource(tempRoot);
+      await writeContentRecord(
+        vault,
+        {
+          studentAnswer: 'cementation binds grains together',
+          feedback: 'correct, well cited',
+          appliedSpecification: specification,
+          appliedSpecificationDigest: 'sha256:abc123',
+          referenceAnswer:
+            'cementation is the process by which minerals precipitate and bind grains',
+          sourceContext: [
+            { blockId: 'block-1', text: 'cementation precipitates minerals between grains' },
+          ],
+          misconceptionDigest: [
+            { concept: 'concept-a', statement: 'confuses cementation with compaction' },
+          ],
+          contractVersion: 3,
+          rubricPolicyVersion: 'explain-back-judge.v7',
+        },
+        { deviceId: 'd1', generateContentId: () => 'd1.full-context' },
+      );
+
+      const result = await readContentRecord(vault, 'd1.full-context');
+      expect(result).toEqual({
+        status: 'found',
+        record: {
+          contentId: 'd1.full-context',
+          studentAnswer: 'cementation binds grains together',
+          feedback: 'correct, well cited',
+          appliedSpecification: specification,
+          appliedSpecificationDigest: 'sha256:abc123',
+          referenceAnswer:
+            'cementation is the process by which minerals precipitate and bind grains',
+          sourceContext: [
+            { blockId: 'block-1', text: 'cementation precipitates minerals between grains' },
+          ],
+          misconceptionDigest: [
+            { concept: 'concept-a', statement: 'confuses cementation with compaction' },
+          ],
+          contractVersion: 3,
+          rubricPolicyVersion: 'explain-back-judge.v7',
+        },
+      });
+    });
+
+    it('every widened field is absent when not supplied — no backfill, ordinary and permanent (D-277f)', async () => {
+      const vault = new FolderSource(tempRoot);
+      await writeContentRecord(
+        vault,
+        { studentAnswer: 'x', feedback: 'y' },
+        { deviceId: 'd1', generateContentId: () => 'd1.no-spec' },
+      );
+      const found = await readContentRecord(vault, 'd1.no-spec');
+      expect(found.status).toBe('found');
+      const record = found.status === 'found' ? found.record : undefined;
+      expect(record?.appliedSpecification).toBeUndefined();
+      expect(record?.appliedSpecificationDigest).toBeUndefined();
+      expect(record?.referenceAnswer).toBeUndefined();
+      expect(record?.sourceContext).toBeUndefined();
+      expect(record?.misconceptionDigest).toBeUndefined();
+      expect(record?.contractVersion).toBeUndefined();
+      expect(record?.rubricPolicyVersion).toBeUndefined();
+    });
+
+    it('a digest with no specification is malformed — reads as missing, never throws', async () => {
+      const vault = new FolderSource(tempRoot);
+      const path = contentStorePath('d1.digest-only');
+      await vault.write(
+        path,
+        JSON.stringify({
+          contentId: 'd1.digest-only',
+          studentAnswer: 'x',
+          feedback: 'y',
+          appliedSpecificationDigest: 'sha256:orphan',
+        }),
+      );
+      const result = await readContentRecord(vault, 'd1.digest-only');
+      expect(result).toEqual({ status: 'missing', contentId: 'd1.digest-only' });
+    });
+
+    it('a specification with no digest is malformed — reads as missing, never throws', async () => {
+      const vault = new FolderSource(tempRoot);
+      const path = contentStorePath('d1.spec-only');
+      await vault.write(
+        path,
+        JSON.stringify({
+          contentId: 'd1.spec-only',
+          studentAnswer: 'x',
+          feedback: 'y',
+          appliedSpecification: specification,
+        }),
+      );
+      const result = await readContentRecord(vault, 'd1.spec-only');
+      expect(result).toEqual({ status: 'missing', contentId: 'd1.spec-only' });
+    });
+
+    it('malformed shapes for the widened fields (wrong type) read as missing, never throw', async () => {
+      const vault = new FolderSource(tempRoot);
+      const cases: Record<string, unknown> = {
+        referenceAnswer: 42,
+        sourceContext: [{ blockId: 'b1' }], // missing `text`
+        misconceptionDigest: [{ concept: 'c1' }], // missing `statement`
+        contractVersion: 'three',
+        rubricPolicyVersion: 7,
+      };
+      for (const [field, badValue] of Object.entries(cases)) {
+        const id = `d1.bad-${field}`;
+        await vault.write(
+          contentStorePath(id),
+          JSON.stringify({ contentId: id, studentAnswer: 'x', feedback: 'y', [field]: badValue }),
+        );
+        const result = await readContentRecord(vault, id);
+        expect(result).toEqual({ status: 'missing', contentId: id });
+      }
+    });
+  });
+
   describe('referential integrity (C6.2a: a missing referent has defined behaviour)', () => {
     it('a content id that was never written reads as missing, never throws', async () => {
       const vault = new FolderSource(tempRoot);

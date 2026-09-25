@@ -1005,4 +1005,49 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
     };
     expect(computeConceptMastery([original, corrected], 'concept-a').state).toBe('tree');
   });
+
+  it('[TARGET-5] a CHAIN of two re-grades: the fold reads the LATEST re-grade, whatever order the log is folded in — an original re-graded away and then re-graded back qualifies again', () => {
+    // g1 (original, qualifying) -> g2 (revisionOf g1, a false-basis correction
+    // to `incorrect` — excludes g1 AND fails to qualify itself) -> g3
+    // (revisionOf g2, re-graded correct again — the judgement now standing).
+    // A fold that stopped at the first `revisionOf` hop (reading only g1's own
+    // corrector, g2) would wrongly settle on g2's `incorrect` verdict as final;
+    // R10 requires the LATEST re-grade, g3, to be what stands.
+    const g1 = gradedExplainBack('relational', { eventId: 'g1' });
+    const g2 = gradedExplainBack('relational', {
+      eventId: 'g2',
+      timestamp: '2026-02-01T09:00:00-04:00',
+      explainBackGrade: {
+        ...g1.explainBackGrade!,
+        correctness: 'incorrect',
+        revisionOf: 'g1',
+      },
+    });
+    const g3 = gradedExplainBack('relational', {
+      eventId: 'g3',
+      timestamp: '2026-02-02T09:00:00-04:00',
+      explainBackGrade: {
+        ...g1.explainBackGrade!,
+        correctness: 'correct',
+        revisionOf: 'g2',
+      },
+    });
+
+    expect(computeConceptMastery([g1], 'concept-a').state).toBe('tree');
+    // Only the false-basis correction landed so far: g1 is excluded (superseded), g2
+    // itself does not qualify (incorrect) — the stage drops, it is not stuck at g1.
+    expect(computeConceptMastery([g1, g2], 'concept-a').state).toBe('sprout');
+    // The re-grade of the re-grade lands: g2 is now also superseded, g3 is the
+    // latest judgement and it qualifies — the stage is granted again, from g3.
+    for (const ordering of [
+      [g1, g2, g3],
+      [g3, g2, g1],
+      [g2, g1, g3],
+      [g3, g1, g2],
+    ]) {
+      const result = computeConceptMastery(ordering, 'concept-a');
+      expect(result.state).toBe('tree');
+      expect(result.evidence.topStageAttempt?.eventId).toBe('g3');
+    }
+  });
 });
