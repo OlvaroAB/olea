@@ -724,6 +724,27 @@ export interface VaultTrendsSourceDeps {
  * is one line and is written here rather than inside core so that the seam
  * where it could stop matching is visible.
  *
+ * **NOT reverted to unstamped, despite `ol-egov.141.89.9.26`'s finding that
+ * this is the one call site (of six named by `ol-2zfj.44`'s module doc) that
+ * has migrated to `extractConceptsFromVault`, while every other production
+ * reader (`registry/provider.ts`, `grove/provider.ts`, and — the one that
+ * actually matters for the fold below — `session/build.ts#buildReviewSession`,
+ * which is what a real review gets logged under) still calls
+ * `enumerateVaultInstruments` unstamped.** Reverting THIS call site alone
+ * would regress `ol-2zfj.50` (`features/F8-concepts-scope.md`'s own scenario,
+ * "every production extraction path mints concept keys, not just the
+ * composition root" — `production-callers.spec.ts`, which exercises this
+ * exact call site). The two are in genuine tension: `[D-174]`'s scenario
+ * requires this reader to stamp; the review-log fold
+ * (`buildMasteryOverview`/`buildInsights` inside `buildTodayPanel`, joining
+ * `entries` — always provisionally keyed, since no write path has migrated —
+ * against `concepts` from this function) needs it not to, or needs every
+ * other production key-deriving call site migrated alongside it. Closing
+ * either side alone reopens the other; see
+ * `packages/plugin/test/today/concept-key-agreement.spec.ts` for the measured
+ * evidence and `ol-egov.141.89.9.26`'s close notes for why this bead reports
+ * rather than resolves it.
+ *
  * **`displayName` resolution (`ol-95vv.6`)** reuses `record.name` — already
  * on hand from the same walk, no second read — overlaid by
  * `resolvedDisplayName` when `deps.registryOverrides` is supplied. This is
