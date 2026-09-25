@@ -55,7 +55,11 @@
  * own doc in `./types.ts`. A caller that never supplies `disputes` still
  * gets a fully honest history, simply with no row ever marked contested,
  * which is the correct default for "unknown" rather than a fabricated
- * "definitely not contested."
+ * "definitely not contested." **The same default now also means "no
+ * corrected-contest evidence to fold into the growth stage"**
+ * (`provenInvalidInstrumentIds` below, `ol-egov.141.89.9.23`) — absent
+ * `disputes`, a contest resolved corrected simply cannot be seen here, the
+ * identical honest-absence posture, never a fabricated "definitely upheld."
  *
  * Only an INSTRUMENT-SEEDED explain-back attempt gets a row here — see
  * `RegistryInstrumentSummary.explainBackHistory`'s own doc in `./types.ts`
@@ -95,7 +99,11 @@ import {
   readAllConceptVitality,
 } from '../mastery/rollup.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
-import { quarantinedGradeInstrumentIds } from '../review-log/contest.js';
+import {
+  correctedGradeInstrumentIds,
+  type DisputeLogRecord,
+  quarantinedGradeInstrumentIds,
+} from '../review-log/contest.js';
 import {
   type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
@@ -440,12 +448,23 @@ function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): numbe
  * proves itself invalid today, with no reason field needed. A corrective
  * re-grade (`explainBackGrade.revisionOf`) is already read unconditionally
  * inside `../mastery/rollup.ts` itself and needs no entry here.
+ *
+ * **Widened by `ol-egov.141.89.9.23`** to close the reachability gap
+ * `correctedGradeInstrumentIds`'s own doc names: a contest resolved
+ * `corrected` is the identical today-unambiguous "found defective" shape a
+ * `rejected` verdict already is (`[D-338]` item 2), so it now joins the
+ * proven-invalid set here too. `upheld` stays excluded — that function's own
+ * doc says why (nothing was found defective there).
  */
-function provenInvalidInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+function provenInvalidInstrumentIds(
+  entries: readonly ReviewLogEntry[],
+  disputes: readonly DisputeLogRecord[],
+): ReadonlySet<string> {
   const invalid = new Set<string>();
   for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
     if (verdict.verdict === 'rejected') invalid.add(instrumentId);
   }
+  for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
   return invalid;
 }
 
@@ -496,7 +515,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   // `suspendedInstrumentIds` wiring here was the retraction bug D-338 rules
   // against, and what still counts without it.
   const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup], {
-    invalidInstrumentIds: [...provenInvalidInstrumentIds(input.entries)],
+    invalidInstrumentIds: [...provenInvalidInstrumentIds(input.entries, input.disputes ?? [])],
   });
   const vitalityByConcept = readAllConceptVitality(
     input.entries,

@@ -26,6 +26,7 @@
 import type { ExplainBackGrade, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptRecord } from '../concept/types.js';
+import { contestClaim, type DisputeLogRecord, resolveDispute } from '../review-log/contest.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import { buildRegistryModel } from './build.js';
@@ -144,7 +145,11 @@ const scheduler = createFsrsScheduler();
 const now = new Date('2026-02-01T12:00:00Z');
 const HOLDING_CUT = 0.8;
 
-function buildFor(entries: readonly ReviewLogEntry[], suspended: ReadonlySet<string> = new Set()) {
+function buildFor(
+  entries: readonly ReviewLogEntry[],
+  suspended: ReadonlySet<string> = new Set(),
+  disputes: readonly DisputeLogRecord[] = [],
+) {
   return buildRegistryModel({
     concepts: [concept()],
     instrumentRecords: [qaInstrument()],
@@ -154,7 +159,46 @@ function buildFor(entries: readonly ReviewLogEntry[], suspended: ReadonlySet<str
     holdingCut: HOLDING_CUT,
     overrides: EMPTY_REGISTRY_OVERRIDES,
     suspendedInstrumentIds: suspended,
+    disputes,
   });
+}
+
+/**
+ * A resolved `[D-095]` dispute against `qaInstrument()`'s own grade —
+ * `outcome` defaults to `corrected`, `[D-338]` item 2's grade-half signal
+ * (`ol-egov.141.89.9.23`). Both the opening and its resolution, in the shape
+ * `buildRegistryModel`'s `disputes` input reads.
+ */
+function contestedGradeDisputes(
+  outcome: 'upheld' | 'corrected' = 'corrected',
+): readonly DisputeLogRecord[] {
+  const opening = contestClaim({
+    claim: {
+      rendering: 'explain-back-grade',
+      conceptIds: ['concept-a'],
+      instrumentId: 'qa:concept-a:1',
+      evidenceBasis: 'evidence-fingerprint-1',
+    },
+    timestamp: '2026-01-21T09:00:00-04:00',
+  });
+  const openingRecord: DisputeLogRecord = {
+    schemaVersion: 5,
+    kind: 'dispute',
+    eventId: 'dispute-1',
+    ...opening.record,
+  };
+  const resolution = resolveDispute({
+    dispute: openingRecord,
+    outcome,
+    timestamp: '2026-01-22T09:00:00-04:00',
+  });
+  const resolutionRecord: DisputeLogRecord = {
+    schemaVersion: 5,
+    kind: 'dispute',
+    eventId: 'dispute-2',
+    ...resolution,
+  };
+  return [openingRecord, resolutionRecord];
 }
 
 describe('buildRegistryModel — [D-338]: suspension alone never retracts the top stage', () => {
@@ -177,5 +221,20 @@ describe('buildRegistryModel — [D-338]: suspension alone never retracts the to
     const model = buildFor([qualifyingExplainBack(), rejectedVerdict()]);
     expect(model.concepts[0]?.mastery.state).not.toBe('tree');
     expect(model.concepts[0]?.mastery.state).toBe('sprout');
+  });
+
+  it('the SAME attempt, once a `[D-095]` dispute against its grade resolves `corrected` — the identical today-unambiguous "found defective" shape a `rejected` verdict already is (`[D-338]` item 2, `ol-egov.141.89.9.23`) — no longer qualifies the top stage', () => {
+    const model = buildFor(
+      [qualifyingExplainBack()],
+      new Set(),
+      contestedGradeDisputes('corrected'),
+    );
+    expect(model.concepts[0]?.mastery.state).not.toBe('tree');
+    expect(model.concepts[0]?.mastery.state).toBe('sprout');
+  });
+
+  it('the SAME contest resolved `upheld` instead — the grading was checked and held, nothing found defective — KEEPS the top stage', () => {
+    const model = buildFor([qualifyingExplainBack()], new Set(), contestedGradeDisputes('upheld'));
+    expect(model.concepts[0]?.mastery.state).toBe('tree');
   });
 });

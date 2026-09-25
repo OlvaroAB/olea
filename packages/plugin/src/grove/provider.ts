@@ -162,6 +162,7 @@ import {
   calendarDaysEndingOn,
   createFsrsScheduler,
   DEFAULT_COURSES_FOLDER,
+  type DisputeLogRecord,
   discoverEmbeddedSources,
   enumerateVaultInstruments,
   extractTier3Evidence,
@@ -171,6 +172,7 @@ import {
   isRegisterableDocument,
   projectRegisteredFiles,
   readAssessments,
+  readReviewLogFile,
   readReviewLogHistory,
   reviewLogPath,
   suspendedInstrumentIds,
@@ -255,6 +257,26 @@ function instrumentCountsByNotePath(
     counts.set(record.notePath, (counts.get(record.notePath) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * `[D-338]` item 2's proven-invalid fold, widened by `[D-338]`'s grade half
+ * (`ol-egov.141.89.9.23`), needs `buildRegistryModel`'s `disputes` input to
+ * see a contest resolved `corrected` at all — see that module's own doc for
+ * why. `readReviewLogHistory` (`../../core/session/history.ts`) deliberately
+ * does not surface dispute records — `../../core/review-log/parse.ts`'s own
+ * doc says why — and `session/history.ts` sits outside this bead's `owns`,
+ * so rather than widen it, this re-reads exactly the `files` that walk
+ * already reported as read, matching `../registry/provider.ts`'s own
+ * `disputesFromFiles` (duplicated rather than shared: different bead's
+ * `owns`, and this is six lines).
+ */
+async function disputesFromFiles(
+  vault: VaultSource,
+  files: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
 }
 
 /**
@@ -479,7 +501,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // finishes, so it is NOT part of the `Promise.all` below. Everything
         // else is independent and paid concurrently.
         const [
-          { entries },
+          { entries, files },
           enumeration,
           offerEvents,
           assessmentRecords,
@@ -513,7 +535,15 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // persistence mechanism feeding the classification mechanism this
         // pipeline already had, never a second path.
         const registeredFiles = projectRegisteredFiles(entries);
-        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary, registeredFiles });
+        // `disputesFromFiles` (`ol-egov.141.89.9.23`) re-reads the same
+        // `files` above — see that function's own doc — so `buildRegistryModel`
+        // below can fold a contest resolved `corrected` into the growth stage,
+        // not only a `rejected` verdict. Independent of `extractTier3Evidence`,
+        // so paid concurrently.
+        const [tier3, disputes] = await Promise.all([
+          extractTier3Evidence(deps.vault, { vocabulary, registeredFiles }),
+          disputesFromFiles(deps.vault, files),
+        ]);
 
         const registryModel = buildRegistryModel({
           concepts: enumeration.concepts,
@@ -521,6 +551,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           entries,
           scheduler,
           now,
+          disputes,
           // `HOLDING_CUT` (`[D-115]`, `olea-core`) — inert today, since F8.1's
           // grove reads growth stage, not vitality (`ol-owyn`), but still the
           // ratified value rather than an independent local guess if grove

@@ -123,6 +123,7 @@ import {
   REVIEW_LOG_FOLDER,
   type RegistryOverrides,
   type RhythmCourseInput,
+  readReviewLogFile,
   readReviewLogHistory,
   resolvedDisplayName,
   resolveTermBoundary,
@@ -910,13 +911,66 @@ function instrumentCountsByNotePath(
  * (`explainBackGrade.revisionOf`) is already read unconditionally inside
  * `olea-core`'s mastery fold and needs no entry here. Matches
  * `../registry/build.ts` (olea-core)'s own `provenInvalidInstrumentIds`.
+ *
+ * **Widened by `ol-egov.141.89.9.23`** to union in
+ * `correctedGradeInstrumentIds`'s signal too: a contest resolved `corrected`
+ * is the same today-unambiguous "found defective" shape a `rejected` verdict
+ * already is (`[D-338]` item 2). `upheld` stays excluded — see
+ * `correctedGradeInstrumentIds` below, this file's own mirror of
+ * `olea-core`'s function of the same name (not itself exported from
+ * `olea-core`'s barrel — widening `packages/core/src/index.ts` is outside
+ * this bead's `owns`, the named reachability gap `../review-log/
+ * contest.ts#correctedGradeInstrumentIds`'s own doc flags).
  */
-function provenInvalidInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+function provenInvalidInstrumentIds(
+  entries: readonly ReviewLogEntry[],
+  disputes: readonly DisputeLogRecord[],
+): ReadonlySet<string> {
   const invalid = new Set<string>();
   for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
     if (verdict.verdict === 'rejected') invalid.add(instrumentId);
   }
+  for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
   return invalid;
+}
+
+/**
+ * `olea-core`'s `review-log/contest.ts#correctedGradeInstrumentIds`, mirrored
+ * here rather than imported: that function is not exported from `olea-core`'s
+ * barrel (`packages/core/src/index.ts`), which sits outside this bead's
+ * `owns` — see `provenInvalidInstrumentIds`'s own doc, above, for why
+ * widening it is out of scope rather than silently worked around. This reads
+ * the identical two fields (`claimKind`, `resolves`, `outcome`) the core
+ * function's own doc names: only a RESOLUTION record (`resolves` present)
+ * whose `outcome` is `corrected`, for a `grade`-kind dispute, counts. `upheld`
+ * is deliberately excluded — nothing was found defective there.
+ */
+function correctedGradeInstrumentIds(disputes: readonly DisputeLogRecord[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const record of disputes) {
+    if (record.claimKind !== 'grade') continue;
+    if (record.resolves === undefined) continue;
+    if (record.outcome !== 'corrected') continue;
+    if (record.instrumentId !== undefined) ids.add(record.instrumentId);
+  }
+  return ids;
+}
+
+/**
+ * `readReviewLogHistory` (`../../core/session/history.ts`) deliberately does
+ * not surface dispute records — `../../core/review-log/parse.ts`'s own doc
+ * says why — and `session/history.ts` sits outside this bead's `owns`, so
+ * rather than widen it, this re-reads exactly the `files` that walk already
+ * reported as read, matching `../registry/provider.ts`'s own
+ * `disputesFromFiles` (duplicated rather than shared: different bead's
+ * `owns`, and this is six lines).
+ */
+async function disputesFromFiles(
+  vault: VaultSource,
+  files: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
 }
 
 /**
@@ -959,25 +1013,33 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
           reviewLogPath(day, deps.deviceId),
         );
 
-        const [{ entries }, enumeration] = await Promise.all([
+        const [{ entries, files }, enumeration] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault),
         ]);
 
         const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
-        const tier3 = await extractTier3Evidence(deps.vault, { vocabulary });
+        // `disputesFromFiles` re-reads the same `files` this walk already
+        // read — see that function's own doc for why `readReviewLogHistory`
+        // itself cannot supply this. Independent of `extractTier3Evidence`,
+        // so paid concurrently.
+        const [tier3, disputes] = await Promise.all([
+          extractTier3Evidence(deps.vault, { vocabulary }),
+          disputesFromFiles(deps.vault, files),
+        ]);
 
         const materialPresence = buildMaterialPresence(
           enumeration.concepts,
           instrumentCountsByNotePath(enumeration.records),
         );
-        // `[D-338]` interim fix (`ol-egov.141.89.9.14`): see
-        // `provenInvalidInstrumentIds`'s own doc, above, for why this no
-        // longer reads `suspendedInstrumentIds`.
+        // `[D-338]` interim fix (`ol-egov.141.89.9.14`), widened by
+        // `ol-egov.141.89.9.23`: see `provenInvalidInstrumentIds`'s own doc,
+        // above, for why this no longer reads `suspendedInstrumentIds`, and
+        // now also unions a contest resolved `corrected`.
         const mastery = computeAllConceptMastery(
           entries,
           enumeration.concepts.map((concept) => concept.key),
-          { invalidInstrumentIds: [...provenInvalidInstrumentIds(entries)] },
+          { invalidInstrumentIds: [...provenInvalidInstrumentIds(entries, disputes)] },
         );
 
         // Every course a concept or a registered source names — a course
