@@ -216,7 +216,19 @@ const STORIES = [
       // `sapling` and stops. `tree` is reachable ONLY through an explain-back
       // graded at or above the declared depth threshold (`relational`), so the
       // one concept in this spread that is meant to read `tree` carries one.
-      { date: '2026-08-24', instrumentType: 'explain-back', soloLevel: 'relational' },
+      // `[D-281]` (`ol-95vv.11`, ruled 2026-09-22) added two more conditions
+      // this same attempt must carry, on top of depth: an independent
+      // correctness verdict, and a recorded (admitted) support level. Both
+      // are added here deliberately, not defaulted by the fold — this is the
+      // evidence a real qualifying attempt would carry, not a workaround
+      // (`ol-egov.141.89.9.42`).
+      {
+        date: '2026-08-24',
+        instrumentType: 'explain-back',
+        soloLevel: 'relational',
+        correctness: 'correct',
+        supportLevelShown: 'independent',
+      },
     ],
   },
   {
@@ -275,6 +287,17 @@ const STORIES = [
       { date: '2026-06-20', instrumentType: 'qa', rating: 'good' },
       { date: '2026-07-10', instrumentType: 'qa', rating: 'good' },
       { date: '2026-08-01', instrumentType: 'qa', rating: 'good' },
+      // `ol-egov.141.89.9.40`: the original four-event story measures
+      // recallProbability 0.8952 at the workbench's fixed NOW
+      // (2027-01-15T09:15Z) through the real FSRS scheduler — below the
+      // ratified 0.90 holding cut (`[D-115]`), so the strong-recall banner no
+      // longer showed. These three extra spaced successes, never touching
+      // the original four, push it to 0.9862 — a comfortable margin, not a
+      // boundary pin — while keeping the state at `sapling` (still no
+      // explain-back, which would move it to `tree`).
+      { date: '2026-09-05', instrumentType: 'qa', rating: 'good' },
+      { date: '2026-10-15', instrumentType: 'qa', rating: 'good' },
+      { date: '2026-12-01', instrumentType: 'qa', rating: 'good' },
     ],
   },
 ];
@@ -316,10 +339,21 @@ function buildRecords(conceptKey, notePath, events) {
         instrumentTypesOffered: [event.instrumentType],
         planVersion: null,
       },
+      // `[D-281]` item 3: the top stage never qualifies without a recorded
+      // support level, whatever the event means to demonstrate. Left off
+      // entries that don't specify one, so only the stories that need it
+      // (the tree route) carry it.
+      ...(event.supportLevelShown !== undefined
+        ? { supportLevelShown: event.supportLevelShown }
+        : {}),
       ...(isExplainBack
         ? {
             explainBackGrade: {
               soloLevel: event.soloLevel,
+              // `[D-281]` item 1: an explain-back reaches the top stage only
+              // with an explicit 'correct' verdict here — absence (the case
+              // before this field existed) never admits it.
+              ...(event.correctness !== undefined ? { correctness: event.correctness } : {}),
               // An opaque placeholder id, never text — the content store this
               // points into holds nothing for a synthetic fixture (D-005).
               contentRef: `wb-fixture-oracle:${slug}:grade:${String(index)}`,

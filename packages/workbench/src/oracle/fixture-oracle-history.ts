@@ -157,8 +157,10 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
       instrumentTypesOffered: ['explain-back'],
       planVersion: null,
     },
+    supportLevelShown: 'independent',
     explainBackGrade: {
       soloLevel: 'relational',
+      correctness: 'correct',
       contentRef: 'wb-fixture-oracle:imbrication:grade:6',
       revisionOf: null,
       artifactProvenance: {
