@@ -17,6 +17,7 @@ import {
   createFsrsScheduler,
   listSameAsLinkRecords,
   proposeSameAsLink,
+  type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistrySourceLocation,
   type RetrievabilityInput,
@@ -1049,5 +1050,215 @@ describe('createLocalRegistryProvider — threads retrievability into the note-o
     // the failing assertion the lane rules ask to be shown red before the
     // fix: `expect(configuredCalls).toBe(unconfiguredCalls + 1)`.
     expect(configuredCalls).toBe(unconfiguredCalls + 1);
+  });
+});
+
+// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4a / [D-176] —
+// The offer-to-create-a-note gate", the accept-time half (bug
+// `ol-egov.141.89.10.21`, this bead `ol-egov.141.89.10.42`, INV-6: never
+// write into her notes without a still-valid consent). `note-offer.spec.ts`
+// and `../../../core/src/registry/build.spec.ts` already prove the GATE
+// itself (`noteOfferEligible`/`recheckNoteOfferAtAccept`, and `noteOfferFor`
+// reading a fresh `existingNoteTitles` listing); this suite proves the
+// WIRING — that `acceptNoteOffer` re-derives that evidence FRESH, from the
+// vault, at the moment she clicks, rather than trusting the render-time
+// `entry` it is handed.
+describe('createLocalRegistryProvider — acceptNoteOffer re-checks eligibility at accept ([D-176], INV-6, ol-egov.141.89.10.21/.42)', () => {
+  const ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
+  const ASSIGNMENTS_BASE_FILE = [
+    'filters:',
+    '  and:',
+    '    - file.inFolder("02 Assignments")',
+    '    - file.ext == "md"',
+    'properties:',
+    '  class:',
+    '  type:',
+    '  weight:',
+    '  due:',
+    '  status:',
+  ].join('\n');
+  const NOTE = [
+    '---',
+    'topic: [Original Name]',
+    'course: TESTC101',
+    '---',
+    '',
+    'Front text::Back text',
+    '',
+  ].join('\n');
+  // `courseRankingsForNoteOffer`'s ranking call only reaches a concept once
+  // it has real assessment EVIDENCE (a tier-3 citation join, matching
+  // `gap/provider.spec.ts`'s and this file's own "threads retrievability"
+  // fixture shape above) — a past paper naming the concept's own term, and a
+  // Zettelkasten note titled after it, both required for the concept to
+  // land in the top band its single-course ranking gives it.
+  const PAST_PAPER = [
+    '---',
+    'role: past-paper',
+    'course: TESTC101',
+    '---',
+    '',
+    '# TESTC101 Past Paper — 2023',
+    '',
+    '## Question 1 (10 marks)',
+    '',
+    'Explain the core mechanism behind Original Name and why it matters.',
+    '',
+  ].join('\n');
+  const QUIZ =
+    '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n';
+
+  function hostWithAssignmentsBase(): FakeDataHost {
+    const host = new FakeDataHost();
+    host.blob = {
+      [STUDY_PLAN_SETTINGS_STORAGE_KEY]: { version: 1, assignmentsBasePath: ASSIGNMENTS_BASE_PATH },
+    };
+    return host;
+  }
+
+  function eligibleFixtureVault() {
+    return memoryVault({
+      '05 Zettelkasten/Original Name.md': '# Original Name\n',
+      'Notes/one.md': NOTE,
+      '03 Research/TESTC101 Past Paper 2023.md': PAST_PAPER,
+      [ASSIGNMENTS_BASE_PATH]: ASSIGNMENTS_BASE_FILE,
+      '02 Assignments/Quiz 1.md': QUIZ,
+    });
+  }
+
+  /** Genuinely eligible: an accepted instrument, one scored review, and top-band rank (the only concept in its only course, so `TOP_BAND_DIVISOR`'s cutoff is always `>= 1`). */
+  async function makeEligibleEntry(
+    vault: ReturnType<typeof eligibleFixtureVault>,
+    settingsHost: FakeDataHost,
+  ): Promise<RegistryConceptEntry> {
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    });
+    const before = await modelFrom(await provider.load());
+    const key = before.concepts[0]?.key;
+    if (key === undefined) throw new Error('missing concept key');
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-01-01T09:00:00-04:00',
+        instrumentId: 'qa:note-offer-accept:1',
+        instrumentType: 'qa',
+        conceptIds: [key],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'note-offer-accept-1' },
+    );
+    const after = await modelFrom(await provider.load());
+    const entry = after.concepts.find((c) => c.key === key);
+    if (entry === undefined) throw new Error('missing concept entry');
+    if (!entry.noteOffer.eligible)
+      throw new Error('fixture is not eligible — test setup is broken');
+    return entry;
+  }
+
+  it('REGRESSION: a click after a note appeared under an alias creates nothing', async () => {
+    const vault = eligibleFixtureVault();
+    const settingsHost = hostWithAssignmentsBase();
+    const renderTimeEntry = await makeEligibleEntry(vault, settingsHost);
+
+    // She renames the concept away from "Original Name" — it becomes an
+    // alias (`renderTimeEntry` above is now stale: it still reports the OLD
+    // display name and no alias at all).
+    const renameProvider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    });
+    await renameProvider.rename(renderTimeEntry, 'Renamed Name');
+
+    // A note appears under the alias, "Original Name" — a course document
+    // now links `[[Original Name]]`, and it resolves to TWO notes sharing
+    // that exact title (the fixture's own `05 Zettelkasten/Original Name.md`
+    // plus a second, unrelated one) — tier-1 binding "refuses to pick one"
+    // (`ol-lzwe`), so the concept stays tier 2 and its key is unchanged, but
+    // `registry/build.ts`'s `existingNoteTitlesFrom` still counts the
+    // ambiguous title as "a real note she has" (module doc, "the
+    // existing-note check") — exactly the stray-note collision
+    // `ol-egov.141.89.10.21` describes, now landing on the ALIAS rather than
+    // the current display name.
+    await vault.write(
+      '01 Courses/TESTC101/Syllabus.md',
+      ['---', 'course: TESTC101', '---', '', 'See [[Original Name]] for more.', ''].join('\n'),
+    );
+    await vault.write('Other/Original Name.md', '# Original Name (duplicate)\n');
+
+    // Confirm the fresh state actually is what this test claims: eligible
+    // is now false, and specifically because of the alias, not the tier.
+    const freshCheck = await modelFrom(await renameProvider.load());
+    const freshRow = freshCheck.concepts.find((c) => c.key === renderTimeEntry.key);
+    if (freshRow === undefined)
+      throw new Error('missing concept row after the stray note appeared');
+    expect(freshRow.tier).toBe(2);
+    expect(freshRow.aliases).toEqual(['Original Name']);
+    expect(freshRow.noteOffer.eligible).toBe(false);
+
+    let acceptCalls = 0;
+    const acceptingProvider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      acceptNoteOfferPort: {
+        async accept() {
+          acceptCalls += 1;
+        },
+      },
+    });
+
+    // The click itself: the view still hands acceptNoteOffer the STALE
+    // render-time entry (it has no way to know the offer has since gone
+    // stale) — a pre-fix `acceptNoteOffer` called the port unconditionally
+    // here, which is the regression this asserts against.
+    await acceptingProvider.acceptNoteOffer(renderTimeEntry);
+    expect(acceptCalls).toBe(0);
+  });
+
+  it('control: still creates the note through the port when the fresh recheck finds no conflict', async () => {
+    const vault = eligibleFixtureVault();
+    const settingsHost = hostWithAssignmentsBase();
+    const entry = await makeEligibleEntry(vault, settingsHost);
+
+    let acceptCalls = 0;
+    let acceptedKey: string | undefined;
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      acceptNoteOfferPort: {
+        async accept(accepted) {
+          acceptCalls += 1;
+          acceptedKey = accepted.key;
+        },
+      },
+    });
+
+    await provider.acceptNoteOffer(entry);
+    // Nothing changed between render and accept here — the recheck must not
+    // block a genuinely still-eligible offer.
+    expect(acceptCalls).toBe(1);
+    expect(acceptedKey).toBe(entry.key);
   });
 });

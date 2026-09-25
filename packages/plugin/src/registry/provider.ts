@@ -541,6 +541,92 @@ async function courseRankingsForNoteOffer(
   }
 }
 
+/**
+ * The whole of `load()`'s composition, factored out so `acceptNoteOffer`
+ * below can call it a second time at accept-time — see that method's own
+ * doc for why a second full call, not a narrower re-derivation, is the
+ * correct way to gather `recheckNoteOfferAtAccept`'s fresh evidence.
+ */
+function createLoadModel(
+  deps: CreateLocalRegistryProviderDeps,
+  overridesStore: ObsidianRegistryOverridesStore,
+  holdingCut: number,
+  scheduler: Scheduler,
+  renameProposalMemory: Map<string, RenameProposalMemory>,
+): () => Promise<RegistryViewState> {
+  return async function loadModel(): Promise<RegistryViewState> {
+    try {
+      const now = deps.now();
+      const today = localToday(now);
+      const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+      const additionalPaths = await additionalReviewLogPaths(today, probeDays, deps.deviceId);
+
+      const [{ entries, files }, enumeration, overrides] = await Promise.all([
+        readReviewLogHistory(deps.vault, { additionalPaths }),
+        enumerateVaultInstruments(deps.vault),
+        overridesStore.load(),
+      ]);
+      const [disputes, courseRankings] = await Promise.all([
+        disputesFromFiles(deps.vault, files),
+        courseRankingsForNoteOffer(
+          deps.vault,
+          deps.settingsHost,
+          entries,
+          enumeration.concepts,
+          today,
+          deps.readRankWeights,
+          scheduler,
+          now,
+        ),
+      ]);
+
+      const model = buildRegistryModel({
+        concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
+        instrumentRecords: enumeration.records,
+        entries,
+        scheduler,
+        now,
+        holdingCut,
+        overrides,
+        suspendedInstrumentIds: suspendedInstrumentIds(entries),
+        disputes,
+        courseRankings,
+      });
+
+      const declinedSignatures = declinedRenameSignaturesFrom(overrides);
+      const gatedConcepts: RegistryConceptEntry[] = model.concepts.map((entry) => {
+        // `[D-206]`: fall back to the persisted baseline (an accepted
+        // proposal's `sourceTier`) only on the FIRST sight of this key —
+        // once this provider instance has its own session memory for it,
+        // that stays authoritative, matching every other provider's "a
+        // change made between two opens must not need a reload" posture.
+        const priorMemory =
+          renameProposalMemory.get(entry.key) ?? renameProposalMemoryFrom(overrides, entry.key);
+        const gated = gateRenameProposal(entry, priorMemory, declinedSignatures);
+        renameProposalMemory.set(entry.key, gated.memory);
+        return { ...entry, displayName: gated.displayName, renameProposal: gated.renameProposal };
+      });
+      const gatedModel: RegistryModel = { ...model, concepts: gatedConcepts };
+
+      // `[D-257]` (TRIAGE-6): F8.4a's concept-identity section — resolved against the SAME
+      // `gatedConcepts` this load already built (post-rename-gate, so a pending rename proposal
+      // and a pending identity proposal read consistent names), never a second vault walk. See
+      // `./same-as-identity.ts`'s own doc for why an empty result is the honest default today.
+      const sameAsLinks = await listSameAsLinkRecords(deps.vault);
+      const identityProposals = await buildSameAsIdentityProposals(
+        deps.vault,
+        sameAsLinks.map((entry) => entry.record),
+        gatedConcepts,
+      );
+
+      return { kind: 'model', model: gatedModel, identityProposals };
+    } catch (error) {
+      console.error('Olea: could not compose the registry', error);
+      return { kind: 'unavailable' };
+    }
+  };
+}
+
 /** A `RegistryViewDeps` whose every method reads the vault and the log fresh — the production wiring `main.ts` hands to `RegistryView`. */
 export function createLocalRegistryProvider(
   deps: CreateLocalRegistryProviderDeps,
@@ -582,78 +668,16 @@ export function createLocalRegistryProvider(
   // those is kept at all any more.
   const renameProposalMemory = new Map<string, RenameProposalMemory>();
 
+  const loadModel = createLoadModel(
+    deps,
+    overridesStore,
+    holdingCut,
+    scheduler,
+    renameProposalMemory,
+  );
+
   return {
-    async load(): Promise<RegistryViewState> {
-      try {
-        const now = deps.now();
-        const today = localToday(now);
-        const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
-        const additionalPaths = await additionalReviewLogPaths(today, probeDays, deps.deviceId);
-
-        const [{ entries, files }, enumeration, overrides] = await Promise.all([
-          readReviewLogHistory(deps.vault, { additionalPaths }),
-          enumerateVaultInstruments(deps.vault),
-          overridesStore.load(),
-        ]);
-        const [disputes, courseRankings] = await Promise.all([
-          disputesFromFiles(deps.vault, files),
-          courseRankingsForNoteOffer(
-            deps.vault,
-            deps.settingsHost,
-            entries,
-            enumeration.concepts,
-            today,
-            deps.readRankWeights,
-            scheduler,
-            now,
-          ),
-        ]);
-
-        const model = buildRegistryModel({
-          concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
-          instrumentRecords: enumeration.records,
-          entries,
-          scheduler,
-          now,
-          holdingCut,
-          overrides,
-          suspendedInstrumentIds: suspendedInstrumentIds(entries),
-          disputes,
-          courseRankings,
-        });
-
-        const declinedSignatures = declinedRenameSignaturesFrom(overrides);
-        const gatedConcepts: RegistryConceptEntry[] = model.concepts.map((entry) => {
-          // `[D-206]`: fall back to the persisted baseline (an accepted
-          // proposal's `sourceTier`) only on the FIRST sight of this key —
-          // once this provider instance has its own session memory for it,
-          // that stays authoritative, matching every other provider's "a
-          // change made between two opens must not need a reload" posture.
-          const priorMemory =
-            renameProposalMemory.get(entry.key) ?? renameProposalMemoryFrom(overrides, entry.key);
-          const gated = gateRenameProposal(entry, priorMemory, declinedSignatures);
-          renameProposalMemory.set(entry.key, gated.memory);
-          return { ...entry, displayName: gated.displayName, renameProposal: gated.renameProposal };
-        });
-        const gatedModel: RegistryModel = { ...model, concepts: gatedConcepts };
-
-        // `[D-257]` (TRIAGE-6): F8.4a's concept-identity section — resolved against the SAME
-        // `gatedConcepts` this load already built (post-rename-gate, so a pending rename proposal
-        // and a pending identity proposal read consistent names), never a second vault walk. See
-        // `./same-as-identity.ts`'s own doc for why an empty result is the honest default today.
-        const sameAsLinks = await listSameAsLinkRecords(deps.vault);
-        const identityProposals = await buildSameAsIdentityProposals(
-          deps.vault,
-          sameAsLinks.map((entry) => entry.record),
-          gatedConcepts,
-        );
-
-        return { kind: 'model', model: gatedModel, identityProposals };
-      } catch (error) {
-        console.error('Olea: could not compose the registry', error);
-        return { kind: 'unavailable' };
-      }
-    },
+    load: loadModel,
 
     async rename(entry: RegistryConceptEntry, newDisplayName: string): Promise<void> {
       const overrides = await overridesStore.load();
@@ -692,8 +716,59 @@ export function createLocalRegistryProvider(
       await openSourceLocationPort.open(location);
     },
 
+    /**
+     * `[D-176]`'s accept-time recheck (bug `ol-egov.141.89.10.21`; INV-6:
+     * never write into her notes without a still-valid consent). The
+     * render-time `entry` and the moment she clicks Accept are two
+     * different instants — a new instrument, a fresh review, a ranking
+     * recompute, or (the regression this closes) a note that appeared in
+     * the meantime can each flip eligibility. Rather than hand-assemble a
+     * second `NoteOfferEvidence` here — `../../core/registry/build.ts`'s
+     * raw per-concept `VaultInstrumentRecord` grouping and its
+     * `existingNoteTitlesFrom` listing are both private to that module,
+     * outside this bead's `owns`, and neither is exported from
+     * `olea-core`'s public surface — this re-runs `loadModel()`, the exact
+     * same vault walk `load()` already performs (so this is the SAME read
+     * `[D-176]`'s render-time check already pays for, never a second,
+     * narrower one), and reads back the fresh model's own `noteOffer`
+     * verdict for this key. That verdict is computed by
+     * `../../core/registry/build.ts`'s `noteOfferFor`, which calls
+     * `../../core/concept/note-offer.ts`'s `noteOfferEligible` — the exact
+     * function `recheckNoteOfferAtAccept` re-exports under an intention-
+     * revealing name for exactly this caller (that module's own doc names
+     * this file and this method), so this reaches the identical gate with
+     * genuinely fresh evidence, not a stale render-time "yes" carried
+     * through. A concept no longer found at all (renamed away, pruned from
+     * this walk, or the vault could not be read) is treated the same as
+     * "not eligible" — fail closed, never fabricate consent.
+     *
+     * **No note offered when ineligible.** `[D-176]`'s own words define no
+     * distinct declined-at-accept state, and none of `docs/
+     * Olea_alpha_functional_scope.md`'s F8.4a clause or the vocabulary
+     * registry name one either — resolving normally without calling the
+     * port is the honest "nothing happened", and the caller's own
+     * `refresh()` (`./view.ts`'s `renderNoteOffer`, gated on
+     * `entry.noteOffer.eligible`) already re-hides the offer section on the
+     * very next render once eligibility reads `false` again, exactly as a
+     * "Not now" decline already does today — no new surface, no invented
+     * copy. See this bead's report for the proposed-decision question this
+     * leaves open (what, if anything, should distinguish this case for
+     * her) rather than answering it here.
+     */
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
-      await acceptNoteOfferPort.accept(entry);
+      const fresh = await loadModel();
+      const freshEntry =
+        fresh.kind === 'model'
+          ? fresh.model.concepts.find((candidate) => candidate.key === entry.key)
+          : undefined;
+      if (freshEntry === undefined || !freshEntry.noteOffer.eligible) {
+        console.error(
+          'Olea: the note-offer accept action found the offer no longer eligible on a fresh recheck ([D-176], INV-6) — no note was created',
+          entry.key,
+        );
+        return;
+      }
+      await acceptNoteOfferPort.accept(freshEntry);
     },
 
     async acceptRenameProposal(
