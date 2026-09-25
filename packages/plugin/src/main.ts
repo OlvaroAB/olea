@@ -2257,11 +2257,25 @@ export default class OleaPlugin extends Plugin {
       // posture (a store read failure must never read as "zero confusions").
       // Pure, no persistence, no surface — see `corroborateConfusionPairings`'s
       // module doc.
+      //
+      // `ol-2zfj.164` (`[D-088]`): each concept's `key` — `pass.read.concepts`
+      // is `ReadConcept[]`, whose `key` already carries `[D-088]`'s opaque
+      // identity through unchanged from `./extract.js`'s mint (`ReadConcept.key`'s
+      // own doc) or, for a read-only concept, minted through the same seam —
+      // is threaded to `ConfusionPairingConcept.key` so an opaque-key-scheme
+      // `MisconceptionRecord` resolves through `corroborateConfusionPairs`'s
+      // key index (`ol-2zfj.155`) instead of counting as
+      // `opaqueKeyUnresolvedRecords`. No new key store: this is the same
+      // store the plugin already holds via `pass.read`, not a rebuild.
       if (records !== null) {
         this.confusionPairingVerdicts = corroborateConfusionPairings(
           pass.relations,
           records,
-          pass.read.concepts.map((concept) => ({ name: concept.name, aliases: concept.aliases })),
+          pass.read.concepts.map((concept) => ({
+            name: concept.name,
+            aliases: concept.aliases,
+            key: concept.key,
+          })),
         );
       }
     } catch (error) {
