@@ -459,15 +459,20 @@ export function createVaultNoteExistsPort(vault: VaultSource): NoteExistsPort {
  * `logAndAdvance` asks about, so no resolution-evidence event is ever
  * considered for this review — never fabricated as "yes" by a missing seam.
  *
- * **No production composer wires this yet.** Same "needs the whole local
- * misconception projection (`olea-core`'s `projectMisconceptions` /
- * `projectMisconceptionsFromAllSources`), which a per-review-write port
- * neither holds nor should learn to compute" reason `session.ts`'s
- * `evaluateSchedulingObservationRouting` and `evaluateStrongRecallProposal`
- * already give for themselves — the production answer belongs wherever the
- * local misconception log is already projected (`../review/open-session.ts`,
- * by that file's own established pattern), which is outside this bead's
- * ownership (`session.ts`/`ports.ts` only). Filed as a follow-up.
+ * **Its production composer is `./open-session.ts`'s `openReviewSession`**
+ * (`ol-egov.141.89.6.19`, `ol-egov.141.89.6.32`), which reads the whole
+ * local misconception projection once per opened session
+ * (`createVaultMisconceptionStore(...).load()`, folding both the
+ * `.olea/misconceptions/` store and the review log's `misconception-observed`
+ * picks through `olea-core`'s `projectMisconceptionsFromAllSources`) — the
+ * same "needs the whole local misconception projection, which a
+ * per-review-write port neither holds nor should learn to compute" reason
+ * `session.ts`'s `evaluateSchedulingObservationRouting` and
+ * `evaluateStrongRecallProposal` already give for themselves. It then wires
+ * this port as a closure over the resulting concept-id set
+ * (`open-session.ts:596-598`):
+ * `misconceptionLookup: { hasOpenMisconceptionOnConcept: (conceptId) =>
+ * openMisconceptionConceptIds.has(conceptId) }`.
  */
 export interface MisconceptionLookupPort {
   hasOpenMisconceptionOnConcept(conceptId: string): boolean;

@@ -610,12 +610,14 @@ export async function appendRetrospectiveOfferRecord(
  * `kind: 'explain-back-declined'` naming the first record's `eventId` as
  * `answers`.
  *
- * **Reachability.** No production caller yet. The banner this authorises a
- * record for renders at `packages/plugin/src/review/view.ts` and clears
- * itself on an unaccepted offer around lines 682-719 (`view.ts`'s own
- * `dismiss`/timeout handling for the F2.12 repeated-failure banner);
- * wiring that surface to call this writer is follow-up work on another lane,
- * not this one.
+ * **Reachability.** `packages/plugin/src/review/ports.ts`'s
+ * `createVaultExplainBackOfferLogPort` is the production caller — its
+ * `recordOffered`/`recordDeclined` call this function directly (`ports.ts:
+ * 381` and `:394`). That port is wired from `packages/plugin/src/main.ts:840`
+ * (`explainBackOfferLog: createVaultExplainBackOfferLogPort(vault,
+ * deviceId)`), and `review/session.ts` calls `deps.explainBackOfferLog
+ * .recordOffered`/`.recordDeclined` from the F2.12 banner's offer/decline
+ * paths (`session.ts:876`, `:895`, `:941`, `:961`, `:1011`, `:1030`).
  */
 export async function appendExplainBackOfferRecord(
   vault: VaultSource,

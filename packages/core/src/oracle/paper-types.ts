@@ -173,7 +173,11 @@ export interface PaperSteering {
  *   value is present.
  * - `'focused-practice'` — selects inside the SAME declared scope (eligibility, held-source
  *   grounding and demand routing are all purpose-blind — see below), using evidence gaps and
- *   demonstrated weakness: the existing coverage/mastery blend (`conceptWeight`) is read in full.
+ *   demonstrated weakness: `./paper-blueprint.ts`'s `focusedPracticeWeight` is read, not the
+ *   general `conceptWeight` blend — the purpose-specific complement that inverts `conceptWeight`'s
+ *   mastery-favours-mastery direction so a WEAKER concept (a low `masteryScore`) ranks higher
+ *   (`ol-egov.141.6.17`, client `7e3639d`; selecting what she already knows best is the opposite
+ *   of focused practice on her weakness).
  *
  * Purpose changes **which asks are selected and in what proportions, and nothing else** (ruling
  * (i)'s own text) — three things it never does, each with its own regression test in

@@ -25,7 +25,17 @@
  *   evidence step refused and nothing was written.
  * - `unavailable`: cause `upstream-unavailable` when the evidence check
  *   could not run, `call-failed` for a drafting-call error, `malformed` for
- *   a response that did not parse.
+ *   a response that did not parse. **Except** a `refused` attempt whose
+ *   `reason` is `'no-hits'`: the seam's own classifier
+ *   (`classifyAuthoringOutcome`) still reports this as `unavailable`
+ *   (retryable), but `[D-289]` point 2 (`ol-egov.141.89.2.12`) rules an empty
+ *   evidence package undecided, never an outage — so this adapter reads
+ *   `attempt.reason` (present on every `refused` attempt) to refine that one
+ *   case past the seam's own status into `declined`, basis
+ *   `nothing-to-write-from`: there was nothing to write from, not a call
+ *   that failed. `'judge-unavailable'`/`'composite-check-unavailable'` keep
+ *   the `unavailable`/`upstream-unavailable` reading — those genuinely are a
+ *   check that could not run.
  * - `deferred` (no deliverable format, or the sweep's budget reached): the
  *   writing step never ran, so there is no writing outcome and this returns
  *   `null`. A deferral is the caller's scheduling fact.
@@ -98,6 +108,13 @@ export type AuthoringAttemptWithDraft<D> =
 /** The code rule named when the evidence step refused on its own grounds. */
 export const EVIDENCE_REFUSED_RULE = 'evidence-refused';
 
+/**
+ * The code rule named when a `refused` attempt's `reason` is `'no-hits'` —
+ * an empty evidence package, read as `declined`/`nothing-to-write-from`
+ * rather than `unavailable` (`[D-289]` point 2, `ol-egov.141.89.2.12`).
+ */
+export const NO_HITS_RULE = 'no-hits';
+
 export function writingFromAuthoringAttempt<D>(
   attempt: AuthoringAttemptWithDraft<D>,
   context: StageSeamContext,
@@ -120,6 +137,16 @@ export function writingFromAuthoringAttempt<D>(
       };
     case 'unavailable':
       if (attempt.kind === 'refused') {
+        // D-289 point 2: an empty evidence package is undecided, never an
+        // outage — refine past the seam's own `unavailable` status for
+        // exactly this reason. See this module's doc.
+        if (attempt.reason === 'no-hits') {
+          return {
+            kind: 'declined',
+            basis: 'nothing-to-write-from',
+            provenance: codeProvenance(NO_HITS_RULE, context.evidenceDigests),
+          };
+        }
         return {
           kind: 'unavailable',
           cause: 'upstream-unavailable',

@@ -83,11 +83,16 @@ describe('mcqExactCheckResults and writingFromMcqDraft', () => {
 });
 
 describe('writingFromAuthoringAttempt', () => {
+  // `'no-hits'` is deliberately excluded from this list: the seam
+  // (`classifyAuthoringOutcome`) still classes it `unavailable` (it is one
+  // of `OPERATIONAL_REFUSAL_REASONS`), but the adapter reads `attempt.reason`
+  // to refine it further, past D-289, into `declined`/`nothing-to-write-from`
+  // — see the dedicated describe block below. Every other reason keeps this
+  // generic agreement.
   const attempts: AuthoringAttemptWithDraft<GeneratedMcqCandidate>[] = [
     { kind: 'drafted', defects: [], draft: clean },
     { kind: 'drafted', defects: checkMcqDraft(broken), draft: broken },
     { kind: 'refused', reason: 'below-band' },
-    { kind: 'refused', reason: 'no-hits' },
     { kind: 'refused', reason: 'judge-rejected' },
     { kind: 'refused', reason: 'judge-unavailable' },
     { kind: 'refused', reason: 'composite-check-unavailable' },
@@ -137,5 +142,25 @@ describe('writingFromAuthoringAttempt', () => {
       context,
     );
     expect(outcome?.kind === 'written' && outcome.draft).toBe(clean);
+  });
+
+  describe('an empty evidence package (no-hits) reads as declined, not unavailable', () => {
+    it('maps to declined, basis nothing-to-write-from, per D-289 point 2 (ol-egov.141.89.2.12)', () => {
+      const outcome = writingFromAuthoringAttempt({ kind: 'refused', reason: 'no-hits' }, context);
+      expect(outcome).toMatchObject({ kind: 'declined', basis: 'nothing-to-write-from' });
+      expect(outcome !== null && writingEnvelopeProblems(outcome)).toEqual([]);
+    });
+
+    it('still reads a real outage — judge-unavailable / composite-check-unavailable — as unavailable, upstream-unavailable', () => {
+      expect(
+        writingFromAuthoringAttempt({ kind: 'refused', reason: 'judge-unavailable' }, context),
+      ).toMatchObject({ kind: 'unavailable', cause: 'upstream-unavailable' });
+      expect(
+        writingFromAuthoringAttempt(
+          { kind: 'refused', reason: 'composite-check-unavailable' },
+          context,
+        ),
+      ).toMatchObject({ kind: 'unavailable', cause: 'upstream-unavailable' });
+    });
   });
 });
