@@ -27,7 +27,13 @@
 import { detectEffortImbalance, detectSpacing, SHORTFALL_RATIO_K } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { DUE_UNAVAILABLE, NOTHING_DUE } from '../src/plugin-bridge.js';
-import { generateStream, PERSONAS, type PersonaId, streamSpec } from '../src/synthetic-bridge.js';
+import {
+  COURSE_VANTREL,
+  generateStream,
+  PERSONAS,
+  type PersonaId,
+  streamSpec,
+} from '../src/synthetic-bridge.js';
 import {
   buildTrendsScenario,
   buildTrendsViewModel,
@@ -121,7 +127,13 @@ describe('the states show what their notes claim', () => {
     // The live rule (`ol-v7r5.63` / `[DOS-C4]`): a ratio, not an absolute
     // gap. The widest course's timeShare/floorShare must clear
     // SHORTFALL_RATIO_K for the detector to stay quiet.
-    const stream = streamFor('lopsided-effort', 'workbench', true);
+    // ol-wyqk: same override `trends-scenarios.ts` applies to this state's
+    // own pair (0.08, not 0.01 — this call only needs one seed, not a
+    // worst-case-over-forty margin) — see `TrendsWorkbenchState
+    // .behaviourOverride`'s doc. Without it `measured` is `null` (too few
+    // windowed reviews) and this assertion would pass vacuously on the
+    // no-comparison default (`1`) rather than a real ratio.
+    const stream = streamFor('lopsided-effort', 'workbench', true, { defaultSuccess: 0.08 });
     expect(widestShortfallRatio(stream)).toBeGreaterThanOrEqual(SHORTFALL_RATIO_K);
   });
 
@@ -164,14 +176,91 @@ const WORLD = {
   assessmentDayOffsets: [42, 93] as readonly number[],
 };
 
-function streamFor(persona: PersonaId, seed: string, neutralised: boolean) {
+/**
+ * `ol-wyqk`: what a call site may add on top of a persona's own behaviour (and,
+ * for a neutralised stream, on top of `planted.neutralise` too) — see
+ * `trends-scenarios.ts`'s `TrendsWorkbenchState.behaviourOverride` doc for the
+ * shared argument. Two fields only, both left OUT of every persona's own
+ * `carriedBy` list (`personas.ts`), so neither can be mistaken for a second
+ * planted pattern: `defaultSuccess` for the two-course comparisons where
+ * boosting the ATTENDED course's due-churn is enough on its own
+ * (lopsided-effort, steady-reviewer — her `courseTakeRate`/absence-of-pattern
+ * stays exactly as planted either way), and `successByCourse[COURSE_VANTREL]`
+ * for struggler, where `defaultSuccess` alone would ALSO speed up her other
+ * course's churn and wash out the very gap being measured (see
+ * `STRUGGLER_SUFFICIENCY_DENSITY`'s own doc).
+ */
+type BehaviourOverride = {
+  readonly defaultSuccess?: number;
+  readonly successByCourse?: Readonly<Record<string, number>>;
+};
+
+/**
+ * `ol-wyqk`: an optional behaviour override, layered on top of `neutralised`'s
+ * own (never replacing it) — see `trends-scenarios.ts`'s
+ * `TrendsWorkbenchState.behaviourOverride` doc for the full argument. Default
+ * `{}` reproduces every call site's exact pre-existing stream, so F6.5(a)'s
+ * spacing assertions (including the crammer's, which this same helper feeds)
+ * are untouched by this addition.
+ */
+function streamFor(
+  persona: PersonaId,
+  seed: string,
+  neutralised: boolean,
+  behaviourOverride: BehaviourOverride = {},
+) {
+  const behaviour = {
+    ...(neutralised ? PERSONAS[persona].planted.neutralise : {}),
+    ...behaviourOverride,
+  };
   return generateStream(
     streamSpec(persona, seed, {
       ...WORLD,
-      ...(neutralised ? { behaviour: PERSONAS[persona].planted.neutralise } : {}),
+      ...(Object.keys(behaviour).length > 0 ? { behaviour } : {}),
     }),
   );
 }
+
+/**
+ * `ol-wyqk`: the density this file's F6.5(b) effort assertions need to clear
+ * `MIN_WINDOWED_TIMED_REVIEWS` on every one of the forty seeds — worst case
+ * over all forty, lopsided-effort's windowed count is 44 at this value
+ * (plateau: as low as 0.03 still clears 40-of-40 at 41; 0.05 does not, at
+ * 38). struggler clears the same floor by a wide margin (90) at this value
+ * because her own planted `successByCourse` already drives high windowed
+ * density — this override only lowers her *other* course's success, which
+ * `successByCourse` does not name. Never applied to `firingCounts` calls in
+ * the F6.5(a) describe block above, including the crammer's and the "fires
+ * on NO other persona" spacing check, which stay at today's density
+ * (default `{}`) — this constant exists only where the effort insight's own
+ * sufficiency gate is being cleared, not the spacing one.
+ */
+const EFFORT_SUFFICIENCY_DENSITY = { defaultSuccess: 0.01 } as const;
+
+/**
+ * `ol-wyqk`: struggler's own equivalent of `EFFORT_SUFFICIENCY_DENSITY`, and
+ * NOT the same override — `defaultSuccess` names every course except the ones
+ * `successByCourse` already does, so applying `EFFORT_SUFFICIENCY_DENSITY` to
+ * struggler lowers Quorbin's success (her *attended*, non-struggling course)
+ * while leaving Vantrel's own planted `0.34` untouched. Measured: that WASHES
+ * OUT the gap rather than merely sufficiency-gating it — Quorbin's own
+ * due-churn rises enough to close most of the distance, so `observed:Quorbin`
+ * peaks around 25/40 near `defaultSuccess` 0.68 and falls on both sides of
+ * it, never reaching all forty (full sweep: this bead's report, section 2).
+ *
+ * Lowering Vantrel's OWN success further instead — the course she is already
+ * planted to be losing — raises windowed sufficiency AND widens the gap
+ * together, since both come from the same course's due-churn. `0.34` (the
+ * plant) gives 10/40 `observed:Quorbin`, 30/40 insufficient; `0.1` gives
+ * 40/40 `observed:Quorbin`, none insufficient — the plateau: `0.2` still
+ * leaves 4 seeds short (36/40), so the floor sits strictly between `0.1` and
+ * `0.2`, and `0.1` was not swept further down only because it already clears
+ * every seed with room (`0.05` and `0.02` both still read 40/40 in the same
+ * sweep).
+ */
+const STRUGGLER_SUFFICIENCY_DENSITY: BehaviourOverride = {
+  successByCourse: { [COURSE_VANTREL]: 0.1 },
+};
 
 /**
  * The ratio the live rule fires on (`ol-v7r5.63` / `[DOS-C4]`): the widest
@@ -194,6 +283,7 @@ function widestShortfallRatio(stream: ReturnType<typeof streamFor>): number {
 function firingCounts(
   persona: PersonaId,
   neutralised: boolean,
+  behaviourOverride: BehaviourOverride = {},
 ): {
   spacing: number;
   effort: number;
@@ -201,7 +291,7 @@ function firingCounts(
   let spacing = 0;
   let effort = 0;
   for (const seed of SEEDS) {
-    const stream = streamFor(persona, seed, neutralised);
+    const stream = streamFor(persona, seed, neutralised, behaviourOverride);
     if (detectSpacing(stream.entries).status === 'observed') spacing += 1;
     const effortResult = detectEffortImbalance({
       entries: stream.entries,
@@ -263,21 +353,39 @@ describe('F6.5(a) spacing — measured against a planted ground truth', () => {
 
 describe('F6.5(b) effort — measured against a planted ground truth', () => {
   it('fires on lopsided-effort on every one of the forty seeds', () => {
-    expect(firingCounts('lopsided-effort', false).effort).toBe(SEEDS.length);
+    // ol-wyqk: `EFFORT_SUFFICIENCY_DENSITY` — see its own doc. Without it,
+    // this reads 0/40: at this persona's own 0.86 success rate the windowed
+    // review count inside the D-092 window (four sittings, for a two-course
+    // comparison) never clears `MIN_WINDOWED_TIMED_REVIEWS` (40), so every
+    // seed abstains `not-enough-history` rather than firing `observed`.
+    expect(firingCounts('lopsided-effort', false, EFFORT_SUFFICIENCY_DENSITY).effort).toBe(
+      SEEDS.length,
+    );
   });
 
   it('goes silent on the same seeds once planted.neutralise is applied — 0 of 40', () => {
     // The falsifiability claim this detector is allowed to make, and the one
     // the spacing detector cannot: same seed, `courseTakeRate` back to `{}`,
-    // nothing else touched, and the finding disappears every time.
+    // nothing else touched, and the finding disappears every time. Left at
+    // today's density (no override): insufficient windowed history already
+    // reads as "not observed" for this claim's purposes (never `observed`),
+    // so this one was not among the seven failing tests and needs no change.
     expect(firingCounts('lopsided-effort', true).effort).toBe(0);
   });
 
   it('reports the plateau around SHORTFALL_RATIO_K rather than a single passing number', () => {
     // Same shape as the retired MIN_GAP version, re-expressed on the live
     // rule: the ratio, not the absolute gap (`ol-v7r5.63` / `[DOS-C4]`).
+    // ol-wyqk: `EFFORT_SUFFICIENCY_DENSITY` on both sides of the pair, or a
+    // seed with insufficient windowed history reports the detector's
+    // no-comparison default (`1`) rather than a real ratio — see
+    // `widestShortfallRatio`'s own doc.
     const ratios = (neutralised: boolean): number[] =>
-      SEEDS.map((seed) => widestShortfallRatio(streamFor('lopsided-effort', seed, neutralised)));
+      SEEDS.map((seed) =>
+        widestShortfallRatio(
+          streamFor('lopsided-effort', seed, neutralised, EFFORT_SUFFICIENCY_DENSITY),
+        ),
+      );
     const plantedWorst = Math.max(...ratios(false));
     const removedWorst = Math.min(...ratios(true));
     // Any threshold in [plantedWorst, removedWorst) separates the pair on all
@@ -295,8 +403,16 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     // a detector that stayed quiet on it would be wrong. Recorded here because
     // "40/40 on a persona nobody planted this in" is exactly the shape that
     // gets mistaken for a false-positive rate.
-    expect(firingCounts('struggler', false).effort).toBe(SEEDS.length);
-    const stream = streamFor('struggler', 'workbench', false);
+    // ol-wyqk: `STRUGGLER_SUFFICIENCY_DENSITY` — see its own doc for why this
+    // is a DIFFERENT override from `EFFORT_SUFFICIENCY_DENSITY` above, not the
+    // same one reused: lowering her already-struggling course's success
+    // further raises windowed sufficiency and widens the gap together,
+    // where lowering the other course's (as `EFFORT_SUFFICIENCY_DENSITY`
+    // would) raises sufficiency by closing the very gap this test measures.
+    expect(firingCounts('struggler', false, STRUGGLER_SUFFICIENCY_DENSITY).effort).toBe(
+      SEEDS.length,
+    );
+    const stream = streamFor('struggler', 'workbench', false, STRUGGLER_SUFFICIENCY_DENSITY);
     const result = detectEffortImbalance({
       entries: stream.entries,
       concepts: TRENDS_CONCEPTS,
@@ -313,6 +429,23 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     // counts apart by luck alone, and on a 24-instrument deck that noise is
     // occasionally a fifth of the split. Asserted as a number so it cannot grow
     // unnoticed.
+    //
+    // STILL FAILING (`ol-wyqk`, reports 0 of 3, not planted-history-fixable):
+    // this is the one of the seven originally-failing effort cases this bead's
+    // report leaves red, on purpose. `EFFORT_SUFFICIENCY_DENSITY` is
+    // deliberately NOT applied here — this claim is about incidental RNG noise
+    // at these personas' own, undisturbed behaviour, and juicing density to
+    // clear the D-092 window's sufficiency floor would measure a different,
+    // unvalidated number instead of "3", not fix this one. Worse, it would be
+    // measuring nothing at all for instrument-skipper regardless: swept to
+    // defaultSuccess 0.001 (essentially never succeeds — already well past any
+    // defensible fixture value), her worst-case windowed count over forty
+    // seeds is 33, still short of `MIN_WINDOWED_TIMED_REVIEWS` (40) — her own
+    // `cardTakeRateWhenMcqAvailable` filter removes most candidates before the
+    // daily cap regardless of success rate, so no `defaultSuccess` clears this
+    // floor for her. A real fix needs either the window widened or the floor
+    // lowered (`D-365`, open) — a product-source change this bead's `owns`
+    // does not reach. See this bead's report, section 2, for the full sweep.
     const stray =
       firingCounts('steady-reviewer', false).effort +
       firingCounts('instrument-skipper', false).effort +

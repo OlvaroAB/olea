@@ -128,6 +128,25 @@ export interface TrendsWorkbenchState {
   readonly vitalityWired: boolean;
   /** Days of simulated history. One, for the too-early state. */
   readonly days: number;
+  /**
+   * `ol-wyqk`: a behaviour override layered on top of the persona's own (and,
+   * for a neutralised state, on top of `planted.neutralise` too), for the
+   * three states whose effort insight needs to clear `MIN_WINDOWED_TIMED_REVIEWS`
+   * (`olea-core`'s `insights/effort.ts`, `ol-egov.141.89.11.7` second pass).
+   * That floor is checked only over the D-092 sittings window — the last
+   * `windowWidthSessions(2)` sittings, four wide for a two-course comparison —
+   * and at these personas' own `defaultSuccess` (`0.86`) a 24-instrument deck
+   * reaches FSRS-spaced intervals long before day 90 that leave only a
+   * handful of reviews inside four sittings (measured: 4-31 across the
+   * personas this file uses, see `test/trends-scenarios.spec.ts`'s own
+   * evidence and this bead's report). Lowering `defaultSuccess` here keeps
+   * more items overdue at every sitting without touching the field this
+   * surface's own claim is actually about — `courseTakeRate` for the
+   * imbalance pair, nothing for the control — so the state still expresses
+   * exactly what its `note` says; only the density behind it changes. Never
+   * `MIN_TIMED_REVIEWS`/`MIN_WINDOWED_TIMED_REVIEWS` themselves (D-365, open).
+   */
+  readonly behaviourOverride?: { readonly defaultSuccess?: number };
   readonly note: string;
 }
 
@@ -140,6 +159,13 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     neutralised: false,
     vitalityWired: true,
     days: 90,
+    // ol-wyqk: see `TrendsWorkbenchState.behaviourOverride`'s own doc — without
+    // this, the effort insight reads `not-enough-history` rather than
+    // `not-observed`, because too few reviews fall inside the D-092 window at
+    // this persona's own 0.86 success rate. 0.35 clears
+    // `MIN_WINDOWED_TIMED_REVIEWS` with room (43 at 0.86's neighbour 0.4; 58
+    // here) — plateau in this bead's report.
+    behaviourOverride: { defaultSuccess: 0.35 },
     note:
       'F6.2 — the mastery overview with something in most of the five named states, in both ' +
       'courses. F6.5 stays quiet: she is measured, and neither pattern is there. Silence is a ' +
@@ -154,6 +180,13 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     neutralised: false,
     vitalityWired: true,
     days: 90,
+    // ol-wyqk: see `TrendsWorkbenchState.behaviourOverride`'s own doc.
+    // `courseTakeRate` already filters most Vantrel candidates before the cap,
+    // so the windowed count this pair needs comes almost entirely from
+    // Quorbin's due rate — 0.08 clears the floor at 44 (plateau in this
+    // bead's report). The SAME value on both members of the pair below, so
+    // "nothing else touched" between them stays true of this addition too.
+    behaviourOverride: { defaultSuccess: 0.08 },
     note:
       'F6.5(b) — her hours went almost entirely to one of two courses, and it is not the one ' +
       'carrying the larger assessment weight. The mastery strip shows the same story from the ' +
@@ -168,6 +201,10 @@ export const TRENDS_STATES: readonly TrendsWorkbenchState[] = [
     neutralised: true,
     vitalityWired: true,
     days: 90,
+    // ol-wyqk: same value as `trends-course-behind`, so the pair's own claim —
+    // "nothing else touched" beyond `planted.neutralise` — still holds for
+    // this addition; see `TrendsWorkbenchState.behaviourOverride`'s doc.
+    behaviourOverride: { defaultSuccess: 0.08 },
     note:
       'The same persona and the same seed with planted.neutralise applied — courseTakeRate back ' +
       'to {} and nothing else touched. The effort insight disappears. If it did not, it would ' +
@@ -308,11 +345,18 @@ function streamFor(state: TrendsWorkbenchState): SyntheticStream {
     utcOffset: HISTORY_UTC_OFFSET,
     assessmentDayOffsets: state.days === 1 ? [4] : HISTORY_ASSESSMENT_DAY_OFFSETS,
   };
+  // `state.neutralised` is still the pair's whole difference from each
+  // other — `behaviourOverride` (`ol-wyqk`, see its own doc) is identical on
+  // both members of a pair when set at all, so it never becomes a second
+  // difference between them.
+  const behaviour = {
+    ...(state.neutralised ? PERSONAS[state.persona].planted.neutralise : {}),
+    ...(state.behaviourOverride ?? {}),
+  };
   return generateStream(
     streamSpec(state.persona, HISTORY_SEED, {
       ...base,
-      // The pair's whole difference, in one spread.
-      ...(state.neutralised ? { behaviour: PERSONAS[state.persona].planted.neutralise } : {}),
+      ...(Object.keys(behaviour).length > 0 ? { behaviour } : {}),
     }),
   );
 }
