@@ -13,15 +13,30 @@
  * ===========================================================================
  * WHAT THIS DELIBERATELY DOES NOT DO (disclosed, not hidden — DF-20)
  * ===========================================================================
- * - **No relation-context retrieval.** `mastery/gradingInputContract.ts`'s
- *   `buildGradingSourceMaterial` (F5.2a) assembles subject + edge + neighbour
- *   passages for a relation-shaped prompt, from ALREADY-RESOLVED
- *   `ConceptDefiningPassages` a caller this bead does not own would have to
- *   supply. This file only ever grades a single concept ("concept-only"),
+ * - **Relation-context retrieval is half-built, and the other half is
+ *   blocked outside this file's ownership (`ol-egov.141.89.6.30`).**
+ *   `resolveExplainBackRelationEdge` below resolves the subject's live
+ *   "causes" partner (rel.md section 1's "Explain-back partner (causes)"
+ *   row) from the SAME gated graph read every other reader uses
+ *   (`servedRelations`, rel.md section 3 Default 4) — a stale endpoint is
+ *   excluded there, not reimplemented here. What still cannot be built here:
+ *   `mastery/gradingInputContract.ts`'s `resolveGradingRelationContext` and
+ *   `buildGradingSourceMaterial` (F5.2a) — the functions that would turn a
+ *   resolved edge into `GradingSourceMaterial`'s subject+edge+neighbour
+ *   passages — are not exported from `packages/core/src/index.ts` (only
+ *   that module's `SchedulingObservation`/`buildSchedulingObservationField`
+ *   are). `packages/plugin` imports `olea-core` only through that barrel
+ *   (no subpath `exports`, `package.json`'s `main`/`types` name the barrel
+ *   only), and `index.ts` sits outside this bead's `owns`. Until that export
+ *   lands, this file only ever grades a single concept ("concept-only"),
  *   using a plain `retrieve()` call over her indexed notes — the same
  *   simplification `review/explainWhy.ts`'s F2.7 grounding half already
- *   uses. Wiring the full relation-aware path is separate, larger work.
- *   `ol-cqz8`'s `buildGradeSoloInputFromTypedAnswer` below inherits this same
+ *   uses. Even once it lands, wiring a real neighbour concept id and its
+ *   defining passages into `buildExplainBackPromptContextFromInstrument`/
+ *   `FromTopic` below is composition-root work in `main.ts`/`modal.ts`,
+ *   also outside this bead's `owns` — see `resolveExplainBackRelationEdge`'s
+ *   own doc and this lane's report for the exact file:line gaps.
+ *   `ol-cqz8`'s `buildGradeSoloInputFromTypedAnswer` below inherits the same
  *   concept-only simplification for the SOLO depth pipeline, for the
  *   identical reason: `relationExpected` is always `false`.
  * - **No synthesized reference answer.** `explainBackJudgeRequest`'s
@@ -36,12 +51,15 @@
  */
 
 import {
+  type ConceptRelation,
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
   type GradeSoloInput,
+  type RelationSet,
   type RetrieveDeps,
   retrieve,
   type SourceBlockRef,
+  servedRelations,
 } from 'olea-core';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from '../review/types.js';
 
@@ -54,6 +72,22 @@ export interface ExplainBackSourceBlock {
 
 export interface ExplainBackRetrievalDeps {
   readonly retrieve: RetrieveDeps;
+  /**
+   * The live relation graph the plugin already holds in memory (main.ts's
+   * `this.relations: RelationSet | null`, folded by `deriveRelationSet` on
+   * every closing ingestion tick) — a lookup, never a fresh read.
+   *
+   * **Optional and absent by default, on purpose.** No production composer
+   * supplies this yet — the same "simply cannot offer it" posture
+   * `review/session.ts`'s `resolvePrerequisiteEvidence` documents for an
+   * analogous not-yet-wired port, and for the identical reason: wiring a
+   * real thunk here is `main.ts`/`modal.ts` composition work outside this
+   * bead's `owns` (see the module doc's "Relation-context retrieval is
+   * half-built" note and `resolveExplainBackRelationEdge` below). An absent
+   * `relations` reads as "no graph available," the ordinary concept-only
+   * path, unchanged from before this field existed.
+   */
+  readonly relations?: () => RelationSet | null;
 }
 
 /**
@@ -76,6 +110,41 @@ export async function retrieveExplainBackSourceBlocks(
     path: chunk.path,
     blockIndex: chunk.blockIndex,
   }));
+}
+
+/**
+ * Resolves the subject concept's "causes" partner edge from the live graph
+ * (rel.md section 1's "Explain-back partner (causes)" row) — a lookup over
+ * an already-folded `RelationSet`, never a fresh read (see
+ * `ExplainBackRetrievalDeps.relations`'s own doc).
+ *
+ * **Gated through the real, exported `servedRelations`, never a second,
+ * hand-rolled filter.** rel.md section 3 Default 4 ("None of the three may
+ * read prerequisite/causes edges by a path that bypasses the gated read")
+ * names exactly this call site; `servedRelations` already withholds a
+ * `stale` edge (`concept/relation.ts:567-568`), so a stale endpoint and no
+ * edge at all both collapse to `undefined` here — the identical
+ * "abstention is automatic" result `mastery/gradingInputContract.ts`'s
+ * `resolveRelationProvenance` documents for its own `ResolvedRelationEdge`
+ * input, which this function cannot call directly (see the module doc).
+ *
+ * `neighbourConceptId` is handed in, never chosen here: F5.2a says which
+ * neighbour a prompt names is decided upstream of retrieval, the same
+ * constraint `GradingRelationContext`'s own doc states on the core side.
+ */
+export function resolveExplainBackRelationEdge(
+  deps: Pick<ExplainBackRetrievalDeps, 'relations'>,
+  subjectConceptId: string,
+  neighbourConceptId: string,
+): ConceptRelation | undefined {
+  const relationSet = deps.relations?.() ?? null;
+  if (relationSet === null) return undefined;
+  return servedRelations(relationSet).find(
+    (edge) =>
+      edge.type === 'causes' &&
+      ((edge.from === subjectConceptId && edge.to === neighbourConceptId) ||
+        (edge.from === neighbourConceptId && edge.to === subjectConceptId)),
+  );
 }
 
 function joinSourceText(blocks: readonly ExplainBackSourceBlock[]): string {

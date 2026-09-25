@@ -5,12 +5,15 @@
  */
 
 import {
+  type ConceptRelation,
   EmbeddingCacheEngine,
   type EmbeddingCacheStore,
   type EmbeddingProvider,
   type EmbedResult,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
+  type RelationSet,
+  type RelationSetEntry,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -18,6 +21,7 @@ import {
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
   buildGradeSoloInputFromTypedAnswer,
+  resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
 } from '../../src/explain-back/request.js';
 import { clozeFixture, mcqFixture, qaFixture } from '../review/fixtures.js';
@@ -211,5 +215,100 @@ describe('buildGradeSoloInputFromTypedAnswer (ol-cqz8)', () => {
     expect(input.sourceMaterial.omissionDenominator).toEqual([]);
     expect(input.sourceMaterial.candidateEdgeNomination).toBeNull();
     expect(input.relationExpected).toBe(false);
+  });
+});
+
+// `ol-egov.141.89.6.30`: rel.md section 1's "Explain-back partner (causes)"
+// row, resolved through the SAME gated read (`servedRelations`) every other
+// reader uses — a stale endpoint is excluded there, never by a second,
+// hand-rolled filter in this file (rel.md section 3 Default 4).
+describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partner (causes)")', () => {
+  function causesEdge(from: string, to: string): ConceptRelation {
+    return {
+      type: 'causes',
+      from,
+      to,
+      provenance: 'model-proposed',
+      confidence: 0.8,
+      introducingPassages: {
+        from: { sourcePath: 'course/note.md', location: { page: 1 } },
+        to: { sourcePath: 'course/note.md', location: { page: 1 } },
+      },
+    };
+  }
+
+  function relationSetEntry(
+    edge: ConceptRelation,
+    evidence: RelationSetEntry['evidence'],
+  ): RelationSetEntry {
+    return {
+      key: `${edge.type}\u0000${edge.from}\u0000${edge.to}`,
+      stage: 'corpus',
+      edge,
+      triageStanding: 'candidate',
+      evidence,
+      attestations: [edge],
+    };
+  }
+
+  function relationSetOf(entries: readonly RelationSetEntry[]): RelationSet {
+    return { entries, mergedDuplicates: 0, contradictions: 0, droppedUnemittable: 0 };
+  }
+
+  it('a current causes edge between the subject and the named neighbour resolves', () => {
+    const edge = causesEdge('cough', 'bronchitis');
+    const relations = relationSetOf([relationSetEntry(edge, 'current')]);
+
+    const found = resolveExplainBackRelationEdge(
+      { relations: () => relations },
+      'bronchitis',
+      'cough',
+    );
+
+    expect(found).toEqual(edge);
+  });
+
+  // Beside the current case directly above: same edge shape, only
+  // `evidence` differs — a stale endpoint is excluded, never served, exactly
+  // as if no edge existed at all (Default 4's abstention).
+  it('a stale causes edge between the same pair is excluded, resolving to undefined', () => {
+    const edge = causesEdge('cough', 'bronchitis');
+    const relations = relationSetOf([relationSetEntry(edge, 'stale')]);
+
+    const found = resolveExplainBackRelationEdge(
+      { relations: () => relations },
+      'bronchitis',
+      'cough',
+    );
+
+    expect(found).toBeUndefined();
+  });
+
+  it('a current edge of a different type (not causes) between the same pair is not served here', () => {
+    const nonCausesEdge: ConceptRelation = {
+      ...causesEdge('x', 'y'),
+      type: 'contrasts-with',
+    };
+    const relations = relationSetOf([relationSetEntry(nonCausesEdge, 'current')]);
+
+    expect(
+      resolveExplainBackRelationEdge({ relations: () => relations }, 'x', 'y'),
+    ).toBeUndefined();
+  });
+
+  it('no candidate edge for the pair at all resolves to undefined, unaffected by freshness', () => {
+    const relations = relationSetOf([]);
+
+    expect(
+      resolveExplainBackRelationEdge({ relations: () => relations }, 'a', 'b'),
+    ).toBeUndefined();
+  });
+
+  it('an absent relations reader (no production caller wired yet) resolves to undefined, never throws', () => {
+    expect(resolveExplainBackRelationEdge({}, 'a', 'b')).toBeUndefined();
+  });
+
+  it('a null RelationSet (no corpus-relation batch has folded one in yet) resolves to undefined', () => {
+    expect(resolveExplainBackRelationEdge({ relations: () => null }, 'a', 'b')).toBeUndefined();
   });
 });
