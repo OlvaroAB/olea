@@ -121,6 +121,7 @@ import {
   EXPLAIN_BACK_TOPIC_PROMPT,
   explainBackDepthHeading,
 } from './copy.js';
+import { isConfirmedFirstFullDepth } from './first-full-depth.js';
 import {
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
@@ -741,6 +742,15 @@ export class ExplainBackModal extends Modal {
     durationMs: number | null,
     attemptId: string,
   ): Promise<void> {
+    // `[ol-egov.141.89.6.18]`: read BEFORE either write this call makes (the
+    // correctness accept just below, then `recordSoloGradeAndReview`'s own
+    // SOLO write) — see `isConfirmedFirstFullDepth`'s own doc
+    // (`./first-full-depth.ts`) for why a read taken after either write
+    // would be too late.
+    const isFirstFullDepth = isConfirmedFirstFullDepth(
+      prompt.subjectConceptId,
+      this.deps.getMasteryState,
+    );
     const context = {
       ...(await this.deps.buildObservationContext({
         subjectConceptId: prompt.subjectConceptId,
@@ -820,10 +830,17 @@ export class ExplainBackModal extends Modal {
     // changed since the request went out — is treated the same as `null`
     // here: no encouragement banner, and (per `acceptWithObservation`'s own
     // doc) nothing was recorded, never a silent accept dressed up as one.
+    // `[ol-egov.141.89.6.18]`: gated on `isFirstFullDepth` above —
+    // `explainBackFullDepthEncouragement` is a correctness proxy only and
+    // has no way to know whether this is genuinely the first time; calling
+    // it unconditionally reprinted the milestone on a repeat full-depth
+    // explanation of an already-mastered concept.
     const message =
       result === null || result.status !== 'accepted'
         ? null
-        : explainBackFullDepthEncouragement(result.accepted);
+        : isFirstFullDepth
+          ? explainBackFullDepthEncouragement(result.accepted)
+          : null;
     this.state = { phase: 'accepted', message, soloLevel };
     this.render();
   }

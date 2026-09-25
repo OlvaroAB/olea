@@ -304,7 +304,14 @@ export function explainBackInsufficientNotesRefusal(sourceBlockCount: number): s
  * actually the first full-depth explanation ever (mastery/stage state this
  * module does not hold) and only calls this function once that is true —
  * same "copy derives, callers decide state" split the module doc draws
- * throughout this file. No caller does so yet; see the section header above.
+ * throughout this file. `[ol-egov.141.89.6.18]`: `explain-back/modal.ts`'s
+ * `computeAcceptGrading` is now that caller, gated on
+ * `explain-back/first-full-depth.ts`'s `isConfirmedFirstFullDepth` — which
+ * itself defaults to "no" (this function is simply not called) whenever the
+ * mastery-state dependency it needs is not wired from `main.ts`, so this
+ * function still returns unconditionally on the correctness proxy alone;
+ * the gate is entirely the caller's job, exactly as this paragraph always
+ * said it should be.
  *
  * The milestone sentence deliberately matches the vocabulary registry's own
  * V5 worked example verbatim (`docs/Olea_vocabulary_registry.md` §9) rather
