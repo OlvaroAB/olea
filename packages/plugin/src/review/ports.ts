@@ -13,7 +13,7 @@ import type {
   Rating,
   SelectionContextV4,
 } from 'olea-contracts';
-import type { VaultSource } from 'olea-core';
+import type { MisconceptionResolutionEvidenceEvent, VaultSource } from 'olea-core';
 // `masteryAtTimeForConceptIds` (C5.4's rollup) had no consumer outside core
 // and `packages/workbench` until this bead (`ol-rpr4`), so nothing had ever
 // added it to core's public surface. The lane that wired it reached in by
@@ -24,6 +24,7 @@ import type { VaultSource } from 'olea-core';
 // barrel. A deep import here would also let the module be bundled twice.
 import {
   appendExplainBackOfferRecord,
+  appendMisconceptionEvent,
   appendMisconceptionObservedRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
@@ -439,6 +440,72 @@ export function createVaultNoteExistsPort(vault: VaultSource): NoteExistsPort {
   return {
     async exists(sourcePath: string) {
       return vault.exists(sourcePath);
+    },
+  };
+}
+
+/**
+ * M2 resolution evidence (`ol-egov.141.89.6.32`, `ol-egov.141.89.6.19`):
+ * whether `conceptId` carries at least one `active`/`fading`
+ * `MisconceptionRecord` in the local misconception projection — the exact
+ * question `../../../core/src/misconception/resolution-evidence-decision.js`'s
+ * module doc assigns to the caller, not to `decideResolutionEvidence` itself
+ * (that function performs no I/O and holds no projection by design; see its
+ * own doc, "WHY `hasOpenMisconceptionOnConcept` IS THE CALLER'S JOB").
+ *
+ * Optional and absent by default on `ReviewSessionDeps`, same "simply cannot
+ * offer it" posture every other optional port in `session.ts` already has:
+ * an absent port reads as "no open misconception known" for every concept
+ * `logAndAdvance` asks about, so no resolution-evidence event is ever
+ * considered for this review — never fabricated as "yes" by a missing seam.
+ *
+ * **No production composer wires this yet.** Same "needs the whole local
+ * misconception projection (`olea-core`'s `projectMisconceptions` /
+ * `projectMisconceptionsFromAllSources`), which a per-review-write port
+ * neither holds nor should learn to compute" reason `session.ts`'s
+ * `evaluateSchedulingObservationRouting` and `evaluateStrongRecallProposal`
+ * already give for themselves — the production answer belongs wherever the
+ * local misconception log is already projected (`../review/open-session.ts`,
+ * by that file's own established pattern), which is outside this bead's
+ * ownership (`session.ts`/`ports.ts` only). Filed as a follow-up.
+ */
+export interface MisconceptionLookupPort {
+  hasOpenMisconceptionOnConcept(conceptId: string): boolean;
+}
+
+/**
+ * The D7.1 append path for an M2 resolution-evidence event
+ * (`buildResolutionEvidenceEvent`, `olea-core`) — mirrors `ReviewLogPort`/
+ * `SuspendPort` above: a narrow seam `ReviewSession` calls with an
+ * already-built event, `createVaultResolutionEvidenceAppendPort` below the
+ * real, `VaultSource`-backed implementation.
+ *
+ * Optional and absent by default on `ReviewSessionDeps`, same "simply cannot
+ * offer it" posture every other optional port here has: an absent port means
+ * a decided resolution-evidence outcome is simply never recorded, not
+ * fabricated as an event with nowhere to write.
+ */
+export interface ResolutionEvidenceAppendPort {
+  appendResolutionEvidence(event: MisconceptionResolutionEvidenceEvent): Promise<void>;
+}
+
+/**
+ * The real `ResolutionEvidenceAppendPort`: `olea-core`'s
+ * `appendMisconceptionEvent` over a `VaultSource` — the M2 append half
+ * `ol-egov.141.89.6.19` built (`events.js`'s `buildResolutionEvidenceEvent`,
+ * `project.js`'s downgrade fold) and `ol-egov.141.89.6.32` gives its first
+ * production caller (`session.ts`'s `logAndAdvance`).
+ *
+ * Lives here, not in `obsidian-ports.ts`, for exactly `createVaultReviewLogPort`'s
+ * reason: it needs a `VaultSource` and a device id, no Obsidian.
+ */
+export function createVaultResolutionEvidenceAppendPort(
+  vault: VaultSource,
+  deviceId: string,
+): ResolutionEvidenceAppendPort {
+  return {
+    async appendResolutionEvidence(event) {
+      await appendMisconceptionEvent(vault, event, deviceId);
     },
   };
 }

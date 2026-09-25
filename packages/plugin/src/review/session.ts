@@ -27,7 +27,7 @@ import type {
   SchedulingObservationDecision,
   StrongRecallProposalDecision,
 } from 'olea-core';
-import { mapMcqRating, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
+import { buildResolutionEvidenceEvent, mapMcqRating, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
@@ -38,14 +38,23 @@ import {
   type ExplainWhyPort,
 } from './explainWhy.js';
 import { previewQaClozeIntervals, previewSingleInterval, type RatingPreview } from './interval.js';
-import type {
-  Clock,
-  EditPort,
-  ExplainBackOfferLogPort,
-  NoteExistsPort,
-  ReviewLogPort,
-  SuspendPort,
+import {
+  type Clock,
+  type EditPort,
+  type ExplainBackOfferLogPort,
+  isoWithLocalOffset,
+  type MisconceptionLookupPort,
+  type NoteExistsPort,
+  type ResolutionEvidenceAppendPort,
+  type ReviewLogPort,
+  type SuspendPort,
 } from './ports.js';
+// `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
+// from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
+// `owns`) — imported by source path for exactly that reason, same technique
+// `packages/workbench/src/oracle-bridge.ts` already documents for a
+// same-shaped gap.
+import { decideResolutionEvidence } from '../../../core/src/misconception/resolution-evidence-decision.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
 
 export interface ReviewProgress {
@@ -304,6 +313,35 @@ export interface ReviewSessionDeps {
    * the only production composer.
    */
   readonly explainBackOfferLog?: ExplainBackOfferLogPort;
+  /**
+   * M2 resolution evidence (`ol-egov.141.89.6.32`, discovered-from
+   * `ol-egov.141.89.6.19`): answers, per concept id, whether the local
+   * misconception projection carries an `active`/`fading` record on it —
+   * `logAndAdvance` below is the caller `resolution-evidence-decision.ts`'s
+   * own doc assigns this question to (`decideResolutionEvidence` performs no
+   * I/O). Optional and absent by default, same "simply cannot offer it"
+   * posture every other optional port here has: an absent port reads as "no
+   * open misconception known" for every concept asked about, so no
+   * resolution-evidence event is ever considered for this review.
+   *
+   * **No production composer wires this yet** — see `ports.ts`'s own doc for
+   * why (needs the whole local misconception projection, which is
+   * `../review/open-session.ts`'s territory, not this port's owning bead's
+   * file ownership). Filed as a follow-up.
+   */
+  readonly misconceptionLookup?: MisconceptionLookupPort;
+  /**
+   * The D7.1 append path for the resolution-evidence event `logAndAdvance`
+   * builds from `decideResolutionEvidence`'s verdict, through `olea-core`'s
+   * `buildResolutionEvidenceEvent` (`ol-egov.141.89.6.32`).
+   * `ports.ts`'s `createVaultResolutionEvidenceAppendPort` is the real,
+   * `VaultSource`-backed implementation. Optional and absent by default,
+   * same "simply cannot offer it" posture every other optional port here
+   * has: an absent port means a decided resolution-evidence outcome is
+   * simply never recorded, never fabricated as an event with nowhere to
+   * write.
+   */
+  readonly resolutionEvidenceAppend?: ResolutionEvidenceAppendPort;
 }
 
 /**
@@ -1225,6 +1263,53 @@ export class ReviewSession {
       instrument: stamped.instrument,
       rating,
     });
+
+    // M2 resolution evidence (`ol-egov.141.89.6.32`, discovered-from
+    // `ol-egov.141.89.6.19`): a graded Q&A/cloze review counts as
+    // resolution evidence for a concept's open misconception per
+    // `decideResolutionEvidence` — never for `'mcq'` (that instrument type
+    // is unrepresentable in its candidate union; recognition never counts,
+    // M2/R7) and never for a failed ('again') recall (that function's own
+    // allowlist). One concept at a time, mirroring D-031's "an instrument
+    // may be evidence for several concepts" — each of `stamped.instrument
+    // .conceptIds` gets its own open-misconception read and its own
+    // decision, since a misconception record is per-concept. Both ports are
+    // optional and absent by default (`ports.ts`): an absent lookup reads as
+    // "no open misconception known" (the pure decision then always returns
+    // `null`, its own fail-closed default), and an absent append port means
+    // a `null`-or-not verdict is simply never recorded — this block finds
+    // nothing to do either way, the same "simply cannot offer it" posture
+    // every other optional port in this method already has.
+    if (stamped.instrument.type === 'qa' || stamped.instrument.type === 'cloze') {
+      for (const conceptId of stamped.instrument.conceptIds) {
+        const hasOpenMisconceptionOnConcept =
+          this.deps.misconceptionLookup?.hasOpenMisconceptionOnConcept(conceptId) ?? false;
+        const evidenceKind = decideResolutionEvidence({
+          source: 'recall',
+          conceptId,
+          instrumentType: stamped.instrument.type,
+          rating,
+          hasOpenMisconceptionOnConcept,
+        });
+        if (evidenceKind !== null && this.deps.resolutionEvidenceAppend !== undefined) {
+          const event = buildResolutionEvidenceEvent({
+            conceptId,
+            evidenceKind,
+            originInstrumentId: stamped.instrument.instrumentId,
+            // `ReviewLogPort.recordReview` below returns `Promise<void>`,
+            // never the review record's own `eventId` — unlike `[D-202]`'s
+            // misconception-observed append, which lives INSIDE
+            // `createVaultReviewLogPort` for exactly the reason that only
+            // the port itself sees the record it just wrote. This class has
+            // no review-log event id to attach; `null` is the honest value,
+            // never a fabricated one.
+            originReviewEventId: null,
+            timestamp: isoWithLocalOffset(now),
+          });
+          await this.deps.resolutionEvidenceAppend.appendResolutionEvidence(event);
+        }
+      }
+    }
 
     await this.deps.reviewLog.recordReview({
       instrument: stamped.instrument,
