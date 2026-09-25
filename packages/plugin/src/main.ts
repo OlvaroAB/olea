@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import type {
+  ExplainBackOfferTrigger,
   MasteryState,
   ReviewLogEntry,
   SoloLevel,
@@ -901,7 +902,12 @@ export default class OleaPlugin extends Plugin {
         // F2.12, `[D-163]` (`ol-12gs`): the confusion banner's "Explain it
         // back" accept action opens `ExplainBackModal` for the offered
         // instrument — see `openExplainBackModal`'s own doc.
-        (instrument) => this.openExplainBackModal({ kind: 'instrument', instrument }),
+        // `ol-egov.141.89.6.44`: `review/view.ts`'s single `openExplainBack`
+        // callback now carries the trigger of whichever of its three
+        // banners (F2.12/F5.3a/F2.21) accepted, so `openExplainBackModal`
+        // below can build `recordNonAttempt` for the `'instrument'` seed too.
+        (instrument, trigger) =>
+          this.openExplainBackModal({ kind: 'instrument', instrument }, trigger),
         // `[D-171]`/`ol-2zfj.47`: the review view's one-step affordance to
         // an instrument's registry entry — see `ReviewView`'s own param
         // doc for why this is a callback rather than an `App` import.
@@ -3548,26 +3554,32 @@ export default class OleaPlugin extends Plugin {
    * view, single rendering implementation" true of the wiring and not just
    * of the class.
    *
-   * `ol-egov.141.89.6.41`: `recordNonAttempt` is wired ONLY for the
-   * `'freeform'` seed (F5.1's command below, F4.6's session-builder
+   * `ol-egov.141.89.6.41`/`ol-egov.141.89.6.44`: `recordNonAttempt` is wired
+   * for the `'freeform'` seed (F5.1's command below, F4.6's session-builder
    * affordance, F6.4's Home affordance — `ol-12gs`'s three "she opened this
    * herself" entry points) with `trigger: 'on-demand'`, the one honest
    * reading of `explainBackOfferTrigger`'s own doc ("her own request",
-   * `olea-contracts`' `review-log.ts`) for a seed she asked for by name.
-   * The `'instrument'` seed (F2.12's confusion banner, F5.3a's scheduling-
-   * observation banner and F2.21's strong-recall banner, per
-   * `review/view.ts`'s module doc) has NO honest trigger to attach here:
-   * all three banners hand off through `ReviewView`'s single
-   * `openExplainBack` callback (`review/view.ts:300`), which takes only a
-   * `ReviewInstrument` and collapses which banner accepted it before this
-   * method ever sees the call. Fabricating one of the three triggers for
-   * that seed would misattribute two-thirds of the time, so `recordNonAttempt`
-   * stays unwired for it — a skip or close from one of those three banners
-   * writes nothing, exactly as before this bead. Disambiguating them needs
-   * `review/view.ts`'s `openExplainBack` callback (outside this bead's
-   * `owns`) to carry a trigger through from each of its three call sites.
+   * `olea-contracts`' `review-log.ts`) for a seed she asked for by name —
+   * and, since `ol-egov.141.89.6.44`, for the `'instrument'` seed as well,
+   * with whichever `trigger` the caller supplies. `review/view.ts`'s single
+   * `openExplainBack` callback (`review/view.ts`'s `ReviewView` constructor
+   * param) now carries the trigger of whichever of its three banners
+   * (F2.12's `'repeated-failure'`, F5.3a's `'scheduling-observation'`,
+   * F2.21's `'strong-recall-proposal'`) accepted, disambiguated at each of
+   * `view.ts`'s three call sites rather than guessed here — so `trigger`
+   * below is never fabricated, only threaded through from whichever banner
+   * (or command) actually produced this seed. `trigger` is `undefined` only
+   * when a future `'instrument'`-seed caller has none to give (there is
+   * none today); `recordNonAttempt` is then left unwired for that call,
+   * the same safe default this method held before `ol-egov.141.89.6.44`.
    */
-  private openExplainBackModal(seed: ExplainBackSeed, onClosed?: () => void): void {
+  private openExplainBackModal(
+    seed: ExplainBackSeed,
+    trigger?: ExplainBackOfferTrigger,
+    onClosed?: () => void,
+  ): void {
+    const nonAttemptTrigger: ExplainBackOfferTrigger | undefined =
+      seed.kind === 'freeform' ? 'on-demand' : trigger;
     new ExplainBackModal(
       this.app,
       {
@@ -3587,10 +3599,10 @@ export default class OleaPlugin extends Plugin {
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
         getMasteryState: this.explainBackMasteryStateReader(),
-        ...(seed.kind === 'freeform'
+        ...(nonAttemptTrigger !== undefined
           ? {
               recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>
-                this.recordExplainBackNonAttempt('on-demand', params),
+                this.recordExplainBackNonAttempt(nonAttemptTrigger, params),
             }
           : {}),
         ...(onClosed ? { onClosed } : {}),

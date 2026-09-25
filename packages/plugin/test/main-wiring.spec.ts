@@ -403,18 +403,17 @@ describe('the explain-back full-depth encouragement has a real mastery-state rea
   });
 });
 
-describe('the explain-back non-attempt record has a real production caller for the on-demand entry points (ol-0r92.104)', () => {
+describe('the explain-back non-attempt record has a real production caller for every entry point (ol-0r92.104, ol-egov.141.89.6.44)', () => {
   // `ol-0r92.104` built `ExplainBackModalDeps.recordNonAttempt` and its two
   // callers inside `explain-back/modal.ts` (`skipPrompt`, `onClose`'s
   // `'answering'` guard), but left it optional and unwired — a skip wrote
-  // nothing in production until this bead. `recordNonAttempt` is wired
-  // ONLY for the `'freeform'` seed (F5.1's on-demand command below, F4.6's
-  // session-builder affordance, F6.4's Home affordance): the `'instrument'`
-  // seed hands off through `ReviewView`'s single `openExplainBack`
-  // callback, which collapses F2.12's confusion banner, F5.3a's
-  // scheduling-observation banner and F2.21's strong-recall banner into one
-  // call site with no trigger to tell them apart — see `openExplainBackModal`'s
-  // own doc for why fabricating one would misattribute two-thirds of the time.
+  // nothing in production until `ol-egov.141.89.6.41` wired the `'freeform'`
+  // seed with trigger `'on-demand'`. `ol-egov.141.89.6.44` threads a real
+  // trigger through `ReviewView`'s single `openExplainBack` callback
+  // (`review/view.ts`) for the `'instrument'` seed too, so a skip from any
+  // of F2.12's confusion banner, F5.3a's scheduling-observation banner or
+  // F2.21's strong-recall banner also records its non-attempt, with that
+  // banner's own trigger rather than a fabricated one.
 
   it('exposes a production entry point that appends a non-attempt record with the given trigger', () => {
     expect(main).toMatch(
@@ -422,10 +421,26 @@ describe('the explain-back non-attempt record has a real production caller for t
     );
   });
 
-  it("wires recordNonAttempt for the 'freeform' seed only, with trigger 'on-demand'", () => {
+  it("openExplainBackModal takes an optional trigger and resolves 'on-demand' for the 'freeform' seed, the caller's trigger otherwise", () => {
     expect(main).toMatch(
-      /\.\.\.\(seed\.kind === 'freeform'\s*\?\s*\{\s*recordNonAttempt: \(params: \{ conceptIds: readonly string\[\]; timestamp: string \}\) =>\s*this\.recordExplainBackNonAttempt\('on-demand', params\),\s*\}\s*: \{\}\),/,
+      /private openExplainBackModal\(\s*seed: ExplainBackSeed,\s*trigger\?: ExplainBackOfferTrigger,\s*onClosed\?: \(\) => void,\s*\): void \{\s*const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;/,
     );
+  });
+
+  it('wires recordNonAttempt whenever a trigger was resolved, for either seed kind', () => {
+    expect(main).toMatch(
+      /\.\.\.\(nonAttemptTrigger !== undefined\s*\?\s*\{\s*recordNonAttempt: \(params: \{ conceptIds: readonly string\[\]; timestamp: string \}\) =>\s*this\.recordExplainBackNonAttempt\(nonAttemptTrigger, params\),\s*\}\s*: \{\}\),/,
+    );
+  });
+
+  it("the ReviewView construction site forwards review/view.ts's per-banner trigger into openExplainBackModal", () => {
+    expect(main).toMatch(
+      /\(instrument, trigger\) =>\s*this\.openExplainBackModal\(\{ kind: 'instrument', instrument \}, trigger\),/,
+    );
+  });
+
+  it('imports ExplainBackOfferTrigger from olea-contracts', () => {
+    expect(main).toMatch(/ExplainBackOfferTrigger,/);
   });
 
   it('imports appendNonAttemptRecord and NonAttemptLogRecordInput from olea-core', () => {

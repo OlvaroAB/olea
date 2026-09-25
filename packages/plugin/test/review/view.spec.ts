@@ -144,7 +144,18 @@ describe('ReviewView.handleAcceptSchedulingObservationOffer — accepting is nev
 
   it('only opens explain-back when a real destination was found', () => {
     expect(ACCEPT_BODY).toMatch(
-      /if \(destination !== undefined\) this\.openExplainBack\?\.\(destination\);/,
+      /if \(destination !== undefined\) this\.openExplainBack\?\.\(destination, 'scheduling-observation'\);/,
+    );
+  });
+
+  // `ol-egov.141.89.6.44`: F5.3a's own trigger — `olea-contracts`'
+  // `explainBackOfferTrigger` doc names `'scheduling-observation'` as "the
+  // F5.3a reciprocal prompt off a live scheduling observation", the same
+  // literal `session.recordSchedulingObservationOfferShown` above already
+  // writes for this banner.
+  it('passes the F5.3a trigger through openExplainBack, matching the literal recordSchedulingObservationOfferShown already writes', () => {
+    expect(ACCEPT_BODY).toMatch(
+      /this\.openExplainBack\?\.\(destination, 'scheduling-observation'\)/,
     );
   });
 });
@@ -251,8 +262,21 @@ describe('ReviewView.handleAcceptStrongRecallOffer — accepting is never record
   });
 
   it('opens explain-back on the offer’s OWN instrument — the proposed concept is one that instrument teaches, so nothing is invented', () => {
-    expect(SR_ACCEPT_BODY).toMatch(/this\.openExplainBack\?\.\(pending\.instrument\)/);
+    expect(SR_ACCEPT_BODY).toMatch(
+      /this\.openExplainBack\?\.\(pending\.instrument, STRONG_RECALL_PROPOSAL_TRIGGER\)/,
+    );
     expect(SR_ACCEPT_BODY).not.toMatch(/queueSnapshot/);
+  });
+
+  // `ol-egov.141.89.6.44`: F2.21's own trigger — `olea-contracts`'
+  // `explainBackOfferTrigger` doc names `'strong-recall-proposal'` as "a
+  // proposal she never asked for (F2.14a)", the same constant
+  // `session.recordStrongRecallOfferShown` above already writes for this
+  // banner — imported, not hand-typed, so the two can't drift.
+  it('uses the imported STRONG_RECALL_PROPOSAL_TRIGGER constant, not a hand-typed literal', () => {
+    expect(VIEW).toMatch(
+      /import \{ type QueueItemReason, STRONG_RECALL_PROPOSAL_TRIGGER \} from 'olea-core';/,
+    );
   });
 });
 

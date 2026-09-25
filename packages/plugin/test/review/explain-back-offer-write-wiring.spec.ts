@@ -105,4 +105,16 @@ describe('ReviewView.handleAcceptConfusionOffer — accepting is never recorded 
   it('still clears this.confusionBanner directly, the same way it always has', () => {
     expect(ACCEPT_BODY).toMatch(/this\.confusionBanner\s*=\s*null;/);
   });
+
+  // `ol-egov.141.89.6.44`: F2.12's own trigger — `olea-contracts`'
+  // `explainBackOfferTrigger` doc names `'repeated-failure'` as "a routing
+  // after repeated failure (F2.12)", the same literal
+  // `session.recordExplainBackOfferShown` above already writes for this
+  // banner — so `openExplainBackModal` (`main.ts`) can attribute a skip or
+  // close inside the modal to this banner rather than guessing.
+  it('passes the F2.12 trigger through openExplainBack, matching the literal recordExplainBackOfferShown already writes', () => {
+    expect(ACCEPT_BODY).toMatch(
+      /this\.openExplainBack\?\.\(pending\.instrument, 'repeated-failure'\);/,
+    );
+  });
 });

@@ -67,7 +67,8 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
-import type { QueueItemReason } from 'olea-core';
+import type { ExplainBackOfferTrigger } from 'olea-contracts';
+import { type QueueItemReason, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
 import { ReviewActivityNotifier } from './activity.js';
 import {
   actionKeycap,
@@ -297,7 +298,9 @@ export class ReviewView extends ItemView {
   private readonly openSession: ReviewSessionProvider;
   private readonly activity: ReviewActivityNotifier;
   private readonly retrieveSourceChunks: RetrieveExplainWhySourceChunks | undefined;
-  private readonly openExplainBack: ((instrument: ReviewInstrument) => void) | undefined;
+  private readonly openExplainBack:
+    | ((instrument: ReviewInstrument, trigger: ExplainBackOfferTrigger) => void)
+    | undefined;
   /** `[D-171]`'s one-step affordance target — see `constructor`'s own param doc. */
   private readonly openRegistryEntry: ((instrumentId: string) => void) | undefined;
   /** F2.10's surface wiring (`ol-i19f`) — see `constructor`'s own param doc and `heading-offer-wiring.ts`. */
@@ -339,8 +342,20 @@ export class ReviewView extends ItemView {
     openSession: ReviewSessionProvider,
     onReviewActivity?: () => void,
     retrieveSourceChunks?: RetrieveExplainWhySourceChunks,
-    /** F2.12, `[D-163]` (`ol-12gs`): opens `ExplainBackModal` for the offered instrument — see `handleAcceptConfusionOffer`'s own doc. */
-    openExplainBack?: (instrument: ReviewInstrument) => void,
+    /**
+     * F2.12, `[D-163]` (`ol-12gs`): opens `ExplainBackModal` for the offered
+     * instrument — see `handleAcceptConfusionOffer`'s own doc.
+     *
+     * `ol-egov.141.89.6.44`: now also takes the `ExplainBackOfferTrigger`
+     * of whichever of this view's three banners accepted — F2.12's
+     * `handleAcceptConfusionOffer` (`'repeated-failure'`), F5.3a's
+     * `handleAcceptSchedulingObservationOffer` (`'scheduling-observation'`)
+     * and F2.21's `handleAcceptStrongRecallOffer`
+     * (`STRONG_RECALL_PROPOSAL_TRIGGER`, i.e. `'strong-recall-proposal'`) —
+     * so `main.ts` can attribute a skip or close inside the modal to the
+     * banner that actually produced it, instead of guessing.
+     */
+    openExplainBack?: (instrument: ReviewInstrument, trigger: ExplainBackOfferTrigger) => void,
     /**
      * `[D-171]`/`ol-2zfj.47`: the one-step affordance F8.4 asks every
      * instrument-rendering surface for — leads to that instrument's registry
@@ -1016,7 +1031,10 @@ export class ReviewView extends ItemView {
     if (session === null || pending === null) return;
     session.resolveConfusionRoutingOffer();
     this.confusionBanner = null;
-    this.openExplainBack?.(pending.instrument);
+    // F2.12's own trigger (`olea-contracts`' `explainBackOfferTrigger` doc:
+    // "a routing after repeated failure"), matching the literal
+    // `session.recordExplainBackOfferShown` already writes for this banner.
+    this.openExplainBack?.(pending.instrument, 'repeated-failure');
     this.render();
   }
 
@@ -1118,7 +1136,11 @@ export class ReviewView extends ItemView {
     const destination = session.queueSnapshot.find((queued) =>
       queued.instrument.conceptIds.includes(pending.neighbourConceptId),
     )?.instrument;
-    if (destination !== undefined) this.openExplainBack?.(destination);
+    // F5.3a's own trigger (`olea-contracts`' `explainBackOfferTrigger` doc:
+    // "the F5.3a reciprocal prompt off a live scheduling observation"),
+    // matching the literal `session.recordSchedulingObservationOfferShown`
+    // already writes for this banner.
+    if (destination !== undefined) this.openExplainBack?.(destination, 'scheduling-observation');
 
     this.render();
   }
@@ -1215,7 +1237,10 @@ export class ReviewView extends ItemView {
     if (session === null || pending === null) return;
     session.resolveStrongRecallOffer();
     this.strongRecallBanner = null;
-    this.openExplainBack?.(pending.instrument);
+    // F2.21's own trigger (`olea-contracts`' `explainBackOfferTrigger` doc:
+    // "a proposal she never asked for"), matching the constant
+    // `session.recordStrongRecallOfferShown` already writes for this banner.
+    this.openExplainBack?.(pending.instrument, STRONG_RECALL_PROPOSAL_TRIGGER);
     this.render();
   }
 
