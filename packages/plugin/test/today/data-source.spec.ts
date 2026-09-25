@@ -36,12 +36,16 @@ import type {
   VaultSource,
 } from 'olea-core';
 import {
+  appendDisputeRecord,
   appendReviewLogRecord,
+  appendSuspendRecord,
   calendarDayFromLocalDate,
   computeAllConceptMastery,
+  contestClaim,
   createFsrsScheduler,
   provisionalConceptKey,
   readReviewLogHistory,
+  resolveDispute,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
@@ -1171,6 +1175,157 @@ describe('loadTodayPanel', () => {
       // On the unfixed code this reads `{ ..., sprout: 0, sapling: 0, tree: 0 }`
       // (the concept falls back to `seed`, never reviewed as far as the
       // windowed read can tell) — the registry above says `tree`.
+      expect(course.distribution.counts.tree).toBe(1);
+    });
+  });
+
+  /**
+   * `ol-egov.141.89.9.43`: `readReviewHistory`'s `disputes` return already
+   * reached `history.disputes` here, but `loadTodayPanel`'s `TodayPanelInput`
+   * construction dropped it before calling `buildTodayPanel` — so the
+   * corrected-contest half of `[D-281]` item 4 (`../../core/today/
+   * panel.ts#TodayPanelInput.disputes`, wired by `ol-4mse`) never reached the
+   * real Today panel, even though `buildTodayPanel` itself already knew how
+   * to use it. Mirrors `data-source.invalid-instruments.spec.ts`'s fixture
+   * shape, but drives the production `loadTodayPanel` entry point directly
+   * (the function this bead's `owns` covers), not `createVaultScopeSource`.
+   */
+  describe('loadTodayPanel forwards disputes into the mastery overview (ol-egov.141.89.9.43)', () => {
+    function fixtureVault() {
+      return memoryVault({
+        'Notes/disputed.md': [
+          '---',
+          'topic: [Disputed Concept]',
+          'course: TESTC404',
+          '---',
+          '',
+          'Front::Back',
+          '',
+        ].join('\n'),
+      });
+    }
+
+    /**
+     * Resolves the SAME key `createVaultTrendsSource` below (called over the
+     * same vault instance) will resolve back — matching the "130 days old"
+     * test above's technique, rather than reconstructing the key by hand,
+     * which drifted from the real extracted key (`boundNotePath` is never
+     * really `null` once the topic is bound to a note) and silently left the
+     * concept unreviewed in the distribution.
+     */
+    async function resolveConceptId(vault: ReturnType<typeof fixtureVault>): Promise<string> {
+      const extracted = await extractConceptsFromVault(vault, {});
+      const record = extracted[0];
+      if (record === undefined) throw new Error('expected one extracted concept');
+      return record.key;
+    }
+
+    async function seedQualifyingAttempt(
+      vault: ReturnType<typeof fixtureVault>,
+      conceptId: string,
+      instrumentId: string,
+    ) {
+      await appendReviewLogRecord(
+        vault,
+        {
+          timestamp: '2026-08-01T09:00:00-04:00',
+          instrumentId,
+          instrumentType: 'explain-back',
+          conceptIds: [conceptId],
+          rating: null,
+          wasUnsure: false,
+          durationMs: 4000,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            instrumentTypesOffered: ['explain-back'],
+            planVersion: null,
+          },
+          supportLevelShown: 'independent',
+          explainBackGrade: {
+            soloLevel: 'relational',
+            correctness: 'correct',
+            contentRef: 'content-ref-1',
+            revisionOf: null,
+            artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+          },
+        },
+        { deviceId: DEVICE, generateEventId: () => 'disputed-qualifying-1' },
+      );
+    }
+
+    it('a corrected grade contest excludes the instrument from the panel’s top stage', async () => {
+      const vault = fixtureVault();
+      const conceptId = await resolveConceptId(vault);
+      const instrumentId = `card:${conceptId}:1`;
+      await seedQualifyingAttempt(vault, conceptId, instrumentId);
+
+      const opening = contestClaim({
+        claim: {
+          rendering: 'explain-back-grade',
+          conceptIds: [conceptId],
+          instrumentId,
+          evidenceBasis: 'evidence-fingerprint-1',
+        },
+        timestamp: '2026-08-16T09:00:00-04:00',
+      });
+      const { record: openingRecord } = await appendDisputeRecord(vault, opening.record, {
+        deviceId: DEVICE,
+        generateEventId: () => 'disputed-dispute-1',
+      });
+      const resolution = resolveDispute({
+        dispute: openingRecord,
+        outcome: 'corrected',
+        timestamp: '2026-08-17T09:00:00-04:00',
+      });
+      await appendDisputeRecord(vault, resolution, {
+        deviceId: DEVICE,
+        generateEventId: () => 'disputed-dispute-2',
+      });
+
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now: () => new Date('2026-09-01T09:00:00Z'),
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC404');
+      if (course === undefined) throw new Error('expected TESTC404 in the mastery overview');
+      // Pre-fix (disputes dropped before `TodayPanelInput`), this reads 1: the
+      // corrected-contest signal never reached `buildTodayPanel`.
+      expect(course.distribution.counts.tree).toBe(0);
+    });
+
+    it('a merely suspended instrument (no contest) is NOT excluded ([D-338]: suspension alone never retracts)', async () => {
+      const vault = fixtureVault();
+      const conceptId = await resolveConceptId(vault);
+      const instrumentId = `card:${conceptId}:1`;
+      await seedQualifyingAttempt(vault, conceptId, instrumentId);
+
+      await appendSuspendRecord(
+        vault,
+        {
+          kind: 'suspend',
+          timestamp: '2026-08-15T09:00:00-04:00',
+          instrumentId,
+          conceptIds: [conceptId],
+        },
+        { deviceId: DEVICE, generateEventId: () => 'disputed-suspend-1' },
+      );
+
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now: () => new Date('2026-09-01T09:00:00Z'),
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC404');
+      if (course === undefined) throw new Error('expected TESTC404 in the mastery overview');
       expect(course.distribution.counts.tree).toBe(1);
     });
   });

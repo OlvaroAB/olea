@@ -1175,6 +1175,16 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
 
   const base: TodayPanelInput = {
     entries: history.entries,
+    // `[D-281]` item 4 / `[D-338]`'s corrected-on-contest half
+    // (`ol-egov.141.89.9.43`): `readReviewHistory` already reads `disputes`
+    // off the same log walk `entries` comes from (see its own doc above);
+    // forwarding it lets `buildTodayPanel`'s `projectInstrumentValidity`
+    // fold in a `[D-095]` grade contest resolved `corrected`, the same
+    // proven-invalid fact `registry/build.ts` and this file's own
+    // `createVaultScopeSource` fold already act on. The rejected-verdict
+    // half needed nothing here, since verdict records already travel inside
+    // `entries` — only this field was still being dropped.
+    disputes: history.disputes,
     instruments,
     today,
     dueThrough: endOfLocalDay(now),
