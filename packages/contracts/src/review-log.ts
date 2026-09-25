@@ -904,6 +904,78 @@ function refineCorrectnessInstrumentType(
   }
 }
 
+/**
+ * How an explain-back answer was composed (`[D-228 / SIG-3]`, `ol-gzhp`,
+ * `ol-egov.115`), captured alongside the grade rather than discarded once
+ * composed. **Never content** (D-005): two integers, never the answer text,
+ * a diff of successive drafts, or a per-key stream with timings — any of
+ * which would be reconstructable toward what she wrote and so is content for
+ * D-005's purposes, the same way document metadata is content per
+ * `ol-pdfmeta`. `firstEditMs` is milliseconds from presentation to the first
+ * input event — the one part of latency `durationMs` cannot separate on its
+ * own. `editBursts` is a count of distinct composing sessions, never a
+ * per-keystroke count (that option, `keystrokeCount`, was REJECTED by
+ * `[D-228]`).
+ *
+ * **Absence means "not captured," never "she made no edits"** — the same
+ * reader rule `mcqCorrectness`'s own doc states, restated here rather than
+ * left implicit because a seventh optional field is exactly where a reader
+ * skimming the shape could default to the wrong reading. Present only on a
+ * graded explain-back review (the only free-text answering surface in
+ * either repo — Q&A, cloze and MCQ are reveal-then-self-rate or one-click,
+ * with no textarea anywhere, so they are N/A BY CONSTRUCTION, not "not
+ * wired yet"). Additive on v5, no `schemaVersion` bump, the same reasoning
+ * `[D-178]` applied to `schedulingObservation` and `[D-205]` to
+ * `correctness` above.
+ *
+ * **Never live-displayed** (`ol-9a7z`): the capturing surface must never
+ * show her a running count or timer while she composes — a visible counter
+ * would change how she writes and manufacture the very behaviour it
+ * measures. That is a constraint on the capturing UI, not on this schema,
+ * but it is the reason this field may exist at all under the cognitive-
+ * offloading check, so it is recorded here too.
+ *
+ * Read by nothing until a named consumer (the miscalibration triangulation
+ * — does laboured composition co-occur with a lower `explainBackGrade
+ * .soloLevel` than the self-rating implies) is built; `[D-228]`'s own
+ * revisit condition removes the field if a year passes with no consumer.
+ * TUNE-1 (`ol-uiel`) may NEVER read this field to fit a constant — it fits
+ * on public multi-user corpora, which carry no edit behaviour, and
+ * principle 17 as amended by `[D-078]` forbids her own history from setting
+ * any constant.
+ */
+export const answerEdits = z.object({
+  /** Milliseconds from presentation to the first `'input'` event, or `null` if no input ever fired since presentation (she submitted an untouched, discard-preserved answer). */
+  firstEditMs: z.number().int().nonnegative().nullable(),
+  /** How many distinct composing sessions produced this answer — never a per-keystroke count. */
+  editBursts: z.number().int().nonnegative(),
+});
+export type AnswerEdits = z.infer<typeof answerEdits>;
+
+/**
+ * `answerEdits` may only appear on an `instrumentType: 'explain-back'`
+ * review — the same "shape enforces the restriction the field's own doc
+ * states" pattern `refineExplainBackGradeInstrumentType` and
+ * `refineCorrectnessInstrumentType` above use for their own fields. Q&A,
+ * cloze and MCQ have no free-text answering surface to edit at all.
+ */
+function refineAnswerEditsInstrumentType(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly answerEdits?: AnswerEdits | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.instrumentType === 'explain-back') return;
+  if (value.answerEdits !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['answerEdits'],
+      message: 'answerEdits may only appear on an explain-back review',
+    });
+  }
+}
+
 function refineSchedulingObservationNotSubject(
   value: {
     readonly conceptIds: readonly string[];
@@ -983,11 +1055,18 @@ export const reviewLogRecordV5 = z
      * reasoning.
      */
     correctness: mcqCorrectness.optional(),
+    /**
+     * Present only for a graded explain-back review (`[D-228 / SIG-3]`). See
+     * `answerEdits`'s own doc for the privacy, gating and no-live-display
+     * reasoning.
+     */
+    answerEdits: answerEdits.optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineExplainBackGradeInstrumentType)
   .superRefine(refineSchedulingObservationNotSubject)
-  .superRefine(refineCorrectnessInstrumentType);
+  .superRefine(refineCorrectnessInstrumentType)
+  .superRefine(refineAnswerEditsInstrumentType);
 export type ReviewLogRecordV5 = z.infer<typeof reviewLogRecordV5>;
 
 /**

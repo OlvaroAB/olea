@@ -14,11 +14,17 @@
 // and whether it matched the key — additive the same way the original three
 // were, still no `schemaVersion` bump.
 //
+// `[D-228 / SIG-3]` (`ol-gzhp`, `ol-egov.115`, ratified 2026-09-06) added a
+// fifth optional field, `answerEdits` — an explain-back answer's composition
+// timing and burst count — additive the same way, still no `schemaVersion`
+// bump. `features/F5-explain-it-back.md`'s DF-20 scenario set for this field
+// is what the `describe('answerEdits …')` block below implements.
+//
 // What v5 has to prove, and none of it is "does zod work" trivia:
 //
-//   1. v5 is v4 plus four fields — `supportLevelShown`, `explainBackGrade`,
-//      `schedulingObservation`, `correctness` — all optional, and nothing
-//      else moved, appeared or vanished;
+//   1. v5 is v4 plus five fields — `supportLevelShown`, `explainBackGrade`,
+//      `schedulingObservation`, `correctness`, `answerEdits` — all optional,
+//      and nothing else moved, appeared or vanished;
 //   2. `explainBackGrade` is gated to explain-back reviews only
 //      (`refineExplainBackGradeInstrumentType`); `schedulingObservation` is
 //      NOT — `[D-185]` (`ol-0r92.41`) widened F5.3a/C5.11 to any instrument
@@ -35,6 +41,8 @@
 //      change at all.
 import { describe, expect, it } from 'vitest';
 import {
+  type AnswerEdits,
+  answerEdits,
   type ExplainBackGrade,
   explainBackGrade,
   type McqCorrectness,
@@ -150,12 +158,12 @@ describe('review-log schema version 5 is the current one', () => {
   });
 });
 
-describe('v5 is v4 plus four optional fields — nothing else changed', () => {
-  it('the record gains exactly four keys: the three [D-117] added plus [D-205]’s correctness', () => {
+describe('v5 is v4 plus five optional fields — nothing else changed', () => {
+  it('the record gains exactly five keys: the three [D-117] added plus [D-205]’s correctness and [D-228]’s answerEdits', () => {
     // `reviewLogRecordV4` no longer exists as a symbol (`[D-109]`'s
     // migrate-in-place rename), so the comparison is against v3 plus every
     // key v4 ever added: `masteryAtTime` (`ol-g6zg`), the three `[D-117]`
-    // fields, and `[D-205]`'s `correctness`.
+    // fields, `[D-205]`'s `correctness` and `[D-228]`'s `answerEdits`.
     const v3Keys = Object.keys(reviewLogRecordV3.shape).sort();
     const v5Keys = Object.keys(reviewLogRecordV5.shape).sort();
     expect(v5Keys).toEqual(
@@ -166,6 +174,7 @@ describe('v5 is v4 plus four optional fields — nothing else changed', () => {
         'explainBackGrade',
         'schedulingObservation',
         'correctness',
+        'answerEdits',
       ].sort(),
     );
   });
@@ -177,16 +186,22 @@ describe('v5 is v4 plus four optional fields — nothing else changed', () => {
     expect(suspendLogRecordV5.parse(v5SuspendLine()).schemaVersion).toBe(5);
   });
 
-  it('a record with none of the four new fields parses, and acquires none of the keys', () => {
+  // F5.9 / `[D-228]` DF-20 scenario "records written before this field still
+  // validate": a v5 explain-back record with no `answerEdits` field parses
+  // unchanged, and readers treat the signal as not captured, never as no
+  // edits made.
+  it('a record with none of the five new fields parses, and acquires none of the keys', () => {
     const parsed = reviewLogRecordV5.parse(v5ReviewLine());
     expect(parsed.supportLevelShown).toBeUndefined();
     expect(parsed.explainBackGrade).toBeUndefined();
     expect(parsed.schedulingObservation).toBeUndefined();
     expect(parsed.correctness).toBeUndefined();
+    expect(parsed.answerEdits).toBeUndefined();
     expect(Object.hasOwn(parsed, 'supportLevelShown')).toBe(false);
     expect(Object.hasOwn(parsed, 'explainBackGrade')).toBe(false);
     expect(Object.hasOwn(parsed, 'schedulingObservation')).toBe(false);
     expect(Object.hasOwn(parsed, 'correctness')).toBe(false);
+    expect(Object.hasOwn(parsed, 'answerEdits')).toBe(false);
   });
 });
 
@@ -326,6 +341,88 @@ describe('correctness is gated to mcq reviews ([D-205 / SIG-2])', () => {
       reviewLogEntryV5.safeParse(v5ReviewLine({ instrumentType: 'mcq', correctness: CORRECT }))
         .success,
     ).toBe(true);
+  });
+});
+
+// F5.9 / `[D-228 / SIG-3]` (`ol-gzhp`, `ol-egov.115`) — how an explain-back
+// answer was composed is captured beside the rating. DF-20 scenarios 1–4 of
+// `features/F5-explain-it-back.md`'s "F2.16 / [D-228]" block; the plugin-side
+// scenarios 5–7 and the solo-review scenario 8 live in their own suites (see
+// that feature block's own `@auto` tags).
+const ANSWER_EDITS: AnswerEdits = { firstEditMs: 12000, editBursts: 3 };
+
+describe('answerEdits is gated to explain-back reviews ([D-228 / SIG-3])', () => {
+  // Scenario: a composed explain-back answer records when she first typed
+  // and how many times she came back to it.
+  it('a composed explain-back answer records when she first typed and how many times she came back to it', () => {
+    const parsed = reviewLogRecordV5.parse(explainBackLine({ answerEdits: ANSWER_EDITS }));
+    expect(parsed.answerEdits).toEqual({ firstEditMs: 12000, editBursts: 3 });
+    expect(parsed.schemaVersion).toBe(5);
+  });
+
+  // Scenario: the field is never content — only two integers; no answer
+  // text, no intermediate draft and no per-key stream appears in it.
+  it('the field is never content — only two integers, no answer text, draft or per-key stream', () => {
+    const parsed = answerEdits.parse(ANSWER_EDITS);
+    expect(Object.keys(parsed).sort()).toEqual(['editBursts', 'firstEditMs']);
+    expect(typeof parsed.firstEditMs).toBe('number');
+    expect(typeof parsed.editBursts).toBe('number');
+  });
+
+  // Scenario: the field is gated to explain-back — a Q&A, cloze or MCQ
+  // review record carrying answerEdits fails to parse, because those three
+  // kinds have no typed answer to edit.
+  it('rejects answerEdits on a qa review', () => {
+    expect(reviewLogRecordV5.safeParse(v5ReviewLine({ answerEdits: ANSWER_EDITS })).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects answerEdits on a cloze review', () => {
+    expect(
+      reviewLogRecordV5.safeParse(
+        v5ReviewLine({ instrumentType: 'cloze', answerEdits: ANSWER_EDITS }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('rejects answerEdits on an mcq review', () => {
+    expect(
+      reviewLogRecordV5.safeParse(
+        v5ReviewLine({ instrumentType: 'mcq', answerEdits: ANSWER_EDITS }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('rejects a negative or fractional firstEditMs, and a negative or fractional editBursts', () => {
+    expect(answerEdits.safeParse({ firstEditMs: -1, editBursts: 0 }).success).toBe(false);
+    expect(answerEdits.safeParse({ firstEditMs: 1.5, editBursts: 0 }).success).toBe(false);
+    expect(answerEdits.safeParse({ firstEditMs: null, editBursts: -1 }).success).toBe(false);
+    expect(answerEdits.safeParse({ firstEditMs: null, editBursts: 1.5 }).success).toBe(false);
+  });
+
+  it('firstEditMs may be null — an untouched, discard-preserved answer still records its burst count', () => {
+    const parsed = answerEdits.parse({ firstEditMs: null, editBursts: 0 });
+    expect(parsed.firstEditMs).toBeNull();
+    expect(parsed.editBursts).toBe(0);
+  });
+
+  // Scenario: records written before this field still validate — a v5
+  // explain-back record with no answerEdits field validates unchanged, and
+  // readers treat the signal as not captured rather than as no edits made.
+  it('pre-[D-228] records still validate — absence reads as "not captured," never "she made no edits"', () => {
+    const parsed = reviewLogRecordV5.parse(explainBackLine());
+    expect(parsed.answerEdits).toBeUndefined();
+    expect(Object.hasOwn(parsed, 'answerEdits')).toBe(false);
+  });
+
+  it('the refinement fires through the union too, not only on the bare record', () => {
+    expect(reviewLogEntryV5.safeParse(v5ReviewLine({ answerEdits: ANSWER_EDITS })).success).toBe(
+      false,
+    );
+    expect(reviewLogEntryV5.safeParse(explainBackLine({ answerEdits: ANSWER_EDITS })).success).toBe(
+      true,
+    );
   });
 });
 

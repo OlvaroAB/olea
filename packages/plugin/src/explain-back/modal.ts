@@ -257,6 +257,25 @@ export interface ExplainBackModalDeps {
      * outcome and never to be papered over with `'independent'`.
      */
     readonly supportLevelShown?: SupportLevel;
+    /**
+     * `ol-0r92.56` (`[D-228 / SIG-3]`): how this attempt's answer was
+     * composed, forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.answerEdits` (a small, disclosed
+     * follow-up in a file this bead does not own — see that field's own doc
+     * for the fallback a not-yet-updated caller gets when it omits this,
+     * the same posture `attemptId`'s doc above states). Always computed for
+     * a genuine submit through this view, the same posture `durationMs`
+     * takes — never `undefined` here, though `firstEditMs` inside it can be
+     * `null` (see `this.firstEditAtMs`'s own doc). Gated to explain-back at
+     * the schema (`contracts/review-log.ts`'s `refineAnswerEditsInstrumentType`);
+     * this view is the only caller that can ever produce one.
+     */
+    readonly answerEdits: {
+      /** See `this.firstEditAtMs`'s own doc for exactly what is measured and why it can be `null`. */
+      readonly firstEditMs: number | null;
+      /** See `this.editBursts`'s own doc for exactly what is counted. */
+      readonly editBursts: number;
+    };
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -477,6 +496,15 @@ interface ResolvedPrompt {
   readonly conceptIds: readonly string[];
 }
 
+/**
+ * `ol-0r92.56` (`[D-228 / SIG-3]`): the shape sealed at `submitAnswer` and
+ * forwarded to `deps.recordSoloGradeAndReview`'s `answerEdits` param — see
+ * that field's own doc. Named separately from the deps param's inline shape
+ * only so `ModalState`'s two phases below can reference it without repeating
+ * the object type.
+ */
+type ModalAnswerEdits = { readonly firstEditMs: number | null; readonly editBursts: number };
+
 type ModalState =
   | { readonly phase: 'topic'; readonly topic: string }
   | { readonly phase: 'loading' }
@@ -489,6 +517,8 @@ type ModalState =
       readonly durationMs: number | null;
       /** `ol-0r92.94` [DOS-C1]: minted once per genuine attempt at submit time — see `submitAnswer`'s doc. */
       readonly attemptId: string;
+      /** `ol-0r92.56` (`[D-228 / SIG-3]`): sealed alongside `durationMs`, same posture — see `submitAnswer`'s doc. */
+      readonly answerEdits: ModalAnswerEdits;
     }
   | {
       readonly phase: 'graded';
@@ -497,6 +527,8 @@ type ModalState =
       readonly pending: PendingExplainBackGrading;
       readonly durationMs: number | null;
       readonly attemptId: string;
+      /** `ol-0r92.56` (`[D-228 / SIG-3]`): carried through to `acceptGrading` on Accept — see `submitAnswer`'s doc. */
+      readonly answerEdits: ModalAnswerEdits;
     }
   | {
       readonly phase: 'refused';
@@ -578,6 +610,43 @@ export class ExplainBackModal extends Modal {
    * bookkeeping for the CURRENT attempt, not state the render tree needs.
    */
   private presentedAtMs: number | null = null;
+
+  /**
+   * `ol-0r92.56` (`[D-228 / SIG-3]`): the moment the FIRST `'input'` event
+   * fired on the answering textarea since `presentedAtMs` was most recently
+   * stamped — reset alongside `presentedAtMs`, at the same three sites
+   * (`resolveInstrumentPrompt`, `resolveTopicPrompt`, `discardGrading`), so
+   * `firstEditMs` shares `durationMs`'s own "this attempt" clock origin
+   * (`presentedAtMs`), never the whole session's. `null` means no input has
+   * fired yet since that reset — evidences she has not started typing, or
+   * she submitted a discard-preserved answer untouched — and is read once,
+   * at the top of `submitAnswer`, mirroring `durationMs`'s own read.
+   */
+  private firstEditAtMs: number | null = null;
+
+  /**
+   * `ol-0r92.56` (`[D-228 / SIG-3]`): how many times she has been presented
+   * with a FRESH answering textarea and typed into it — incremented at most
+   * once per `renderAnsweringPhase` call, on that call's own first `'input'`
+   * event, never per keystroke (a per-keystroke count is `keystrokeCount`,
+   * REJECTED by `[D-228]`). Deliberately NOT reset alongside `presentedAtMs`
+   * / `firstEditAtMs` above: it lives on the modal for the instance's whole
+   * life, so it keeps counting across a discard-and-retry re-render — see
+   * `features/F5-explain-it-back.md`'s "the counter survives the modal
+   * re-rendering the answering phase" scenario, which this field exists to
+   * satisfy. This is the one part of `[D-228]`'s operational definition this
+   * bead can build without inventing a number: the ruling's own analysis
+   * describes bursts as "coalescing keystrokes separated by less than an
+   * idle threshold," but no such threshold is stated anywhere in the ruling,
+   * the build bead, or an existing declared constant for composition-scale
+   * pauses (`DEFAULT_SITTING_IDLE_THRESHOLD_MS` is 15 minutes, for session
+   * gaps, not composing one answer) — per `[D-194]`, an unstated number is
+   * reported rather than guessed. So THIS implementation counts distinct
+   * fresh-textarea presentations she typed into, not idle-gap-coalesced
+   * keystroke runs within one presentation; see this bead's report for the
+   * open follow-up if within-presentation pause/resume detection is wanted.
+   */
+  private editBursts = 0;
 
   /**
    * `ol-0r92.94` [DOS-C1]: the in-flight-memo half of the idempotency
@@ -668,6 +737,7 @@ export class ExplainBackModal extends Modal {
       query,
     };
     this.presentedAtMs = this.now().getTime();
+    this.firstEditAtMs = null;
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
@@ -718,6 +788,7 @@ export class ExplainBackModal extends Modal {
       conceptIds: [],
     };
     this.presentedAtMs = this.now().getTime();
+    this.firstEditAtMs = null;
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
@@ -735,6 +806,19 @@ export class ExplainBackModal extends Modal {
   private async submitAnswer(prompt: ResolvedPrompt, answer: string): Promise<void> {
     const durationMs =
       this.presentedAtMs !== null ? Math.max(0, this.now().getTime() - this.presentedAtMs) : null;
+    // `ol-0r92.56` (`[D-228 / SIG-3]`): sealed HERE, the same moment and the
+    // same read-once posture `durationMs` above takes — see
+    // `this.firstEditAtMs`'s and `this.editBursts`'s own docs for what each
+    // half measures. `firstEditMs` shares `durationMs`'s clock origin
+    // (`presentedAtMs`) and is `null` under the identical guard; `editBursts`
+    // is read as-is, since it is never reset by this attempt's own clock.
+    const answerEdits: ModalAnswerEdits = {
+      firstEditMs:
+        this.presentedAtMs !== null && this.firstEditAtMs !== null
+          ? Math.max(0, this.firstEditAtMs - this.presentedAtMs)
+          : null,
+      editBursts: this.editBursts,
+    };
     // `ol-0r92.94` [DOS-C1]: minted HERE, once per genuine attempt at
     // submit — never `prompt.originInstrumentId`, which is the instrument's
     // own id and is the SAME value across every attempt she makes at it
@@ -746,7 +830,7 @@ export class ExplainBackModal extends Modal {
     // needs, and reusing it keeps `main.ts`'s existing deps literal
     // (outside this bead's `owns`) unchanged.
     const attemptId = this.deps.generateInstrumentId();
-    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId };
+    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits };
     this.render();
 
     const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
@@ -764,7 +848,7 @@ export class ExplainBackModal extends Modal {
         this.render();
         return;
       }
-      this.state = { phase: 'graded', prompt, answer, pending, durationMs, attemptId };
+      this.state = { phase: 'graded', prompt, answer, pending, durationMs, attemptId, answerEdits };
       this.render();
     } catch (error) {
       // `UnusableGradingInputError` (empty referenceAnswer) reads as
@@ -808,10 +892,18 @@ export class ExplainBackModal extends Modal {
     pending: PendingExplainBackGrading,
     durationMs: number | null,
     attemptId: string,
+    answerEdits: ModalAnswerEdits,
   ): Promise<void> {
     const inFlight = this.acceptInFlightByAttempt.get(attemptId);
     if (inFlight) return inFlight;
-    const promise = this.computeAcceptGrading(prompt, answer, pending, durationMs, attemptId);
+    const promise = this.computeAcceptGrading(
+      prompt,
+      answer,
+      pending,
+      durationMs,
+      attemptId,
+      answerEdits,
+    );
     this.acceptInFlightByAttempt.set(attemptId, promise);
     return promise;
   }
@@ -822,6 +914,7 @@ export class ExplainBackModal extends Modal {
     pending: PendingExplainBackGrading,
     durationMs: number | null,
     attemptId: string,
+    answerEdits: ModalAnswerEdits,
   ): Promise<void> {
     // `[ol-egov.141.89.6.18]`: read BEFORE either write this call makes (the
     // correctness accept just below, then `recordSoloGradeAndReview`'s own
@@ -894,6 +987,12 @@ export class ExplainBackModal extends Modal {
           // set to `undefined` are different things, and "absent" is the one
           // that means unknown all the way down to the persisted record.
           ...(supportLevelShown !== undefined ? { supportLevelShown } : {}),
+          // `ol-0r92.56` (`[D-228 / SIG-3]`): sealed at `submitAnswer`, the
+          // same "computed once, carried through" posture `durationMs` takes
+          // — always sent, never conditionally spread, because this field is
+          // always computable for a genuine submit through this view (see
+          // `ModalAnswerEdits`'s own doc).
+          answerEdits,
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {
@@ -937,6 +1036,7 @@ export class ExplainBackModal extends Modal {
     // so the clock for THIS attempt's `durationMs` restarts here rather than
     // accumulating time already spent on the discarded one.
     this.presentedAtMs = this.now().getTime();
+    this.firstEditAtMs = null;
     this.state = { phase: 'answering', prompt, answer };
     this.render();
   }
@@ -1019,6 +1119,7 @@ export class ExplainBackModal extends Modal {
           this.state.pending,
           this.state.durationMs,
           this.state.attemptId,
+          this.state.answerEdits,
         );
         return;
       case 'refused':
@@ -1080,6 +1181,27 @@ export class ExplainBackModal extends Modal {
       attr: { placeholder: EXPLAIN_BACK_ANSWER_PLACEHOLDER },
     });
     textarea.value = answer;
+    // `ol-0r92.56` (`[D-228 / SIG-3]`): the ONE capture listener this bead
+    // adds. Never reads or persists `textarea.value` here — this listener
+    // only counts and times, it does not hold or diff the answer text
+    // (D-005: no intermediate draft, no per-key stream). Nothing here
+    // renders anywhere (the no-live-display rule): `firstEditAtMs` and
+    // `editBursts` are written to instance fields only, never to the DOM.
+    // `burstStarted` is scoped to THIS call — a fresh `false` every time
+    // `renderAnsweringPhase` runs — so a later render's own first `'input'`
+    // can register its own burst without touching this closure; the running
+    // total lives on `this.editBursts`, never on the textarea, which is why
+    // it survives the re-render this method's own re-invocation is. See
+    // `this.firstEditAtMs`'s and `this.editBursts`'s own docs for exactly
+    // what each half of `answerEdits` measures.
+    let burstStarted = false;
+    textarea.addEventListener('input', () => {
+      if (this.firstEditAtMs === null) this.firstEditAtMs = this.now().getTime();
+      if (!burstStarted) {
+        burstStarted = true;
+        this.editBursts += 1;
+      }
+    });
     const button = root.createEl('button', { text: EXPLAIN_BACK_SUBMIT_LABEL });
     button.addEventListener('click', () => {
       // `ol-0r92.98`: mirrors `renderTopicPhase`'s own guard above — an empty
@@ -1109,6 +1231,7 @@ export class ExplainBackModal extends Modal {
     pending: PendingExplainBackGrading,
     durationMs: number | null,
     attemptId: string,
+    answerEdits: ModalAnswerEdits,
   ): void {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
@@ -1145,7 +1268,7 @@ export class ExplainBackModal extends Modal {
     const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
     accept.addEventListener(
       'click',
-      () => void this.acceptGrading(prompt, answer, pending, durationMs, attemptId),
+      () => void this.acceptGrading(prompt, answer, pending, durationMs, attemptId, answerEdits),
     );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
