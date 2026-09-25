@@ -687,12 +687,22 @@ describe('both adapters carry dedupeReason through verbatim ([D-240] item 5)', (
 // [SUPP-3] (`ol-lpl4`): row 3.9's chooser input, built from raw review-log
 // entries and threaded through both adapters — the live queue's equivalent of
 // `study-session/build.ts`'s composition-time wiring ([SUPP-2], `ol-95vv.4`).
+//
+// `explainBackGrade` (`ol-egov.141.89.9.20`): present only for an
+// `'explain-back'` entry, and only when the caller wants a GRADED one —
+// omitted entirely produces an ungraded entry (`rating` stays `null` per
+// F2.16, and no `explainBackGrade` at all), the shape
+// `buildSupportLevelHistoryLookup` must skip rather than guess at.
 function reviewLogEntry(overrides: {
   readonly eventId: string;
   readonly timestamp: string;
-  readonly instrumentType: 'qa' | 'cloze' | 'mcq';
+  readonly instrumentType: 'qa' | 'cloze' | 'mcq' | 'explain-back';
   readonly rating: 'again' | 'hard' | 'good' | 'easy' | null;
   readonly conceptIds: readonly string[];
+  readonly explainBackGrade?: {
+    readonly soloLevel: 'prestructural' | 'unistructural' | 'multistructural' | 'relational' | 'extended-abstract';
+    readonly correctness?: 'correct' | 'partial' | 'incorrect';
+  };
 }) {
   return {
     schemaVersion: 5 as const,
@@ -712,6 +722,23 @@ function reviewLogEntry(overrides: {
       planVersion: null,
     },
     conceptIds: [...overrides.conceptIds],
+    ...(overrides.explainBackGrade !== undefined
+      ? {
+          explainBackGrade: {
+            soloLevel: overrides.explainBackGrade.soloLevel,
+            contentRef: `content:${overrides.eventId}`,
+            revisionOf: null,
+            artifactProvenance: {
+              taskId: 'grade.explain-back.v1',
+              promptVersion: '2026-08-26',
+              modelId: 'workers-ai:test-model',
+            },
+            ...(overrides.explainBackGrade.correctness !== undefined
+              ? { correctness: overrides.explainBackGrade.correctness }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -886,6 +913,114 @@ describe('buildSupportLevelHistoryLookup — folds raw review-log entries into r
     expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
       { failureShape: 'none', hintUptake: false },
       { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+});
+
+// `ol-egov.141.89.9.20`: the explain-back branch of the support history had
+// no production caller — `buildSupportLevelHistoryLookup` filtered to
+// `qa`/`cloze` only, so no explain-back review ever reached
+// `deriveFailureShape`'s explain-back branch (fixed for correctness-before-
+// depth by `ol-egov.141.89.9.17`, D-286, D-281). These tests are this
+// lookup's REGRESSION coverage for that gap: each fails against the prior
+// filter (`review.instrumentType !== 'qa' && ... !== 'cloze'` skipped every
+// explain-back entry, so every `outcomesFor(..., 'explanation')` below came
+// back `[]`) and passes once explain-back entries are folded at the
+// `'explanation'` tier.
+describe('explain-back reviews reach the support history, at the explanation tier ([D-094], D-286, D-281, ol-egov.141.89.9.20)', () => {
+  it('an incorrect relational explanation lowers the ladder — correctness overrides depth', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'relational', correctness: 'incorrect' },
+      }),
+    ]);
+    // Failing-first: before the fix, this instrumentType was filtered out
+    // entirely and the assertion below saw `[]`, not `[{ failureShape:
+    // 'wrong-concept', ... }]`.
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+    // Never bleeds into the unrelated recall tier for the same concept.
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('an unknown-correctness explanation never reads as a clean pass, even at a relational depth', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        // No `correctness` at all — a pre-D-286 single-pass grade. [D-281]:
+        // read as unknown, capped at 'minor-slip', never promoted to 'none'
+        // on depth alone.
+        explainBackGrade: { soloLevel: 'relational' },
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'minor-slip', hintUptake: false },
+    ]);
+  });
+
+  it('a confirmed correct, relational explanation reads as a clean pass', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'relational', correctness: 'correct' },
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('an ungraded explain-back entry (no soloLevel) is skipped, not guessed at', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([]);
+  });
+
+  it('a clean recall review and a failing explanation of the same concept in one sitting stay on their own tiers', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+      reviewLogEntry({
+        eventId: 'e2',
+        // 5 minutes later — same sitting (C5.4's 45-minute gap).
+        timestamp: '2026-08-18T09:05:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'prestructural', correctness: 'incorrect' },
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
     ]);
   });
 });

@@ -182,11 +182,16 @@ function supportLadderTierFor(instrumentType: SchedulableInstrumentType): Suppor
  * needs when one session holds more than one review of the same concept at
  * the same tier: *"outcome = escalate on any blank or wrong-concept failure
  * in the session; clean only when every answer was clean with no hint
- * taken."* `deriveFailureShape` never returns `'blank'` or `'minor-slip'`
- * for a `qa`/`cloze` review (see its own module doc: only `'none'`/
- * `'wrong-concept'` are reachable from a recall rating), so this queue's own
- * fold only ever needs the two-way case today — but the ranking is written
- * generally rather than assuming that stays true.
+ * taken."* `deriveFailureShape` never returns `'blank'` for a `qa`/`cloze`
+ * review (only `'none'`/`'wrong-concept'` are reachable from a recall
+ * rating), but an `explain-back` review (`ol-egov.141.89.9.20`) can land on
+ * any of `'none'`/`'minor-slip'`/`'wrong-concept'` — an unknown-correctness
+ * or partial-depth answer folded alongside a clean recall answer in the same
+ * sitting must still read as the worse of the two, which is exactly what
+ * this severity order is for. `'blank'` stays unreachable through this
+ * fold's two entry kinds today (see {@link buildSupportLevelHistoryLookup}'s
+ * doc), but the ranking is written generally rather than assuming that stays
+ * true.
  */
 const FAILURE_SHAPE_SEVERITY: Readonly<Record<FailureShape, number>> = {
   none: 0,
@@ -219,13 +224,35 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * emitted oldest first, matching `chooseSupportLevel`'s fold requirement
  * (see its own module doc's "ordering rule").
  *
- * `mcq` and `explain-back` review-kind entries are skipped: an `mcq` review
- * has no ladder tier to attribute (see {@link supportLadderTierFor}), and this
- * queue never offers `explain-back` (F2.14) so its entries carry no signal
- * this queue's own chooser calls will ever ask for. A `qa`/`cloze` entry with
- * a `null` rating is skipped too rather than guessed at — the schema's own
- * doc says `rating` is nullable only for `explain-back`, so a null rating on
- * a recall-tier entry is not a shape this fold has an honest reading for.
+ * `mcq` review-kind entries are skipped: recognition has no ladder tier to
+ * attribute (see {@link supportLadderTierFor}). `qa`/`cloze` entries fold at
+ * the `'recall'` tier; a `null` rating is skipped too rather than guessed
+ * at — the schema's own doc says `rating` is nullable only for
+ * `explain-back`, so a null rating on a recall-tier entry is not a shape
+ * this fold has an honest reading for.
+ *
+ * **`explain-back` entries fold at the `'explanation'` tier** (`ol-egov.
+ * 141.89.9.20`; att.md §2.6, `[D-094]`, `[D-286]`, `[D-281]`) — this queue
+ * never OFFERS an explain-back instrument (see {@link supportLadderTierFor}'s
+ * own doc: `SchedulableInstrumentType` excludes it), but her past
+ * explain-back reviews are still real evidence for row 3.9's chooser, read
+ * from `review.explainBackGrade` rather than `review.rating` (always `null`
+ * for this kind, F2.16). `deriveFailureShape` reads `correctness` before
+ * `soloLevel` (`[D-286]`'s two-pass split): an `'incorrect'` verdict lowers
+ * the ladder however deep the (possibly absent) depth pass went, and a
+ * record with no `correctness` at all (`[D-281]`: unknown, never read as
+ * correct) is capped at `'minor-slip'` — it never reads as the clean pass a
+ * relational-but-unverified answer would otherwise produce. An
+ * `explain-back` entry with no `soloLevel` at all (an ungraded or declined
+ * attempt — `deriveFailureShape` throws on that shape, see its own doc's
+ * "blank" section) is skipped, the same "no honest reading" treatment a
+ * null recall rating gets.
+ *
+ * Because `qa`/`cloze` and `explain-back` reviews of the SAME concept in one
+ * sitting occupy different tiers (`[D-094]`'s ladders are per-tier), the
+ * per-session fold below is keyed by concept AND tier, not concept alone —
+ * a clean recall answer must never paper over a failing explanation of the
+ * same concept in the same sitting, or the reverse.
  *
  * `hintUptake` is always `false` — `deriveFailureShape`'s own module doc: no
  * review-log field records hint use, so the honest default is "not used",
@@ -237,24 +264,44 @@ export function buildSupportLevelHistoryLookup(
   const byKey = new Map<string, SessionSupportOutcome[]>();
 
   for (const session of clusterReviewSessions(entries)) {
-    const shapeByConceptId = new Map<string, FailureShape>();
+    const shapeByKey = new Map<string, FailureShape>();
     for (const review of session.reviews) {
-      if (review.instrumentType !== 'qa' && review.instrumentType !== 'cloze') continue;
-      if (review.rating === null) continue;
+      let tier: SupportLadderTier;
+      let evidence: GradedReviewEvidence;
 
-      const evidence: GradedReviewEvidence = {
-        instrumentType: review.instrumentType,
-        rating: review.rating,
-      };
+      if (review.instrumentType === 'qa' || review.instrumentType === 'cloze') {
+        if (review.rating === null) continue;
+        tier = 'recall';
+        evidence = { instrumentType: review.instrumentType, rating: review.rating };
+      } else if (review.instrumentType === 'explain-back') {
+        const grade = review.explainBackGrade;
+        if (grade === undefined || grade.soloLevel === undefined) continue;
+        tier = 'explanation';
+        evidence = {
+          instrumentType: 'explain-back',
+          // `GradedReviewEvidence.rating` is required by its own shape but
+          // `deriveFailureShape` never reads it on the explain-back branch —
+          // `review.rating` is always `null` for this kind (F2.16) and the
+          // interface has no nullable variant, so a placeholder is supplied
+          // here, matching `support-level-signal.spec.ts`'s own precedent
+          // for this exact case.
+          rating: 'again',
+          soloLevel: grade.soloLevel,
+          ...(grade.correctness !== undefined ? { correctness: grade.correctness } : {}),
+        };
+      } else {
+        continue;
+      }
+
       const shape = deriveFailureShape(evidence);
       for (const conceptId of review.conceptIds) {
-        const existing = shapeByConceptId.get(conceptId);
-        shapeByConceptId.set(conceptId, existing === undefined ? shape : worseFailureShape(existing, shape));
+        const key = `${conceptId}:${tier}`;
+        const existing = shapeByKey.get(key);
+        shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
       }
     }
 
-    for (const [conceptId, failureShape] of shapeByConceptId) {
-      const key = `${conceptId}:recall`;
+    for (const [key, failureShape] of shapeByKey) {
       const outcome: SessionSupportOutcome = { failureShape, hintUptake: false };
       const bucket = byKey.get(key);
       if (bucket === undefined) byKey.set(key, [outcome]);
