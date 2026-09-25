@@ -739,6 +739,7 @@ export {
   MIN_SPAN_DAYS,
   MIN_TIMED_REVIEWS,
   PRE_ASSESSMENT_WINDOW_DAYS,
+  SHORTFALL_RATIO_K,
 } from './insights/index.js';
 // Instrument formats in the vault (F2.1, F2.15, C5.3). Q&A/cloze target an
 // Obsidian SR plugin's default syntax; MCQ is Olea's own block. Both parse and

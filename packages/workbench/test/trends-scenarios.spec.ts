@@ -24,7 +24,7 @@
 // plateau rule). Every count here is exact so that a change in either the
 // detector or the generator turns this file red instead of quietly shifting.
 
-import { detectEffortImbalance, detectSpacing, MIN_GAP } from 'olea-core';
+import { detectEffortImbalance, detectSpacing, SHORTFALL_RATIO_K } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { DUE_UNAVAILABLE, NOTHING_DUE } from '../src/plugin-bridge.js';
 import { generateStream, PERSONAS, type PersonaId, streamSpec } from '../src/synthetic-bridge.js';
@@ -118,7 +118,11 @@ describe('the states show what their notes claim', () => {
   it('trends-course-behind-neutralised: same seed, pattern removed, insight gone', () => {
     const vm = buildTrendsViewModel('trends-course-behind-neutralised');
     expect(vm.insights?.effort.status).toBe('not-observed');
-    expect(vm.insights?.effort.measured?.widestGap).toBeLessThan(MIN_GAP);
+    // The live rule (`ol-v7r5.63` / `[DOS-C4]`): a ratio, not an absolute
+    // gap. The widest course's timeShare/floorShare must clear
+    // SHORTFALL_RATIO_K for the detector to stay quiet.
+    const stream = streamFor('lopsided-effort', 'workbench', true);
+    expect(widestShortfallRatio(stream)).toBeGreaterThanOrEqual(SHORTFALL_RATIO_K);
   });
 
   it('trends-cramming: the spacing insight fires, on both of its conditions', () => {
@@ -167,6 +171,23 @@ function streamFor(persona: PersonaId, seed: string, neutralised: boolean) {
       ...(neutralised ? { behaviour: PERSONAS[persona].planted.neutralise } : {}),
     }),
   );
+}
+
+/**
+ * The ratio the live rule fires on (`ol-v7r5.63` / `[DOS-C4]`): the widest
+ * course's (by `gap`, same tie-break as `detectEffortImbalance` itself)
+ * timeShare over its own floorShare. `< SHORTFALL_RATIO_K` fires; `1` when
+ * there is no widest course to compare (mirrors the detector's own
+ * no-comparison default).
+ */
+function widestShortfallRatio(stream: ReturnType<typeof streamFor>): number {
+  const result = detectEffortImbalance({
+    entries: stream.entries,
+    concepts: TRENDS_CONCEPTS,
+    floorShares: TRENDS_ASSESSMENTS,
+  });
+  const widest = result.measured?.courses[0];
+  return widest !== undefined && widest.floorShare > 0 ? widest.timeShare / widest.floorShare : 1;
 }
 
 /** How many of the forty seeds each detector fires on, for one persona variant. */
@@ -252,25 +273,19 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     expect(firingCounts('lopsided-effort', true).effort).toBe(0);
   });
 
-  it('reports the plateau around MIN_GAP rather than a single passing number', () => {
-    const gaps = (neutralised: boolean): number[] =>
-      SEEDS.map((seed) => {
-        const stream = streamFor('lopsided-effort', seed, neutralised);
-        const result = detectEffortImbalance({
-          entries: stream.entries,
-          concepts: TRENDS_CONCEPTS,
-          floorShares: TRENDS_ASSESSMENTS,
-        });
-        return result.measured?.widestGap ?? 0;
-      });
-    const planted = Math.min(...gaps(false));
-    const removed = Math.max(...gaps(true));
-    // Any threshold in (removed, planted] separates the pair on all forty
-    // seeds. MIN_GAP sits inside it with room on both sides — that width is the
-    // claim, not the fact that 0.2 happens to work.
-    expect(removed).toBeLessThan(MIN_GAP);
-    expect(planted).toBeGreaterThan(MIN_GAP);
-    expect(planted - removed).toBeGreaterThan(0.1);
+  it('reports the plateau around SHORTFALL_RATIO_K rather than a single passing number', () => {
+    // Same shape as the retired MIN_GAP version, re-expressed on the live
+    // rule: the ratio, not the absolute gap (`ol-v7r5.63` / `[DOS-C4]`).
+    const ratios = (neutralised: boolean): number[] =>
+      SEEDS.map((seed) => widestShortfallRatio(streamFor('lopsided-effort', seed, neutralised)));
+    const plantedWorst = Math.max(...ratios(false));
+    const removedWorst = Math.min(...ratios(true));
+    // Any threshold in [plantedWorst, removedWorst) separates the pair on all
+    // forty seeds. SHORTFALL_RATIO_K sits inside it with room on both sides —
+    // that width is the claim, not the fact that 0.5 happens to work.
+    expect(plantedWorst).toBeLessThan(SHORTFALL_RATIO_K);
+    expect(removedWorst).toBeGreaterThan(SHORTFALL_RATIO_K);
+    expect(removedWorst - plantedWorst).toBeGreaterThan(0.1);
   });
 
   it('also fires on the struggler on every seed, and that is CORRECT rather than a false positive', () => {

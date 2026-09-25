@@ -61,6 +61,7 @@ export {
   MIN_COURSES_WITH_FLOOR_SHARE,
   MIN_GAP,
   MIN_TIMED_REVIEWS,
+  SHORTFALL_RATIO_K,
 } from './effort.js';
 export type { SpacingInsight, SpacingMeasured } from './spacing.js';
 export {
