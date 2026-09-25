@@ -22,6 +22,7 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import { buildReviewSession, queueItemsFromComposedSession } from './build.js';
 import { toDueInstruments } from './due-instruments.js';
 import { readReviewLogHistory } from './history.js';
+import type { InstrumentIdSource } from './instrument-id.js';
 import type { VaultInstrumentRecord } from './types.js';
 
 /**
@@ -218,6 +219,63 @@ describe('one entry point, an enumeration composeQueue can still be fed (`[SESS-
     const overdue = laterQueue.items.find((i) => i.instrumentId === gamma.instrumentId);
     expect(overdue?.selectionContext.dueState).toBe('overdue');
     expect(overdue?.priorState).not.toBeNull();
+  });
+});
+
+// `ol-v7r5.70`: a duplicate `instrumentId` (two notes whose instrument both
+// derive/carry the same id) is detected when `recordsById` is built, not just
+// silently resolved by `Map`'s own last-write-wins semantics (C5.3, `[D-090]`
+// — the fuller confirmation-queue treatment is contracted but unbuilt; see
+// `ReviewSession.duplicateInstrumentIds`'s own doc for why this bead stops at
+// detection and reporting).
+describe('duplicate instrument ids are detected, not just silently overwritten (`ol-v7r5.70`)', () => {
+  const fixedId: InstrumentIdSource = () => 'duplicated-instrument-id';
+
+  function twoNoteDuplicateVault(): ReturnType<typeof memoryVault> {
+    return memoryVault({
+      'Courses/GEO/one.md': note('Alpha', 'GEO101', ['## First?', '', 'Alpha front::Alpha back']),
+      'Courses/GEO/two.md': note('Beta', 'GEO101', ['## Second?', '', 'Beta front::Beta back']),
+    });
+  }
+
+  it('is reported in duplicateInstrumentIds, naming both notes and which one recordsById kept', async () => {
+    const session = await buildReviewSession({
+      vault: twoNoteDuplicateVault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      instruments: { instrumentId: fixedId },
+    });
+
+    // Both instruments are still enumerated — this bead does not drop either.
+    expect(session.instruments.records).toHaveLength(2);
+    expect(
+      session.instruments.records.every((r) => r.instrumentId === 'duplicated-instrument-id'),
+    ).toBe(true);
+
+    expect(session.duplicateInstrumentIds).toHaveLength(1);
+    const [duplicate] = session.duplicateInstrumentIds;
+    expect(duplicate?.instrumentId).toBe('duplicated-instrument-id');
+    expect([...(duplicate?.notePaths ?? [])].sort()).toEqual([
+      'Courses/GEO/one.md',
+      'Courses/GEO/two.md',
+    ]);
+
+    // `recordsById` still keeps exactly one record — the last one enumerated
+    // (today's winner, per the bead's own scoping) — and the report names
+    // that same note as `keptNotePath`, so a caller never has to re-derive it.
+    expect(session.recordsById.size).toBe(1);
+    const kept = session.recordsById.get('duplicated-instrument-id');
+    expect(kept?.notePath).toBe(duplicate?.keptNotePath);
+  });
+
+  it('reports nothing when every instrumentId is unique', async () => {
+    const session = await buildReviewSession({
+      vault: smallVault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(session.duplicateInstrumentIds).toEqual([]);
   });
 });
 

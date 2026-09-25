@@ -179,6 +179,44 @@ export interface ReviewSession {
   readonly entries: readonly ReviewLogEntry[];
   /** `instrumentId` -> record, so a caller rendering a composer's chosen items does not re-scan. */
   readonly recordsById: ReadonlyMap<string, VaultInstrumentRecord>;
+  /**
+   * `ol-v7r5.70`: every `instrumentId` that `instruments.records` carried more
+   * than once, so a genuine collision is never just silently resolved by
+   * `recordsById`'s own last-write-wins `Map` semantics (C5.3's duplication
+   * rule, ruled by `[D-090]`: "the loser is never silently minted as a live
+   * item"). Empty in the ordinary case — the same "reported, never dropped"
+   * posture `instruments.unbound`/`invalidMcqBlocks`/`invalidCardBlocks`
+   * already take for their own structural defects.
+   *
+   * **Detection and reporting only.** `recordsById` still keeps the same
+   * record it always did — the last one `instruments.records` enumerated,
+   * per that Map's own semantics — because nothing has ruled a different
+   * winner for *this* walk, and `candidates`/composition are unchanged: a
+   * losing duplicate is not withheld or routed anywhere by this function.
+   * C5.3's fuller rule — the loser routes through a confirmation queue,
+   * inert until she answers, never served — is contracted
+   * (`features/F3-learn-from-anything.md`'s `@auto:core/instrument/
+   * duplication.spec` scenarios) but unbuilt: it needs machinery this
+   * enumeration alone does not have (a confirmation queue is plugin-side
+   * state), so it is deliberately not attempted here. A caller wanting to
+   * show her something reads this list the same way a future consumer of
+   * `unbound`/`invalidMcqBlocks` would — there is no such consumer yet for
+   * any of the four (nothing in `packages/plugin` currently reads any of
+   * them).
+   */
+  readonly duplicateInstrumentIds: readonly DuplicateInstrumentIdReport[];
+}
+
+/**
+ * One `instrumentId` `instruments.records` carried more than once, with every
+ * note it was found in — see {@link ReviewSession.duplicateInstrumentIds}.
+ */
+export interface DuplicateInstrumentIdReport {
+  readonly instrumentId: string;
+  /** Every note this id's instrument was found in, in enumeration order (`instruments.records`' own order). */
+  readonly notePaths: readonly VaultPath[];
+  /** The note path of the record `recordsById` actually kept — today's winner, the last one enumerated. */
+  readonly keptNotePath: VaultPath;
 }
 
 /**
@@ -310,7 +348,36 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   );
   const candidates = containment.candidates;
 
+  // `ol-v7r5.70`: built alongside `recordsById` rather than after, from the
+  // same single walk over `instruments.records` — every note path an id was
+  // seen at, so a real collision (more than one note) is distinguishable
+  // from the ordinary case (exactly one) without a second pass.
+  const notePathsByInstrumentId = new Map<string, VaultPath[]>();
+  for (const record of instruments.records) {
+    const notePaths = notePathsByInstrumentId.get(record.instrumentId);
+    if (notePaths === undefined) {
+      notePathsByInstrumentId.set(record.instrumentId, [record.notePath]);
+    } else {
+      notePaths.push(record.notePath);
+    }
+  }
+
   const recordsById = new Map(instruments.records.map((record) => [record.instrumentId, record]));
+
+  // Last-write-wins is `recordsById`'s own `Map` semantics, unchanged here —
+  // see `DuplicateInstrumentIdReport`'s own doc for why this walk does not
+  // pick a different winner.
+  const duplicateInstrumentIds: DuplicateInstrumentIdReport[] = [];
+  for (const [instrumentId, notePaths] of notePathsByInstrumentId) {
+    if (notePaths.length < 2) continue;
+    duplicateInstrumentIds.push({
+      instrumentId,
+      notePaths,
+      // Non-null: `notePaths` was just checked to have at least 2 entries, appended in
+      // `instruments.records`' own order — its last entry is the note `recordsById` kept.
+      keptNotePath: notePaths[notePaths.length - 1] as VaultPath,
+    });
+  }
 
   return {
     instruments,
@@ -320,6 +387,7 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
     suspended,
     entries,
     recordsById,
+    duplicateInstrumentIds,
   };
 }
 
