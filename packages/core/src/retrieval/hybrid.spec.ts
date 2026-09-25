@@ -250,3 +250,124 @@ describe('hybridRetrieve — semantic availability is visible on every hit (`[IL
     expect(hits[0]?.matchedBy).toContain('rerank');
   });
 });
+
+// `[ILB-EVD-4]`, `docs/dev/intelligence-build/evd.md` §2: "a failed rerank call keeps the fused
+// list's prior order and records the failure; it never blocks the request the way a failed judge
+// call does." Before this behaviour existed, a thrown `rerank.rerank(...)` call propagated
+// straight out of `hybridRetrieve` to its caller — the opposite of "never blocks the request".
+describe('hybridRetrieve — a failed rerank call keeps the fused order and never throws (`[ILB-EVD-4]`)', () => {
+  const throwingRerank: RerankProvider = {
+    async rerank(_request) {
+      throw new Error('reranker unavailable');
+    },
+  };
+
+  it('never rejects when the rerank provider throws', async () => {
+    const chunks = [chunk('a.md', 0, 'mitochondria is the powerhouse')];
+    await expect(
+      hybridRetrieve({
+        query: 'mitochondria',
+        chunks,
+        keywordHits: [keywordHit('a.md', 0, 'mitochondria is the powerhouse', 1)],
+        queryVector: null,
+        embeddings: new Map(),
+        options: { rerank: throwingRerank },
+      }),
+    ).resolves.not.toThrow();
+  });
+
+  it('keeps the fused (RRF) order — never the rerank order — on a rerank failure', async () => {
+    // Same fixture as "applies an optional rerank stage": pre-rerank fusion ranks
+    // high-fused.md first on keyword rank alone. A rerank failure must leave that order
+    // untouched, not fall back to some other order.
+    const chunks = [
+      chunk('low-fused.md', 0, 'text', 'low'),
+      chunk('high-fused.md', 0, 'text', 'high'),
+    ];
+    const hits = await hybridRetrieve({
+      query: 'text',
+      chunks,
+      keywordHits: [
+        keywordHit('high-fused.md', 0, 'text', 2),
+        keywordHit('low-fused.md', 0, 'text', 1),
+      ],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { rerank: throwingRerank },
+    });
+
+    expect(hits.map((h) => h.path)).toEqual(['high-fused.md', 'low-fused.md']);
+    expect(hits.every((h) => h.matchedBy.includes('rerank'))).toBe(false);
+  });
+
+  it('records the failure on every hit via rerankFailed', async () => {
+    const chunks = [chunk('a.md', 0, 'text', 'h1'), chunk('b.md', 0, 'text', 'h2')];
+    const hits = await hybridRetrieve({
+      query: 'text',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'text', 2), keywordHit('b.md', 0, 'text', 1)],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { rerank: throwingRerank },
+    });
+
+    expect(hits).toHaveLength(2);
+    expect(hits.every((h) => h.rerankFailed === true)).toBe(true);
+  });
+
+  it('respects limit after a rerank failure, same as the success path', async () => {
+    const chunks = [chunk('a.md', 0, 'x'), chunk('b.md', 0, 'x'), chunk('c.md', 0, 'x')];
+    const hits = await hybridRetrieve({
+      query: 'x',
+      chunks,
+      keywordHits: [
+        keywordHit('a.md', 0, 'x', 3),
+        keywordHit('b.md', 0, 'x', 2),
+        keywordHit('c.md', 0, 'x', 1),
+      ],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { limit: 2, rerank: throwingRerank },
+    });
+    expect(hits).toHaveLength(2);
+  });
+
+  it('rerankFailed is false whenever rerank was not attempted (no rerank option) or succeeded', async () => {
+    const chunks = [chunk('a.md', 0, 'text', 'h1')];
+    const noRerank = await hybridRetrieve({
+      query: 'text',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'text', 1)],
+      queryVector: null,
+      embeddings: new Map(),
+    });
+    expect(noRerank[0]?.rerankFailed).toBe(false);
+
+    const succeedingRerank: RerankProvider = {
+      async rerank(request) {
+        return { scores: request.candidates.map((c) => ({ id: c.id, score: 1 })) };
+      },
+    };
+    const withRerank = await hybridRetrieve({
+      query: 'text',
+      chunks,
+      keywordHits: [keywordHit('a.md', 0, 'text', 1)],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { rerank: succeedingRerank },
+    });
+    expect(withRerank[0]?.rerankFailed).toBe(false);
+  });
+
+  it('never calls through to a rerank failure when there are no fused candidates (matches the existing no-candidates short-circuit)', async () => {
+    const hits = await hybridRetrieve({
+      query: 'nothing matches',
+      chunks: [chunk('a.md', 0, 'unrelated text', 'h1')],
+      keywordHits: [],
+      queryVector: null,
+      embeddings: new Map(),
+      options: { rerank: throwingRerank },
+    });
+    expect(hits).toEqual([]);
+  });
+});

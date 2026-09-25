@@ -25,6 +25,19 @@
  * function's doc. `semantic` is this function's additive answer: `'used'`
  * when `params.queryVector` was actually available to fuse against, else
  * `'unavailable'`. It changes no ranking and no other field.
+ *
+ * **Every `HybridHit` also carries `rerankFailed` (`[ILB-EVD-4]`,
+ * `docs/dev/intelligence-build/evd.md` §2).** Target: "a failed rerank call
+ * keeps the fused list's prior order and records the failure; it never
+ * blocks the request the way a failed judge call does." Before this field
+ * existed, a thrown `options.rerank.rerank(...)` call propagated straight
+ * past this function to its caller — the opposite of the target's "never
+ * blocks the request." Now a throw is caught: the fused order (computed
+ * before the rerank call, RRF-only) is returned unchanged and every hit in
+ * that result carries `rerankFailed: true`; on success, or when no
+ * `options.rerank` was supplied at all, every hit carries `rerankFailed:
+ * false`. Same value on every hit in one result set, exactly like
+ * `semantic` — a property of the call, not of any individual chunk.
  */
 
 import type { SearchHit } from '../keyword-index/query.js';
@@ -84,6 +97,8 @@ export interface HybridHit {
    * degraded silently" (`ol-egov.141.89.1.4`).
    */
   readonly semantic: 'used' | 'unavailable';
+  /** `true` only when `options.rerank` was supplied AND its call threw — see this file's doc. `false` when no rerank was requested, or when it was requested and succeeded (whether or not it returned a score for this particular hit). */
+  readonly rerankFailed: boolean;
 }
 
 export interface HybridRetrievalOptions {
@@ -185,6 +200,7 @@ export async function hybridRetrieve(params: HybridRetrieveParams): Promise<read
       cosineScore: cosineScoreByHash.get(chunk.contentHash) ?? null,
       matchedBy,
       semantic,
+      rerankFailed: false,
     });
   }
 
@@ -199,10 +215,23 @@ export async function hybridRetrieve(params: HybridRetrieveParams): Promise<read
     return applyLimit(fused, params.options?.limit);
   }
 
-  const reranked = await rerank.rerank({
-    query: params.query,
-    candidates: fused.map((hit) => ({ id: chunkKey(hit.path, hit.blockIndex), text: hit.text })),
-  });
+  let reranked: Awaited<ReturnType<RerankProvider['rerank']>>;
+  try {
+    reranked = await rerank.rerank({
+      query: params.query,
+      candidates: fused.map((hit) => ({ id: chunkKey(hit.path, hit.blockIndex), text: hit.text })),
+    });
+  } catch {
+    // Target (evd.md §2, [ILB-EVD-4]): a failed rerank call keeps the fused list's prior
+    // order and records the failure; it never blocks the request the way a failed judge
+    // call does. `fused` is already sorted in RRF order above — return it unchanged, with
+    // the failure recorded on every hit, rather than throwing past this function's caller.
+    return applyLimit(
+      fused.map((hit) => ({ ...hit, rerankFailed: true })),
+      params.options?.limit,
+    );
+  }
+
   const rerankScore = new Map(reranked.scores.map((s) => [s.id, s.score] as const));
 
   const withRerank = fused.map((hit) => {

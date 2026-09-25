@@ -36,6 +36,22 @@
  * `conflicting` verdict) — this builder only reserves the slot the wire
  * shape needs so a later stage has somewhere to write into without another
  * schema change.
+ *
+ * **`degraded` is a caller-supplied fact, not something this module derives
+ * (`evd.md` §2/§3).** Target: "retrieval continued past an embedding
+ * failure on a verified anchor or keyword hits alone... the evidence
+ * package is marked degraded in its provenance." Deciding WHETHER a request
+ * is degraded (an embedding failure, and whether a verified anchor or
+ * keyword hits kept it alive) is the candidates step's job, upstream of
+ * this one — this module has no query, no embedding result and no keyword
+ * hits to judge that from, only the chunks it was handed. `degraded`
+ * defaults to `false` (an ordinary, full-retrieval package) so every
+ * existing caller that never passes it is unaffected; a caller that does
+ * know the request degraded passes `true` and it travels straight onto
+ * `EvidencePackage.degraded`, unread by anything in this module — `evd.md`
+ * §3 is explicit that the mark is not itself a verdict: "the decision
+ * stage still returns one of the four verdicts above... `degraded` only
+ * changes what the benchmark and the delivery funnel report it against."
  */
 
 import type { VaultPath } from '../vault/types.js';
@@ -65,6 +81,8 @@ export interface EvidencePackage {
   /** Keyed by `sourcePath`; `undefined` where no revision fact is known for that source. */
   readonly sourceRevisions: Readonly<Record<string, string | undefined>>;
   readonly conflicts: readonly EvidenceConflict[];
+  /** `true` only when the caller says retrieval continued past an embedding failure on a verified anchor or keyword hits alone (or a failed optional rerank) — see this file's doc. Never derived here. */
+  readonly degraded: boolean;
 }
 
 export interface BuildEvidencePackageDeps {
@@ -84,6 +102,8 @@ export interface BuildEvidencePackageDeps {
 export async function buildEvidencePackage(
   chunks: readonly GroundedChunk[],
   deps: BuildEvidencePackageDeps,
+  /** See `EvidencePackage.degraded` / this file's doc. Defaults to `false` so every existing caller is unaffected. */
+  degraded = false,
 ): Promise<EvidencePackage> {
   const passages: EvidencePassage[] = [];
   const sourceRevisions: Record<string, string | undefined> = {};
@@ -105,5 +125,5 @@ export async function buildEvidencePackage(
     }
   }
 
-  return { passages, sourceRevisions, conflicts: [] };
+  return { passages, sourceRevisions, conflicts: [], degraded };
 }

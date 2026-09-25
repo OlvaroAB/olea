@@ -29,6 +29,7 @@ function hit(overrides: Partial<HybridHit> = {}): HybridHit {
     cosineScore: null,
     matchedBy: [],
     semantic: 'used',
+    rerankFailed: false,
     ...overrides,
   };
 }

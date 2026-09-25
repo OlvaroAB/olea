@@ -120,7 +120,7 @@ describe('buildEvidencePackage (`[ILB-EVD-4]`, evd.md §2/§3)', () => {
   it('produces an empty package from an empty chunk list', async () => {
     const pkg = await buildEvidencePackage([], { hash: fakeHash });
 
-    expect(pkg).toEqual({ passages: [], sourceRevisions: {}, conflicts: [] });
+    expect(pkg).toEqual({ passages: [], sourceRevisions: {}, conflicts: [], degraded: false });
   });
 
   it('is side-effect free on its input: calling it twice with the same chunks yields the same package', async () => {
@@ -130,5 +130,40 @@ describe('buildEvidencePackage (`[ILB-EVD-4]`, evd.md §2/§3)', () => {
     const second = await buildEvidencePackage(chunks, { hash: fakeHash });
 
     expect(first).toEqual(second);
+  });
+});
+
+// `[ILB-EVD-4]`, evd.md §2/§3: the degraded mark travels with the package's provenance rather
+// than living only on a log line. Deciding WHETHER a request degraded is upstream of this
+// module (the candidates step) — these tests only check that the mark, once supplied, is carried
+// faithfully and changes nothing else.
+describe('buildEvidencePackage — the degraded mark (`[ILB-EVD-4]`, evd.md §2/§3)', () => {
+  it('defaults to degraded: false when the caller passes nothing', async () => {
+    const pkg = await buildEvidencePackage([chunk('a.md', 0, 'text')], { hash: fakeHash });
+    expect(pkg.degraded).toBe(false);
+  });
+
+  it('carries degraded: true through when the caller says the request degraded', async () => {
+    const pkg = await buildEvidencePackage([chunk('a.md', 0, 'text')], { hash: fakeHash }, true);
+    expect(pkg.degraded).toBe(true);
+  });
+
+  it('carries degraded: false through explicitly, same as the default', async () => {
+    const pkg = await buildEvidencePackage([chunk('a.md', 0, 'text')], { hash: fakeHash }, false);
+    expect(pkg.degraded).toBe(false);
+  });
+
+  it('changes no other field: a degraded and a non-degraded package built from the same chunks agree on everything except degraded', async () => {
+    const chunks = [chunk('a.md', 0, 'text'), chunk('b.md', 1, 'other text')];
+
+    const notDegraded = await buildEvidencePackage(chunks, { hash: fakeHash }, false);
+    const degraded = await buildEvidencePackage(chunks, { hash: fakeHash }, true);
+
+    expect({ ...degraded, degraded: false }).toEqual(notDegraded);
+  });
+
+  it("is set even for an otherwise-empty package (an empty degraded retrieval is still degraded, not insufficient-evidence — that distinction is the candidates/decision stages' job, not this one's)", async () => {
+    const pkg = await buildEvidencePackage([], { hash: fakeHash }, true);
+    expect(pkg).toEqual({ passages: [], sourceRevisions: {}, conflicts: [], degraded: true });
   });
 });
