@@ -1716,6 +1716,9 @@ export default class OleaPlugin extends Plugin {
         void this.tickIngestionAndMaybeRunCorpusRelations();
         void this.drainEmbeddings(capability);
         void this.tickCitationRevisions();
+        // `[DOS-3]` (`ol-2zfj.159`): see `drainPendingMaterialityEdits`'s own
+        // doc for why this interval is the intended caller.
+        void this.drainPendingMaterialityEdits();
       }, INGESTION_TICK_INTERVAL_MS),
     );
   }
@@ -1760,6 +1763,30 @@ export default class OleaPlugin extends Plugin {
       console.error('Olea: materiality trigger evaluation failed', error);
     } finally {
       this.materialityPreviousText.record(path, currentText);
+    }
+  }
+
+  /**
+   * `[DOS-3]` (`ol-2zfj.159`): the production caller
+   * `MaterialityTrigger.drainDuePendingEdits`'s own doc names as missing --
+   * folded into the SAME periodic interval `tickCitationRevisions`/
+   * `tickIngestionAndMaybeRunCorpusRelations` already run from below
+   * (`INGESTION_TICK_INTERVAL_MS`), the intended caller that method's doc
+   * points at. Without this, a below-floor edit that never recurs on its
+   * own path stays pending until something else happens to touch that path
+   * again -- see `drainDuePendingEdits`'s own doc for why.
+   *
+   * Never throws into the interval: a failure here must not stop the
+   * neighbouring ticks (`tickCitationRevisions`'s own doc argues the same
+   * for its own tick), same "last line of defence, not the primary
+   * error-handling path" posture `drainEmbeddings`'s doc states outright.
+   */
+  private async drainPendingMaterialityEdits(): Promise<void> {
+    if (this.materiality === null) return;
+    try {
+      await this.materiality.drainDuePendingEdits(Date.now());
+    } catch (error) {
+      console.error('Olea: materiality pending-edit drain failed', error);
     }
   }
 
@@ -2551,6 +2578,11 @@ export default class OleaPlugin extends Plugin {
       deviceId,
       settingsHost: this,
       now: () => new Date(),
+      // `[DOS-C4-a]` / `ol-feza`: the same store this refresh reads/writes
+      // the cached plan through doubles as `sittingsSinceFloorMet`'s floor-
+      // share source — the previous cached plan's own allocation, read
+      // before this call overwrites it below.
+      studyPlanStore: store,
       // `exactOptionalPropertyTypes`: omit the key entirely rather than
       // assign `undefined` to it when the Worker isn't configured (F7.8) —
       // same pattern `drainEmbeddings` uses for `keywordIndex` above.
