@@ -162,6 +162,24 @@ describe('notes the walk has nothing to say about, and notes it has to complain 
     expect(found.invalidMcqBlocks[0]?.block.reason).toBe('insufficient-distractors');
   });
 
+  it('ol-v7r5.72: a Q&A card that fails to parse is reported with its note and its reason, and produces no candidate', async () => {
+    const vault = memoryVault({
+      'Notes/broken-card.md': [
+        FRONTMATTER('[Alpha]'),
+        'A stray separator::', // declares a single-line card, empty back
+        '',
+        'Front::Back', // a valid card in the same note, must still show up
+        '',
+      ].join('\n'),
+    });
+
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records.map((r) => r.instrumentType)).toEqual(['qa']);
+    expect(found.invalidCardBlocks).toHaveLength(1);
+    expect(found.invalidCardBlocks[0]?.notePath).toBe('Notes/broken-card.md');
+    expect(found.invalidCardBlocks[0]?.block.reason).toBe('missing-back');
+  });
+
   it('an excluded path is walked past entirely — format documentation is not a corpus', async () => {
     const vault = memoryVault({
       'README.md': [FRONTMATTER('[Alpha]'), 'A separator looks like front::back', ''].join('\n'),

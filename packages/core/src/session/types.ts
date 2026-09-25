@@ -29,6 +29,7 @@ import type { Provenance } from '../extract/types.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type {
   ClozeCardInstrument,
+  InvalidCardBlock,
   InvalidMcqBlock,
   McqInstrument,
   QaCardInstrument,
@@ -139,11 +140,27 @@ export interface UnboundInstrumentReport {
   readonly span: { readonly start: number; readonly end: number };
 }
 
+/**
+ * A block that carried a Q&A separator and did not parse into a card, with
+ * the note it is in.
+ *
+ * `ol-v7r5.72`: mirrors `InvalidMcqReport` for the same reason `InvalidCardBlock`
+ * mirrors `InvalidMcqBlock` (`../instrument/types.js`) — a Q&A card that
+ * declared itself and failed must be as visible as a broken MCQ block already
+ * is, instead of vanishing from `records` with nothing shown to her.
+ */
+export interface InvalidCardReport {
+  readonly notePath: VaultPath;
+  readonly block: InvalidCardBlock;
+}
+
 /** Everything one walk of the vault found. */
 export interface VaultInstrumentEnumeration {
   /** Every schedulable, concept-bound instrument, in vault order then source order. */
   readonly records: readonly VaultInstrumentRecord[];
   readonly invalidMcqBlocks: readonly InvalidMcqReport[];
+  /** `ol-v7r5.72`: the Q&A-card counterpart of `invalidMcqBlocks`, added so a consumer can read both. */
+  readonly invalidCardBlocks: readonly InvalidCardReport[];
   readonly unbound: readonly UnboundInstrumentReport[];
   /**
    * `extractConcepts`'s own result for this walk, passed through — the walk
@@ -151,7 +168,7 @@ export interface VaultInstrumentEnumeration {
    * caller that also needs the concept records (e.g. `gap/build.ts`'s
    * `buildMaterialPresence`) would otherwise have to re-walk the vault a
    * second time to get them. Additive: existing callers that only read
-   * `records`/`invalidMcqBlocks`/`unbound` are unaffected.
+   * `records`/`invalidMcqBlocks`/`invalidCardBlocks`/`unbound` are unaffected.
    */
   readonly concepts: readonly ConceptRecord[];
 }

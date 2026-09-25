@@ -73,8 +73,10 @@ import { parseDocument } from '../block/parse.js';
 import type { Block, ParsedDocument } from '../block/types.js';
 import type {
   CardInstrument,
+  CardInvalidReason,
   ClozeCardInstrument,
   ClozeDelimiter,
+  InvalidCardBlock,
   QaCardInstrument,
   QaCardStyle,
   SourceSpan,
@@ -167,26 +169,53 @@ function stripLine(text: string): StrippedLine {
   return { text: rest, blockId, foreignScheduling };
 }
 
+/**
+ * ol-v7r5.72: a three-way result rather than `T | null`, so a caller can tell
+ * "no separator here at all" (`'none'`, not a card attempt, cloze parsing
+ * still gets a look) apart from "a separator was found and it came out
+ * empty on one side" (`'invalid'`, a declared card that failed — surfaced,
+ * never silently dropped, the way `mcq-format.ts` already treats a broken
+ * MCQ fence).
+ */
+type SingleLineMatch =
+  | {
+      readonly kind: 'match';
+      readonly style: QaCardStyle;
+      readonly front: string;
+      readonly back: string;
+    }
+  | { readonly kind: 'invalid'; readonly reason: CardInvalidReason; readonly detail: string }
+  | { readonly kind: 'none' };
+
 /** Splits on the reversed separator first — `:::` contains `::`, so order is the whole correctness argument. */
-function matchSingleLine(text: string): { style: QaCardStyle; front: string; back: string } | null {
+function matchSingleLine(text: string): SingleLineMatch {
   const reversed = text.indexOf(SINGLE_LINE_REVERSED_SEPARATOR);
   if (reversed > 0) {
     const front = text.slice(0, reversed).trim();
     const back = text.slice(reversed + SINGLE_LINE_REVERSED_SEPARATOR.length).trim();
     if (front !== '' && back !== '') {
-      return { style: 'single-line-reversed', front, back };
+      return { kind: 'match', style: 'single-line-reversed', front, back };
     }
-    return null;
+    return {
+      kind: 'invalid',
+      reason: front === '' ? 'missing-front' : 'missing-back',
+      detail: `"${SINGLE_LINE_REVERSED_SEPARATOR}" found with ${front === '' ? 'no text before it' : 'no text after it'}`,
+    };
   }
   const plain = text.indexOf(SINGLE_LINE_SEPARATOR);
   if (plain > 0) {
     const front = text.slice(0, plain).trim();
     const back = text.slice(plain + SINGLE_LINE_SEPARATOR.length).trim();
     if (front !== '' && back !== '') {
-      return { style: 'single-line', front, back };
+      return { kind: 'match', style: 'single-line', front, back };
     }
+    return {
+      kind: 'invalid',
+      reason: front === '' ? 'missing-front' : 'missing-back',
+      detail: `"${SINGLE_LINE_SEPARATOR}" found with ${front === '' ? 'no text before it' : 'no text after it'}`,
+    };
   }
-  return null;
+  return { kind: 'none' };
 }
 
 function clozesOnLine(line: LineSlice, stripped: StrippedLine): ClozeCardInstrument[] {
@@ -234,24 +263,47 @@ function clozesOnLine(line: LineSlice, stripped: StrippedLine): ClozeCardInstrum
   return [];
 }
 
+/** ol-v7r5.72: same three-way shape as `SingleLineMatch`, for the same reason. */
+type MultiLineMatch =
+  | { readonly kind: 'match'; readonly card: QaCardInstrument }
+  | { readonly kind: 'invalid'; readonly reason: CardInvalidReason; readonly detail: string }
+  | { readonly kind: 'none' };
+
 /** A paragraph holding a `?`/`??` separator line is a multi-line card: the plugin ends one at a blank line, and a blank line is exactly where `block/parse.ts` ends a paragraph. */
-function multiLineCard(block: Block, lines: readonly LineSlice[]): QaCardInstrument | null {
+function multiLineCard(block: Block, lines: readonly LineSlice[]): MultiLineMatch {
   let separatorIndex = -1;
   let style: QaCardStyle = 'multi-line';
+  let separatorText: string = MULTI_LINE_SEPARATOR;
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]?.text.trim();
     if (text === MULTI_LINE_REVERSED_SEPARATOR) {
       separatorIndex = i;
       style = 'multi-line-reversed';
+      separatorText = MULTI_LINE_REVERSED_SEPARATOR;
       break;
     }
     if (text === MULTI_LINE_SEPARATOR) {
       separatorIndex = i;
       style = 'multi-line';
+      separatorText = MULTI_LINE_SEPARATOR;
       break;
     }
   }
-  if (separatorIndex <= 0 || separatorIndex >= lines.length - 1) return null;
+  if (separatorIndex === -1) return { kind: 'none' };
+  if (separatorIndex <= 0) {
+    return {
+      kind: 'invalid',
+      reason: 'missing-front',
+      detail: `multi-line separator "${separatorText}" has no line above it`,
+    };
+  }
+  if (separatorIndex >= lines.length - 1) {
+    return {
+      kind: 'invalid',
+      reason: 'missing-back',
+      detail: `multi-line separator "${separatorText}" has no line below it`,
+    };
+  }
 
   const frontLines = lines.slice(0, separatorIndex);
   const backLines = lines.slice(separatorIndex + 1);
@@ -277,43 +329,81 @@ function multiLineCard(block: Block, lines: readonly LineSlice[]): QaCardInstrum
     .map((l) => l.text)
     .join('\n')
     .trim();
-  if (front === '' || back === '') return null;
+  if (front === '' || back === '') {
+    return {
+      kind: 'invalid',
+      reason: front === '' ? 'missing-front' : 'missing-back',
+      detail: `multi-line separator "${separatorText}" found with ${front === '' ? 'a blank front' : 'a blank back'}`,
+    };
+  }
 
   return {
-    type: 'qa',
-    style,
-    front,
-    back,
-    reversed: style === 'multi-line-reversed',
-    raw: block.raw,
-    span: { start: block.start, end: block.end },
-    blockId,
-    foreignScheduling,
+    kind: 'match',
+    card: {
+      type: 'qa',
+      style,
+      front,
+      back,
+      reversed: style === 'multi-line-reversed',
+      raw: block.raw,
+      span: { start: block.start, end: block.end },
+      blockId,
+      foreignScheduling,
+    },
   };
 }
 
+/** What one walk of `parseCardsWithInvalid` (below) found. */
+export interface CardParseResult {
+  readonly cards: readonly CardInstrument[];
+  /** ol-v7r5.72: a block that declared itself a card (a separator matched) and did not parse. */
+  readonly invalid: readonly InvalidCardBlock[];
+}
+
 /**
- * Every Q&A and cloze card in a note, in source order.
+ * Every Q&A and cloze card in a note, in source order — plus, additively,
+ * every block that declared itself a card (matched a `::`/`:::`/`?`/`??`
+ * separator) and did not parse because its front or back came out blank.
  *
  * Precedence on one line is Q&A over cloze: a line carrying `::` is a Q&A card
  * whose answer may happen to contain highlights, not a cloze card that happens
  * to contain a colon pair. That is the plugin's own reading and it is the one
  * that does not turn every highlighted answer into a second instrument.
+ *
+ * `parseCards` (below) is `parseCardsWithInvalid(source).cards` — same walk,
+ * same `cards` output, `invalid` just discarded — so existing callers see no
+ * behaviour change (`ol-v7r5.72`'s card-format.spec.ts pins the two producing
+ * identical `cards` across every fixture note).
  */
-export function parseCards(source: string): readonly CardInstrument[] {
+export function parseCardsWithInvalid(source: string): CardParseResult {
   const doc = parseDocument(source);
   const cards: CardInstrument[] = [];
+  const invalid: InvalidCardBlock[] = [];
 
   for (const block of doc.blocks) {
     if (block.kind === 'paragraph') {
       const lines = blockLines(block);
       const multi = multiLineCard(block, lines);
-      if (multi) {
-        cards.push(multi);
+      if (multi.kind === 'match') {
+        cards.push(multi.card);
         continue;
       }
+      if (multi.kind === 'invalid') {
+        invalid.push({
+          reason: multi.reason,
+          detail: multi.detail,
+          raw: block.raw,
+          span: { start: block.start, end: block.end },
+        });
+      }
+      // Falls through even when the multi-line attempt was invalid, exactly
+      // as it did when that attempt returned `null`: a broken multi-line
+      // separator does not stop the rest of the paragraph's lines from
+      // still being checked for a single-line card or a cloze.
       for (const line of lines) {
-        cards.push(...cardsOnLine(line));
+        const found = cardsOnLine(line);
+        cards.push(...found.cards);
+        invalid.push(...found.invalid);
       }
       continue;
     }
@@ -329,36 +419,61 @@ export function parseCards(source: string): readonly CardInstrument[] {
           textEnd: line.textEnd,
           text: line.text.slice(markerLength),
         };
-        cards.push(...cardsOnLine(itemLine));
+        const found = cardsOnLine(itemLine);
+        cards.push(...found.cards);
+        invalid.push(...found.invalid);
       }
     }
   }
 
-  return cards;
+  return { cards, invalid };
 }
 
-function cardsOnLine(line: LineSlice): CardInstrument[] {
+/** Every Q&A and cloze card in a note, in source order. See `parseCardsWithInvalid` for the full walk. */
+export function parseCards(source: string): readonly CardInstrument[] {
+  return parseCardsWithInvalid(source).cards;
+}
+
+function cardsOnLine(line: LineSlice): CardParseResult {
   const stripped = stripLine(line.text);
-  if (stripped.text === '') return [];
+  if (stripped.text === '') return { cards: [], invalid: [] };
 
   const single = matchSingleLine(stripped.text);
-  if (single) {
-    return [
-      {
-        type: 'qa',
-        style: single.style,
-        front: single.front,
-        back: single.back,
-        reversed: single.style === 'single-line-reversed',
-        raw: line.text,
-        span: { start: line.start, end: line.textEnd },
-        blockId: stripped.blockId,
-        foreignScheduling: stripped.foreignScheduling,
-      },
-    ];
+  if (single.kind === 'match') {
+    return {
+      cards: [
+        {
+          type: 'qa',
+          style: single.style,
+          front: single.front,
+          back: single.back,
+          reversed: single.style === 'single-line-reversed',
+          raw: line.text,
+          span: { start: line.start, end: line.textEnd },
+          blockId: stripped.blockId,
+          foreignScheduling: stripped.foreignScheduling,
+        },
+      ],
+      invalid: [],
+    };
   }
 
-  return clozesOnLine(line, stripped);
+  const invalid: InvalidCardBlock[] =
+    single.kind === 'invalid'
+      ? [
+          {
+            reason: single.reason,
+            detail: single.detail,
+            raw: line.text,
+            span: { start: line.start, end: line.textEnd },
+          },
+        ]
+      : [];
+
+  // Falls through to cloze even when the single-line attempt was invalid,
+  // exactly as when it returned `null`: a `::` with nothing on one side does
+  // not stop the rest of the (stripped) line from being checked for a cloze.
+  return { cards: clozesOnLine(line, stripped), invalid };
 }
 
 // ---- the create path ------------------------------------------------------

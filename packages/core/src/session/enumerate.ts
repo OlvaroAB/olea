@@ -30,11 +30,16 @@
  * drives review decides when a stamp actually happens (`ol-k7eg`'s notes:
  * on first review, not on enumeration).
  *
- * ## Three things that are reported rather than dropped
+ * ## Four things that are reported rather than dropped
  *
  *   - **An invalid MCQ block.** The format module already refuses to return one
  *     as an instrument; this carries the refusal up with the note path, so she
  *     can be told which block, in which note, and why.
+ *   - **An invalid Q&A card block** (`ol-v7r5.72`). Same shape as the MCQ case,
+ *     one paragraph up: `card-format.ts`'s `parseCardsWithInvalid` already
+ *     refuses to return a declared-but-empty separator as a card; this carries
+ *     that refusal up the same way, into `invalidCardBlocks`. Before this fix
+ *     the block simply vanished — no candidate, no diagnostic, nothing read it.
  *   - **An instrument in a note with no `topic:`.** It is a real card with no
  *     concept, which the queue cannot dedupe, the panel cannot count and the
  *     log cannot record. Silently skipping it is how a corpus loses cards
@@ -119,7 +124,7 @@ import { noteTitle } from '../concept/zettelkasten.js';
 import type { Provenance } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
-import { parseCards } from '../instrument/card-format.js';
+import { parseCardsWithInvalid } from '../instrument/card-format.js';
 import { type InstrumentCitation, readInstrumentCitation } from '../instrument/citation-store.js';
 import { readClozeId } from '../instrument/cloze-identity.js';
 import { parseMcqBlocks } from '../instrument/mcq-format.js';
@@ -129,6 +134,7 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { InstrumentIdSource } from './instrument-id.js';
 import { provisionalInstrumentId } from './instrument-id.js';
 import type {
+  InvalidCardReport,
   InvalidMcqReport,
   UnboundInstrumentReport,
   VaultInstrumentEnumeration,
@@ -185,9 +191,10 @@ function headingAbove(headings: readonly HeadingBlock[], offset: number): string
  */
 function instrumentsOf(source: string): {
   readonly instruments: readonly ParsedInstrument[];
-  readonly invalid: ReturnType<typeof parseMcqBlocks>['invalid'];
+  readonly invalidMcq: ReturnType<typeof parseMcqBlocks>['invalid'];
+  readonly invalidCards: ReturnType<typeof parseCardsWithInvalid>['invalid'];
 } {
-  const cards = parseCards(source);
+  const { cards, invalid: invalidCards } = parseCardsWithInvalid(source);
   const mcqs = parseMcqBlocks(source);
 
   const instruments: ParsedInstrument[] = [
@@ -211,7 +218,7 @@ function instrumentsOf(source: string): {
     ),
   ].sort((a, b) => a.span.start - b.span.start);
 
-  return { instruments, invalid: mcqs.invalid };
+  return { instruments, invalidMcq: mcqs.invalid, invalidCards };
 }
 
 /**
@@ -300,15 +307,19 @@ export async function enumerateVaultInstruments(
 
   const records: VaultInstrumentRecord[] = [];
   const invalidMcqBlocks: InvalidMcqReport[] = [];
+  const invalidCardBlocks: InvalidCardReport[] = [];
   const unbound: UnboundInstrumentReport[] = [];
 
   for (const notePath of paths) {
     if (excluded.has(notePath)) continue;
     const source = await vault.read(notePath);
-    const { instruments, invalid } = instrumentsOf(source);
+    const { instruments, invalidMcq, invalidCards } = instrumentsOf(source);
 
-    for (const block of invalid) {
+    for (const block of invalidMcq) {
       invalidMcqBlocks.push({ notePath, block });
+    }
+    for (const block of invalidCards) {
+      invalidCardBlocks.push({ notePath, block });
     }
     if (instruments.length === 0) continue;
 
@@ -446,5 +457,5 @@ export async function enumerateVaultInstruments(
     }
   }
 
-  return { records, invalidMcqBlocks, unbound, concepts };
+  return { records, invalidMcqBlocks, invalidCardBlocks, unbound, concepts };
 }

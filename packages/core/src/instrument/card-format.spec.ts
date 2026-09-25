@@ -17,6 +17,7 @@ import {
   createClozeCard,
   createQaCard,
   parseCards,
+  parseCardsWithInvalid,
   SR_DEFAULT_DECK_TAG,
   stampQaCardBlockId,
 } from './card-format.js';
@@ -92,6 +93,83 @@ describe('parseCards — the four Q&A forms the SR plugin defines', () => {
   it('a multi-line separator with no front or no back is not a card', () => {
     expect(parseCards('?\nanswer only\n')).toHaveLength(0);
     expect(parseCards('question only\n?\n')).toHaveLength(0);
+  });
+
+  describe('ol-v7r5.72 — a declared-but-empty card surfaces instead of vanishing', () => {
+    // `'::answer only\n'` never declares at all — the plain separator match
+    // requires text before it (`plain > 0`), so a leading `::` is `'none'`,
+    // not `'invalid'`. That gap is real but is not what this bead's confirmed
+    // defect (card-format.ts:171-189) names, so it is left alone here.
+
+    it('a single-line separator with an empty back is reported, not silently dropped', () => {
+      const source = 'question only::\n';
+      expect(parseCards(source)).toHaveLength(0); // unchanged: still not a card
+
+      const { cards, invalid } = parseCardsWithInvalid(source);
+      expect(cards).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('missing-back');
+      expect(invalid[0]?.raw).toContain('question only::');
+    });
+
+    it('a reversed single-line separator with an empty front is reported', () => {
+      const source = ' :::answer only\n';
+      const { cards, invalid } = parseCardsWithInvalid(source);
+      expect(cards).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('missing-front');
+    });
+
+    it('a multi-line separator with no front line is reported', () => {
+      const source = '?\nanswer only\n';
+      expect(parseCards(source)).toHaveLength(0); // unchanged: still not a card
+
+      const { cards, invalid } = parseCardsWithInvalid(source);
+      expect(cards).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('missing-front');
+    });
+
+    it('a multi-line separator with no back line is reported', () => {
+      const source = 'question only\n?\n';
+      expect(parseCards(source)).toHaveLength(0); // unchanged: still not a card
+
+      const { cards, invalid } = parseCardsWithInvalid(source);
+      expect(cards).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('missing-back');
+    });
+
+    it('a blank-after-trim front or back between real separator lines is reported', () => {
+      const blankFront = '   \n?\nanswer\n';
+      const { invalid: invalidFront } = parseCardsWithInvalid(blankFront);
+      expect(invalidFront).toHaveLength(1);
+      expect(invalidFront[0]?.reason).toBe('missing-front');
+
+      const blankBack = 'question\n?\n   \n';
+      const { invalid: invalidBack } = parseCardsWithInvalid(blankBack);
+      expect(invalidBack).toHaveLength(1);
+      expect(invalidBack[0]?.reason).toBe('missing-back');
+    });
+
+    it('a valid single-line card elsewhere in the same paragraph still parses when the multi-line attempt is invalid', () => {
+      // Regression guard: reporting the broken multi-line attempt must not
+      // swallow a genuinely valid card that shares its paragraph block.
+      const source = 'Term::Answer\n?\n';
+      const { cards, invalid } = parseCardsWithInvalid(source);
+      expect(qa(cards).map((c) => c.front)).toEqual(['Term']);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('missing-back');
+    });
+
+    it('parseCards and parseCardsWithInvalid.cards agree on every fixture note', () => {
+      // parseCardsWithInvalid must never change what counts as a valid card —
+      // only add visibility into what does not.
+      for (const file of walkMarkdown(VAULT_FIXTURES)) {
+        const source = readFileSync(file, 'utf8');
+        expect(parseCardsWithInvalid(source).cards).toEqual(parseCards(source));
+      }
+    });
   });
 
   it('finds single-line cards inside list items, without the list marker', () => {

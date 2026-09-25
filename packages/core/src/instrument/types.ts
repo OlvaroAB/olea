@@ -95,6 +95,35 @@ export interface ClozeCardInstrument extends VaultInstrumentCommon {
 
 export type CardInstrument = QaCardInstrument | ClozeCardInstrument;
 
+/** Why a block that carried a Q&A separator did not become a card. */
+export type CardInvalidReason = 'missing-front' | 'missing-back';
+
+/**
+ * A block that carried a Q&A separator (`::`, `:::`, `?`, `??`) and did not
+ * parse into a card because its front or back came out blank.
+ *
+ * Reported, never dropped — the same pattern as `InvalidMcqBlock` below,
+ * named separately because a Q&A card's declaration (a reserved separator
+ * appearing in her text) and an MCQ's (the fenced fence) are different
+ * signals with different failure vocabularies. A card that vanishes silently
+ * because a separator landed with nothing on one side is worse than one that
+ * was never attempted: she wrote it, she expects to see it, and nothing
+ * tells her why she does not.
+ *
+ * Cloze failures are **not** covered by this type: the parser only
+ * recognises a *complete* `==…==`/`{{…}}` pair, so an unterminated cloze
+ * attempt never declares itself the way a Q&A separator does — deciding what
+ * counts as a declared-but-broken cloze is `M4` in brief 82's still-open
+ * ruling (`ol-v7r5.67`), and is not invented here.
+ */
+export interface InvalidCardBlock {
+  readonly reason: CardInvalidReason;
+  /** Human-readable specifics — which separator, which side came out blank. */
+  readonly detail: string;
+  readonly raw: string;
+  readonly span: SourceSpan;
+}
+
 /**
  * **F2.15's floor, enforced at the parse/serialize boundary.**
  *
