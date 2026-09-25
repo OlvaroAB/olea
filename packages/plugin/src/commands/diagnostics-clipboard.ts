@@ -12,7 +12,9 @@
  * which has no runtime outside a real Obsidian host (`obsidian`'s own
  * `package.json` declares `main: ""`), so it cannot execute under Vitest.
  * Covered by the `@manual` scenarios in `features/F7-plugin-surface.md`
- * instead.
+ * instead. The one seam this bead added — `generatedAt`'s injectable clock —
+ * is pure and lives in `./diagnostics-clock.js` instead, with its own test
+ * file, for exactly this reason.
  *
  * **Failures surface actionably, never silently** (the bead's own acceptance
  * criterion): if either store fails to load or the clipboard write throws,
@@ -24,11 +26,18 @@
 import { apiVersion, Notice, Platform } from 'obsidian';
 import type { PersistedKeywordIndex, PersistedQueue } from 'olea-core';
 import { buildDiagnosticsReport } from './diagnostics.js';
+import { type DiagnosticsClock, resolveDiagnosticsGeneratedAt } from './diagnostics-clock.js';
 
 export interface DiagnosticsSources {
   readonly pluginVersion: string;
   loadQueue(): Promise<PersistedQueue | null>;
   loadIndex(): Promise<PersistedKeywordIndex | null>;
+  /**
+   * The plugin's own clock (`OleaPlugin`'s `now: () => Date`); optional, defaulting to the real
+   * wall clock — see `./diagnostics-clock.js`'s module doc for why the default lives there and
+   * not here, and why no production call site threads this yet.
+   */
+  now?: DiagnosticsClock;
 }
 
 /** The `{ writeText }` slice of the Clipboard API this needs — injectable so production's real `navigator.clipboard` is a call-site concern, not a hard-wired global. */
@@ -47,7 +56,7 @@ export async function copyDiagnosticsToClipboard(
   try {
     const [queue, index] = await Promise.all([sources.loadQueue(), sources.loadIndex()]);
     const report = buildDiagnosticsReport({
-      generatedAt: new Date().toISOString(),
+      generatedAt: resolveDiagnosticsGeneratedAt(sources.now),
       pluginVersion: sources.pluginVersion,
       obsidianApiVersion: apiVersion,
       platform: Platform.isMobile ? 'mobile' : 'desktop',

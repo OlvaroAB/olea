@@ -10,7 +10,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConceptRelation, ConceptsRead } from 'olea-core';
-import { appendEdgeDisposition, FolderSource, propositionKey, servedRelations } from 'olea-core';
+import {
+  appendEdgeDisposition,
+  FolderSource,
+  listRelationCacheRecords,
+  propositionKey,
+  servedRelations,
+} from 'olea-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   excludedEdgeDispositionSummary,
@@ -83,6 +89,16 @@ describe('persistRelationCacheFromPass', () => {
   it("persists the corpus stage's key-bearing edges", async () => {
     const result = await persistRelationCacheFromPass(vault, passWith([corpusEdge()]));
     expect(result).toEqual({ written: 1, droppedNoKey: 0, droppedUnemittable: 0 });
+  });
+
+  it('a stubbed clock reaches the written record (ol-3ux7.64.26): mintedAt/updatedAt are the stubbed instant, not real wall time', async () => {
+    const stubbed = new Date('2026-01-02T03:04:05.000Z');
+    await persistRelationCacheFromPass(vault, passWith([corpusEdge()]), { now: () => stubbed });
+
+    const records = await listRelationCacheRecords(vault);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.record.mintedAt).toBe('2026-01-02T03:04:05.000Z');
+    expect(records[0]?.record.updatedAt).toBe('2026-01-02T03:04:05.000Z');
   });
 });
 

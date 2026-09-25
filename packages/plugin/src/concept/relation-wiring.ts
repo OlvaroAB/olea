@@ -62,7 +62,17 @@ import {
 import type { ConceptAndRelationPass } from './wiring.js';
 
 export interface RelationCacheSyncOptions {
-  readonly now?: () => string;
+  /**
+   * The plugin's own clock (`OleaPlugin`'s `now: () => Date`, `main.ts:377`) — matches that
+   * convention's shape directly rather than the ISO-string shape `olea-core`'s
+   * `writeRelationCache` takes, so a caller can pass `this.now` unwrapped; converted to the ISO
+   * string `writeRelationCache` expects at the call below. Optional, defaulting to the real wall
+   * clock (`() => new Date()`) — production behaviour is unchanged when omitted. No production
+   * call site threads this yet: `./wiring.ts`'s `readConceptsAndRelations` calls
+   * `persistRelationCacheFromPass` with no options (`:842`), so `olea-core`'s own default fires;
+   * `./wiring.ts` is outside this bead's owns (`ol-3ux7.64.26`).
+   */
+  readonly now?: () => Date;
 }
 
 /**
@@ -78,9 +88,10 @@ export async function persistRelationCacheFromPass(
 ): Promise<RelationCacheWriteResult | null> {
   const edges = pass.corpus.relations;
   if (edges === undefined) return null;
+  const now = options.now ?? ((): Date => new Date());
   return writeRelationCache(vault, edges, {
     mode: 'patch',
-    ...(options.now !== undefined ? { now: options.now } : {}),
+    now: () => now().toISOString(),
   });
 }
 

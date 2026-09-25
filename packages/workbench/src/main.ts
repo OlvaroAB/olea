@@ -1077,13 +1077,16 @@ async function main(): Promise<void> {
       mountedModal = null;
     }
     if (route.surface !== 'simulator' && simulatorController !== null) {
-      // Uninstalls the simulator's page-level `Date` override and unmounts
-      // whatever it last mounted (the whole plugin, or its degraded
-      // fallback) — see `SimulatorController.dispose`'s own doc. The
-      // simulator's mounts are never routed through the generic `mounted`
-      // block above (a whole-plugin mount is not one of the `ItemView`
-      // types that lifecycle closes), so this is the only teardown call for
-      // whatever this controller owns — no double-close.
+      // Unmounts whatever the simulator last mounted (the whole plugin, or
+      // its degraded fallback) — see `SimulatorController.dispose`'s own
+      // doc. No page-level `Date` override to uninstall any more
+      // (`ol-3ux7.64.9` [WBX-8]): the injected clock lives on the mounted
+      // `OleaPlugin` instance itself, discarded along with everything else
+      // this teardown unmounts. The simulator's mounts are never routed
+      // through the generic `mounted` block above (a whole-plugin mount is
+      // not one of the `ItemView` types that lifecycle closes), so this is
+      // the only teardown call for whatever this controller owns — no
+      // double-close.
       await simulatorController.dispose();
       simulatorController = null;
     }

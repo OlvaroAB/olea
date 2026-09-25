@@ -24,9 +24,12 @@ test.describe.configure({ mode: 'parallel' });
  * "^export const VIEW_TYPE_OLEA" packages/plugin/src`). A DELIBERATE, small
  * hand list at the TEST level only — the production ribbon itself never has
  * one (`obsidian-shim/index.ts`'s `Workspace.registeredViewTypes`'s own
- * doc). A ninth view registered by the plugin without a matching entry here
- * fails this test loudly, which is the point: it is evidence the mechanism
- * really does track the registry rather than a number nobody re-checks.
+ * doc). An eleventh view registered by the plugin without a matching entry
+ * here fails this test loudly, which is the point: it is evidence the
+ * mechanism really does track the registry rather than a number nobody
+ * re-checks. (`olea-paper` added `ol-3ux7.64.26`, discovered missing —
+ * `ol-3ux7.64.9`'s clock-injection pass found it, unrelated to that bead's
+ * own clock work.)
  */
 const KNOWN_VIEW_TYPES = [
   'olea-review',
@@ -38,6 +41,7 @@ const KNOWN_VIEW_TYPES = [
   'olea-registry',
   'olea-retrospective',
   'olea-session-builder',
+  'olea-paper',
 ] as const;
 
 test('@auto-web:simulator/shell — no workbench prose or mode list on this route', async ({
