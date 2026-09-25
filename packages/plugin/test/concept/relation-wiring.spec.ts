@@ -100,6 +100,39 @@ describe('persistRelationCacheFromPass', () => {
     expect(records[0]?.record.mintedAt).toBe('2026-01-02T03:04:05.000Z');
     expect(records[0]?.record.updatedAt).toBe('2026-01-02T03:04:05.000Z');
   });
+
+  it(
+    "pins the production caller's sync to 'patch' mode (D-376, ol-egov.187): a second " +
+      'persist of the same proposition with a new attestation keeps the first attestation ' +
+      "too; a change to 'rebuild' mode here would drop it and fail this assertion",
+    async () => {
+      const firstAttestationPassages = {
+        from: { sourcePath: 'A.md', location: { page: 1 } },
+        to: { sourcePath: 'B.md', location: { page: 1 } },
+      };
+      const secondAttestationPassages = {
+        from: { sourcePath: 'A2.md', location: { page: 9 } },
+        to: { sourcePath: 'B2.md', location: { page: 9 } },
+      };
+
+      await persistRelationCacheFromPass(
+        vault,
+        passWith([corpusEdge({ introducingPassages: firstAttestationPassages, confidence: 0.6 })]),
+      );
+      await persistRelationCacheFromPass(
+        vault,
+        passWith([
+          corpusEdge({ introducingPassages: secondAttestationPassages, confidence: 0.9 }),
+        ]),
+      );
+
+      const records = await listRelationCacheRecords(vault);
+      expect(records).toHaveLength(1);
+      // Patch mode merges: both attestations survive. Rebuild mode would read no prior
+      // record and write only the second call's attestation, leaving exactly 1.
+      expect(records[0]?.record.attestations).toHaveLength(2);
+    },
+  );
 });
 
 describe('readRelationSetWithCache', () => {
