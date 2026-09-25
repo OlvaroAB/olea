@@ -31,11 +31,12 @@
  *   leaving a file on disk, the adapter makes the missing folders one level at a time and writes
  *   the file. Both routes write the whole string as given, so a retry is idempotent.
  *
- * The optional adapter members exist only because the workbench shim's adapter is reduced to
- * exists, list and remove (packages/workbench/src/obsidian-shim/vault-shim.ts), and the
- * workbench compiles this file against it; a real Obsidian DataAdapter has every one. When any
- * is missing, there is no fallback and each function answers from the index alone, as before;
- * the shim's index resolves dot paths, so nothing it runs needs the fallback.
+ * The adapter members below (stat, read, readBinary, write, mkdir) are required, not optional:
+ * a real Obsidian DataAdapter always has every one, and since ol-3ux7.64.25 so does the
+ * workbench shim's adapter (packages/workbench/src/obsidian-shim/vault-shim.ts), built over the
+ * same ShimVaultSource its Vault already uses. The shim's index resolves dot paths on its own
+ * (see that file's module doc), so nothing it runs today exercises the fallback branch through
+ * these members — they are here so the type is honest about what every real caller provides.
  */
 
 /** The slice of Obsidian's Stat this module reads. */
@@ -54,9 +55,6 @@ export interface RawFileAdapter {
   mkdir(normalizedPath: string): Promise<void>;
 }
 
-/** What a host hands over: exists always; the rest on a real host (see the module doc). */
-export type HostAdapter = Pick<RawFileAdapter, 'exists'> & Partial<Omit<RawFileAdapter, 'exists'>>;
-
 /** The part of Obsidian's TFile this module reads. */
 export interface IndexedFile {
   readonly stat: { readonly ctime: number };
@@ -71,7 +69,7 @@ export interface IndexedVault<F extends IndexedFile> {
   modify(file: F, data: string): Promise<void>;
   create(path: string, data: string): Promise<unknown>;
   createFolder(path: string): Promise<unknown>;
-  readonly adapter: HostAdapter;
+  readonly adapter: RawFileAdapter;
 }
 
 /**
@@ -90,23 +88,12 @@ function noSuchFile(path: string, cause?: unknown): Error {
   );
 }
 
-function hasRawFileSurface(adapter: HostAdapter): adapter is RawFileAdapter {
-  return (
-    typeof adapter.stat === 'function' &&
-    typeof adapter.read === 'function' &&
-    typeof adapter.readBinary === 'function' &&
-    typeof adapter.write === 'function' &&
-    typeof adapter.mkdir === 'function'
-  );
-}
-
-/** The adapter to fall back to for this path, or null when the rule above gives none. */
+/** The adapter to fall back to for this path, or null when the rule above gives none. Every IndexedVault's adapter has the full RawFileAdapter surface (see this module's doc), so a hidden path always has one to fall back to. */
 function fallbackFor<F extends IndexedFile>(
   vault: IndexedVault<F>,
   path: string,
 ): RawFileAdapter | null {
-  if (!isHiddenVaultPath(path)) return null;
-  return hasRawFileSurface(vault.adapter) ? vault.adapter : null;
+  return isHiddenVaultPath(path) ? vault.adapter : null;
 }
 
 async function isFileOnDisk(raw: RawFileAdapter, path: string): Promise<boolean> {

@@ -296,15 +296,19 @@ for (const [name, makeHost] of [
   });
 }
 
-describe('an adapter reduced to exists, list and remove (the workbench shim shape) keeps the answers it gave before', () => {
-  it('on a host that indexes dot paths, everything goes through the vault as before', async () => {
-    const host = indexingHost({ adapter: 'reduced' });
+describe('a hidden path the index has never seen at all: the fallback consults the adapter and still says no such file', () => {
+  it('on a host that indexes dot paths, an unseeded hidden path falls back to the adapter, which also has nothing', async () => {
+    const host = indexingHost();
     await writeVaultText(host.vault, HIDDEN_LOG, 'one\n');
     await appendLine(host, HIDDEN_LOG, 'two');
     expect(host.text(HIDDEN_LOG)).toBe('one\ntwo\n');
     await expect(readVaultText(host.vault, HIDDEN)).rejects.toThrow('no such file');
     expect(await vaultFileExists(host.vault, HIDDEN)).toBe(false);
     expect(await vaultFileFirstSeen(host.vault, HIDDEN)).toBeNull();
-    expect(host.callsTo('adapter.')).toEqual([]);
+    // Since ol-3ux7.64.25 the adapter is always the full RawFileAdapter surface (a real host and
+    // the workbench shim both provide it), so an index miss on a hidden path still falls back
+    // and asks it, rather than assuming the index is authoritative for every host — the adapter
+    // itself also has nothing, so the answer is unchanged, but it is now consulted, not skipped.
+    expect(host.callsTo('adapter.stat').length).toBeGreaterThan(0);
   });
 });

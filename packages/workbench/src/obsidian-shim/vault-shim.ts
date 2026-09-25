@@ -179,7 +179,22 @@ export function createInMemoryPluginDataStore(): PluginDataStore {
   };
 }
 
-/** Obsidian's raw filesystem adapter, reduced to the three members `ObsidianSource.delete`/`.listUnder` (via `dot-folder-walk.ts`'s `DotFolderAdapter`) actually call. Composed entirely from `ShimVaultSource.list`/`.exists`/`.delete` — a flat path map has no real folder objects, so "does this folder exist" and "list its immediate children" are both derived by grouping paths on their next `/`, never stored. */
+/**
+ * Obsidian's raw filesystem adapter, over `ShimVaultSource` — the shape
+ * `hidden-path-fallback.ts`'s `RawFileAdapter` needs (`ol-3ux7.64.25`), plus
+ * the three members `ObsidianSource.delete`/`.listUnder` (via
+ * `dot-folder-walk.ts`'s `DotFolderAdapter`) call. A flat path map has no
+ * real folder objects, so "does this folder exist" and "list its immediate
+ * children" are both derived by grouping paths on their next `/`, never
+ * stored — `stat`'s folder branch and `mkdir` follow the same rule.
+ *
+ * This shim's `Vault.getFileByPath` already resolves dot paths (this file's
+ * own module doc, `handleSourceEvent`), so nothing this package runs today
+ * actually exercises `hidden-path-fallback.ts`'s fallback branch through
+ * these members — they exist so the structural type checks, and so a future
+ * change to that indexing choice (a real host's console check, `ol-ppxj.10`)
+ * does not also need a shim adapter change.
+ */
 class VaultAdapterShim {
   constructor(private readonly source: ShimVaultSource) {}
 
@@ -190,6 +205,46 @@ class VaultAdapterShim {
     const nested = await this.source.list({ under: path });
     return nested.length > 0;
   }
+
+  /**
+   * Obsidian's `DataAdapter.stat` shape in full (`type`, `ctime`, `mtime`,
+   * `size`) even though `hidden-path-fallback.ts` reads only `type`/`ctime`
+   * today — matching the real host's surface rather than the one caller's
+   * current needs. `size` is always 0: `TFile.stat.size` above has the same
+   * simplification (never tracked past construction), so a raw stat here is
+   * no less faithful than the index-based one already is. `ctime` prefers
+   * the source's own `firstSeen` (stable across a remount, per `ready()`'s
+   * doc) and falls back to "now" for a source that does not implement it.
+   */
+  async stat(
+    path: string,
+  ): Promise<{ type: 'file' | 'folder'; ctime: number; mtime: number; size: number } | null> {
+    if (path === '') return { type: 'folder', ctime: 0, mtime: 0, size: 0 };
+    if (await this.source.exists(path)) {
+      const ctime = (await this.source.firstSeen?.(path)) ?? Date.now();
+      return { type: 'file', ctime, mtime: ctime, size: 0 };
+    }
+    const nested = await this.source.list({ under: path });
+    if (nested.length > 0) return { type: 'folder', ctime: 0, mtime: 0, size: 0 };
+    return null;
+  }
+
+  /** Always goes to disk, never a cache — matching `Vault.read`'s own doc: INV-2's round trip needs the same bytes either route gives. */
+  async read(path: string): Promise<string> {
+    return this.source.read(path);
+  }
+
+  async readBinary(path: string): Promise<ArrayBuffer> {
+    const bytes = await this.source.readBinary(path);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  }
+
+  async write(path: string, content: string): Promise<void> {
+    await this.source.write(path, content);
+  }
+
+  /** No-op, matching `Vault.createFolder` below: folders are implicit over a flat path map, so there is nothing to create. */
+  async mkdir(_path: string): Promise<void> {}
 
   async remove(path: string): Promise<void> {
     await this.source.delete(path);

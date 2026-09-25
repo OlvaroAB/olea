@@ -9,14 +9,15 @@
  * dot paths (getFileByPath and getFolderByPath answer null for them, as getFiles already does
  * on a real host); true, it knows them (what the workbench shim models). On a hiding host,
  * hiddenCreate and hiddenCreateFolder pick what vault.create and vault.createFolder do for a
- * hidden path, since the typings are silent on it. adapter 'reduced' keeps only exists, list
- * and remove: the workbench shim's adapter.
+ * hidden path, since the typings are silent on it. The adapter always carries the full
+ * RawFileAdapter surface (stat, read, readBinary, write, mkdir, exists) — required since
+ * ol-3ux7.64.25, matching both a real host and the workbench shim's adapter.
  */
 
 import {
-  type HostAdapter,
   type IndexedVault,
   isHiddenVaultPath,
+  type RawFileAdapter,
   type RawStat,
 } from '../../src/vault/hidden-path-fallback.js';
 
@@ -30,8 +31,6 @@ export interface HostOptions {
   readonly hiddenCreate?: HiddenCreate;
   /** What vault.createFolder does for a hidden folder on a hiding host (unknown on a real one). */
   readonly hiddenCreateFolder?: HiddenCreateFolder;
-  /** 'reduced' keeps only exists, list and remove: the workbench shim's adapter shape. */
-  readonly adapter?: 'full' | 'reduced';
 }
 
 export class FakeFile {
@@ -51,7 +50,7 @@ export interface FakeAdapterExtras {
 }
 
 export type FakeVault = IndexedVault<FakeFile> & {
-  readonly adapter: HostAdapter & FakeAdapterExtras;
+  readonly adapter: RawFileAdapter & FakeAdapterExtras;
   getFiles(): FakeFile[];
 };
 
@@ -193,7 +192,7 @@ export class FakeHost {
     }
   }
 
-  private buildAdapter(): HostAdapter & FakeAdapterExtras {
+  private buildAdapter(): RawFileAdapter & FakeAdapterExtras {
     const base = {
       exists: async (path: string): Promise<boolean> => {
         this.calls.push(`adapter.exists ${path}`);
@@ -218,7 +217,6 @@ export class FakeHost {
         this.indexed.delete(path);
       },
     };
-    if (this.options.adapter === 'reduced') return base;
     return {
       ...base,
       stat: async (path) => {
