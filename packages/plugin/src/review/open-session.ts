@@ -398,6 +398,10 @@ export async function openReviewSession(
       scheduler: input.scheduler,
       now,
       reviewLog: { additionalPaths },
+      // `[D-357]`: every review this opens is logged under each concept's permanent key (the
+      // `.olea/concepts/` sidecar), the key Today, the registry, the grove and the plan read too —
+      // never the content-derived stand-in.
+      instruments: { concepts: { stampConceptKeys: true } },
       ...(input.filter !== undefined ? { filter: input.filter } : {}),
       ...(input.relations !== undefined ? { relations: input.relations } : {}),
       ...(input.assessments !== undefined ? { assessments: input.assessments } : {}),

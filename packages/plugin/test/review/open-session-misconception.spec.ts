@@ -101,11 +101,18 @@ async function seedOpenMisconception(
   await appendMisconceptionEvent(vault, event, DEVICE);
 }
 
+/**
+ * The walk `openReviewSession` itself runs (`[D-357]`): stamped, so each record names its concept
+ * by the permanent key the review — and so the misconception projection it is joined against — is
+ * logged under.
+ */
+const STAMPED = { concepts: { stampConceptKeys: true } } as const;
+
 async function sessionInputFor(
   vault: ReturnType<typeof memoryVault>,
   instrumentId: string,
 ): Promise<OpenReviewSessionInput> {
-  const enumeration = await enumerateVaultInstruments(vault);
+  const enumeration = await enumerateVaultInstruments(vault, STAMPED);
   const record = enumeration.records.find((r) => r.instrumentId === instrumentId);
   if (record === undefined) throw new Error(`no enumerated instrument "${instrumentId}"`);
   const holder = createStudySessionHolder();
@@ -173,7 +180,7 @@ async function readResolutionEvidenceEvents(
 describe('openReviewSession — M2 resolution evidence over the real vault projection', () => {
   it('a good qa recall on a concept with an open misconception appends resolution evidence', async () => {
     const vault = qaVault();
-    const enumeration = await enumerateVaultInstruments(vault);
+    const enumeration = await enumerateVaultInstruments(vault, STAMPED);
     const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
     if (qa === undefined) throw new Error('expected the fixture to enumerate one qa instrument');
     const conceptId = qa.conceptIds[0];
@@ -199,7 +206,7 @@ describe('openReviewSession — M2 resolution evidence over the real vault proje
 
   it('a good qa recall on a concept with no open misconception appends nothing', async () => {
     const vault = qaVault();
-    const enumeration = await enumerateVaultInstruments(vault);
+    const enumeration = await enumerateVaultInstruments(vault, STAMPED);
     const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
     if (qa === undefined) throw new Error('expected the fixture to enumerate one qa instrument');
 

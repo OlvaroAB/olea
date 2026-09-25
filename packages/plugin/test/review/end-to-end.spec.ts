@@ -121,9 +121,12 @@ import { fileURLToPath } from 'node:url';
 import type { InstrumentType, Rating } from 'olea-contracts';
 import type { RandomSource, VaultPath } from 'olea-core';
 import {
+  buildConceptKeyCanonicalIndex,
+  CONCEPT_KEY_STORE_FOLDER,
   calendarDayFromLocalDate,
   createFsrsScheduler,
   FolderSource,
+  listConceptKeyRecords,
   parseReviewLog,
   reviewLogPath,
 } from 'olea-core';
@@ -606,6 +609,17 @@ let agreement: {
   readonly panelWhileActive: number;
   readonly holderStatusAfterOpening: string;
 };
+/**
+ * The hook below drives real sessions over a vault on disk: two Today panels,
+ * an F6.1 agreement open and {@link ROUNDS} full sittings, every walk stamped
+ * with the permanent concept key (`[D-357]`). About 3 s run alone; in the
+ * whole plugin suite's parallel run it passed vitest's 10 s hook default
+ * (`ol-egov.141.89.9.30`). Measured on a fixture copy: a stamped walk costs
+ * about what an unstamped one does (15–29 ms against 14–48 ms, three runs),
+ * so this is room for a loaded machine, not cover for a slow path.
+ */
+const SESSION_DRIVE_TIMEOUT_MS = 60_000;
+
 let rounds: SessionRound[];
 let rated: RatedItem[];
 /** Every D7.1 write across every sitting, in order — the durable ids, unlike `rated`'s pre-stamp view snapshot. */
@@ -652,7 +666,7 @@ beforeAll(async () => {
   }
   rated = rounds.flatMap((round) => [...round.rated]);
   logged = rounds.flatMap((round) => [...round.logged]);
-});
+}, SESSION_DRIVE_TIMEOUT_MS);
 
 describe('the fixture vault, on disk, produces a real Today panel', () => {
   it('copied the committed fixtures rather than opening them', () => {
@@ -833,7 +847,24 @@ describe('every rating reached the vault as a D7.1 record (INV-4)', () => {
   it('wrote this device`s daily log file, and only under `.olea/`', async () => {
     const after = await digestVault(vaultRoot);
     const added = [...after.keys()].filter((path) => !before.has(path));
-    expect(added).toEqual([logPath()]);
+    // `[D-357]`: besides the log, the only files a session adds are Olea's own
+    // concept-key records — each concept's permanent key, minted the first
+    // time a stamped walk met it — never a note of hers.
+    const conceptKeyRecords = added.filter((path) =>
+      path.startsWith(`${CONCEPT_KEY_STORE_FOLDER}/`),
+    );
+    expect(added.filter((path) => !conceptKeyRecords.includes(path))).toEqual([logPath()]);
+    expect(conceptKeyRecords.length).toBeGreaterThan(0);
+  });
+
+  it('minted one permanent key per concept, however many walks met it at once (ol-egov.141.89.9.52)', async () => {
+    const records = await listConceptKeyRecords(new FolderSource(vaultRoot));
+    expect(records.length).toBeGreaterThan(0);
+    // Today's readers, the composer and the review walk all ran over this
+    // vault, several of them concurrently; not one concept came out of them
+    // with a second, same-anchor record.
+    const index = buildConceptKeyCanonicalIndex(records.map(({ record }) => record));
+    expect(index.superseded.size).toBe(0);
   });
 
   it('round-trips through a fresh FolderSource and the real parser', async () => {

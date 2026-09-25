@@ -201,7 +201,10 @@ export class CitationRevisionTrigger {
       formattingOnly: 0,
     };
 
-    const enumeration = await enumerateVaultInstruments(vault);
+    // `[D-357]`: the permanent concept key on every record this walk hands on.
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
     const mcqRecords = enumeration.records.filter(isMcqRecord);
 
     // Every instrument's own span, of every type, in the note it lives in —

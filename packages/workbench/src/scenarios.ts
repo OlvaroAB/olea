@@ -20,8 +20,9 @@
  * fixture string). A screenshot taken twice is the same screenshot.
  */
 
-import type { Rating } from 'olea-contracts';
+import type { Rating, ReviewLogEntry } from 'olea-contracts';
 import type {
+  ConceptRecord,
   Scheduler,
   SchedulerState,
   UnconsumedSchedulingObservation,
@@ -33,6 +34,7 @@ import {
   CONFUSION_ROUTING_LAPSE_THRESHOLD,
   evaluateConfusionRouting,
   evaluateSchedulingObservationRouting,
+  provisionalConceptKey,
 } from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
@@ -303,6 +305,33 @@ function findStrongRecallFixtureConceptId(): string | undefined {
 
 const STRONG_RECALL_FIXTURE_CONCEPT_ID = findStrongRecallFixtureConceptId();
 
+/**
+ * `[D-357]` (`ol-egov.141.89.9.30`): the generated `FIXTURE_ORACLE_HISTORY` names each concept
+ * by the content-derived stand-in key (`provisionalConceptKey` of its name and bound note), the
+ * only key a generator can write ahead of time — a permanent key is a random nonce the scenario
+ * vault mints for itself on its first stamped walk. The composed queue now carries those
+ * permanent keys (`./queue/derive.ts` stamps), so the history is re-keyed at load, concept by
+ * concept, through that same stamped enumeration: each enumerated concept's stand-in, derived the
+ * way the generator derived it, maps to the key the vault holds for it. A stand-in naming no
+ * enumerated concept is left as it is and simply reads as unreviewed.
+ */
+function permanentKeyByStandIn(concepts: readonly ConceptRecord[]): ReadonlyMap<string, string> {
+  return new Map(
+    concepts.map((concept) => [
+      provisionalConceptKey({ name: concept.name, boundNotePath: concept.boundNotePath ?? null }),
+      concept.key,
+    ]),
+  );
+}
+
+function rekeyedFixtureHistory(byStandIn: ReadonlyMap<string, string>): readonly ReviewLogEntry[] {
+  return FIXTURE_ORACLE_HISTORY.map((entry) =>
+    'conceptIds' in entry
+      ? { ...entry, conceptIds: entry.conceptIds.map((id) => byStandIn.get(id) ?? id) }
+      : entry,
+  );
+}
+
 export interface BuildScenarioOptions {
   readonly vault: VaultSource;
   readonly scheduler: Scheduler;
@@ -572,8 +601,13 @@ export function buildScenario(options: BuildScenarioOptions): Scenario {
           'workbench: fixture-oracle-history.ts carries no strong-recall-eligible story — see ol-v7r5.41',
         );
       }
+      // Both the fixture concept and its history, re-keyed onto this vault's permanent keys —
+      // see `permanentKeyByStandIn`.
+      const byStandIn = permanentKeyByStandIn(queue.session.instruments.concepts);
+      const strongRecallConceptId =
+        byStandIn.get(STRONG_RECALL_FIXTURE_CONCEPT_ID) ?? STRONG_RECALL_FIXTURE_CONCEPT_ID;
       const target = [...queue.qa, ...queue.cloze, ...queue.mcq].find((item) =>
-        item.instrument.conceptIds.includes(STRONG_RECALL_FIXTURE_CONCEPT_ID),
+        item.instrument.conceptIds.includes(strongRecallConceptId),
       );
       if (target === undefined) {
         throw new Error(
@@ -595,7 +629,7 @@ export function buildScenario(options: BuildScenarioOptions): Scenario {
         deps: {
           ...base,
           evaluateStrongRecallProposal: createStrongRecallProposalReader({
-            entries: FIXTURE_ORACLE_HISTORY,
+            entries: rekeyedFixtureHistory(byStandIn),
             scheduler,
             now: WORKBENCH_NOW,
           }),

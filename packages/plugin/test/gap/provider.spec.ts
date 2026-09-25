@@ -14,6 +14,7 @@ import { studyPlanEnvelope } from 'olea-contracts';
 import type { Scheduler } from 'olea-core';
 import {
   createFsrsScheduler,
+  extractConcepts,
   type RetrievabilityInput,
   type RetrievabilityOutput,
 } from 'olea-core';
@@ -466,6 +467,13 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
 
   async function vaultWithIndependentReview() {
     const vault = gapVault();
+    // The join key `resolveRetrievabilityScores` actually iterates: the concept's permanent key
+    // (`[D-357]`), read back from this vault's own `.olea/concepts/` sidecar — the key the
+    // provider's stamped walk resolves for `GapRow.conceptKey`, never the display name.
+    const conceptKey = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+      (concept) => concept.name === 'Widget theory',
+    )?.key;
+    if (conceptKey === undefined) throw new Error('fixture vault has no Widget theory concept');
     await vault.write(
       '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
       `${JSON.stringify({
@@ -475,11 +483,7 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
         timestamp: '2026-08-09T09:00:00-04:00',
         instrumentId: 'qa:widget-theory:1',
         instrumentType: 'qa',
-        // The join key `resolveRetrievabilityScores` actually iterates —
-        // `provisionalConceptKey`'s derivation (`concept-key.ts`), not the
-        // display name — confirmed against this exact fixture's own
-        // `GapRow.conceptKey`.
-        conceptIds: ['concept-prov1:Widget theory'],
+        conceptIds: [conceptKey],
         rating: 'good',
         supportLevelShown: 'independent',
         wasUnsure: false,
@@ -559,13 +563,11 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     expect(priorityScoreOf(withDefault)).not.toBe(priorityScoreOf(neutralControl));
   });
 
-  // `gap/provider.ts` (`enumerateVaultInstruments`) and `plan/provider.ts`
-  // (`extractConceptsFromVault`) mint two DIFFERENT concept-key shapes for
-  // the identical vault content — a provisional, content-derived key here
-  // vs an opaque, persisted-key-store mint there (`concept-key.ts`'s own
-  // module doc names this residual gap; not this bead's to close). So a
-  // single hardcoded `conceptIds` value can never join to both providers'
-  // real keys at once. This test proves the acceptance criterion's actual
+  // `gap/provider.ts` and `plan/provider.ts` both read the permanent concept
+  // key (`[D-357]`), but each vault below mints its own — a permanent key is
+  // a random nonce persisted per vault, never derived from content — so a
+  // single hardcoded `conceptIds` value can never join to both vaults' real
+  // keys at once. This test proves the acceptance criterion's actual
   // claim — the SAME vault/review state produces the SAME priority score
   // through both providers — by discovering each provider's own real key
   // first (a bare load/fetch against a review-free vault; the opaque mint

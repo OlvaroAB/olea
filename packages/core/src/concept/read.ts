@@ -123,6 +123,7 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts, resolveLinkClosure } from './extract.js';
+import { type ConceptKeyRequest, resolveConceptKeys } from './key-store.js';
 import { reconcileRelations, totalDropped } from './reconcile.js';
 import type { ConceptRelation, ProposedRelation } from './relation.js';
 import type { ConceptSize } from './size.js';
@@ -257,13 +258,18 @@ export interface ReadConcept {
    * through unchanged — this module never re-derives a key a record already
    * holds. Only a concept the read found that `./extract.js` returned no
    * record for at all has no prior key to carry, and that one is minted
-   * through the same single seam (`./concept-key.js`'s `ConceptKeySource`),
-   * never by assembling a string here.
+   * through the same single seam, never by assembling a string here.
    *
-   * Provisional, exactly as `ConceptRecord.key` is: `./concept-key.js`'s
-   * module doc states plainly that today's derivation is content-derived and
-   * not yet the stable key C7.11 contracts. Nothing here makes that better
-   * or worse — it inherits the same seam and will inherit its replacement.
+   * **Permanent when the caller stamps (`[D-357]`, `ol-egov.141.89.9.30`).**
+   * With `ReadConceptsOptions.stampConceptKeys` on — every production read —
+   * a corroborated concept carries the permanent `.olea/concepts/` key its
+   * record resolved, and an uncorroborated one resolves its own through
+   * `./key-store.js` on a topic anchor: the first course its passages sit in,
+   * and its name (a Class B choice, flagged on the bead). The corpus relation
+   * stage and same-as, which key by this field, then carry the key every
+   * other reader does. Off, it is the content-derived stand-in
+   * (`./concept-key.js`'s `provisionalConceptKey`) — kept for a call over a
+   * shared, tracked fixture vault, which must never be written into.
    */
   readonly key: string;
   /**
@@ -477,6 +483,14 @@ export interface ReadConceptsOptions {
    * `DEFAULT_CLOSURE_DOCUMENT_CAP`; degrades silently.
    */
   readonly closureDocumentCap?: number;
+  /**
+   * Key every returned concept by its permanent `.olea/concepts/` key
+   * (`[D-357]`) — see `ReadConcept.key`. **Off by default**, for the same
+   * reason `ExtractConceptsOptions.stampConceptKeys` is: a read over a shared,
+   * tracked fixture vault must not write into it. Every production read
+   * passes `true`.
+   */
+  readonly stampConceptKeys?: boolean;
 }
 
 function byCodeUnit(a: string, b: string): number {
@@ -850,23 +864,60 @@ function dedupe(values: readonly string[], exclude: string): readonly string[] {
  * match is what lets her name win when the reader called the concept
  * something else in the passage it read.
  */
+/** Her record for this proposal — by its name first, then each alias — or none. */
+function conventionFor(
+  proposal: ProposedConcept,
+  conventions: ReadonlyMap<string, ConceptRecord>,
+): ConceptRecord | undefined {
+  return [proposal.name, ...proposal.aliases]
+    .map((w) => conventions.get(w))
+    .find((r) => r !== undefined);
+}
+
+/**
+ * The key-store request for a concept the read found and her conventions did
+ * not (`[D-357]`; see `ReadConcept.key`): a topic anchor on the first course
+ * its passages sit in and its own name — no aliases, so only the anchor match
+ * the store already defines can reuse an existing key, never a shared wording
+ * or passage alone (`[D-378]`). Its passages' documents are the introducing
+ * paths, as `./extract.js` records a topic's introducing notes.
+ */
+function uncorroboratedKeyRequest(
+  proposal: ProposedConcept,
+  coursesFromPassages: ReadonlySet<string>,
+): ConceptKeyRequest {
+  const introducingPaths = [
+    ...new Set([proposal.anchor, ...proposal.alsoIn].map((anchor) => anchor.sourcePath)),
+  ].sort(byCodeUnit);
+  return {
+    tier: 3,
+    anchor: {
+      kind: 'topic',
+      course: [...coursesFromPassages].sort(byCodeUnit)[0] ?? '',
+      name: proposal.name,
+      aliases: [],
+      introducingPaths,
+    },
+  };
+}
+
 function corroborate(
   proposal: ProposedConcept,
   conventions: ReadonlyMap<string, ConceptRecord>,
   coursesFromPassages: ReadonlySet<string>,
 ): ReadConcept {
   const wordings = [proposal.name, ...proposal.aliases];
-  const hers = wordings.map((w) => conventions.get(w)).find((r) => r !== undefined);
+  const hers = conventionFor(proposal, conventions);
 
   if (hers === undefined) {
     const sourcePaths: readonly VaultPath[] = [];
     return {
       // No record corroborated this concept, so there is no key to carry and
       // nothing is being overwritten — this is a first mint, through the one
-      // seam (`ReadConcept.key`'s doc, `[D-088]`). It is deliberately the
-      // same call `./extract.js`'s `keyFor` makes for an un-stamped concept,
-      // so a concept that later acquires a record converges on the same key
-      // rather than acquiring a second one.
+      // seam (`ReadConcept.key`'s doc, `[D-088]`). Unstamped, it is the same
+      // content-derived stand-in `./extract.js`'s `keysFor` derives; stamped,
+      // `readConcepts` replaces it with the permanent key the store resolves
+      // for `uncorroboratedKeyRequest` before anything leaves this module.
       key: provisionalConceptKey({ name: proposal.name, boundNotePath: null }),
       name: proposal.name,
       aliases: dedupe(proposal.aliases, proposal.name),
@@ -1309,6 +1360,8 @@ export async function readConcepts(
     ...(options.closureDocumentCap !== undefined
       ? { closureDocumentCap: options.closureDocumentCap }
       : {}),
+    // `[D-357]`: a corroborated concept carries the permanent key its record resolves.
+    ...(options.stampConceptKeys === true ? { stampConceptKeys: true } : {}),
   });
   const conventions = conventionIndex(records);
 
@@ -1325,6 +1378,7 @@ export async function readConcepts(
 
   const concepts: ReadConcept[] = [];
   const claimed = new Set<string>();
+  const uncorroborated: { readonly index: number; readonly request: ConceptKeyRequest }[] = [];
   for (const proposal of mergedProposals) {
     const courses = new Set<string>();
     for (const anchor of [proposal.anchor, ...proposal.alsoIn]) {
@@ -1332,8 +1386,29 @@ export async function readConcepts(
       if (course !== undefined) courses.add(course);
     }
     const concept = corroborate(proposal, conventions, courses);
+    if (options.stampConceptKeys === true && conventionFor(proposal, conventions) === undefined) {
+      uncorroborated.push({
+        index: concepts.length,
+        request: uncorroboratedKeyRequest(proposal, courses),
+      });
+    }
     claimed.add(concept.name);
     concepts.push(concept);
+  }
+
+  // `[D-357]`: every uncorroborated concept's permanent key, in one turn of the
+  // key store's queue (`./key-store.js`) — so two reads meeting one new concept
+  // at once never mint it twice.
+  if (uncorroborated.length > 0) {
+    const keys = await resolveConceptKeys(
+      vault,
+      uncorroborated.map(({ request }) => request),
+    );
+    uncorroborated.forEach(({ index }, i) => {
+      const concept = concepts[index];
+      const key = keys[i];
+      if (concept !== undefined && key !== undefined) concepts[index] = { ...concept, key };
+    });
   }
 
   // Her conventions never *lose* a concept either. One she named that the

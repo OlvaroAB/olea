@@ -109,10 +109,13 @@ export async function buildPrivacyExportBundle(
   }
   const misconceptionLog = mergeMisconceptionEvents(...misconceptionSources).events;
 
-  const { records: instruments } = await enumerateVaultInstruments(
-    deps.vault,
-    deps.instrumentOptions ?? {},
-  );
+  // `[D-357]`: each exported instrument names its concepts by their permanent keys — the keys her
+  // exported review log carries — so the bundle joins with itself. A caller's own `concepts`
+  // options (a non-default folder, say) are kept; stamping is not one of them to switch off.
+  const { records: instruments } = await enumerateVaultInstruments(deps.vault, {
+    ...(deps.instrumentOptions ?? {}),
+    concepts: { ...(deps.instrumentOptions?.concepts ?? {}), stampConceptKeys: true },
+  });
 
   return {
     version: PRIVACY_EXPORT_BUNDLE_VERSION,

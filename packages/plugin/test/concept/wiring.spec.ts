@@ -84,8 +84,10 @@ class MemoryVault implements VaultSource {
   readBinary(path: VaultPath): Promise<Uint8Array> {
     return this.read(path).then((t) => new TextEncoder().encode(t));
   }
-  write(): Promise<void> {
-    return Promise.reject(new Error('read-only'));
+  write(path: VaultPath, content: string): Promise<void> {
+    // Reading concepts now stamps permanent keys, which writes .olea/concepts/ records (D-357).
+    this.files[path] = content;
+    return Promise.resolve();
   }
   exists(path: VaultPath): Promise<boolean> {
     return Promise.resolve(path in this.files);

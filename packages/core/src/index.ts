@@ -177,23 +177,30 @@ export { extractConcepts, foldReadAnchors } from './concept/extract.js';
 // The `ConceptKeyRecord` sidecar (`[D-174]`, `ol-2zfj.42`) and its two seams:
 // `resolveConceptKey` (anchor-match, mint-or-lookup) and `bindConceptKeyToNote`
 // (`ol-2zfj.55`, key-driven rebind onto a newly-accepted note, `[D-176]`/`[D-183]`).
-// See `./concept/key-store.js`'s module doc.
+// See `./concept/key-store.js`'s module doc. `resolveConceptKeys` (the batch
+// seam, one turn of the store's queue) and the canonical index over same-anchor
+// duplicates (`[D-378]`) arrived with `ol-egov.141.89.9.52`/`ol-egov.141.89.9.30`.
 export type {
   ConceptKeyAnchor,
+  ConceptKeyCanonicalIndex,
   ConceptKeyRecord,
+  ConceptKeyRequest,
   NoteAnchor,
   ResolveConceptKeyOptions,
   TopicAnchor,
 } from './concept/key-store.js';
 export {
   bindConceptKeyToNote,
+  buildConceptKeyCanonicalIndex,
   CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   CONCEPT_KEY_STORE_FOLDER,
   conceptKeyRecordPath,
   findNormalizationCollisions,
   isConceptKeyRecord,
   listConceptKeyRecords,
+  readConceptKeyCanonicalIndex,
   resolveConceptKey,
+  resolveConceptKeys,
 } from './concept/key-store.js';
 // Knowledge-kind classification (component register row 1.5, `[KCT-1]`,
 // `ol-kxr6`) — a label, or explicitly unclassified, read by component 2.2

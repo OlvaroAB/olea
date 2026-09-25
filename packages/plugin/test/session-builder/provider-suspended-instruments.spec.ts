@@ -18,8 +18,9 @@
  * `composeStudySessionForRequest` never calls `session/build.ts`'s
  * `buildReviewSession` and never reads `.suspended` at all.
  */
-import { describe, expect, it } from 'vitest';
+
 import { createFsrsScheduler, enumerateVaultInstruments } from 'olea-core';
+import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { createVaultSuspendPort } from '../../src/review/ports.js';
@@ -109,9 +110,13 @@ function twoConceptSameCourseVault(): ReturnType<typeof memoryVault> {
 }
 
 describe('composeStudySessionForRequest excludes a suspended instrument from its own instrument index (ol-egov.141.89.10.30)', () => {
-  it("composedInput.instruments never offers a suspended instrument for its concept, and still offers the non-suspended one", async () => {
+  it('composedInput.instruments never offers a suspended instrument for its concept, and still offers the non-suspended one', async () => {
     const vault = twoConceptSameCourseVault();
-    const enumeration = await enumerateVaultInstruments(vault);
+    // Stamped, as the builder's own walk is (`[D-357]`): each record names its concept by the
+    // permanent key the composed instrument index is keyed by.
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
     const widget = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
     const gadget = enumeration.records.find((r) => r.notePath === 'Notes/two.md');
     if (widget === undefined || gadget === undefined) {
@@ -133,9 +138,10 @@ describe('composeStudySessionForRequest excludes a suspended instrument from its
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       NOW,
     );
-    if (result === null) throw new Error('expected a composed result, got null (plan not configured)');
+    if (result === null)
+      throw new Error('expected a composed result, got null (plan not configured)');
 
-    // conceptIds are opaque keys (`concept-<id>:<name>`), not plain names —
+    // conceptIds are permanent, opaque keys (`[D-357]`), not plain names —
     // looked up by the record's own id, never a literal concept-name string.
     const widgetConceptId = widget.conceptIds[0];
     const gadgetConceptId = gadget.conceptIds[0];

@@ -184,7 +184,8 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // `Promise.all`.
         const [{ entries }, enumeration, options] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
-          enumerateVaultInstruments(deps.vault),
+          // `[D-357]`: the permanent concept key, the one her review log carries.
+          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
           deps.readRankWeights?.() ?? Promise.resolve(undefined),
         ]);
 

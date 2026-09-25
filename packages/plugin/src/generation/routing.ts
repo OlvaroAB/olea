@@ -208,7 +208,13 @@ export async function buildConceptInstrumentInventory(
   vault: VaultSource,
   options: { readonly under?: VaultPath } = {},
 ): Promise<ReadonlyMap<string, ConceptInstrumentInventory>> {
-  const { records } = await enumerateVaultInstruments(vault, options);
+  // `[D-357]`: the permanent concept key. A subtree walk (`under`) still keys each concept by its
+  // vault-wide identity — `extractConcepts`' own rule for a stamped subtree pass — so this
+  // inventory joins the same keys a whole-vault reader holds.
+  const { records } = await enumerateVaultInstruments(vault, {
+    ...options,
+    concepts: { stampConceptKeys: true },
+  });
 
   const mutableCounts = new Map<string, { retrieval: number; quiz: number; explainBack: number }>();
   for (const record of records) {

@@ -153,7 +153,11 @@ async function resolveRevisionTarget(
   vault: VaultSource,
   predecessorInstrumentId: string,
 ): Promise<RevisionTarget | null> {
-  const { records, concepts } = await enumerateVaultInstruments(vault);
+  // `[D-357]`: the permanent concept key, so the revision drafts under the key her review log and
+  // every other reader carry.
+  const { records, concepts } = await enumerateVaultInstruments(vault, {
+    concepts: { stampConceptKeys: true },
+  });
   const record = records.find((r) => r.instrumentId === predecessorInstrumentId);
   if (record === undefined) return null;
 

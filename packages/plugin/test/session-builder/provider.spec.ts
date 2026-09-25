@@ -47,7 +47,7 @@ import {
   pastSessionsFromReviewLog,
   reviewLogPath,
 } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
@@ -192,12 +192,42 @@ function reviewRecord(
 }
 
 /**
+ * `files` plus the `.olea/concepts/` sidecar a stamped walk mints over them.
+ * A permanent concept key (`[D-357]`) is a random nonce persisted per vault,
+ * never derived from content, so every vault this suite builds from the same
+ * content carries these records and every walk over it — the provider's own
+ * included — resolves the same keys rather than minting its own.
+ */
+async function withConceptKeys(
+  files: Readonly<Record<string, string>>,
+): Promise<Readonly<Record<string, string>>> {
+  const vault = memoryVault(files);
+  await enumerateVaultInstruments(vault, { concepts: { stampConceptKeys: true } });
+  const keyed: Record<string, string> = { ...files };
+  for (const path of await vault.list()) {
+    if (path.startsWith('.olea/concepts/')) keyed[path] = await vault.read(path);
+  }
+  return keyed;
+}
+
+let KEYED_BASE_FILES: Readonly<Record<string, string>> = BASE_FILES;
+let KEYED_TWO_COURSE_FILES: Readonly<Record<string, string>> | undefined;
+beforeAll(async () => {
+  KEYED_BASE_FILES = await withConceptKeys(BASE_FILES);
+  KEYED_TWO_COURSE_FILES = await withConceptKeys(rawTwoCourseBaseFiles());
+});
+
+/**
  * The real `(conceptKey, instrumentId)` pair `session/enumerate.ts` would
  * mint for `Notes/one.md`'s card — resolved by actually walking the base
  * fixture once, rather than hand-guessing the opaque id format (`ol-63e1`).
+ * Stamped, as the provider's own walk is: the concept key is the permanent
+ * one this suite's vaults all carry.
  */
 async function widgetIdentity(): Promise<{ conceptKey: string; instrumentId: string }> {
-  const enumeration = await enumerateVaultInstruments(memoryVault(BASE_FILES));
+  const enumeration = await enumerateVaultInstruments(memoryVault(KEYED_BASE_FILES), {
+    concepts: { stampConceptKeys: true },
+  });
   const record = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
   if (record === undefined) throw new Error('expected an instrument on Notes/one.md');
   const [conceptKey] = record.conceptIds;
@@ -208,7 +238,7 @@ async function widgetIdentity(): Promise<{ conceptKey: string; instrumentId: str
 function vaultWithReviewLog(reviewLog: readonly ReviewLogRecord[]) {
   const logPath = reviewLogPath('2026-08-05', DEVICE);
   return memoryVault({
-    ...BASE_FILES,
+    ...KEYED_BASE_FILES,
     ...(reviewLog.length > 0
       ? { [logPath]: reviewLog.map((r) => JSON.stringify(r)).join('\n') }
       : {}),
@@ -800,7 +830,7 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
       timestamp: '2026-08-09T09:00:00-04:00',
     });
     const vault = memoryVault({
-      ...BASE_FILES,
+      ...KEYED_BASE_FILES,
       [reviewLogPath('2026-08-09', DEVICE)]: JSON.stringify(record),
     });
     let calls = 0;
@@ -1142,7 +1172,13 @@ const TESTC202_PAST_PAPER = [
 const QUIZ_TESTC202 =
   '---\nclass: TESTC202\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 2\n';
 
+/** The two-course content with its concept-key sidecar (see `withConceptKeys`). */
 function twoCourseBaseFiles(): Readonly<Record<string, string>> {
+  if (KEYED_TWO_COURSE_FILES === undefined) throw new Error('beforeAll has not keyed the fixture');
+  return KEYED_TWO_COURSE_FILES;
+}
+
+function rawTwoCourseBaseFiles(): Readonly<Record<string, string>> {
   return {
     '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
     '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
@@ -1298,7 +1334,9 @@ describe('createLocalSessionBuilderProvider — C5.5 clustering feeds the D-092 
   async function twoCourseIdentities(): Promise<
     ReadonlyMap<string, { conceptKey: string; instrumentId: string }>
   > {
-    const enumeration = await enumerateVaultInstruments(memoryVault(twoCourseBaseFiles()));
+    const enumeration = await enumerateVaultInstruments(memoryVault(twoCourseBaseFiles()), {
+      concepts: { stampConceptKeys: true },
+    });
     const byCourse = new Map<string, { conceptKey: string; instrumentId: string }>();
     for (const record of enumeration.records) {
       const [conceptKey] = record.conceptIds;

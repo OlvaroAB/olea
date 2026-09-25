@@ -511,7 +511,8 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           readCompletenessByCourse,
         ] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
-          enumerateVaultInstruments(deps.vault),
+          // `[D-357]`: the permanent concept key, the one her review log carries.
+          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
           offerStore.load(),
           safeAssessmentRecords(deps.vault, assignmentsBasePath),
           overridesStore.load(),

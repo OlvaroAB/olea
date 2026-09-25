@@ -199,6 +199,14 @@ export interface ReadConceptsFromVaultOptions {
   readonly coursesFolder?: VaultPath;
   /** Overrides the declared defaults above — see the module doc. */
   readonly budget?: ConceptReadBudget;
+  /**
+   * `[D-357]`: key every concept the read returns by its permanent `.olea/concepts/` key
+   * (`olea-core`'s `ReadConceptsOptions.stampConceptKeys`). **On by default here** — opt-OUT,
+   * never opt-in, the same flip `extractConceptsFromVault` below makes for extraction, because
+   * every caller of this function reads her real vault. Pass `false` only over a shared, tracked
+   * fixture that must not be written into.
+   */
+  readonly stampConceptKeys?: boolean;
 }
 
 /**
@@ -212,6 +220,13 @@ export interface ReadConceptsFromVaultOptions {
  * configured. `null` when it is not (F7.8) — the same grey-out contract
  * every other AI-gated surface in this plugin follows, propagated one level
  * up rather than left for a caller to rediscover.
+ *
+ * **Permanent keys (`[D-357]`, `ol-egov.141.89.9.30`).** Stamps by default
+ * (`ReadConceptsFromVaultOptions.stampConceptKeys`), so every concept this
+ * returns — and so the corpus relation stage's endpoint keys, the relation
+ * cache `readConceptsAndRelations` persists, and same-as — carries the key
+ * her review log, Today, the registry and the plan all carry, never the
+ * content-derived stand-in.
  */
 export async function readConceptsFromVault(
   wiring: ConceptWiring,
@@ -232,6 +247,7 @@ export async function readConceptsFromVault(
       ? { zettelkastenFolder: options.zettelkastenFolder }
       : {}),
     ...(options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {}),
+    stampConceptKeys: options.stampConceptKeys ?? true,
   });
 }
 

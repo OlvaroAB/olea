@@ -82,7 +82,38 @@
  * `./extract.ts` already does for the whole vault (a full `vault.list` + read pass per
  * extraction), so it adds no new order-of-magnitude cost; a future index file is a pure
  * performance optimisation if this ever proves too slow on a real vault, not a correctness
- * change to this module's contract.
+ * change to this module's contract. `resolveConceptKeys` (the batch form) lists once for a
+ * whole extraction pass rather than once per candidate.
+ *
+ * ===========================================================================
+ * ONE WRITER AT A TIME (`ol-egov.141.89.9.52`, `[D-357]`'s follow-up)
+ * ===========================================================================
+ * Look-up-then-mint is a read followed by a write, and before this landing nothing sat between
+ * the two: two passes meeting one brand-new concept at once (two review opens, a review open
+ * racing a generation pass, the Today panel's stamped readers loading side by side) both listed
+ * before either wrote, both missed, and both minted — two permanent keys for one anchor. Every
+ * function here that reads the store in order to write it (`resolveConceptKeys`,
+ * `resolveConceptKey`, `bindConceptKeyToNote`) now runs inside `withConceptKeyStoreLock`, a FIFO
+ * queue: each holder lists, matches, mints and writes before the next one lists. The queue is
+ * module-wide rather than per `VaultSource` object on purpose — the plugin constructs a fresh
+ * `ObsidianSource` over the same vault at many call sites, so an object-keyed lock would let two
+ * of them race exactly as before. Unrelated vaults in one process (tests, the workbench) merely
+ * take turns, which costs latency, never correctness. Two devices minting offline and meeting
+ * through her vault sync is a different race no in-process lock can close; the canonical rule
+ * below is what makes both devices read the same key afterwards.
+ *
+ * ===========================================================================
+ * SAME-ANCHOR DUPLICATES READ AS ONE IDENTITY (`[D-378]`)
+ * ===========================================================================
+ * Records sharing an anchor — as the anchor match below already defines it, never a shared
+ * cited passage or a shared introducing note alone — are one identity. The earliest-minted
+ * record (`mintedAt`, then the key's code-unit order for a same-day tie, since `mintedAt` holds a
+ * date only) is canonical; every other record in the group is a superseded duplicate that keeps
+ * its file, its key and its bytes: nothing here deletes or rewrites one. Lookup returns the
+ * canonical key, and `buildConceptKeyCanonicalIndex` / `readConceptKeyCanonicalIndex` hand every
+ * other reader the same mapping, so a historical reference to a superseded key (a relation, an
+ * outcome, a registry passage anchor) resolves to the key lookup returns — from one function,
+ * never re-derived per reader.
  */
 
 import { listFolder } from '../vault/list-folder.js';
@@ -112,7 +143,7 @@ export interface NoteAnchor {
  * A topic-only (tier-2) concept's anchor: the existing course/wording/alias match signal.
  *
  * `introducingPaths` (`[D-180 / KEY-2]`, ol-egov.65, additive) holds the candidate's introducing
- * material — `extract.ts`'s `keyFor` populates it from `ConceptRecord.sourcePaths`, sorted. It is
+ * material — `extract.ts`'s `keysFor` populates it from `ConceptRecord.sourcePaths`, sorted. It is
  * the signal `resolveConceptKey`'s rename-signature match (below) uses to recognise the SAME
  * topic-only concept under a re-worded `topic:` value, since a topic-only concept has no note to
  * anchor a rename on the way a bound concept anchors on `noteUid`. **Optional, not required** —
@@ -295,6 +326,181 @@ export async function listConceptKeyRecords(
 }
 
 /**
+ * The tail of the store's FIFO queue — see the module doc's "ONE WRITER AT A TIME". Module-wide on
+ * purpose: many `VaultSource` objects can front one vault.
+ */
+let conceptKeyStoreTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `task` once every task queued before it has settled, and holds the queue until `task`
+ * settles. A rejected task releases the queue exactly as a fulfilled one does, and its rejection
+ * reaches only its own caller.
+ */
+function withConceptKeyStoreLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = conceptKeyStoreTail.then(task, task);
+  conceptKeyStoreTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/** `(mintedAt, key)` code-unit order — the canonical rule's "earliest-created" (`[D-378]`). */
+function mintedEarlier(a: ConceptKeyRecord, b: ConceptKeyRecord): number {
+  if (a.mintedAt !== b.mintedAt) return a.mintedAt < b.mintedAt ? -1 : 1;
+  return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+}
+
+/** Every key the store holds, mapped to the canonical key of its identity (`[D-378]`). */
+export interface ConceptKeyCanonicalIndex {
+  /**
+   * `key`'s canonical key: itself when it is canonical, and itself when the store holds no
+   * record for it (a stand-in key, or one from another vault) — never a guess.
+   */
+  canonicalOf(key: string): string;
+  /** Superseded duplicate key -> its canonical key. Empty on a store with no duplicates. */
+  readonly superseded: ReadonlyMap<string, string>;
+}
+
+/**
+ * The bucket tags two records must share before `recordMatchesAnchor` is even asked about the
+ * pair — an over-approximation, checked exactly afterwards, so grouping costs one pass over the
+ * records plus the pairs inside each bucket rather than every pair in the store.
+ */
+function linkTags(record: ConceptKeyRecord): readonly string[] {
+  const { anchor } = record;
+  if (anchor.kind === 'note') {
+    const tags = [`path\u0000${anchor.notePath}`];
+    if (anchor.noteUid !== null) tags.push(`uid\u0000${anchor.noteUid}`);
+    for (const alias of recordAliases(record)) tags.push(`wording\u0000${alias}`);
+    return tags;
+  }
+  const tags = [`topic\u0000${anchor.course}\u0000${anchor.name}`, `wording\u0000${anchor.name}`];
+  for (const alias of anchor.aliases) {
+    tags.push(`topic\u0000${anchor.course}\u0000${alias}`, `wording\u0000${alias}`);
+  }
+  return tags;
+}
+
+/** The exact "shares an anchor" test, in either direction — the same one lookup uses. */
+function recordsShareAnchor(a: ConceptKeyRecord, b: ConceptKeyRecord): boolean {
+  return recordMatchesAnchor(a, b.anchor) || recordMatchesAnchor(b, a.anchor);
+}
+
+/**
+ * Groups `records` into identities and names each group's canonical key (`[D-378]`). Pure; reads
+ * and writes nothing.
+ *
+ * **What joins two records.** Only a shared anchor as `recordMatchesAnchor` already defines it:
+ * one note by `olea-uid`, or by path where either side carries no uid; one course-and-wording
+ * topic, or a wording a rebound record keeps as an alias (`[D-183]`). A shared introducing note or
+ * cited passage alone never joins two records (`[D-378]`'s clarification), and neither does a
+ * normalisation-collision entry, which is a candidate list, never a merge.
+ *
+ * **Two notes with different uids are never one identity**, even when a uid-less record at a
+ * path both once held links to each of them: the anchor match is not transitive there, so a
+ * join that would put two distinct uids in one group is refused.
+ *
+ * Deterministic: pairs are joined in `(mintedAt, key)` order of their earlier member, then of
+ * their later one, so the same store always yields the same groups.
+ */
+export function buildConceptKeyCanonicalIndex(
+  records: readonly ConceptKeyRecord[],
+): ConceptKeyCanonicalIndex {
+  const seenKeys = new Set<string>();
+  const ordered: ConceptKeyRecord[] = [];
+  for (const record of records) {
+    if (seenKeys.has(record.key)) continue;
+    seenKeys.add(record.key);
+    ordered.push(record);
+  }
+  ordered.sort(mintedEarlier);
+
+  const buckets = new Map<string, number[]>();
+  ordered.forEach((record, index) => {
+    for (const tag of new Set(linkTags(record))) {
+      const bucket = buckets.get(tag);
+      if (bucket === undefined) buckets.set(tag, [index]);
+      else bucket.push(index);
+    }
+  });
+  const pairKeys = new Set<number>();
+  const pairs: (readonly [number, number])[] = [];
+  const width = ordered.length;
+  for (const bucket of buckets.values()) {
+    for (let i = 0; i < bucket.length; i += 1) {
+      for (let j = i + 1; j < bucket.length; j += 1) {
+        const low = bucket[i] as number;
+        const high = bucket[j] as number;
+        const pairKey = low * width + high;
+        if (pairKeys.has(pairKey)) continue;
+        pairKeys.add(pairKey);
+        if (
+          recordsShareAnchor(ordered[low] as ConceptKeyRecord, ordered[high] as ConceptKeyRecord)
+        ) {
+          pairs.push([low, high]);
+        }
+      }
+    }
+  }
+  pairs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+  // Union-find whose root is always the group's earliest member, carrying the group's one uid.
+  const parent = ordered.map((_, index) => index);
+  const groupUid: (string | null)[] = ordered.map((record) =>
+    record.anchor.kind === 'note' ? record.anchor.noteUid : null,
+  );
+  function find(index: number): number {
+    let root = index;
+    while (parent[root] !== root) root = parent[root] as number;
+    let cursor = index;
+    while (parent[cursor] !== root) {
+      const next = parent[cursor] as number;
+      parent[cursor] = root;
+      cursor = next;
+    }
+    return root;
+  }
+  for (const [a, b] of pairs) {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) continue;
+    const uidA = groupUid[rootA] ?? null;
+    const uidB = groupUid[rootB] ?? null;
+    if (uidA !== null && uidB !== null && uidA !== uidB) continue;
+    const root = Math.min(rootA, rootB);
+    const child = Math.max(rootA, rootB);
+    parent[child] = root;
+    groupUid[root] = uidA ?? uidB;
+  }
+
+  const canonicalByKey = new Map<string, string>();
+  const superseded = new Map<string, string>();
+  ordered.forEach((record, index) => {
+    const canonical = (ordered[find(index)] as ConceptKeyRecord).key;
+    canonicalByKey.set(record.key, canonical);
+    if (canonical !== record.key) superseded.set(record.key, canonical);
+  });
+  return {
+    canonicalOf: (key) => canonicalByKey.get(key) ?? key,
+    superseded,
+  };
+}
+
+/**
+ * The canonical index over the store as it stands — for a reader resolving a historical key
+ * (a relation, an outcome, a registry passage anchor) to the key lookup now returns. Reads only;
+ * waits its turn behind any lookup or mint already queued, so it never sees half a pass.
+ */
+export async function readConceptKeyCanonicalIndex(
+  vault: VaultSource,
+): Promise<ConceptKeyCanonicalIndex> {
+  return withConceptKeyStoreLock(async () =>
+    buildConceptKeyCanonicalIndex((await listConceptKeyRecords(vault)).map(({ record }) => record)),
+  );
+}
+
+/**
  * `ol-bo48` (ONT-R1 `ol-2zfj.86`, ONT-R6 `ol-2zfj.88`, `[D-174]`): mints a durable, opaque key
  * via `./concept-key.ts`'s `mintOpaqueConceptKey` — a random nonce, never a derivation of
  * `anchor`. This module writes that string once into a durable record rather than treating it
@@ -461,6 +667,12 @@ function isRenameSignatureMatch(
   candidate: TopicAnchor,
   runTopicNames: ReadonlySet<string> | undefined,
 ): boolean {
+  // Omitted means disabled, as `ResolveConceptKeyOptions.runTopicNames` documents: without this
+  // run's wordings there is no way to tell a rename from two concepts sharing an introducing
+  // note, and a shared note alone never proves one identity (`[D-378]`). Before
+  // `ol-egov.141.89.9.30` an omitted set fell through to a match — unreached then, because only
+  // `extract.ts` asked this branch and it always passes the set; the concept read does not.
+  if (runTopicNames === undefined) return false;
   if (record.anchor.kind !== 'topic') return false;
   const existingAnchor = record.anchor;
   if (existingAnchor.course !== candidate.course) return false;
@@ -468,7 +680,7 @@ function isRenameSignatureMatch(
   const candidatePaths = anchorIntroducingPaths(candidate);
   if (candidatePaths.length === 0) return false;
   if (!stringArraysEqual(anchorIntroducingPaths(existingAnchor), candidatePaths)) return false;
-  if (runTopicNames?.has(existingAnchor.name) === true) return false;
+  if (runTopicNames.has(existingAnchor.name)) return false;
   return true;
 }
 
@@ -498,33 +710,71 @@ function defaultNow(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** One candidate for `resolveConceptKeys`: the tier it would mint at, and its anchor. */
+export interface ConceptKeyRequest {
+  readonly tier: ConceptTier;
+  readonly anchor: ConceptKeyAnchor;
+}
+
 /**
- * The single seam (design doc §7): given this candidate's anchor and tier, resolve its durable
- * key — reading an existing record back verbatim when one matches, minting and persisting a new
- * one otherwise. **Never mints a second record for an anchor that already matches one** (the
- * scenario "re-extraction resolves to the existing key"), and **never deletes, retires or
- * mutates `key` on any existing record** (the conservation property, `[D-088]`) — the only field
- * this function ever rewrites on a hit is `anchor`, and only when it has drifted **within the same
- * anchor kind**. A cross-kind match (`recordMatchesAnchor`'s `[D-183]` alias fallback, above)
- * never rewrites `anchor` here: a stale `TopicAnchor` candidate matching a rebound `NoteAnchor`
- * record must resolve to the same key without regressing the record back off the note it was
- * bound to — undoing that is `bindConceptKeyToNote`'s job to prevent, not this function's to
- * cause.
+ * The store as one lookup pass sees it: the listing, kept current as this pass mints and
+ * refreshes, plus the canonical index over it, rebuilt only after a write changed an anchor.
  */
-export async function resolveConceptKey(
+interface StoreState {
+  readonly entries: { path: VaultPath; record: ConceptKeyRecord }[];
+  index: ConceptKeyCanonicalIndex | null;
+}
+
+function canonicalIndexOf(state: StoreState): ConceptKeyCanonicalIndex {
+  if (state.index === null) {
+    state.index = buildConceptKeyCanonicalIndex(state.entries.map(({ record }) => record));
+  }
+  return state.index;
+}
+
+/**
+ * The canonical entry among `hits` (`[D-378]`): each hit is mapped to its identity's canonical
+ * key, and the earliest-minted of those wins. Usually every hit is one identity and this is its
+ * canonical record; when a candidate matches two identities (a uid-less note path both once held),
+ * the earlier identity wins, the same way on every read.
+ */
+function canonicalEntryAmong(
+  state: StoreState,
+  hits: readonly { readonly path: VaultPath; readonly record: ConceptKeyRecord }[],
+): { path: VaultPath; record: ConceptKeyRecord } | undefined {
+  const index = canonicalIndexOf(state);
+  const byKey = new Map(state.entries.map((entry) => [entry.record.key, entry]));
+  let best: { path: VaultPath; record: ConceptKeyRecord } | undefined;
+  for (const hit of hits) {
+    const canonical = byKey.get(index.canonicalOf(hit.record.key));
+    if (canonical === undefined) continue;
+    if (best === undefined || mintedEarlier(canonical.record, best.record) < 0) best = canonical;
+  }
+  return best;
+}
+
+/**
+ * One candidate against the store as `state` holds it. Everything `resolveConceptKey`'s doc
+ * promises is decided here; the only difference a batch makes is that a later candidate sees
+ * what an earlier one minted or refreshed, exactly as it would had the two been resolved one
+ * after the other.
+ */
+async function resolveOne(
   vault: VaultSource,
-  tier: ConceptTier,
-  anchor: ConceptKeyAnchor,
-  options: ResolveConceptKeyOptions = {},
+  state: StoreState,
+  request: ConceptKeyRequest,
+  options: ResolveConceptKeyOptions,
 ): Promise<string> {
-  const now = options.now ?? defaultNow;
-  const existing = await listConceptKeyRecords(vault);
-  const hit = existing.find(({ record }) => recordMatchesAnchor(record, anchor));
+  const { tier, anchor } = request;
+  const hits = state.entries.filter(({ record }) => recordMatchesAnchor(record, anchor));
+  const hit = canonicalEntryAmong(state, hits);
 
   if (hit !== undefined) {
     if (hit.record.anchor.kind === anchor.kind && !anchorEquals(hit.record.anchor, anchor)) {
       const refreshed: ConceptKeyRecord = { ...hit.record, anchor };
       await vault.write(hit.path, serialize(refreshed));
+      hit.record = refreshed;
+      state.index = null;
     }
     return hit.record.key;
   }
@@ -536,20 +786,21 @@ export async function resolveConceptKey(
   // decline (`[D-183]`'s existing accept/decline path, `ol-2zfj.58`/`ol-2zfj.59`) is a follow-up;
   // this seam only stops the orphaning.
   if (anchor.kind === 'topic') {
-    const renameHit = existing.find(({ record }) =>
+    const renameHits = state.entries.filter(({ record }) =>
       isRenameSignatureMatch(record, anchor, options.runTopicNames),
     );
+    const renameHit = canonicalEntryAmong(state, renameHits);
     if (renameHit !== undefined) return renameHit.record.key;
   }
 
   const key = mintKey(options.generateKey);
   // ONT-R1's "at mint" normalisation index (`ol-2zfj.86`, C7.11): only meaningful for a topic
   // anchor (see `findNormalizationCollisions`'s doc for why a note anchor is excluded). Computed
-  // against `existing` — the same listing already fetched above, no second vault read — over this
-  // candidate's own wording (`name` plus any `aliases` it already carries).
+  // against the listing this pass already holds — no second vault read — over this candidate's
+  // own wording (`name` plus any `aliases` it already carries).
   const normalizationCollisions =
     anchor.kind === 'topic'
-      ? findNormalizationCollisions(existing, [anchor.name, ...anchor.aliases])
+      ? findNormalizationCollisions(state.entries, [anchor.name, ...anchor.aliases])
       : [];
   const record: ConceptKeyRecord = {
     key,
@@ -557,11 +808,66 @@ export async function resolveConceptKey(
     anchor,
     aliases: [],
     ...(normalizationCollisions.length > 0 ? { normalizationCollisions } : {}),
-    mintedAt: now(),
+    mintedAt: (options.now ?? defaultNow)(),
     schemaVersion: CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   };
-  await vault.write(conceptKeyRecordPath(key), serialize(record));
+  const path = conceptKeyRecordPath(key);
+  await vault.write(path, serialize(record));
+  // A fresh mint matched no record, so it joins no identity: the index gains a singleton, which a
+  // rebuild on the next lookup that needs it picks up.
+  state.entries.push({ path, record });
+  state.index = null;
   return key;
+}
+
+/**
+ * The batch seam: resolves every request in order, as one turn of the store's queue (module doc,
+ * "ONE WRITER AT A TIME") over one listing. `keys[i]` answers `requests[i]`. Equivalent to calling
+ * `resolveConceptKey` for each request one after the other, with nothing else touching the store
+ * in between — which is the property a concurrent second pass could otherwise break.
+ */
+export async function resolveConceptKeys(
+  vault: VaultSource,
+  requests: readonly ConceptKeyRequest[],
+  options: ResolveConceptKeyOptions = {},
+): Promise<readonly string[]> {
+  if (requests.length === 0) return [];
+  return withConceptKeyStoreLock(async () => {
+    const state: StoreState = {
+      entries: (await listConceptKeyRecords(vault)).map(({ path, record }) => ({ path, record })),
+      index: null,
+    };
+    const keys: string[] = [];
+    for (const request of requests) keys.push(await resolveOne(vault, state, request, options));
+    return keys;
+  });
+}
+
+/**
+ * The single seam (design doc §7): given this candidate's anchor and tier, resolve its durable
+ * key — reading an existing record back verbatim when one matches, minting and persisting a new
+ * one otherwise. **Never mints a second record for an anchor that already matches one** (the
+ * scenario "re-extraction resolves to the existing key"), not even when two passes ask at once
+ * (the store's queue, module doc), and **never deletes, retires or mutates `key` on any existing
+ * record** (the conservation property, `[D-088]`) — the only field this function ever rewrites on
+ * a hit is `anchor`, and only when it has drifted **within the same anchor kind**. A cross-kind
+ * match (`recordMatchesAnchor`'s `[D-183]` alias fallback, above) never rewrites `anchor` here: a
+ * stale `TopicAnchor` candidate matching a rebound `NoteAnchor` record must resolve to the same
+ * key without regressing the record back off the note it was bound to — undoing that is
+ * `bindConceptKeyToNote`'s job to prevent, not this function's to cause.
+ *
+ * **Several matching records answer with the canonical one (`[D-378]`)** — the earliest-minted
+ * record of the matched identity (module doc, "SAME-ANCHOR DUPLICATES"), never whichever file
+ * lists first; only that canonical record's anchor is ever refreshed, and no duplicate is touched.
+ */
+export async function resolveConceptKey(
+  vault: VaultSource,
+  tier: ConceptTier,
+  anchor: ConceptKeyAnchor,
+  options: ResolveConceptKeyOptions = {},
+): Promise<string> {
+  const [key] = await resolveConceptKeys(vault, [{ tier, anchor }], options);
+  return key as string;
 }
 
 /**
@@ -587,14 +893,31 @@ export async function resolveConceptKey(
  * nothing the second time: both `anchor` and the merged `aliases` are already exactly what this
  * call would produce, so the no-op is a real no-op (no file write), not merely a harmless
  * duplicate write.
+ *
+ * **Moves the identity, never a duplicate (`[D-378]`).** A `key` that names a superseded
+ * duplicate rebinds its identity's canonical record — the one lookup returns — so the identity
+ * moves onto the note as `[D-183]` intends and the duplicate itself is never rewritten. Runs as
+ * one turn of the store's queue (module doc), so a lookup racing it sees the record either wholly
+ * before or wholly after the rebind.
  */
 export async function bindConceptKeyToNote(
   vault: VaultSource,
   key: string,
   noteAnchor: NoteAnchor,
 ): Promise<void> {
+  return withConceptKeyStoreLock(() => bindUnderLock(vault, key, noteAnchor));
+}
+
+async function bindUnderLock(
+  vault: VaultSource,
+  key: string,
+  noteAnchor: NoteAnchor,
+): Promise<void> {
   const existing = await listConceptKeyRecords(vault);
-  const hit = existing.find(({ record }) => record.key === key);
+  const canonicalKey = buildConceptKeyCanonicalIndex(
+    existing.map(({ record }) => record),
+  ).canonicalOf(key);
+  const hit = existing.find(({ record }) => record.key === canonicalKey);
   if (hit === undefined) {
     throw new Error(
       `bindConceptKeyToNote: no existing ConceptKeyRecord for key "${key}" — this function ` +

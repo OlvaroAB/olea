@@ -137,7 +137,8 @@ export interface GenerationArrivalDeps {
   readonly coursesFolder?: string;
   /**
    * Normally `(courseCode) => extractConcepts(vault, {under:
-   * `${coursesFolder}/${courseCode}`})` — the same injection seam
+   * `${coursesFolder}/${courseCode}`, stampConceptKeys: true})` (`[D-357]`:
+   * the permanent key, keyed vault-wide) — the same injection seam
    * `generation/pipeline.ts`'s `GenerationPipelineDeps.listConceptsForCourse`
    * already uses, for the identical reason (`pipeline.spec.ts` never builds
    * a real vault). `buildGenerationArrivalDeps` below composes the real one.
@@ -227,6 +228,13 @@ export function buildGenerationArrivalDeps(
     ...base,
     listConceptsForCourse:
       base.listConceptsForCourse ??
-      ((courseCode) => extractConcepts(vault, { under: `${coursesFolder}/${courseCode}` })),
+      ((courseCode) =>
+        // `[D-357]`: the permanent concept key, keyed vault-wide even for this one-course walk
+        // (`extractConcepts`' rule for a stamped subtree pass) — the same key the draft runner
+        // finds the job's concept by, and the key every other reader holds.
+        extractConcepts(vault, {
+          under: `${coursesFolder}/${courseCode}`,
+          stampConceptKeys: true,
+        })),
   };
 }

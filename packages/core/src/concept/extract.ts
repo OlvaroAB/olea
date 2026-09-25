@@ -135,8 +135,8 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
 import { courseFromPath, DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractTier3Evidence } from './evidence.js';
-import type { ConceptKeyAnchor } from './key-store.js';
-import { resolveConceptKey } from './key-store.js';
+import type { ConceptKeyAnchor, ConceptKeyRequest } from './key-store.js';
+import { resolveConceptKeys } from './key-store.js';
 // Type-only, and deliberately the one edge of this module that reaches into `./read.js` — see
 // `foldReadAnchors`'s own doc comment for why the join lives here rather than in that module.
 // `isolatedModules` erases this import entirely, so it creates no runtime cycle with `read.ts`,
@@ -575,11 +575,20 @@ export async function extractConcepts(
   // know whether a matched record's OLD wording is genuinely absent from this run, to tell a
   // rename apart from two distinct concepts sharing one introducing note. `byName`'s keys are
   // exactly this run's candidate names, before any minting happens, so this is captured once
-  // here — not per-candidate — and passed through unchanged to every `keyFor` call below.
+  // here — not per-candidate — and passed through unchanged to every `keysFor` call below.
   const runTopicNames = new Set(byName.keys());
 
+  /** What `keysFor` needs to know about one candidate to derive or resolve its key. */
+  interface KeyCandidate {
+    readonly tier: ConceptTier;
+    readonly name: string;
+    readonly boundNotePath: VaultPath | undefined;
+    readonly courses: readonly string[];
+    readonly sourcePaths: readonly VaultPath[];
+  }
+
   /**
-   * `[D-174]` read-back (design doc §7): look up an existing `ConceptKeyRecord` by this
+   * `[D-174]` read-back (design doc §7): look up an existing `ConceptKeyRecord` by each
    * candidate's anchor before minting anything, so a re-extraction resolves to the key already
    * on file rather than deriving a fresh one. `courses` picks the first (sorted) course as the
    * topic anchor's single `course` field — a concept may belong to several (M:N, see
@@ -592,52 +601,104 @@ export async function extractConcepts(
    * `isRenameSignatureMatch`). Unused when `boundNotePath` is set: a bound concept anchors on the
    * note itself, not on introducing material.
    *
+   * **One store turn per call (`ol-egov.141.89.9.52`).** Every candidate of the call goes to
+   * `resolveConceptKeys` together, which lists the store once and resolves them in order inside
+   * the store's queue — so a second pass running at the same time waits, then finds what this one
+   * minted, instead of minting its own key for the same brand-new concept.
+   *
    * Gated on `options.stampConceptKeys` (see `ExtractConceptsOptions`'s doc) — off by default so
    * a call against a shared, tracked fixture vault never writes into it; falls back to the
    * pre-`[D-174]` `provisionalConceptKey` derivation when off.
    */
-  async function keyFor(
-    tier: ConceptTier,
-    name: string,
-    boundNotePath: VaultPath | undefined,
-    courses: readonly string[],
-    sourcePaths: readonly VaultPath[],
-  ): Promise<string> {
+  async function keysFor(candidates: readonly KeyCandidate[]): Promise<readonly string[]> {
     if (options.stampConceptKeys !== true) {
-      return provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null });
+      return candidates.map(({ name, boundNotePath }) =>
+        provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null }),
+      );
     }
-    const anchor: ConceptKeyAnchor =
-      boundNotePath !== undefined
-        ? { kind: 'note', noteUid: await noteUidFor(boundNotePath), notePath: boundNotePath }
-        : {
-            kind: 'topic',
-            course: [...courses].sort()[0] ?? '',
-            name,
-            aliases: [],
-            introducingPaths: [...sourcePaths].sort(),
-          };
-    return resolveConceptKey(vault, tier, anchor, { runTopicNames });
+    // A subtree pass takes each concept's key from the vault-wide pass (see `vaultWideKeyByName`)
+    // and resolves its own anchor only for a name that pass did not produce — never minting a
+    // second record for a concept the vault-wide pass already keyed.
+    const keys: (string | undefined)[] = candidates.map(({ name }) =>
+      vaultWideKeyByName?.get(name),
+    );
+    const unresolved = candidates.flatMap((candidate, i) =>
+      keys[i] === undefined ? [{ candidate, i }] : [],
+    );
+    if (unresolved.length === 0) return keys as string[];
+    const requests: ConceptKeyRequest[] = [];
+    for (const { candidate } of unresolved) {
+      const anchor: ConceptKeyAnchor =
+        candidate.boundNotePath !== undefined
+          ? {
+              kind: 'note',
+              noteUid: await noteUidFor(candidate.boundNotePath),
+              notePath: candidate.boundNotePath,
+            }
+          : {
+              kind: 'topic',
+              course: [...candidate.courses].sort()[0] ?? '',
+              name: candidate.name,
+              aliases: [],
+              introducingPaths: [...candidate.sourcePaths].sort(),
+            };
+      requests.push({ tier: candidate.tier, anchor });
+    }
+    const resolved = await resolveConceptKeys(vault, requests, { runTopicNames });
+    unresolved.forEach(({ i }, j) => {
+      keys[i] = resolved[j];
+    });
+    return keys as string[];
   }
 
-  const records: ConceptRecord[] = await Promise.all(
+  /**
+   * **A subtree pass keys by the vault-wide identity (`[D-357]`, `ol-egov.141.89.9.30`).** With
+   * `under` set, this walk sees only part of a concept's evidence: a topic-only concept named in
+   * two courses anchors on the first of its courses vault-wide, but on the subtree's own course
+   * here, and a note reachable from another course may bind (or turn ambiguous) differently. A
+   * stamped subtree pass that resolved its own anchors would therefore mint a second permanent key
+   * for a concept the whole-vault readers (Today, the registry, the plan) already key — two keys
+   * for one concept, the split `[D-357]` closes. So a stamped subtree pass first runs the same
+   * extraction over the whole vault (stamped, every other option unchanged) and takes each
+   * concept's key from there by name, the identity `byName` itself uses; everything else on the
+   * returned records (`courses`, `sourcePaths`, `tier`, binding) stays this subtree's own.
+   */
+  let vaultWideKeyByName: ReadonlyMap<string, string> | undefined;
+  if (options.stampConceptKeys === true && options.under !== undefined) {
+    const { under: _subtree, ...vaultWideOptions } = options;
+    const vaultWide = await extractConcepts(vault, vaultWideOptions);
+    vaultWideKeyByName = new Map(vaultWide.map((record) => [record.name, record.key]));
+  }
+
+  const drafts = await Promise.all(
     [...byName].map(async ([name, acc]) => {
       const { bound, ambiguous } = resolveTitle(reachableByTitle, name);
       const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
       const sourcePaths = [...acc.sourcePaths].sort();
       const tier: ConceptTier = bound !== undefined ? 1 : 2;
-      const key = await keyFor(tier, name, bound, [...acc.courses], sourcePaths);
-      const record: ConceptRecord = {
-        key,
-        name,
-        tier,
-        courses: [...acc.courses].sort(),
-        sourcePaths,
-        ...(bound !== undefined ? { boundNotePath: bound } : {}),
-        ...(definition !== undefined ? { definition } : {}),
-        ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
-        size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
-      };
-      return record;
+      return { name, acc, bound, ambiguous, definition, sourcePaths, tier };
+    }),
+  );
+  const draftKeys = await keysFor(
+    drafts.map((draft) => ({
+      tier: draft.tier,
+      name: draft.name,
+      boundNotePath: draft.bound,
+      courses: [...draft.acc.courses],
+      sourcePaths: draft.sourcePaths,
+    })),
+  );
+  const records: ConceptRecord[] = drafts.map(
+    ({ name, acc, bound, ambiguous, definition, sourcePaths, tier }, i) => ({
+      key: draftKeys[i] as string,
+      name,
+      tier,
+      courses: [...acc.courses].sort(),
+      sourcePaths,
+      ...(bound !== undefined ? { boundNotePath: bound } : {}),
+      ...(definition !== undefined ? { definition } : {}),
+      ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
+      size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
     }),
   );
 
@@ -690,6 +751,12 @@ export async function extractConcepts(
       if (citation.course !== undefined) courses.add(citation.course);
     }
 
+    const tier3Drafts: {
+      readonly name: string;
+      readonly courses: ReadonlySet<string>;
+      readonly boundNotePath: VaultPath;
+      readonly definition: string | undefined;
+    }[] = [];
     for (const [name, courses] of newNames) {
       const { bound: boundNotePath } = resolveTitle(zettelByTitle, name);
       // By construction every name in `newNames` came from `vocabulary` and
@@ -707,9 +774,21 @@ export async function extractConcepts(
       // wrote, matched by exact title, so its definition is captured the
       // same way (`[DF-13]`) even though nothing tagged it as a `topic`.
       const definition = await definitionFor(boundNotePath, name);
-      const key = await keyFor(3, name, boundNotePath, [...courses], [boundNotePath]);
+      tier3Drafts.push({ name, courses, boundNotePath, definition });
+    }
+    // Resolved after, and apart from, tiers 1/2 — the order this pass has always minted in.
+    const tier3Keys = await keysFor(
+      tier3Drafts.map(({ name, courses, boundNotePath }) => ({
+        tier: 3 as const,
+        name,
+        boundNotePath,
+        courses: [...courses],
+        sourcePaths: [boundNotePath],
+      })),
+    );
+    tier3Drafts.forEach(({ name, courses, boundNotePath, definition }, i) => {
       records.push({
-        key,
+        key: tier3Keys[i] as string,
         name,
         tier: 3,
         courses: [...courses].sort(),
@@ -718,7 +797,7 @@ export async function extractConcepts(
         ...(definition !== undefined ? { definition } : {}),
         size: conceptRecordSize({ sourcePaths: [boundNotePath], boundNotePath }),
       });
-    }
+    });
   }
 
   // Plain code-unit ordering (matches FolderSource.list's convention),

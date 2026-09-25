@@ -46,24 +46,23 @@
  * a tier-3 mint), so no `ensureHomeNoteForConcept` complexity is needed
  * here the way `pipeline.ts` needs it for a raw, note-less document drop.
  *
- * **`listConceptsForCourse`'s default deliberately uses plain `extractConcepts`
- * (`stampConceptKeys` off, `olea-core`'s provisional, content-derived key —
- * see `concept-key.ts`'s own doc), matching `generation-queue.ts`'s
- * `buildGenerationArrivalDeps` default exactly, NOT `concept/wiring.ts`'s
- * `extractConceptsFromVault` (`stampConceptKeys: true`).** The job's
- * `conceptKey` was minted by whichever `listConceptsForCourse` the arrival
- * glue used — under `main.ts`'s current composition (no
- * `deps.generation.listConceptsForCourse` override, GEN-3.4's own scope),
- * that is `buildGenerationArrivalDeps`'s plain-`extractConcepts` default. A
- * draft-time lookup that instead stamped keys would very likely mint or read
- * a *different* key for the same concept (a persisted opaque nonce, not the
- * content-derived provisional stand-in), and never find `payload.conceptKey`
- * among it — a silent, permanent non-retryable failure for every job. Using
- * the same derivation on both sides is what makes the match land. This
- * inherits `ConceptRecord.key`'s own disclosed instability (not yet stable
- * across a rename — `concept-key.ts`'s module doc): a concept renamed
- * between arrival and drain fails this lookup honestly (see below) rather
- * than silently drafting into the wrong note.
+ * **`listConceptsForCourse`'s default stamps the permanent concept key
+ * (`[D-357]`), exactly as `generation-queue.ts`'s `buildGenerationArrivalDeps`
+ * default does.** The job's `conceptKey` was minted by whichever
+ * `listConceptsForCourse` the arrival glue used — under `main.ts`'s current
+ * composition (no `deps.generation.listConceptsForCourse` override, GEN-3.4's
+ * own scope), that is `buildGenerationArrivalDeps`'s default — so both sides
+ * must derive the key the same way or the draft-time lookup never finds
+ * `payload.conceptKey`, a silent, permanent non-retryable failure for every
+ * job. Before `[D-357]` both sides used the content-derived stand-in key for
+ * that reason; both now read the `.olea/concepts/` sidecar, and a stamped
+ * one-course walk keys each concept by its vault-wide identity
+ * (`extractConcepts`' rule for a stamped subtree pass), so the key here is
+ * also the key her review log, Today and the registry carry. A permanent key
+ * survives a bound note's rename (`olea-uid`) and a topic re-wording
+ * (`[D-180]`'s rename signature); a concept that genuinely left the course
+ * between arrival and drain still fails this lookup honestly (see below)
+ * rather than drafting into the wrong note.
  *
  * ## Composition (`packages/plugin/src/main.ts`, outside this file's `owns`
  * only in the sense that the call site lives there — GEN-3.4's own scope)
@@ -117,9 +116,9 @@ export interface GenerationDraftJobDeps {
    */
   readonly draftDeps: () => DraftQuizCardsDeps | null;
   /**
-   * Defaults to plain `extractConcepts` scoped to the job's course — see
-   * this module's doc for why NOT `extractConceptsFromVault`'s stamped
-   * variant. Injected so tests never need a real vault walk.
+   * Defaults to a stamped `extractConcepts` scoped to the job's course — the
+   * arrival glue's own derivation (see this module's doc). Injected so tests
+   * never need a real vault walk.
    */
   readonly listConceptsForCourse?: (courseCode: string) => Promise<readonly ConceptRecord[]>;
   /** Injected so tests can fake grounded/refused outcomes without a real Worker — same seam `pipeline.ts`'s/`revision-job-runner.ts`'s `draftForConcept` uses. Defaults to the real `draftQuizCardsForConcept`. */
@@ -141,7 +140,8 @@ function defaultListConceptsForCourse(
   vault: VaultSource,
   coursesFolder: string,
 ): (courseCode: string) => Promise<readonly ConceptRecord[]> {
-  return (courseCode) => extractConcepts(vault, { under: `${coursesFolder}/${courseCode}` });
+  return (courseCode) =>
+    extractConcepts(vault, { under: `${coursesFolder}/${courseCode}`, stampConceptKeys: true });
 }
 
 /**

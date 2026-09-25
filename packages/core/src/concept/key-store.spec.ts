@@ -602,7 +602,7 @@ describe('extractConcepts — wired through the [D-174] sidecar when stampConcep
     const renamed = after.find((c) => c.name === 'Basalt weathering process');
     expect(renamed).toBeDefined();
 
-    // `[D-180 / KEY-2]`/`[D-183 / NAME-1]` closed the gap: `extract.ts`'s `keyFor` now threads the
+    // `[D-180 / KEY-2]`/`[D-183 / NAME-1]` closed the gap: `extract.ts`'s `keysFor` now threads the
     // candidate's `sourcePaths` into the topic anchor as `introducingPaths`, and `key-store.ts`'s
     // rename-signature match recognises "same course, same introducingPaths, old wording absent
     // from this run" as the same concept re-worded. The display name renders the current wording

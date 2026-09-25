@@ -1,72 +1,32 @@
 /**
- * Investigation for `ol-egov.141.89.10.59` (service repo, discovered from
- * `ol-egov.141.89.10.52` item 5): does a real review's `ReviewLogEntry
- * .conceptIds` carry the same key shape the stamped consumers read?
+ * A real review's `ReviewLogEntry.conceptIds` carry the same key every
+ * concept reader joins on — the permanent `.olea/concepts/` key (`[D-357]`,
+ * `ol-egov.141.89.9.30`).
  *
- * `session/enumerate.ts` (the walk behind `buildReviewSession`, and so behind
- * every real review this suite's sibling `open-session.spec.ts` drives) mints
- * `conceptIds` from `extractConcepts` with `stampConceptKeys` OMITTED —
- * `open-session.ts`'s own `buildReviewSession` call never sets it, and
- * neither does any of the six vault-walking call sites this file measures
- * against. `extract.ts#keyFor`'s doc: omitted means `options.stampConceptKeys
- * !== true`, which falls back to `provisionalConceptKey` — a pure,
- * content-derived stand-in (`concept-prov1:...`), never the persisted,
- * opaque `mintOpaqueConceptKey` output (`concept-key1:...`) `extract.ts`
- * mints when a caller explicitly opts in.
+ * Found by `ol-egov.141.89.10.59` (discovered from `ol-egov.141.89.10.52`
+ * item 5), and pinned here as two expected failures until `[D-357]` landed:
+ * `open-session.ts`'s `buildReviewSession` call enumerated her vault with
+ * `stampConceptKeys` unset, so `session/enumerate.ts` logged every review
+ * under the content-derived stand-in key (`concept-prov1:...`), while
+ * `today/data-source.ts`'s `createVaultTrendsSource` and the four readers
+ * behind `extractConceptsFromVault` (`retrospective/provider.ts`,
+ * `generation/wiring.ts`, `plan/provider.ts`,
+ * `course-setup/recognition-source.ts`) read the permanent key
+ * (`concept-key1:...`). A review she had just rated folded to zero scored
+ * events on Today's mastery overview and to a null weakest readiness behind
+ * `oracle/compose.ts`'s attainment/readiness fold (and, through
+ * `plan/build.ts`'s `conceptId: entry.conceptKey`, the plan join).
  *
- * `packages/plugin/src/concept/wiring.ts#extractConceptsFromVault` flips that
- * default: `stampConceptKeys: true` unless a caller opts OUT. Four production
- * readers call it this way — `retrospective/provider.ts:253`,
- * `generation/wiring.ts:87`, `plan/provider.ts:231`,
- * `course-setup/recognition-source.ts:91` — and `today/data-source.ts`'s
- * `createVaultTrendsSource` (used by `loadTodayPanel`'s F6.2 mastery
- * overview / F6.5 insights fold) is a fifth, direct call at line 744. Every
- * one of them reads a `ConceptRecord.key` that is the OPAQUE persisted key,
- * never the provisional one a real review-log record actually carries.
+ * `[D-357]` (David, 2026-09-25, option A) moved every path that composes a
+ * review or lists concepts onto the permanent key before the first
+ * installable release. No build was ever installed on her real vault, so no
+ * read-time bridge for old stand-in entries exists: a stand-in entry in a test
+ * or simulator vault simply reads as unreviewed, and nothing already written
+ * is rewritten.
  *
- * **This is not a fresh finding — it is the measured state
- * `ol-egov.141.89.9.26` already pinned**, in
- * `packages/plugin/test/today/concept-key-agreement.spec.ts`'s second
- * describe block, for the Today reader specifically, and left unfixed on
- * purpose: reverting `createVaultTrendsSource` to unstamped regresses
- * `ol-2zfj.50`'s own scenario (`production-callers.spec.ts`) that this exact
- * call site stamp. This file's job is narrower and complementary — drive a
- * REAL review through `openReviewSession` (this package's own composition,
- * not a hand-built `ReviewLogEntry`) and show the identical mismatch reaches
- * two of the five stamped readers the bead names, plus the shared
- * `computeAllConceptMastery`/`readAllConceptReadiness` fold `oracle/
- * compose.ts:340-350` puts behind attainment, readiness and (via `plan/
- * build.ts:176`'s `conceptId: entry.conceptKey`) the plan join — all three
- * key their `conceptKeys` off the identical opaque `extractConceptsFromVault`
- * output this file measures directly.
- *
- * **Where the bead's own framing over-reached, corrected here:** the
- * registry is NOT a sixth stamped reader. `registry/provider.ts:595` calls
- * `enumerateVaultInstruments(deps.vault)` with no `concepts` option at all —
- * the identical unstamped walk `buildReviewSession` uses — so the registry's
- * own join stays internally consistent with a real review-log record. Traced
- * and reported, not asserted here (this file owns one new spec, not a
- * registry-owned regression suite).
- *
- * Join table (file:line), traced for this report:
- *  - `session/enumerate.ts:357-365` mints `conceptIds` from `ordered.map(c =>
- *    c.key)`, `c.key` from `extract.ts#keyFor` with `stampConceptKeys`
- *    unset -> provisional. `open-session.ts:396`'s `buildReviewSession` call
- *    never sets it either. MISMATCH SOURCE.
- *  - `today/data-source.ts:744` (`createVaultTrendsSource#listConceptCourses`)
- *    -> `extractConceptsFromVault`, stamped by default -> opaque. Folded
- *    against `entries` (provisional) inside `loadTodayPanel`'s F6.2 mastery
- *    overview. MISMATCH.
- *  - `oracle/compose.ts:340-350` (`composeOracleRanking`, behind attainment
- *    (`computeAllConceptMastery`), readiness (`readAllConceptReadiness`,
- *    `ol-v7r5.54`'s wiring) and, through `plan/build.ts:176`, the plan join)
- *    takes `conceptKeys` from `edges.edges.map(e => e.conceptKey)`, and
- *    `evidence-edge/build.ts:267`'s `conceptKeyByName` is built from
- *    `options.concepts` — `plan/provider.ts:231` supplies that via
- *    `extractConceptsFromVault`, stamped -> opaque. MISMATCH.
- *  - `registry/provider.ts:595` -> `enumerateVaultInstruments`, unstamped ->
- *    provisional, matching a real review-log record. NOT a mismatch — the
- *    bead's framing named it as one; this trace does not bear that out.
+ * This file drives a REAL review through `openReviewSession` (this package's
+ * own composition, not a hand-built `ReviewLogEntry`) and reads it back
+ * through the two stamped readers named above.
  *
  * Every course code and concept name below is invented (INV-3).
  */
@@ -74,13 +34,13 @@
 import type { Rating } from 'olea-contracts';
 import type { ComposedStudySession, StudySessionItem } from 'olea-core';
 import {
+  appendReviewLogRecord,
   computeAllConceptMastery,
   createFsrsScheduler,
   enumerateVaultInstruments,
   OPAQUE_CONCEPT_KEY_PREFIX,
   PROVISIONAL_CONCEPT_KEY_PREFIX,
   projectInstrumentValidity,
-  provisionalConceptKey,
   readAllConceptReadiness,
   readReviewLogHistory,
 } from 'olea-core';
@@ -237,8 +197,8 @@ async function openAndRateOneItem(vault: ReturnType<typeof memoryVault>) {
   await outcome.session.rate('good' satisfies Rating);
 }
 
-describe('a real review, read back through the provisional key it was actually logged under', () => {
-  it('precondition: the review-log record names the provisional key session/enumerate.ts mints, not the opaque one (confirms the fixture, not the bug)', async () => {
+describe('a real review, read back through the permanent key it is logged under ([D-357])', () => {
+  it('the review-log record names the permanent key, never the stand-in, and the log folds against it', async () => {
     const vault = fixtureVault();
     await openAndRateOneItem(vault);
 
@@ -247,25 +207,22 @@ describe('a real review, read back through the provisional key it was actually l
     expect(reviewEntries).toHaveLength(1);
     const loggedConceptId = reviewEntries[0]?.conceptIds[0];
     expect(loggedConceptId).toBeDefined();
-    expect(loggedConceptId?.startsWith(`${PROVISIONAL_CONCEPT_KEY_PREFIX}:`)).toBe(true);
+    expect(loggedConceptId?.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
+    expect(loggedConceptId?.startsWith(`${PROVISIONAL_CONCEPT_KEY_PREFIX}:`)).toBe(false);
 
-    // The write path itself is sound: folding the log against the SAME
-    // provisional key it was written under finds the review — isolates the
-    // bug below to the key SHAPE mismatch, not to a broken append or a
-    // broken fold.
-    const provisionalKey = provisionalConceptKey({ name: CONCEPT_NAME, boundNotePath: null });
-    expect(loggedConceptId).toBe(provisionalKey);
-    const mastery = computeAllConceptMastery(entries, [provisionalKey]);
-    expect(mastery.get(provisionalKey)?.evidence.scoredEventCount).toBe(1);
+    // The write path itself is sound: folding the log against the key it was
+    // written under finds the review.
+    const mastery = computeAllConceptMastery(entries, [loggedConceptId as string]);
+    expect(mastery.get(loggedConceptId as string)?.evidence.scoredEventCount).toBe(1);
   });
 
-  it.fails("REGRESSION (traced, not owned by this bead — see ol-egov.141.89.10.59 report): Today's mastery-overview reader finds the review it just logged", async () => {
+  it("Today's mastery-overview reader finds the review it just logged", async () => {
     const vault = fixtureVault();
     await openAndRateOneItem(vault);
     const { entries } = await readReviewLogHistory(vault, {});
 
-    // `today/data-source.ts:744` — the exact call `loadTodayPanel`'s F6.2
-    // mastery overview / F6.5 insights fold uses.
+    // `today/data-source.ts`'s `createVaultTrendsSource` — the exact call
+    // `loadTodayPanel`'s F6.2 mastery overview / F6.5 insights fold uses.
     const trends = createVaultTrendsSource({ vault });
     const concepts = await trends.listConceptCourses();
     if (concepts === null) throw new Error('fixture vault should enumerate cleanly');
@@ -273,24 +230,21 @@ describe('a real review, read back through the provisional key it was actually l
     expect(stampedConceptId).toBeDefined();
     expect(stampedConceptId?.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
 
-    // Same fold `buildTodayPanel`'s mastery overview runs, keyed by the
-    // stamped id Today actually reads. Today the review is invisible here:
-    // `scoredEventCount` reads 0, not 1 — this assertion states what SHOULD
-    // be true once the key shapes agree, so it documents the gap rather than
-    // asserting today's broken behaviour as correct.
+    // Same fold `buildTodayPanel`'s mastery overview runs, keyed by the id
+    // Today actually reads.
     const mastery = computeAllConceptMastery(entries, [stampedConceptId as string]);
     expect(mastery.get(stampedConceptId as string)?.evidence.scoredEventCount).toBe(1);
   });
 
-  it.fails('REGRESSION (traced, not owned by this bead — see ol-egov.141.89.10.59 report): the attainment/readiness fold behind oracle/compose.ts finds the review it just logged', async () => {
+  it('the attainment/readiness fold behind oracle/compose.ts finds the review it just logged', async () => {
     const vault = fixtureVault();
     await openAndRateOneItem(vault);
     const { entries } = await readReviewLogHistory(vault, {});
 
-    // `plan/provider.ts:231` (and `generation/wiring.ts:87`,
-    // `course-setup/recognition-source.ts:91`, `retrospective/provider.ts:253`)
-    // all source their `concepts` this exact way, which is what
-    // `oracle/compose.ts:343`'s `conceptKeys` (attainment's
+    // `plan/provider.ts` (and `generation/wiring.ts`,
+    // `course-setup/recognition-source.ts`, `retrospective/provider.ts`) all
+    // source their `concepts` this exact way, which is what
+    // `oracle/compose.ts`'s `conceptKeys` (attainment's
     // `computeAllConceptMastery` input and readiness's
     // `readAllConceptReadiness` input alike) is built from.
     const records = await extractConceptsFromVault(vault, {});
@@ -301,17 +255,63 @@ describe('a real review, read back through the provisional key it was actually l
     const mastery = computeAllConceptMastery(entries, [stampedConceptId as string]);
     expect(mastery.get(stampedConceptId as string)?.evidence.scoredEventCount).toBe(1);
 
-    const scheduler = createFsrsScheduler();
-    const validity = projectInstrumentValidity(entries);
-    const readiness = readAllConceptReadiness(
-      entries,
-      [stampedConceptId as string],
-      scheduler,
-      NOW,
-      validity,
+    // Readiness joins by the same key. Which successes it counts is `[D-264]`'s
+    // rule, not the key's: only an unaided success is readiness evidence, and
+    // the support-level chooser shows a cold-start first review with support
+    // (`[D-094]`), so that review alone honestly reads as no readiness yet.
+    // The same review, shown unaided, enters the reading under the permanent
+    // key — and would enter no reading under any other.
+    const unaided = entries.map((entry) =>
+      entry.kind === 'review' ? { ...entry, supportLevelShown: 'independent' as const } : entry,
     );
-    // Readiness should see the same review's instrument as eligible evidence;
-    // it does not, for the identical key-shape reason.
+    const reviewedAt = unaided.find((entry) => entry.kind === 'review')?.timestamp;
+    if (reviewedAt === undefined) throw new Error('no review entry was logged');
+    const dayAfter = new Date(Date.parse(reviewedAt) + 86_400_000);
+    const readiness = readAllConceptReadiness(
+      unaided,
+      [stampedConceptId as string, `${PROVISIONAL_CONCEPT_KEY_PREFIX}:${CONCEPT_NAME}`],
+      createFsrsScheduler(),
+      dayAfter,
+      projectInstrumentValidity(unaided),
+    );
     expect(readiness.get(stampedConceptId as string)?.weakest).not.toBeNull();
+    expect(readiness.get(`${PROVISIONAL_CONCEPT_KEY_PREFIX}:${CONCEPT_NAME}`)?.weakest).toBeNull();
+  });
+
+  it('a stand-in entry already in a vault is not rewritten and simply reads as unreviewed ([D-357], no bridge)', async () => {
+    const vault = fixtureVault();
+    const standIn = `${PROVISIONAL_CONCEPT_KEY_PREFIX}:${CONCEPT_NAME}`;
+    const { instrumentId } = await composeOneItemSession(vault);
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-09-20T10:00:00Z',
+        instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [standIn],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 1000,
+        selectionContext: {
+          dueState: 'new',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'stand-in-1' },
+    );
+    const logPaths = (await vault.list()).filter((path) => path.startsWith('.olea/reviews/'));
+    expect(logPaths).toHaveLength(1);
+    const before = await vault.read(logPaths[0] as string);
+
+    const records = await extractConceptsFromVault(vault, {});
+    const permanentKey = records.find((r) => r.name === CONCEPT_NAME)?.key as string;
+    const { entries } = await readReviewLogHistory(vault, {});
+    const mastery = computeAllConceptMastery(entries, [permanentKey]);
+    expect(mastery.get(permanentKey)?.evidence.scoredEventCount).toBe(0);
+    // Nothing already written is rewritten.
+    expect(await vault.read(logPaths[0] as string)).toBe(before);
   });
 });

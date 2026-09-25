@@ -40,8 +40,14 @@
  * deliberately" below; `ol-egov.141.89.10.13`). It does not read a clock:
  * `now` is the caller's, same discipline as `ScheduleInput.now`, so a
  * caller's own composition over this enumeration is deterministic and a
- * replay of it is trustworthy. And it writes nothing at all, into the vault
- * or beside it.
+ * replay of it is trustworthy. And it writes nothing into her notes. The one
+ * write it can cause is Olea's own concept-key sidecar: a caller passing
+ * `instruments.concepts.stampConceptKeys` has the walk read each concept's
+ * permanent key from `.olea/concepts/` and mint one for a concept seen for the
+ * first time (`../concept/key-store.ts`). Every production caller does
+ * (`[D-357]`: a review is logged under the permanent key, never the
+ * content-derived stand-in); a caller over a shared, tracked fixture vault
+ * leaves it off and writes nothing at all.
  *
  * ## Suspension comes from the whole log, deliberately
  *

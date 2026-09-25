@@ -11,7 +11,7 @@
  * decision function reads `instrumentMixGaps` faithfully.
  */
 import type { ConceptInstrumentInventory, KnowledgeKindClassifierPort } from 'olea-core';
-import { provisionalConceptKey } from 'olea-core';
+import { extractConcepts } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildConceptInstrumentInventory,
@@ -157,14 +157,25 @@ describe('classifyForRouting', () => {
   });
 });
 
+/**
+ * The permanent concept key (`[D-357]`) the inventory keys by — read back from the same
+ * `.olea/concepts/` sidecar the inventory's own walk stamped, never the content-derived stand-in.
+ */
+async function permanentKey(vault: MemoryVaultSource, name: string): Promise<string> {
+  const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+    (concept) => concept.name === name,
+  )?.key;
+  if (key === undefined) throw new Error(`no concept named ${name}`);
+  return key;
+}
+
 describe('buildConceptInstrumentInventory', () => {
   it('counts a real vault instrument into its concept and routing group', async () => {
     const vault = new MemoryVaultSource({
       [NOTE]: [frontmatter('Working memory'), '## Q', '', MCQ_BLOCK, ''].join('\n'),
     });
-    const key = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
-
     const inventory = await buildConceptInstrumentInventory(vault, { under: '01 Courses' });
+    const key = await permanentKey(vault, 'Working memory');
 
     expect(inventory.get(key)).toEqual({ retrieval: 0, quiz: 1, explainBack: 0 });
   });
@@ -181,10 +192,9 @@ describe('buildConceptInstrumentInventory', () => {
         '',
       ].join('\n'),
     });
-    const wmKey = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
-    const attnKey = provisionalConceptKey({ name: 'Attention', boundNotePath: null });
-
     const inventory = await buildConceptInstrumentInventory(vault, { under: '01 Courses' });
+    const wmKey = await permanentKey(vault, 'Working memory');
+    const attnKey = await permanentKey(vault, 'Attention');
 
     expect(inventory.get(wmKey)).toEqual({ retrieval: 1, quiz: 0, explainBack: 0 });
     expect(inventory.get(attnKey)).toEqual({ retrieval: 1, quiz: 0, explainBack: 0 });

@@ -533,9 +533,11 @@ export function createVaultInstrumentSource(
           scheduler: deps.scheduler,
           now: deps.now(),
           reviewLog: { additionalPaths },
-          ...(deps.excludePaths !== undefined
-            ? { instruments: { excludePaths: deps.excludePaths } }
-            : {}),
+          // `[D-357]`: the permanent concept key, the one her review log now carries.
+          instruments: {
+            concepts: { stampConceptKeys: true },
+            ...(deps.excludePaths !== undefined ? { excludePaths: deps.excludePaths } : {}),
+          },
           ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
         });
 
@@ -707,26 +709,16 @@ export interface VaultTrendsSourceDeps {
  * is one line and is written here rather than inside core so that the seam
  * where it could stop matching is visible.
  *
- * **NOT reverted to unstamped, despite `ol-egov.141.89.9.26`'s finding that
- * this is the one call site (of six named by `ol-2zfj.44`'s module doc) that
- * has migrated to `extractConceptsFromVault`, while every other production
- * reader (`registry/provider.ts`, `grove/provider.ts`, and — the one that
- * actually matters for the fold below — `session/build.ts#buildReviewSession`,
- * which is what a real review gets logged under) still calls
- * `enumerateVaultInstruments` unstamped.** Reverting THIS call site alone
- * would regress `ol-2zfj.50` (`features/F8-concepts-scope.md`'s own scenario,
- * "every production extraction path mints concept keys, not just the
- * composition root" — `production-callers.spec.ts`, which exercises this
- * exact call site). The two are in genuine tension: `[D-174]`'s scenario
- * requires this reader to stamp; the review-log fold
- * (`buildMasteryOverview`/`buildInsights` inside `buildTodayPanel`, joining
- * `entries` — always provisionally keyed, since no write path has migrated —
- * against `concepts` from this function) needs it not to, or needs every
- * other production key-deriving call site migrated alongside it. Closing
- * either side alone reopens the other; see
- * `packages/plugin/test/today/concept-key-agreement.spec.ts` for the measured
- * evidence and `ol-egov.141.89.9.26`'s close notes for why this bead reports
- * rather than resolves it.
+ * **Stamped, like every other production reader (`[D-357]`).** This was once
+ * the one stamped reader while the review composer and every other reader
+ * derived the content-based stand-in key, so a concept she had reviewed read
+ * as never reviewed here (`ol-egov.141.89.9.26`). Every path that composes a
+ * review or lists concepts now reads and writes the permanent `.olea/concepts/`
+ * key — `session/build.ts#buildReviewSession` behind every review she logs,
+ * the registry, the grove and this file's scope and instrument sources
+ * alike — so `buildMasteryOverview`/`buildInsights` join one key on both
+ * sides. `packages/plugin/test/today/concept-key-agreement.spec.ts` and
+ * `packages/plugin/test/review/concept-key-join.spec.ts` hold that join.
  *
  * **`displayName` resolution (`ol-95vv.6`)** reuses `record.name` — already
  * on hand from the same walk, no second read — overlaid by
@@ -1021,7 +1013,9 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
 
         const [{ entries, files }, enumeration] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
-          enumerateVaultInstruments(deps.vault),
+          // `[D-357]`: keyed by the permanent concept key, the same key the trends source below
+          // and every review-log entry carry, so F6.2's scope and mastery join one identity.
+          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
         ]);
 
         const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];

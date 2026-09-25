@@ -102,7 +102,8 @@ async function loadCourseState(
 
   const [{ records }, enumeration, outcomeRecords] = await Promise.all([
     readAssessments(deps.vault, config.assignmentsBasePath),
-    enumerateVaultInstruments(deps.vault),
+    // `[D-357]`: the permanent concept key, the one her review log carries.
+    enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
     listOutcomeRecords(deps.vault),
   ]);
   const courseAssessments = records.filter((record) => record.course === course);
@@ -200,7 +201,8 @@ export function createLocalPracticePaperProvider(
       const asOf = isoToday(deps.now());
       const [{ records }, enumeration, outcomeRecords] = await Promise.all([
         readAssessments(deps.vault, config.assignmentsBasePath),
-        enumerateVaultInstruments(deps.vault),
+        // `[D-357]`: the permanent concept key, the one her review log carries.
+        enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
         listOutcomeRecords(deps.vault),
       ]);
 

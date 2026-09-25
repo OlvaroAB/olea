@@ -30,7 +30,7 @@
  * reads this field back.
  */
 import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
-import { checkRoutingReachesSelection, hashText, provisionalConceptKey } from 'olea-core';
+import { checkRoutingReachesSelection, extractConcepts, hashText } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
@@ -39,6 +39,15 @@ import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+
+/** The permanent concept key (`[D-357]`) the vault's own stamped extraction resolves for `name`. */
+async function permanentKey(vault: MemoryVaultSource, name: string): Promise<string> {
+  const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+    (concept) => concept.name === name,
+  )?.key;
+  if (key === undefined) throw new Error(`no concept named ${name}`);
+  return key;
+}
 
 const COURSE_FOLDER_NOTE = '01 Courses/COGS214/Week 2.md';
 
@@ -575,13 +584,13 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
     '```',
   ].join('\n');
 
-  // The real derivation `extractConcepts`/`enumerateVaultInstruments` use
-  // internally (`ol-63e1`) for an unbound (tier-2) concept — matching it here
-  // is what lets `buildConceptInstrumentInventory`'s real vault walk find the
-  // same key the fake `listConceptsForCourse` candidate carries, the same way
-  // production's `listConceptsForCourseFactory` (`wiring.ts`) does by calling
-  // the real `extractConcepts` itself.
-  const conceptKey = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
+  // A fixed key for the tests below whose vault holds no instrument, so the
+  // real inventory walk never has a key to disagree with. The one test that
+  // needs `buildConceptInstrumentInventory`'s walk to find the candidate reads
+  // the permanent key (`[D-357]`) back from its own vault instead — see
+  // `permanentKey` — the same key production's `listConceptsForCourseFactory`
+  // (`wiring.ts`) hands the sweep by calling the real stamped extraction.
+  const conceptKey = 'concept-key1:working-memory-fixture';
 
   it('classifier unavailable (`classifier: null`) routes to the retrieval baseline and skips quiz drafting', async () => {
     const vault = new MemoryVaultSource();
@@ -670,6 +679,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       ].join('\n'),
     });
     const cache = createVaultDraftCacheStore(vault);
+    const permanent = await permanentKey(vault, 'Working memory');
 
     const classifier: KnowledgeKindClassifierPort = {
       // `fact` -> retrieval-dominant, quiz **floor** (target 1) — the
@@ -686,7 +696,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       draftDeps: {} as never,
       listConceptsForCourse: async () => [
         {
-          key: conceptKey,
+          key: permanent,
           name: 'Working memory',
           tier: 2,
           courses: ['COGS214'],
@@ -821,7 +831,7 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
 describe('the row 2.2 health check reads the sweep it actually ran (`[MOM-8.1 / BD-1]`)', () => {
   const COURSE_FOLDER_NOTE = '01 Courses/COGS214/Lecture 3.md';
   const CONCEPT_NOTE = '01 Courses/COGS214/Working memory.md';
-  const conceptKey = provisionalConceptKey({ name: 'Working memory', boundNotePath: null });
+  const conceptKey = 'concept-key1:working-memory-fixture';
 
   function classifiedConcept(): ConceptRecord {
     return {

@@ -170,8 +170,12 @@ export async function deriveWorkbenchQueue(
   const entries =
     typeof options.entries === 'function'
       ? options.entries(
-          (await enumerateVaultInstruments(options.vault, { excludePaths: NOT_A_FIXTURE_NOTE }))
-            .records,
+          (
+            await enumerateVaultInstruments(options.vault, {
+              excludePaths: NOT_A_FIXTURE_NOTE,
+              concepts: { stampConceptKeys: true },
+            })
+          ).records,
         )
       : options.entries;
 
@@ -180,7 +184,9 @@ export async function deriveWorkbenchQueue(
     scheduler: options.scheduler,
     now: WORKBENCH_NOW,
     entries,
-    instruments: { excludePaths: NOT_A_FIXTURE_NOTE },
+    // `[D-357]`: the permanent concept key, as the product's review composer reads and writes it —
+    // and the same key the persona join above mapped her stream onto (one vault, one sidecar).
+    instruments: { excludePaths: NOT_A_FIXTURE_NOTE, concepts: { stampConceptKeys: true } },
   });
 
   const at = sessionInstant(session.candidates);

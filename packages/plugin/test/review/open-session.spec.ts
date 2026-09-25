@@ -64,11 +64,12 @@ import type {
 } from 'olea-core';
 import {
   appendReviewLogRecord,
+  CONCEPT_KEY_RECORD_SCHEMA_VERSION,
   calendarDayFromLocalDate,
+  conceptKeyRecordPath,
   createFsrsScheduler,
   enumerateVaultInstruments,
   parseReviewLog,
-  provisionalConceptKey,
   reviewLogPath,
   suspendedInstrumentIds,
   writeDistractorProvenance,
@@ -101,14 +102,49 @@ import { memoryVault, unreadableVault } from './memory-vault.js';
 const DEVICE = 'olea-testdevice1';
 
 /**
- * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` now carry
- * the opaque key, never the display name — 'Alpha'/'Beta' here are both
- * unbound (`Concepts/Alpha.md`/`Concepts/Beta.md` carry `title:`, not `topic:`,
- * and sit outside the default Zettelkasten folder, so they bind nothing;
- * the real binding comes from `Courses/TEST101/Week one|two.md`'s `topic:`).
+ * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` carry
+ * the opaque key, never the display name — 'Alpha'/'Beta'/'Gamma' here are
+ * all unbound (`Concepts/*.md` carry `title:`, not `topic:`, and no course
+ * note links them, so they bind nothing; the real binding comes from
+ * `Courses/TEST101/Week one|two|three.md`'s `topic:`).
+ *
+ * `[D-357]`: the key is the permanent one from `.olea/concepts/` — a random
+ * nonce minted once per vault, never derived from content. So `studyVault()`
+ * carries each concept's record already (`conceptKeySidecar`), with a fixed,
+ * readable key: every stamped walk over it, the session's own included,
+ * resolves these keys by lookup and mints nothing.
  */
+const FIXTURE_CONCEPT_KEYS: Readonly<Record<string, { key: string; introducedBy: string }>> = {
+  Alpha: { key: 'concept-key1:fixture-alpha', introducedBy: 'Courses/TEST101/Week one.md' },
+  Beta: { key: 'concept-key1:fixture-beta', introducedBy: 'Courses/TEST101/Week two.md' },
+  Gamma: { key: 'concept-key1:fixture-gamma', introducedBy: 'Courses/TEST101/Week three.md' },
+};
+
 function unboundKey(name: string): string {
-  return provisionalConceptKey({ name, boundNotePath: null });
+  const fixture = FIXTURE_CONCEPT_KEYS[name];
+  if (fixture === undefined) throw new Error(`no fixture concept key for ${name}`);
+  return fixture.key;
+}
+
+/** One concept's `.olea/concepts/` record, exactly as the key store writes a topic-anchored mint. */
+function conceptKeySidecar(name: string): Record<string, string> {
+  const fixture = FIXTURE_CONCEPT_KEYS[name];
+  if (fixture === undefined) throw new Error(`no fixture concept key for ${name}`);
+  const record = {
+    key: fixture.key,
+    tier: 2,
+    anchor: {
+      kind: 'topic',
+      course: 'TEST101',
+      name,
+      aliases: [],
+      introducingPaths: [fixture.introducedBy],
+    },
+    aliases: [],
+    mintedAt: '2026-08-01',
+    schemaVersion: CONCEPT_KEY_RECORD_SCHEMA_VERSION,
+  };
+  return { [conceptKeyRecordPath(fixture.key)]: `${JSON.stringify(record, null, 2)}\n` };
 }
 
 /** Fixed so the composed queue, the log filename and the assertions all agree. */
@@ -140,6 +176,11 @@ const MCQ_BLOCK = [
 /** Two notes, three instruments, two concepts — small enough to read in one screen. */
 function studyVault(extra: Readonly<Record<string, string>> = {}) {
   return memoryVault({
+    ...conceptKeySidecar('Alpha'),
+    ...conceptKeySidecar('Beta'),
+    // Gamma's note arrives mid-test (`addGammaConcept`); its record waiting here reads nothing on
+    // its own — a record is looked up by anchor, never enumerated as a concept.
+    ...conceptKeySidecar('Gamma'),
     'Concepts/Alpha.md': CONCEPT_NOTE,
     'Concepts/Beta.md': CONCEPT_NOTE.replace('title: Alpha', 'title: Beta'),
     'Courses/TEST101/Week one.md': [

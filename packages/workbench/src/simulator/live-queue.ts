@@ -41,7 +41,10 @@ export async function loadLiveDueQueue(options: LoadLiveDueQueueOptions): Promis
     vault: options.vault,
     scheduler: options.scheduler,
     now: options.now,
-    instruments: { excludePaths: EXCLUDE_PATHS },
+    // `[D-357]`: the simulator's reviews are logged under each concept's permanent key, the key
+    // the mounted plugin's Today, registry and grove read — exactly as the product's own review
+    // composer (`open-session.ts`) logs them.
+    instruments: { excludePaths: EXCLUDE_PATHS, concepts: { stampConceptKeys: true } },
   });
   const offered = composeQueue({
     candidates: session.candidates,

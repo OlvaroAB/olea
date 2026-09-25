@@ -16,7 +16,7 @@ import {
   GOVERNING_GOVERNS_FOR_SECONDS,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
-import { createFsrsScheduler, provisionalConceptKey, reviewLogPath } from 'olea-core';
+import { createFsrsScheduler, extractConcepts, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { sessionCompositionSentence } from '../../src/home/copy.js';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
@@ -550,9 +550,23 @@ const AVOIDANCE_CONTEXT: SelectionContextV4 = {
   planVersion: null,
 };
 
-/** `[D-248]` took the Zettelkasten folder out of tier-1 binding entirely (`../../src/concept/extract.ts`'s module doc), so `manyConcepts`'s zettel file does not bind its concept — the review-log join key is the plain, unbound provisional form. */
-function conceptKey(name: string): string {
-  return provisionalConceptKey({ name, boundNotePath: null });
+/** The review-log join key: the concept's permanent key (`[D-357]`), read back from this vault's own `.olea/concepts/` sidecar — the key the grove's stamped walk resolves. */
+async function conceptKey(vault: ReturnType<typeof fixtureVault>, name: string): Promise<string> {
+  const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+    (concept) => concept.name === name,
+  )?.key;
+  if (key === undefined) throw new Error(`fixture vault has no concept named ${name}`);
+  return key;
+}
+
+/** Both courses saturated, with one recent review in TESTC101 and none in TESTC202. */
+async function vaultReviewedInOneCourse(): Promise<ReturnType<typeof fixtureVault>> {
+  const vault = twoCourseVault();
+  await vault.write(
+    reviewLogPath('2026-09-01', DEVICE),
+    `${reviewLine(await conceptKey(vault, 'Widget0'), '2026-09-01T09:00:00Z', 'e1')}\n`,
+  );
+  return vault;
 }
 
 function reviewLine(conceptKey: string, timestamp: string, eventId: string): string {
@@ -580,15 +594,7 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
   });
 
   it('fires for the course with no review activity while the other was reviewed recently, and marks it asked', async () => {
-    const vault = fixtureVault({
-      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
-      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
-      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
-        conceptKey('Widget0'),
-        '2026-09-01T09:00:00Z',
-        'e1',
-      )}\n`,
-    });
+    const vault = await vaultReviewedInOneCourse();
     const host = hostWithBasePath(BASE_PATH);
     const state = dashboard(await provider(vault, host).load(DEFAULT_REQUEST));
 
@@ -596,15 +602,7 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
   });
 
   it('a second load never re-offers the same course — "at most once"', async () => {
-    const vault = fixtureVault({
-      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
-      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
-      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
-        conceptKey('Widget0'),
-        '2026-09-01T09:00:00Z',
-        'e1',
-      )}\n`,
-    });
+    const vault = await vaultReviewedInOneCourse();
     const host = hostWithBasePath(BASE_PATH);
     const home = provider(vault, host);
 
@@ -616,15 +614,7 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
   });
 
   it('onAnswer records her literal choice and a date — never a diagnosis', async () => {
-    const vault = fixtureVault({
-      ...manyConcepts('TESTC101', 'Widget', SATURATING_CONCEPT_COUNT),
-      ...manyConcepts('TESTC202', 'Gadget', SATURATING_CONCEPT_COUNT),
-      [reviewLogPath('2026-09-01', DEVICE)]: `${reviewLine(
-        conceptKey('Widget0'),
-        '2026-09-01T09:00:00Z',
-        'e1',
-      )}\n`,
-    });
+    const vault = await vaultReviewedInOneCourse();
     const host = hostWithBasePath(BASE_PATH);
     const state = dashboard(await provider(vault, host).load(DEFAULT_REQUEST));
     const question = state.avoidanceQuestion;

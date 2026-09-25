@@ -73,7 +73,11 @@ async function conceptACell(vault: ReturnType<typeof fixtureVault>) {
 
 /** Writes the qualifying explain-back attempt and returns the real minted instrument id. */
 async function seedQualifyingAttempt(vault: ReturnType<typeof fixtureVault>) {
-  const enumeration = await enumerateVaultInstruments(vault);
+  // Stamped, as the provider's own walk is (`[D-357]`): the attempt is logged under the
+  // concept's permanent key, the key a real review carries.
+  const enumeration = await enumerateVaultInstruments(vault, {
+    concepts: { stampConceptKeys: true },
+  });
   const instrument = enumeration.records[0];
   if (instrument === undefined) throw new Error('missing instrument');
   const conceptIds = [...instrument.conceptIds];
