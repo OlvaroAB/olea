@@ -142,6 +142,19 @@ export const PLUGIN_SURFACE_STATES = [
 // F1.5/F8.1's grove (`ol-z6x2`) — see `grove-scenarios.ts` for the source of truth.
 export const GROVE_STATES = ['grove-no-source', 'grove-declared'] as const;
 
+// F6.10/D-243's Home dashboard (`ol-ppxj.49`) — see `home-scenarios.ts` for the source of
+// truth. Deliberately absent from `discoverMatrix`/`drift-guard.spec.ts`: this list's own nav
+// entries in `public/index.html` are plain, hand-written anchors (`ol-ppxj.49`'s own module
+// doc — main.ts's per-state button loop is outside this bead's owns), never
+// `[data-wb-home-state-link]` elements a generic discovery pass could read, so a drift check
+// against them would just assert this file's own hardcoded copy of itself.
+export const HOME_STATES = [
+  'home-composed',
+  'home-empty',
+  'home-session-unavailable',
+  'home-unavailable',
+] as const;
+
 export const VARIABLE_SETS = [
   'obsidian-dark',
   'obsidian-light',
@@ -165,6 +178,7 @@ export type BulkReviewStateId = (typeof BULK_REVIEW_STATES)[number];
 export type RegistryStateId = (typeof REGISTRY_STATES)[number];
 export type PluginSurfaceStateId = (typeof PLUGIN_SURFACE_STATES)[number];
 export type GroveStateId = (typeof GROVE_STATES)[number];
+export type HomeStateId = (typeof HOME_STATES)[number];
 export type VariableSetId = (typeof VARIABLE_SETS)[number];
 export type Surface =
   | 'review'
@@ -180,7 +194,8 @@ export type Surface =
   | 'bulk-review'
   | 'registry'
   | 'plugin-surface'
-  | 'grove';
+  | 'grove'
+  | 'home';
 
 /**
  * WBF-4 (`ol-opjq`) — per-STATE viewport overrides for the golden suite.

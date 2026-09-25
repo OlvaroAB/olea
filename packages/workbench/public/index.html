@@ -209,6 +209,30 @@
             volunteer.
           </p>
           <nav class="wb-nav" data-wb-grove-states></nav>
+
+          <h2 class="wb-nav-heading">Home states</h2>
+          <p class="wb-nav-note">
+            F6.10's landing dashboard (D-243): the composed session inline, its own and the
+            session card's unavailable states, and F6.10's per-course coverage strip plus F4.6's
+            avoidance question, borrowed the same way the grove pane above borrows its course
+            model — see home-scenarios.ts's own module doc.
+          </p>
+          <!-- ol-ppxj.49: unlike every list above, this one is NOT built by main.ts's
+               per-state button loop (main.ts is a heavily contested shared file outside
+               this bead's owns) — so it gets no `is-active` highlighting and does not go
+               through `writeRoute`. Plain links into the already-wired #/home/<id> hash
+               route (readRoute/findStateFor, ol-qq61) reach every state regardless; wiring
+               this the same way as its siblings is filed as a follow-up naming main.ts. -->
+          <nav class="wb-nav" data-wb-home-states>
+            <a class="wb-nav-item" href="#/home/home-composed"
+              >Composed session, inline on Home</a
+            >
+            <a class="wb-nav-item" href="#/home/home-empty">Composed, but nothing to sit</a>
+            <a class="wb-nav-item" href="#/home/home-session-unavailable"
+              >The composed-session box: unavailable</a
+            >
+            <a class="wb-nav-item" href="#/home/home-unavailable">The whole view: unavailable</a>
+          </nav>
         </div>
 
         <div data-wb-walk-nav hidden>

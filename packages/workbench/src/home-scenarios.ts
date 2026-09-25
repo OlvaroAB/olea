@@ -28,26 +28,108 @@
  * itself warns against ("an implementation... has invented [something] and
  * hidden it").
  *
- * **`courses` is deliberately left empty (`[]`) in every state here.** F6.10's
- * per-course coverage strip is a different, pre-existing risk — it does not
- * belong to `[D-243]`'s gap (the session composition and its unavailable
- * box), and `HomeView.renderCourses` already no-ops cleanly on an empty
- * array (`./view.ts`'s own `if (courses.length === 0) return;`). Covering the
- * course-strip render path honestly would mean reusing a real
- * `createLocalGroveProvider` walk (or `grove-scenarios.ts`'s hand-built
- * models) here too — left to a follow-up rather than folded into this pass,
- * so this file's own scope stays legible: it is about the composed session,
- * not the grove.
+ * **`courses` and `avoidanceQuestion` (`ol-ppxj.49`, follow-up to the first
+ * tranche above).** `home-composed` keeps `courses: []` and
+ * `avoidanceQuestion: undefined` UNCHANGED — `test/home-scenarios.spec.ts`
+ * pins exactly that pair for that one state ("courses left empty"), and
+ * neither F6.10's course strip nor F4.6's avoidance question is specific to
+ * the composed-session state, so there is no honesty reason to disturb a
+ * locked assertion rather than land the new coverage on the other two
+ * dashboard states instead. `home-session-unavailable` and `home-empty`
+ * carry it — see `COURSES_FOR`/`AVOIDANCE_QUESTION_FOR` below.
  *
- * **`avoidanceQuestion` is left `undefined` everywhere** — same reasoning:
- * F4.6's course-avoidance question is its own steering input, independent of
- * `[D-243]`'s session-composition move, and `HomeView` already renders
- * correctly with none offered.
+ * **The course rows are hand-built `HomeCourseRow`s, not a real
+ * `createLocalGroveProvider` walk over the fixture vault.** `grove-
+ * scenarios.ts`'s own module doc gives the reason this file borrows instead
+ * of computing: its own scope is deliberately "the F1/F8.1 risk that does
+ * NOT live in the Obsidian runtime", fed a HAND-BUILT `GroveCourseModel`
+ * rather than a fixture-vault read, over coined vocabulary (`syn:course:…`).
+ * There is no real objectives document or past paper anywhere in the fixture
+ * vault `buildSessionScenario` reads above, so a real
+ * `createLocalGroveProvider` call over it would only ever produce
+ * `'no-registered-source'` rows — never the declared-course marks this bead
+ * needs shown. This file follows the identical discipline instead:
+ * `HomeCourseRow` (production's own type, via `./home-bridge.js`) filled
+ * with fixture facts, sharing `grove-scenarios.ts`'s own `'vantrel'` course
+ * name so a reader flipping between the Grove and Home panes sees the same
+ * course rather than a second, uncoordinated coined one. Quiet-line text
+ * calls the real, pure `home/copy.ts` functions (`HOME_SET_UP_WAITING`,
+ * `homeScopeGrewLine`) over fixture numbers — never a workbench-invented
+ * sentence, same "state real copy, feed it fixture facts" posture this
+ * file's own `sessionStateId` reuse already holds to.
+ *
+ * **`avoidanceQuestion.onAnswer` writes nothing** — same "never wired to a
+ * real event log" posture `grove-scenarios.ts#buildGroveScenario`'s own
+ * `registerSource`/`dismiss` give, `Notice`d rather than silently swallowed
+ * so a click is visibly acknowledged (mirrors that file's own
+ * `openRetrospective`).
  */
 
 import type { VaultSource } from 'olea-core';
-import type { HomeViewState } from './home-bridge.js';
+import {
+  HOME_SET_UP_WAITING,
+  type HomeAvoidanceQuestion,
+  type HomeCourseRow,
+  type HomeViewState,
+  homeScopeGrewLine,
+} from './home-bridge.js';
+import { Notice } from './obsidian-shim/index.js';
 import { buildSessionScenario, type SessionScenario } from './session-scenarios.js';
+
+/**
+ * F6.10's course strip, per state — `undefined` (the default) leaves
+ * `courses: []`, `home-composed`'s own pinned shape. Coined vocabulary,
+ * `'syn:course:vantrel'` shared with `grove-scenarios.ts`'s own fixture
+ * course — see this file's own module doc.
+ */
+const COURSES_FOR: Partial<Record<string, readonly HomeCourseRow[]>> = {
+  'home-session-unavailable': [
+    {
+      course: 'syn:course:vantrel',
+      marks: [{ kind: 'stage', state: 'sprout' }, { kind: 'ground' }, { kind: 'material-gap' }],
+      quiet: {
+        kind: 'scope-grew',
+        text: homeScopeGrewLine('01 Courses/syn:course:vantrel/Objectives.md', 3),
+      },
+    },
+    // A declared course with nothing built yet (`marks: []`, never
+    // `undefined` — that shape is reserved for a status other than
+    // `'declared'`, `home/provider.ts`'s own `marksForDeclaredCourse` never
+    // returns `undefined`) — F6.10's `HOME_NO_MAP_DRAWN` branch, distinct
+    // from `home-empty`'s `HOME_SCOPE_NOT_DECLARED` one below.
+    { course: 'syn:course:driftglass', marks: [] },
+  ],
+  'home-empty': [
+    // `marks` omitted (`undefined`), matching `home/provider.ts#buildCourseRows`'s
+    // own shape for a `'no-registered-source'` course — never an empty array,
+    // which is reserved for a declared course with zero concepts.
+    {
+      course: 'syn:course:brindlewood',
+      quiet: { kind: 'set-up-waiting', text: HOME_SET_UP_WAITING },
+    },
+  ],
+};
+
+/**
+ * F4.6's once-asked avoidance question, per state — `undefined` (the
+ * default) leaves `avoidanceQuestion: undefined`, `home-composed`'s own
+ * pinned shape. Named after `COURSES_FOR`'s own `'home-session-unavailable'`
+ * course (F4.6's question only ever names a course that HAS material,
+ * `findAvoidedCourse`'s own `hasMaterial` gate) — demonstrates `HomeView`
+ * rendering the question ABOVE the session card's own unavailable box,
+ * exactly the order `HomeView.render()` draws them in.
+ */
+const AVOIDANCE_QUESTION_FOR: Partial<Record<string, HomeAvoidanceQuestion>> = {
+  'home-session-unavailable': {
+    course: 'syn:course:vantrel',
+    onAnswer: async (answer) => {
+      new Notice(
+        `Workbench: recording her answer ("${answer}") would write to HomeView's own ` +
+          'per-install store in the real product. This pane writes nothing.',
+      );
+    },
+  },
+};
 
 export interface HomeWorkbenchState {
   readonly id: string;
@@ -174,8 +256,16 @@ export async function buildHomeScenario(
     budgetMinutes: sessionScenario.state.budgetMinutes,
   });
 
+  const courses = COURSES_FOR[stateId] ?? [];
+  const avoidanceQuestion = AVOIDANCE_QUESTION_FOR[stateId];
+
   return {
-    state: { kind: 'dashboard', session, courses: [] },
+    state: {
+      kind: 'dashboard',
+      session,
+      courses,
+      ...(avoidanceQuestion !== undefined ? { avoidanceQuestion } : {}),
+    },
     note: workbenchState.note,
     workbenchState,
     sessionScenario,

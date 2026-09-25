@@ -10,5 +10,18 @@
  * bridged view uses.
  */
 
-export type { HomeCourseRow, HomeViewDeps, HomeViewState } from '../../plugin/src/home/view.js';
+// `ol-ppxj.49`: the course-row quiet-line copy `home-scenarios.ts` needs —
+// `HOME_SET_UP_WAITING` verbatim for the `'no-registered-source'` fixture row,
+// `homeScopeGrewLine` (the real, pure function, called over fixture numbers
+// rather than re-worded) for the "scope grew" row — see that file's own
+// module doc.
+export { HOME_SET_UP_WAITING, homeScopeGrewLine } from '../../plugin/src/home/copy.js';
+export type {
+  HomeAvoidanceQuestion,
+  HomeCourseRow,
+  HomeGroveMark,
+  HomeQuietLine,
+  HomeViewDeps,
+  HomeViewState,
+} from '../../plugin/src/home/view.js';
 export { HomeView, VIEW_TYPE_OLEA_HOME } from '../../plugin/src/home/view.js';
