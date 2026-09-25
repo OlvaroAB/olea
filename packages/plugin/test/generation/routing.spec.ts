@@ -63,6 +63,35 @@ describe('buildKnowledgeKindSourceMaterial', () => {
     expect(await buildKnowledgeKindSourceMaterial(vault, { sourcePaths: [] })).toEqual([]);
     expect(await buildKnowledgeKindSourceMaterial(vault, { sourcePaths: ['nope.md'] })).toEqual([]);
   });
+
+  it("gap 1 (`ol-egov.141.89.3.8`): includes the concept's own bound note, not only the introducing notes in sourcePaths", async () => {
+    const vault = new MemoryVaultSource({
+      'lecture.md': 'A lecture that mentions the concept only in passing.',
+      'concept-note.md': "The concept's own defining passage.",
+    });
+    const passages = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['lecture.md'],
+      boundNotePath: 'concept-note.md',
+    });
+    expect(passages.map((p) => p.text)).toContain("The concept's own defining passage.");
+    // The bound note is read first, and never duplicated when it also
+    // happens to be listed in `sourcePaths`.
+    expect(passages[0]).toEqual({
+      text: "The concept's own defining passage.",
+      anchor: {
+        sourcePath: 'concept-note.md',
+        location: { page: 1, charRange: { start: 0, end: 35 } },
+      },
+    });
+    expect(passages).toHaveLength(2);
+
+    const dedupe = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['concept-note.md', 'lecture.md'],
+      boundNotePath: 'concept-note.md',
+    });
+    expect(dedupe).toHaveLength(2);
+    expect(dedupe.filter((p) => p.anchor.sourcePath === 'concept-note.md')).toHaveLength(1);
+  });
 });
 
 describe('classifyForRouting', () => {

@@ -6,6 +6,9 @@
  * import anywhere in this file, mirroring `test/grading/wiring.spec.ts` and
  * `test/retrieval/wiring.spec.ts`.
  */
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   ListOptions,
   Unsubscribe,
@@ -14,11 +17,13 @@ import type {
   VaultSource,
   WorkerTaskRequest,
 } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { FolderSource, resolveConceptKey } from 'olea-core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildConceptWiring,
   DEFAULT_MAX_PASSAGES_PER_READ,
   DEFAULT_PASSAGES_PER_CALL,
+  proposeSameAsForMovedNoteAnchors,
   readConceptsFromVault,
 } from '../../src/concept/wiring.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
@@ -243,5 +248,96 @@ describe('readConceptsFromVault', () => {
 
     expect(result?.outcome).toBe('unrecognised');
     expect(transport.calls).toHaveLength(0);
+  });
+});
+
+// ---- proposeSameAsForMovedNoteAnchors (gap 2, `ol-egov.141.89.3.8` [ILB-CPT-B1]) -------------
+
+describe('proposeSameAsForMovedNoteAnchors', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-moved-note-anchor-'));
+    vault = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('proposes a same-as link between a no-uid note anchor orphaned by a move-and-rename and the freshly-resolved key at its new name', async () => {
+    // The note exists, gets read once (minting a key with no stable uid,
+    // since it carries no `olea-uid` frontmatter), then is moved AND re-cased.
+    await vault.write('05 Zettelkasten/Concept One.md', 'Her original note text.');
+    const oldKey = await resolveConceptKey(vault, 1, {
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Concept One.md',
+    });
+
+    await vault.delete('05 Zettelkasten/Concept One.md');
+    await vault.write('05 Zettelkasten/Folder/concept one.md', 'Her original note text, moved.');
+    const newKey = await resolveConceptKey(vault, 1, {
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Folder/concept one.md',
+    });
+
+    // Confirms the gap this bead names: the ordinary anchor match cannot
+    // follow the move, so a second, unrelated key was minted.
+    expect(newKey).not.toBe(oldKey);
+
+    const proposals = await proposeSameAsForMovedNoteAnchors(vault, [
+      { key: newKey, name: 'concept one' },
+    ]);
+
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({ status: 'proposed', reason: 'normalisation-collision' });
+    expect([proposals[0]?.keyA, proposals[0]?.keyB].sort()).toEqual([oldKey, newKey].sort());
+  });
+
+  it('proposes nothing when the old anchor still resolves — it is not orphaned', async () => {
+    await vault.write('05 Zettelkasten/Concept One.md', 'Still there.');
+    await resolveConceptKey(vault, 1, {
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Concept One.md',
+    });
+
+    const proposals = await proposeSameAsForMovedNoteAnchors(vault, [
+      { key: 'unrelated-key', name: 'concept one' },
+    ]);
+    expect(proposals).toHaveLength(0);
+  });
+
+  it('proposes nothing when the orphaned anchor carries a stable uid — the ordinary match already tracks that move', async () => {
+    await vault.write('05 Zettelkasten/Concept One.md', 'Her original note text.');
+    await resolveConceptKey(vault, 1, {
+      kind: 'note',
+      noteUid: 'stable-olea-uid-1',
+      notePath: '05 Zettelkasten/Concept One.md',
+    });
+    await vault.delete('05 Zettelkasten/Concept One.md');
+
+    const proposals = await proposeSameAsForMovedNoteAnchors(vault, [
+      { key: 'some-new-key', name: 'concept one' },
+    ]);
+    expect(proposals).toHaveLength(0);
+  });
+
+  it("proposes nothing when no candidate name normalises to the orphaned anchor's recovered name", async () => {
+    await vault.write('05 Zettelkasten/Concept One.md', 'Her original note text.');
+    await resolveConceptKey(vault, 1, {
+      kind: 'note',
+      noteUid: null,
+      notePath: '05 Zettelkasten/Concept One.md',
+    });
+    await vault.delete('05 Zettelkasten/Concept One.md');
+
+    const proposals = await proposeSameAsForMovedNoteAnchors(vault, [
+      { key: 'some-new-key', name: 'A completely different concept' },
+    ]);
+    expect(proposals).toHaveLength(0);
   });
 });

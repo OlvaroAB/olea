@@ -82,16 +82,20 @@ import {
   type CorpusRelationBatchTriggerReason,
   type CorpusRelationVerdictPort,
   classifyKnowledgeKind,
+  conceptIdentityNormalizationIndex,
   deriveRelationSet,
   type ExtractConceptsOptions,
   extractConcepts,
   foldReadAnchors,
   type KnowledgeKindClassifierPort,
+  listConceptKeyRecords,
   type Provenance,
+  proposeSameAsLink,
   type ReadConcept,
   type RelationSet,
   readConcepts,
   runCorpusRelationBatch,
+  type SameAsLinkRecord,
   shouldRunCorpusRelationBatch,
   type VaultPath,
   type VaultSource,
@@ -292,6 +296,90 @@ export async function extractConceptsWithAnchors(
 ): Promise<readonly ConceptRecord[]> {
   const records = await extractConceptsFromVault(vault, options);
   return foldReadAnchors(records, readConcepts);
+}
+
+// =============================================================================
+// `proposeSameAsForMovedNoteAnchors` — gap 2, `ol-egov.141.89.3.8` [ILB-CPT-B1]:
+// the collision-to-proposal step for a moved-and-renamed concept note with no
+// stable id.
+// =============================================================================
+//
+// `olea-core`'s `key-store.ts` deliberately scopes its mint-time normalisation
+// collision check (`findNormalizationCollisions`) to TOPIC anchors only — its
+// own doc reasons that "a NoteAnchor's identity is already the stronger
+// noteUid/path signal `anchorMatches` uses". That assumption fails exactly
+// when a bound note carries no `olea-uid` frontmatter AND has since moved:
+// `anchorMatches`'s note branch then falls back to plain `notePath` equality,
+// which the move breaks, `resolveConceptKey` finds no match and mints a
+// brand-new key, and — because note anchors never enter the collision index
+// — no `normalizationCollisions` entry is ever recorded either. The old key
+// is orphaned with no candidate collision anywhere, which is what cpt.md
+// (§7, `[D-295 / CPT-D2]`) calls "the collision-to-proposal step" skipping
+// this case.
+//
+// This closes the gap from the other side, touching neither `key-store.ts`'s
+// schema nor its mint-time algorithm (both out of this bead's ownership): a
+// note-bound `ConceptKeyRecord` whose `notePath` no longer exists in the
+// current vault listing is treated as orphaned, and its pre-move name is
+// recovered from that STALE path's own filename rather than a new persisted
+// field — concept-note binding is always an exact-title match (`extract.ts`'s
+// module doc, both tier 1 and tier 3), so the last path a `NoteAnchor`
+// matched at IS, by construction, the note's name at that time. A freshly
+// resolved candidate whose name normalises (`conceptIdentityNormalizationIndex`
+// — the SAME index `key-store.ts` already uses for its own collision check)
+// to that recovered name is proposed as the same concept, through
+// `proposeSameAsLink`'s own bias-to-splits seam: this only ever proposes,
+// never merges, and a normalisation miss proposes nothing.
+//
+// **No production caller yet ([D-072]).** Wiring this into the real
+// ingestion tick is `[ILB-CPT-4]`'s to do — it already owns `main.ts`'s
+// composition of the rest of this same step (the mint-time half in
+// `key-store.ts`, and `same-as-consumer.ts`'s read-time fold), both outside
+// this bead's file ownership. This function is the tested, composable unit
+// that step calls.
+
+/** The filename `notePath` binds on, stripped of its extension — `extract.ts`'s exact-title-match rule means this IS the note's bound name at the anchor's last known path. */
+function noteNameFromPath(notePath: VaultPath): string {
+  const base = notePath.split('/').pop() ?? notePath;
+  return base.endsWith('.md') ? base.slice(0, -'.md'.length) : base;
+}
+
+/** A freshly-resolved, note-bound concept: enough to test for a normalisation match against an orphaned anchor's recovered name. */
+export interface MovedNoteAnchorCandidate {
+  readonly key: string;
+  readonly name: string;
+}
+
+/**
+ * Finds every persisted note-anchored `ConceptKeyRecord` with no stable
+ * `olea-uid` whose `notePath` no longer exists in the current vault, and
+ * proposes a same-as link to any `candidates` entry whose name normalises to
+ * that anchor's recovered pre-move name. See this section's module doc for
+ * the full argument. Returns every link this call actually proposed (a
+ * caller wanting the no-op case — an existing record left unchanged — reads
+ * `proposeSameAsLink`'s own return value directly).
+ */
+export async function proposeSameAsForMovedNoteAnchors(
+  vault: VaultSource,
+  candidates: readonly MovedNoteAnchorCandidate[],
+): Promise<readonly SameAsLinkRecord[]> {
+  const currentNotePaths = new Set(await vault.list({ extensions: ['md'] }));
+  const records = await listConceptKeyRecords(vault);
+
+  const proposed: SameAsLinkRecord[] = [];
+  for (const { record } of records) {
+    if (record.anchor.kind !== 'note') continue;
+    if (record.anchor.noteUid !== null) continue; // a stable id means the ordinary match already tracks a move.
+    if (currentNotePaths.has(record.anchor.notePath)) continue; // still there: not orphaned.
+
+    const oldIndex = conceptIdentityNormalizationIndex(noteNameFromPath(record.anchor.notePath));
+    for (const candidate of candidates) {
+      if (candidate.key === record.key) continue;
+      if (conceptIdentityNormalizationIndex(candidate.name) !== oldIndex) continue;
+      proposed.push(await proposeSameAsLink(vault, record.key, candidate.key));
+    }
+  }
+  return proposed;
 }
 
 // =============================================================================

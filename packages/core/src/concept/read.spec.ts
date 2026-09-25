@@ -748,7 +748,7 @@ describe('readConcepts — split-document boundary reconciliation (`ol-2zfj.144`
     expect(result.relations[0]).toMatchObject({ from: 'Second-batch concept', to: 'Torvane' });
   });
 
-  it('matching is exact and case-sensitive — differently-cased names across batches stay two concepts', async () => {
+  it('gap 3 (`ol-egov.141.89.3.8` [ILB-CPT-B1]): a case-only repeat across batches of ONE document collapses to one identity, both wordings kept', async () => {
     const reader = perCallReader([
       (request) => ({
         concepts: [
@@ -780,7 +780,13 @@ describe('readConcepts — split-document boundary reconciliation (`ol-2zfj.144`
 
     expect(result.outcome).toBe('read');
     if (result.outcome !== 'read') return;
-    expect(result.concepts.map((c) => c.name).sort()).toEqual(['Torvane', 'torvane']);
+    // One identity, not two: the first batch's casing wins the name (`[D-210]`'s
+    // own "first proposal wins" rule), and the second batch's own casing
+    // survives as an alias rather than being discarded.
+    expect(result.concepts.map((c) => c.name)).toEqual(['Torvane']);
+    expect(result.concepts[0]?.aliases).toEqual(['torvane']);
+    // Both batches' anchors are kept as corroborating evidence.
+    expect(result.concepts[0]?.alsoIn).toHaveLength(1);
   });
 
   it('merging is scoped to one document — the same name proposed in two different documents is never folded', async () => {
@@ -793,6 +799,18 @@ describe('readConcepts — split-document boundary reconciliation (`ol-2zfj.144`
     expect(result.outcome).toBe('read');
     if (result.outcome !== 'read') return;
     expect(result.concepts.filter((c) => c.name === 'Ormathel')).toHaveLength(2);
+  });
+
+  it('merging is scoped to one document even for a case-only repeat — two different documents proposing case variants of the same name are never folded', async () => {
+    const reader = new ScriptedReader([
+      proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
+      proposal('ormathel', anchorIn('01 Courses/ABCD101/Lecture Two.md')),
+    ]);
+    const result = await readConcepts(BARE_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name).sort()).toEqual(['Ormathel', 'ormathel']);
   });
 });
 

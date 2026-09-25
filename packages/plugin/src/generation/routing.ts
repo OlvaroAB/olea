@@ -18,13 +18,25 @@
  *   only the type-to-group fold.
  * - `classifyForRouting` reaches component 1.5's classifier
  *   (`classifyKnowledgeKind`) with a **disclosed, minimal** source-material
- *   builder: each of the concept's `sourcePaths`, read whole, one passage per
- *   note. This is deliberately NOT component 1's `readConcepts` (a
- *   model-assisted passage extraction with its own budget and its own
- *   not-yet-wired trigger, `concept/wiring.ts`'s `readConceptsFromVault`) —
- *   building that here would be a second bead's scope wearing this one's
- *   name. Whole-note text is the honest floor: real material, not invented,
- *   at the cost of coarser passages than a dedicated extractor would offer.
+ *   builder: the concept's own bound note (`boundNotePath`, when one exists)
+ *   first, then each of `sourcePaths`, read whole, one passage per note. This
+ *   is deliberately NOT component 1's `readConcepts` (a model-assisted
+ *   passage extraction with its own budget and its own not-yet-wired
+ *   trigger, `concept/wiring.ts`'s `readConceptsFromVault`) — building that
+ *   here would be a second bead's scope wearing this one's name. Whole-note
+ *   text is the honest floor: real material, not invented, at the cost of
+ *   coarser passages than a dedicated extractor would offer.
+ *
+ *   **`boundNotePath` was missing from this builder's input until
+ *   `ol-egov.141.89.3.8` [ILB-CPT-B1] (gap 1).** `ConceptRecord.sourcePaths`
+ *   is "every note whose `topic` property... named this concept" (`olea-core`
+ *   `concept/types.ts`) — the notes that *introduce* or *mention* the
+ *   concept, never her own concept note. For a tier-1 concept those are two
+ *   different files, so reading `sourcePaths` alone sent the classifier only
+ *   the surrounding lecture material and never the concept's own defining
+ *   text, exactly the failure this fix closes. `boundNotePath` is read first
+ *   so a caller reading only the first passage (a future budget, say) still
+ *   sees the concept's own note before any surrounding material.
  *
  * **Never guessed, on either failure path.** A classifier that is
  * unavailable (`classifier === null`, F7.8), a call that could not run
@@ -100,19 +112,32 @@ export interface ConceptRoutingDecision {
 }
 
 /**
- * Reads each of `concept.sourcePaths` whole, as one passage per note — the
- * disclosed minimal reading this module doc explains. A missing or empty
- * note contributes nothing (never fabricated); a concept with no readable
- * source note at all returns `[]`, which `classifyKnowledgeKind`'s own
- * INV-5 guard turns into a clean `'not-run'` — no network call is ever made
- * on empty context.
+ * Reads the concept's own bound note (`boundNotePath`, when it has one) and
+ * then each of `concept.sourcePaths` whole, as one passage per note — the
+ * disclosed minimal reading this module doc explains. `boundNotePath` comes
+ * first and is never read twice if it also happens to appear in
+ * `sourcePaths`. A missing or empty note contributes nothing (never
+ * fabricated); a concept with no readable source note at all returns `[]`,
+ * which `classifyKnowledgeKind`'s own INV-5 guard turns into a clean
+ * `'not-run'` — no network call is ever made on empty context.
+ *
+ * **Why `boundNotePath` has to be read at all (gap 1, `ol-egov.141.89.3.8`).**
+ * `sourcePaths` is her *introducing* material — the notes whose `topic:`
+ * property named this concept — never her own concept note. Without this,
+ * a tier-1 concept's classification input was built entirely from the
+ * lecture notes that merely mention it, and never from the note that
+ * actually defines it.
  */
 export async function buildKnowledgeKindSourceMaterial(
   vault: VaultSource,
-  concept: Pick<ConceptRecord, 'sourcePaths'>,
+  concept: Pick<ConceptRecord, 'sourcePaths' | 'boundNotePath'>,
 ): Promise<readonly KnowledgeKindSourcePassage[]> {
   const passages: KnowledgeKindSourcePassage[] = [];
-  for (const sourcePath of concept.sourcePaths) {
+  const orderedPaths: readonly VaultPath[] =
+    concept.boundNotePath !== undefined
+      ? [concept.boundNotePath, ...concept.sourcePaths.filter((p) => p !== concept.boundNotePath)]
+      : concept.sourcePaths;
+  for (const sourcePath of orderedPaths) {
     if (!(await vault.exists(sourcePath))) continue;
     const text = await vault.read(sourcePath);
     if (text.trim().length === 0) continue;

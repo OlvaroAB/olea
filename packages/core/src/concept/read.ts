@@ -18,17 +18,32 @@
  * her. The hierarchy is a *match precedence*, never a coverage order — it
  * decides whose naming wins, never whether a tier runs.
  *
- * **Nothing here normalises, folds or renames.** Every string that reaches a
- * `ReadConcept` is copied character-for-character from either her vault or
- * the passage the reader read it out of. There is no title-casing, no
- * trimming into a canonical form, no fuzzy dedupe and no alias expansion.
- * Corroboration is matched by **exact string equality**, deliberately
- * case-sensitive, for the same reason `./types.js`'s `ConceptRecord` is:
- * folding case would be this module inventing an identity her vault does not
- * state. The casing question is real and is tracked on its own (`ol-5y40`);
- * it is deliberately answered *the same way in both places* rather than
- * given a second, quieter answer here.
+ * **Nothing here normalises, folds or renames — every WORDING that reaches a
+ * `ReadConcept` is copied character-for-character.** Every string that
+ * reaches a `ReadConcept`'s `name` or `aliases` is copied verbatim from
+ * either her vault or the passage the reader read it out of; nothing is
+ * title-cased, trimmed into a canonical form, or discarded. Corroboration
+ * against HER conventions is matched by **exact string equality**,
+ * deliberately case-sensitive, for the same reason `./types.js`'s
+ * `ConceptRecord` is: folding case there would be this module inventing an
+ * identity her vault does not state. The casing question is real and is
+ * tracked on its own (`ol-5y40`); it is deliberately answered *the same way
+ * in both places* rather than given a second, quieter answer here.
  *
+ * **The one exception, and why it is not a counter-example.**
+ * `mergeProposalsWithinDocument` below folds two same-document proposals
+ * whose names differ only by the same normalisation
+ * (`./concept-key.js`'s `conceptIdentityNormalizationIndex`, exactly the
+ * index `./key-store.js`'s own mint-time collision check already uses for
+ * identity) into one `ReadConcept` (`ol-egov.141.89.3.8` [ILB-CPT-B1], gap
+ * 3). This is not the model's wording winning over hers — no convention is
+ * involved — it is recognising that two calls over ONE document, split only
+ * because `[D-210]` bounds a call's size, proposed the SAME concept and one
+ * of them merely cased it differently. Both wordings survive: the later
+ * proposal's own `name` is kept as an alias rather than discarded, so no
+ * string is lost, only the duplicate identity.
+ *
+
  * **An empty list is never the answer to "what went wrong".** A vault this
  * stage cannot read is reported loudly — see `ConceptReadResult`, which is a
  * discriminated union precisely so a caller cannot reach `.concepts`, find
@@ -105,7 +120,7 @@ import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
 import { hashContent } from '../ingestion/hash.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { provisionalConceptKey } from './concept-key.js';
+import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts, resolveLinkClosure } from './extract.js';
 import { reconcileRelations, totalDropped } from './reconcile.js';
@@ -1122,29 +1137,40 @@ function anchorKey(anchor: Provenance): string {
 }
 
 /**
- * Folds proposals that share a document and an EXACT name into one, before
- * corroboration ever runs (`ol-2zfj.144` [IL-D5]) — the concept-boundary
- * half of reconciling a document `[D-210]` splits across several calls. See
- * this file's module doc, "A split document's own batches are reconciled
- * afterwards", for why this is needed and what it deliberately does not
- * recover.
+ * Folds proposals that share a document and the SAME identity-normalised
+ * name into one, before corroboration ever runs (`ol-2zfj.144` [IL-D5]) —
+ * the concept-boundary half of reconciling a document `[D-210]` splits
+ * across several calls. See this file's module doc, "A split document's own
+ * batches are reconciled afterwards", for why this is needed and what it
+ * deliberately does not recover.
  *
- * Matching is exact string equality on `name`, scoped to one document
- * (`anchor.sourcePath`, which every proposal from one document batch
- * shares) — the same deliberately case-sensitive, no-fuzzy-matching
- * discipline this module already holds for corroborating her conventions
- * (this file's own "nothing here normalises" paragraph). Cross-document
- * identity is a different, open question this function does not touch.
+ * Matching is by `./concept-key.js`'s `conceptIdentityNormalizationIndex`
+ * (case-fold, whitespace-collapse, minimal punctuation strip, naive plural
+ * fold — the SAME index `./key-store.js`'s mint-time collision check already
+ * uses for identity), scoped to one document (`anchor.sourcePath`, which
+ * every proposal from one document batch shares) — **widened from exact
+ * string equality** by `ol-egov.141.89.3.8` [ILB-CPT-B1] (gap 3): two calls
+ * over one document, split only because `[D-210]` bounds a call's size, are
+ * answered by the model with no view of each other, and a trivially
+ * re-cased repeat of the same name (`"Torvane"` / `"torvane"`) is that
+ * split's own artifact, not a second concept. See the module doc's "one
+ * exception" paragraph for why this does not weaken the exact-match
+ * discipline `corroborate` below still holds against HER conventions.
+ * Cross-document identity is a different, open question this function does
+ * not touch.
  *
- * The merged proposal keeps the FIRST proposal's `anchor` as the
- * introducing passage — `proposals` arrives in call order, and
+ * The merged proposal keeps the FIRST proposal's `name` and `anchor` as the
+ * introducing wording and passage — `proposals` arrives in call order, and
  * `batchesByDocument` runs one document's own batches consecutively in
  * reading order, so "first" is "earliest in the document" — and folds every
  * later proposal's own anchor and `alsoIn` entries into `alsoIn`, deduped by
- * `anchorKey`. `aliases` is unioned across every merged proposal, also
- * deduped. Order is otherwise preserved: a name seen for the first time
- * keeps its original position, and a later duplicate updates that position
- * in place rather than appending a second entry.
+ * `anchorKey`. `aliases` is unioned across every merged proposal, plus a
+ * later proposal's own `name` when it differs from the first's (a re-cased
+ * repeat is exactly this case) — no wording is ever discarded, only the
+ * duplicate identity — all deduped against `existing.name`. Order is
+ * otherwise preserved: a name seen for the first time keeps its original
+ * position, and a later duplicate updates that position in place rather
+ * than appending a second entry.
  */
 function mergeProposalsWithinDocument(
   proposals: readonly ProposedConcept[],
@@ -1153,7 +1179,7 @@ function mergeProposalsWithinDocument(
   const indexByKey = new Map<string, number>();
 
   for (const proposal of proposals) {
-    const key = `${proposal.anchor.sourcePath}\u0000${proposal.name}`;
+    const key = `${proposal.anchor.sourcePath}\u0000${conceptIdentityNormalizationIndex(proposal.name)}`;
     const existingIndex = indexByKey.get(key);
     if (existingIndex === undefined) {
       indexByKey.set(key, merged.length);
@@ -1170,9 +1196,14 @@ function mergeProposalsWithinDocument(
       seen.add(id);
       additions.push(anchor);
     }
+    // The later proposal's own `name` may be a case (or other normalisation)
+    // variant of `existing.name` — the very thing this merge now folds — so
+    // it is kept as an alias rather than silently dropped when it differs.
+    const incomingWordings =
+      proposal.name === existing.name ? proposal.aliases : [proposal.name, ...proposal.aliases];
     merged[existingIndex] = {
       name: existing.name,
-      aliases: dedupe([...existing.aliases, ...proposal.aliases], existing.name),
+      aliases: dedupe([...existing.aliases, ...incomingWordings], existing.name),
       anchor: existing.anchor,
       alsoIn: [...existing.alsoIn, ...additions],
     };
