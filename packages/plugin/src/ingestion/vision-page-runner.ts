@@ -28,6 +28,50 @@
  * (`olea-service/src/tasks/visionExtract.ts`'s `visionExtractTask`) — this
  * file was its only client, so nothing else in this repo still calls it.
  *
+ * **PDF pages, rendered — `ol-egov.141.89.8.4` (`[D-324]`, resolving
+ * `ol-9cle`).** A `'vision-page'` job for `format: 'pdf'` used to be an
+ * unconditional, honest, non-retryable gap ("no page-to-image renderer
+ * exists in either repo yet"). That renderer now exists
+ * (`./page-render/pdf-page-renderer.ts`, `ol-9cle`) and is wired in here:
+ * when `deps.pageRenderer` (a `PageRenderPort`) is supplied, a `'pdf'` page
+ * is rendered to a PNG at `PDF_PAGE_RENDER_SCALE` and read exactly the way a
+ * standalone image already is — same extractor, same landing logic, factored
+ * into `readAndLandPage` below so the two paths cannot drift apart. A
+ * render failure (`PageRenderError`) is per.md section 2's own rule for this
+ * step: "the unit is recorded as not read because it could not be rendered,
+ * not retried until the renderer changes, and never read as having no
+ * content" — so every `PageRenderError` becomes a named, non-retryable
+ * `JobRunOutcome`, never a fabricated empty reading. `pageRenderer` is
+ * absent by default: a host that has not composed the real
+ * `createObsidianPageRenderer` (`./page-renderer.ts`) still gets today's
+ * honest gap, unchanged — see the still-open PPTX/DOCX note just below.
+ *
+ * **PPTX and DOCX stay the honest gap.** Their pages already carry embedded
+ * raster image PARTS (`../extract/embedded-image.ts`, `ol-egov.141.89.8.20`)
+ * rather than needing a render step, but per that file's own module doc, a
+ * slide or region can carry zero, one or several such images, and which to
+ * send — "send all, pick the largest, or combine" — is a selection policy
+ * this bead's own notes say to "decide ... with evidence before wiring,"
+ * not something to pick unilaterally under this bead's remaining time. Left
+ * as a named follow-up (see this bead's report) rather than wired here.
+ *
+ * **`[D-326]` producer provenance, wired from the wire's own stamp.** Every
+ * `SuccessResponse` this file's transport receives already carries a
+ * `stamp: { modelId, promptVersion, ... }` alongside `result`
+ * (`olea-service/src/index.ts`) — `readVisionResult` now reads it, so
+ * `VisionPageExtractResult.modelId`/`.promptVersion` are the ACTUAL model
+ * and prompt version that produced THIS reading, never a locally-assumed
+ * constant. `readAndLandPage` (below) turns every reading — `'complete'`,
+ * `'partial'` and `'unreadable'` alike — into a manifest-entry value
+ * (mirroring `packages/core/src/ingestion/unit-manifest/types.ts`'s shape
+ * locally; see `VisionUnitManifestEntry`'s own doc for why it is mirrored
+ * rather than imported) carrying that provenance plus a digest of the image
+ * bytes sent, and hands it to `deps.onManifestEntry` when one is supplied.
+ * **Persisting that entry anywhere durable is deliberately NOT done here** —
+ * `UnitManifest` has no store yet (a stored-shape call this bead does not
+ * make unilaterally); `onManifestEntry` is the seam a later wiring bead
+ * composes into one.
+ *
  * **Pattern.** Mirrors `retrieval/workerGroundingJudge.ts` /
  * `concept/workerConceptReader.ts`: a one-method `VisionPageExtractPort`
  * (the actual seam a fake stands in for in tests) implemented by
@@ -153,6 +197,8 @@ import type {
   WorkerTaskTransport,
 } from 'olea-core';
 import { isExtractionJobPayload } from 'olea-core';
+import { PageRenderError } from './page-render/errors.js';
+import type { PageRenderPort } from './page-render/types.js';
 
 /** `TASK_IDS.VISION_EXTRACT_V2`, mirrored — see the module doc. Pinned by `vision-page-runner.spec.ts`. */
 export const VISION_EXTRACT_V2_TASK_ID = 'vision.extract.v2';
@@ -245,6 +291,18 @@ export interface VisionPageExtractResult {
   readonly coverage: string | null;
   /** Non-null exactly when `outcome` is `'unreadable'`. */
   readonly unreadableReason: string | null;
+  /**
+   * The resolved model id that produced this reading, read from the wire
+   * response's own `stamp.modelId` (`[D-326]`'s producer provenance) — see
+   * the module doc. `WorkerVisionPageExtractor.extract` (the real
+   * implementation) always supplies this; a `VisionPageExtractPort` test
+   * double may omit it, since a fake answering directly has no wire stamp to
+   * read — `readAndLandPage` falls back to a declared, honestly-labelled
+   * placeholder in that case (see `UNREPORTED_PROVENANCE_FIELD`).
+   */
+  readonly modelId?: string;
+  /** The prompt version that produced this reading, from `stamp.promptVersion` — same provenance and same optionality reasoning as `modelId` above. */
+  readonly promptVersion?: string;
 }
 
 /** The seam `WorkerVisionPageExtractor` implements — the thing a test fakes instead of a real Worker call. */
@@ -325,6 +383,30 @@ function readVisionResult(body: unknown): VisionPageExtractResult {
     );
   }
 
+  // `[D-326]`: every real `SuccessResponse` carries `stamp.modelId`/
+  // `stamp.promptVersion` alongside `result` (`olea-service/src/index.ts`) —
+  // read here so producer provenance travels with the reading, not derived
+  // from a locally-assumed constant.
+  const stamp = response['stamp'];
+  if (typeof stamp !== 'object' || stamp === null) {
+    throw new WorkerVisionPageExtractorError(
+      'WorkerVisionPageExtractor: the Worker response carried no `stamp` object.',
+    );
+  }
+  const s = stamp as Record<string, unknown>;
+  const modelId = s['modelId'];
+  if (typeof modelId !== 'string') {
+    throw new WorkerVisionPageExtractorError(
+      'WorkerVisionPageExtractor: the Worker response carried no string `stamp.modelId`.',
+    );
+  }
+  const promptVersion = s['promptVersion'];
+  if (typeof promptVersion !== 'string') {
+    throw new WorkerVisionPageExtractorError(
+      'WorkerVisionPageExtractor: the Worker response carried no string `stamp.promptVersion`.',
+    );
+  }
+
   const result = response['result'];
   if (typeof result !== 'object' || result === null) {
     throw new WorkerVisionPageExtractorError(
@@ -358,13 +440,160 @@ function readVisionResult(body: unknown): VisionPageExtractResult {
     figureDescription,
     coverage,
     unreadableReason,
+    modelId,
+    promptVersion,
   };
+}
+
+/**
+ * Mirrors `packages/core/src/ingestion/unit-manifest/types.ts`'s
+ * `UnitProducerProvenance` — not imported directly because that module is
+ * not yet exported from `olea-core`'s public surface
+ * (`packages/core/src/index.ts`, a shared file staged by the orchestrator,
+ * not this bead's to edit; see this bead's report for the export lines it
+ * still needs). Same reasoning `VISION_EXTRACT_V2_TASK_ID`'s own doc gives
+ * for mirroring the frozen catalogue's task id locally rather than
+ * importing it: mirror the shape, pin it, report the wiring gap rather than
+ * reach around the package boundary.
+ */
+export interface VisionUnitProducerProvenance {
+  readonly task: string;
+  readonly promptVersion: string;
+  readonly modelIdentity: string;
+  readonly imageDigest: string;
+}
+
+/**
+ * Mirrors the three outcomes this runner can actually reach in
+ * `unit-manifest/types.ts`'s `UnitReadingState` union — always `method:
+ * 'image'` here, since every unit this file lands came from the image path
+ * (a standalone image, or a rendered PDF page); the `'text-and-image'`
+ * method belongs to `[D-324]`'s still-open figure-cue routing (see this
+ * bead's report), not reachable from this file yet.
+ */
+export type VisionUnitReadingState =
+  | {
+      readonly kind: 'read';
+      readonly method: 'image';
+      readonly provenance: VisionUnitProducerProvenance;
+    }
+  | {
+      readonly kind: 'partial';
+      readonly method: 'image';
+      readonly coverage: string;
+      readonly provenance: VisionUnitProducerProvenance;
+    }
+  | {
+      readonly kind: 'unreadable';
+      readonly reason: string;
+      readonly provenance: VisionUnitProducerProvenance;
+    };
+
+/** Mirrors `unit-manifest/types.ts`'s `UnitManifestEntry` — see `VisionUnitProducerProvenance`'s doc for why mirrored rather than imported. Always `conceptExtractionState: 'not-started'`: this file only ever produces a freshly-read entry, never one concept extraction has already run over. */
+export interface VisionUnitManifestEntry {
+  readonly unitId: string;
+  readonly sourcePath: VaultPath;
+  readonly page: number;
+  readonly readingState: VisionUnitReadingState;
+  readonly conceptExtractionState: 'not-started';
+}
+
+/**
+ * Mirrors `unit-manifest/manifest.ts#stableUnitId`'s algorithm exactly
+ * (`${sourcePath}#${page}`) — not imported for the same reason above.
+ * `vision-page-runner.spec.ts` pins the literal format so a future import
+ * of the real function is a safe, test-verified swap.
+ */
+function stableVisionUnitId(sourcePath: VaultPath, page: number): string {
+  return `${sourcePath}#${page}`;
+}
+
+/** The declared placeholder used when a `VisionPageExtractPort` (a test double, never the real `WorkerVisionPageExtractor`) answers without a `modelId`/`promptVersion` — see `VisionPageExtractResult`'s own doc. Honestly labelled rather than silently substituting an empty string a reader might mistake for real data. */
+const UNREPORTED_PROVENANCE_FIELD = 'unreported (extractor did not supply it)';
+
+/** The declared placeholder for a `'partial'` reading with no named coverage — same posture `olea-service/src/tasks/visionExtract.ts`'s `COVERAGE_NOT_STATED` takes for the identical gap server-side. */
+const COVERAGE_NOT_STATED_FALLBACK = 'coverage not stated by the model';
+
+function toHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
+}
+
+/**
+ * SHA-256 of the base64 image payload actually sent to the model — the
+ * `imageDigest` `[D-326]`'s producer provenance names. Mirrors
+ * `packages/core/src/ingestion/hash.ts#hashContent`'s algorithm (SHA-256 via
+ * `SubtleCrypto`) so a digest computed here and a `contentHash` computed
+ * there sit in the same hash family; not imported directly for the same
+ * package-boundary reason as the types above. Hashes the base64 TEXT, never
+ * decoded bytes: that is exactly, and only, what left this device for the
+ * model to read (D-005 — no page bytes, no derived content, only an opaque
+ * digest of what was sent).
+ */
+async function hashImagePayload(pageImageBase64: string): Promise<string> {
+  // `TextEncoder.encode` always returns a freshly-allocated `Uint8Array`
+  // backed by its own exactly-sized `ArrayBuffer` (never a view into a
+  // larger one), so `.buffer` needs no `.slice()` narrowing the way
+  // `hashContent` needs for an arbitrary caller-supplied view.
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(pageImageBase64).buffer,
+  );
+  return toHex(new Uint8Array(digest));
 }
 
 export interface WorkerVisionPageRunnerDeps {
   readonly vault: VaultSource;
   readonly extractor: VisionPageExtractPort;
   readonly sink: ExtractedUnitSink;
+  /**
+   * Renders one PDF page to an image, resolving `[D-324]`'s renderer gap
+   * (`ol-9cle`) for `format: 'pdf'` — see the module doc's "PDF pages,
+   * rendered" section. Absent by default: a host that has not composed
+   * `createObsidianPageRenderer` (`./page-renderer.ts`) still gets today's
+   * honest, named, non-retryable gap for a `'pdf'`/`'pptx'`/`'docx'` page.
+   * PPTX and DOCX stay unrendered here regardless of whether this is
+   * supplied — see the module doc for why.
+   */
+  readonly pageRenderer?: PageRenderPort;
+  /**
+   * `[D-326]` producer provenance, for a host that wants to build a durable
+   * unit manifest — see the module doc's own section. Called at most once
+   * per reading actually reached (never for a render/transport failure that
+   * short-circuits before a `VisionPageExtractResult` exists), with one
+   * `VisionUnitManifestEntry` covering exactly the reading just made.
+   * **Absent by default: this file persists nothing itself** — a host that
+   * wants a durable manifest supplies this and does the persisting; see
+   * this bead's report for what still needs building.
+   */
+  readonly onManifestEntry?: (entry: VisionUnitManifestEntry) => void;
+}
+
+/**
+ * The pdf.js render scale used when rasterising a routed PDF page for
+ * `vision.extract.v2` (`[D-324]`; `ol-9cle`'s `PageRenderPort`).
+ *
+ * @provenance declared, never fitted (`docs/design/component-baseline.md`'s
+ * declared-vs-derived line; `page-render/types.ts`'s own module doc leaves
+ * this "a plain-English legibility choice for whoever wires this port"). A
+ * PDF's default unit is 72 points per inch; a scale of 2 renders at roughly
+ * 144 DPI — comfortably legible for body text, and well inside
+ * `MAX_VISION_IMAGE_BASE64_CHARS`' generous headroom for a single page
+ * (`olea-service/src/tasks/visionExtract.ts`) even at a dense A4/Letter page
+ * size. UNMEASURED against a live model call, same status this file already
+ * records for the image-input envelope generally (see the top module doc).
+ */
+export const PDF_PAGE_RENDER_SCALE = 2;
+
+/**
+ * Strips a data URL's `data:<mime>;base64,` prefix, leaving the standard
+ * base64 `vision.extract.v2` requires. `RenderedPage.dataUrl` is always this
+ * shape (`canvas.toDataURL('image/png')`'s own contract, `page-render/types.ts`).
+ */
+function dataUrlBase64(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',');
+  return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
 }
 
 /**
@@ -408,6 +637,177 @@ function isUnavailableVisionFailure(error: unknown): boolean {
  * Never throws: every failure this function can observe is turned into a
  * `JobRunOutcome` before it returns.
  */
+/**
+ * Builds this reading's `[D-326]` manifest entry and hands it to
+ * `deps.onManifestEntry`, when one is supplied — see that field's own doc.
+ * A no-op (and no digest computed) when it is absent, so a host that has
+ * not wired a manifest sink pays nothing extra for this.
+ */
+async function emitManifestEntry(
+  deps: WorkerVisionPageRunnerDeps,
+  sourcePath: VaultPath,
+  page: number,
+  pageImageBase64: string,
+  result: VisionPageExtractResult,
+): Promise<void> {
+  if (!deps.onManifestEntry) return;
+
+  const provenance: VisionUnitProducerProvenance = {
+    task: VISION_EXTRACT_V2_TASK_ID,
+    promptVersion: result.promptVersion ?? UNREPORTED_PROVENANCE_FIELD,
+    modelIdentity: result.modelId ?? UNREPORTED_PROVENANCE_FIELD,
+    imageDigest: await hashImagePayload(pageImageBase64),
+  };
+
+  const readingState: VisionUnitReadingState =
+    result.outcome === 'unreadable'
+      ? { kind: 'unreadable', reason: result.unreadableReason ?? 'not-legible', provenance }
+      : result.outcome === 'partial'
+        ? {
+            kind: 'partial',
+            method: 'image',
+            coverage: result.coverage ?? COVERAGE_NOT_STATED_FALLBACK,
+            provenance,
+          }
+        : { kind: 'read', method: 'image', provenance };
+
+  deps.onManifestEntry({
+    unitId: stableVisionUnitId(sourcePath, page),
+    sourcePath,
+    page,
+    readingState,
+    conceptExtractionState: 'not-started',
+  });
+}
+
+/**
+ * Sends one already-obtained image (standalone-image bytes, or a rendered
+ * PDF page) to `vision.extract.v2` and lands whatever comes back — the one
+ * place either path turns a `VisionPageExtractResult` into a
+ * `JobRunOutcome`, so the image-file path and the PDF-render path (below)
+ * cannot drift apart on how a `'complete'`/`'partial'`/`'unreadable'`
+ * reading is handled. Also the one place that builds this reading's
+ * `[D-326]` manifest entry (`emitManifestEntry`, above) — every outcome
+ * that reaches this far (`'complete'`, `'partial'`, `'unreadable'`) gets one,
+ * even when it lands zero `ExtractedUnit`s (a figure-only or unreadable
+ * page is still a completed reading, and `[D-326]`'s record exists
+ * precisely to say so).
+ */
+async function readAndLandPage(
+  deps: WorkerVisionPageRunnerDeps,
+  job: JobRunnerView,
+  pageImageBase64: string,
+  mimeType: SupportedVisionMimeType,
+  sourcePath: VaultPath,
+  page: number,
+  embeddedIn: EmbeddedInNote | undefined,
+): Promise<JobRunOutcome> {
+  let result: VisionPageExtractResult;
+  try {
+    result = await deps.extractor.extract({ pageImageBase64, mimeType });
+  } catch (error) {
+    if (isUnavailableVisionFailure(error)) {
+      // `[D-325]`: an outage is never a judgement about the page — retried,
+      // the same transient-environment shape a vault read failure gets,
+      // never DF-21's permanent stop.
+      return { ok: false, retryable: true };
+    }
+    // DF-21: a genuine problem with this request or this response (a
+    // refusal, a malformed body) will reach the identical conclusion on
+    // the identical bytes — retrying buys nothing.
+    return {
+      ok: false,
+      retryable: false,
+      reason: `WorkerVisionPageRunner: vision.extract.v2 could not serve job ${job.contentHash}.`,
+    };
+  }
+
+  await emitManifestEntry(deps, sourcePath, page, pageImageBase64, result);
+
+  if (result.outcome === 'unreadable') {
+    // INV-5 / honest failure: zero units, not an error — the same shape
+    // `extractResolvedSource` already gives a furniture-only/empty page.
+    // Never fabricates a concept out of a refusal.
+    return { ok: true };
+  }
+
+  // `'complete'` or `'partial'` from here. `result.figureDescription` and
+  // (for `'partial'`) `result.coverage` are deliberately read and then not
+  // acted on further — see the module doc's "FIGURE DESCRIPTION" and
+  // "PARTIAL COVERAGE" sections for why, and what each still needs.
+  if (result.extractedText.length === 0) {
+    // No passage text to land — either an honestly empty reading, or
+    // `[D-325]`'s figure-only-page case (`'complete'` with only a
+    // `figureDescription`), which has nowhere to flow on this side yet.
+    // Same "no unit invented from nothing" shape v1 held for empty text.
+    return { ok: true };
+  }
+
+  const embeddedInField: { embeddedIn?: EmbeddedInNote } = embeddedIn ? { embeddedIn } : {};
+  const unit: ExtractedUnit = {
+    text: result.extractedText,
+    provenance: {
+      sourcePath,
+      location: { page, charRange: { start: 0, end: result.extractedText.length } },
+      ...embeddedInField,
+    },
+  };
+  await deps.sink.receive([unit]);
+  return { ok: true };
+}
+
+/**
+ * The `[D-324]` PDF branch: render the routed page with `deps.pageRenderer`,
+ * then hand its bytes to `readAndLandPage` exactly the way a standalone
+ * image already is. Every `PageRenderError` becomes a named, non-retryable
+ * outcome — per.md section 2's own rule for this step ("not retried until
+ * the renderer changes, and never read as having no content") — never a
+ * fabricated empty reading and never silently retried against the same
+ * unrenderable bytes.
+ */
+async function renderAndLandPdfPage(
+  deps: WorkerVisionPageRunnerDeps,
+  pageRenderer: PageRenderPort,
+  job: JobRunnerView,
+  sourcePath: VaultPath,
+  page: number,
+  embeddedIn: EmbeddedInNote | undefined,
+): Promise<JobRunOutcome> {
+  let pdfBytes: Uint8Array;
+  try {
+    pdfBytes = await deps.vault.readBinary(sourcePath);
+  } catch {
+    return { ok: false, retryable: true };
+  }
+
+  try {
+    const rendered = await pageRenderer.renderPage({
+      pdfBytes,
+      pageNumber: page,
+      scale: PDF_PAGE_RENDER_SCALE,
+    });
+    return await readAndLandPage(
+      deps,
+      job,
+      dataUrlBase64(rendered.dataUrl),
+      rendered.mimeType,
+      sourcePath,
+      page,
+      embeddedIn,
+    );
+  } catch (error) {
+    const code = error instanceof PageRenderError ? error.code : 'render-failed';
+    return {
+      ok: false,
+      retryable: false,
+      reason:
+        `WorkerVisionPageRunner: job ${job.contentHash} could not be rendered to an image ` +
+        `(${code}) — per.md section 2 treats a render failure as not read, never retried until ` +
+        'the renderer itself changes, and never as a page with no content.',
+    };
+  }
+}
+
 export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): JobRunner {
   return async (job: JobRunnerView): Promise<JobRunOutcome> => {
     if (!isExtractionJobPayload(job.payload) || job.payload.kind !== 'vision-page') {
@@ -421,16 +821,24 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
     const { sourcePath, format, page, embeddedIn } = job.payload;
 
     if (format !== 'image') {
-      // A page INSIDE a pdf/pptx/docx needs a rendered page image; no
-      // renderer exists in either repo yet (`ol-9cle`). Named, non-retryable
-      // gap — never silently doing nothing, never crashing.
+      if (format === 'pdf' && deps.pageRenderer) {
+        // `[D-324]`, resolving `ol-9cle` — see the module doc's "PDF pages,
+        // rendered" section.
+        return renderAndLandPdfPage(deps, deps.pageRenderer, job, sourcePath, page, embeddedIn);
+      }
+      // A page INSIDE a pptx/docx (or a pdf with no pageRenderer wired)
+      // needs a rendered/selected page image this runner does not have a
+      // way to obtain yet. Named, non-retryable gap — never silently doing
+      // nothing, never crashing. See the module doc's PPTX/DOCX note for
+      // why that half stays a gap rather than being wired unilaterally.
       return {
         ok: false,
         retryable: false,
         reason:
           `WorkerVisionPageRunner: job ${job.contentHash} needs a rendered page image for a ` +
-          `'${format}' document, and no page-to-image renderer exists in either repo yet ` +
-          "(ol-9cle) — only standalone image sources (format 'image') are wired today.",
+          `'${format}' document, and no page renderer is wired for it in this run (ol-9cle's ` +
+          "renderer exists for 'pdf'; PPTX/DOCX embedded-image selection is a separate, " +
+          "still-open policy) — only standalone image sources (format 'image') are unconditionally wired today.",
       };
     }
 
@@ -455,55 +863,6 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
       return { ok: false, retryable: true };
     }
 
-    let result: VisionPageExtractResult;
-    try {
-      result = await deps.extractor.extract({ pageImageBase64: bytesToBase64(bytes), mimeType });
-    } catch (error) {
-      if (isUnavailableVisionFailure(error)) {
-        // `[D-325]`: an outage is never a judgement about the page — retried,
-        // the same transient-environment shape a vault read failure gets
-        // just above, never DF-21's permanent stop.
-        return { ok: false, retryable: true };
-      }
-      // DF-21: a genuine problem with this request or this response (a
-      // refusal, a malformed body) will reach the identical conclusion on
-      // the identical bytes — retrying buys nothing.
-      return {
-        ok: false,
-        retryable: false,
-        reason: `WorkerVisionPageRunner: vision.extract.v2 could not serve job ${job.contentHash}.`,
-      };
-    }
-
-    if (result.outcome === 'unreadable') {
-      // INV-5 / honest failure: zero units, not an error — the same shape
-      // `extractResolvedSource` already gives a furniture-only/empty page.
-      // Never fabricates a concept out of a refusal.
-      return { ok: true };
-    }
-
-    // `'complete'` or `'partial'` from here. `result.figureDescription` and
-    // (for `'partial'`) `result.coverage` are deliberately read and then not
-    // acted on further — see the module doc's "FIGURE DESCRIPTION" and
-    // "PARTIAL COVERAGE" sections for why, and what each still needs.
-    if (result.extractedText.length === 0) {
-      // No passage text to land — either an honestly empty reading, or
-      // `[D-325]`'s figure-only-page case (`'complete'` with only a
-      // `figureDescription`), which has nowhere to flow on this side yet.
-      // Same "no unit invented from nothing" shape v1 held for empty text.
-      return { ok: true };
-    }
-
-    const embeddedInField: { embeddedIn?: EmbeddedInNote } = embeddedIn ? { embeddedIn } : {};
-    const unit: ExtractedUnit = {
-      text: result.extractedText,
-      provenance: {
-        sourcePath,
-        location: { page, charRange: { start: 0, end: result.extractedText.length } },
-        ...embeddedInField,
-      },
-    };
-    await deps.sink.receive([unit]);
-    return { ok: true };
+    return readAndLandPage(deps, job, bytesToBase64(bytes), mimeType, sourcePath, page, embeddedIn);
   };
 }

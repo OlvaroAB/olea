@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { newPendingEntry, withReadingState } from '../ingestion/unit-manifest/manifest.js';
+import type { UnitManifest, UnitManifestEntry } from '../ingestion/unit-manifest/types.js';
 import type { ListOptions, Unsubscribe, VaultPath, VaultSource } from '../vault/types.js';
-import { findUnreadableFiles, reasonForExtractionOutcome } from './unreadable.js';
+import {
+  findUnreadableFiles,
+  reasonForExtractionOutcome,
+  reasonForUnitManifest,
+} from './unreadable.js';
 
 /**
  * A minimal in-memory `VaultSource`, matching the pattern
@@ -199,5 +205,155 @@ describe('findUnreadableFiles — the census ([D-196], F1.5(b), F8.1)', () => {
       linkedPaths: new Set(['03 Research/b-scan.png', '03 Research/a-scan.png']),
     });
     expect(files.map((f) => f.path)).toEqual(['03 Research/a-scan.png', '03 Research/b-scan.png']);
+  });
+});
+
+const FIXTURE_PATH = '03 Research/GEOL204 Week 2.pdf' as VaultPath; // coined fixture path (INV-3).
+
+function manifestOf(entries: readonly UnitManifestEntry[]): UnitManifest {
+  return { sourcePath: FIXTURE_PATH, revisionDigest: 'digest-xyz', entries };
+}
+
+describe('reasonForUnitManifest — [D-326]: the grove census reads the record, not the text layer', () => {
+  it('excludes an empty manifest', () => {
+    expect(reasonForUnitManifest(manifestOf([]))).toBeNull();
+  });
+
+  it('is not-settled while any unit is pending — never reported as broken mid-pass', () => {
+    const manifest = manifestOf([newPendingEntry(FIXTURE_PATH, 1)]);
+    expect(reasonForUnitManifest(manifest)).toBe('not-settled');
+  });
+
+  it('is not-settled while any unit is unavailable — an outage in flight, not a verdict', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), { kind: 'unavailable' }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBe('not-settled');
+  });
+
+  it('excludes a fully read manifest', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), { kind: 'read', method: 'text-layer' }),
+      withReadingState(newPendingEntry(FIXTURE_PATH, 2), { kind: 'read', method: 'image' }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBeNull();
+  });
+
+  it('excludes a manifest with a merely partial unit — real, honestly-scoped material, not a failure', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'partial',
+        method: 'image',
+        coverage: 'the top half of the page',
+      }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBeNull();
+  });
+
+  it("excludes blank-page and no-text-on-page unreadable units — [D-325]'s 'no text must not mean no material'", () => {
+    const blank = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'unreadable',
+        reason: 'blank-page',
+      }),
+    ]);
+    const noText = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'unreadable',
+        reason: 'no-text-on-page',
+      }),
+    ]);
+    expect(reasonForUnitManifest(blank)).toBeNull();
+    expect(reasonForUnitManifest(noText)).toBeNull();
+  });
+
+  it('reports image-only-no-text once settled with a not-legible unit', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'unreadable',
+        reason: 'not-legible',
+      }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBe('image-only-no-text');
+  });
+
+  it('reports image-only-no-text once settled with a failed unit', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'failed',
+        reason: 'render-failed',
+        retryable: false,
+      }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBe('image-only-no-text');
+  });
+
+  it('a document with some units read and one failed is listed — some units not read is never fully read', () => {
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), { kind: 'read', method: 'text-layer' }),
+      withReadingState(newPendingEntry(FIXTURE_PATH, 2), {
+        kind: 'failed',
+        reason: 'no-renderer-for-format',
+        retryable: false,
+      }),
+    ]);
+    expect(reasonForUnitManifest(manifest)).toBe('image-only-no-text');
+  });
+});
+
+describe('findUnreadableFiles — reading a supplied manifest instead of re-extracting ([D-326])', () => {
+  it('classifies from the manifest and never reads the file at all', async () => {
+    const vault = new MemoryVaultSource({}); // absent from the vault entirely — proves re-extraction never runs
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), {
+        kind: 'unreadable',
+        reason: 'not-legible',
+      }),
+    ]);
+    const files = await findUnreadableFiles(vault, {
+      files: [FIXTURE_PATH],
+      linkedPaths: new Set([FIXTURE_PATH]),
+      manifests: new Map([[FIXTURE_PATH, manifest]]),
+    });
+    expect(files).toEqual([{ path: FIXTURE_PATH, reason: 'image-only-no-text' }]);
+  });
+
+  it('excludes a path whose manifest reads as fully readable, from the manifest alone', async () => {
+    const vault = new MemoryVaultSource({});
+    const manifest = manifestOf([
+      withReadingState(newPendingEntry(FIXTURE_PATH, 1), { kind: 'read', method: 'image' }),
+    ]);
+    const files = await findUnreadableFiles(vault, {
+      files: [FIXTURE_PATH],
+      linkedPaths: new Set([FIXTURE_PATH]),
+      manifests: new Map([[FIXTURE_PATH, manifest]]),
+    });
+    expect(files).toEqual([]);
+  });
+
+  it('excludes a not-settled path from the census entirely, without falling back to re-extraction', async () => {
+    const vault = new MemoryVaultSource({}); // would report image-only-no-text if it fell back and read this empty vault
+    const manifest = manifestOf([newPendingEntry(FIXTURE_PATH, 1)]);
+    const files = await findUnreadableFiles(vault, {
+      files: [FIXTURE_PATH],
+      linkedPaths: new Set([FIXTURE_PATH]),
+      manifests: new Map([[FIXTURE_PATH, manifest]]),
+    });
+    expect(files).toEqual([]);
+  });
+
+  it("falls back to today's re-extraction for a path with no manifest supplied — backward compatible", async () => {
+    const vault = new MemoryVaultSource({
+      [FIXTURE_PATH]: asciiBytes('irrelevant, imageExtractor never reads content'),
+    });
+    const files = await findUnreadableFiles(vault, {
+      files: [FIXTURE_PATH],
+      linkedPaths: new Set([FIXTURE_PATH]),
+      manifests: new Map(), // supplied, but this path has no entry in it
+    });
+    // FIXTURE_PATH is a .pdf here, and the bytes are not a real PDF, so the
+    // re-extraction fallback reaches the same 'image-only-no-text' verdict
+    // the no-manifests-at-all tests above already exercise.
+    expect(files).toEqual([{ path: FIXTURE_PATH, reason: 'image-only-no-text' }]);
   });
 });

@@ -27,14 +27,22 @@ import type {
   WorkerTaskRequest,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { PageRenderError } from '../../src/ingestion/page-render/errors.js';
+import type {
+  PageRenderPort,
+  PdfPageRenderRequest,
+  RenderedPage,
+} from '../../src/ingestion/page-render/types.js';
 import {
   bytesToBase64,
   createWorkerVisionPageRunner,
+  PDF_PAGE_RENDER_SCALE,
   VISION_EXTRACT_CONTRACT_VERSION,
   VISION_EXTRACT_V2_TASK_ID,
   type VisionPageExtractPort,
   type VisionPageExtractRequest,
   type VisionPageExtractResult,
+  type VisionUnitManifestEntry,
   WorkerVisionPageExtractor,
   WorkerVisionPageExtractorError,
 } from '../../src/ingestion/vision-page-runner.js';
@@ -125,6 +133,8 @@ describe('WorkerVisionPageExtractor — the response it reads', () => {
       figureDescription: null,
       coverage: null,
       unreadableReason: null,
+      modelId: 'm',
+      promptVersion: '1.0.0',
     });
   });
 
@@ -185,6 +195,8 @@ describe('WorkerVisionPageExtractor — the response it reads', () => {
       figureDescription: null,
       coverage: null,
       unreadableReason: 'blank-page',
+      modelId: 'm',
+      promptVersion: '1.0.0',
     });
   });
 });
@@ -278,6 +290,44 @@ describe('WorkerVisionPageExtractor — refuses to hand back an unusable shape, 
       ).rejects.toThrow(WorkerVisionPageExtractorError);
     },
   );
+
+  it('throws when the response carries no `stamp` object — [D-326] producer provenance', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: completeResult('x'),
+    }));
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    await expect(
+      extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
+    ).rejects.toThrow(/no `stamp` object/);
+  });
+
+  it('throws when `stamp.modelId` is missing or not a string', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      stamp: { contractVersion: 2, promptVersion: '1.0.0' },
+      result: completeResult('x'),
+    }));
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    await expect(
+      extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
+    ).rejects.toThrow(/stamp\.modelId/);
+  });
+
+  it('throws when `stamp.promptVersion` is missing or not a string', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      stamp: { contractVersion: 2, modelId: 'm' },
+      result: completeResult('x'),
+    }));
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    await expect(
+      extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
+    ).rejects.toThrow(/stamp\.promptVersion/);
+  });
 });
 
 describe('bytesToBase64', () => {
@@ -647,6 +697,161 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
   });
 });
 
+/** A `PageRenderPort` fake that records every request and answers with whatever the test scripts, or throws. */
+class FakePageRenderer implements PageRenderPort {
+  readonly requests: PdfPageRenderRequest[] = [];
+  constructor(
+    private readonly reply: (request: PdfPageRenderRequest) => RenderedPage | Promise<RenderedPage>,
+  ) {}
+  async renderPage(request: PdfPageRenderRequest): Promise<RenderedPage> {
+    this.requests.push(request);
+    return this.reply(request);
+  }
+}
+
+const FAKE_RENDERED_PAGE: RenderedPage = {
+  dataUrl: `data:image/png;base64,${bytesToBase64(FAKE_PNG_BYTES)}`,
+  mimeType: 'image/png',
+  width: 100,
+  height: 100,
+};
+
+describe('createWorkerVisionPageRunner — a PDF page, rendered via the injected pageRenderer (D-324, resolves ol-9cle)', () => {
+  it('renders the routed page and lands a unit on a complete reading', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/deck.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('Figure 3: the rock cycle'));
+    const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 3 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(pageRenderer.requests).toEqual([
+      { pdfBytes: new Uint8Array([1, 2, 3]), pageNumber: 3, scale: PDF_PAGE_RENDER_SCALE },
+    ]);
+    expect(extractor.requests).toHaveLength(1);
+    expect(extractor.requests[0]?.mimeType).toBe('image/png');
+    expect(extractor.requests[0]?.pageImageBase64).toBe(bytesToBase64(FAKE_PNG_BYTES));
+    expect(sink.calls[0]?.[0]?.text).toBe('Figure 3: the rock cycle');
+    expect(sink.calls[0]?.[0]?.provenance.location.page).toBe(3);
+  });
+
+  it('a render failure is a named, non-retryable outcome — never retried until the renderer changes, never read as empty', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/corrupt.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const pageRenderer = new FakePageRenderer(() => {
+      throw new PageRenderError(
+        'PdfJsPageRenderer: pdf.js could not render page 3.',
+        'render-failed',
+      );
+    });
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 3 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('render-failed');
+    expect(extractor.requests).toHaveLength(0); // never paid for a call on bytes it couldn't render
+  });
+
+  it('a vault read failure before rendering is retryable — the ordinary transient shape', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/flaky.pdf' as VaultPath;
+    vault.failOn(pdfPath);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('x'));
+    const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(pageRenderer.requests).toHaveLength(0);
+  });
+
+  it('an unreadable rendered page produces zero units, same INV-5 honesty as a standalone image', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/blank.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: 'blank-page',
+    }));
+    const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(sink.calls).toHaveLength(0);
+  });
+
+  it('without a pageRenderer wired, a PDF page still gets the honest ol-9cle-named gap — unchanged default behaviour', async () => {
+    const vault = new MemoryVaultSource();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('x'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink }); // no pageRenderer
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Lectures/deck.pdf', format: 'pdf', page: 3 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('ol-9cle');
+  });
+
+  it('a pageRenderer supplied does not extend to pptx/docx — still the named gap, per the still-open embedded-image selection policy', async () => {
+    const vault = new MemoryVaultSource();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('x'));
+    const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Lectures/deck.pptx', format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(pageRenderer.requests).toHaveLength(0); // never invoked for a format it does not render
+  });
+});
+
 describe('createWorkerVisionPageRunner — [D-325] unavailable is retryable, a genuine refusal is not', () => {
   it('a raw transport failure (the transport itself threw, no response arrived) is retryable — the regression this bead fixes', async () => {
     // Before this bead, EVERY failure from the extract() call — including a
@@ -783,5 +988,231 @@ describe('createWorkerVisionPageRunner — D-005: never names her material', () 
       'utf8',
     );
     expect(source).not.toMatch(/console\.\w+\(/);
+  });
+});
+
+/** Records every entry `onManifestEntry` is called with, in order. */
+class RecordingManifestSink {
+  readonly entries: VisionUnitManifestEntry[] = [];
+  readonly handler = (entry: VisionUnitManifestEntry): void => {
+    this.entries.push(entry);
+  };
+}
+
+describe('createWorkerVisionPageRunner — [D-326] onManifestEntry: producer provenance from the wire', () => {
+  it('builds a read entry, with provenance, for a complete reading', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'complete',
+      extractedText: 'Figure 3: the rock cycle',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: null,
+      modelId: '@cf/meta/llama-4-scout-17b-16e-instruct',
+      promptVersion: '3',
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(visionPageJob());
+
+    expect(manifest.entries).toHaveLength(1);
+    const entry = manifest.entries[0];
+    expect(entry?.unitId).toBe('Slides/diagram.png#1');
+    expect(entry?.sourcePath).toBe('Slides/diagram.png');
+    expect(entry?.page).toBe(1);
+    expect(entry?.conceptExtractionState).toBe('not-started');
+    expect(entry?.readingState.kind).toBe('read');
+    if (entry?.readingState.kind !== 'read') return;
+    expect(entry.readingState.method).toBe('image');
+    expect(entry.readingState.provenance).toEqual({
+      task: 'vision.extract.v2',
+      promptVersion: '3',
+      modelIdentity: '@cf/meta/llama-4-scout-17b-16e-instruct',
+      imageDigest: expect.any(String),
+    });
+    expect(entry.readingState.provenance.imageDigest).toMatch(/^[0-9a-f]{64}$/); // hex SHA-256
+  });
+
+  it('builds a partial entry with coverage, falling back honestly when none was named', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/dense.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'partial',
+      extractedText: 'the top half',
+      figureDescription: null,
+      coverage: null, // the model named no coverage
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/dense.png', format: 'image', page: 1 },
+      }),
+    );
+
+    const entry = manifest.entries[0];
+    expect(entry?.readingState.kind).toBe('partial');
+    if (entry?.readingState.kind !== 'partial') return;
+    expect(entry.readingState.coverage).toBe('coverage not stated by the model');
+  });
+
+  it('builds an unreadable entry with its reason', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/blank.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: 'blank-page',
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/blank.png', format: 'image', page: 1 },
+      }),
+    );
+
+    const entry = manifest.entries[0];
+    expect(entry?.readingState).toEqual({
+      kind: 'unreadable',
+      reason: 'blank-page',
+      provenance: expect.objectContaining({ task: 'vision.extract.v2' }),
+    });
+  });
+
+  it('falls back to a labelled placeholder when the port answers with no modelId/promptVersion', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => completeResult('text')); // no modelId/promptVersion
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(visionPageJob());
+
+    const entry = manifest.entries[0];
+    if (entry?.readingState.kind !== 'read') return expect.unreachable();
+    expect(entry.readingState.provenance.modelIdentity).toContain('unreported');
+    expect(entry.readingState.provenance.promptVersion).toContain('unreported');
+  });
+
+  it('a resumed page on a later pass gets the SAME unitId — [D-326] stable identity', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/dense.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'partial',
+      extractedText: 'first pass',
+      figureDescription: null,
+      coverage: 'the first half',
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    const job = visionPageJob({
+      payload: { kind: 'vision-page', sourcePath: 'Slides/dense.png', format: 'image', page: 1 },
+    });
+    await runner(job); // "first pass"
+    await runner(job); // "resumed pass"
+
+    expect(manifest.entries).toHaveLength(2);
+    expect(manifest.entries[0]?.unitId).toBe(manifest.entries[1]?.unitId);
+  });
+
+  it('is never called when the extractor call itself fails (nothing was read)', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor: VisionPageExtractPort = {
+      async extract() {
+        throw new WorkerVisionPageExtractorError('boom', 'invalid-request');
+      },
+    };
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(visionPageJob());
+
+    expect(manifest.entries).toHaveLength(0);
+  });
+
+  it('is never called for a pdf render failure (nothing was read)', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/corrupt.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const pageRenderer = new FakePageRenderer(() => {
+      throw new PageRenderError('render failed', 'render-failed');
+    });
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      pageRenderer,
+      onManifestEntry: manifest.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 1 },
+      }),
+    );
+
+    expect(manifest.entries).toHaveLength(0);
+  });
+
+  it('is a no-op (no digest computed, nothing thrown) when onManifestEntry is not supplied', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('text'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink }); // no onManifestEntry
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({ ok: true });
   });
 });

@@ -82,10 +82,23 @@
  * its own denominator, which is what lets a file becoming readable (she
  * fixed it) or newly unreadable (she dropped a bad scan) show up on the very
  * next read with no cache to invalidate.
+ *
+ * ## `[D-326]`: reading the manifest instead of re-extracting
+ *
+ * Per.md section 7 decision 3 rules that "the grove's census ... read the
+ * record instead of re-extracting the text layer." `reasonForUnitManifest`
+ * and `FindUnreadableFilesOptions.manifests` (below) are that reader — see
+ * their own docs for the fold. This is additive and backward-compatible: a
+ * path with no manifest supplied falls back to today's re-extraction,
+ * unchanged, so a caller with no manifest store wired yet (there is none
+ * yet in this build — see this bead's own report) gets exactly the census
+ * it always did.
  */
 
 import { extractFromVault, formatFromExtension } from '../extract/registry.js';
 import type { ExtractionOutcome } from '../extract/types.js';
+import { hasPendingUnits } from '../ingestion/unit-manifest/manifest.js';
+import type { UnitManifest } from '../ingestion/unit-manifest/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** One of exactly three structural reasons a file could not be read (`[D-196]`). Never a fourth. */
@@ -115,10 +128,57 @@ export interface FindUnreadableFilesOptions {
    * discipline for its own independent vault reads.
    */
   readonly linkedPaths: ReadonlySet<VaultPath>;
+  /**
+   * `[D-326]`'s manifests, keyed by path, when the caller already has them —
+   * the grove census reads a listed file's manifest instead of
+   * re-extracting its text layer (per.md section 7 decision 3). A path with
+   * no entry here falls back to today's re-extraction, unchanged — see the
+   * module doc.
+   */
+  readonly manifests?: ReadonlyMap<VaultPath, UnitManifest>;
 }
 
 function isMarkdown(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+/**
+ * `[D-326]`'s grove-census reader: classifies one file from its unit
+ * manifest instead of re-extracting the text layer. Returns one of the same
+ * three `[D-196]` reasons `reasonForExtractionOutcome` does, `null` for a
+ * file that reads as readable, or `'not-settled'` for a file with any unit
+ * still `'pending'` or `'unavailable'` — excluded from the census exactly
+ * the way an in-progress file always was, never reported as broken while
+ * its pass is still running (per.md section 3: "A file is listed once its
+ * pass settles (nothing pending)").
+ *
+ * **Which units count against the file, once settled.** A file with any
+ * unit `'failed'`, or `'unreadable'` for reason `'not-legible'`, is
+ * `'image-only-no-text'` — the same reason the re-extraction path already
+ * gives that shape (`reasonForExtractionOutcome`'s `'unreadable'` case). A
+ * unit that is `'unreadable'` for `'blank-page'` or `'no-text-on-page'` does
+ * NOT count: both mean the read genuinely succeeded and found nothing (the
+ * same "nothing is wrong; there was nothing there" reasoning this module's
+ * doc already gives `'empty-document'`/`'furniture-only'` — `[D-325]`'s own
+ * clarification is that "no text on the page" must not mean "no useful
+ * material," so treating it as a structural failure here would be exactly
+ * the mistake that ruling forbids). A file with at least one `'read'` unit
+ * and no failing unit is readable (`null`) even when some units are merely
+ * `'partial'`: a partial reading is honestly-scoped real material, not a
+ * structural failure — per.md section 3's own posture for `CPT`'s
+ * consumption of partial units.
+ */
+export function reasonForUnitManifest(
+  manifest: UnitManifest,
+): UnreadableReason | 'not-settled' | null {
+  if (manifest.entries.length === 0) return null; // nothing to classify; excluded, same as an empty file
+  if (hasPendingUnits(manifest)) return 'not-settled';
+  const failing = manifest.entries.some(
+    (entry) =>
+      entry.readingState.kind === 'failed' ||
+      (entry.readingState.kind === 'unreadable' && entry.readingState.reason === 'not-legible'),
+  );
+  return failing ? 'image-only-no-text' : null;
 }
 
 /**
@@ -172,6 +232,16 @@ export async function findUnreadableFiles(
 
     if (!options.linkedPaths.has(path)) {
       results.push({ path, reason: 'not-linked' });
+      continue;
+    }
+
+    const manifest = options.manifests?.get(path);
+    if (manifest !== undefined) {
+      // [D-326]: the manifest is authoritative for this path — never also
+      // re-extract, and never report a still-settling file as broken.
+      const manifestReason = reasonForUnitManifest(manifest);
+      if (manifestReason === 'not-settled') continue;
+      if (manifestReason !== null) results.push({ path, reason: manifestReason });
       continue;
     }
 
