@@ -133,12 +133,16 @@ describe('every port the session needs is the real one', () => {
     // this attempt's misconception-record lookup above already used), and
     // `ol-egov.141.89.6.41`'s `recordExplainBackNonAttempt` awaits it an
     // eighth time to thread the same id into `appendNonAttemptRecord`'s own
-    // vault write (the on-demand explain-back skip/close event) —
+    // vault write (the on-demand explain-back skip/close event), and
+    // `ol-egov.141.89.9.49`'s `openNextCourseSetupProposal` awaits it a
+    // ninth time to thread the same id into
+    // `readCourseSetupRecognitions`'s own `readReviewHistory` read (F8.7's
+    // proposal-time recognition claims) —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // eight. The count below tracks known call sites rather than asserting
+    // nine. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(8);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(9);
   });
 });
 
@@ -1056,6 +1060,33 @@ describe('C7.8 course detection has a real trigger and a real host (ol-0r92.7)',
     expect(main).toMatch(
       /new CourseSetupModal\(this\.app,\s*\{\s*proposal:\s*\{\s*suggestedName:\s*next\.code,\s*rootPath:\s*next\.rootPath\s*\},/,
     );
+  });
+
+  // `ol-egov.141.89.9.49` (F8.7, `[D-058]`/`[D-274]`, discovered from
+  // `ol-egov.141.89.9.47`): `recognitionClaims` used to be hardcoded `[]`
+  // because nothing assembled the review-log entries and the
+  // concept-to-course join at proposal time. These assert the real seam is
+  // wired, not merely written — the same shape this describe block already
+  // uses for the detector and the modal host above.
+
+  it('imports the real recognition read and the real claim-copy builder, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*buildRecognitionClaimCopy\s*\}\s*from\s*'\.\/course-setup\/copy\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*readCourseSetupRecognitions\s*\}\s*from\s*'\.\/course-setup\/recognition-source\.js'/,
+    );
+  });
+
+  it('assembles recognitions for the proposal’s own course code before opening the modal', () => {
+    expect(main).toMatch(
+      /const recognitions = await readCourseSetupRecognitions\(\s*next\.code,\s*\{\s*vault,\s*deviceId,\s*today:\s*localToday\(new Date\(\)\),\s*\}\s*\);/,
+    );
+  });
+
+  it('passes real recognitions through buildRecognitionClaimCopy into recognitionClaims, never a hardcoded empty list', () => {
+    expect(main).toMatch(/recognitionClaims:\s*recognitions\.map\(buildRecognitionClaimCopy\),/);
+    expect(main).not.toMatch(/recognitionClaims:\s*\[\],/);
   });
 
   it('confirming marks the code seen and chains to the next detected proposal, rather than stacking modals', () => {

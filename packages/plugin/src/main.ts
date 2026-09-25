@@ -87,6 +87,8 @@ import {
   readConceptsAndRelations,
   readConceptsFromVault,
 } from './concept/wiring.js';
+import { buildRecognitionClaimCopy } from './course-setup/copy.js';
+import { readCourseSetupRecognitions } from './course-setup/recognition-source.js';
 import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
@@ -2039,12 +2041,19 @@ export default class OleaPlugin extends Plugin {
    * plain `{ name, kinshipAnswer }` result and does nothing with it beyond a
    * `Notice` and marking the code seen for this session — writing a
    * `CourseRecord` is the Class C schema addition this bead stops short of.
-   * `recognitionClaims` is passed as `[]` and `kinshipCandidateCourse` is
-   * omitted for the same reason `../today/earlier-course-recognition.ts`'s
-   * own module doc gives: nothing yet assembles the concepts+entries a real
-   * recognition read needs at proposal time, so an honest "not computed" (the
-   * confirmation view renders neither section when given nothing, by
-   * contract) is what ships here rather than a fabricated claim.
+   * `kinshipCandidateCourse` stays omitted, for the reason it always was:
+   * `course-setup/kinship-view.ts`'s candidate is a caller-supplied course,
+   * and nothing here computes one.
+   *
+   * **`recognitionClaims` (`ol-egov.141.89.9.49`, F8.7, `[D-058]`/`[D-274]`).**
+   * `./course-setup/recognition-source.ts#readCourseSetupRecognitions`
+   * assembles the two inputs `../today/earlier-course-recognition.ts
+   * #buildEarlierCourseRecognitions` needs — the whole review log and the
+   * concept-to-course join (F1.3) — over `next.code`, and each result is
+   * reduced through `./course-setup/copy.ts#buildRecognitionClaimCopy` before
+   * reaching the modal. Both reads fail closed to `[]` (that module's own
+   * doc), so a vault or log read that throws still opens the proposal with an
+   * honest "no recognition claims this time" rather than blocking it.
    */
   private async openNextCourseSetupProposal(vault: VaultSource): Promise<void> {
     let paths: readonly VaultPath[];
@@ -2064,9 +2073,17 @@ export default class OleaPlugin extends Plugin {
 
     this.courseSetupSeenCodes.add(next.code);
     this.courseSetupModalOpen = true;
+
+    const deviceId = await ensureDeviceId(this);
+    const recognitions = await readCourseSetupRecognitions(next.code, {
+      vault,
+      deviceId,
+      today: localToday(new Date()),
+    });
+
     new CourseSetupModal(this.app, {
       proposal: { suggestedName: next.code, rootPath: next.rootPath },
-      recognitionClaims: [],
+      recognitionClaims: recognitions.map(buildRecognitionClaimCopy),
       // `ol-ppa9` (F1.4/`[D-213]`): this proposal's own folder already has a
       // live queue state the instant she is looking at it — extraction runs
       // from file arrival, independent of confirming anything
