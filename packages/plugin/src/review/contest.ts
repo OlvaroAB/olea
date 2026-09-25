@@ -32,10 +32,12 @@
  * for whenever it comes back.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import {
   appendDisputeRecord,
   contestClaim,
   type DisputeLogRecord,
+  latestExplainBackGradeByInstrument,
   quarantinedGradeInstrumentIds,
   resolveDispute,
   type VaultSource,
@@ -144,4 +146,107 @@ export function correctionLineFor(
 ): string | null {
   if (resolution.outcome !== 'corrected') return null;
   return `${CONTEST_CORRECTED_PREFIX} ${opening.timestamp.slice(0, 10)}.`;
+}
+
+/**
+ * The `revisionOf` a corrective re-grade must carry to satisfy `[D-281]`'s
+ * correction rule (`ol-egov.141.89.9.25`) — the `eventId` of the grade
+ * CURRENTLY STANDING for this instrument, i.e. the one a contest resolved
+ * `corrected` is correcting.
+ *
+ * Reads `latestExplainBackGradeByInstrument`'s own answer to "most recent"
+ * (`olea-core`, GLOSSARY SOLO rule 3) rather than re-deriving it: a grade
+ * contest names only `instrumentId` and an evidence fingerprint, never an
+ * event id of its own, so the standing grade is the one thing on the log
+ * that can be named — the same reading `explain-back-grade-write.ts`'s
+ * `superseded` field already treats as authoritative. `null` — never a
+ * guess — when the instrument carries no graded explain-back event at all,
+ * which a caller should treat as "nothing to revise" rather than an error:
+ * a grade could in principle be contested and resolved corrected between
+ * two reads of a log this function is never shown the later half of.
+ */
+export function originalGradeEventIdFor(
+  instrumentId: string,
+  records: readonly (ReviewLogEntry | DisputeLogRecord)[],
+): string | null {
+  return latestExplainBackGradeByInstrument(records).get(instrumentId)?.eventId ?? null;
+}
+
+/** What one contest resolution and its corrective re-grade (if any) produced. */
+export interface ResolveContestedGradeAndRegradeResult {
+  /** The resolution record `resolveContestedGrade` appended. */
+  readonly resolution: DisputeLogRecord;
+  /**
+   * The `eventId` a corrective re-grade named, when one was appended.
+   * `null` for an upheld outcome, and `null` for a corrected outcome that
+   * found no standing grade to revise (see `originalGradeEventIdFor`).
+   */
+  readonly revisionOf: string | null;
+}
+
+/**
+ * The production path this module names but, until now, nothing called
+ * (`ol-egov.141.89.9.25`): resolves a contested grade and, when the
+ * re-derivation found the tool wrong, appends the compensating re-grade
+ * naming the corrected grade's own event as `revisionOf` — the one ruled
+ * exception to the growth-stage high-water mark (`[D-281]`, `ol-95vv.10`)
+ * and the correction path `[D-338]` item 2 reads as proven-invalid evidence.
+ *
+ * **What this function does NOT do, deliberately.** It does not run the
+ * re-derivation itself. `outcome` is the re-derivation's own verdict,
+ * arrived at however that heavier judgement is produced — this module's own
+ * header already names that as "the only part that needs the network", and
+ * `ol-egov.141.89.9.25`'s own bead text calls it "likely Worker-driven and
+ * larger than plumbing": deciding what re-derives a grade (a fresh,
+ * heavier Worker judge call; when it runs relative to going back online;
+ * whether it is the SAME `explain-back.solo.v1` judge already wired for a
+ * fresh attempt, per `docs/dev/wiring-register.md`'s `GradeContestPort`
+ * entry, or a distinct heavier one) is a design question this bead's `owns`
+ * does not extend to, and no contract clause or ruling settles it today —
+ * see this bead's report for the proposed decision. Likewise it does not
+ * itself write the corrective re-grade's review-log event: `contest.ts` has
+ * no access to a `GradingWiring`/Worker judge or to the `[D-077]` content
+ * store `recordSoloGradeAndReview` (`../explain-back/solo-review.js`) needs
+ * to mint one, so `appendCorrectiveRegrade` is injected — the same
+ * dependency-injection discipline `createVaultGradeContestPort` above
+ * already uses for the vault, applied to the one write this module cannot
+ * itself perform. A real caller supplies it as
+ * `(revisionOf) => recordSoloGradeAndReview(deps, { ...answer, revisionOf })`
+ * — a FRESH `attemptId`, per that function's own doc, never the corrected
+ * attempt's own id.
+ *
+ * **Reachability (`[D-072]`).** This function is real, tested and callable,
+ * not a stub — but it has no production caller yet: wiring it needs
+ * `packages/plugin/src/review/session.ts` (or `main.ts`) to decide when the
+ * re-derivation runs and to supply a real `appendCorrectiveRegrade`, both
+ * outside this bead's `owns`. Named, not hidden, per this bead's own
+ * instruction not to invent that surface.
+ */
+export async function resolveContestedGradeAndRegrade(input: {
+  readonly port: GradeContestPort;
+  readonly dispute: DisputeLogRecord;
+  readonly outcome: GradeContestOutcome;
+  /** Every record her review log carries — read only to find the standing grade, never written here. */
+  readonly records: readonly (ReviewLogEntry | DisputeLogRecord)[];
+  /**
+   * Appends the corrective re-grade. Called exactly once, and only when
+   * `outcome` is `'corrected'` and a standing grade event was found to
+   * revise — never for `'upheld'`, and never with a guessed `revisionOf`.
+   */
+  readonly appendCorrectiveRegrade: (revisionOf: string) => Promise<void>;
+}): Promise<ResolveContestedGradeAndRegradeResult> {
+  const resolution = await input.port.resolveContestedGrade({
+    dispute: input.dispute,
+    outcome: input.outcome,
+  });
+
+  if (input.outcome !== 'corrected' || input.dispute.instrumentId === undefined) {
+    return { resolution, revisionOf: null };
+  }
+
+  const revisionOf = originalGradeEventIdFor(input.dispute.instrumentId, input.records);
+  if (revisionOf !== null) {
+    await input.appendCorrectiveRegrade(revisionOf);
+  }
+  return { resolution, revisionOf };
 }
