@@ -439,7 +439,22 @@ export interface StudySessionModel {
    * "nothing fit in twenty minutes".
    */
   readonly consideredRowCount: number;
-  /** The format the fill preferred (F4.8), derived from {@link nextAssessment}. `'unknown'` prefers nothing and reorders nothing. */
+  /**
+   * The format {@link nextAssessment} prefers (F4.8) — the session's own
+   * "what does she meet next, across every course here" countdown, derived
+   * exactly as {@link nextAssessment} is. `'unknown'` prefers nothing and
+   * reorders nothing.
+   *
+   * **Not what any one item's `formatMatch` was chosen against**
+   * (`ol-v7r5.42` [COMP-1]): each course's own block is filled against that
+   * course's own nearest assessment's format, resolved separately inside the
+   * fill, so a composed multi-course session can read `'recall-style'` here
+   * (its soonest assessment overall) while a course whose own nearest
+   * assessment is an essay still shows `'no-preference'` on every one of its
+   * items — correctly. This field stays useful for F4.7's countdown sentence;
+   * a caller that wants to know whether format matching actually fired for a
+   * given item reads that item's own {@link StudySessionItem.formatMatch}.
+   */
   readonly formatPreference: AssessmentFormat;
   readonly nextAssessment: SessionAssessmentCountdown | null;
   /**
@@ -1009,6 +1024,32 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     return finalWeek;
   }
 
+  // F2.17/F4.8's format preference, resolved once per course rather than
+  // once for the whole session (`ol-v7r5.42` [COMP-1]). Reuses
+  // `nextAssessmentOf` itself, scoped to one course's own rows: the "soonest
+  // by date, never one already behind her" rule and its no-future-assessment
+  // fallback (that course's own top-ranked row) stay byte-identical to the
+  // session-level computation above — only the set of rows/assessments
+  // considered narrows to one course. Before this, every course's block
+  // shared `formatPreference` below (the single soonest assessment across
+  // EVERY course this session covers), so a course whose own nearest
+  // assessment is an essay was served MCQ-first whenever some other course in
+  // the same session had a quiz sooner — the defect this bead fixes. The
+  // session-level `formatPreference`/`nextAssessment` (returned below) are
+  // untouched: they still answer "what does she meet next, across this whole
+  // session" (F4.7's countdown), a different question from "which format does
+  // THIS course's own block prefer" (F4.8's matching, answered per course
+  // here).
+  const formatPreferenceByCourse = new Map<string, AssessmentFormat>();
+  function formatPreferenceForCourse(course: string): AssessmentFormat {
+    const cached = formatPreferenceByCourse.get(course);
+    if (cached !== undefined) return cached;
+    const courseRows = ordered.filter((row) => row.course === course);
+    const preference = nextAssessmentOf(courseRows, input.assessments, asOf)?.format ?? 'unknown';
+    formatPreferenceByCourse.set(course, preference);
+    return preference;
+  }
+
   // Per row: its instruments in fill order, and how far the fill has walked
   // that list. Built once so the passes below are a walk rather than a
   // repeated lookup.
@@ -1017,9 +1058,10 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     // indexes `VaultInstrumentRecord.conceptIds`, which `session/enumerate.ts`
     // now mints as the opaque key; a display-name lookup here would silently
     // find nothing for every row.
+    const rowFormatPreference = formatPreferenceForCourse(row.course);
     const { records, recallOverrodePreferenceIds } = orderedForFormat(
       instruments.instrumentsFor(row.conceptKey),
-      formatPreference,
+      rowFormatPreference,
       servingPolicy,
       input.schedulerStates,
       input.arrivalDays?.get(row.conceptKey) ?? null,
@@ -1030,6 +1072,8 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
       records,
       /** `[SESS-8.9]` — ids `orderedForFormat` placed ahead of format preference with a real competitor to beat. See {@link StudySessionItem.dedupeReason}. */
       recallOverrodePreferenceIds,
+      /** This row's own course's format preference (`ol-v7r5.42`) — what {@link orderedForFormat} above actually used, and what {@link formatMatchOf} below must use too, so an item's `formatMatch` never disagrees with the order it was actually selected in. */
+      formatPreference: rowFormatPreference,
       at: 0,
       chose: false,
       /** Set when a row still had instruments left that the remaining budget could not take. */
@@ -1167,7 +1211,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
             gapScore: queue.row.gapScore,
             estimatedSeconds: seconds,
             durationSource: durations.sourceFor(record.instrumentType),
-            formatMatch: formatMatchOf(record.instrumentType, formatPreference),
+            formatMatch: formatMatchOf(record.instrumentType, queue.formatPreference),
             ...(supportLevel !== undefined ? { supportLevel } : {}),
             ...(obligationClass !== undefined ? { obligationClass } : {}),
             ...(dedupeReason !== undefined ? { dedupeReason } : {}),

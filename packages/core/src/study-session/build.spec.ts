@@ -1071,6 +1071,121 @@ describe('assessment-format matching (F4.8)', () => {
   });
 });
 
+describe('the format preference is resolved per course, not once for the whole session (`ol-v7r5.42` [COMP-1])', () => {
+  it('a composed multi-course session matches each course to its OWN nearest assessment, not the session-wide soonest', () => {
+    // ALPHA's own nearest assessment is a quiz (recall-style, sooner by
+    // date); BRAVO's own nearest assessment is an essay (written, later by
+    // date). Before the fix, `buildStudySession` picked ONE format — the
+    // soonest assessment across every course in `rows` — and applied it to
+    // every course's block, so BRAVO would wrongly be served MCQ-first too
+    // (recall-style, from ALPHA's sooner quiz) even though BRAVO's own next
+    // assessment is an essay and prefers nothing (F4.8's "Scope of the
+    // match", `[D-187]`; the bug the discovering bead names verbatim).
+    const alpha = row({ conceptName: 'A', course: 'ALPHA', gapScore: 9 });
+    const bravo = row({ conceptName: 'B', course: 'BRAVO', gapScore: 9 });
+    const index = buildConceptInstrumentIndex([
+      qa('a-qa', ['A']),
+      mcq('a-mcq', ['A']),
+      qa('b-qa', ['B']),
+      mcq('b-mcq', ['B']),
+    ]);
+
+    const session = buildStudySession({
+      rows: [alpha, bravo],
+      instruments: index,
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      assessments: [
+        // Both dates outside `FINAL_WEEK_DAYS` (7) from `AS_OF` so F2.17's
+        // final-week relaxation never fires — this test is about format
+        // preference alone, not the relaxation stacking on top of it.
+        assessment('02 Assignments/alpha-quiz.md', {
+          course: 'ALPHA',
+          type: 'Quiz',
+          due: '2026-09-25',
+        }),
+        assessment('02 Assignments/bravo-essay.md', {
+          course: 'BRAVO',
+          type: 'Essay',
+          due: '2026-10-10',
+        }),
+      ],
+    });
+
+    // F2.17's per-concept cap means each row wins exactly one instrument —
+    // WHICH one is exactly what the format preference decides.
+    const byCourse = new Map(session.items.map((item) => [item.course, item]));
+
+    // ALPHA's own nearest assessment is recall-style: its MCQ wins the slot.
+    expect(byCourse.get('ALPHA')?.instrumentId).toBe('a-mcq');
+    expect(byCourse.get('ALPHA')?.formatMatch).toBe('preferred-format');
+
+    // BRAVO's own nearest assessment is written: no preference, so vault
+    // order (Q&A first) wins — NOT the MCQ that ALPHA's sooner quiz would
+    // wrongly hand it under the pre-fix, session-wide preference.
+    expect(byCourse.get('BRAVO')?.instrumentId).toBe('b-qa');
+    expect(byCourse.get('BRAVO')?.formatMatch).toBe('no-preference');
+
+    // The session-LEVEL field is untouched by this fix: it still names the
+    // soonest assessment across the whole session (ALPHA's quiz) — a
+    // different question (F4.7's countdown) from what each course's own
+    // block matched against (F4.8's per-course selection, asserted above).
+    expect(session.nextAssessment?.assessmentPath).toBe('02 Assignments/alpha-quiz.md');
+    expect(session.formatPreference).toBe('recall-style');
+  });
+
+  it('holds with the dates reversed — the earlier-but-written course still gets no preference', () => {
+    // Same two courses, but now BRAVO's essay is the SOONER assessment and
+    // ALPHA's quiz is later — proving the fix reads each course's OWN
+    // nearest record rather than "whichever course happens to sort first" or
+    // "the first course in `rows`".
+    const alpha = row({ conceptName: 'A', course: 'ALPHA', gapScore: 9 });
+    const bravo = row({ conceptName: 'B', course: 'BRAVO', gapScore: 9 });
+    const index = buildConceptInstrumentIndex([
+      qa('a-qa', ['A']),
+      mcq('a-mcq', ['A']),
+      qa('b-qa', ['B']),
+      mcq('b-mcq', ['B']),
+    ]);
+
+    const session = buildStudySession({
+      rows: [alpha, bravo],
+      instruments: index,
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      order: 'given',
+      assessments: [
+        // Both dates outside `FINAL_WEEK_DAYS` (7) from `AS_OF`, same reason
+        // as the test above.
+        assessment('02 Assignments/alpha-quiz.md', {
+          course: 'ALPHA',
+          type: 'Quiz',
+          due: '2026-10-10',
+        }),
+        assessment('02 Assignments/bravo-essay.md', {
+          course: 'BRAVO',
+          type: 'Essay',
+          due: '2026-09-25',
+        }),
+      ],
+    });
+
+    const byCourse = new Map(session.items.map((item) => [item.course, item]));
+    expect(byCourse.get('ALPHA')?.instrumentId).toBe('a-mcq');
+    expect(byCourse.get('ALPHA')?.formatMatch).toBe('preferred-format');
+    expect(byCourse.get('BRAVO')?.instrumentId).toBe('b-qa');
+    expect(byCourse.get('BRAVO')?.formatMatch).toBe('no-preference');
+
+    // Session-level field now follows BRAVO's sooner essay — still a
+    // different question from either course's own instrument selection.
+    expect(session.nextAssessment?.assessmentPath).toBe('02 Assignments/bravo-essay.md');
+    expect(session.formatPreference).toBe('written');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The duration model, seen through the session
 // ---------------------------------------------------------------------------
