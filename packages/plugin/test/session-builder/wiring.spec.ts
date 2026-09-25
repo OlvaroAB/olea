@@ -65,7 +65,7 @@ describe('the session builder is registered, not merely written (ol-p5t06b)', ()
     // module specifier and `createLocalSessionBuilderProvider`'s presence in
     // it independently rather than one single-name import statement.
     expect(main).toMatch(
-      /createLocalSessionBuilderProvider,?\s*\n\}\s*from\s*'\.\/session-builder\/provider\.js'/,
+      /\bcreateLocalSessionBuilderProvider\b[^}]*\}\s*from\s*'\.\/session-builder\/provider\.js'/,
     );
   });
 

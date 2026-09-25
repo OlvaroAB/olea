@@ -188,10 +188,28 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
      * would need a matching parameter added to wire it through to
      * `usage/log-store.ts`; flagged for the orchestrator, D-072).
      */
-    private readonly onCallFailed?: (entry: { taskId: string; errorCode?: string }) => void,
+    private readonly onCallFailed?: (entry: {
+      taskId: string;
+      errorCode?: string;
+      /**
+       * `ol-egov.141.89.10.55`: the client's own round trip around the
+       * single `send` call below, scoped to this invocation only — a failed
+       * call's wire body has no `stamp`, so it can never carry a
+       * server-measured duration; this is "how long this failed call took
+       * from here", never fabricated for the network-failure/non-JSON throw
+       * paths `sendWorkerTask` itself covers (`onCallFailed` never fires
+       * there). `obsidian-transport.ts` already declared this field
+       * optional on its own pass-through type in anticipation of this
+       * change; `send` below is what actually measures and supplies it.
+       */
+      latencyMs?: number;
+    }) => void,
   ) {}
 
   async send(request: WorkerTaskRequest): Promise<unknown> {
+    // Scoped to this call only (a fresh local per invocation, never shared
+    // state on `this`) — see `onCallFailed`'s doc above for what it feeds.
+    const startedAt = Date.now();
     const result = await sendWorkerTask(this.httpRequest, this.config, request);
     if (typeof result === 'object' && result !== null) {
       const r = result as Record<string, unknown>;
@@ -209,6 +227,7 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
         this.onCallFailed({
           taskId: request.taskId,
           ...(typeof r.code === 'string' ? { errorCode: r.code } : {}),
+          latencyMs: Date.now() - startedAt,
         });
       }
     }

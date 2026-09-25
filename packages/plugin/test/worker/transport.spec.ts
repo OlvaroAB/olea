@@ -243,7 +243,14 @@ describe('WorkerHttpTransport — item 5 (ol-egov.141.89.10.25): failed calls ar
     await transport.send(REQUEST);
 
     expect(recordedOk).toHaveLength(0);
-    expect(recordedFailed).toEqual([{ taskId: REQUEST.taskId, errorCode: 'upstream-error' }]);
+    // `ol-egov.141.89.10.55`: `latencyMs` is now always present on a failed
+    // entry (a real, client-measured duration, never fabricated) — asserted
+    // as "a real non-negative number" here rather than an exact figure,
+    // matching the dedicated latency tests below for the actual measurement.
+    expect(recordedFailed).toEqual([
+      { taskId: REQUEST.taskId, errorCode: 'upstream-error', latencyMs: expect.any(Number) },
+    ]);
+    expect((recordedFailed[0] as { latencyMs: number }).latencyMs).toBeGreaterThanOrEqual(0);
   });
 
   it('carries whichever ErrorCode came back — quota-exceeded, grounding-refused, unauthenticated all recorded honestly', async () => {
@@ -262,7 +269,9 @@ describe('WorkerHttpTransport — item 5 (ol-egov.141.89.10.25): failed calls ar
 
       await transport.send(REQUEST);
 
-      expect(recordedFailed).toEqual([{ taskId: REQUEST.taskId, errorCode: code }]);
+      expect(recordedFailed).toEqual([
+        { taskId: REQUEST.taskId, errorCode: code, latencyMs: expect.any(Number) },
+      ]);
     }
   });
 
@@ -307,6 +316,41 @@ describe('WorkerHttpTransport — item 5 (ol-egov.141.89.10.25): failed calls ar
     await transport.send(REQUEST);
 
     expect(recordedFailed).toHaveLength(0);
+  });
+
+  it('measures a real client round trip, not a fabricated figure — an artificially slow response yields a proportionally larger latencyMs', async () => {
+    // Two failed calls through the same transport instance, one delayed
+    // well past the other, prove `startedAt` is a fresh local per `send`
+    // invocation (never contaminated by a previous or concurrent call on
+    // the same instance) and that the number really tracks elapsed time
+    // rather than being a constant or omitted placeholder.
+    const body = { ok: false, code: 'internal-error', message: 'x' };
+    const fastHttpRequest: HttpRequestFn = async () => ({
+      status: 500,
+      text: JSON.stringify(body),
+    });
+    const slowHttpRequest: HttpRequestFn = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { status: 500, text: JSON.stringify(body) };
+    };
+    const recordedFast: Record<string, unknown>[] = [];
+    const recordedSlow: Record<string, unknown>[] = [];
+    const fastTransport = new WorkerHttpTransport(fastHttpRequest, CONFIG, undefined, (entry) =>
+      recordedFast.push(entry),
+    );
+    const slowTransport = new WorkerHttpTransport(slowHttpRequest, CONFIG, undefined, (entry) =>
+      recordedSlow.push(entry),
+    );
+
+    await fastTransport.send(REQUEST);
+    await slowTransport.send(REQUEST);
+
+    const fastLatency = recordedFast[0]?.latencyMs as number;
+    const slowLatency = recordedSlow[0]?.latencyMs as number;
+    expect(typeof fastLatency).toBe('number');
+    expect(typeof slowLatency).toBe('number');
+    expect(slowLatency).toBeGreaterThanOrEqual(50);
+    expect(slowLatency).toBeGreaterThan(fastLatency);
   });
 });
 

@@ -1455,7 +1455,12 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   it('main.ts:2415 — composeDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);\\s*return result\\?\\.composed\\.full`,
+        // `ol-egov.141.89.10.14`: the call itself is unchanged; two new
+        // statements (retaining `frozenScope`/an initial snapshot) now sit
+        // between the call and the `return`, so this pin no longer requires
+        // them to be adjacent — see the `ol-egov.141.89.10.14` describe block
+        // below for the pin on those two statements themselves.
+        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
       ),
     );
   });
@@ -1556,34 +1561,104 @@ describe('ol-egov.141.89.10.47: Start’s holder entry captures the composing pl
   // bead's close evidence / report for the corrected text.
 });
 
-describe('ol-egov.141.89.10.14 (bug): the shared session holder cannot yet compute real staleness', () => {
-  // CONFIRMED, not merely "unbuilt": `enterStudySessionHolderForStart` has
-  // no exported path to a real `staleness` fact today. The three real
-  // facts live behind `session-builder/provider.ts`'s private
-  // `buildScopeSnapshotAt` (over unexported `FrozenScopeConcept`/
-  // `FrozenScopeAssessment` and a vault `firstSeen` read) — the function
-  // `createLocalSessionBuilderProvider` calls, for ITS OWN sitting, at both
-  // freeze time and re-entry time. `composeStudySessionForRequest`'s result
-  // does carry an exported `frozenScope: FrozenSittingScope`, but nothing
-  // exported turns it into a fresh `SittingScopeSnapshot` to diff against —
-  // so building that here would mean re-deriving the due/arrival/band logic
-  // a second, possibly-drifting way, which `[D-033]`'s one-composer
-  // discipline rules out. This pins BOTH halves of the current gap:
-  // `composeDefaultStudySession` still discards `result.frozenScope`, and
-  // `enterStudySessionHolderForStart` still passes literal `false`s. When
-  // `session-builder/provider.ts` exports `buildScopeSnapshotAt` (or an
-  // equivalent) and this file is wired to use it, BOTH assertions below
-  // need to flip to real-facts assertions — see the bead's close evidence
-  // for the follow-up that does the export.
+describe('ol-egov.141.89.10.14 (bug, fixed): the shared session holder now computes real staleness', () => {
+  // FIXED: `ol-egov.141.89.10.46` (client 15a222d) exported
+  // `session-builder/provider.ts`'s `buildScopeSnapshotAt` (plus its two
+  // supporting types), so `main.ts` can now turn a held `FrozenSittingScope`
+  // into a fresh `SittingScopeSnapshot` without re-deriving the due/arrival/
+  // band logic a second, drifting way ([D-033]). This pins BOTH halves of
+  // the fix: `composeDefaultStudySession` now retains the compose result's
+  // `frozenScope` (and an initial snapshot) in `sharedSittingFrozenScope`/
+  // `sharedSittingFrozenSnapshot` instead of discarding it, and
+  // `enterStudySessionHolderForStart` now hands those, plus the sitting's own
+  // `enteredAt` and a fresh `now`, to `computeSharedSittingStaleness`
+  // (`session/shared-sitting-staleness.ts`) rather than passing literal
+  // `false`s. That helper — not `main.ts` — is where the real diffing logic
+  // lives, precisely because `main.ts` cannot be imported under Vitest (this
+  // file's own module doc): the behavioural half (a material change actually
+  // ending a held sitting at next entry, and no change holding it) lives in
+  // `test/session/shared-sitting-staleness.spec.ts`, which drives that helper
+  // directly. This describe block is the source-level wiring pin confirming
+  // `main.ts` actually calls it with the right arguments.
 
-  it('composeDefaultStudySession returns only composed.full, dropping the frozenScope composeStudySessionForRequest returns', () => {
+  it('composeDefaultStudySession retains the compose result’s frozenScope and an initial snapshot, rather than discarding them', () => {
+    expect(main).toMatch(/this\.sharedSittingFrozenScope = result\?\.frozenScope;/);
+    expect(main).toMatch(
+      /this\.sharedSittingFrozenSnapshot =\s*result !== null\s*\? await buildScopeSnapshotAt\(\s*result\.frozenScope,\s*localToday\(now\),\s*wiring\.vault\.firstSeen\?\.bind\(wiring\.vault\),\s*\)\s*: undefined;/,
+    );
     expect(main).toMatch(/return result\?\.composed\.full \?\? null;/);
-    expect(main).not.toMatch(/frozenScope/);
   });
 
-  it('enterStudySessionHolderForStart still passes literal-false staleness facts to the holder’s decide() call', () => {
+  it('enterStudySessionHolderForStart imports and calls computeSharedSittingStaleness with the retained freeze, the sitting’s own enteredAt and now, not literal falses', () => {
     expect(main).toMatch(
+      /import \{ computeSharedSittingStaleness \} from '\.\/session\/shared-sitting-staleness\.js';/,
+    );
+    expect(main).toMatch(
+      /const wiring = this\.review;\s*const staleness = await computeSharedSittingStaleness\(\s*\{\s*frozenScope: this\.sharedSittingFrozenScope,\s*frozenSnapshot: this\.sharedSittingFrozenSnapshot,\s*\},\s*sitting\.enteredAt,\s*now,\s*wiring === null \? undefined : wiring\.vault\.firstSeen\?\.bind\(wiring\.vault\),\s*\);/,
+    );
+    expect(main).toMatch(/staleness,\s*\}\);/);
+  });
+
+  it('the staleness object is no longer a literal all-false constant', () => {
+    expect(main).not.toMatch(
       /staleness:\s*\{\s*itemsDueInScope:\s*false,\s*materialArrivedInScope:\s*false,\s*assessmentProximityBandCrossedInScope:\s*false,\s*\},/,
     );
+  });
+});
+
+describe('[D-167] the study-plan refresh now has a between-sessions trigger too, not just onload (ol-egov.141.89.10.17)', () => {
+  // CONFIRMED bug: `refreshCachedStudyPlan` had exactly one call site,
+  // `onload` — a plan built once, cached, and never touched again for the
+  // rest of a session, even across a day boundary, contrary to A2.5's "the
+  // clock schedules the check ... recomputes about daily" (`[D-167]`). The
+  // actual day-boundary predicate is unit-tested directly against real
+  // clock values in `test/plan/refresh-schedule.spec.ts`, since it imports
+  // no `obsidian`; these are the source-level checks that `main.ts` actually
+  // wires that predicate into the recurring tick and back into
+  // `refreshCachedStudyPlan`, the same reachability shape this file's own
+  // module doc opens with.
+
+  it('seeds a lastCheckedDay state right after the onload refresh, from the real localToday/Date pair', () => {
+    expect(main).toMatch(
+      /void this\.refreshCachedStudyPlan\(vault, deviceId, studyPlanStore\);[\s\S]{0,300}?const studyPlanRefreshState = \{ lastCheckedDay: localToday\(new Date\(\)\) \};/,
+    );
+  });
+
+  it('the ingestion-tick interval evaluates studyPlanRefreshDue on every poll, alongside the other ticked work', () => {
+    expect(main).toMatch(
+      /void this\.drainPendingMaterialityEdits\(\);[\s\S]{0,300}?const studyPlanRefreshCheckedAt = new Date\(\);\s*if \(studyPlanRefreshDue\(studyPlanRefreshState\.lastCheckedDay, studyPlanRefreshCheckedAt\)\) \{/,
+    );
+  });
+
+  it('only re-runs refreshCachedStudyPlan, and only updates lastCheckedDay, when the predicate actually fires — not on every tick', () => {
+    expect(main).toMatch(
+      /if \(studyPlanRefreshDue\(studyPlanRefreshState\.lastCheckedDay, studyPlanRefreshCheckedAt\)\) \{\s*studyPlanRefreshState\.lastCheckedDay = localToday\(studyPlanRefreshCheckedAt\);\s*void this\.refreshCachedStudyPlan\(vault, deviceId, studyPlanStore\);\s*\}/,
+    );
+  });
+
+  it('imports the pure predicate from its own testable module, not an inline re-implementation', () => {
+    expect(main).toMatch(/import \{ studyPlanRefreshDue \} from '\.\/plan\/refresh-schedule\.js';/);
+  });
+});
+
+describe('ol-egov.141.89.10.55: a failed Worker call now reaches the usage log too, and the transport measures its own latency', () => {
+  // `ol-egov.141.89.10.50` built `buildFailedUsageLogEntry` and the
+  // transport's `onCallFailed` plumbing, but `main.ts`'s
+  // `createRecordingTransport` passed only the success recorder — the same
+  // "built, never wired" defect shape this file's own module doc opens
+  // with. These are the source-level checks that the second, failed-call
+  // recorder argument is now supplied for real. The round-trip measurement
+  // itself is unit-tested directly against a fake, artificially delayed
+  // `HttpRequestFn` in `test/worker/transport.spec.ts`, since `transport.ts`
+  // imports no `obsidian` and can be loaded under Vitest.
+
+  it('createRecordingTransport now passes a second, failed-call recorder to createObsidianWorkerTransport', () => {
+    expect(main).toMatch(
+      /createObsidianWorkerTransport\(\s*config,\s*\(entry\) => \{\s*void usageLogStore\.record\(\{ \.\.\.entry, recordedAt: new Date\(\)\.toISOString\(\) \}\);\s*\},\s*\(entry\) => \{\s*void usageLogStore\.record\(buildFailedUsageLogEntry\(entry, new Date\(\)\.toISOString\(\)\)\);\s*\},\s*\);/,
+    );
+  });
+
+  it('imports buildFailedUsageLogEntry from usage/types, not a local reimplementation', () => {
+    expect(main).toMatch(/import \{ buildFailedUsageLogEntry \} from '\.\/usage\/types\.js';/);
   });
 });

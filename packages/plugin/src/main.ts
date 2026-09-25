@@ -58,6 +58,7 @@ import {
   readReviewLogHistory,
   refreshStudyPlan,
   type Scheduler,
+  type SittingScopeSnapshot,
   servedRelations,
   type VaultPath,
   type VaultSource,
@@ -169,6 +170,7 @@ import { buildPracticePaperProvider, courseForActiveFileInApp } from './paper/wi
 import type { PlanPolicyHttpPost } from './plan/plan-policy-provider.js';
 import { buildPlanPolicyWiring, type PlanPolicyWiring } from './plan/plan-policy-wiring.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
+import { studyPlanRefreshDue } from './plan/refresh-schedule.js';
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
@@ -231,10 +233,13 @@ import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { createStudySessionHolder, type StudySessionHolder } from './session/holder.js';
+import { computeSharedSittingStaleness } from './session/shared-sitting-staleness.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from './session-builder/copy.js';
 import {
+  buildScopeSnapshotAt,
   composeStudySessionForRequest,
   createLocalSessionBuilderProvider,
+  type FrozenSittingScope,
 } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
 import {
@@ -257,6 +262,7 @@ import { refreshOpenTodayViews } from './today/refresh.js';
 import { ObsidianTermWindowStore } from './today/term-window-store.js';
 import { TodayView, VIEW_TYPE_OLEA_TODAY } from './today/view.js';
 import { ObsidianUsageLogStore } from './usage/log-store.js';
+import { buildFailedUsageLogEntry } from './usage/types.js';
 import { ObsidianSource } from './vault/obsidian-source.js';
 import { createObsidianWorkerTransport, obsidianHttpRequest } from './worker/obsidian-transport.js';
 
@@ -372,6 +378,30 @@ export default class OleaPlugin extends Plugin {
    * defect this bead exists to collapse.
    */
   private readonly studySessionHolder: StudySessionHolder = createStudySessionHolder();
+  /**
+   * `ol-egov.141.89.10.14` (C5.8, `[D-162]`, `[D-193]`/`[D-241]`): the frozen
+   * sitting scope and its initial snapshot for whatever sitting
+   * `studySessionHolder` above currently holds — the shared holder's own
+   * equivalent of `session-builder/provider.ts`'s `load()` closure variables
+   * of the same name. Set (never independently) by every
+   * `composeDefaultStudySession` call that produces a composition, since
+   * that method is the ONE place a fresh sitting is composed for this
+   * holder, whether the caller entering it is `enterStudySessionHolderForStart`
+   * below (Start) or `review/open-session.ts`'s own idle-branch `enter()`
+   * call (opening the review tab directly) — both funnel through it, so this
+   * pair is always current for whichever sitting is actually active,
+   * regardless of which surface opened it. `undefined` exactly when nothing
+   * has been composed yet, or the last compose found no plan configured.
+   *
+   * Read only by `enterStudySessionHolderForStart`'s `decide()` call below —
+   * the one place this shared holder is asked about staleness today. Diffing
+   * a fresh `buildScopeSnapshotAt` read against `sharedSittingFrozenSnapshot`
+   * via `diffSittingScopeSnapshots` is exactly `provider.ts`'s own `load()`
+   * computation for ITS sitting — one definition of `[D-162]`'s three facts
+   * (`[D-033]`), not a second, independently-drifting one.
+   */
+  private sharedSittingFrozenScope: FrozenSittingScope | undefined;
+  private sharedSittingFrozenSnapshot: SittingScopeSnapshot | undefined;
   /**
    * `[JEV-11]` (`ol-3ux7.96`): the one recorder for this plugin instance,
    * same "constructed unconditionally at class-field init, never rebuilt"
@@ -740,11 +770,26 @@ export default class OleaPlugin extends Plugin {
     // `usage/log-store.ts`'s own `data.json` key, which the settings pane's
     // usage section aggregates. The wrapper keeps the factory signature every
     // wiring site already expects.
+    //
+    // `ol-egov.141.89.10.55`: the second argument is the failed-call
+    // recorder (`ol-egov.141.89.10.50` built `buildFailedUsageLogEntry` and
+    // the transport-side `onCallFailed` plumbing; nothing called it until
+    // now). `buildFailedUsageLogEntry` never sets `promptVersion`/`modelId`/
+    // any cost figure — a failed call has no response stamp to read them
+    // from (D-005: no content, and nothing fabricated either) — only the
+    // task id, the Worker's own error code when the response carried one,
+    // and `transport.ts`'s client-measured round-trip `latencyMs`.
     const usageLogStore = new ObsidianUsageLogStore(this);
     const createRecordingTransport: typeof createObsidianWorkerTransport = (config) =>
-      createObsidianWorkerTransport(config, (entry) => {
-        void usageLogStore.record({ ...entry, recordedAt: new Date().toISOString() });
-      });
+      createObsidianWorkerTransport(
+        config,
+        (entry) => {
+          void usageLogStore.record({ ...entry, recordedAt: new Date().toISOString() });
+        },
+        (entry) => {
+          void usageLogStore.record(buildFailedUsageLogEntry(entry, new Date().toISOString()));
+        },
+      );
 
     const vault = new ObsidianSource(this.app);
     // The queue and the panel must agree about what "due" means, so both read
@@ -886,6 +931,17 @@ export default class OleaPlugin extends Plugin {
     // `null`) is what she gets meanwhile, which is exactly plan §7.1.4's
     // "may refresh," never "must, before anything else works."
     void this.refreshCachedStudyPlan(vault, deviceId, studyPlanStore);
+
+    // `[D-167]`/`ol-egov.141.89.10.17`: the "clock schedules the check" half
+    // of A2.5's between-sessions recompute (`plan/refresh-schedule.ts`'s own
+    // doc — `refreshCachedStudyPlan` otherwise has exactly one call site,
+    // `onload`, so the plan built above never refreshes again for the rest
+    // of a session, even across a day boundary or several). Seeded to
+    // today's local day, since the refresh just kicked off above already
+    // covers "now" — the `registerInterval` tick below re-evaluates this
+    // cheap, in-memory predicate on every poll, and only re-runs
+    // `refreshCachedStudyPlan` once the local day actually advances.
+    const studyPlanRefreshState = { lastCheckedDay: localToday(new Date()) };
 
     this.registerView(VIEW_TYPE_OLEA_REVIEW, (leaf) => {
       // `ol-v7r5.35` (`[D-193]`): ONE frozen queue per opened review tab —
@@ -1484,8 +1540,10 @@ export default class OleaPlugin extends Plugin {
             openSourceLocationPort: createObsidianOpenSourceLocationPort(this.app),
             // F8.4a/`[D-176]` (`ol-r1by`): the note-offer accept hand-off —
             // without this line, accepting the offer would log an error
-            // instead of creating a note. See `obsidian-ports.ts`'s own doc
-            // for what this port does and does not yet do (key binding).
+            // instead of creating a note. See `registry/ports.ts`'s own doc
+            // (`createObsidianAcceptNoteOfferPort` moved there, `ol-2zfj.55`)
+            // — the key-binding gap this comment once flagged is now closed
+            // via `bindConceptKeyToNote`.
             acceptNoteOfferPort: createObsidianAcceptNoteOfferPort(vault),
             // `ol-r5j4`: keeps `this.registryOverridesCache` current the
             // instant she renames, withdraws or restores a concept from this
@@ -1826,6 +1884,18 @@ export default class OleaPlugin extends Plugin {
         // `[DOS-3]` (`ol-2zfj.159`): see `drainPendingMaterialityEdits`'s own
         // doc for why this interval is the intended caller.
         void this.drainPendingMaterialityEdits();
+        // `[D-167]`/`ol-egov.141.89.10.17`: the between-sessions half of
+        // A2.5's recompute trigger — see `refresh-schedule.ts`'s module doc.
+        // The predicate is a free, local `YYYY-MM-DD` string compare; the
+        // comparatively expensive vault/review-log walk `refreshCachedStudyPlan`
+        // runs, and the remote calls its own fingerprint gate may make, only
+        // happen when this returns `true` — about once per local calendar
+        // day of continuous use, matching `[D-167]`'s own "about daily".
+        const studyPlanRefreshCheckedAt = new Date();
+        if (studyPlanRefreshDue(studyPlanRefreshState.lastCheckedDay, studyPlanRefreshCheckedAt)) {
+          studyPlanRefreshState.lastCheckedDay = localToday(studyPlanRefreshCheckedAt);
+          void this.refreshCachedStudyPlan(vault, deviceId, studyPlanStore);
+        }
       }, INGESTION_TICK_INTERVAL_MS),
     );
   }
@@ -2902,6 +2972,16 @@ export default class OleaPlugin extends Plugin {
    * session.ts` (finding the holder idle) and `startSession` below (entering
    * the holder at Start) call this and treat `null` as "nothing to compose",
    * never a thrown error.
+   *
+   * `ol-egov.141.89.10.14`: also refreshes `sharedSittingFrozenScope`/
+   * `sharedSittingFrozenSnapshot` (that field's own doc) to match whatever
+   * this call just composed — the compose result's own `frozenScope`, kept
+   * rather than discarded, plus an initial `SittingScopeSnapshot` for it
+   * built via `session-builder/provider.ts`'s exported `buildScopeSnapshotAt`
+   * at this same `now`/`today`, the identical pairing `provider.ts`'s own
+   * `load()` builds right after ITS OWN fresh compose. `null` clears both,
+   * the same "nothing frozen" reading `provider.ts` gives its own fields on
+   * an unavailable build.
    */
   private async composeDefaultStudySession(): Promise<ComposedStudySession | null> {
     const wiring = this.review;
@@ -2936,6 +3016,15 @@ export default class OleaPlugin extends Plugin {
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
     );
+    this.sharedSittingFrozenScope = result?.frozenScope;
+    this.sharedSittingFrozenSnapshot =
+      result !== null
+        ? await buildScopeSnapshotAt(
+            result.frozenScope,
+            localToday(now),
+            wiring.vault.firstSeen?.bind(wiring.vault),
+          )
+        : undefined;
     return result?.composed.full ?? null;
   }
 
@@ -3059,41 +3148,37 @@ export default class OleaPlugin extends Plugin {
    * holder simply composes, below, exactly as a genuine first Start of the
    * plugin session must.
    *
-   * `trigger`/`staleness` are honest zeros, not fabricated facts — the same
-   * posture `session-builder/provider.ts` took for its own `trigger` field
-   * before `ol-v7r5.26` wired real staleness signals for ITS sitting.
-   * `decideRebuild` never reads `trigger` while a sitting is active, so only
-   * `staleness` is live here, and honest zeros mean this can only ever
-   * decide `'hold'` today — real material-change detection for the SHARED
-   * holder (items due, material arrived, an assessment band crossed, since
-   * whichever surface entered it) is real future work, not this row's to
-   * build; see this bead's close evidence.
-   *
-   * `ol-egov.141.89.10.14` (bug): confirmed this is more than "not built
-   * yet" — it is currently **not buildable from this file alone**. The real
-   * facts exist one call away: `composeDefaultStudySession` below already
-   * calls `composeStudySessionForRequest`, whose result carries a
-   * `frozenScope: FrozenSittingScope` (exported), and `diffSittingScopeSnapshots`
-   * / `EMPTY_SITTING_SCOPE_SNAPSHOT` / `SittingScopeSnapshot` are exported
-   * from `olea-core`. But turning a `FrozenSittingScope` into a fresh
-   * `SittingScopeSnapshot` at a later instant is `session-builder/provider.ts`'s
-   * own `buildScopeSnapshotAt` (private, `provider.ts:676`, over
-   * unexported `FrozenScopeConcept`/`FrozenScopeAssessment` and the vault
-   * `firstSeen` read) — the same function `createLocalSessionBuilderProvider`
-   * calls at both freeze time and re-entry time for ITS sitting. Nothing
-   * else in this file or `olea-core` re-derives a due/arrival/band snapshot
-   * from a frozen scope, and duplicating that logic here would give the two
-   * holders two independently-drifting definitions of "stale" — exactly
-   * what `[D-033]`'s one-composer discipline exists to prevent. Wiring this
-   * for real needs `provider.ts` to export `buildScopeSnapshotAt` (or an
-   * equivalent wrapper) so this method can retain the compose result's
-   * `frozenScope` across a sitting and diff a fresh snapshot against it —
-   * see the bead's close evidence for the follow-up that does the export.
+   * `trigger` stays an honest zero — `decideRebuild` never reads it while a
+   * sitting is active (only the between-sittings branch this holder cannot
+   * reach today would, per this doc's own paragraph above). `staleness` is
+   * no longer a fabricated zero, though (`ol-egov.141.89.10.14`, C5.8,
+   * `[D-162]`, `[D-193]`/`[D-241]`): {@link computeSharedSittingStaleness}
+   * (`session/shared-sitting-staleness.ts`, pulled out into its own module
+   * so it can be driven directly under Vitest — this file cannot) diffs a
+   * fresh `buildScopeSnapshotAt` read against `sharedSittingFrozenScope`/
+   * `sharedSittingFrozenSnapshot` (those fields' own doc, refreshed by every
+   * `composeDefaultStudySession` call) — the identical computation
+   * `session-builder/provider.ts`'s own `load()` runs for ITS sitting
+   * (`ol-egov.141.89.10.46` exported `buildScopeSnapshotAt` for exactly this
+   * reuse, `[D-033]`'s one-composer discipline: one definition of the three
+   * facts, never two independently-drifting ones). That helper already gives
+   * honest zeros when nothing has been frozen yet or the idle threshold has
+   * not passed — see its own doc.
    */
   private async enterStudySessionHolderForStart(): Promise<void> {
     const now = new Date();
     const sitting = this.studySessionHolder.getSitting();
     if (sitting.status === 'active') {
+      const wiring = this.review;
+      const staleness = await computeSharedSittingStaleness(
+        {
+          frozenScope: this.sharedSittingFrozenScope,
+          frozenSnapshot: this.sharedSittingFrozenSnapshot,
+        },
+        sitting.enteredAt,
+        now,
+        wiring === null ? undefined : wiring.vault.firstSeen?.bind(wiring.vault),
+      );
       const decision = this.studySessionHolder.decide({
         now,
         trigger: {
@@ -3102,11 +3187,7 @@ export default class OleaPlugin extends Plugin {
           materialLandedSinceLastRebuild: false,
           assessmentDatePassedSinceLastRebuild: false,
         },
-        staleness: {
-          itemsDueInScope: false,
-          materialArrivedInScope: false,
-          assessmentProximityBandCrossedInScope: false,
-        },
+        staleness,
       });
       if (decision.action === 'hold') return;
       // `[D-162]`: the sitting ENDS — never a recompose of the unreviewed
