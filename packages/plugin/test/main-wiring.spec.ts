@@ -416,13 +416,13 @@ describe('the explain-back full-depth encouragement has a real mastery-state rea
 
   it('exposes a mastery-state reader that snapshots the review log once, fresh, per modal', () => {
     expect(main).toMatch(
-      /private explainBackMasteryStateReader\(\):\s*\(conceptId: string\) => MasteryState \| null \{\s*const vault = new ObsidianSource\(this\.app\);\s*let snapshot: readonly ReviewLogEntry\[\] \| null = null;\s*void readReviewLogHistory\(vault\)\s*\.then\(\(\{ entries \}\) => \{\s*snapshot = entries;\s*\}\)/,
+      /private explainBackMasteryStateReader\(\):\s*\(conceptId: string\) => MasteryState \| null \{\s*const vault = new ObsidianSource\(this\.app\);\s*let snapshot: readonly ReviewLogEntry\[\] \| null = null;\s*let depthGateValue: SoloLevel \| undefined;\s*void readReviewLogHistory\(vault\)\s*\.then\(\(\{ entries \}\) => \{\s*snapshot = entries;\s*\}\)/,
     );
   });
 
   it('resolves mastery state through computeAllConceptMastery, defaulting to null (unconfirmed) while the snapshot is outstanding', () => {
     expect(main).toMatch(
-      /return \(conceptId\) =>\s*snapshot === null\s*\?\s*null\s*:\s*\(computeAllConceptMastery\(snapshot, \[conceptId\]\)\.get\(conceptId\)\?\.state \?\? null\);/,
+      /return \(conceptId\) => \{\s*if \(snapshot === null\) return null;\s*const options = depthGateValue !== undefined \? \{ depthGate: depthGateValue \} : undefined;\s*return computeAllConceptMastery\(snapshot, \[conceptId\], options\)\.get\(conceptId\)\?\.state \?\? null;\s*\};/,
     );
   });
 
@@ -432,6 +432,46 @@ describe('the explain-back full-depth encouragement has a real mastery-state rea
 
   it('imports computeAllConceptMastery from olea-core', () => {
     expect(main).toMatch(/computeAllConceptMastery,/);
+  });
+});
+
+describe("component 3.1's delivered growth-stage depth gate has a real production caller ([D-352], ol-egov.141.89.9.55)", () => {
+  // Same defect shape component 3.3's own describe block above opens with:
+  // `depth-gate-provider.ts`, `depth-gate/wiring.ts` and their fetch/decode
+  // logic are all complete and tested (`test/depth-gate/*.spec.ts`) — these
+  // assertions are the source-level proof `main.ts` actually builds that
+  // wiring and threads its result into `explainBackMasteryStateReader`,
+  // the one caller in this file that folds mastery through
+  // `MasteryRollupOptions.depthGate`.
+
+  it('builds the depth-gate wiring through the tested composer, against the real data host and the real HTTP GET adapter', () => {
+    expect(main).toMatch(
+      /this\.depthGate\s*=\s*await buildDepthGateWiring\(\{\s*dataHost:\s*this,\s*httpGet:\s*obsidianDepthGateGet,/,
+    );
+  });
+
+  it('imports the real composer and transport adapter, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*obsidianDepthGateGet\s*\}\s*from\s*'\.\/depth-gate\/obsidian-depth-gate-transport\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*buildDepthGateWiring,\s*type DepthGateWiring\s*\}\s*from\s*'\.\/depth-gate\/wiring\.js'/,
+    );
+  });
+
+  it('resolves the delivered value once, fresh, alongside the review-log snapshot — the same "open time, read fresh per call" shape as snapshot', () => {
+    expect(main).toMatch(
+      /let depthGateValue: SoloLevel \| undefined;/,
+    );
+    expect(main).toMatch(
+      /void \(this\.depthGate\?\.readDepthGate\?\.\(\) \?\? Promise\.resolve\(undefined\)\)\.then\(\(value\) => \{\s*depthGateValue = value;\s*\}\);/,
+    );
+  });
+
+  it('feeds the resolved value into MasteryRollupOptions.depthGate, omitting the key (so rollup.ts applies DEPTH_GATE_SOLO_LEVEL) rather than passing undefined explicitly', () => {
+    expect(main).toMatch(
+      /const options = depthGateValue !== undefined \? \{ depthGate: depthGateValue \} : undefined;/,
+    );
   });
 });
 

@@ -92,6 +92,8 @@ import { buildRecognitionClaimCopy } from './course-setup/copy.js';
 import { readCourseSetupRecognitions } from './course-setup/recognition-source.js';
 import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
+import { obsidianDepthGateGet } from './depth-gate/obsidian-depth-gate-transport.js';
+import { buildDepthGateWiring, type DepthGateWiring } from './depth-gate/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
@@ -566,6 +568,14 @@ export default class OleaPlugin extends Plugin {
   private headingOfferForItem: HeadingOfferBannerTracker | null = null;
   /** Component 3.3's delivered ranking weights (`[D-110]`, `ol-v7r5.3`) — F7.8 grey-out, same shape as `concept`/`grading`/`retrieval` above. */
   private rankWeights: RankWeightsWiring | null = null;
+  /**
+   * Component 3.1's delivered growth-stage depth gate (`[D-352]`,
+   * `ol-egov.141.89.9.55`) — F7.8 grey-out, built and re-fetched on the same
+   * terms as `rankWeights` immediately above. Read by
+   * `explainBackMasteryStateReader` below, the one caller in this file that
+   * folds mastery through `MasteryRollupOptions.depthGate`.
+   */
+  private depthGate: DepthGateWiring | null = null;
   /**
    * `[D-167]`/`ol-v7r5.25` component 3.5 threading, hooked up per
    * `ol-v7r5.27`: same F7.8 grey-out shape as `rankWeights` above, built
@@ -1835,6 +1845,16 @@ export default class OleaPlugin extends Plugin {
     this.rankWeights = await buildRankWeightsWiring({
       dataHost: this,
       httpGet: obsidianRankWeightsGet,
+      now: this.now,
+    });
+
+    // Component 3.1's delivered growth-stage depth gate (`[D-352]`,
+    // `ol-egov.141.89.9.55`) — same fetch-or-null wiring shape as
+    // `rankWeights` immediately above, threaded into
+    // `explainBackMasteryStateReader` below.
+    this.depthGate = await buildDepthGateWiring({
+      dataHost: this,
+      httpGet: obsidianDepthGateGet,
       now: this.now,
     });
 
@@ -3774,10 +3794,24 @@ export default class OleaPlugin extends Plugin {
    * renders. The vault read this starts is asynchronous but unblocked by
    * anything on her critical path, so in every real session it resolves long
    * before an accept could reach `computeAcceptGrading`.
+   *
+   * **`[D-352]` (`ol-egov.141.89.9.55`): threads the delivered depth gate
+   * in, the production caller of `this.depthGate?.readDepthGate`.** Same
+   * "resolve once at open time, read the resolved value fresh per call"
+   * shape as `snapshot` immediately below, and deliberately independent of
+   * it: `depthGateValue` is left `undefined` (never set) when `this.depthGate`
+   * is `null` (Worker unconfigured) or the fetch fails or has not yet
+   * resolved by the time this closure is called, and an `undefined` third
+   * argument to `computeAllConceptMastery` is exactly what makes
+   * `computeConceptMastery` (`rollup.ts`) apply its own declared
+   * `DEPTH_GATE_SOLO_LEVEL` fallback — so a slow or unavailable fetch never
+   * blocks the mastery read the way waiting on both promises together
+   * would.
    */
   private explainBackMasteryStateReader(): (conceptId: string) => MasteryState | null {
     const vault = new ObsidianSource(this.app);
     let snapshot: readonly ReviewLogEntry[] | null = null;
+    let depthGateValue: SoloLevel | undefined;
     void readReviewLogHistory(vault)
       .then(({ entries }) => {
         snapshot = entries;
@@ -3793,10 +3827,14 @@ export default class OleaPlugin extends Plugin {
           },
         );
       });
-    return (conceptId) =>
-      snapshot === null
-        ? null
-        : (computeAllConceptMastery(snapshot, [conceptId]).get(conceptId)?.state ?? null);
+    void (this.depthGate?.readDepthGate?.() ?? Promise.resolve(undefined)).then((value) => {
+      depthGateValue = value;
+    });
+    return (conceptId) => {
+      if (snapshot === null) return null;
+      const options = depthGateValue !== undefined ? { depthGate: depthGateValue } : undefined;
+      return computeAllConceptMastery(snapshot, [conceptId], options).get(conceptId)?.state ?? null;
+    };
   }
 
   /**
