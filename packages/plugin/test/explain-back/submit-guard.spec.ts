@@ -86,11 +86,24 @@ describe('ExplainBackModal — the submit button guard is actually wired in', ()
     expect(submitAnswerBody).toMatch(/this\.deps\.grade\(/);
   });
 
-  it('the empty-submit guard is not the explicit skip action — no new skip event is introduced by it', () => {
-    const guardLine = modal.match(
-      /if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;/,
-    );
+  it('the empty-submit guard is not the explicit skip action — the guard itself introduces no skip event', () => {
+    // `ol-0r92.104` [DOS-I9] added the real named skip action to this same
+    // file, so `modal` now legitimately contains "skip" — this test's job
+    // narrows from "the word never appears" to "the guard's own click
+    // handler is not where it appears": the guard returns before
+    // `submitAnswer` and touches neither `skipPrompt` nor
+    // `deps.recordNonAttempt`, so a blank submit still writes no event of
+    // any kind, named-skip or otherwise. See `skip-wiring.spec.ts` for the
+    // skip action's own, separately-wired tests.
+    const guardLine = modal.match(/if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;/);
     expect(guardLine).not.toBeNull();
-    expect(modal).not.toMatch(/skip/i);
+    const start = modal.indexOf('private renderAnsweringPhase(');
+    const end = modal.indexOf('private renderGradedPhase(');
+    const body = modal.slice(start, end);
+    const guardBlockStart = body.indexOf("button.addEventListener('click', () => {");
+    expect(guardBlockStart).toBeGreaterThan(-1);
+    const guardBlockEnd = body.indexOf('});', guardBlockStart) + 3;
+    const guardBlock = body.slice(guardBlockStart, guardBlockEnd);
+    expect(guardBlock).not.toMatch(/skip/i);
   });
 });

@@ -128,6 +128,7 @@ import {
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackSourceBlock,
 } from './request.js';
+import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
 import { type ExplainBackSupportShown, supportLevelShownForExplainBack } from './solo-review.js';
 
 /**
@@ -259,6 +260,38 @@ export interface ExplainBackModalDeps {
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
+  /**
+   * `ol-0r92.104` [DOS-I9] (`[D-273]`, `[D-306]`): writes one non-attempt
+   * review-log event — core's `appendNonAttemptRecord`
+   * (`olea-core`'s `review-log/write.ts`), wrapped with a vault and the
+   * offer `trigger` this modal instance was opened under. `trigger` is not a
+   * param here because this view has no way to know it: `ExplainBackSeed`
+   * carries no trigger field, and the SAME `openExplainBackModal`
+   * construction point (`main.ts`, outside this bead's `owns`) is the one
+   * call site for all four of `[D-163]`'s ruled entry points. A real
+   * implementation closes over the trigger for the entry point it is
+   * constructed for — see this file's module doc, "Wiring", for what
+   * `main.ts` needs to change to supply that per call site.
+   *
+   * Optional and best-effort, same posture as `recordSoloGradeAndReview`:
+   * `main.ts` does not wire this yet, so a skip or a close-without-answering
+   * today writes nothing (unchanged from before this bead), never throws,
+   * and never blocks the UI transition it accompanies
+   * (`recordNonAttemptIfPossible` below catches and logs, content-free per
+   * D-005).
+   *
+   * **Never called for an answer that reached `deps.grade`** (`[D-304]`): a
+   * submitted answer — flagged by some future local check or not — is
+   * graded and recorded as the review it is; this dep's only two callers are
+   * `skipPrompt` and `onClose`'s guard on the `'answering'` phase, neither of
+   * which is reachable once `submitAnswer` has run for the current attempt.
+   */
+  readonly recordNonAttempt?: (params: {
+    /** Every concept the prompt concerned (D7.1's non-empty `conceptIds`). Never called when this would be `[]` — see `./skip.ts`'s `canRecordNonAttempt`. */
+    readonly conceptIds: readonly string[];
+    /** ISO-8601 with offset, the moment she left the prompt (the skip taken, or the close handled) — this view's own clock (`this.now`), the same "this view is the only place that can observe it" reasoning `durationMs` (`ol-yj0k`) already documents above. */
+    readonly timestamp: string;
+  }) => Promise<void>;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
   /**
@@ -429,6 +462,19 @@ interface ResolvedPrompt {
    * `context.question`, when it re-retrieves to check staleness.
    */
   readonly query: string;
+  /**
+   * `ol-0r92.104` [DOS-I9]: every concept this prompt concerned, for a
+   * non-attempt record's `conceptIds` (D7.1) — the full
+   * `instrument.conceptIds` for an instrument-seeded prompt, `[]` for a
+   * free-form topic entry (`resolveTopicPrompt`'s `subjectConceptId: null`
+   * is single-valued and reduced from the same absence; there is no wider
+   * list to fall back to). Deliberately the full list, not narrowed to
+   * `subjectConceptId` (`instrument.conceptIds[0]`) the way rendering above
+   * is — a non-attempt record should name every concept the prompt
+   * concerned, not just the one this view picked as "the" subject for
+   * display.
+   */
+  readonly conceptIds: readonly string[];
 }
 
 type ModalState =
@@ -465,6 +511,23 @@ type ModalState =
       readonly message: string | null;
       /** `[D-217]`: the SOLO depth level `deps.recordSoloGradeAndReview` reported, if any — `null` renders no heading (see `renderAcceptedPhase`), never a placeholder. */
       readonly soloLevel: SoloLevel | null;
+    }
+  | {
+      /**
+       * `ol-0r92.104` [DOS-I9] (`[D-273]`, `[D-305]`): reached only from the
+       * named skip action (`skipPrompt`) — never from `onClose`, which
+       * closes the whole `Modal` rather than rendering a further phase of
+       * it. A DEDICATED phase, not a reuse of `'accepted'` with `message`
+       * and `soloLevel` both `null`: those two fields being empty happens to
+       * render identically (see `renderSkippedPhase`), but `'accepted'`
+       * means a correctness verdict was actually accepted (`acceptGrading`
+       * ran `deps.acceptWithObservation`) — a skip never reaches that call
+       * at all (`[D-273]`: a skip grades nothing), so tagging it
+       * `'accepted'` would be a false structural claim any future reader of
+       * `this.state.phase` (an idempotency guard, a metric, a test) could
+       * reasonably rely on.
+       */
+      readonly phase: 'skipped';
     };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -544,6 +607,21 @@ export class ExplainBackModal extends Modal {
   }
 
   override onClose(): void {
+    // `ol-0r92.104` [DOS-I9] (`[D-306]`): a prompt she opened and closed
+    // without submitting is recorded the same way a named skip is — one
+    // non-attempt event, never which exit she took. `'answering'` is the
+    // ONLY phase that means "the question is on screen and she has not yet
+    // submitted": `'topic'`/`'loading'` precede a resolved prompt entirely
+    // (nothing was opened to leave), and every other phase
+    // (`'grading'`/`'graded'`/`'refused'`/`'accepted'`/`'skipped'`) is
+    // reachable only after `submitAnswer` already sent an answer to
+    // `deps.grade` (or, for `'skipped'`, after the skip's own write already
+    // ran) — see `submitAnswer`'s and `skipPrompt`'s own call sites, which
+    // are this file's only two routes off `'answering'` besides this one.
+    // Fire-and-forget: `onClose` is synchronous (`Modal`'s own signature),
+    // so this cannot be awaited, and `recordNonAttemptIfPossible` never
+    // throws (see its own doc).
+    if (this.state.phase === 'answering') void this.recordNonAttemptIfPossible(this.state.prompt);
     this.contentEl.empty();
     this.deps.onClosed?.();
   }
@@ -586,6 +664,7 @@ export class ExplainBackModal extends Modal {
       subjectConceptId,
       originInstrumentId: instrument.instrumentId,
       sourceBlocks,
+      conceptIds: instrument.conceptIds,
       query,
     };
     this.presentedAtMs = this.now().getTime();
@@ -612,6 +691,7 @@ export class ExplainBackModal extends Modal {
         originInstrumentId: this.deps.generateInstrumentId(),
         sourceBlocks,
         query: topic,
+        conceptIds: [],
       };
       // Never shown an answer box — insufficient-notes is a refusal before
       // any prompt existed to present, so no `presentedAtMs` is set here,
@@ -635,6 +715,7 @@ export class ExplainBackModal extends Modal {
       originInstrumentId: this.deps.generateInstrumentId(),
       sourceBlocks,
       query: topic,
+      conceptIds: [],
     };
     this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer: '' };
@@ -860,6 +941,57 @@ export class ExplainBackModal extends Modal {
     this.render();
   }
 
+  /**
+   * `ol-0r92.104` [DOS-I9] (`[D-273]`, SKIP-1): the named skip action — the
+   * `'answering'` phase's OTHER button. Never calls `deps.grade` or anything
+   * downstream of it: no answer is sent, no verdict is produced, and there
+   * is no grade at all, which is exactly what makes this distinct from the
+   * empty-submit guard (`isBlankExplainBackAnswer`, `ol-0r92.98`) — that
+   * guard only stops a blank `deps.grade` call from firing; this is a
+   * second, independently-wired action that never reaches `deps.grade` in
+   * the first place, blank answer or not, and writes its own event kind
+   * where the guard writes nothing.
+   *
+   * Synchronous and immediate, like `discardGrading` above, never like
+   * `submitAnswer`'s async `'grading'` phase: there is no network round trip
+   * to wait on here, only a best-effort local write
+   * (`recordNonAttemptIfPossible`) that never blocks or fails this
+   * transition (see that method's own doc).
+   */
+  private skipPrompt(prompt: ResolvedPrompt): void {
+    void this.recordNonAttemptIfPossible(prompt);
+    this.state = { phase: 'skipped' };
+    this.render();
+  }
+
+  /**
+   * `ol-0r92.104` [DOS-I9] (D7.1, `[D-304]`, `[D-306]`): the one place both
+   * `skipPrompt` and `onClose`'s `'answering'` guard write a non-attempt
+   * event through — never called anywhere else in this file, and in
+   * particular never from `submitAnswer`/`acceptGrading`'s paths, so an
+   * answer that reached `deps.grade` (flagged by some future local check or
+   * not) can never also be written as this kind (`[D-304]`).
+   *
+   * Writes nothing, silently, when `deps.recordNonAttempt` is unwired (see
+   * that field's own doc) or when `prompt.conceptIds` is empty
+   * (`canRecordNonAttempt`, `./skip.ts`) — a free-form topic prompt has no
+   * concept to name the record against, and D7.1's schema requires one. A
+   * failed write is caught and logged content-free (D-005), never thrown:
+   * this accompanies a UI transition (closing the prompt, or closing the
+   * whole modal) that must complete either way.
+   */
+  private async recordNonAttemptIfPossible(prompt: ResolvedPrompt): Promise<void> {
+    if (!this.deps.recordNonAttempt || !canRecordNonAttempt(prompt.conceptIds)) return;
+    try {
+      await this.deps.recordNonAttempt({
+        conceptIds: prompt.conceptIds,
+        timestamp: this.now().toISOString(),
+      });
+    } catch (error) {
+      console.error('Olea: non-attempt record failed (skip/close unaffected)', { error });
+    }
+  }
+
   private render(): void {
     const root = this.contentEl;
     root.empty();
@@ -894,6 +1026,9 @@ export class ExplainBackModal extends Modal {
         return;
       case 'accepted':
         this.renderAcceptedPhase(root, this.state.message, this.state.soloLevel);
+        return;
+      case 'skipped':
+        this.renderSkippedPhase(root);
         return;
     }
   }
@@ -955,6 +1090,16 @@ export class ExplainBackModal extends Modal {
       if (isBlankExplainBackAnswer(textarea.value)) return;
       void this.submitAnswer(prompt, textarea.value);
     });
+    // `ol-0r92.104` [DOS-I9]: the named skip action — a second, independent
+    // button, never the same click handler as the guard above. See
+    // `skipPrompt`'s own doc for exactly how this differs from the
+    // empty-submit guard just above it. No `cls` here, same as the submit
+    // button just above: neither is owned by `styles.css` (out of this
+    // bead's `owns`; `styles.spec.ts`'s drift guard requires every emitted
+    // class to have a rule), and a bare, unstyled Obsidian button is exactly
+    // what `submit`/`Done` already render as today.
+    const skip = root.createEl('button', { text: EXPLAIN_BACK_SKIP_LABEL });
+    skip.addEventListener('click', () => this.skipPrompt(prompt));
   }
 
   private renderGradedPhase(
@@ -1242,6 +1387,24 @@ export class ExplainBackModal extends Modal {
     }
     if (message !== null)
       root.createEl('p', { cls: 'olea-explain-back-encouragement', text: message });
+    this.renderDoneButton(root);
+  }
+
+  /**
+   * `ol-0r92.104` [DOS-I9] (`[D-305]`): a skip, or a prompt closed without
+   * answering, closes with no result line — not the five-step depth
+   * description (`renderAcceptedPhase` above), and no sixth phrase or
+   * sentence in its place. Nothing renders here above the Done button: no
+   * heading, no message, no mention that anything was skipped at all (F5.7:
+   * no surface shows her a count or a fact about her skips). The bare Done
+   * button is reused from `renderAcceptedPhase` via `renderDoneButton`
+   * rather than re-typed, which is the one thing the two phases share.
+   */
+  private renderSkippedPhase(root: HTMLElement): void {
+    this.renderDoneButton(root);
+  }
+
+  private renderDoneButton(root: HTMLElement): void {
     const button = root.createEl('button', { text: 'Done' });
     button.addEventListener('click', () => this.close());
   }

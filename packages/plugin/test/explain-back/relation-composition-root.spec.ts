@@ -154,8 +154,13 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(body).toMatch(
       /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
     );
+    // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
+    // non-attempt record's own field, D7.1) — matched by name here rather
+    // than wildcarded, so an unrelated future field slipping in unnoticed
+    // still fails this assertion instead of silently passing through a
+    // loose wildcard.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*query,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*\};/,
     );
   });
 
