@@ -519,6 +519,10 @@ export {
 } from './gap/build.js';
 export type { CoverageScope, CoverageScopeSource, SourceReadState } from './gap/coverage.js';
 export { readStateOf, sourcesInState, summariseCoverageScope } from './gap/coverage.js';
+// [ILB-ATT] Whether a concept's demand rule is currently met
+// (`ol-egov.141.89.9.4`) — see `./gap/demand.js`'s own module doc.
+export type { DemandRule, DemandsMetInput, DemandsMetReading } from './gap/demand.js';
+export { demandsMetNow } from './gap/demand.js';
 export type { AssessmentFormat, ReadinessFactors, ReadinessOptions } from './gap/readiness.js';
 export {
   assessmentFormatOf,
@@ -770,6 +774,10 @@ export {
   MULTI_LINE_REVERSED_SEPARATOR,
   MULTI_LINE_SEPARATOR,
   parseCards,
+  // The MCQ-block-invalid-report sibling (`ol-egov.141.89.9.4`): the same
+  // walk `parseCards` above does, with the rejected blocks kept rather than
+  // dropped. See `./instrument/card-format.js`'s own module doc.
+  parseCardsWithInvalid,
   SINGLE_LINE_REVERSED_SEPARATOR,
   SINGLE_LINE_SEPARATOR,
   SR_DEFAULT_DECK_TAG,
@@ -864,8 +872,10 @@ export {
 } from './instrument/rating.js';
 export type {
   CardInstrument,
+  CardInvalidReason,
   ClozeCardInstrument,
   ClozeDelimiter,
+  InvalidCardBlock,
   InvalidMcqBlock,
   McqInstrument,
   McqInvalidReason,
@@ -910,6 +920,42 @@ export type {
   PersistedKeywordIndex,
 } from './keyword-index/types.js';
 export { EMPTY_KEYWORD_INDEX } from './keyword-index/types.js';
+// [ILB-ATT] The attainment slice's read-time fold (`ol-egov.141.89.9.4`): a
+// per-concept attainment reading — stage, correction, eligible vitality,
+// readiness and need — over `readAllConceptAttainment`'s proven/withheld
+// evidence exclusion (`./mastery/validity.js`, below). See
+// `./mastery/attainment.js`'s own module doc. `SaplingRule`/`SoloLevel`/
+// `SupportLevel` are re-exported there for the module's own convenience but
+// NOT re-barrelled here: `SupportLevel` already has a barrel export from
+// `./support-level/types.js`, and a second export of the same name is a
+// TS2308 duplicate-export error.
+export type {
+  ArithmeticVersionInput,
+  AttainmentOptions,
+  ConceptAttainment,
+  ConceptReadinessReading,
+  CorrectionFact,
+  CurrentReading,
+  EligibleVitalityReading,
+  NeedBasis,
+  NeedReading,
+  StageCorrection,
+  TopStageAward,
+  WithheldEvidencePolicy,
+} from './mastery/attainment.js';
+export {
+  ATTAINMENT_FOLD_VERSION,
+  attainmentArithmeticVersion,
+  DEFAULT_WITHHELD_EVIDENCE_POLICY,
+  excludedFromCurrent,
+  readAllConceptAttainment,
+  readAllConceptReadiness,
+  readAllCurrentRecognition,
+  readAllEligibleConceptVitality,
+  readConceptAttainment,
+  readNeed,
+  UNKNOWN_NEED_VALUE,
+} from './mastery/attainment.js';
 // F2.11's single vocabulary site (D-017). Anything rendering mastery imports
 // from here; there is deliberately no second copy of these five words.
 export type { MasteryDisplay } from './mastery/display.js';
@@ -975,6 +1021,17 @@ export {
 // first consumer outside it (`ol-lohq`).
 export type { MasteryDistribution } from './mastery/sprig.js';
 export { masteryDistribution } from './mastery/sprig.js';
+// [ILB-ATT] The proven-invalid / withheld evidence exclusion
+// (`ol-egov.141.89.9.4`) `./mastery/attainment.js`'s reading folds over — see
+// `./mastery/validity.js`'s own module doc.
+export type {
+  InstrumentValidityProjection,
+  ProvenInvalidFact,
+  ProvenInvalidReason,
+  WithheldFact,
+  WithheldReason,
+} from './mastery/validity.js';
+export { projectInstrumentValidity } from './mastery/validity.js';
 // F2.11's second axis (knowledge model R3, `[D-087]`; `VIT-1` / `ol-1bjz`).
 // The fold from per-instrument retrievability to a concept's `holding` /
 // `tending` / `early` reading. **It has no consumer outside core yet** — the
@@ -1199,6 +1256,7 @@ export {
   ALLOWED_HELD_SOURCE_KINDS as PAPER_ALLOWED_HELD_SOURCE_KINDS,
   buildPaperBlueprint,
   conceptWeight as paperConceptWeight,
+  DEFAULT_PAPER_PURPOSE,
   dominantFormatClass as paperDominantFormatClass,
   EMPHASIS_WEIGHT_BOOST_DECLARED,
   EXTENT_FALLBACK_SLOT_COUNT_DECLARED,
@@ -1207,6 +1265,7 @@ export {
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
   PAPER_TAUGHT_ELIGIBLE_SIGNALS,
+  slotWeightForPurpose,
   taskIdForFormatClass as paperTaskIdForFormatClass,
   validatePaperScope,
 } from './oracle/paper-blueprint.js';
@@ -1262,6 +1321,7 @@ export type {
   PaperGroundingLabel,
   PaperGroundingTier,
   PaperHeldSource,
+  PaperPurpose,
   PaperRecoveredSection,
   PaperRecoveredSitting,
   PaperRecoveredStructure,
@@ -1271,6 +1331,9 @@ export type {
   PaperTaughtSignal,
   PaperWeightingAlpha,
 } from './oracle/paper-types.js';
+// F4.11's declared practice-paper purposes (`ol-egov.141.89.9.4`'s slot-weight
+// consumer) — see `./oracle/paper-types.js`'s own module doc.
+export { PAPER_PURPOSES } from './oracle/paper-types.js';
 export type { PaperUnlockInput, PaperUnlockResult } from './oracle/paper-unlock.js';
 export {
   daysUntilDue as paperDaysUntilDue,
@@ -1780,7 +1843,15 @@ export {
   mostRecentExpectedOccurrence,
   type RecurringWeekday,
 } from './schedule/recurrence.js';
-export { createFsrsScheduler } from './scheduler/fsrs-scheduler.js';
+// [ILB-ATT] The declared FSRS-6 configuration and the cold-start resolver
+// (`ol-egov.141.89.9.4`) — see `./scheduler/fsrs-scheduler.js`'s own module
+// doc for the declared-vs-delivered rule.
+export type { ResolvedSchedulerConfiguration } from './scheduler/fsrs-scheduler.js';
+export {
+  createFsrsScheduler,
+  DECLARED_SCHEDULER_CONFIGURATION,
+  resolveSchedulerConfiguration,
+} from './scheduler/fsrs-scheduler.js';
 // `[D-240]` item 2's serving rule (`ol-2zfj.71` [SESS-7]) — ONE
 // implementation, called by both session composers. Exported because the
 // harness's three-arm sweep selects the policy by name and because
@@ -1805,6 +1876,8 @@ export type {
   ScheduleInput,
   ScheduleOutput,
   Scheduler,
+  SchedulerConfiguration,
+  SchedulerConfigurationSource,
   SchedulerState,
 } from './scheduler/types.js';
 // F8.1's six-state grove coverage computation (`[D-054]`, `ol-o8eo`) — the
@@ -1894,6 +1967,7 @@ export {
 } from './session/replay.js';
 export type {
   ClozeInstrumentRecord,
+  InvalidCardReport,
   InvalidMcqReport,
   McqInstrumentRecord,
   QaInstrumentRecord,
@@ -1951,6 +2025,13 @@ export type {
   UnreadableReason,
 } from './source/unreadable.js';
 export { findUnreadableFiles, reasonForExtractionOutcome } from './source/unreadable.js';
+// The two shared stage contracts, Decision and Writing, their shared
+// provenance/failure arm, and one small pure adapter per existing core seam
+// (`ol-egov.141.89.20`, design in `[D-300]`'s review) — landed the same way
+// `./concept/revision/index.js` did above. No production caller yet, by
+// design: each chain adopts its contract in its own build bead. See
+// `./stage-contract/index.js`'s own module doc.
+export * from './stage-contract/index.js';
 // The absence signal register row 3.8 names (F6.6; `ol-v7r5.18`): "days since
 // her last review", derived from the review log's own timestamps.
 export { daysSinceLastReview } from './study-session/absence.js';
@@ -2087,6 +2168,13 @@ export {
   WINDOW_SLACK_SESSIONS,
   windowWidthSessions,
 } from './study-session/window.js';
+// [ILB-ATT] The support-level history the ladder and chooser fold over
+// (`ol-egov.141.89.9.4`) — see `./support-level/history.js`'s own module doc.
+export type {
+  SupportLevelHistory,
+  SupportLevelHistoryOptions,
+} from './support-level/history.js';
+export { buildSupportLevelHistory } from './support-level/history.js';
 // Support-level ladder (register row 3.9, `ol-ry2k`, `[D-094]`) — session-boundary
 // transitions only; self-assessment adjusts the offer, never the persisted level.
 export {
