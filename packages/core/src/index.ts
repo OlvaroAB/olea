@@ -816,11 +816,16 @@ export {
 // instrument id, never written into her notes. `./session/enumerate.js` reads it into
 // `VaultInstrumentRecord.sourceProvenance`; the write side (draft-time, `generation/materialize-mcq.ts`
 // in the plugin repo) is not yet wired — see that module's own doc for the exact insertion point.
-export type { CitationRecord, InstrumentCitation } from './instrument/citation-store.js';
+export type {
+  CitationFreshnessState,
+  CitationRecord,
+  InstrumentCitation,
+} from './instrument/citation-store.js';
 export {
   CITATION_RECORD_SCHEMA_VERSION,
   CITATION_STORE_FOLDER,
   citationStorePath,
+  classifyCitationFreshness,
   isCitationRecord,
   readInstrumentCitation,
   writeInstrumentCitation,

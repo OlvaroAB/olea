@@ -220,6 +220,7 @@ import type {
   AssessmentProximityBand,
   BuildComposedStudySessionInput,
   CalendarDay,
+  CitationFreshnessState,
   ComposedReentrySession,
   ConceptInstrumentIndex,
   ConceptMaterialPresence,
@@ -245,6 +246,7 @@ import {
   buildMaterialPresence,
   calendarDayOfTimestamp,
   calendarDaysEndingOn,
+  classifyCitationFreshness,
   composeOracleRanking,
   composeReentrySession,
   DEFAULT_SITTING_IDLE_THRESHOLD_MS,
@@ -727,39 +729,6 @@ export interface ComposeStudySessionForRequestResult {
 }
 
 /**
- * `[D-292]`/`ol-2zfj.154`'s three read states, mirrored here rather than imported.
- * `olea-core`'s `instrument/citation-store.ts` defines `CitationFreshnessState` and
- * `classifyCitationFreshness`, and `study-session/compose.ts` imports both internally — but
- * neither is re-exported from `packages/core/src/index.ts`'s citation-sidecar block, unlike
- * `CitationRecord`/`InstrumentCitation`/`readInstrumentCitation` right beside them (checked:
- * `core/src/index.ts` lines ~778-791). Widening that export is a one-line change to a file
- * outside this bead's `owns` (`packages/plugin/src/session-builder/provider.ts` only) — filed
- * as a follow-up rather than reached into (see this bead's report). A string-literal union
- * needs no imported name to satisfy `BuildComposedStudySessionInput.citationFreshness`'s
- * structural type (`ReadonlyMap<string, CitationFreshnessState>` — TypeScript compares literal
- * unions structurally), so this alias types this file's own resolver correctly without the
- * export existing yet.
- */
-type CitationFreshnessState = 'fresh' | 'stale' | 'unknown';
-
-/**
- * Mirrors `classifyCitationFreshness`'s body in `olea-core`'s `instrument/citation-store.ts`
- * exactly (`'unknown'` whenever `passageDigest` is absent, OR whenever there is no current
- * observation to compare it against; `'fresh'`/`'stale'` only when both are present) —
- * duplicated rather than imported for the reason {@link CitationFreshnessState}'s own doc
- * gives. Kept to the identical three-line body so a future switch to the real export, once
- * `core/src/index.ts` carries it, is a no-op diff.
- */
-function mirrorClassifyCitationFreshness(
-  citation: InstrumentCitation,
-  currentPassageDigest: string | undefined,
-): CitationFreshnessState {
-  if (citation.passageDigest === undefined) return 'unknown';
-  if (currentPassageDigest === undefined) return 'unknown';
-  return citation.passageDigest === currentPassageDigest ? 'fresh' : 'stale';
-}
-
-/**
  * `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`'s own follow-up): the production resolver
  * that turns each candidate instrument's own citation record into the `citationFreshness` map
  * `study-session/compose.ts`'s `buildComposedStudySession` accepts. `compose.ts` stays pure (its
@@ -792,8 +761,8 @@ function mirrorClassifyCitationFreshness(
  *    confirmed by grep) — `ol-2zfj.154`'s own follow-up, named onto `ol-egov.141.89.2.5`.
  *
  * So the production call below passes `() => undefined`, always, rather than a stub that looks
- * like a real observation — `mirrorClassifyCitationFreshness` already reads that absence as
- * `'unknown'`, the same as a legacy record with no `passageDigest` at all, never silently
+ * like a real observation — `classifyCitationFreshness` (`olea-core`) already reads that absence
+ * as `'unknown'`, the same as a legacy record with no `passageDigest` at all, never silently
  * `'fresh'`. `currentPassageDigestOf` is still a real parameter (not hardcoded inside this
  * function) so a test can inject a fake observation and exercise the `'fresh'`/`'stale'`
  * branches this resolver's logic is built to handle, and so the one production call site that
@@ -816,7 +785,7 @@ export async function resolveCitationFreshness(
       // it, both read 'unknown'"). No entry needed.
       if (citation === undefined) return;
       const currentPassageDigest = await currentPassageDigestOf(citation);
-      result.set(instrumentId, mirrorClassifyCitationFreshness(citation, currentPassageDigest));
+      result.set(instrumentId, classifyCitationFreshness(citation, currentPassageDigest));
     }),
   );
   return result;
