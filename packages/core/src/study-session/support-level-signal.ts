@@ -12,16 +12,44 @@
  * row's own words) is either honoured or quietly reduced back to the FSRS
  * rating it was supposed to improve on.
  *
- * ## Explain-back: genuinely finer than card-level correctness
+ * ## Explain-back: correctness is read before depth (D-286, D-281)
  *
- * A graded explain-back review already carries `explainBackGrade.soloLevel`
- * — Biggs & Collis's five-level taxonomy (`olea-contracts`' `SoloLevel`),
- * not a pass/fail. That is real texture a card-level rating cannot express:
+ * `[D-286 / GRD-3]` splits explain-back grading into two passes — pass one,
+ * a narrow correct/partial/incorrect correctness verdict, and pass two, the
+ * SOLO depth assessment below, which runs for a correct or partial verdict
+ * and is SKIPPED for a clearly incorrect one. `[D-281]` names correctness as
+ * an independent, required condition for the growth-stage tree's top stage:
+ * *"Depth without correctness is a confident wrong answer, and the fold must
+ * never promote one."* This module owes the same discipline, and used not
+ * to: it read `soloLevel` alone, so a relational-but-incorrect answer read
+ * as a clean pass. {@link deriveFailureShape} now reads `correctness` FIRST:
+ *
+ * - `'incorrect'` → always `'wrong-concept'`, whatever `soloLevel` says (or
+ *   even if it is absent — pass two was never run). Depth never overrides
+ *   correctness.
+ * - `undefined` (unknown — a record written before this field existed;
+ *   `[D-281]`: "read as unknown and can never be read as correct") → depth
+ *   is read but capped below `'none'`: a clean or partial soloLevel both
+ *   read as `'minor-slip'`, never a promotion on unverified depth alone.
+ *   Unlike a confirmed `'incorrect'` verdict, an unknown one is not KNOWN to
+ *   be wrong, so it is not escalated all the way to `'wrong-concept'`
+ *   either — `'minor-slip'` is the honest middle: real, breaks a clean
+ *   streak, but not an escalation trigger on data this module cannot vouch
+ *   for. A `'prestructural'` reading still reads `'wrong-concept'`
+ *   regardless, since that shape does not depend on correctness at all.
+ * - `'correct'` / `'partial'` → depth is read at full strength (D-286 runs
+ *   pass two for both, so a partial-but-well-structured answer still gets
+ *   scored for structure), via the SOLO mapping below.
+ *
+ * A graded explain-back review carries `explainBackGrade.soloLevel` — Biggs
+ * & Collis's five-level taxonomy (`olea-contracts`' `SoloLevel`), not a
+ * pass/fail. That is real texture a card-level rating cannot express:
  * *"listed several relevant ideas without integrating them"* and *"missed
  * the point of the question entirely"* are both failures, but they are not
  * the same failure, and `[D-094]`'s ladder cares which one happened —
  * escalation is named for `'blank'` and `'wrong-concept'` specifically, not
- * for any failure. The mapping below reads the SOLO level as that texture:
+ * for any failure. The mapping below reads the SOLO level as that texture,
+ * once correctness has already cleared the answer for a depth reading:
  *
  * - `'extended-abstract'` / `'relational'` → `'none'`. A genuinely
  *   integrated or generalised answer is a clean pass — not merely "not
@@ -114,6 +142,15 @@ export interface GradedReviewEvidence {
   readonly rating: Rating;
   /** Present only for a graded explain-back review — `ReviewLogRecordV5.explainBackGrade.soloLevel`, verbatim. */
   readonly soloLevel?: SoloLevel;
+  /**
+   * Present only for a graded explain-back review —
+   * `ReviewLogRecordV5.explainBackGrade.correctness`, verbatim
+   * (`[D-286 / GRD-3]`'s pass-one verdict; `[D-281]`'s independent
+   * correctness condition). Undefined means UNKNOWN, never correct — a
+   * record written before this field existed. See the module doc and
+   * {@link deriveFailureShape} for how each value reads.
+   */
+  readonly correctness?: 'correct' | 'partial' | 'incorrect';
 }
 
 const EXPLANATION_CLEAN: readonly SoloLevel[] = ['relational', 'extended-abstract'];
@@ -134,6 +171,16 @@ export function deriveFailureShape(evidence: GradedReviewEvidence): FailureShape
   }
 
   if (evidence.instrumentType === 'explain-back') {
+    // [D-286 / GRD-3]: correctness is pass one and is read FIRST. A clearly
+    // incorrect verdict is a failure whatever the depth pass found — pass
+    // two is skipped entirely for 'incorrect', so soloLevel need not even be
+    // present. This is the fix for the bug this module existed to close: a
+    // relational or extended-abstract soloLevel must never override an
+    // incorrect correctness verdict into 'none'.
+    if (evidence.correctness === 'incorrect') {
+      return 'wrong-concept';
+    }
+
     const level = evidence.soloLevel;
     if (level === undefined) {
       throw new Error(
@@ -142,6 +189,25 @@ export function deriveFailureShape(evidence: GradedReviewEvidence): FailureShape
           'or a caller error. Do not pass a soloLevel-less explain-back record here.',
       );
     }
+
+    if (evidence.correctness === undefined) {
+      // [D-281]: "Records written before this field existed read as unknown
+      // and can never be read as correct." A record with no correctness
+      // signal at all — every pre-D-286 single-pass grade — must not be
+      // promoted to a clean pass on depth alone; that is exactly the
+      // confident-wrong-answer promotion D-281 forbids for the growth-stage
+      // fold, and this component owes the same discipline. Unlike a
+      // CONFIRMED 'incorrect' verdict, though, an unknown one is not known to
+      // be wrong, so it is not escalated to 'wrong-concept' either — it is
+      // capped at 'minor-slip': real, breaks a clean streak, but not an
+      // escalation trigger on data this component cannot actually vouch for.
+      if (EXPLANATION_CLEAN.includes(level)) return 'minor-slip';
+      if (EXPLANATION_PARTIAL.includes(level)) return 'minor-slip';
+      return 'wrong-concept'; // 'prestructural'
+    }
+
+    // correctness is 'correct' or 'partial': pass one passed (D-286 runs the
+    // depth pass for both), so depth is read at full strength.
     if (EXPLANATION_CLEAN.includes(level)) return 'none';
     if (EXPLANATION_PARTIAL.includes(level)) return 'minor-slip';
     return 'wrong-concept'; // 'prestructural'

@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { deriveFailureShape, type GradedReviewEvidence } from './support-level-signal.js';
 
 describe('deriveFailureShape — explain-back, genuinely finer than card-level correctness', () => {
-  it('maps a clean integrated answer to none', () => {
+  it('maps a clean integrated answer to none, once correctness confirms pass one', () => {
+    // D-286/D-281: 'none' is a clean pass, which requires a CONFIRMED
+    // correctness verdict, not depth alone — see the dedicated
+    // "correctness is read before depth" describe block below for the
+    // unknown/incorrect-correctness cases this bug was about.
     expect(
       deriveFailureShape({
         instrumentType: 'explain-back',
         rating: 'good',
+        correctness: 'correct',
         soloLevel: 'relational',
       }),
     ).toBe('none');
@@ -14,6 +19,7 @@ describe('deriveFailureShape — explain-back, genuinely finer than card-level c
       deriveFailureShape({
         instrumentType: 'explain-back',
         rating: 'easy',
+        correctness: 'correct',
         soloLevel: 'extended-abstract',
       }),
     ).toBe('none');
@@ -68,6 +74,71 @@ describe('deriveFailureShape — explain-back, genuinely finer than card-level c
   it('throws on an explain-back review with no soloLevel rather than guessing', () => {
     const evidence: GradedReviewEvidence = { instrumentType: 'explain-back', rating: 'again' };
     expect(() => deriveFailureShape(evidence)).toThrow(/soloLevel/);
+  });
+});
+
+describe('deriveFailureShape — correctness is read before depth (D-286, D-281)', () => {
+  it('reads a relational but incorrect explanation as a failure, never as none', () => {
+    const shape = deriveFailureShape({
+      instrumentType: 'explain-back',
+      rating: 'again',
+      correctness: 'incorrect',
+      soloLevel: 'relational',
+    });
+    expect(shape).not.toBe('none');
+    expect(shape).toBe('wrong-concept');
+  });
+
+  it('reads an extended-abstract but incorrect explanation as a failure too — depth never overrides correctness', () => {
+    expect(
+      deriveFailureShape({
+        instrumentType: 'explain-back',
+        rating: 'again',
+        correctness: 'incorrect',
+        soloLevel: 'extended-abstract',
+      }),
+    ).toBe('wrong-concept');
+  });
+
+  it('does not require soloLevel when correctness is incorrect — D-286 skips the depth pass for a clearly incorrect answer', () => {
+    expect(
+      deriveFailureShape({
+        instrumentType: 'explain-back',
+        rating: 'again',
+        correctness: 'incorrect',
+      }),
+    ).toBe('wrong-concept');
+  });
+
+  it('still reads none for a confirmed-correct, relational explanation', () => {
+    expect(
+      deriveFailureShape({
+        instrumentType: 'explain-back',
+        rating: 'good',
+        correctness: 'correct',
+        soloLevel: 'relational',
+      }),
+    ).toBe('none');
+  });
+
+  it('still runs the depth pass for a partial verdict (D-286: partial still gets scored for structure)', () => {
+    expect(
+      deriveFailureShape({
+        instrumentType: 'explain-back',
+        rating: 'hard',
+        correctness: 'partial',
+        soloLevel: 'unistructural',
+      }),
+    ).toBe('minor-slip');
+  });
+
+  it('never reads unknown correctness as a success on depth alone — a pre-D-281 record with no correctness field cannot be promoted', () => {
+    const shape = deriveFailureShape({
+      instrumentType: 'explain-back',
+      rating: 'good',
+      soloLevel: 'relational',
+    });
+    expect(shape).not.toBe('none');
   });
 });
 
