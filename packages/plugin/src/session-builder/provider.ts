@@ -225,6 +225,7 @@ import type {
   ConceptMaterialPresence,
   ConceptRecord,
   ConceptRelation,
+  InstrumentCitation,
   OracleMasteryState,
   RankOracleOptions,
   ReplayResult,
@@ -258,6 +259,7 @@ import {
   exitSitting,
   IDLE_SITTING,
   isCalendarDay,
+  readInstrumentCitation,
   readReviewLogHistory,
   replaySchedulerStates,
   resolveAssessmentGroupingContext,
@@ -725,6 +727,102 @@ export interface ComposeStudySessionForRequestResult {
 }
 
 /**
+ * `[D-292]`/`ol-2zfj.154`'s three read states, mirrored here rather than imported.
+ * `olea-core`'s `instrument/citation-store.ts` defines `CitationFreshnessState` and
+ * `classifyCitationFreshness`, and `study-session/compose.ts` imports both internally — but
+ * neither is re-exported from `packages/core/src/index.ts`'s citation-sidecar block, unlike
+ * `CitationRecord`/`InstrumentCitation`/`readInstrumentCitation` right beside them (checked:
+ * `core/src/index.ts` lines ~778-791). Widening that export is a one-line change to a file
+ * outside this bead's `owns` (`packages/plugin/src/session-builder/provider.ts` only) — filed
+ * as a follow-up rather than reached into (see this bead's report). A string-literal union
+ * needs no imported name to satisfy `BuildComposedStudySessionInput.citationFreshness`'s
+ * structural type (`ReadonlyMap<string, CitationFreshnessState>` — TypeScript compares literal
+ * unions structurally), so this alias types this file's own resolver correctly without the
+ * export existing yet.
+ */
+type CitationFreshnessState = 'fresh' | 'stale' | 'unknown';
+
+/**
+ * Mirrors `classifyCitationFreshness`'s body in `olea-core`'s `instrument/citation-store.ts`
+ * exactly (`'unknown'` whenever `passageDigest` is absent, OR whenever there is no current
+ * observation to compare it against; `'fresh'`/`'stale'` only when both are present) —
+ * duplicated rather than imported for the reason {@link CitationFreshnessState}'s own doc
+ * gives. Kept to the identical three-line body so a future switch to the real export, once
+ * `core/src/index.ts` carries it, is a no-op diff.
+ */
+function mirrorClassifyCitationFreshness(
+  citation: InstrumentCitation,
+  currentPassageDigest: string | undefined,
+): CitationFreshnessState {
+  if (citation.passageDigest === undefined) return 'unknown';
+  if (currentPassageDigest === undefined) return 'unknown';
+  return citation.passageDigest === currentPassageDigest ? 'fresh' : 'stale';
+}
+
+/**
+ * `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`'s own follow-up): the production resolver
+ * that turns each candidate instrument's own citation record into the `citationFreshness` map
+ * `study-session/compose.ts`'s `buildComposedStudySession` accepts. `compose.ts` stays pure (its
+ * own module doc, "Citation freshness") and never reads the vault or classifies anything itself
+ * — this is the one production place that does, mirroring the `arrivalDays`/`relatedConceptKeys`
+ * pattern this file already uses for every other caller-resolved signal.
+ *
+ * Reads each instrument's own citation with a targeted `readInstrumentCitation` call
+ * (`citation-store.ts`'s own addressing discipline: by id, never a scan) — the same call
+ * `olea-core`'s `session/enumerate.ts` already makes once per instrument for
+ * `VaultInstrumentRecord.sourceProvenance`, paid a second time here because that walk keeps only
+ * `sourcePath`/`page`/`section` (`citationToSourceProvenance`), never `passageDigest` —
+ * `VaultInstrumentRecord` has no field for it, and widening that record's own shape is a change
+ * to `enumerate.ts`, outside this file's `owns` (filed as a follow-up).
+ *
+ * **`currentPassageDigestOf` is the one honest place this resolver admits a real gap.** Checked,
+ * before writing this, for a production-shaped observation of "what does this cited passage look
+ * like right now, in `passageDigest`'s own digest space":
+ *  - `../ingestion/materiality/citation-hash-store.ts`'s `ObsidianCitationHashStore` keeps the
+ *    cited note's raw TEXT, for a different consumer (`evaluateCitedPassageRevision`'s
+ *    revised/unchanged verdict) — never a digest, and never in `passageDigest`'s digest space.
+ *    Reusing its `text` here would mean inventing a comparison this resolver has no standing to
+ *    invent, exactly the "do not invent an observation" instruction this bead was given.
+ *  - `olea-core`'s `retrieval/evidencePackage.ts` has its OWN `passageDigest` field, on a
+ *    different type (`RetrievalEvidencePassage`), built by an injected hash the retrieval
+ *    pipeline supplies for its own chunks at evidence-assembly time — not wired to any
+ *    vault-observable "this instrument's cited passage, right now" read.
+ *  - and nothing writes `passageDigest` onto a `CitationRecord` at draft time yet either
+ *    (`generation/pipeline.ts`'s `citationFromUnit` mints `sourcePath`/`page`/`section` only,
+ *    confirmed by grep) — `ol-2zfj.154`'s own follow-up, named onto `ol-egov.141.89.2.5`.
+ *
+ * So the production call below passes `() => undefined`, always, rather than a stub that looks
+ * like a real observation — `mirrorClassifyCitationFreshness` already reads that absence as
+ * `'unknown'`, the same as a legacy record with no `passageDigest` at all, never silently
+ * `'fresh'`. `currentPassageDigestOf` is still a real parameter (not hardcoded inside this
+ * function) so a test can inject a fake observation and exercise the `'fresh'`/`'stale'`
+ * branches this resolver's logic is built to handle, and so the one production call site that
+ * needs to change, the day a real observation exists, is visible in a diff rather than buried.
+ */
+export async function resolveCitationFreshness(
+  vault: VaultSource,
+  instrumentIds: readonly string[],
+  currentPassageDigestOf: (
+    citation: InstrumentCitation,
+  ) => Promise<string | undefined> | string | undefined,
+): Promise<ReadonlyMap<string, CitationFreshnessState>> {
+  const result = new Map<string, CitationFreshnessState>();
+  await Promise.all(
+    instrumentIds.map(async (instrumentId) => {
+      const citation = await readInstrumentCitation(vault, instrumentId);
+      // No citation record at all (hand-authored, or generated but never cited) — omitted from
+      // the map, which `compose.ts`'s own default already reads as `'unknown'`, identically to
+      // setting it explicitly (its module doc: "An omitted map, or an instrument missing from
+      // it, both read 'unknown'"). No entry needed.
+      if (citation === undefined) return;
+      const currentPassageDigest = await currentPassageDigestOf(citation);
+      result.set(instrumentId, mirrorClassifyCitationFreshness(citation, currentPassageDigest));
+    }),
+  );
+  return result;
+}
+
+/**
  * `[SESS-8.4]` (`ol-egov.132.4`) — the ONE place a plugin assembles the
  * study-session composer's real input (the oracle chain, the gap view, her
  * review history, F2.19's two resolvers, A2.5's cached allocation) from a
@@ -849,6 +947,27 @@ export async function composeStudySessionForRequest(
   );
   const conceptInstrumentIndex = buildConceptInstrumentIndex(nonSuspendedRecords);
 
+  // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`'s own follow-up): resolve citation
+  // freshness for every instrument reachable from today's candidate concepts — `gapRows`, the
+  // same candidate set `arrivalDays` above is scoped to (every concept this call considered,
+  // not just the ones the budget cut keeps; a concept that narrowly misses the cut is still a
+  // real candidate `compose.ts` may look up). Scoped through `conceptInstrumentIndex` rather
+  // than the whole vault's `nonSuspendedRecords`, so a course or topic not in play today costs
+  // no citation reads. See `resolveCitationFreshness`'s own doc for why `() => undefined` is
+  // the honest call here (no production observation of a current passage digest exists yet —
+  // reported as a gap, not invented) and for the exact three places checked.
+  const citationCandidateInstrumentIds = new Set<string>();
+  for (const row of gapRows) {
+    for (const record of conceptInstrumentIndex.instrumentsFor(row.conceptKey)) {
+      citationCandidateInstrumentIds.add(record.instrumentId);
+    }
+  }
+  const citationFreshness = await resolveCitationFreshness(
+    deps.vault,
+    [...citationCandidateInstrumentIds],
+    () => undefined,
+  );
+
   // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
   // candidate this call considered (not just the ones the budget cut
   // kept), so a concept that only narrowly missed the cut still counts
@@ -932,6 +1051,9 @@ export async function composeStudySessionForRequest(
     relatedConceptKeys,
     assessmentContext,
     instruments: buildConceptInstrumentIndex(nonSuspendedRecords),
+    // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`): resolved above, scoped to today's
+    // candidate concepts — see that resolution's own comment.
+    citationFreshness,
     replay,
     // The first production read of the review log's `durationMs` (INV-4:
     // the discipline went in ahead of the feature, and this is the
