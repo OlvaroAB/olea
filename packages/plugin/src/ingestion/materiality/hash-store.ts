@@ -31,6 +31,12 @@ function isMaterialityRecord(value: unknown): value is MaterialityRecord {
   if (typeof candidate.canonicalLength !== 'number') return false;
   if (typeof candidate.lastChangedAt !== 'number') return false;
   if (candidate.lastVerdictAt !== null && typeof candidate.lastVerdictAt !== 'number') return false;
+  // [D-311]: `revision` is optional (a record persisted before this field
+  // existed has none) -- only reject when the key is PRESENT and not a
+  // number, the same "wrong type is corrupted" posture every other field
+  // here already takes. A missing revision is not corruption; `wiring.ts`
+  // treats it as revision 0.
+  if (candidate.revision !== undefined && typeof candidate.revision !== 'number') return false;
   const hashes = candidate.hashes as Record<string, unknown> | undefined;
   if (typeof hashes !== 'object' || hashes === null) return false;
   return typeof hashes.rawHash === 'string' && typeof hashes.canonicalHash === 'string';

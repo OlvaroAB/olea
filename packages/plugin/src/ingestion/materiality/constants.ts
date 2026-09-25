@@ -30,6 +30,12 @@ export interface MaterialityConstants {
    * having survived debounce, before a judge call is considered.
    */
   readonly minEditChars: number;
+  /**
+   * Milliseconds a below-floor edit may sit pending, with nothing else
+   * touching its path, before `wiring.ts`'s `drainDuePendingEdits` forces it
+   * to the judge anyway. `[DOS-3]` (ol-2zfj.159).
+   */
+  readonly pendingDrainMs: number;
 }
 
 /**
@@ -61,8 +67,32 @@ export const MATERIALITY_DEBOUNCE_MS = 3 * 60 * 1000;
  */
 export const MATERIALITY_MIN_EDIT_CHARS = 8;
 
+/**
+ * Thirty minutes (ten times `MATERIALITY_DEBOUNCE_MS`). **Declared, not
+ * derived** — a plain-English choice, never fitted against a corpus, same
+ * Class B "reversible default, flagged for retroactive review" posture the
+ * other two constants in this file take.
+ *
+ * Argued: `[DOS-3]` (ol-2zfj.159) closes a gap the length floor's own
+ * recurrence-based escalation (see `wiring.ts`'s `pendingSmallEdit` field
+ * doc) cannot — a below-floor edit that never recurs on its own path has no
+ * second edit to escalate on, so without a time-based drain it stays pending
+ * forever. Ten times the debounce window is comfortably longer than any
+ * pause a single editing session's own autosave/manual-save cadence
+ * produces (the debounce already absorbs those), so the drain never fires
+ * mid-session on a note she is still actively working in; short enough that
+ * a genuinely one-off edit still reaches a decision the same day, not "the
+ * next time something unrelated nudges this path." Revisit once real
+ * editing-session data shows whether 30 minutes fires too eagerly (cutting
+ * into one long sitting on the same note) or too slowly (a one-off edit
+ * sitting unreviewed for a while) — the same "measured baseline, named
+ * revisit condition" shape `debounceMs`/`minEditChars` above already use.
+ */
+export const MATERIALITY_PENDING_DRAIN_MS = 30 * 60 * 1000;
+
 /** The reversible defaults above, bundled for callers that want one object. */
 export const DEFAULT_MATERIALITY_CONSTANTS: MaterialityConstants = {
   debounceMs: MATERIALITY_DEBOUNCE_MS,
   minEditChars: MATERIALITY_MIN_EDIT_CHARS,
+  pendingDrainMs: MATERIALITY_PENDING_DRAIN_MS,
 };

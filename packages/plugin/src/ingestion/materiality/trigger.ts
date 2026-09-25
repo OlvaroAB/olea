@@ -42,6 +42,14 @@
  * may defer, batch or deprioritise a call; it may never, by itself or by
  * the caller's bookkeeping, be the reason a real content change goes
  * undecided forever.
+ *
+ * **Recurrence is not the only way out of a defer** (`[DOS-3]`, ol-2zfj.159).
+ * A below-floor edit that never recurs on its own path has no second edit to
+ * escalate on — the caller's recurrence bookkeeping alone would leave it
+ * pending forever, the exact outcome the paragraph above forbids. `wiring.ts`'s
+ * `MaterialityTrigger.drainDuePendingEdits` is the other half: a time-based
+ * drain that forces a pending, non-recurring below-floor edit to the judge
+ * once it has sat long enough with nothing else touching that path.
  */
 
 import type { MaterialityConstants } from './constants.js';

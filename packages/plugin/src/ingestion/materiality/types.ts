@@ -33,6 +33,26 @@ export interface MaterialityRecord {
   readonly lastChangedAt: number;
   /** Epoch ms a verdict (material or not) was last committed for this path, or `null` before the first one. */
   readonly lastVerdictAt: number | null;
+  /**
+   * `[D-311]`: a persisted counter for `wiring.ts`'s stale-response guard,
+   * bumped by one every time a judge call is dispatched for this path.
+   * `MaterialityTrigger` captures the value on this loaded record before
+   * awaiting the judge and, after the await, reloads the record and checks
+   * this field again — if it no longer matches (a newer `evaluate()` call,
+   * in this process or, surviving a restart, a later one reading the same
+   * store, already committed its own verdict), the response is stale and is
+   * dropped rather than committed. Optional, never `undefined` in new
+   * writes: a record saved before this field existed has none, which is not
+   * refused (the hash store's own "corrupted entry, never seen" bucket is
+   * for structurally broken data, not a field this bead is adding) but is
+   * not silently trusted either — per `[D-311]`'s own wording, "records
+   * without one are treated as unknown and re-judged at their next change":
+   * `MaterialityTrigger.evaluate` sends such a record's next real change
+   * straight to the judge, bypassing the formatting-only/below-floor
+   * shortcuts, and the verdict it produces is the write that gives the path
+   * a revision for the first time (see `wiring.ts`'s own `isLegacyRecord`).
+   */
+  readonly revision?: number;
 }
 
 /** Persistence port for `MaterialityRecord`s, one per vault path — mirrors `QueueStore`'s shape and reasoning (`olea-core`). */
