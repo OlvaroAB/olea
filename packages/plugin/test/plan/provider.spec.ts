@@ -201,17 +201,91 @@ describe('createLocalStudyPlanProvider — allocation policy ([D-167], ol-v7r5.2
     expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
   });
 
-  it('readPlanPolicy resolving undefined (offline/unconfigured/failed) — same absent-allocation plan, no throw', async () => {
+  it('readPlanPolicy is ABSENT (unconfigured / F7.8 AI off) — same absent-allocation plan, no throw', async () => {
     const raw = await createLocalStudyPlanProvider({
       vault: studyVault(),
       deviceId: DEVICE,
       settingsHost: hostWithBasePath(BASE_PATH),
       now: () => new Date('2026-08-10T09:00:00-04:00'),
-      readPlanPolicy: async () => undefined,
+      // No `readPlanPolicy` dep at all — the legitimate "this device never
+      // asks" state, distinct from "asked and failed" below.
     }).fetchPlan();
 
     const plan = studyPlanEnvelope.parse(raw);
     expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
+  });
+
+  describe('ol-egov.141.89.10.16 — a failed allocation fetch must never produce a silent allocation-less plan', () => {
+    it('REGRESSION: readPlanPolicy is PRESENT but resolves undefined (an attempted, failed fetch — offline/non-2xx/unparseable/malformed) — fetchPlan throws rather than building a schema-valid plan with no allocation', async () => {
+      // This is the exact mechanism ol-egov.141.89.10.16 reports:
+      // `fetchPlanPolicy` (plan-policy-provider.ts) collapses every
+      // transport/parse/validation failure to `undefined`; before this fix,
+      // `provider.ts` read that `undefined` identically to "not configured"
+      // and silently built a fully schema-valid `StudyPlanEnvelope` missing
+      // only `allocation`. `refresh.ts` (olea-core) reads that as a genuine
+      // success (`read.status === 'ok'`) and calls `saveCachedStudyPlan`,
+      // overwriting whatever plan — possibly with a real allocation — was
+      // cached before, even though `refresh.ts`'s own module doc promises
+      // "a bad answer never costs her the plan she already had."
+      //
+      // The fix: when the allocation fetch is actually ATTEMPTED (there are
+      // running courses AND a `readPlanPolicy` dep is configured) and it
+      // resolves `undefined`, that is a failure, not a "no policy" design
+      // state — so `fetchPlan` now throws. `provider.ts`'s own module doc
+      // already documents this convention for the ordinary "not configured
+      // yet" and "vault walk failed" cases: "a throw here is caught there
+      // and reported through `reason`, never surfaced past it... refresh
+      // already has the degradation path built and tested" — so a throw
+      // here means `refreshStudyPlan` (olea-core, out of this bead's owns)
+      // hands back the CACHED plan unchanged, allocation included, exactly
+      // the "cached plan, failing fetch, cached plan unchanged" scenario
+      // this bead's acceptance criteria names.
+      const provider = createLocalStudyPlanProvider({
+        vault: studyVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => new Date('2026-08-10T09:00:00-04:00'),
+        // Simulates `fetchPlanPolicy` returning `undefined` after a real
+        // attempt: offline, a non-2xx response, an unparseable body, or a
+        // body that failed `isPlanPolicyResult`'s shape check — every case
+        // `plan-policy-provider.ts`'s own doc lists as collapsing here.
+        readPlanPolicy: async () => undefined,
+      });
+
+      await expect(provider.fetchPlan()).rejects.toThrow(/allocation policy/i);
+    });
+
+    it('a plan.body still has no allocation field when there genuinely are no running courses — courses.length === 0 never attempts the fetch, so it is not a failure and does not throw', async () => {
+      let called = false;
+      const raw = await createLocalStudyPlanProvider({
+        vault: memoryVault({
+          '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+          [BASE_PATH]: [
+            'filters:',
+            '  and:',
+            '    - file.inFolder("02 Assignments")',
+            '    - file.ext == "md"',
+            'properties:',
+            '  class:',
+            '  type:',
+            '  weight:',
+            '  due:',
+            '  status:',
+          ].join('\n'),
+        }),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => new Date('2026-08-10T09:00:00-04:00'),
+        readPlanPolicy: async () => {
+          called = true;
+          return undefined;
+        },
+      }).fetchPlan();
+
+      expect(called).toBe(false);
+      const plan = studyPlanEnvelope.parse(raw);
+      expect(Object.hasOwn(plan.body, 'allocation')).toBe(false);
+    });
   });
 
   it('a delivered allocation policy is threaded onto body.allocation, with the resolved per-course inputs it was asked for', async () => {

@@ -188,21 +188,31 @@ describe('createLocalStudyPlanProvider — sittingsSinceFloorMet ([DOS-C4-a], ol
         reviewLine('r3', '2026-08-09T11:00:00-04:00', null, conceptId),
     );
 
+    // `ol-egov.141.89.10.16`: `readPlanPolicy` resolving `undefined` after
+    // it was actually CALLED is now a failure `fetchPlan` throws on, not a
+    // silent "no policy" — see `provider.spec.ts`'s dedicated suite for
+    // that behaviour. This test's own concern is unaffected by the throw:
+    // `resolvePlanPolicyCourseInputs`'s `sittingsSinceFloorMet` still had to
+    // reach the REQUEST before the (now-failing) fetch happened, and the fake
+    // `readPlanPolicy` still captures that request synchronously before it
+    // returns `undefined`.
     let requestedCourses: readonly {
       readonly courseId: string;
       readonly sittingsSinceFloorMet?: number;
     }[] = [];
-    await createLocalStudyPlanProvider({
-      vault,
-      deviceId: DEVICE,
-      settingsHost: hostWithBasePath(BASE_PATH),
-      now: NOW,
-      studyPlanStore: memoryStore(previousPlanWithFloorShare(0.6)),
-      readPlanPolicy: async (request) => {
-        requestedCourses = request.courses;
-        return undefined;
-      },
-    }).fetchPlan();
+    await expect(
+      createLocalStudyPlanProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: NOW,
+        studyPlanStore: memoryStore(previousPlanWithFloorShare(0.6)),
+        readPlanPolicy: async (request) => {
+          requestedCourses = request.courses;
+          return undefined;
+        },
+      }).fetchPlan(),
+    ).rejects.toThrow(/allocation policy/i);
 
     const course = requestedCourses.find((c) => c.courseId === 'TESTC101');
     expect(course?.sittingsSinceFloorMet).toBe(2);
@@ -211,27 +221,32 @@ describe('createLocalStudyPlanProvider — sittingsSinceFloorMet ([DOS-C4-a], ol
   it("no review log at all keeps today's behaviour — sittingsSinceFloorMet stays absent even with a floor share on hand", async () => {
     const vault = studyVault();
 
+    // Same `ol-egov.141.89.10.16` note as the test above: the attempted
+    // `readPlanPolicy` call now makes `fetchPlan` throw, but the request it
+    // was asked with is still captured before that happens.
     let requestedCourses: readonly {
       readonly courseId: string;
       readonly sittingsSinceFloorMet?: number;
     }[] = [];
-    await createLocalStudyPlanProvider({
-      vault,
-      deviceId: DEVICE,
-      settingsHost: hostWithBasePath(BASE_PATH),
-      now: NOW,
-      studyPlanStore: memoryStore(previousPlanWithFloorShare(0.6)),
-      readPlanPolicy: async (request) => {
-        requestedCourses = request.courses;
-        return undefined;
-      },
-    }).fetchPlan();
+    await expect(
+      createLocalStudyPlanProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: NOW,
+        studyPlanStore: memoryStore(previousPlanWithFloorShare(0.6)),
+        readPlanPolicy: async (request) => {
+          requestedCourses = request.courses;
+          return undefined;
+        },
+      }).fetchPlan(),
+    ).rejects.toThrow(/allocation policy/i);
 
     const course = requestedCourses.find((c) => c.courseId === 'TESTC101');
     expect(course?.sittingsSinceFloorMet).toBeUndefined();
   });
 
-  it('no studyPlanStore dep at all — same absent sittingsSinceFloorMet, no throw (every existing caller keeps compiling and behaving unchanged)', async () => {
+  it('no studyPlanStore dep at all — same absent sittingsSinceFloorMet (the attempted-and-failed policy fetch still throws, ol-egov.141.89.10.16)', async () => {
     const vault = studyVault();
     const conceptId = await widgetTheoryConceptKey(vault);
     await vault.write(
@@ -244,16 +259,18 @@ describe('createLocalStudyPlanProvider — sittingsSinceFloorMet ([DOS-C4-a], ol
       readonly courseId: string;
       readonly sittingsSinceFloorMet?: number;
     }[] = [];
-    await createLocalStudyPlanProvider({
-      vault,
-      deviceId: DEVICE,
-      settingsHost: hostWithBasePath(BASE_PATH),
-      now: NOW,
-      readPlanPolicy: async (request) => {
-        requestedCourses = request.courses;
-        return undefined;
-      },
-    }).fetchPlan();
+    await expect(
+      createLocalStudyPlanProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: NOW,
+        readPlanPolicy: async (request) => {
+          requestedCourses = request.courses;
+          return undefined;
+        },
+      }).fetchPlan(),
+    ).rejects.toThrow(/allocation policy/i);
 
     const course = requestedCourses.find((c) => c.courseId === 'TESTC101');
     expect(course?.sittingsSinceFloorMet).toBeUndefined();

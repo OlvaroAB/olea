@@ -8,12 +8,26 @@
  * `POST` carrying a body: build the URL, send the request, decode the
  * response, and collapse EVERY failure mode — offline, an unconfigured
  * Worker, a non-2xx response, an unparseable body, a body that doesn't
- * shape-check — to `undefined`. No throw reaches a caller, same F7.8
- * degrade-not-half-work posture: this policy's absence means the plan
- * carries no `allocation` field (`StudyPlanBody.allocation`'s own doc: "no
- * allocation policy travelled with this plan," never "every course got
- * zero") and the caller falls back exactly as it already does when
- * `allocation` is absent for any other reason.
+ * shape-check — to `undefined`. No throw reaches a caller here.
+ *
+ * **This module never distinguishes "not asked" from "asked and failed" —
+ * a caller above it must** (`ol-egov.141.89.10.16`). `undefined` here is
+ * always "an attempt was made and it failed": this function is only ever
+ * invoked when there is a request to send, so there is no success path that
+ * legitimately produces `undefined` — every collapse above is a genuine
+ * failure. It stays a plain `undefined` return (not a richer
+ * ok/fail-discriminated result) because `plan-policy-wiring.ts` (its
+ * production caller, and `provider.ts`'s `readPlanPolicy` dep signature it
+ * feeds) is typed against exactly `PlanPolicyResult | undefined` and is
+ * outside this bead's granted `owns` — widening this function's return
+ * shape would require editing that file too. The distinction this bead's
+ * fix actually needs — "the dep resolved `undefined` because it was never
+ * called" (F7.8: unconfigured, AI off) vs. "the dep resolved `undefined`
+ * because it WAS called and this collapse fired" (a real failure) — is
+ * something the caller can already tell from whether it called the dep at
+ * all, and `provider.ts` now does exactly that: it throws when it attempted
+ * the call and got `undefined` back, rather than reading that identically
+ * to "no policy applies" the way it used to.
  *
  * **Not a `rankWeightsEnvelope`/`studyPlanEnvelope` read.** The response
  * this endpoint returns is not cached under its own versioned-artifact

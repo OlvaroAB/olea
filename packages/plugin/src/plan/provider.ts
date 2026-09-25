@@ -99,12 +99,17 @@ export interface CreateLocalStudyPlanProviderDeps {
    * `[D-167]` / `ol-v7r5.25`: reads component 3.5's allocation policy from
    * `POST /v1/plan-policy`, behind `plan-policy-wiring.ts`'s fingerprint
    * gate — an unchanged fingerprint reuses the cached result rather than
-   * calling out. Absent, or resolving `undefined` (unconfigured, offline, a
-   * failed call with nothing cached yet — `buildPlanPolicyWiring`'s own
-   * doc), means this refresh's plan carries no `allocation` field at all,
-   * exactly the same "no policy travelled" reading
-   * `StudyPlanBody.allocation`'s own doc states — never a caller-invented
-   * zero.
+   * calling out. **Two different meanings, not one** (`ol-egov.141.89.10.16`
+   * fixed the conflation): this dep being ABSENT (unconfigured, F7.8 AI
+   * off) means this refresh's plan carries no `allocation` field at all,
+   * exactly the "no policy travelled" reading `StudyPlanBody.allocation`'s
+   * own doc states — never a caller-invented zero. This dep being PRESENT
+   * and resolving `undefined` means it was actually called and failed
+   * (offline, a non-2xx response, an unparseable or malformed body — every
+   * case `plan-policy-provider.ts`'s `fetchPlanPolicy` collapses to
+   * `undefined` on purpose at that layer); `fetchPlan` throws in that case
+   * rather than silently building an allocation-less plan — see the throw
+   * site below for why.
    */
   readonly readPlanPolicy?: (request: PlanPolicyRequest) => Promise<PlanPolicyResult | undefined>;
   /**
@@ -263,12 +268,32 @@ export function createLocalStudyPlanProvider(
 
       // `[D-167]` / `ol-v7r5.25`: resolve component 3.5's per-course inputs
       // from what this device already has, ask for the allocation policy
-      // behind the fingerprint gate, and land whatever comes back (or
-      // nothing) onto the plan. `deps.readPlanPolicy` absent, or resolving
-      // `undefined`, means `allocation` stays unset below — F7.8's
-      // degrade-not-half-work posture, same as `readRankWeights` above: a
-      // plan with no allocation is byte-identical to today's plan before
-      // this bead, never a plan with every course silently zeroed.
+      // behind the fingerprint gate, and land whatever comes back onto the
+      // plan. `deps.readPlanPolicy` ABSENT (F7.8: unconfigured, offline
+      // mode, AI features off) and `courses.length === 0` (nothing running
+      // to allocate for) are both a designed "no policy applies" state —
+      // `allocation` stays unset below, same degrade-not-half-work posture
+      // as `readRankWeights` above: a plan with no allocation is
+      // byte-identical to today's plan before this bead.
+      //
+      // **`ol-egov.141.89.10.16`: a CALL that is actually made and resolves
+      // `undefined` is a different thing — a failure, not a design state.**
+      // `deps.readPlanPolicy` present means this device IS configured to
+      // ask; `plan-policy-provider.ts`'s `fetchPlanPolicy` (its own doc)
+      // collapses every transport/parse/shape failure to `undefined`, on
+      // purpose, at that layer — but a caller here reading THAT `undefined`
+      // identically to "never asked" is exactly the bug: it silently built
+      // a schema-valid plan missing only `allocation`, which
+      // `refresh.ts`'s `read.status === 'ok'` then read as a genuine
+      // success and cached over whatever plan (possibly WITH an
+      // allocation) existed before, even though a bad answer is supposed
+      // to never cost her the plan she already had (`refresh.ts`'s own
+      // module doc). So an attempted-and-failed policy fetch throws here
+      // instead — this file's own doc above already documents exactly this
+      // convention for "not configured yet" and "vault walk failed": the
+      // throw is caught by `refreshStudyPlan`, which keeps the cached plan,
+      // allocation included, and reports the failure through `reason`
+      // rather than losing anything.
       const courses = resolvePlanPolicyCourseInputs(
         today,
         ranking,
@@ -277,8 +302,15 @@ export function createLocalStudyPlanProvider(
         sittingsHistory,
         floorSharesByCourse,
       );
-      const policy =
-        courses.length === 0 ? undefined : await deps.readPlanPolicy?.({ asOf: today, courses });
+      const attemptingPolicyFetch = courses.length > 0 && deps.readPlanPolicy !== undefined;
+      const policy = attemptingPolicyFetch
+        ? await deps.readPlanPolicy?.({ asOf: today, courses })
+        : undefined;
+      if (attemptingPolicyFetch && policy === undefined) {
+        throw new Error(
+          'Olea: the allocation policy fetch failed — keeping the cached study plan rather than caching one with no allocation.',
+        );
+      }
 
       return buildStudyPlan({
         ranking,
