@@ -263,6 +263,7 @@ import {
   resolveAssessmentGroupingContext,
   resolveRelatedConceptKeys,
   reviewLogPath,
+  suspendedInstrumentIds,
 } from 'olea-core';
 import {
   isStudyPlanConfigured,
@@ -824,7 +825,29 @@ export async function composeStudySessionForRequest(
   // rows, so only concepts actually in play cost a stat call.
   const gapRows = allGapRows(gap);
   const arrivalDays = await arrivalDaysByConceptKey(deps.vault, gapRows);
-  const conceptInstrumentIndex = buildConceptInstrumentIndex(enumeration.records);
+
+  // `ol-egov.141.89.10.30`: exclude a currently-suspended or withdrawn
+  // instrument (the identical `kind: 'suspend'` log entry either F2.6's
+  // suspend action or F8.5's registry-withdrawal action writes —
+  // `review-log/suspension.ts`'s own doc) BEFORE this composer indexes it by
+  // concept, mirroring `session/build.ts`'s own `candidates` fold
+  // (`ol-egov.141.89.10.13`) — the fix that bead landed protects only a
+  // caller that composes directly over `ReviewSession.candidates` (the
+  // workbench/simulator), never this real "Olea: Start today's review" path,
+  // because this function never calls `buildReviewSession` and never reads
+  // its `.suspended`. `entries` is the same whole-log read already held
+  // above (SESS-2's replay, the mastery join), so this is a fold over data
+  // already in hand, never a second log read. Folded once and reused at both
+  // this file's `buildConceptInstrumentIndex` call sites below, so a
+  // suspended instrument can never reach either the sitting's own frozen
+  // scope or `composedInput.instruments` — the two places `study-session/
+  // compose.ts`'s `buildComposedStudySession` and this call's own
+  // obligation-signal fold read instruments from.
+  const suspended = suspendedInstrumentIds(entries);
+  const nonSuspendedRecords = enumeration.records.filter(
+    (record) => !suspended.has(record.instrumentId),
+  );
+  const conceptInstrumentIndex = buildConceptInstrumentIndex(nonSuspendedRecords);
 
   // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
   // candidate this call considered (not just the ones the budget cut
@@ -908,7 +931,7 @@ export async function composeStudySessionForRequest(
     arrivalDays,
     relatedConceptKeys,
     assessmentContext,
-    instruments: buildConceptInstrumentIndex(enumeration.records),
+    instruments: buildConceptInstrumentIndex(nonSuspendedRecords),
     replay,
     // The first production read of the review log's `durationMs` (INV-4:
     // the discipline went in ahead of the feature, and this is the

@@ -1378,6 +1378,20 @@ function applyContainmentCoPresence(
 
 export interface ComposeSessionRowsInput {
   readonly rows: readonly GapRow[];
+  /**
+   * `ol-egov.141.89.10.30`: the caller's job to exclude a currently-
+   * suspended or withdrawn instrument before it is indexed here — this
+   * module never reads a suspend record itself (no `suspendedInstrumentIds`
+   * fold anywhere in this file) and does not filter `instrumentsFor()`'s
+   * results by anything but concept id. `session-builder/provider.ts`,
+   * this composer's one production caller, builds this index from
+   * `enumeration.records` already filtered by that fold (mirroring
+   * `session/build.ts`'s own `candidates` filter, `ol-egov.141.89.10.13`) —
+   * see that file's `composeStudySessionForRequest` for where. A caller
+   * that hands this an unfiltered index will compose a suspended or
+   * withdrawn instrument into the session; nothing downstream of this
+   * field catches that.
+   */
   readonly instruments: ConceptInstrumentIndex;
   /** `replaySchedulerStates(entries, scheduler)` — the same replay the caller's `Scheduler` produces elsewhere. */
   readonly replay: ReplayResult;

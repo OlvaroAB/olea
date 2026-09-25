@@ -100,6 +100,22 @@
  * one "withdrawn" through the registry port, to name each path's real
  * caller — but both land the same `suspend` log entry, folded by the same
  * `suspendedInstrumentIds` (`packages/core/src/review-log/suspension.ts`).
+ *
+ * ## Case 2 was pinned as `it.fails`; `ol-egov.141.89.10.30` fixed it
+ *
+ * `ol-egov.141.89.10.13` landed `packages/core/src/session/build.ts`'s own
+ * `candidates` filter first, but confirmed empirically that it does not
+ * reach this path: `composeStudySessionForRequest`
+ * (`session-builder/provider.ts:748`) never calls `build.ts`'s
+ * `buildReviewSession` and never reads its `.suspended`, so case 2's two
+ * `it.fails` cases stayed failing even after that fix landed.
+ * `ol-egov.141.89.10.30` wired the same `suspendedInstrumentIds` fold into
+ * `session-builder/provider.ts` itself, at the point it builds the
+ * composer's own `ConceptInstrumentIndex` (`buildConceptInstrumentIndex`),
+ * before either of that function's two call sites hands the index to
+ * `study-session/compose.ts`'s `buildComposedStudySession` — see that
+ * bead's commit for the diff. Case 2's three tests below are now plain,
+ * passing `it` cases, not `it.fails`.
  */
 
 import {
@@ -420,7 +436,7 @@ describe('case 1 (ol-egov.141.6.16 acceptance criterion 1) — non-suspended ins
 });
 
 describe('case 2 (ol-egov.141.6.16 acceptance criterion 2) — a suspended and a withdrawn instrument, through the real plugin path', () => {
-  it('records what the path does with a suspended instrument and a withdrawn instrument (over-inclusion defect ol-egov.141.89.10.13, not fixed here)', async () => {
+  it('a suspended instrument and a withdrawn instrument are both excluded from the served queue (fixed: ol-egov.141.89.10.30)', async () => {
     const vault = twoConceptSameCourseVault();
     const enumeration = await enumerateVaultInstruments(vault);
     expect(enumeration.records.length).toBe(2);
@@ -462,86 +478,63 @@ describe('case 2 (ol-egov.141.6.16 acceptance criterion 2) — a suspended and a
     }
     const servedIds = outcome.scheduledQueue.map((item) => item.instrument.instrumentId);
 
-    // Observed, current behaviour: both the suspended and the withdrawn
-    // instrument DO reach the served queue. This is not asserted as
-    // correct — it is `ol-egov.141.89.10.13`'s own confirmed finding, read
-    // again here through the plugin's real path. `ol-4mse` (the Today
-    // panel's mastery fold, `packages/core/src/today/panel.ts` ~line 272)
-    // is a separate call site this suite's composed-review-tab path never
-    // reaches, so it is not exercised or re-confirmed here.
-    expect(servedIds).toContain(widget.instrumentId);
-    expect(servedIds).toContain(gadget.instrumentId);
-
-    // What SHOULD hold, and does NOT yet on this real path — a suspended or
-    // withdrawn instrument excluded from the served queue. Pinned as an
-    // EXPECTED failure (`it.fails`) below, not a passing assertion of the
-    // over-inclusion, so this file never locks the bug in as correct.
-    //
-    // `ol-egov.141.89.10.13` landed `session/build.ts`'s own fix (its
-    // `candidates` field, built at `session/build.ts:277-285`, now excludes
-    // `suspended`/withdrawn) and a core unit test proving it. Verified here,
-    // empirically, that this alone does NOT flip the two `it.fails` below:
-    // `composeThroughProductionPath` selects instruments through
-    // `composeStudySessionForRequest` (`session-builder/provider.ts:770`,
-    // `enumerateVaultInstruments` called directly) into
-    // `study-session/compose.ts`'s `buildComposedStudySession` — a path that
-    // never calls `session/build.ts`'s `buildReviewSession` and never reads
-    // `.suspended` at all (`buildConceptInstrumentIndex(enumeration.records)`,
-    // `session-builder/provider.ts:827`/`:911`, takes the raw, unfiltered
-    // enumeration). `open-session.ts`'s own `buildReviewSession` call
-    // (`:378`) is a SECOND, independent enumeration, used only to fill in
-    // `state`/`conceptIds` on the already-selected rows
-    // (`queueItemsFromComposedSession`, which never drops a row) — so
-    // `session/build.ts`'s fix protects a caller that composes directly over
-    // `candidates` (the workbench/simulator, `composeQueue`'s legacy
-    // callers), but not this, the real "Olea: Start today's review" path.
-    // Remains `it.fails` until a follow-up bead wires suspension into
-    // `session-builder/provider.ts`/`study-session/compose.ts` themselves
-    // (outside `ol-egov.141.89.10.13`'s `owns`) — see this bead's report.
+    // `ol-egov.141.89.10.30`: neither the suspended nor the withdrawn
+    // instrument reaches the served queue. Before this bead, both did — this
+    // suite's own history (`git log` on this file) carries the confirmed
+    // over-inclusion finding this test used to pin as an `it.fails`.
+    // `ol-egov.141.89.10.13` landed `session/build.ts`'s own `candidates`
+    // fix first, but that path is never called from here
+    // (`composeStudySessionForRequest` never calls `buildReviewSession` and
+    // never read `.suspended`) — this bead is the one that actually wires
+    // the same fold (`suspendedInstrumentIds`, `review-log/suspension.ts`)
+    // into `session-builder/provider.ts`, at the point it builds the
+    // composer's `ConceptInstrumentIndex`
+    // (`buildConceptInstrumentIndex(nonSuspendedRecords)`), before either of
+    // its two call sites hands that index to `study-session/compose.ts`'s
+    // `buildComposedStudySession`. `ol-4mse` (the Today panel's mastery
+    // fold, `packages/core/src/today/panel.ts` ~line 272) is a separate call
+    // site this suite's composed-review-tab path never reaches, so it is not
+    // exercised or re-confirmed here.
+    expect(servedIds).not.toContain(widget.instrumentId);
+    expect(servedIds).not.toContain(gadget.instrumentId);
   });
 
-  it.fails(
-    'expected (not yet true): a suspended instrument is excluded from the served queue (ol-egov.141.89.10.13)',
-    async () => {
-      const vault = twoConceptSameCourseVault();
-      const enumeration = await enumerateVaultInstruments(vault);
-      const widget = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
-      if (widget === undefined) throw new Error('expected the Widget theory instrument enumerated');
+  it('a suspended instrument is excluded from the served queue (ol-egov.141.89.10.30)', async () => {
+    const vault = twoConceptSameCourseVault();
+    const enumeration = await enumerateVaultInstruments(vault);
+    const widget = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
+    if (widget === undefined) throw new Error('expected the Widget theory instrument enumerated');
 
-      await createVaultSuspendPort(vault, DEVICE).suspend(widget.instrumentId, widget.conceptIds);
+    await createVaultSuspendPort(vault, DEVICE).suspend(widget.instrumentId, widget.conceptIds);
 
-      const outcome = await composeThroughProductionPath(vault);
-      if (!outcome.ok) throw new Error(`expected a composed session, got: ${String(outcome.error)}`);
-      const servedIds = outcome.scheduledQueue.map((item) => item.instrument.instrumentId);
+    const outcome = await composeThroughProductionPath(vault);
+    if (!outcome.ok) throw new Error(`expected a composed session, got: ${String(outcome.error)}`);
+    const servedIds = outcome.scheduledQueue.map((item) => item.instrument.instrumentId);
 
-      expect(servedIds).not.toContain(widget.instrumentId);
-    },
-  );
+    expect(servedIds).not.toContain(widget.instrumentId);
+  });
 
-  it.fails(
-    'expected (not yet true): a withdrawn instrument is excluded from the served queue (ol-egov.141.89.10.13)',
-    async () => {
-      const vault = twoConceptSameCourseVault();
-      const enumeration = await enumerateVaultInstruments(vault);
-      const gadget = enumeration.records.find((r) => r.notePath === 'Notes/two.md');
-      if (gadget === undefined) throw new Error('expected the Gadget theory instrument enumerated');
+  it('a withdrawn instrument is excluded from the served queue (ol-egov.141.89.10.30)', async () => {
+    const vault = twoConceptSameCourseVault();
+    const enumeration = await enumerateVaultInstruments(vault);
+    const gadget = enumeration.records.find((r) => r.notePath === 'Notes/two.md');
+    if (gadget === undefined) throw new Error('expected the Gadget theory instrument enumerated');
 
-      await appendSuspendRecord(
-        vault,
-        {
-          kind: 'suspend',
-          timestamp: isoWithLocalOffset(NOW),
-          instrumentId: gadget.instrumentId,
-          conceptIds: [...gadget.conceptIds],
-        },
-        { deviceId: DEVICE },
-      );
+    await appendSuspendRecord(
+      vault,
+      {
+        kind: 'suspend',
+        timestamp: isoWithLocalOffset(NOW),
+        instrumentId: gadget.instrumentId,
+        conceptIds: [...gadget.conceptIds],
+      },
+      { deviceId: DEVICE },
+    );
 
-      const outcome = await composeThroughProductionPath(vault);
-      if (!outcome.ok) throw new Error(`expected a composed session, got: ${String(outcome.error)}`);
-      const servedIds = outcome.scheduledQueue.map((item) => item.instrument.instrumentId);
+    const outcome = await composeThroughProductionPath(vault);
+    if (!outcome.ok) throw new Error(`expected a composed session, got: ${String(outcome.error)}`);
+    const servedIds = outcome.scheduledQueue.map((item) => item.instrument.instrumentId);
 
-      expect(servedIds).not.toContain(gadget.instrumentId);
-    },
-  );
+    expect(servedIds).not.toContain(gadget.instrumentId);
+  });
 });
