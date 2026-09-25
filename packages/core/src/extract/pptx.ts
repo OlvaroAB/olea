@@ -37,9 +37,20 @@
  * answer — see `types.ts`'s doc comment on `SourceLocation.section`. This
  * is deliberately per-slide, not a deck-wide outline: unlike a markdown
  * document, a deck has no nesting for `../block/outline.ts`'s tree to walk.
+ *
+ * **`extractPptxEmbeddedImages` (C3.3; per.md decision 1, `[D-324]`,
+ * `ol-egov.141.89.8.20`, discovered from `ol-9cle`) is a separate function,
+ * called beside `pptxExtractor.extract`, not merged into it.** A slide's own
+ * embedded raster part(s) — its picture(s), not a render of the slide — live
+ * in `ppt/media/`, reached via `ppt/slides/_rels/slideN.xml.rels`. See
+ * `embedded-image.ts`'s module doc for why this stays a sibling function
+ * (the shared `PageExtraction`/`ExtractionResult` types are outside this
+ * bead's `owns`) and how a future vision-page caller would consume it.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
+import type { PageEmbeddedImages } from './embedded-image.js';
+import { readEmbeddedRasterImages } from './embedded-image.js';
 import { applyFurnitureDetection } from './furniture.js';
 import { classifyPageText, isReachedButUnreadable } from './plausibility.js';
 import { routePage } from './threshold.js';
@@ -269,3 +280,44 @@ export const pptxExtractor: Extractor = {
     };
   },
 };
+
+/** `ppt/slides/slideN.xml`'s own `.rels` part — `ppt/slides/_rels/slideN.xml.rels`, PowerPoint's fixed convention for a part's relationships. */
+function slideRelsPath(slideKey: string): string {
+  const slash = slideKey.lastIndexOf('/');
+  const dir = slideKey.slice(0, slash);
+  const file = slideKey.slice(slash + 1);
+  return `${dir}/_rels/${file}.rels`;
+}
+
+/**
+ * Every slide's embedded raster image(s), in the same presentation order
+ * `pptxExtractor.extract` uses — so `page` numbers line up between the two
+ * — read from `ppt/media/` via each slide's own `.rels` part. See this
+ * module's doc comment and `embedded-image.ts`'s for why this is a sibling
+ * function rather than a field on `pptxExtractor.extract`'s return value,
+ * and how a future caller would consume it.
+ *
+ * A slide with no picture relationship, or whose only picture is a vector
+ * metafile (EMF/WMF — see `embedded-image.ts`'s `RASTER_EXTENSION_MIME`),
+ * gets `images: []`: marked as having no image, never omitted from the
+ * result and never faked.
+ */
+export function extractPptxEmbeddedImages(input: ExtractorInput): PageEmbeddedImages[] {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(input.bytes);
+  } catch {
+    // Not a valid zip at all — mirrors `pptxExtractor.extract`'s own
+    // `'unreadable'` case: nothing about this source could be read, so
+    // nothing is reported rather than a fabricated page.
+    return [];
+  }
+
+  const order = resolvePresentationOrder(files) ?? fallbackSlideOrder(files);
+  return order.map((key, idx) => {
+    const relsBytes = files[slideRelsPath(key)];
+    const relsXml = relsBytes ? strFromU8(relsBytes) : undefined;
+    const images = readEmbeddedRasterImages(files, relsXml, 'ppt/slides');
+    return { page: idx + 1, images };
+  });
+}

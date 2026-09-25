@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { docxExtractor } from './docx.js';
+import { docxExtractor, extractDocxEmbeddedImages } from './docx.js';
 import { DEFAULT_TEXT_LAYER_CHAR_THRESHOLD } from './threshold.js';
 
 function documentXml(paragraphs: readonly string[]): string {
@@ -31,6 +31,29 @@ function buildDocxBytes(files: Record<string, string>): Uint8Array {
   for (const [path, content] of Object.entries(files)) zipped[path] = strToU8(content);
   return zipSync(zipped);
 }
+
+/** Like `buildDocxBytes`, but accepts already-binary parts too — the embedded-image tests need real (fake) image bytes alongside text XML. */
+function buildDocxBytesMixed(files: Record<string, string | Uint8Array>): Uint8Array {
+  const zipped: Record<string, Uint8Array> = {};
+  for (const [path, content] of Object.entries(files)) {
+    zipped[path] = typeof content === 'string' ? strToU8(content) : content;
+  }
+  return zipSync(zipped);
+}
+
+function documentRels(
+  mapping: ReadonlyArray<readonly [id: string, type: string, target: string]>,
+): string {
+  const rels = mapping
+    .map(([id, type, target]) => `<Relationship Id="${id}" Type="${type}" Target="${target}"/>`)
+    .join('');
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`
+  );
+}
+
+const IMAGE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
 
 describe('docxExtractor — paragraph extraction and offsets', () => {
   it('extracts each non-empty paragraph as its own unit with correct running offsets', async () => {
@@ -189,5 +212,65 @@ describe('docxExtractor — robustness', () => {
     expect(result.pages).toHaveLength(1);
     expect(result.pages[0]?.charCount).toBe(0);
     expect(result.pages[0]?.route).toBe('vision');
+  });
+});
+
+describe('extractDocxEmbeddedImages — embedded raster images for the one page region (ol-egov.141.89.8.20)', () => {
+  it("reads a document picture relationship's bytes and real media type from word/media", () => {
+    const jpegBytes = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]);
+    const bytes = buildDocxBytesMixed({
+      'word/document.xml': documentXml(['A paragraph beside a figure']),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.jpeg']]),
+      'word/media/image1.jpeg': jpegBytes,
+    });
+
+    const result = extractDocxEmbeddedImages({ path: 'paper.docx', bytes });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.page).toBe(1);
+    expect(result[0]?.images).toHaveLength(1);
+    expect(result[0]?.images[0]?.mimeType).toBe('image/jpeg');
+    expect(result[0]?.images[0]?.bytes).toEqual(jpegBytes);
+  });
+
+  it('marks a document with no picture relationship as having no image — never faked, never omitted', () => {
+    const bytes = buildDocxBytesMixed({
+      'word/document.xml': documentXml(['Plain text, no figures']),
+    });
+
+    const result = extractDocxEmbeddedImages({ path: 'paper.docx', bytes });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.page).toBe(1);
+    expect(result[0]?.images).toEqual([]);
+  });
+
+  it('excludes a vector metafile (WMF) picture relationship — vector, not raster', () => {
+    const bytes = buildDocxBytesMixed({
+      'word/document.xml': documentXml(['A paragraph next to a pasted vector graphic']),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.wmf']]),
+      'word/media/image1.wmf': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = extractDocxEmbeddedImages({ path: 'paper.docx', bytes });
+    expect(result[0]?.images).toEqual([]);
+  });
+
+  it('does not throw on bytes that are not a zip at all', () => {
+    const bytes = new TextEncoder().encode('not a zip');
+    expect(extractDocxEmbeddedImages({ path: 'garbage.docx', bytes })).toEqual([]);
+  });
+
+  it("does not alter docxExtractor.extract's own text output", async () => {
+    const bytes = buildDocxBytesMixed({
+      'word/document.xml': documentXml(['Text stays exactly as before']),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.png']]),
+      'word/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+    const result = await docxExtractor.extract({ path: 'paper.docx', bytes });
+    expect(result.pages[0]?.units[0]?.text).toBe('Text stays exactly as before');
+    expect(Object.keys(result.pages[0] ?? {}).sort()).toEqual(
+      ['charCount', 'furniture', 'page', 'route', 'textLayer', 'units'].sort(),
+    );
   });
 });

@@ -37,9 +37,21 @@
  * a rebuilt table of contents. A paragraph before the first heading (or a
  * document with none) carries no `section`, which is the honest answer, not
  * a missing one — see `types.ts`'s doc comment on `SourceLocation.section`.
+ *
+ * **`extractDocxEmbeddedImages` (C3.3; per.md decision 1, `[D-324]`,
+ * `ol-egov.141.89.8.20`, discovered from `ol-9cle`) is a separate function,
+ * called beside `docxExtractor.extract`, not merged into it.** A DOCX's
+ * embedded raster part(s) live in `word/media/`, reached via
+ * `word/_rels/document.xml.rels`, and — following this file's own "whole
+ * document is one logical page" convention above — are reported as a single
+ * `page: 1` region's images, not per-paragraph. See `embedded-image.ts`'s
+ * module doc for why this stays a sibling function and how a future
+ * vision-page caller would consume it.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
+import type { PageEmbeddedImages } from './embedded-image.js';
+import { readEmbeddedRasterImages } from './embedded-image.js';
 import { classifyPageText } from './plausibility.js';
 import { routePage } from './threshold.js';
 import type {
@@ -170,3 +182,29 @@ export const docxExtractor: Extractor = {
     };
   },
 };
+
+/**
+ * The DOCX's embedded raster image(s), as a single `page: 1` region — this
+ * format has exactly one logical page (see the module doc), so there is
+ * exactly one `PageEmbeddedImages` record, always, even when `images` is
+ * empty (a zip that doesn't unzip at all, `word/_rels/document.xml.rels` is
+ * absent, or the document paints only vector shapes): marked as having no
+ * image, never omitted, never faked. See this module's doc comment and
+ * `embedded-image.ts`'s for why this is a sibling function rather than a
+ * field on `docxExtractor.extract`'s return value.
+ */
+export function extractDocxEmbeddedImages(input: ExtractorInput): PageEmbeddedImages[] {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(input.bytes);
+  } catch {
+    // Not a valid zip at all — mirrors `docxExtractor.extract`'s own
+    // `'unreadable'` case.
+    return [];
+  }
+
+  const relsBytes = files['word/_rels/document.xml.rels'];
+  const relsXml = relsBytes ? strFromU8(relsBytes) : undefined;
+  const images = readEmbeddedRasterImages(files, relsXml, 'word');
+  return [{ page: 1, images }];
+}

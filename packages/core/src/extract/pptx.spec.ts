@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { pptxExtractor } from './pptx.js';
+import { extractPptxEmbeddedImages, pptxExtractor } from './pptx.js';
 import { DEFAULT_TEXT_LAYER_CHAR_THRESHOLD } from './threshold.js';
 
 function slideXml(paragraphs: readonly string[]): string {
@@ -61,6 +61,29 @@ function buildPptxBytes(files: Record<string, string>): Uint8Array {
   for (const [path, content] of Object.entries(files)) zipped[path] = strToU8(content);
   return zipSync(zipped);
 }
+
+/** Like `buildPptxBytes`, but accepts already-binary parts too — the embedded-image tests need real (fake) image bytes alongside text XML. */
+function buildPptxBytesMixed(files: Record<string, string | Uint8Array>): Uint8Array {
+  const zipped: Record<string, Uint8Array> = {};
+  for (const [path, content] of Object.entries(files)) {
+    zipped[path] = typeof content === 'string' ? strToU8(content) : content;
+  }
+  return zipSync(zipped);
+}
+
+function slideRels(
+  mapping: ReadonlyArray<readonly [id: string, type: string, target: string]>,
+): string {
+  const rels = mapping
+    .map(([id, type, target]) => `<Relationship Id="${id}" Type="${type}" Target="${target}"/>`)
+    .join('');
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`
+  );
+}
+
+const IMAGE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
 
 describe('pptxExtractor — presentation-order resolution', () => {
   it('orders slides by presentation.xml/rels, not by slideN.xml filename number', async () => {
@@ -186,5 +209,98 @@ describe('pptxExtractor — robustness', () => {
     const bytes = new TextEncoder().encode('not a zip');
     const result = await pptxExtractor.extract({ path: 'garbage.pptx', bytes });
     expect(result.pages).toEqual([]);
+  });
+});
+
+describe('extractPptxEmbeddedImages — embedded raster images per slide (ol-egov.141.89.8.20)', () => {
+  it("reads a slide picture relationship's bytes and real media type from ppt/media", () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const bytes = buildPptxBytesMixed({
+      'ppt/slides/slide1.xml': slideXml(['A figure-bearing slide']),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': pngBytes,
+    });
+
+    const result = extractPptxEmbeddedImages({ path: 'deck.pptx', bytes });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.page).toBe(1);
+    expect(result[0]?.images).toHaveLength(1);
+    expect(result[0]?.images[0]?.mimeType).toBe('image/png');
+    expect(result[0]?.images[0]?.bytes).toEqual(pngBytes);
+  });
+
+  it('marks a vector-only slide as having no image — never faked, never omitted', () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/slides/slide1.xml': slideXml(['A slide with only freeform shapes, no picture']),
+    });
+
+    const result = extractPptxEmbeddedImages({ path: 'deck.pptx', bytes });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.page).toBe(1);
+    expect(result[0]?.images).toEqual([]);
+  });
+
+  it('excludes a vector metafile (EMF) picture relationship — vector, not raster', () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/slides/slide1.xml': slideXml(['A slide whose only picture is a pasted vector graphic']),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.emf'],
+      ]),
+      'ppt/media/image1.emf': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = extractPptxEmbeddedImages({ path: 'deck.pptx', bytes });
+    expect(result[0]?.images).toEqual([]);
+  });
+
+  it('follows the same presentation-order page numbering as pptxExtractor.extract, not filename order', () => {
+    const png = (n: number) => new Uint8Array([n]);
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXml(['rId2', 'rId3']),
+      'ppt/_rels/presentation.xml.rels': presentationRels([
+        ['rId2', 'slides/slide2.xml'],
+        ['rId3', 'slides/slide1.xml'],
+      ]),
+      'ppt/slides/slide1.xml': slideXml(['File named slide one']),
+      'ppt/slides/slide2.xml': slideXml(['File named slide two']),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/imageFromSlideFile1.png'],
+      ]),
+      'ppt/slides/_rels/slide2.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/imageFromSlideFile2.png'],
+      ]),
+      'ppt/media/imageFromSlideFile1.png': png(1),
+      'ppt/media/imageFromSlideFile2.png': png(2),
+    });
+
+    const result = extractPptxEmbeddedImages({ path: 'deck.pptx', bytes });
+    // page 1 is presentation-order-first, slide2.xml (rId2 comes first) —
+    // same reordering `pptxExtractor.extract`'s own test above asserts.
+    expect(result[0]?.images[0]?.bytes).toEqual(png(2));
+    expect(result[1]?.images[0]?.bytes).toEqual(png(1));
+  });
+
+  it('does not throw on bytes that are not a zip at all', () => {
+    const bytes = new TextEncoder().encode('not a zip');
+    expect(extractPptxEmbeddedImages({ path: 'garbage.pptx', bytes })).toEqual([]);
+  });
+
+  it("does not alter pptxExtractor.extract's own text output", async () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/slides/slide1.xml': slideXml(['Text stays exactly as before']),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+    expect(result.pages[0]?.units[0]?.text).toBe('Text stays exactly as before');
+    expect(Object.keys(result.pages[0] ?? {}).sort()).toEqual(
+      ['charCount', 'furniture', 'page', 'route', 'textLayer', 'units'].sort(),
+    );
   });
 });
