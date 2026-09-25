@@ -19,6 +19,8 @@
  * same reason.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
+
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
 export interface ObsidianDataHost {
   loadData(): Promise<unknown>;
@@ -71,16 +73,29 @@ export class ObsidianWorkerConfigStore {
     return isPersistedWorkerConfig(candidate) ? candidate : EMPTY_WORKER_CONFIG;
   }
 
+  /**
+   * Read-modify-write: `ObsidianQueueStore`/`ObsidianKeywordIndexStore`
+   * both share this exact blob under their own keys, and this must not
+   * clobber whichever of them saved most recently. Atomic
+   * (`readModifyWrite`) when `this.host` supports it — see `../retrieval/
+   * serializing-data-host.ts`'s module doc — falling back to a plain,
+   * non-atomic pair for a bare `ObsidianDataHost` (every existing test
+   * here).
+   */
   async save(config: PersistedWorkerConfig): Promise<void> {
-    // Read-modify-write: `ObsidianQueueStore`/`ObsidianKeywordIndexStore`
-    // both share this exact blob under their own keys, and this must not
-    // clobber whichever of them saved most recently.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[WORKER_CONFIG_STORAGE_KEY] = config;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[WORKER_CONFIG_STORAGE_KEY] = config;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

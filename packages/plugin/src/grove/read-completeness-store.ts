@@ -40,6 +40,7 @@
 
 import type { ConceptReadCoverage } from 'olea-core';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 export const GROVE_READ_COMPLETENESS_STORAGE_KEY = 'groveReadCompleteness';
 
@@ -88,15 +89,28 @@ export class ObsidianGroveReadCompletenessStore {
     return new Map(Object.entries(candidate.byCourse));
   }
 
-  /** REPLACES the whole stored map — see module doc for why a course absent from `byCourse` must not linger from a prior save. */
+  /**
+   * REPLACES the whole stored map — see module doc for why a course absent
+   * from `byCourse` must not linger from a prior save. Atomic
+   * (`readModifyWrite`) when `this.host` supports it, falling back to a
+   * plain, non-atomic pair otherwise — see `../retrieval/serializing-data-
+   * host.ts`'s module doc.
+   */
   async save(byCourse: ReadonlyMap<string, readonly ConceptReadCoverage[]>): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const value: GroveReadCompleteness = { version: 1, byCourse: Object.fromEntries(byCourse) };
+      blob[GROVE_READ_COMPLETENESS_STORAGE_KEY] = value;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const value: GroveReadCompleteness = { version: 1, byCourse: Object.fromEntries(byCourse) };
-    blob[GROVE_READ_COMPLETENESS_STORAGE_KEY] = value;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

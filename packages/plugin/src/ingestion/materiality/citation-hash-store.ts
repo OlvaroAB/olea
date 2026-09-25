@@ -62,6 +62,7 @@
  */
 
 import type { VaultPath } from 'olea-core';
+import { hasReadModifyWrite } from '../../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
 export interface ObsidianDataHost {
@@ -123,34 +124,65 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     return result;
   }
 
+  /**
+   * Read-modify-write, not a cached blob from construction time — same
+   * reason `ObsidianMaterialityHashStore.save` gives: another part of the
+   * plugin may have written to `data.json` since this store last loaded.
+   * Atomic (`readModifyWrite`) when `this.host` supports it — see
+   * `../../retrieval/serializing-data-host.ts`'s module doc — falling back
+   * to a plain, non-atomic pair for a bare `ObsidianDataHost` (every
+   * existing test here).
+   */
   async save(instrumentId: string, record: CitationAnchorRecord): Promise<void> {
-    // Read-modify-write, not a cached blob from construction time — same
-    // reason `ObsidianMaterialityHashStore.save` gives: another part of the
-    // plugin may have written to `data.json` since this store last loaded.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      table[instrumentId] = record;
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
-    const table: Record<string, unknown> =
-      typeof existingTable === 'object' && existingTable !== null
-        ? { ...(existingTable as Record<string, unknown>) }
-        : {};
-    table[instrumentId] = record;
-    blob[CITATION_ANCHOR_STORAGE_KEY] = table;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 
+  /**
+   * Atomic (`readModifyWrite`) when `this.host` supports it, falling back
+   * to a plain, non-atomic `loadData()`-then-`saveData()` pair otherwise —
+   * same reasoning as `save` above. The mutate step returns the input
+   * unchanged (no-op, still atomic against the queue) when there is nothing
+   * to remove, matching this method's original "nothing to do" early
+   * returns for a bare `ObsidianDataHost`.
+   */
   async remove(instrumentId: string): Promise<void> {
+    const mutate = (existing: unknown): unknown => {
+      if (typeof existing !== 'object' || existing === null) return existing;
+      const existingTable = (existing as Record<string, unknown>)[CITATION_ANCHOR_STORAGE_KEY];
+      if (typeof existingTable !== 'object' || existingTable === null) return existing;
+      const blob: Record<string, unknown> = { ...(existing as Record<string, unknown>) };
+      const table: Record<string, unknown> = { ...(existingTable as Record<string, unknown>) };
+      delete table[instrumentId];
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(mutate);
+      return;
+    }
     const existing = await this.host.loadData();
     if (typeof existing !== 'object' || existing === null) return;
     const existingTable = (existing as Record<string, unknown>)[CITATION_ANCHOR_STORAGE_KEY];
     if (typeof existingTable !== 'object' || existingTable === null) return;
-    const blob: Record<string, unknown> = { ...(existing as Record<string, unknown>) };
-    const table: Record<string, unknown> = { ...(existingTable as Record<string, unknown>) };
-    delete table[instrumentId];
-    blob[CITATION_ANCHOR_STORAGE_KEY] = table;
-    await this.host.saveData(blob);
+    await this.host.saveData(mutate(existing));
   }
 }

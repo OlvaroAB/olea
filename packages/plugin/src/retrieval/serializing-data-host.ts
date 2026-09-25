@@ -33,22 +33,49 @@
  * overlap-serialization half, without editing any of those stores' own
  * files (this bead does not own them).
  *
- * **What this does and does not fix.** It serializes every operation issued
- * through the ONE host it wraps — for `main.ts`, that is every store in the
- * plugin, since they all take `this`. **It does not make every store's
- * read-modify-write atomic** — only a caller that uses `readModifyWrite`
- * gets that; a store still calling bare `loadData()`-then-`saveData()` (as
- * `ground-streak-store.ts`, `settings-store.ts` and `overrides-store.ts` all
- * still do) gets its individual calls serialized against everything else,
- * but its own two-call read-modify-write can still be interleaved by
- * another caller's read-modify-write landing between them — see this bead's
- * close notes for the explicit check naming which sibling stores this is
- * still true for.
+ * **What this did and did not fix, as of `ol-3ux7.96`.** It serializes
+ * every operation issued through the ONE host it wraps — for `main.ts`,
+ * that is every store in the plugin, since they all take `this`. It did
+ * NOT make every store's read-modify-write atomic on its own — only a
+ * caller that uses `readModifyWrite` gets that.
+ *
+ * **`ol-ppxj.46` update.** The seventeen sibling stores this doc used to
+ * name as still calling a bare `loadData()`-then-`saveData()` pair
+ * (`ground-streak-store.ts`, `settings-store.ts`, `overrides-store.ts` and
+ * the rest) are now migrated onto `readModifyWrite`, each via its own
+ * `merge`/`mutate` function that folds its load-then-decide-then-write
+ * logic into one call so no part of the decision is split across two
+ * separate host operations. `AtomicDataHost`/`hasReadModifyWrite` below are
+ * the shared structural-detection helper this module used to argue for
+ * without exporting — added here so a new store does not have to redeclare
+ * it (`gate-stage-store.ts` still keeps its own local copy, predating this
+ * export; the two are structurally interchangeable). Every store still
+ * falls back to the identical plain, non-atomic pair when handed a host
+ * without `readModifyWrite` — which is exactly the fake host every existing
+ * store test in this plugin still constructs, so none of those tests needed
+ * to change.
  */
 
 export interface RawDataHost {
   loadData(): Promise<unknown>;
   saveData(data: unknown): Promise<void>;
+}
+
+/**
+ * The narrow shape a store's own host port must have to use the atomic
+ * `readModifyWrite` path instead of a plain, non-atomic pair — see this
+ * module's doc for exactly what the difference closes.
+ * `hasReadModifyWrite` detects it structurally (never `instanceof
+ * SerializingDataHost`), so a store's own test suite can keep handing it a
+ * plain fake `{ loadData, saveData }` host with no `readModifyWrite` and
+ * correctly exercise the honest, non-atomic fallback path.
+ */
+export interface AtomicDataHost extends RawDataHost {
+  readModifyWrite(mutate: (current: unknown) => unknown | Promise<unknown>): Promise<void>;
+}
+
+export function hasReadModifyWrite(host: RawDataHost): host is AtomicDataHost {
+  return typeof (host as Partial<AtomicDataHost>).readModifyWrite === 'function';
 }
 
 export class SerializingDataHost implements RawDataHost {

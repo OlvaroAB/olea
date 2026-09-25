@@ -39,6 +39,7 @@
  * both outside this bead's owned paths.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import type { UsageLogEntry } from './types.js';
 import { isUsageLogEntry } from './types.js';
 
@@ -80,20 +81,40 @@ export class ObsidianUsageLogStore {
     return isPersistedUsageLog(candidate) ? candidate.entries : [];
   }
 
-  /** Appends one entry, dropping the oldest once the cap is reached. */
+  /**
+   * Appends one entry, dropping the oldest once the cap is reached. Reads
+   * the current entries and writes the capped result as ONE queued unit
+   * (`readModifyWrite`, when `this.host` supports it) — the append decision
+   * (what the current entries are) and the write that records it must come
+   * from the same snapshot, or a concurrent writer's row lands between them
+   * and gets silently overwritten, see `../retrieval/serializing-data-
+   * host.ts`'s module doc. Falls back to a plain, non-atomic
+   * `loadData()`-then-`saveData()` pair for a bare `ObsidianDataHost`
+   * (every existing test here).
+   */
   async record(entry: UsageLogEntry): Promise<void> {
-    const existing = await this.load();
-    const next = [...existing, entry];
-    const capped =
-      next.length > USAGE_LOG_MAX_ENTRIES ? next.slice(next.length - USAGE_LOG_MAX_ENTRIES) : next;
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const candidate = blob[USAGE_LOG_STORAGE_KEY];
+      const currentEntries = isPersistedUsageLog(candidate) ? candidate.entries : [];
+      const next = [...currentEntries, entry];
+      const capped =
+        next.length > USAGE_LOG_MAX_ENTRIES
+          ? next.slice(next.length - USAGE_LOG_MAX_ENTRIES)
+          : next;
+      const persisted: PersistedUsageLog = { version: 1, entries: capped };
+      blob[USAGE_LOG_STORAGE_KEY] = persisted;
+      return blob;
+    };
 
-    const blobExisting = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof blobExisting === 'object' && blobExisting !== null
-        ? { ...(blobExisting as Record<string, unknown>) }
-        : {};
-    const persisted: PersistedUsageLog = { version: 1, entries: capped };
-    blob[USAGE_LOG_STORAGE_KEY] = persisted;
-    await this.host.saveData(blob);
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    const existing = await this.host.loadData();
+    await this.host.saveData(merge(existing));
   }
 }

@@ -35,6 +35,7 @@
  */
 
 import type { ObsidianDataHost } from '../plan/settings-store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 export const GROVE_GROUND_STREAKS_STORAGE_KEY = 'groveGroundStreaks';
 
@@ -68,15 +69,29 @@ export class ObsidianGroveGroundStreakStore {
     return new Map(Object.entries(candidate.streaks));
   }
 
-  /** REPLACES the whole stored map — see module doc for why "absent means reset" requires this rather than a merge. */
+  /**
+   * REPLACES the whole stored map — see module doc for why "absent means
+   * reset" requires this rather than a merge. Atomic (`readModifyWrite`)
+   * when `this.host` supports it — see `../retrieval/serializing-data-
+   * host.ts`'s module doc for why a plain `loadData()`-then-`saveData()`
+   * pair is not enough — falling back to that honest, non-atomic pair for a
+   * bare `ObsidianDataHost` (every existing test here).
+   */
   async save(streaks: ReadonlyMap<string, number>): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const value: GroveGroundStreaks = { version: 1, streaks: Object.fromEntries(streaks) };
+      blob[GROVE_GROUND_STREAKS_STORAGE_KEY] = value;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const value: GroveGroundStreaks = { version: 1, streaks: Object.fromEntries(streaks) };
-    blob[GROVE_GROUND_STREAKS_STORAGE_KEY] = value;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

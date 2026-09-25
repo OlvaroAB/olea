@@ -13,6 +13,7 @@
  * materiality).
  */
 
+import { hasReadModifyWrite } from '../../retrieval/serializing-data-host.js';
 import type { MaterialityHashStore, MaterialityRecord } from './types.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
@@ -58,22 +59,34 @@ export class ObsidianMaterialityHashStore implements MaterialityHashStore {
     return isMaterialityRecord(candidate) ? candidate : null;
   }
 
+  /**
+   * Read-modify-write, not a cached blob from construction time — another
+   * part of the plugin (or another path's save call) may have written
+   * since this store last loaded. Atomic (`readModifyWrite`) when
+   * `this.host` supports it — see `../../retrieval/serializing-data-
+   * host.ts`'s module doc — falling back to a plain, non-atomic pair for a
+   * bare `ObsidianDataHost` (every existing test here).
+   */
   async save(record: MaterialityRecord): Promise<void> {
-    // Read-modify-write, not a cached blob from construction time — another
-    // part of the plugin (or another path's save call) may have written
-    // since this store last loaded.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[MATERIALITY_HASH_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      table[record.path] = record;
+      blob[MATERIALITY_HASH_STORAGE_KEY] = table;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const existingTable = blob[MATERIALITY_HASH_STORAGE_KEY];
-    const table: Record<string, unknown> =
-      typeof existingTable === 'object' && existingTable !== null
-        ? { ...(existingTable as Record<string, unknown>) }
-        : {};
-    table[record.path] = record;
-    blob[MATERIALITY_HASH_STORAGE_KEY] = table;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

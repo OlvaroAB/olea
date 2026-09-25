@@ -32,6 +32,7 @@
  */
 
 import { type CalendarDay, isCalendarDay } from 'olea-core';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
 export interface ObsidianDataHost {
@@ -84,26 +85,46 @@ export class ObsidianMaterialArrivalStore {
    * Records `day` as `course`'s latest observed arrival, unless a
    * later-or-equal day is already on record — see this module's doc for why
    * that direction is never allowed to regress.
+   *
+   * Read-modify-write, not a cached blob from construction time: another
+   * course's arrival (or another install session, in principle) may have
+   * written since this store last loaded. The monotonic decision itself
+   * runs INSIDE the mutate step below, not on a snapshot read beforehand —
+   * folding "read the current day, decide, write" into one queued unit is
+   * what makes the decision correct under a concurrent writer, not just the
+   * write that follows it (`../retrieval/serializing-data-host.ts`'s module
+   * doc: a decision split across two separate host calls can still race).
+   * Atomic when `this.host` supports `readModifyWrite`; falls back to the
+   * same decision made against one `loadData()` snapshot otherwise (every
+   * existing test here).
    */
   async recordArrival(course: string, day: CalendarDay): Promise<void> {
-    // Read-modify-write, not a cached blob from construction time: another
-    // course's arrival (or another install session, in principle) may have
-    // written since this store last loaded.
+    const mutate = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const currentRaw = blob[MATERIAL_ARRIVAL_STORAGE_KEY];
+      const current = isPersistedMaterialArrivals(currentRaw)
+        ? currentRaw
+        : EMPTY_MATERIAL_ARRIVALS;
+
+      const previousDay = current.lastArrivalByCourse[course];
+      if (previousDay !== undefined && previousDay >= day) return blob;
+
+      blob[MATERIAL_ARRIVAL_STORAGE_KEY] = {
+        version: 1,
+        lastArrivalByCourse: { ...current.lastArrivalByCourse, [course]: day },
+      } satisfies PersistedMaterialArrivals;
+      return blob;
+    };
+
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(mutate);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const currentRaw = blob[MATERIAL_ARRIVAL_STORAGE_KEY];
-    const current = isPersistedMaterialArrivals(currentRaw) ? currentRaw : EMPTY_MATERIAL_ARRIVALS;
-
-    const previousDay = current.lastArrivalByCourse[course];
-    if (previousDay !== undefined && previousDay >= day) return;
-
-    blob[MATERIAL_ARRIVAL_STORAGE_KEY] = {
-      version: 1,
-      lastArrivalByCourse: { ...current.lastArrivalByCourse, [course]: day },
-    } satisfies PersistedMaterialArrivals;
+    const blob = mutate(existing);
     await this.host.saveData(blob);
   }
 }

@@ -29,6 +29,7 @@
  */
 
 import type { KeywordIndexStore, PersistedKeywordIndex } from 'olea-core';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
 export interface ObsidianDataHost {
@@ -63,17 +64,29 @@ export class ObsidianKeywordIndexStore implements KeywordIndexStore {
     return isPersistedKeywordIndex(candidate) ? candidate : null;
   }
 
+  /**
+   * Read-modify-write, not a cached blob from construction time: another
+   * part of the plugin — in particular `ObsidianQueueStore`, sharing this
+   * same data.json — may have written a different key since this store
+   * last loaded, and this must not clobber it. Atomic (`readModifyWrite`)
+   * when `this.host` supports it — see `../retrieval/serializing-data-
+   * host.ts`'s module doc — falling back to a plain, non-atomic pair for a
+   * bare `ObsidianDataHost` (every existing test here).
+   */
   async save(index: PersistedKeywordIndex): Promise<void> {
-    // Read-modify-write, not a cached blob from construction time: another
-    // part of the plugin — in particular `ObsidianQueueStore`, sharing this
-    // same data.json — may have written a different key since this store
-    // last loaded, and this must not clobber it.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[KEYWORD_INDEX_STORAGE_KEY] = index;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[KEYWORD_INDEX_STORAGE_KEY] = index;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

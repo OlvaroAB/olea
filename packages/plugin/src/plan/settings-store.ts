@@ -31,6 +31,8 @@
  * same `ObsidianDataHost` port, own top-level key, read-modify-write on save.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
+
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
 export interface ObsidianDataHost {
   loadData(): Promise<unknown>;
@@ -74,13 +76,26 @@ export class ObsidianStudyPlanSettingsStore {
     return isPersistedStudyPlanConfig(candidate) ? candidate : EMPTY_STUDY_PLAN_CONFIG;
   }
 
+  /**
+   * Atomic (`readModifyWrite`) when `this.host` supports it, falling back
+   * to a plain, non-atomic `loadData()`-then-`saveData()` pair otherwise —
+   * see `../retrieval/serializing-data-host.ts`'s module doc for why the
+   * two-call shape alone can silently discard a sibling store's write.
+   */
   async save(config: PersistedStudyPlanConfig): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[STUDY_PLAN_SETTINGS_STORAGE_KEY] = config;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[STUDY_PLAN_SETTINGS_STORAGE_KEY] = config;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

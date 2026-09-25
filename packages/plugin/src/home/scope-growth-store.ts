@@ -41,6 +41,7 @@
 
 import type { VaultPath } from 'olea-core';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 export const HOME_SCOPE_GROWTH_STORAGE_KEY = 'homeScopeGrowth';
 
@@ -87,16 +88,29 @@ export class ObsidianHomeScopeGrowthStore {
     return new Map(Object.entries(candidate.courses));
   }
 
-  /** REPLACES the whole stored map — see module doc for why a course absent from the new save must disappear rather than linger. */
+  /**
+   * REPLACES the whole stored map — see module doc for why a course absent
+   * from the new save must disappear rather than linger. Atomic
+   * (`readModifyWrite`) when `this.host` supports it, falling back to a
+   * plain, non-atomic pair otherwise — see `../retrieval/serializing-data-
+   * host.ts`'s module doc.
+   */
   async save(entries: ReadonlyMap<string, HomeScopeSnapshot>): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const value: HomeScopeGrowth = { version: 1, courses: Object.fromEntries(entries) };
+      blob[HOME_SCOPE_GROWTH_STORAGE_KEY] = value;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const value: HomeScopeGrowth = { version: 1, courses: Object.fromEntries(entries) };
-    blob[HOME_SCOPE_GROWTH_STORAGE_KEY] = value;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }
 

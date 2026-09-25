@@ -28,6 +28,7 @@
  * store like every sibling here.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import type { ObsidianDataHost } from '../worker/config-store.js';
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob. */
@@ -76,16 +77,28 @@ export class ObsidianHeadingOfferSettingStore {
    * Read-modify-write: this plugin keeps several stores under sibling keys
    * in one `data.json` blob and none may clobber another (same reasoning
    * `ObsidianWorkerConfigStore.save`/`ObsidianExplainBackAuditGateStore
-   * .setSustainedFailure` give for their own setters).
+   * .setSustainedFailure` give for their own setters). Atomic
+   * (`readModifyWrite`) when `this.host` supports it — folding load, decide
+   * and save into one queued unit, see `../retrieval/serializing-data-
+   * host.ts`'s module doc for why a plain two-call pair is not enough —
+   * falling back to that honest, non-atomic pair for a bare
+   * `ObsidianDataHost` (every existing test here).
    */
   async setEnabled(value: boolean): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const setting: PersistedHeadingOfferSetting = { version: 1, enabled: value };
+      blob[HEADING_OFFER_SETTING_STORAGE_KEY] = setting;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const setting: PersistedHeadingOfferSetting = { version: 1, enabled: value };
-    blob[HEADING_OFFER_SETTING_STORAGE_KEY] = setting;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

@@ -23,6 +23,8 @@
  * treating the blob as this store's alone.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
+
 export interface CorpusRelationRunState {
   /** Concept names known as of the corpus stage's last run. Names, not identifiers — D-005 has no bearing here (nothing leaves the device), but there is still no reason to invent a second identity scheme. */
   readonly knownConceptNames: readonly string[];
@@ -59,10 +61,26 @@ export class ObsidianCorpusRelationStateStore {
     return isCorpusRelationRunState(candidate) ? candidate : EMPTY_STATE;
   }
 
-  /** Read-modify-write around this store's own key, preserving whatever else `data.json` holds. */
+  /**
+   * Read-modify-write around this store's own key, preserving whatever else
+   * `data.json` holds. Atomic (`readModifyWrite`) when `this.host` supports
+   * it — see `../retrieval/serializing-data-host.ts`'s module doc — falling
+   * back to a plain, non-atomic pair for a bare `ObsidianDataHost` (every
+   * existing test here).
+   */
   async save(state: CorpusRelationRunState): Promise<void> {
-    const blob = await this.host.loadData();
-    const base = typeof blob === 'object' && blob !== null ? (blob as Record<string, unknown>) : {};
-    await this.host.saveData({ ...base, [CORPUS_RELATION_STATE_STORAGE_KEY]: state });
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const base =
+        typeof existing === 'object' && existing !== null
+          ? (existing as Record<string, unknown>)
+          : {};
+      return { ...base, [CORPUS_RELATION_STATE_STORAGE_KEY]: state };
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    const existing = await this.host.loadData();
+    await this.host.saveData(merge(existing));
   }
 }

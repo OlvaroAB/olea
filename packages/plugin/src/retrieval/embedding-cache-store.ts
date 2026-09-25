@@ -35,6 +35,7 @@
  */
 
 import type { EmbeddingCacheStore, PersistedEmbeddingCache } from 'olea-core';
+import { hasReadModifyWrite } from './serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
 export interface ObsidianDataHost {
@@ -73,17 +74,29 @@ export class ObsidianEmbeddingCacheStore implements EmbeddingCacheStore {
     return isPersistedEmbeddingCache(candidate) ? candidate : null;
   }
 
+  /**
+   * Read-modify-write, not a cached blob from construction time: the
+   * ingestion queue, the keyword index and the worker config all share this
+   * same data.json and may have written a different key since this store
+   * last loaded. Atomic (`readModifyWrite`) when `this.host` supports it —
+   * see `./serializing-data-host.ts`'s module doc — falling back to a
+   * plain, non-atomic pair for a bare `ObsidianDataHost` (every existing
+   * test here).
+   */
   async save(cache: PersistedEmbeddingCache): Promise<void> {
-    // Read-modify-write, not a cached blob from construction time: the
-    // ingestion queue, the keyword index and the worker config all share
-    // this same data.json and may have written a different key since this
-    // store last loaded.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[EMBEDDING_CACHE_STORAGE_KEY] = cache;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[EMBEDDING_CACHE_STORAGE_KEY] = cache;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }

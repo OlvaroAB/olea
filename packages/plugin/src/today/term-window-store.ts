@@ -45,6 +45,7 @@
  */
 
 import { type CalendarDay, isCalendarDay, type TermWindow } from 'olea-core';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
 export interface ObsidianDataHost {
@@ -127,14 +128,26 @@ export class ObsidianTermWindowStore {
     return normalisePersisted(candidate);
   }
 
+  /**
+   * Atomic (`readModifyWrite`) when `this.host` supports it, falling back
+   * to a plain, non-atomic `loadData()`-then-`saveData()` pair otherwise —
+   * see `../retrieval/serializing-data-host.ts`'s module doc.
+   */
   private async writePersisted(next: PersistedTermWindow): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[TERM_WINDOW_STORAGE_KEY] = next;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[TERM_WINDOW_STORAGE_KEY] = next;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 
   /**

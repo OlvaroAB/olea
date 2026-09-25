@@ -30,6 +30,7 @@
  */
 
 import { EMPTY_REGISTRY_OVERRIDES, type RegistryOverrides } from 'olea-core';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
 export interface ObsidianDataHost {
@@ -73,13 +74,25 @@ export class ObsidianRegistryOverridesStore {
     return isRegistryOverrides(candidate) ? candidate : EMPTY_REGISTRY_OVERRIDES;
   }
 
+  /**
+   * Atomic (`readModifyWrite`) when `this.host` supports it, falling back
+   * to a plain, non-atomic pair otherwise — see `../retrieval/serializing-
+   * data-host.ts`'s module doc.
+   */
   async save(overrides: RegistryOverrides): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[REGISTRY_OVERRIDES_STORAGE_KEY] = overrides;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
     const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[REGISTRY_OVERRIDES_STORAGE_KEY] = overrides;
-    await this.host.saveData(blob);
+    await this.host.saveData(merge(existing));
   }
 }
