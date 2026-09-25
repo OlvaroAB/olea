@@ -198,9 +198,15 @@ import {
   createWorkerJudgeCaller,
   createWorkerSoloJudgeCaller,
   decideResolutionEvidence,
+  decisionFromExplainBackGrading,
+  decisionFromSoloGrading,
+  EXPLAIN_BACK_JUDGE_TASK_ID,
   EXPLAIN_BACK_SOLO_TASK_ID,
+  type ExplainBackCorrectnessDecision,
+  type ExplainBackDepthDecision,
   evaluateConfusionRouting as evaluateConfusionRoutingCore,
   evaluateSchedulingObservationRouting as evaluateSchedulingObservationRoutingCore,
+  failedCallProvenance,
   type GradeExplainBackInput,
   type GradeSoloInput,
   gradeExplainBack,
@@ -212,11 +218,13 @@ import {
   type MisconceptionRecord,
   type MisconceptionResolutionEvidenceEvent,
   type MisconceptionSourceCitation,
+  type ModelStamp,
   type PendingExplainBackGrading,
   type PendingSoloGrading,
   type SchedulingObservationDecision,
   type SchedulingObservationRoutingInput,
   type SoloArtifactProvenance,
+  type StageSeamContext,
   type WorkerTaskTransport,
 } from 'olea-core';
 import { buildMisconceptionEmbedderWiring } from '../misconception-embedder.js';
@@ -365,6 +373,95 @@ export async function gradeExplainBackAttempt(
 ): Promise<PendingExplainBackGrading | null> {
   if (wiring.judgeCaller === null || wiring.killedBySustainedAuditFailure) return null;
   return gradeExplainBack(input, wiring.judgeCaller);
+}
+
+/**
+ * Reads `.stamp` off a `JudgeCaller`'s parsed response. The declared
+ * `ExplainBackGradingWireResponse` (`gradingPipeline.ts`) has no `stamp`
+ * field, but the production caller
+ * (`createWorkerJudgeCaller`/`workerJudgeCaller.ts`) returns a strict
+ * superset with one attached — see that file's own "THE D7.3 STAMP" doc.
+ * Read defensively, the same shape `extractSoloArtifactProvenance` below
+ * uses for the SOLO pipeline's own stamp: `null` for a caller that never
+ * attaches one (a test stub) or a malformed value, never invented (D-005).
+ */
+function readJudgeCallerStamp(response: unknown): ModelStamp | null {
+  if (typeof response !== 'object' || response === null) return null;
+  const stamp = (response as Record<string, unknown>).stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return { promptVersion: s.promptVersion, modelId: s.modelId };
+}
+
+/**
+ * `ol-egov.141.89.39`: `gradeExplainBackAttempt` above reaches
+ * `gradeExplainBack` and hands back its `PendingExplainBackGrading`
+ * unchanged — no `StageProvenance` anywhere in that path, because
+ * `JudgeCaller`'s declared type carries no `stamp` field for it to read.
+ * This is the same pipeline read through `olea-core`'s Decision contract
+ * instead (`stage-contract/adapters/explain-back-correctness.ts`'s
+ * `decisionFromExplainBackGrading`), with the Worker's own D7.3 stamp
+ * (`workerJudgeCaller.ts`'s `StampedExplainBackGradingWireResponse`) carried
+ * into the adapted decision's provenance — the gap `ol-egov.141.89.38`
+ * closed one level down (the caller returns the stamp) but that nothing yet
+ * threaded into a `StageProvenance` at a composition site, per that bead's
+ * close notes.
+ *
+ * Grey-out (F7.8: no Worker configured, or `[D-127]`'s kill-switch tripped)
+ * is `unavailable`/`not-configured` here rather than `null` — the Decision
+ * contract's own way of saying "no producer was asked," never a fabricated
+ * stamp for a call that never happened.
+ *
+ * A fresh, per-call capturing decorator (never a mutation of `wiring`
+ * itself) is what makes this safe under `wiring.judgeCaller` being shared
+ * across concurrent calls — the same reason `gradeSoloAttempt` below builds
+ * its own capturing transport per call rather than once in
+ * `buildGradingWiring`.
+ *
+ * **No production caller yet** — the same "no caller yet" state
+ * `gradeExplainBackAttempt` itself carried for most of this file's history
+ * (see the module doc above): nothing in `main.ts`/`modal.ts` reads a
+ * grading through this contract today. Reaching one is a follow-up outside
+ * this bead's `owns`.
+ */
+export async function gradeExplainBackAttemptDecision(
+  wiring: GradingWiring,
+  input: GradeExplainBackInput,
+): Promise<ExplainBackCorrectnessDecision> {
+  if (wiring.judgeCaller === null || wiring.killedBySustainedAuditFailure) {
+    return {
+      kind: 'unavailable',
+      cause: 'not-configured',
+      provenance: failedCallProvenance({
+        seat: 'candidate',
+        taskId: EXPLAIN_BACK_JUDGE_TASK_ID,
+        stamp: null,
+        evidenceDigests: [],
+      }),
+    };
+  }
+  const judgeCaller = wiring.judgeCaller;
+
+  let stamp: ModelStamp | null = null;
+  const capturingCaller: JudgeCaller = async (request) => {
+    const response = await judgeCaller(request);
+    stamp = readJudgeCallerStamp(response);
+    return response;
+  };
+
+  const [settled] = await Promise.allSettled([gradeExplainBack(input, capturingCaller)]);
+  const context: StageSeamContext = {
+    seat: 'candidate',
+    taskId: EXPLAIN_BACK_JUDGE_TASK_ID,
+    stamp,
+    evidenceDigests: [],
+  };
+  return decisionFromExplainBackGrading(
+    settled as PromiseSettledResult<PendingExplainBackGrading>,
+    context,
+  );
 }
 
 /**
@@ -782,6 +879,63 @@ function extractSoloArtifactProvenance(
   if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
   if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
   return { taskId, promptVersion: s.promptVersion, modelId: s.modelId };
+}
+
+/**
+ * `ol-egov.141.89.39`: the SOLO depth pipeline read through `olea-core`'s
+ * Decision contract (`stage-contract/adapters/explain-back-depth.ts`'s
+ * `decisionFromSoloGrading`), the same composition `gradeExplainBackAttemptDecision`
+ * above adds for the correctness pipeline — see that function's doc for the
+ * shared reasoning (grey-out is `unavailable`/`not-configured`, a fresh
+ * per-call capturing decorator, no production caller yet).
+ *
+ * Reuses `extractSoloArtifactProvenance` to read the Worker's D7.3 stamp off
+ * the raw wire body (dropping its `taskId`, which the adapter's
+ * `StageSeamContext` supplies separately) rather than duplicating that
+ * reading logic — `gradeSoloAttempt` above already established it is the
+ * correct, defensive way to read this pipeline's stamp.
+ */
+export async function gradeSoloAttemptDecision(
+  wiring: GradingWiring,
+  input: GradeSoloInput,
+): Promise<ExplainBackDepthDecision> {
+  if (wiring.soloTransport === null || wiring.killedBySustainedAuditFailure) {
+    return {
+      kind: 'unavailable',
+      cause: 'not-configured',
+      provenance: failedCallProvenance({
+        seat: 'candidate',
+        taskId: EXPLAIN_BACK_SOLO_TASK_ID,
+        stamp: null,
+        evidenceDigests: [],
+      }),
+    };
+  }
+  const soloTransport = wiring.soloTransport;
+
+  let stamp: ModelStamp | null = null;
+  const capturingTransport: WorkerTaskTransport = {
+    send: async (request) => {
+      const body = await soloTransport.send(request);
+      const provenance = extractSoloArtifactProvenance(body, EXPLAIN_BACK_SOLO_TASK_ID);
+      stamp =
+        provenance === null
+          ? null
+          : { promptVersion: provenance.promptVersion, modelId: provenance.modelId };
+      return body;
+    },
+  };
+
+  const [settled] = await Promise.allSettled([
+    gradeSolo(input, createWorkerSoloJudgeCaller({ transport: capturingTransport })),
+  ]);
+  const context: StageSeamContext = {
+    seat: 'candidate',
+    taskId: EXPLAIN_BACK_SOLO_TASK_ID,
+    stamp,
+    evidenceDigests: [],
+  };
+  return decisionFromSoloGrading(settled as PromiseSettledResult<PendingSoloGrading>, context);
 }
 
 /**

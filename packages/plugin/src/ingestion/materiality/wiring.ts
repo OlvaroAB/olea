@@ -54,7 +54,12 @@
  * ===========================================================================
  */
 
-import type { Clock } from 'olea-core';
+import {
+  type Clock,
+  decisionFromRevisionJudge,
+  type MaterialityDecision,
+  type ModelStamp,
+} from 'olea-core';
 import { canonicalizeForMateriality } from './canonical.js';
 import type { MaterialityConstants } from './constants.js';
 import { DEFAULT_MATERIALITY_CONSTANTS } from './constants.js';
@@ -69,11 +74,43 @@ import type {
   MaterialityJudgeVerdict,
   MaterialityVerdictEvent,
 } from './types.js';
+import { MATERIALITY_JUDGE_TASK_ID } from './workerJudge.js';
 
 export type MaterialityEvaluationResult =
   | MaterialityGateOutcome
   | { readonly kind: 'judge-unavailable' }
-  | { readonly kind: 'verdict'; readonly verdict: MaterialityVerdictEvent };
+  | {
+      readonly kind: 'verdict';
+      readonly verdict: MaterialityVerdictEvent;
+      /**
+       * `ol-egov.141.89.39`: the same judge verdict read through
+       * `olea-core`'s Decision contract
+       * (`stage-contract/adapters/revision-judge.ts`'s
+       * `decisionFromRevisionJudge`), carrying the Worker's D7.3 stamp
+       * (`workerJudge.ts`'s `StampedMaterialityJudgeVerdict`) into the
+       * adapted decision's provenance — see `readMaterialityJudgeStamp`'s
+       * doc below for why it is read defensively rather than assumed.
+       */
+      readonly decision: MaterialityDecision;
+    };
+
+/**
+ * Reads `.stamp` off a `MaterialityJudge`'s verdict. The declared
+ * `MaterialityJudgeVerdict` (`./types.ts`) has no `stamp` field, but the
+ * production judge (`WorkerMaterialityJudge`, `./workerJudge.ts`) returns a
+ * strict superset with one attached — see that file's own "THE D7.3 STAMP"
+ * doc. Read here the same defensive way every other Worker-response stamp
+ * reader in this plugin does: `null` for a judge that never attaches one (a
+ * test stub) or a malformed value, never invented (D-005).
+ */
+function readMaterialityJudgeStamp(verdict: MaterialityJudgeVerdict): ModelStamp | null {
+  const stamp = (verdict as { readonly stamp?: unknown }).stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return { promptVersion: s.promptVersion, modelId: s.modelId };
+}
 
 /** One path's deferred below-floor edit — see `pendingSmallEdit`'s own field doc for why this caches text at all. */
 interface PendingBelowFloorEdit {
@@ -559,6 +596,24 @@ export class MaterialityTrigger {
       );
       return { kind: 'judge-unavailable' };
     }
+    // `ol-egov.141.89.39`: read `judged` through the Decision contract right
+    // where it is obtained — `decisionFromRevisionJudge` needs the judge's
+    // OWN settled result, not a value reconstructed later from `verdict`
+    // below (which drops the Worker's stamp entirely). Computed here, ahead
+    // of the stale-response guards below, and carried into the final
+    // `'verdict'` return only — a response the guards below drop was never
+    // committed as this path's answer, so it is not reported as one here
+    // either (unchanged from `judge-unavailable`'s existing meaning on those
+    // paths).
+    const decision = decisionFromRevisionJudge(
+      { status: 'fulfilled', value: judged },
+      {
+        seat: 'candidate',
+        taskId: MATERIALITY_JUDGE_TASK_ID,
+        stamp: readMaterialityJudgeStamp(judged),
+        evidenceDigests: [],
+      },
+    );
     if (this.revisions.get(path) !== inMemoryRevision) {
       // A newer dispatch for this path started while this judge call was in
       // flight, and will persist its own (newer) baseline. This response is
@@ -605,7 +660,7 @@ export class MaterialityTrigger {
         console.error('Olea: materiality-verdict hook failed (trigger unaffected)', error);
       }
     }
-    return { kind: 'verdict', verdict };
+    return { kind: 'verdict', verdict, decision };
   }
 }
 

@@ -24,7 +24,9 @@ import {
   evaluateConfusionRouting,
   evaluateSchedulingObservationRouting,
   gradeExplainBackAttempt,
+  gradeExplainBackAttemptDecision,
   gradeSoloAttempt,
+  gradeSoloAttemptDecision,
 } from '../../src/grading/wiring.js';
 import { SLOT_E_MODEL_ID } from '../../src/retrieval/wiring.js';
 import { EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY } from '../../src/settings/explain-back-audit-gate.js';
@@ -352,6 +354,146 @@ describe('gradeSoloAttempt', () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+});
+
+// ---- gradeExplainBackAttemptDecision / gradeSoloAttemptDecision (ol-egov.141.89.39) ----
+
+describe('gradeExplainBackAttemptDecision — the correctness pipeline read through the Decision contract', () => {
+  it('is unavailable, not-configured, with no stamp, when the Worker is unconfigured', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeTransport(),
+    });
+
+    const decision = await gradeExplainBackAttemptDecision(wiring, baseInput);
+
+    expect(decision).toEqual({
+      kind: 'unavailable',
+      cause: 'not-configured',
+      provenance: {
+        producer: {
+          kind: 'model',
+          seat: 'candidate',
+          taskId: 'explain-back.judge.v1',
+          stamp: null,
+        },
+        evidenceDigests: [],
+      },
+    });
+  });
+
+  it('carries the Worker D7.3 stamp into the adapted verdict when the response has one', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeTransport(() => ({
+      ok: true,
+      stamp: { contractVersion: 1, promptVersion: '1.2.0', modelId: 'test-model' },
+      result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+    }));
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const decision = await gradeExplainBackAttemptDecision(wiring, baseInput);
+
+    expect(decision.kind).toBe('verdict');
+    if (decision.kind !== 'verdict') throw new Error('unreachable');
+    expect(decision.verdict).toBe('correct');
+    expect(decision.provenance.producer).toEqual({
+      kind: 'model',
+      seat: 'candidate',
+      taskId: 'explain-back.judge.v1',
+      stamp: { promptVersion: '1.2.0', modelId: 'test-model' },
+    });
+  });
+
+  it('carries a null stamp, never a fabricated one, when the response has none', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeTransport(() => ({
+      ok: true,
+      // no `stamp` at all
+      result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+    }));
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const decision = await gradeExplainBackAttemptDecision(wiring, baseInput);
+
+    expect(decision.kind).toBe('verdict');
+    if (decision.kind !== 'verdict') throw new Error('unreachable');
+    expect(decision.provenance.producer).toMatchObject({ stamp: null });
+  });
+});
+
+describe('gradeSoloAttemptDecision — the depth pipeline read through the Decision contract', () => {
+  it('is unavailable, not-configured, with no stamp, when the Worker is unconfigured', async () => {
+    const wiring = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeSoloTransport(),
+    });
+
+    const decision = await gradeSoloAttemptDecision(wiring, baseSoloInput);
+
+    expect(decision).toEqual({
+      kind: 'unavailable',
+      cause: 'not-configured',
+      provenance: {
+        producer: {
+          kind: 'model',
+          seat: 'candidate',
+          taskId: 'explain-back.solo.v1',
+          stamp: null,
+        },
+        evidenceDigests: [],
+      },
+    });
+  });
+
+  it('carries the Worker D7.3 stamp into the adapted verdict when the response has one', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeSoloTransport();
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const decision = await gradeSoloAttemptDecision(wiring, baseSoloInput);
+
+    expect(decision.kind).toBe('verdict');
+    if (decision.kind !== 'verdict') throw new Error('unreachable');
+    expect(decision.verdict).toBe('relational');
+    expect(decision.provenance.producer).toEqual({
+      kind: 'model',
+      seat: 'candidate',
+      taskId: 'explain-back.solo.v1',
+      stamp: { promptVersion: '1.0.0', modelId: 'solo-test-model' },
+    });
+  });
+
+  it('carries a null stamp, never a fabricated one, when the response has none', async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const transport = fakeSoloTransport(() => ({
+      ok: true,
+      result: { soloLevel: 'relational', rationale: 'Connects both ideas under one principle.' },
+      // no `stamp` at all
+    }));
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const decision = await gradeSoloAttemptDecision(wiring, baseSoloInput);
+
+    expect(decision.kind).toBe('verdict');
+    if (decision.kind !== 'verdict') throw new Error('unreachable');
+    expect(decision.provenance.producer).toMatchObject({ stamp: null });
   });
 });
 

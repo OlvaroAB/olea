@@ -166,13 +166,76 @@ describe('MaterialityTrigger.evaluate', () => {
       material: true,
       reason: 'claim reversed',
     };
-    expect(result).toEqual({ kind: 'verdict', verdict: expectedVerdict });
+    // `ol-egov.141.89.39`: the same judge call read through the Decision
+    // contract, unstamped here (the stub judge attaches no `.stamp`) — see
+    // the `readMaterialityJudgeStamp` describe block below for the stamped
+    // case.
+    expect(result).toEqual({
+      kind: 'verdict',
+      verdict: expectedVerdict,
+      decision: {
+        kind: 'verdict',
+        verdict: 'material',
+        payload: { reason: 'claim reversed' },
+        provenance: {
+          producer: {
+            kind: 'model',
+            seat: 'candidate',
+            taskId: 'materiality.judge.v1',
+            stamp: null,
+          },
+          evidenceDigests: [],
+        },
+      },
+    });
     expect(judge.judge).toHaveBeenCalledWith({
       path: PATH,
       previousText: 'Basalt weathers quickly.',
       currentText: 'Basalt does not weather at all in cold, dry climates.',
     });
     expect(onVerdict).toHaveBeenCalledWith(expectedVerdict);
+  });
+
+  it("ol-egov.141.89.39: carries the Worker D7.3 stamp into the adapted decision's provenance when the judge verdict has one", async () => {
+    const store = new FakeStore();
+    await seed(store, 'Basalt weathers quickly.', 0);
+    // A `const` variable, not an inline literal, so TypeScript does not
+    // reject `stamp` as an excess property of the declared
+    // `MaterialityJudgeVerdict` — the production `WorkerMaterialityJudge`
+    // returns exactly this wider shape (`workerJudge.ts`'s
+    // `StampedMaterialityJudgeVerdict`) and `readMaterialityJudgeStamp` in
+    // `wiring.ts` reads it the same defensive way.
+    const stampedVerdict = {
+      material: true,
+      reason: 'claim reversed',
+      stamp: { promptVersion: '1.4.0', modelId: 'materiality-test-model' },
+    };
+    const judge: MaterialityJudge = { judge: vi.fn(async () => stampedVerdict) };
+    const now = DEFAULT_MATERIALITY_CONSTANTS.debounceMs + 1;
+    const trigger = new MaterialityTrigger({ store, clock: fakeClock(now), judge });
+
+    const result = await trigger.evaluate(
+      PATH,
+      'Basalt does not weather at all in cold, dry climates.',
+      'Basalt weathers quickly.',
+    );
+
+    expect(result.kind).toBe('verdict');
+    if (result.kind !== 'verdict') throw new Error('unreachable');
+    expect(result.decision).toEqual({
+      kind: 'verdict',
+      verdict: 'material',
+      payload: { reason: 'claim reversed' },
+      provenance: {
+        producer: {
+          kind: 'model',
+          seat: 'candidate',
+          taskId: 'materiality.judge.v1',
+          stamp: { promptVersion: '1.4.0', modelId: 'materiality-test-model' },
+        },
+        evidenceDigests: [],
+      },
+    });
   });
 
   it('surfaces a not-material judge verdict unchanged too — the cheap gates never override the judge', async () => {
@@ -393,11 +456,7 @@ describe('MaterialityTrigger.evaluate', () => {
 
       await trigger.evaluate(PATH, '');
       clock.set(DEFAULT_MATERIALITY_CONSTANTS.debounceMs + 1);
-      const result = await trigger.evaluate(
-        PATH,
-        'Basalt weathers quickly in humid climates.',
-        '',
-      );
+      const result = await trigger.evaluate(PATH, 'Basalt weathers quickly in humid climates.', '');
 
       expect(result.kind).toBe('verdict');
       expect(judge.judge).toHaveBeenCalledWith({
