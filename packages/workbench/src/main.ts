@@ -66,7 +66,12 @@ import {
 import { GroveView } from './grove-bridge.js';
 import { buildGroveScenario, findGroveState, GROVE_STATES } from './grove-scenarios.js';
 import { HomeView, type HomeViewDeps, type HomeViewState } from './home-bridge.js';
-import { buildHomeScenario, findHomeState, type HomeScenario } from './home-scenarios.js';
+import {
+  buildHomeScenario,
+  findHomeState,
+  HOME_STATES,
+  type HomeScenario,
+} from './home-scenarios.js';
 import { createHostFrame, type HostFrame, loadModalHostCascade } from './host-frame.js';
 import { installObsidianDomHelpers } from './obsidian-shim/dom.js';
 import { Notice, type WorkspaceLeaf } from './obsidian-shim/index.js';
@@ -535,6 +540,7 @@ async function main(): Promise<void> {
   const registryStateList = requireEl('[data-wb-registry-states]');
   const pluginSurfaceStateList = requireEl('[data-wb-plugin-surface-states]');
   const groveStateList = requireEl('[data-wb-grove-states]');
+  const homeStateList = requireEl('[data-wb-home-states]');
   const walkStepList = requireEl('[data-wb-walk-steps]');
   const modeSwitchList = requireEl('[data-wb-mode-switch]');
   const flatNav = requireEl('[data-wb-flat-nav]');
@@ -806,6 +812,25 @@ async function main(): Promise<void> {
       writeRoute({ ...readRoute(), surface: 'grove', stateId: state.id });
     });
     groveStateList.appendChild(button);
+  }
+
+  // `ol-ppxj.50` (follow-up to `ol-ppxj.49`): `index.html` still ships this
+  // list's markup as four plain anchors (`ol-ppxj.49`'s own note there
+  // explains why — `main.ts` was a contested shared file at the time), so
+  // this loop clears them and rebuilds the list the same way every sibling
+  // list above does, the one difference being `is-active` highlighting and a
+  // `writeRoute` click handler instead of a bare `href`.
+  homeStateList.empty();
+  for (const state of HOME_STATES) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'wb-nav-item';
+    button.dataset.wbHomeStateLink = state.id;
+    button.textContent = state.label;
+    button.addEventListener('click', () => {
+      writeRoute({ ...readRoute(), surface: 'home', stateId: state.id });
+    });
+    homeStateList.appendChild(button);
   }
 
   // The walkthrough's own step list (rule: "collapses the six state lists to
@@ -1185,6 +1210,12 @@ async function main(): Promise<void> {
       button.classList.toggle(
         'is-active',
         route.surface === 'grove' && button.dataset.wbGroveStateLink === state.id,
+      );
+    }
+    for (const button of homeStateList.querySelectorAll<HTMLElement>('[data-wb-home-state-link]')) {
+      button.classList.toggle(
+        'is-active',
+        route.surface === 'home' && button.dataset.wbHomeStateLink === state.id,
       );
     }
     for (const button of setList.querySelectorAll<HTMLElement>('[data-wb-set-link]')) {
@@ -1686,13 +1717,18 @@ async function main(): Promise<void> {
      * REAL `HomeView` over `home-scenarios.ts`'s reuse of the REAL fixture-
      * vault session composition — never `composed`/`loaded.history`, same
      * reasoning as `mountSession`, which this mounter's states borrow their
-     * whole composed-session half from. `courses` stays empty on every state
-     * here (see `home-scenarios.ts`'s own module doc); the navigation
-     * callbacks below route to this workbench's own real flat surfaces where
-     * one exists (review, grove, explain-back — the same doors production's
-     * `main.ts` wires `HomeView` to) and surface an honest Notice where none
-     * does (the retrospective view and a real dismiss write, neither of
-     * which this harness has a destination for).
+     * whole composed-session half from. `courses` and `avoidanceQuestion`
+     * come from `buildHomeScenario`'s own state per state id (see
+     * `home-scenarios.ts`'s own module doc — `home-composed` alone keeps
+     * `courses: []`, a locked unit-test pin, not a mounter gap); `deps.load`
+     * below re-fetches the same pair on every reload rather than dropping
+     * them, `ol-ppxj.50` (follow-up to `ol-ppxj.49`, which built the data but
+     * did not yet wire this mounter to it). The navigation callbacks below
+     * route to this workbench's own real flat surfaces where one exists
+     * (review, grove, explain-back — the same doors production's `main.ts`
+     * wires `HomeView` to) and surface an honest Notice where none does (the
+     * retrospective view and a real dismiss write, neither of which this
+     * harness has a destination for).
      */
     async function mountHome(stateId: string): Promise<void> {
       const scenario = await buildHomeScenario(stateId, vault);
@@ -1712,13 +1748,24 @@ async function main(): Promise<void> {
         load: async (request) => {
           const reloaded = await buildHomeScenario(stateId, vault);
           const reloadedSession = reloaded.sessionScenario;
+          const reloadedState = reloaded.state;
+          // `request` carries F4.6's three steering inputs (`[D-243]`) —
+          // re-run through the composed session so a budget/scope change
+          // sticks, same as before this fix. `courses` and
+          // `avoidanceQuestion` are NOT steering-dependent (`home-
+          // scenarios.ts` keys them only on `stateId`, already fixed for
+          // this mount), so they pass through from `reloadedState`
+          // unchanged rather than being rebuilt by hand — `ol-ppxj.50`.
           const nextState: HomeViewState =
-            reloadedSession === undefined
-              ? reloaded.state
+            reloadedSession === undefined || reloadedState.kind !== 'dashboard'
+              ? reloadedState
               : {
                   kind: 'dashboard',
                   session: await reloadedSession.deps.load(request),
-                  courses: [],
+                  courses: reloadedState.courses,
+                  ...(reloadedState.avoidanceQuestion !== undefined
+                    ? { avoidanceQuestion: reloadedState.avoidanceQuestion }
+                    : {}),
                 };
           latestScenario = { ...reloaded, state: nextState };
           renderHomeInspector(inspector, { setNote: activeSet.note, scenario: latestScenario });
@@ -3068,9 +3115,9 @@ function renderHomeInspector(inspector: HTMLElement, input: HomeInspectorInput):
   coursesRow.createSpan({ cls: 'wb-inspector-label', text: 'home.courses' });
   coursesRow.createSpan({
     cls: 'wb-inspector-value',
-    text:
-      `${String(scenario.state.courses.length)} row(s) — always 0 here, see home-scenarios.ts's ` +
-      'own module doc for why',
+    // `ol-ppxj.50`: per-state now (`home-scenarios.ts`'s own `COURSES_FOR`)
+    // — 0 only for the states that key nothing there, not "always 0".
+    text: `${String(scenario.state.courses.length)} row(s)`,
   });
 }
 
