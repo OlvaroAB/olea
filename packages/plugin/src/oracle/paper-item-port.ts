@@ -3,14 +3,20 @@
  * `PaperItemGenerationPort` (`olea-core`'s `oracle/paper-items.ts`), F4.11's practice-paper
  * pipeline (`[D-250]`/`[D-252]`, component register row 2.11, `[H-blueprint]` / `ol-0r92.75`).
  *
- * **Reachability, stated plainly (`[D-072]` clause 5).** This file composes the port; NOTHING
- * calls it yet. `main.ts` is deliberately untouched by this bead — the surfaces that would call a
- * practice-paper pipeline (the course-page affordance, the paper view, the steering dials) are a
- * separate lane's job (DP-7, `[D-255]`'s ratified unlock numbers) and no product surface exists
- * for F4.11 today (`docs/dev/surface-register.md`'s F4.11 entry, private repo, stays prose-only).
- * This mirrors the same "reachability deferred, documented rather than silently absent" posture
- * `../retrieval/classify-passage.ts` and `../generation/pipeline.ts`'s `deps.formatMatch` already
- * hold for a composed-but-unwired seam.
+ * **Reachability, stated plainly (`[D-072]` clause 5), updated from this file's original note.**
+ * `createWorkerPaperItemGenerationPort` (below) is reached in production: `./generation-port.ts`'s
+ * `buildPracticePaperGenerationPort` (line 34) calls it directly; `./wiring.ts`'s
+ * `buildPracticePaperProvider` composes that into `createLocalPracticePaperProvider`
+ * (`./provider.ts`), whose `requestPaper` calls `olea-core`'s `fillPaperBlueprintSlots`
+ * (`oracle/paper-items.ts`) once per filled slot — the actual call site of this port. The
+ * course-scoped entry command (`OLEA_COMMAND_PRACTICE_PAPER_OPEN`, `./ids.ts`) and the
+ * `PaperView` registration reach that provider from `main.ts` (`this.addCommand` around line
+ * 1011, `this.registerView(VIEW_TYPE_OLEA_PAPER, ...)` around line 1197,
+ * `revealPracticePaperView` around line 3916) — `[PAPER-10]` / `ol-0r92.75.1`'s wiring, landed
+ * after this file's original "nothing calls it yet" note. A slot's own `taskId` (`'cards.generate.v1'`
+ * for the `written`/`practical` route, `'quiz.generate.v1'` for `recall-style` —
+ * `oracle/paper-blueprint.ts`'s `taskIdForFormatClass`) decides which generator this port's single
+ * request shape reaches; both are exercised through this one port, not two.
  *
  * **Why this is a NEW file rather than a call to `draftQuizCardsForConcept`
  * (`../retrieval/draft-quiz-cards.ts`).** That function does its own retrieval — it turns a
