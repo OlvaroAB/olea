@@ -202,6 +202,7 @@ import {
   HOME_UNAVAILABLE,
   HOME_VIEW_TITLE,
   OPEN_RETROSPECTIVE_ACTION,
+  sessionCompositionSentence,
 } from './copy.js';
 
 export const VIEW_TYPE_OLEA_HOME = 'olea-home';
@@ -269,6 +270,21 @@ export type HomeViewState =
       readonly courses: readonly HomeCourseRow[];
       /** `undefined` on every load after the first for a given course — see `./provider.ts`'s own "asked once, at render" discipline. */
       readonly avoidanceQuestion?: HomeAvoidanceQuestion;
+      /**
+       * F2.22 / F6.4 (`ol-egov.141.89.10.19`): `ComposedStudySession.focusReason`
+       * (`study-session/compose.ts`), carried through unchanged for
+       * `./copy.ts#sessionCompositionSentence` to render — see that
+       * function's own doc for the exact assembly rule. `undefined` when
+       * `session.kind !== 'model'` (a re-entry composition has no
+       * `dominantCourse`/`focusReason` of its own to carry) OR — today,
+       * still — because `../session-builder/view.ts`'s `SessionBuilderState`
+       * has no field to carry it through yet: `./provider.ts`'s own doc
+       * names the exact one-field addition this needs, outside this bead's
+       * `owns`. `./view.ts` renders nothing when this is `undefined`, the
+       * same honest-absence posture every other quiet feature here already
+       * takes — never a placeholder sentence of this view's own invention.
+       */
+      readonly focusReason?: string;
     }
   | { readonly kind: 'unavailable' };
 
@@ -409,7 +425,7 @@ export class HomeView extends ItemView {
       this.renderAvoidanceQuestion(root, this.activeAvoidanceQuestion);
     }
 
-    this.renderOffer(root, state.session);
+    this.renderOffer(root, state.session, state.focusReason);
     this.renderCourses(root, state.courses);
   }
 
@@ -470,7 +486,11 @@ export class HomeView extends ItemView {
    * builder screen any more (F4.6: "there is no builder screen to pass
    * through").
    */
-  private renderOffer(root: HTMLElement, session: SessionBuilderState): void {
+  private renderOffer(
+    root: HTMLElement,
+    session: SessionBuilderState,
+    focusReason: string | undefined,
+  ): void {
     // `.olea-card`: the shared panel primitive (border, radius, elevated
     // ground, padding) — see this file's own module doc for why this reuses
     // the design-system section rather than a second card treatment. No
@@ -556,6 +576,20 @@ export class HomeView extends ItemView {
 
     const summaryLine = sessionSummaryLine(modelLike);
     card.createDiv({ cls: 'olea-home-offer-title', text: summaryLine });
+
+    // F2.22 / F6.4 (`ol-egov.141.89.10.19`): the composition sentence, said
+    // once, right under the headline it belongs to — `session.kind ===
+    // 'model'` only, since a re-entry composition has no `dominantCourse`/
+    // `focusReason` of its own (F6.6 runs the ordinary selection rule at
+    // fewer slots, not a second rule with a second reason to state). Renders
+    // nothing when `focusReason` is `undefined` — see `HomeViewState`'s own
+    // field doc for why that is still true in production today.
+    if (session.kind === 'model' && focusReason !== undefined) {
+      card.createDiv({
+        cls: 'olea-prose olea-home-offer-reason-line',
+        text: sessionCompositionSentence(focusReason),
+      });
+    }
 
     // Everything else `copy.ts` produced for this composition, in its own
     // order — F4.9's framing (`sessionFraming`), F6.6's "still available"

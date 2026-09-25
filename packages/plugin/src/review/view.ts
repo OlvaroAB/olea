@@ -69,6 +69,14 @@
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { ExplainBackOfferTrigger } from 'olea-contracts';
 import { type QueueItemReason, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
+// F2.22 / F6.4 (`ol-egov.141.89.10.19`): `sessionCompositionSentence` is the
+// ONE assembly function both surfaces this clause binds — Home and this
+// view — call, so the two can never independently paraphrase the same
+// reason. It lives in `../home/copy.ts` (Home's own vocabulary site)
+// because neither surface's own `copy.ts` is a natural single home for a
+// string genuinely shared across both — see that function's own doc for the
+// full argument. `renderHeader`'s own doc below has the render-time half.
+import { sessionCompositionSentence } from '../home/copy.js';
 import { ReviewActivityNotifier } from './activity.js';
 import {
   actionKeycap,
@@ -309,6 +317,8 @@ export class ReviewView extends ItemView {
   private readonly extendSession: (() => Promise<readonly ReviewQueueItem[]>) | undefined;
   /** `ol-v7r5.35` (`[D-193]`) — see `constructor`'s own param doc and `onClose`'s. */
   private readonly releaseSession: (() => void) | undefined;
+  /** F2.22 / F6.4 (`ol-egov.141.89.10.19`) — see `constructor`'s own param doc and `renderHeader`'s. */
+  private readonly getFocusReason: (() => string | undefined) | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -395,6 +405,23 @@ export class ReviewView extends ItemView {
      * the same no-op posture as `extendSession` above.
      */
     releaseSession?: () => void,
+    /**
+     * F2.22 / F6.4 (`ol-egov.141.89.10.19`): the composition sentence's raw
+     * reason — `ComposedStudySession.focusReason` (`study-session/
+     * compose.ts`), read fresh whenever `renderHeader` asks for it, never a
+     * snapshot captured once (the same "thunk, not a value" posture every
+     * other optional read-only dep on this constructor already takes).
+     * `renderHeader` calls `../home/copy.ts#sessionCompositionSentence` on
+     * whatever this returns — never this parameter's own job to format —
+     * and only on the session's first item, per that function's own doc.
+     * `main.ts` is this callback's real wiring site: it would read
+     * `this.studySessionHolder.getSitting()` (`session/holder.ts`, the same
+     * shared holder `openSession`'s own opener already reads/writes) and
+     * return `sitting.status === 'active' ? sitting.items.focusReason :
+     * undefined` — outside this bead's `owns`, so wired here only as far as
+     * accepting the callback; reported, not made.
+     */
+    getFocusReason?: () => string | undefined,
   ) {
     super(leaf);
     this.openSession = openSession;
@@ -405,6 +432,7 @@ export class ReviewView extends ItemView {
     this.headingOffer = headingOffer;
     this.extendSession = extendSession;
     this.releaseSession = releaseSession;
+    this.getFocusReason = getFocusReason;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -710,6 +738,18 @@ export class ReviewView extends ItemView {
    * can never disagree about when the pair is reachable. `dispatch` (below)
    * is the single place either button's click or the matching keypress ends
    * up, so the two can't drift.
+   *
+   * **F2.22 / F6.4's composition sentence (`ol-egov.141.89.10.19`), said
+   * once.** `progress.position === 1` is "the start of the session" this
+   * view can see — every phase of the first item (front, reveal, mcq-open,
+   * mcq-answered) shares one position, so the sentence holds steady across
+   * all of them and then — per F2.22's own "and then gets out of the way" —
+   * is simply never asked for again once she advances to item 2, rather
+   * than persisting as a standing banner for the whole session. Rendered
+   * BEFORE the button logic below (and its several early `return`s) so
+   * every branch of this method still says it once, and drawn straight into
+   * `contentEl` rather than into `header` — it is prose alongside the
+   * progress row, not a control belonging to it.
    */
   private renderHeader(
     progress: { readonly position: number; readonly total: number },
@@ -717,6 +757,15 @@ export class ReviewView extends ItemView {
     instrument: ReviewInstrument | null,
     studentAnswerForExplain = '',
   ): void {
+    if (progress.position === 1) {
+      const focusReason = this.getFocusReason?.();
+      if (focusReason !== undefined) {
+        this.contentEl.createDiv({
+          cls: 'olea-prose',
+          text: sessionCompositionSentence(focusReason),
+        });
+      }
+    }
     const header = this.contentEl.createDiv({ cls: 'olea-review-header' });
     header.createSpan({
       cls: 'olea-review-progress',

@@ -138,6 +138,41 @@ export function homeScopeGrewLine(addedDocumentPath: VaultPath, addedCount: numb
   return `Scope grew: ${addedDocumentPath} added ${addedCount} ${conceptNoun}.`;
 }
 
+/**
+ * F2.22 / F6.4 (`ol-egov.141.89.10.19`) — the ONE composition sentence: which
+ * course, and why. `focusReason` is `ComposedStudySession.focusReason`
+ * (`study-session/compose.ts`), itself `FOCUS_BRANCH_SENTENCE`'s ratified
+ * fragment (`[D-244]` item 5, corrected by `[FOCUS-5]`) — that module's own
+ * doc is explicit that it "does not compose prose... a caller assembling the
+ * rendered sentence... has the exact wording ratified rather than inventing
+ * a paraphrase." This function is that one caller-side assembly, and BOTH
+ * surfaces F2.22 binds — Home (`./view.ts`) and the review session
+ * (`../review/view.ts`) — call this exact function so the two can never
+ * independently paraphrase the same reason (F2.22's "same statement...
+ * never two independently computed accounts").
+ *
+ * **Why "this course" rather than the course's own name.** Every ratified
+ * fragment is a "because ..." clause except `filter`'s own
+ * ("this course because you asked for it"), which already names it
+ * generically — she chose the course herself, so naming it again would be
+ * the count-of-figures-shaped over-explanation F8.3's sibling bans elsewhere
+ * guard against. The functional scope's own two illustrative quotes (F2.22,
+ * F6.4) both read "this course because ...", never the course's own name, so
+ * this function matches that literally: it prepends the generic lead-in only
+ * when the fragment does not already carry it, then capitalises and
+ * punctuates — nothing else. The screen that hosts this sentence already
+ * names the course elsewhere (Home's course rows; the review header's own
+ * progress line sits beside a session that is, by F2.18, about one course),
+ * so this sentence carries only the "why", never inventing a display format
+ * for a course identifier this module has no business formatting.
+ */
+export function sessionCompositionSentence(focusReason: string): string {
+  const withLeadIn = focusReason.startsWith('this course')
+    ? focusReason
+    : `this course ${focusReason}`;
+  return `${withLeadIn.charAt(0).toUpperCase()}${withLeadIn.slice(1)}.`;
+}
+
 /** Every string this module can render, for `test/home/copy.spec.ts`'s honesty checks. */
 export function allHomeStrings(): readonly string[] {
   return [
@@ -155,5 +190,10 @@ export function allHomeStrings(): readonly string[] {
     HOME_NO_MAP_DRAWN,
     HOME_SET_UP_WAITING,
     homeScopeGrewLine('03 Research/Objectives.md', 3),
+    sessionCompositionSentence('this course because you asked for it'),
+    sessionCompositionSentence(
+      'because its assessment is close and the assessed material still needs work',
+    ),
+    sessionCompositionSentence('because it is behind its share from your recent sessions'),
   ];
 }
