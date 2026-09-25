@@ -25,33 +25,21 @@
  * so there is nowhere for a real course name to end up compiled into this
  * module (INV-3).
  *
- * ## Vitality's words are a stopgap, not a second vocabulary site
+ * ## Vitality's words read the same site as growth stage
  *
  * `olea-core`'s `mastery/display.ts` is F2.11's single vocabulary site for
  * growth stage, and this module reads `MASTERY_DISPLAY` from it rather than
- * repeating the four words. Vitality has no equivalent site yet —
- * `display.ts`'s own doc defers wiring vitality's display words to `MAT-2`
- * (`ol-95vv`), unbuilt at the time this shipped. `VITALITY_LABEL` below is a
- * stopgap copied VERBATIM from `mastery/vitality.ts`'s own module doc ("the
- * student sees *holding*, *needs tending* and *too early to say*") — nothing
- * invented — and is meant to be deleted in favour of `MAT-2`'s mapping once it
- * ships, not extended. Flagged in the `RECOG-1` report for retroactive review
- * (Class B).
+ * repeating the four words. Vitality's own ratified site is `mastery/
+ * vitality.ts`'s `VITALITY_DISPLAY` (`ol-egov.141.89.9.45`); this module reads
+ * that export rather than holding a second copy of the three words.
  */
 
 import type { MasteryState } from 'olea-contracts';
 import type { EarlierCourseEvidence, EarlierCourseRecognition, Vitality } from 'olea-core';
-import { MASTERY_DISPLAY } from 'olea-core';
+import { MASTERY_DISPLAY, VITALITY_DISPLAY } from 'olea-core';
 
 /** Sits above the claim block wherever course setup renders one. States the fact, asks nothing. */
 export const RECOGNITION_CLAIM_HEADING = 'Already met';
-
-/** See this module's doc: copied verbatim from `mastery/vitality.ts`, not invented. */
-const VITALITY_LABEL: Readonly<Record<Vitality, string>> = {
-  holding: 'holding',
-  tending: 'needs tending',
-  early: 'too early to say',
-};
 
 /** `3 reviews` · `1 review` · `0 reviews` — a count, flat, matching `today/copy.ts`'s `conceptCountLabel`. */
 export function reviewCountLabel(count: number): string {
@@ -93,9 +81,9 @@ export function stageLabel(state: MasteryState): string {
   return MASTERY_DISPLAY[state].label;
 }
 
-/** See this module's doc — stopgap only. `null` when no vitality reading was supplied (honest "not read"). */
+/** Reads `../../core/mastery/vitality`'s ratified `VITALITY_DISPLAY`. `null` when no vitality reading was supplied (honest "not read"). */
 export function vitalityLabel(vitality: Vitality | null): string | null {
-  return vitality === null ? null : VITALITY_LABEL[vitality];
+  return vitality === null ? null : VITALITY_DISPLAY[vitality].label;
 }
 
 /** One recognition, reduced to exactly what F8.7 says the claim shows. */

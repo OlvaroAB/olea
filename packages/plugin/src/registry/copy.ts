@@ -20,8 +20,8 @@
  *   "mostly internal and triage-facing — prefer the plain term in
  *   student-facing copy"). *Withdraw* / *restore* are that plain term.
  * - **Mastery vocabulary is F2.11's, verbatim** (`../../core/mastery/display`'s
- *   `MASTERY_DISPLAY` for stage; the three vitality words below, matching
- *   `retrospective/copy.ts`'s own `vitalityLabel`).
+ *   `MASTERY_DISPLAY` for stage; `../../core/mastery/vitality`'s
+ *   `VITALITY_DISPLAY` for the vitality axis).
  * - **One concept, stated — never a ladder or a field** (vocabulary registry
  *   §1's own width table: "One concept · any width · Neither — a single
  *   concept has no distribution; stage and vitality, stated"). This view
@@ -46,6 +46,7 @@ import {
   type RegistryConceptEntry,
   type RegistryInstrumentSummary,
   type RegistrySourceLocation,
+  VITALITY_DISPLAY,
   type Vitality,
 } from 'olea-core';
 
@@ -69,16 +70,9 @@ export const REGISTRY_EMPTY_LINE =
 
 export const REGISTRY_UNAVAILABLE_LINE = 'Olea could not read your vault just now.';
 
-/** F2.11 axis 2, in the registry's own words — matching `retrospective/copy.ts`'s `vitalityLabel` mapping (registry §1), since vitality has one ratified word set and this view renders it independently of that module (see this file's doc). */
+/** F2.11 axis 2, in the registry's own words — reads `../../core/mastery/vitality`'s ratified `VITALITY_DISPLAY` rather than holding a second copy of the three words (registry §1). */
 export function vitalityLabel(vitality: Vitality): string {
-  switch (vitality) {
-    case 'holding':
-      return 'holding';
-    case 'tending':
-      return 'needs tending';
-    case 'early':
-      return 'too early to say';
-  }
+  return VITALITY_DISPLAY[vitality].label;
 }
 
 /**

@@ -11,9 +11,10 @@
  *
  * **This module carries the growth-stage axis only.** Vitality — `holding` /
  * `needs tending` / `too early to say`, the fluctuating overlay
- * (`docs/Olea_vocabulary_registry.md` §1 axis 2) — is not modelled here and
- * is not yet a persisted field anywhere in this codebase; wiring it to a real
- * retrievability reading is `MAT-2`'s (`ol-95vv`) job, not this file's.
+ * (`docs/Olea_vocabulary_registry.md` §1 axis 2) — has its own display words
+ * in `./vitality.ts`'s `VITALITY_DISPLAY`; it is not yet a persisted field
+ * anywhere in this codebase, and wiring it to a real retrievability reading
+ * is `MAT-2`'s (`ol-95vv`) job, not this file's.
  *
  * `leaves` and `fruit` belong here rather than in a rendering layer because
  * the sprig's geometry *is* the state, not a decoration of it. **The sprig is

@@ -86,6 +86,7 @@ import {
   MASTERY_DISPLAY,
   MASTERY_ORDER,
   type StudySessionItem,
+  VITALITY_DISPLAY,
   type Vitality,
 } from 'olea-core';
 import type { TermDatesAskState } from './term-window-store.js';
@@ -296,22 +297,12 @@ export function conceptCountLabel(count: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * F2.11 axis 2's three words, verbatim. **Duplicated from `../registry/
- * copy.ts`'s own `vitalityLabel`**, not imported — the two copy modules are
- * owned by different beads' `owns` sets, the same reasoning `scopeSummaryLine`
- * above states for its own duplication one layer down. One vocabulary
- * (`docs/Olea_vocabulary_registry.md` §1 axis 2), two call sites that agree
- * on it verbatim.
+ * F2.11 axis 2's three words, verbatim — reads `../../core/mastery/
+ * vitality`'s ratified `VITALITY_DISPLAY`, the same source `../registry/
+ * copy.ts`'s own `vitalityLabel` reads, rather than holding a second copy.
  */
 export function vitalityLabel(vitality: Vitality): string {
-  switch (vitality) {
-    case 'holding':
-      return 'holding';
-    case 'tending':
-      return 'needs tending';
-    case 'early':
-      return 'too early to say';
-  }
+  return VITALITY_DISPLAY[vitality].label;
 }
 
 /**

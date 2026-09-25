@@ -44,19 +44,13 @@ import type {
   RetrospectiveReading,
   RetrospectiveScopeOrigin,
 } from 'olea-core';
+import { VITALITY_DISPLAY } from 'olea-core';
 
 export const RETROSPECTIVE_VIEW_TITLE = 'Assessment retrospective';
 
-/** Registry §1 display words — the vitality axis, verbatim, never abbreviated. */
+/** Registry §1 display words — reads `../../core/mastery/vitality`'s ratified `VITALITY_DISPLAY` rather than holding a second copy of the three words. */
 export function vitalityLabel(vitality: RetrospectiveConceptLine['vitality']): string {
-  switch (vitality) {
-    case 'holding':
-      return 'holding';
-    case 'tending':
-      return 'needs tending';
-    case 'early':
-      return 'too early to say';
-  }
+  return VITALITY_DISPLAY[vitality].label;
 }
 
 /**
