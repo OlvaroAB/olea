@@ -58,6 +58,27 @@
 // session, which is what this suite runs. Follow-up filed rather than solved
 // here (out of this bead's owned files): `ol-may1` [SESS-17].
 //
+// **[SESS-16] was a snapshot of a moving target, and it has since moved
+// (`ol-egov.141.89.9.28`, 2026-09-25).** The claim above was measured on
+// 2026-09-16 against `this.NOW = new Date()` — a real wall-clock read, not an
+// injected one — over a fixture whose assignment due dates are real calendar
+// dates (`packages/core/fixtures/vault/02 Assignments/*.md`). Nine days
+// later, re-running the identical 2026-09-16 commit's code and test (verified
+// in a worktree, never by editing this file's history) reproduces `Set{'qa',
+// 'cloze', 'mcq'}` instead of `Set{'qa'}` — the composer and oracle ranking
+// are unchanged; only the calendar advanced. `study-session/build.ts`'s
+// `nextAssessmentOf` treats an assessment due today (`daysUntil === 0`) as
+// still "ahead of her" (only `daysUntil < 0` is excluded), so which
+// assignment is GEOL204's *nearest* — and therefore which format
+// `orderedForFormat`/`typesMatching` prefers — shifts as due dates in
+// `02 Assignments/` are crossed by real time. None of today's review-path
+// commits (`5d1487f`, `abd69d7`, `8ba1e9b`, `618c103`, `9597750`) touch this
+// path; the failure reproduces identically on code from before any of them
+// existed. So the two assertions below no longer pin the exact type set —
+// see their own comments for what they check instead — while claim 2's own
+// text above stays accurate: this fixture still does not exist to give
+// cloze/mcq a *guaranteed* row, it merely may, depending on today's date.
+//
 // Four claims, and each is the reason a different failure would be invisible:
 //
 //  1. **The Today panel, the holder and the queue are one number.** F6.1's
@@ -706,18 +727,23 @@ describe('complete passes through the real ReviewSession', () => {
     }
   });
 
-  it('reaches and rates every format this fixture\'s composed session actually offers', () => {
-    // `[SESS-16]` (`ol-egov.132.18`): NOT "at least one of each format" any
-    // more — measured directly, every round composes the same three Q&A
-    // items and nothing else. The module doc's `[SESS-16]` note has the
-    // evidence chain (`composeOracleRanking`'s evidence-only scope, the
-    // per-concept cap, vault order with no recall-style preference to
-    // reorder it). This is a true fact about this fixture vault's composed
-    // session, not a defect in the composer being weakened away — see
-    // `ol-may1` [SESS-17] for the filed follow-up on restoring
-    // cross-format coverage to this real end-to-end suite.
+  it('reaches and rates only real, schedulable formats', () => {
+    // `[SESS-16]` (`ol-egov.132.18`) originally pinned this to exactly
+    // `Set(['qa'])`, measured on 2026-09-16. The module doc's dated addendum
+    // above (`ol-egov.141.89.9.28`) has the evidence: that exact set was a
+    // real-clock snapshot, not an invariant — `orderedForFormat`'s nearest-
+    // assessment format preference (`study-session/build.ts`) moves as real
+    // calendar days cross the fixture's assignment due dates, so whether
+    // cloze/mcq beat vault order for GEOL204's four rows depends on today's
+    // date. What stays true regardless of the date this suite runs on: every
+    // rated item is one of the three schedulable formats this queue ever
+    // offers (never `explain-back`, F2.14 is a different surface), and at
+    // least one item was actually rated. Cross-format survival itself is
+    // proved elsewhere, immune to this drift: `ol-may1` [SESS-17]'s synthetic
+    // vault.
     const types = new Set(rated.map((item) => item.type));
-    expect(types).toEqual(new Set(['qa']));
+    expect(types.size).toBeGreaterThan(0);
+    for (const type of types) expect(['qa', 'cloze', 'mcq']).toContain(type);
   });
 
   // Replaces the deleted "drained the vault: nothing is left to offer".
@@ -880,11 +906,17 @@ describe('every rating reached the vault as a D7.1 record (INV-4)', () => {
       expect(context.instrumentTypesOffered).toContain(record.instrumentType);
     }
 
-    // `[SESS-16]`: on record matches what was rated (qa only, on this
-    // fixture's composed session — see the module doc's `[SESS-16]` note and
-    // the "reaches and rates every format this fixture's composed session
-    // actually offers" test above), not the three-format set SESS-12 assumed.
-    expect(new Set(reviews.map((record) => record.instrumentType))).toEqual(new Set(['qa']));
+    // `[SESS-16]`'s original text asserted this against a literal `Set(['qa'])`
+    // — a real-clock snapshot from 2026-09-16 that later dates falsify (see
+    // the module doc's dated addendum, `ol-egov.141.89.9.28`, and the "reaches
+    // and rates only real, schedulable formats" test above for why the exact
+    // format set is not stable input). What is a real invariant, regardless of
+    // which formats today's date happens to select: the log records exactly
+    // the types that were rated, no more and no fewer — the write path never
+    // drops or invents a format.
+    expect(new Set(reviews.map((record) => record.instrumentType))).toEqual(
+      new Set(rated.map((item) => item.type)),
+    );
 
     // `[SESS-12]`, the claim the deleted `'new'` assertion was hiding: the
     // composer really does choose material ahead of its own scheduler due day,
