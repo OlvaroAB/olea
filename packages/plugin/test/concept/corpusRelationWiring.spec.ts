@@ -25,7 +25,13 @@ import type {
   VaultSource,
   WorkerTaskRequest,
 } from 'olea-core';
-import { EmbeddingCacheEngine, FolderSource, hashText, resolveRelatedConceptKeys } from 'olea-core';
+import {
+  EmbeddingCacheEngine,
+  FolderSource,
+  hashText,
+  listRelationCacheRecords,
+  resolveRelatedConceptKeys,
+} from 'olea-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ObsidianCorpusRelationStateStore } from '../../src/concept/corpusRelationStateStore.js';
 import type { CorpusConceptSource } from '../../src/concept/wiring.js';
@@ -960,6 +966,42 @@ describe('the production corpus-relations batch, over the fixture vault (`ol-282
     expect(endpoints.length).toBeGreaterThan(0);
     for (const endpoint of endpoints) {
       expect(endpoint.key, `no key on wire endpoint "${endpoint.name}"`).toBeTypeOf('string');
+    }
+  });
+
+  it('ol-3ux7.64.27: a stubbed now passed to readConceptsAndRelations reaches the relation-cache record it writes (persistRelationCacheFromPass), not real wall time', async () => {
+    const vault = new FolderSource(fixtureCopyRoot);
+    const conventionNames = await fixtureConventionNames(vault);
+    const transport = fixtureTransport(conventionNames);
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const stubbed = new Date('2026-01-02T03:04:05.000Z');
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      {
+        vault,
+        ingestionSessionClosed: true,
+        read: { under: FIXTURE_SCOPE, budget: { maxPassages: 12 } },
+        sourcesFolder: FIXTURE_SCOPE,
+        now: () => stubbed,
+      },
+    );
+
+    expect(pass).not.toBeNull();
+    const records = await listRelationCacheRecords(vault);
+    expect(records.length).toBeGreaterThan(0);
+    for (const { record } of records) {
+      expect(record.mintedAt).toBe('2026-01-02T03:04:05.000Z');
+      expect(record.updatedAt).toBe('2026-01-02T03:04:05.000Z');
     }
   });
 

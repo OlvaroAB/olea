@@ -748,6 +748,15 @@ export interface ReadConceptsAndRelationsOptions {
   readonly embeddingProximity?: EmbeddingProximityOptions;
   /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `assessmentErrorAdjacency` (`ol-2zfj.19`). */
   readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
+  /**
+   * The plugin's own clock (`OleaPlugin`'s `now: () => Date`, `main.ts:377`); forwarded to
+   * `persistRelationCacheFromPass`'s `RelationCacheSyncOptions.now` (`relation-wiring.ts`) so the
+   * relation-cache record's `mintedAt`/`updatedAt` read the simulated instant under the
+   * workbench simulator rather than always the real wall clock. Optional, defaulting to
+   * `persistRelationCacheFromPass`'s own default (`() => new Date()`) when omitted — unchanged
+   * production behaviour for any caller that does not pass it.
+   */
+  readonly now?: () => Date;
 }
 
 /**
@@ -839,7 +848,8 @@ export async function readConceptsAndRelations(
     corpus,
     relations: deriveRelationSet(read.relations, corpus.relations ?? []),
   };
-  await persistRelationCacheFromPass(options.vault, passSoFar);
+  const cacheSyncOptions = options.now !== undefined ? { now: options.now } : {};
+  await persistRelationCacheFromPass(options.vault, passSoFar, cacheSyncOptions);
   const relations = await readRelationSetWithCache(options.vault, passSoFar);
 
   // The confirmed same-as link's first read consumer (`ol-2zfj.86` ONT-R1, F8.6) — see this

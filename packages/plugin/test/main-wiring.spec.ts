@@ -1770,3 +1770,34 @@ describe("the plugin exposes dataFileHost's atomic readModifyWrite on itself (ol
     );
   });
 });
+
+// `ol-3ux7.64.27`: `diagnostics-clipboard.ts`'s `DiagnosticsSources.now` and
+// `concept/wiring.ts`'s `ReadConceptsAndRelationsOptions.now` both existed
+// (`ol-3ux7.64.26`) but neither production call site here threaded
+// `this.now` through — so under the workbench simulator, the diagnostics
+// report's `generatedAt` and the relation-cache record's `mintedAt`/
+// `updatedAt` still read real wall time instead of the simulated instant.
+// Source-level pins, same reasoning as every other block in this file:
+// `main.ts` cannot be instantiated under Vitest.
+describe('the plugin clock reaches diagnostics and the relation-cache sync', () => {
+  it('copyDiagnostics threads this.now into DiagnosticsSources', () => {
+    expect(main).toMatch(
+      /copyDiagnostics: \(\) => \{\s*void copyDiagnosticsToClipboard\(\{\s*pluginVersion: this\.manifest\.version,\s*loadQueue: \(\) => new ObsidianQueueStore\(this\)\.load\(\),\s*loadIndex: \(\) => new ObsidianKeywordIndexStore\(this\)\.load\(\),\s*now: this\.now,\s*\}\);\s*\},/,
+    );
+  });
+
+  it('the ingestion tick threads this.now into readConceptsAndRelations, so the relation-cache sync sees the simulated clock', () => {
+    expect(main).toMatch(
+      /const pass = await readConceptsAndRelations\(\s*this\.concept,\s*this\.corpusRelation,\s*this\.corpusRelationStateStore,\s*\{\s*vault,\s*ingestionSessionClosed: true,\s*now: this\.now,/,
+    );
+  });
+
+  it("setClock's doc comment matches mountPlugin's clock-before-onload ordering, not a post-mount call", () => {
+    // `codeOf` strips doc comments, so this one check reads the raw source —
+    // the doc comment's TEXT is exactly what this test pins.
+    const rawMain = readFileSync(`${srcDir}main.ts`, 'utf8');
+    expect(rawMain).toMatch(/mountPlugin`'s own `clock` deps/);
+    expect(rawMain).toMatch(/applied BEFORE `onload\(\)` runs/);
+    expect(rawMain).not.toMatch(/calls this right after mounting, before any view\s*opens/);
+  });
+});

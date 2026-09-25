@@ -376,12 +376,18 @@ export default class OleaPlugin extends Plugin {
    */
   private readonly now = (): Date => this.clock.now();
   /**
-   * The workbench simulator's injection door (`ol-3ux7.64.9` [WBX-8]):
-   * `SimulatorController` calls this right after mounting, before any view
-   * opens, so every `this.now()` read from then on reports the simulated
-   * instant instead of real wall time — no page-level `Date` override
-   * required. Production never calls this; the default `systemClock` above
-   * is what real Obsidian sees.
+   * The workbench simulator's injection door (`ol-3ux7.64.9` [WBX-8]).
+   * **Not called after mounting.** Since `ol-3ux7.64.9`'s addendum fix, the
+   * simulator sets the clock through `mountPlugin`'s own `clock` deps
+   * (`obsidian-shim/mount-plugin.ts`), applied BEFORE `onload()` runs —
+   * `SimulatorController.remountPane` passes `clock` into that same
+   * `mountPlugin` call rather than invoking this method post-mount. That
+   * closed the window where an `onload`-synchronous read (e.g. the
+   * cold-start course-setup scan) could still see real wall time on a
+   * simulated day. This method itself is unchanged and still available —
+   * only the ordering of who calls it, and when, has moved. Production
+   * never calls this; the default `systemClock` above is what real
+   * Obsidian sees.
    */
   setClock(clock: Clock): void {
     this.clock = clock;
@@ -1112,6 +1118,7 @@ export default class OleaPlugin extends Plugin {
           pluginVersion: this.manifest.version,
           loadQueue: () => new ObsidianQueueStore(this).load(),
           loadIndex: () => new ObsidianKeywordIndexStore(this).load(),
+          now: this.now,
         });
       },
       // `ol-l5og.11`: the registry's open command, folded into the shared
@@ -2449,6 +2456,7 @@ export default class OleaPlugin extends Plugin {
         {
           vault,
           ingestionSessionClosed: true,
+          now: this.now,
           ...(records !== null ? { assessmentErrorAdjacency: { records } } : {}),
           ...(embeddingCache !== null && embeddingCache !== undefined
             ? {
