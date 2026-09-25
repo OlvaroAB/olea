@@ -90,9 +90,14 @@ export async function runCorpusRelationBatch(
 
   // ONT-R2 (`ol-2zfj.89`, C7.10, `./types.js`'s own doc): the declared cap, enforced by simple
   // truncation over nomination's own (deterministic) output order — never mandatory splitting,
-  // which the ruling rejects as the primary mechanism. A capped-out candidate is not lost: it is
-  // simply reconsidered on the next batch boundary, since this stage's scope is new-concept x
-  // all-concepts rather than a one-shot queue.
+  // which the ruling rejects as the primary mechanism. CORRECTED 2026-09-25 (`ol-egov.141.89.15`,
+  // `[D-297]` / REL-D2): a capped-out candidate is NOT reconsidered on the next batch boundary
+  // today, contrary to what this comment used to claim. `runCorpusRelationBatchIfDue`
+  // (plugin `concept/wiring.ts`) marks every concept in `allConcepts` as "known" after ANY batch
+  // runs, whatever was cut here — so a capped-out pair's endpoints drop out of `newConcepts` on
+  // every later tick and the pair is never re-nominated. `[D-297]` rules the fix (a stored
+  // backlog, judged oldest first); it is not yet built (gates `[ILB-REL-4]`, `ol-egov.141.89.4.4`,
+  // still open).
   const candidates = nominated.slice(0, CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING);
   const candidatesCappedOut = nominated.length - candidates.length;
 

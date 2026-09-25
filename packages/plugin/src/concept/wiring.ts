@@ -202,12 +202,16 @@ export interface ReadConceptsFromVaultOptions {
 }
 
 /**
- * The production caller `ol-5nle` exists to build: reaches `readConcepts`
- * through whatever `ConceptReaderPort` `buildConceptWiring` composed, over
- * the real Worker transport when one is configured. `null` when it is not
- * (F7.8) — the same grey-out contract every other AI-gated surface in this
- * plugin follows, propagated one level up rather than left for a caller to
- * rediscover.
+ * Reached in production via `readConceptsAndRelations` below (`ol-2zfj.12`),
+ * called from `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations`
+ * (`packages/plugin/src/main.ts`) on the ingestion tick — `ol-5nle` [EXT-7],
+ * closed, built this end to end (corrected 2026-09-25, `ol-egov.141.89.15`;
+ * this paragraph previously said the production caller "exists to build").
+ * Reaches `readConcepts` through whatever `ConceptReaderPort`
+ * `buildConceptWiring` composed, over the real Worker transport when one is
+ * configured. `null` when it is not (F7.8) — the same grey-out contract
+ * every other AI-gated surface in this plugin follows, propagated one level
+ * up rather than left for a caller to rediscover.
  */
 export async function readConceptsFromVault(
   wiring: ConceptWiring,

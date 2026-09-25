@@ -12,8 +12,8 @@
  * own design doc used for the fold before it (`docs/dev/relation-landing-design.md` §8).
  *
  * **What this file does.** Two composed operations, each a thin wrapper over `olea-core`'s
- * persisted-relation modules, so a caller (today: nothing production-reachable; tomorrow: the
- * orchestrator's splice above) has one seam rather than three separate imports to get right:
+ * persisted-relation modules, so a caller (`./wiring.ts`'s `readConceptsAndRelations`, since the
+ * splice below landed) has one seam rather than three separate imports to get right:
  *
  * 1. `persistRelationCacheFromPass` — writes the corpus stage's own key-bearing edges
  *    (`ConceptAndRelationPass.corpus.relations`, `CorpusReconciledRelation[]`, which optionally
@@ -33,11 +33,12 @@
  *    reaches `deriveRelationSet` at all, so every one of that function's existing consumers stays
  *    correct with no change to their own code.
  *
- * **Reachability (`[D-072]`, plan §2.7 clause 5).** Neither function has a production caller
- * yet, for the same reason `readConceptsAndRelations` itself does not: the splice point is
- * `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations` (`packages/plugin/src/main.ts`), which
- * this lane's file ownership excludes. Exercised by `relation-wiring.spec.ts` alone until the
- * orchestrator applies the one-hop patch described above.
+ * **Reachability (`[D-072]`, plan §2.7 clause 5) — LANDED.** Both functions are
+ * production-reachable: the one-hop splice this doc names above was applied to `./wiring.ts`'s
+ * `readConceptsAndRelations` (`[D-119]`, `ol-2zfj.14`/`.122`/`.124`), itself called from
+ * `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations` (`packages/plugin/src/main.ts`) — see that
+ * function's own module doc for the full chain. Corrected 2026-09-25, `ol-egov.141.89.15`; this
+ * paragraph previously said neither function had a production caller.
  */
 
 import {

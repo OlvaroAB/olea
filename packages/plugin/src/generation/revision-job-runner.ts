@@ -60,31 +60,18 @@
  * edit from drafting the successor twice, not a cache lookup in here.
  *
  * ## Composition (`packages/plugin/src/ingestion/wiring.ts`, outside this
- * bead's `owns` — named rather than silently left undone)
+ * bead's `owns`) — LANDED
  *
- * `buildIngestionRunner` is the one place a real `JobRunner` is handed to
- * `IngestionQueueEngine.create` in production
- * (`packages/plugin/src/ingestion/wiring.ts:102-107`). Wiring this consumer
- * in needs exactly:
- *
- * ```ts
- * const revisionAware = createRevisionAwareJobRunner({
- *   vault: deps.vault,
- *   cache: generationCache,       // GenerationWiring.cache, ol-p3t07a
- *   deviceId,
- *   draftDeps: () => currentDraftDeps,  // read fresh, same posture wiring.ts's
- *                                       // own module doc uses for `this.knowledgeKind?.classifier`
- *   fallback: runner,             // the existing createExtractionJobRunner(...) call
- * });
- * const engine = await IngestionQueueEngine.create({ ...,  runner: revisionAware });
- * ```
- *
- * That two-line substitution is outside this bead's `owns`
- * (`packages/plugin/src/ingestion/`) and is left as this exact diff for the
- * orchestrator/next lane, per `[D-072]`'s escape hatch — everything up to
- * and including this consumer, the draft cache record it writes, and
- * `accept.ts`'s forwarding into `materializeAcceptedDraft` is built and
- * tested; only this last composition line remains.
+ * `buildIngestionRunner` composes this consumer in production:
+ * `deps.revision ? createRevisionAwareJobRunner({ vault: deps.vault, cache:
+ * deps.revision.cache, draftDeps: deps.revision.draftDeps, fallback: runner
+ * }) : runner` (`packages/plugin/src/ingestion/wiring.ts:493-499`), the
+ * `composedRunner` handed to `IngestionQueueEngine.create`. `main.ts:2486`
+ * confirms it is already composed and names the confirmation-queue
+ * admission this runner's draft record still needs (see that comment for
+ * what remains, distinct from this composition step). Corrected 2026-09-25,
+ * `ol-egov.141.89.15` — this paragraph previously described the
+ * substitution above as left for a later lane; it had already landed.
  */
 
 import {
