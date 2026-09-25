@@ -134,11 +134,17 @@ async function enqueueArrival(
   try {
     const bytes = await vault.readBinary(path);
     const contentHash = await hashContent(bytes);
+    // `sourceUnitId: path` — same reasoning as `process-now.ts`'s own call:
+    // the vault path IS the source unit for an extraction job, so a still-
+    // pending job from an earlier arrival of this same path is retired once
+    // a newer revision lands (`EnqueueInput.sourceUnitId`, `olea-core`;
+    // `ol-egov.141.89.10.49`).
     await enqueuer.enqueue({
       contentHash,
       label: path,
       payload: { kind: 'source', sourcePath: path, format },
       lastChangedAt,
+      sourceUnitId: path,
     });
   } catch (error) {
     console.error('Olea: could not enqueue an arriving source file', error);

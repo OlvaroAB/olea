@@ -186,10 +186,18 @@ async function runSource(
   // Deliberately NO `lastChangedAt` — see the module doc: this is what
   // makes the ENQUEUE debounce (`ol-84my`) structurally never evaluate for
   // this call, rather than racing its quiet window.
+  // `sourceUnitId: path` — the source unit for an extraction job IS the
+  // vault path it was read from (`EnqueueInput.sourceUnitId`'s own doc,
+  // `olea-core`): a later `processNow` call for the SAME path after she
+  // edits it carries a different `contentHash` but this same path, so a
+  // still-queued/deferred job from the earlier revision is retired rather
+  // than left to eventually run on content she has already moved past
+  // (`ol-egov.141.89.10.49`).
   const input: EnqueueInput = {
     contentHash,
     label: path,
     payload: { kind: 'source', sourcePath: path, format },
+    sourceUnitId: path,
   };
   const enqueueResult = await enqueuer.enqueue(input);
   if (enqueueResult.status === 'duplicate' && enqueueResult.existingStatus === 'done') {

@@ -195,6 +195,10 @@ describe('processNow — a known non-markdown source bypasses only the ENQUEUE d
     });
     expect(enqueuer.calls[0]).not.toHaveProperty('lastChangedAt');
     expect(typeof enqueuer.calls[0]?.contentHash).toBe('string');
+    // sourceUnitId is the vault path itself (ol-egov.141.89.10.49) — the
+    // same path across every revision, so a later edit's newer content hash
+    // can retire a still-pending job from this one.
+    expect(enqueuer.calls[0]?.sourceUnitId).toBe('Lectures/week2.pdf');
   });
 
   it('idempotency (D-002) is untouched: content-hash dedup still applies through the same enqueue call', async () => {

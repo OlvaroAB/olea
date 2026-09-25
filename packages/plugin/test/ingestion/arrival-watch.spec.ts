@@ -92,6 +92,8 @@ const NEVER_RUNS: JobRunner = async () => {
   throw new Error('this test never ticks the engine — the runner should never be called');
 };
 
+const ALWAYS_SUCCEEDS: JobRunner = async () => ({ ok: true });
+
 /**
  * `enqueueArrival` is fire-and-forget from the watch handler's own
  * perspective (`void enqueueArrival(...)`), and its own `await hashContent`
@@ -144,6 +146,7 @@ describe('buildIngestionArrivalWatch — which events enqueue', () => {
       label: 'Lectures/week2.pdf',
       payload: { kind: 'source', sourcePath: 'Lectures/week2.pdf', format: 'pdf' },
       lastChangedAt: null,
+      sourceUnitId: 'Lectures/week2.pdf',
     });
     expect(typeof enqueuer.calls[0]?.contentHash).toBe('string');
     expect(enqueuer.calls[0]?.contentHash.length).toBeGreaterThan(0);
@@ -261,9 +264,81 @@ describe('buildIngestionArrivalWatch — end to end with the real IngestionQueue
     // t=60s + 190s = 250s: the same (now-finished) content is observed
     // again, 190s after the path last changed — clear of the 180s window.
     // This settles and enqueues the finished version as its own job.
+    //
+    // Since ol-egov.141.89.10.49, `sourceUnitId: path` is threaded through
+    // every enqueue (`enqueueArrival`) — so this second, genuinely-different
+    // job for the SAME path now retires the first one (still `queued`,
+    // never having been ticked) as a stale, superseded revision, rather
+    // than leaving both queued side by side for a job runner to eventually
+    // waste a paid call on the half-copied bytes.
     clock.now_ = 250_000;
     channel.fire({ kind: 'modify', path });
     await flushAsync();
-    expect(engine.snapshot().queued).toBe(2);
+    expect(engine.snapshot()).toMatchObject({ queued: 1, failed: 1 });
+    const jobs = engine.list();
+    expect(jobs.find((j) => j.status === 'failed')?.failedReason).toContain('superseded');
+    expect(jobs.find((j) => j.status === 'queued')?.label).toBe(path);
+  });
+});
+
+describe('buildIngestionArrivalWatch — supersede on a newer revision, through a real IngestionQueueEngine (ol-egov.141.89.10.49)', () => {
+  it('retires a still-queued job for the same path once a newer revision of it arrives', async () => {
+    const vault = new MemoryVaultSource();
+    const path = 'Lectures/week2.pdf';
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryQueueStore(),
+      capability: { canDrain: true },
+      runner: NEVER_RUNS,
+    });
+    const channel = fakeWatchChannel();
+    buildIngestionArrivalWatch({ vault, enqueuer: engine, watch: channel.watch });
+
+    // Revision 1 arrives and sits queued (nothing ticks this engine).
+    vault.setBinary(path, new Uint8Array([1]));
+    channel.fire({ kind: 'create', path });
+    await flushAsync();
+    expect(engine.snapshot().queued).toBe(1);
+    const firstHash = engine.list()[0]?.contentHash;
+
+    // She edits the file — revision 2, different bytes, same path.
+    vault.setBinary(path, new Uint8Array([1, 2, 3]));
+    channel.fire({ kind: 'modify', path });
+    await flushAsync();
+
+    const jobs = engine.list();
+    const stale = jobs.find((j) => j.contentHash === firstHash);
+    const fresh = jobs.find((j) => j.contentHash !== firstHash);
+    // Never a silent drop — the record survives, honestly labelled.
+    expect(stale?.status).toBe('failed');
+    expect(stale?.failedReason).toContain('superseded');
+    expect(fresh?.status).toBe('queued');
+    expect(engine.snapshot().queued).toBe(1);
+  });
+
+  it('leaves a done job for the same path alone when a further revision arrives', async () => {
+    const vault = new MemoryVaultSource();
+    const path = 'Lectures/week2.pdf';
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryQueueStore(),
+      capability: { canDrain: true },
+      runner: ALWAYS_SUCCEEDS,
+    });
+    const channel = fakeWatchChannel();
+    buildIngestionArrivalWatch({ vault, enqueuer: engine, watch: channel.watch });
+
+    vault.setBinary(path, new Uint8Array([1]));
+    channel.fire({ kind: 'create', path });
+    await flushAsync();
+    const firstHash = engine.list()[0]?.contentHash;
+    expect(await engine.tick()).toEqual({ kind: 'ran', contentHash: firstHash, outcome: 'done' });
+    expect(engine.list().find((j) => j.contentHash === firstHash)?.status).toBe('done');
+
+    vault.setBinary(path, new Uint8Array([1, 2, 3]));
+    channel.fire({ kind: 'modify', path });
+    await flushAsync();
+
+    expect(engine.list().find((j) => j.contentHash === firstHash)?.status).toBe('done');
+    expect(engine.snapshot().done).toBe(1);
+    expect(engine.snapshot().queued).toBe(1);
   });
 });

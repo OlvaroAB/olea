@@ -75,6 +75,22 @@ export async function buildGenerationEnqueueInput(
     contentHash,
     label: `${input.courseCode} · ${input.conceptName} · ${input.instrumentKind}`,
     payload,
+    // The source unit for a generation call is its own (course, concept,
+    // kind) identity — `generationJobIdentityString`, the same string
+    // `contentHash` above is a hash of (`EnqueueInput.sourceUnitId`'s own
+    // doc, `olea-core`). Deliberately the FULL triple, including
+    // `instrumentKind`: a coarser id (course+concept alone) would make a
+    // second call for a DIFFERENT kind on the same concept — a normal,
+    // wanted thing under D-238's "further calls add kinds, they never
+    // replace the primary one" — wrongly retire a still-pending call for the
+    // first kind. At this granularity `sourceUnitId` is currently a no-op —
+    // it can only ever match an identical `contentHash`, so the "different
+    // hash, same unit" supersede branch never fires for this caller today —
+    // but it is the only honest choice, and stays correctly wired for the
+    // day a generation call's content can vary independently of this triple
+    // (e.g. a material fingerprint) without a second edit here
+    // (`ol-egov.141.89.10.49`).
+    sourceUnitId: generationJobIdentityString(input),
   };
 }
 

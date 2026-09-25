@@ -786,6 +786,53 @@ describe('supersede on enqueue (item 3, ol-egov.141.89.10.25) — same sourceUni
     expect(engine.snapshot().queued).toBe(2);
     expect(engine.list().every((j) => j.status === 'queued')).toBe(true);
   });
+
+  it('loads a queue persisted before sourceUnitId existed (the field simply absent on every job) without error, and drains it normally', async () => {
+    const store = new MemoryStore();
+    // Exactly the `PersistedJob` shape a pre-`ol-egov.141.89.10.49` client
+    // wrote — no `sourceUnitId` key at all, not even `undefined` (real JSON
+    // round-trips never carry an `undefined` key).
+    await store.save({
+      version: 1,
+      jobs: [
+        {
+          contentHash: 'h1-old-shape',
+          label: 'Lecture 1',
+          payload: {},
+          enqueuedAt: 0,
+          status: 'queued',
+          attempts: 0,
+        },
+      ],
+      headroom: null,
+    });
+
+    const engine = await IngestionQueueEngine.create({
+      store,
+      capability: desktop,
+      runner: alwaysSucceeds,
+    });
+
+    // Loads and drains exactly as before — an old job with no sourceUnitId
+    // is neither superseded nor a supersede target of anything.
+    expect(engine.snapshot()).toMatchObject({ queued: 1 });
+    expect(await engine.tick()).toEqual({
+      kind: 'ran',
+      contentHash: 'h1-old-shape',
+      outcome: 'done',
+    });
+
+    // A fresh enqueue that DOES carry sourceUnitId never matches the old
+    // job's undefined one, so nothing about it is retroactively retired.
+    await engine.enqueue({
+      contentHash: 'h2-new',
+      label: 'Lecture 2',
+      payload: {},
+      sourceUnitId: 'vault/Lecture2.md',
+    });
+    expect(engine.list().find((j) => j.contentHash === 'h1-old-shape')?.status).toBe('done');
+    expect(engine.snapshot()).toMatchObject({ done: 1, queued: 1 });
+  });
 });
 
 describe('a JobRunner that throws (DF-21 seam: what the engine does with a job that throws)', () => {

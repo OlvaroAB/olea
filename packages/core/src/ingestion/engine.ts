@@ -120,36 +120,15 @@ export type TickResult =
 export type JobPriorityComparator = (a: PersistedJob, b: PersistedJob) => number;
 
 /**
- * Widens `EnqueueInput` (`types.ts`) with an optional stable per-source
- * identifier, so `enqueue` can recognise "this is a newer revision of a job
- * already queued" and retire the stale one (`ol-egov.141.89.10.25`, item 3:
- * "same unit, newer content"). Declared here rather than folded into
- * `EnqueueInput` itself — `types.ts` sits outside this bead's owned paths —
- * following the same opt-in shape `enqueueDebounce`'s `lastChangedAt`
- * already uses one field over: a caller that never supplies `sourceUnitId`
- * (every current production caller — `process-now.ts`, `arrival-watch.ts`,
- * `generation-queue.ts` per a repo-wide grep) sees no change in behaviour at
- * all. Flagged for the orchestrator: this should move into `EnqueueInput`
- * proper the next time `types.ts` is touched, so a caller doesn't have to
- * import from two places for one input shape, and so a production caller can
- * actually supply it — nothing does yet, which is this item's reachability
- * gap (D-072).
+ * `PersistedJob` plus the same optional `sourceUnitId` `EnqueueInput` now
+ * declares (`types.ts`) — this engine persists it internally when a caller
+ * supplies one, so a later `enqueue` for the same unit can find the stale
+ * job again after a restart. Not folded into `types.ts`'s own `PersistedJob`
+ * (a persisted-schema addition — Class C, proposed rather than built here;
+ * see this bead's report): `QueueStore.save` still receives plain
+ * `PersistedJob[]` structurally, since the extra field is optional and
+ * additive, so nothing downstream that only knows `PersistedJob` breaks.
  */
-export type SupersedeAwareEnqueueInput = EnqueueInput & {
-  /**
-   * A stable identifier for the source this content came from (e.g. a
-   * vault-relative path) — stays the SAME across revisions while
-   * `contentHash` changes with every edit. `label` cannot serve this role:
-   * `types.ts` documents it as "never interpreted by the engine" and two
-   * unrelated sources can share a label (e.g. the same lecture title across
-   * courses), so treating it as a unit key would risk dropping the wrong
-   * job. Omitted (every current production caller): `enqueue` behaves
-   * exactly as before this field existed.
-   */
-  readonly sourceUnitId?: string;
-};
-
-/** `PersistedJob` plus the same optional `sourceUnitId` this engine now persists internally when a caller supplies one — see `SupersedeAwareEnqueueInput`'s doc. Not exported into `types.ts`'s `PersistedQueue` shape (out of this bead's owned paths); `QueueStore.save` still receives plain `PersistedJob[]` structurally, since the extra field is optional and additive. */
 type StoredJob = PersistedJob & { readonly sourceUnitId?: string };
 
 export interface EngineDeps {
@@ -290,18 +269,19 @@ export class IngestionQueueEngine {
    * own doc. Every existing caller supplies neither, so this is purely
    * additive: unchanged behaviour until a caller opts in on both sides.
    *
-   * **Supersede (item 3, `ol-egov.141.89.10.25`).** When `input.sourceUnitId`
+   * **Supersede (item 3, `ol-egov.141.89.10.25`; wired to its three
+   * production callers by `ol-egov.141.89.10.49`).** When `input.sourceUnitId`
    * is supplied, any still-pending job (`'queued'`, or `'deferred'` with
    * `'transient-error'`) sharing that same `sourceUnitId` but a DIFFERENT
    * `contentHash` is for a stale revision of the same source: this enqueue is
    * the newer content, so the stale job is retired to `'failed'` with an
    * honest `failedReason` rather than left to eventually run on content she
    * has already moved past. Never a silent drop — the record survives, it
-   * simply stops being eligible (see `SupersedeAwareEnqueueInput`'s doc for
-   * why `label` can't serve as the unit key, and why no production caller
-   * supplies `sourceUnitId` yet).
+   * simply stops being eligible (see `EnqueueInput.sourceUnitId`'s own doc,
+   * `types.ts`, for why `label` can't serve as the unit key and what each
+   * caller uses).
    */
-  async enqueue(input: SupersedeAwareEnqueueInput): Promise<EnqueueResult> {
+  async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
     const existing = this.jobs.find((j) => j.contentHash === input.contentHash);
     if (existing) return { status: 'duplicate', existingStatus: existing.status };
 

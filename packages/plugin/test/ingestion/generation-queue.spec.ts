@@ -129,6 +129,25 @@ describe('generationJobIdentityString / buildGenerationEnqueueInput', () => {
     expect(first.contentHash).toBe(second.contentHash);
     expect(first.payload).toEqual({ kind: 'generation', ...args });
   });
+
+  it('carries sourceUnitId as the full (course, concept, kind) identity — ol-egov.141.89.10.49', async () => {
+    const args = {
+      courseCode: 'A',
+      conceptKey: 'ck-1',
+      conceptName: 'Osmosis',
+      instrumentKind: 'mcq' as const,
+      trigger: 'arrival' as const,
+    };
+    const input = await buildGenerationEnqueueInput(args);
+    expect(input.sourceUnitId).toBe(generationJobIdentityString(args));
+
+    // A different instrumentKind for the SAME concept is a different unit —
+    // D-238 lets further calls for a new kind coexist with a still-pending
+    // call for another kind, so they must never share a sourceUnitId (that
+    // would make the engine wrongly retire the still-valid pending call).
+    const otherKind = await buildGenerationEnqueueInput({ ...args, instrumentKind: 'qa' });
+    expect(otherKind.sourceUnitId).not.toBe(input.sourceUnitId);
+  });
 });
 
 describe('enqueueGenerationJob / enqueueTriggeredGenerationCall', () => {

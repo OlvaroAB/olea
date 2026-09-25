@@ -183,6 +183,33 @@ export interface EnqueueInput {
    * `'debounced'` instead of `'queued'`.
    */
   readonly lastChangedAt?: number | null;
+  /**
+   * A stable identifier for the source this content came from — the same
+   * across every revision of that source, while `contentHash` changes with
+   * every edit. `label` cannot serve this role: it is documented above as
+   * "never interpreted by the engine," and two unrelated sources can share
+   * one (e.g. the same lecture title in two different courses), so treating
+   * it as a unit key would risk retiring the wrong job. What counts as "the
+   * source" is the caller's call — a vault-relative path for an extracted
+   * file (`process-now.ts`, `arrival-watch.ts`), or a generation call's own
+   * (course, concept, kind) identity (`generation-queue.ts`'s
+   * `generationJobIdentityString`) — as long as it means "this many
+   * revisions of one and the same thing" consistently for that caller.
+   * Omitted (the default for a caller that never sets it): `enqueue` behaves
+   * exactly as before this field existed.
+   *
+   * **Supersede.** When supplied, `IngestionQueueEngine.enqueue` retires any
+   * still-pending job (`'queued'`, or `'deferred'` with `'transient-error'`)
+   * sharing this same `sourceUnitId` but a DIFFERENT `contentHash` — a newer
+   * revision of the same source has arrived, so the stale attempt is marked
+   * `'failed'` with an honest `failedReason` rather than left to eventually
+   * run on content she has already moved past. Never a silent drop: the
+   * record survives, it simply stops being eligible. A `'done'` job (or a
+   * job under a different `sourceUnitId`) is left alone
+   * (`ol-egov.141.89.10.25` item 3; moved onto this shared type, and wired
+   * to its three production callers, by `ol-egov.141.89.10.49`).
+   */
+  readonly sourceUnitId?: string;
 }
 
 export type EnqueueResult =
