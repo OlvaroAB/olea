@@ -12,11 +12,27 @@ import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { ConceptPriority, CourseOracleRanking } from '../oracle/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
 import type { VaultPath } from '../vault/types.js';
-import { noteOfferEligible } from './note-offer.js';
+import {
+  type NoteOfferEvidence,
+  noteOfferEligible,
+  recheckNoteOfferAtAccept,
+} from './note-offer.js';
 
 const CONCEPT_KEY = 'concept-a';
 const COURSE = 'CRS101';
 const ASSESSMENT_PATH = '02 Assessments/final.md' as VaultPath;
+const DISPLAY_NAME = 'Concept A';
+const ALIAS_NAME = 'Old Concept A Name';
+
+/** The shared concept identity every truth-table case below asks about — one constant instead of ten identical `{ conceptKey: CONCEPT_KEY }` literals, now that `noteOfferEligible` also reads `displayName`/`aliases` (this bead, ol-egov.141.89.10.21). */
+const NOTE_OFFER_CONCEPT = { conceptKey: CONCEPT_KEY, displayName: DISPLAY_NAME };
+
+/** Same concept, but with one prior display name on record — used by the alias-collision cases below. */
+const NOTE_OFFER_CONCEPT_WITH_ALIAS = {
+  conceptKey: CONCEPT_KEY,
+  displayName: DISPLAY_NAME,
+  aliases: [ALIAS_NAME],
+};
 
 function instrument(): VaultInstrumentRecord {
   return {
@@ -127,118 +143,131 @@ describe('noteOfferEligible — the [D-176] three-way gate', () => {
   // three", per the ratified clause.
 
   it('T T T — accepted instruments, reviewed, top band: eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [instrument()], mastery: mastery(3), ranking: FULL_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: true,
       hasAcceptedInstruments: true,
       hasBeenReviewed: true,
       inTopBand: true,
+      hasNoExistingNote: true,
     });
   });
 
   it('T T F — accepted instruments, reviewed, but below the top band: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [instrument()], mastery: mastery(3), ranking: BELOW_BAND_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: BELOW_BAND_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: true,
       hasBeenReviewed: true,
       inTopBand: false,
+      hasNoExistingNote: true,
     });
   });
 
   it('T F T — accepted instruments, top band, but no mastery entry at all: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [instrument()], mastery: undefined, ranking: FULL_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: undefined,
+      ranking: FULL_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: true,
       hasBeenReviewed: false,
       inTopBand: true,
+      hasNoExistingNote: true,
     });
   });
 
   it('T F F — accepted instruments only, zero scored reviews, absent from the ranking: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [instrument()], mastery: mastery(0), ranking: ABSENT_FROM_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(0),
+      ranking: ABSENT_FROM_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: true,
       hasBeenReviewed: false,
       inTopBand: false,
+      hasNoExistingNote: true,
     });
   });
 
   it('F T T — no accepted instruments, reviewed, top band: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [], mastery: mastery(3), ranking: FULL_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: false,
       hasBeenReviewed: true,
       inTopBand: true,
+      hasNoExistingNote: true,
     });
   });
 
   it('F T F — no accepted instruments, reviewed, course abstained (no ranking to sit in): not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [], mastery: mastery(3), ranking: ABSTAINED_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [],
+      mastery: mastery(3),
+      ranking: ABSTAINED_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: false,
       hasBeenReviewed: true,
       inTopBand: false,
+      hasNoExistingNote: true,
     });
   });
 
   it('F F T — no accepted instruments, never reviewed, top band: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [], mastery: undefined, ranking: FULL_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [],
+      mastery: undefined,
+      ranking: FULL_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: false,
       hasBeenReviewed: false,
       inTopBand: true,
+      hasNoExistingNote: true,
     });
   });
 
   it('F F F — none of the three: not eligible', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [], mastery: undefined, ranking: BELOW_BAND_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [],
+      mastery: undefined,
+      ranking: BELOW_BAND_RANKING,
+    });
     expect(verdict).toEqual({
       eligible: false,
       hasAcceptedInstruments: false,
       hasBeenReviewed: false,
       inTopBand: false,
+      hasNoExistingNote: true,
     });
   });
 
   it('a pruned instrument still counts as "accepted" — pruning is a queue-visibility flag, not an un-accept', () => {
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      {
-        instruments: [{ ...instrument() } as VaultInstrumentRecord],
-        mastery: mastery(3),
-        ranking: FULL_RANKING,
-      },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [{ ...instrument() } as VaultInstrumentRecord],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+    });
     expect(verdict.hasAcceptedInstruments).toBe(true);
   });
 
@@ -248,10 +277,138 @@ describe('noteOfferEligible — the [D-176] three-way gate', () => {
       ...evidence,
       evidence: { ...evidence.evidence, explainBackAttempts: 4 },
     };
-    const verdict = noteOfferEligible(
-      { conceptKey: CONCEPT_KEY },
-      { instruments: [instrument()], mastery: explainBackOnly, ranking: FULL_RANKING },
-    );
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: explainBackOnly,
+      ranking: FULL_RANKING,
+    });
     expect(verdict.hasBeenReviewed).toBe(false);
+  });
+});
+
+describe('noteOfferEligible — the existing-note check (bug ol-egov.141.89.10.21)', () => {
+  it('an existing note titled exactly her current display name suppresses the offer', () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [DISPLAY_NAME],
+    });
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.hasNoExistingNote).toBe(false);
+  });
+
+  it("an existing note titled under one of the concept's aliases suppresses the offer", () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT_WITH_ALIAS, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [ALIAS_NAME],
+    });
+    expect(verdict.eligible).toBe(false);
+    expect(verdict.hasNoExistingNote).toBe(false);
+  });
+
+  it("matches through concept-key.ts's ratified normalisation index (case, whitespace) — reused, never re-implemented", () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: ['  concept   a  '],
+    });
+    expect(verdict.hasNoExistingNote).toBe(false);
+  });
+
+  it('an unrelated existing note title never suppresses the offer', () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: ['Some other concept entirely'],
+    });
+    expect(verdict).toEqual({
+      eligible: true,
+      hasAcceptedInstruments: true,
+      hasBeenReviewed: true,
+      inTopBand: true,
+      hasNoExistingNote: true,
+    });
+  });
+
+  it("an existing note titled after an alias that is NOT this concept's own alias never suppresses the offer", () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT_WITH_ALIAS, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: ['Some entirely different old name'],
+    });
+    expect(verdict.eligible).toBe(true);
+    expect(verdict.hasNoExistingNote).toBe(true);
+  });
+
+  it('omitting existingNoteTitles entirely behaves exactly as before this bead — never a spurious suppression', () => {
+    const verdict = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+    });
+    expect(verdict.eligible).toBe(true);
+    expect(verdict.hasNoExistingNote).toBe(true);
+  });
+});
+
+describe('recheckNoteOfferAtAccept — the accept-time recheck (bug ol-egov.141.89.10.21)', () => {
+  it('is the identical gate: same inputs in, same verdict out as noteOfferEligible', () => {
+    const evidence: NoteOfferEvidence = {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [],
+    };
+    expect(recheckNoteOfferAtAccept(NOTE_OFFER_CONCEPT, evidence)).toEqual(
+      noteOfferEligible(NOTE_OFFER_CONCEPT, evidence),
+    );
+  });
+
+  it('declines rather than creating a duplicate when a note appeared between render and click', () => {
+    const atRender = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [],
+    });
+    expect(atRender.eligible).toBe(true);
+
+    // Between render and her click — a concurrent accept, or a note she
+    // wrote by hand under this same wording — the plugin's accept path
+    // re-reads the vault and calls the recheck with fresh evidence, never
+    // the evidence render saw.
+    const atClick = recheckNoteOfferAtAccept(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [DISPLAY_NAME],
+    });
+    expect(atClick.eligible).toBe(false);
+    expect(atClick.hasNoExistingNote).toBe(false);
+  });
+
+  it('also declines when eligibility changed for one of the original three reasons (ranking dropped out of the top band between render and click)', () => {
+    const atRender = noteOfferEligible(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: FULL_RANKING,
+      existingNoteTitles: [],
+    });
+    expect(atRender.eligible).toBe(true);
+
+    const atClick = recheckNoteOfferAtAccept(NOTE_OFFER_CONCEPT, {
+      instruments: [instrument()],
+      mastery: mastery(3),
+      ranking: BELOW_BAND_RANKING,
+      existingNoteTitles: [],
+    });
+    expect(atClick.eligible).toBe(false);
+    expect(atClick.inTopBand).toBe(false);
   });
 });

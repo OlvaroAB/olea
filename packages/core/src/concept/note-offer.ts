@@ -52,11 +52,49 @@
  *     A concept the ranking abstained on, or vetoed away entirely (so it
  *     never appears in `ranked`), is never in the top band — there is
  *     nothing to sit in.
+ *
+ * ## The existing-note check and the accept-time recheck (bug ol-egov.141.89.10.21)
+ *
+ * The three-way gate above answers `[D-176]`'s "may Olea offer" question,
+ * but never asked whether a note already exists for this concept under a
+ * name she has used for it — a real gap, since a tier-1 concept (a note
+ * already bound to the CURRENT key/anchor) is the only case the caller
+ * (`../registry/build.js`'s `noteOfferFor`) already excludes, and a stray
+ * note titled after a PRIOR display name (an alias, from before a rename)
+ * is invisible to that tier check entirely. **INV-6 is the reason this
+ * matters, not just tidiness**: offering to create a note that duplicates
+ * one she already has risks a second, competing "home" for material she
+ * authored under the first, which is exactly the kind of collision INV-6
+ * exists to prevent for anything touching her authored notes.
+ *
+ * `noteOfferEligible` now also refuses when `evidence.existingNoteTitles`
+ * contains a title matching `concept.displayName` or any of
+ * `concept.aliases`, under `./concept-key.js`'s ratified
+ * `conceptIdentityNormalizationIndex` (C7.11) — the same ruled index this
+ * codebase already uses for "is this the same wording" comparisons
+ * elsewhere, never a fresh normalisation invented here. **`aliases` is
+ * built exactly the way `../registry/build.js` builds
+ * `RegistryConceptEntry.aliases`** (`../registry/overrides.js`'s
+ * `aliasesFor`) — this module takes the finished list as an input and never
+ * rebuilds it, matching this file's own "reuse, never recompute" rule
+ * above.
+ *
+ * **The accept-time recheck.** The render-time call and the moment she
+ * clicks Accept are two different instants; anything the gate reads — a
+ * new instrument, a fresh review, a ranking recompute, or (now) a note that
+ * appeared in the meantime — can change between them. `recheckNoteOfferAtAccept`
+ * below is the identical pure gate, meant to be called a second time, with
+ * evidence read fresh at accept time, so a stale render-time "yes" can
+ * never carry through into creating a note that should no longer be
+ * offered. It is not a different function in substance — re-exporting
+ * `noteOfferEligible` under an intention-revealing name is enough, and
+ * keeps the two calls from silently drifting apart.
  */
 
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
 import type { VaultInstrumentRecord } from '../session/types.js';
+import { conceptIdentityNormalizationIndex } from './concept-key.js';
 
 /**
  * DECLARED (Class B, unratified — run charter's ladder, `docs/
@@ -81,6 +119,29 @@ const TOP_BAND_DIVISOR = 3;
 export interface NoteOfferConcept {
   /** The opaque join key (`[D-088]`/`[D-109]`) — what `evidence.mastery` and `evidence.ranking`'s entries are keyed/joined on. Never a display name (R2). */
   readonly conceptKey: string;
+  /**
+   * Her current display name (`RegistryConceptEntry.displayName`, C7.4) —
+   * checked against `NoteOfferEvidence.existingNoteTitles` for an
+   * existing-note collision, same as every entry in `aliases` below.
+   * Optional, like `aliases`: a caller that does not yet supply it gets no
+   * existing-note check at all (`hasNoExistingNote` stays `true`
+   * unconditionally) rather than a spurious one built from nothing — see
+   * this module's doc, "the existing-note check", for the one production
+   * caller (`../registry/build.js`'s `noteOfferFor`) that has not been
+   * wired to pass this yet as of this bead (owned by other concurrent
+   * lanes; out of this file's `owns`).
+   */
+  readonly displayName?: string;
+  /**
+   * Every prior display name this concept has carried — built the exact
+   * way `../registry/build.js` builds `RegistryConceptEntry.aliases`
+   * (`../registry/overrides.js`'s `aliasesFor`), and handed in unmodified.
+   * This module never re-derives an alias list (module doc: "reuse, never
+   * recompute"). Defaults to none, for a concept that has never been
+   * renamed, or for a caller not yet wired to pass it (see `displayName`'s
+   * doc above).
+   */
+  readonly aliases?: readonly string[];
 }
 
 /** Everything `noteOfferEligible` reads, gathered by the caller from machinery this module never re-runs. */
@@ -105,20 +166,35 @@ export interface NoteOfferEvidence {
    * ranking per course; this gate answers the question for exactly one).
    */
   readonly ranking: CourseOracleRanking;
+  /**
+   * Every note title already known to exist (or about to exist) for this
+   * concept's vault — at minimum, the titles a caller would check for a
+   * path collision before writing (`../../packages/plugin/src/registry/
+   * ports.js`'s `uniqueNotePath` reads `VaultSource.exists` for the same
+   * purpose one layer up). Matched against `concept.displayName` and
+   * `concept.aliases` under `conceptIdentityNormalizationIndex` (this
+   * module's doc, "the existing-note check"). Defaults to none — a caller
+   * that cannot yet supply this list gets the pre-fix behaviour, never a
+   * spurious suppression.
+   */
+  readonly existingNoteTitles?: readonly string[];
 }
 
-/** The three conditions, individually inspectable, plus the combined verdict — never asserted as a bare boolean, matching this codebase's "reasoning must be inspectable" convention (`oracle/types.ts`'s `OracleConceptFactors` is the same posture one layer up). */
+/** The four conditions, individually inspectable, plus the combined verdict — never asserted as a bare boolean, matching this codebase's "reasoning must be inspectable" convention (`oracle/types.ts`'s `OracleConceptFactors` is the same posture one layer up). */
 export interface NoteOfferVerdict {
-  /** `hasAcceptedInstruments && hasBeenReviewed && inTopBand` — the whole gate, per the ratified clause's "All three". */
+  /** `hasAcceptedInstruments && hasBeenReviewed && inTopBand && hasNoExistingNote` — the whole gate. The first three are the ratified clause's "All three"; `hasNoExistingNote` is this bead's own added safety check (module doc, "the existing-note check"), never a restatement of `[D-176]`'s own text. */
   readonly eligible: boolean;
   readonly hasAcceptedInstruments: boolean;
   readonly hasBeenReviewed: boolean;
   readonly inTopBand: boolean;
+  /** `false` when a note already exists under `concept.displayName` or any `concept.aliases` entry — see this module's doc, "the existing-note check". */
+  readonly hasNoExistingNote: boolean;
 }
 
 /**
- * The whole of `[D-176]`'s trigger, and nothing else. Pure — INV-1/§7.1: no
- * vault I/O, no clock, no network, same inputs in, same verdict out.
+ * The whole of `[D-176]`'s trigger, plus the existing-note safety check this
+ * bead adds, and nothing else. Pure — INV-1/§7.1: no vault I/O, no clock, no
+ * network, same inputs in, same verdict out.
  */
 export function noteOfferEligible(
   concept: NoteOfferConcept,
@@ -127,12 +203,60 @@ export function noteOfferEligible(
   const hasAcceptedInstruments = evidence.instruments.length > 0;
   const hasBeenReviewed = (evidence.mastery?.evidence.scoredEventCount ?? 0) > 0;
   const inTopBand = isInTopBand(concept.conceptKey, evidence.ranking);
+  const hasNoExistingNote = !existingNoteFound(concept, evidence.existingNoteTitles ?? []);
   return {
-    eligible: hasAcceptedInstruments && hasBeenReviewed && inTopBand,
+    eligible: hasAcceptedInstruments && hasBeenReviewed && inTopBand && hasNoExistingNote,
     hasAcceptedInstruments,
     hasBeenReviewed,
     inTopBand,
+    hasNoExistingNote,
   };
+}
+
+/**
+ * `recheckNoteOfferAtAccept` — the identical gate above, re-exported under
+ * an intention-revealing name for the plugin's accept path
+ * (`../../packages/plugin/src/registry/provider.js`'s `acceptNoteOffer`,
+ * around line 695 today) to call a second time, with evidence read fresh at
+ * the moment she clicks Accept, never the evidence the render-time call
+ * saw. Module doc, "the accept-time recheck", explains why this must be a
+ * second call rather than trusting the render-time verdict: anything this
+ * gate reads can change between render and click, and a stale "yes" must
+ * never carry through into creating a note — including a duplicate the
+ * existing-note check above would otherwise have caught only at render
+ * time.
+ */
+export function recheckNoteOfferAtAccept(
+  concept: NoteOfferConcept,
+  evidence: NoteOfferEvidence,
+): NoteOfferVerdict {
+  return noteOfferEligible(concept, evidence);
+}
+
+/**
+ * Does a title in `existingNoteTitles` already denote this concept, under
+ * her current display name or any alias? Comparison runs through
+ * `./concept-key.js`'s ratified `conceptIdentityNormalizationIndex`
+ * (C7.11) — the same index this codebase already uses to find wording
+ * collisions elsewhere — never a fresh normalisation invented here. Per
+ * that function's own doc, this is a lookup-index equality check only: no
+ * substring/prefix/suffix matching, exactly the same restraint its other
+ * caller (`../concept/key-store.js`) already observes.
+ */
+function existingNoteFound(
+  concept: NoteOfferConcept,
+  existingNoteTitles: readonly string[],
+): boolean {
+  if (existingNoteTitles.length === 0) return false;
+  const candidateNames = [
+    ...(concept.displayName === undefined ? [] : [concept.displayName]),
+    ...(concept.aliases ?? []),
+  ];
+  if (candidateNames.length === 0) return false;
+  const candidates = new Set(candidateNames.map(conceptIdentityNormalizationIndex));
+  return existingNoteTitles.some((title) =>
+    candidates.has(conceptIdentityNormalizationIndex(title)),
+  );
 }
 
 /**
