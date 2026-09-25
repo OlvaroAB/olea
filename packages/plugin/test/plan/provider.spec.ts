@@ -415,6 +415,15 @@ describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C
         instrumentType: 'qa',
         conceptIds: ['Widget theory'],
         rating: 'good',
+        // D-264 ruling 1: the ranking's retrievability now reads readiness
+        // (mastery/attainment.ts's instrumentsWithIndependentSuccess), which
+        // requires a completed review with rating !== 'again' AND
+        // supportLevelShown === 'independent'. Without this field the
+        // fixture's own 'good' rating no longer suffices — the instrument
+        // falls out of the readiness fold and this whole suite's premise
+        // (a review history that makes retrievability nonzero) goes false.
+        // This pins: only an independent-support success feeds retrievability.
+        supportLevelShown: 'independent',
         wasUnsure: false,
         durationMs: 1200,
         selectionContext: {
