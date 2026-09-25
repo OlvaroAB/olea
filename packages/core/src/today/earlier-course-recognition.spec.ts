@@ -3,7 +3,7 @@
  * Fixture ids are opaque (INV-3): no real course code or concept name
  * anywhere in this file.
  */
-import type { ReviewLogRecord } from 'olea-contracts';
+import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptCourses } from '../insights/types.js';
 import { buildEarlierCourseRecognitions } from './earlier-course-recognition.js';
@@ -156,5 +156,69 @@ describe('buildEarlierCourseRecognitions', () => {
     const result = buildEarlierCourseRecognitions({ newCourse: 'NEW1', entries, concepts });
 
     expect(result.map((r) => r.conceptId)).toEqual(['a', 'z']);
+  });
+
+  it('`[D-281]` item 4 (ol-a07q, ol-egov.141.89.9.47): a `rejected` verdict against the qualifying instrument excludes its evidence from the stage shown here, the same as the other three mastery-fold readers', () => {
+    const concepts: readonly ConceptCourses[] = [{ conceptId: 'c1', courses: ['NEW1', 'OLD1'] }];
+    const heldReview = review('c1', '2026-08-30', 'e1');
+    const qualifyingExplainBack: ReviewLogRecord = {
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'eb-1',
+      timestamp: '2026-08-29T09:00:00+00:00',
+      instrumentId: 'eb:c1:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c1'],
+      rating: null,
+      wasUnsure: false,
+      durationMs: 4000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['explain-back'],
+        planVersion: null,
+      },
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    };
+    // A real refusal, not a mere suspend — the proven-invalid signal D-281
+    // item 4 (and ol-v7r5.69's close reason) both require.
+    const rejectedVerdict: ReviewLogEntry = {
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'verdict-1',
+      timestamp: '2026-08-29T09:30:00+00:00',
+      instrumentId: 'eb:c1:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c1'],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+
+    const withoutRejection = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [heldReview, qualifyingExplainBack],
+      concepts,
+    });
+    const withRejection = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [heldReview, qualifyingExplainBack, rejectedVerdict],
+      concepts,
+    });
+
+    expect(withoutRejection[0]?.state).toBe('tree');
+    // The exact regression this bead fixes: before the fix,
+    // `buildEarlierCourseRecognitions` called `computeConceptMastery` with no
+    // `invalidInstrumentIds` at all (unless a caller happened to derive and
+    // pass one itself), so a rejected verdict never reached the fold and the
+    // stage shown here stayed `tree`.
+    expect(withRejection[0]?.state).not.toBe('tree');
   });
 });

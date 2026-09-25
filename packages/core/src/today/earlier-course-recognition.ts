@@ -84,6 +84,7 @@
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
 import type { ConceptCourses } from '../insights/types.js';
 import { computeConceptMastery, type MasteryRollupOptions } from '../mastery/rollup.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { VitalityReading } from '../mastery/vitality.js';
 
 /**
@@ -128,6 +129,15 @@ export interface EarlierCourseRecognitionInput {
   readonly entries: readonly ReviewLogEntry[];
   /** The concept-to-course join (F1.3), the same shape `today/mastery-overview.ts` reads. */
   readonly concepts: readonly ConceptCourses[];
+  /**
+   * Passed through to `computeConceptMastery` for every concept. `[D-281]`
+   * item 4's `invalidInstrumentIds` is derived internally from `entries`
+   * (`../mastery/validity.js`'s `projectInstrumentValidity`, the same fold
+   * `oracle/compose.ts` and `retrospective/build.ts` now do) and always wins
+   * over any value passed here — this module owns that fold the same way the
+   * other three readers own theirs, so a caller cannot accidentally show a
+   * stage that still counts a proven-invalid instrument's evidence.
+   */
   readonly options?: MasteryRollupOptions;
   /**
    * Pre-computed vitality readings, keyed by concept id — typically
@@ -199,6 +209,13 @@ export function buildEarlierCourseRecognitions(
 ): readonly EarlierCourseRecognition[] {
   const { newCourse, entries, concepts, options, vitality } = input;
   const byConcept = courseSetsByConcept(concepts);
+  // `ol-egov.141.89.9.47` (`[D-281]` item 4, `ol-a07q`): the same proven-
+  // invalid projection `oracle/compose.ts` and `retrospective/build.ts` fold
+  // is folded here too, once over the whole input log — a rejected verdict
+  // or a contest resolved `corrected` must drop its evidence from the stage
+  // this screen shows, the same as it already drops from every other reader.
+  const invalidInstrumentIds = [...projectInstrumentValidity(entries).provenInvalid.keys()];
+  const resolvedOptions: MasteryRollupOptions = { ...options, invalidInstrumentIds };
 
   const results: EarlierCourseRecognition[] = [];
 
@@ -211,7 +228,7 @@ export function buildEarlierCourseRecognitions(
     const evidence = evidenceFor(entries, conceptId);
     if (evidence.reviewCount === 0 && !evidence.explainedBack) continue;
 
-    const { state } = computeConceptMastery(entries, conceptId, options);
+    const { state } = computeConceptMastery(entries, conceptId, resolvedOptions);
 
     results.push({
       conceptId,
