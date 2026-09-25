@@ -142,13 +142,72 @@
  * (the pre-`ol-0r92.87` default, and every draft cached before this field existed) skips the
  * check entirely — no snapshot to compare against means no gate, the same "no signal" posture
  * `sourceCitation`/`predecessorInstrumentId` below already use.
+ *
+ * ## The retry-orphan fix (`ol-egov.141.89.2.8`)
+ *
+ * Found by the practice-authoring code-case executor (`.olea-harness/ilb-pra/dev-r1/
+ * retry-orphan-sidecar.md`, no content — evidence lives there). `stampMcqId`'s default id is
+ * random (`crypto.getRandomValues`), minted fresh on every call. When attempt 1 writes the
+ * citation sidecar below and is then interrupted before `vault.write` runs, nothing durable
+ * records which id attempt 1 used — the note itself was never written, so a retry re-reads the
+ * same unchanged note (the stale-input guard above passes), re-inserts the block from scratch,
+ * and used to mint a SECOND, different random id. Attempt 1's citation record is then orphaned:
+ * keyed by an id no instrument in the vault ever carries.
+ *
+ * Fixed by deriving the id deterministically from the accepted draft (`deriveInstrumentId`
+ * below) rather than persisting a pre-write id in the caller. Persisting-before-first-write was
+ * the other option the bead named, but it would require `accept.ts`/`cache-store.ts` (this
+ * bead's `owns` is this file only) to write `DraftRecord.instrumentId` — a field currently
+ * populated only on resolution, after materialization succeeds — ahead of the vault write, which
+ * is a caller-side sequencing change this file cannot make. Deterministic derivation needs no
+ * such change: `stampMcqId`'s `generateId` seam (`olea-core`) already exists exactly for this
+ * (its own doc: "Injectable for deterministic tests"), and this module already hashes note
+ * content for the stale-input guard above, so hashing the draft's own fields for its id reuses
+ * the same primitive rather than adding a new one.
+ *
+ * **The id is per DRAFT, not per question text.** The first cut of this fix hashed only
+ * `sourcePath`/`question`/`predecessorInstrumentId` — everything a retry of the SAME draft
+ * always resupplies identically. But two DIFFERENT accepted drafts can legitimately carry
+ * identical question text (a regenerated duplicate, two sweeps producing the same item), and
+ * random ids kept those distinct where content-only hashing would not have: two distinct drafts
+ * would derive the SAME instrument id, which breaks the write-once sidecar guards below (the
+ * second accept would see the first's sidecar and skip writing its own) and the assumption that
+ * an instrument id is unique per instrument. So `input.draftId` — `DraftRecord.draftId`
+ * (`generation/types.ts`), stable across every retry of the SAME draft and unique per draft
+ * (`cache-store.ts`'s file name) — is folded into the hash too when supplied. Two calls with the
+ * same `draftId` (any retry of one draft, this bead's whole scenario) still converge on the same
+ * id; two calls with different `draftId`s (two distinct drafts, however similar their question
+ * text) now always diverge. `undefined` only for a caller with no draft identity to supply —
+ * none exists in this package today; `accept.ts` always has one — which falls back to the
+ * pre-draftId hash rather than refusing, matching every other optional field's "no signal, skip
+ * the input" convention in this module.
+ *
+ * With `draftId` supplied, two calls to `materializeAcceptedDraft` for the same draft — exactly
+ * what a retry of the same cached `DraftRecord` supplies — now always converge on the same id, so
+ * a retry after any write boundary re-derives the SAME id attempt 1 used: the sidecar attempt 1
+ * wrote stops being orphaned, and no persisted record shape changes (the id is still just a
+ * `mcq-` string wherever it lands). This never reads the note's own prose into the id — only the
+ * drafted question's fields and the draft's own opaque id, already in memory before this function
+ * is ever called — so nothing about her content becomes newly derivable from an instrument id
+ * that could not be already.
+ *
+ * **The two sidecar writes below are also made retry-safe, not just id-stable.** Both
+ * `writeInstrumentCitation` and `writeDistractorProvenance` are write-once stores that THROW if
+ * a record already exists under the id they're given (their own module docs, `olea-core`) — with
+ * the id now converging across attempts, a retry that reached the citation write on attempt 1
+ * would otherwise hit that throw on attempt 2 instead of completing. Each write below is now
+ * guarded by a `vault.exists` check on that sidecar's own path first, so a sidecar a prior
+ * interrupted attempt already wrote is left untouched (still correctly keyed, since the id
+ * matches) and a retry only writes what it did not yet write, before writing the note itself.
  */
 
 import {
   acceptGeneratedMcq,
   appendSuccessionRecord,
   buildSuccessionEvent,
+  citationStorePath,
   type DistractorProvenanceEntry,
+  distractorProvenanceStorePath,
   hashText,
   type InstrumentCitation,
   insertMcqBlock,
@@ -167,6 +226,15 @@ import type { DraftQuestion } from './types.js';
 export interface MaterializeAcceptedDraftInput {
   readonly sourcePath: VaultPath;
   readonly question: DraftQuestion;
+  /**
+   * `DraftRecord.draftId` (`generation/types.ts`) — this draft's own stable, unique-per-draft
+   * identity, stable across every retry of the same draft. Folded into the instrument id this
+   * call derives (`deriveInstrumentId` below, the module doc's "retry-orphan fix" section) so
+   * two distinct drafts with identical question text still derive distinct instrument ids, while
+   * a retry of the SAME draft still converges. `undefined` only for a caller with no draft
+   * identity to supply — none exists in this package today.
+   */
+  readonly draftId?: string;
   /**
    * `[D-133]`: the id of the instrument this successor supersedes, when this
    * draft was materializing a revision's successor rather than an ordinary
@@ -219,6 +287,37 @@ export interface MaterializeAcceptedDraftDeps {
 
 export interface MaterializeAcceptedDraftResult {
   readonly instrumentId: string;
+}
+
+/**
+ * Derives a stable instrument id from exactly what identifies this one accepted draft — never
+ * from the note's own prose — so a retry of `materializeAcceptedDraft` after an interrupted
+ * write converges on the SAME id instead of `stampMcqId`'s default random mint producing a new
+ * one each call. See the module doc's "retry-orphan fix" section for why this lives here rather
+ * than as a pre-write persisted id in the caller.
+ *
+ * `sourcePath` and every `question` field a retry always supplies identically (the same cached
+ * `DraftRecord`, re-forwarded verbatim by `accept.ts`) are hashed together; `predecessorInstrumentId`
+ * is folded in too so an ordinary draft and a `[D-133]` successor never derive the same id from
+ * otherwise-matching question text. `input.draftId` — `DraftRecord.draftId`, unique per draft and
+ * stable across every retry of that same draft — is folded in ahead of everything else: it is
+ * what keeps two DIFFERENT drafts with identical question text from deriving the SAME instrument
+ * id (the module doc's "the id is per draft" section), while still letting a retry of the SAME
+ * draft converge. `hashText` is the same SHA-256-hex primitive the stale-input guard above
+ * already uses on note content — this call hashes the draft's own identity and fields instead.
+ */
+async function deriveInstrumentId(input: MaterializeAcceptedDraftInput): Promise<string> {
+  const canonical = JSON.stringify({
+    draftId: input.draftId ?? null,
+    sourcePath: input.sourcePath,
+    stem: input.question.stem,
+    correctAnswer: input.question.correctAnswer,
+    distractors: input.question.distractors,
+    feedback: input.question.feedback,
+    predecessorInstrumentId: input.predecessorInstrumentId ?? null,
+  });
+  const digest = await hashText(canonical);
+  return `mcq-${digest.slice(0, 16)}`;
 }
 
 /**
@@ -293,20 +392,35 @@ export async function materializeAcceptedDraft(
     );
   }
 
-  const stamped = stampMcqId(content, inserted.span);
+  // Deterministic, not `stampMcqId`'s default random mint — see the module doc's
+  // "retry-orphan fix" section: a retry against the same unchanged note must re-derive the same
+  // id a prior, interrupted attempt already minted and sidecar-wrote, never a fresh one.
+  const derivedId = await deriveInstrumentId(input);
+  const stamped = stampMcqId(content, inserted.span, { generateId: () => derivedId });
 
   // `[D-181]`: the sidecar, never text written into her notes — see the
   // module doc's own section. Skipped, not fabricated, when the pipeline
-  // had no citation to record for this draft.
+  // had no citation to record for this draft. Also skipped — rather than
+  // calling the write-once store and taking its "already has a record"
+  // throw — when a prior, interrupted attempt already wrote this exact
+  // sidecar under the SAME derived id (the module doc's "retry-orphan fix"
+  // section): a retry must converge cleanly, not fail on the half of the
+  // work an earlier attempt already finished.
   if (input.sourceCitation !== undefined) {
-    await writeInstrumentCitation(vault, stamped.id, input.sourceCitation);
+    if (!(await vault.exists(citationStorePath(stamped.id)))) {
+      await writeInstrumentCitation(vault, stamped.id, input.sourceCitation);
+    }
   }
 
   // `[D-220 / DIST-3]`: the distractor-provenance sidecar — see the module doc's own section.
-  // Skipped (never an empty sidecar) when nothing survived generation with grounding.
+  // Skipped (never an empty sidecar) when nothing survived generation with grounding, and
+  // likewise skipped (not re-thrown-into) when a prior interrupted attempt already wrote it
+  // under this same derived id — see the citation-sidecar comment just above.
   const distractorProvenanceEntries = groundedDistractorEntries(input.question);
   if (distractorProvenanceEntries.length > 0) {
-    await writeDistractorProvenance(vault, stamped.id, { entries: distractorProvenanceEntries });
+    if (!(await vault.exists(distractorProvenanceStorePath(stamped.id)))) {
+      await writeDistractorProvenance(vault, stamped.id, { entries: distractorProvenanceEntries });
+    }
   }
 
   if (input.predecessorInstrumentId === undefined) {

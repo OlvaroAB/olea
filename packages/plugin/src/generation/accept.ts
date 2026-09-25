@@ -154,6 +154,12 @@ export function createDraftAcceptPort(deps: DraftAcceptPortDeps): DraftAcceptPor
           {
             sourcePath: record.sourcePath,
             question: record.question,
+            // `ol-egov.141.89.2.8`: this draft's own stable, unique-per-draft id, folded into
+            // the instrument id `materializeAcceptedDraft` derives — see that module's doc
+            // ("the id is per draft") for why: without it, two different drafts with identical
+            // question text would derive the same instrument id, where a retry of this SAME
+            // draft still needs to converge on one.
+            draftId: record.draftId,
             // [D-133] (`ol-2zfj.39`): forwarded only when this draft was
             // produced by the `'instrument-revision'` job kind
             // (`revision-job-runner.ts`) — `undefined` for every ordinary
