@@ -24,17 +24,17 @@
  * that headline, and Start sits the composed session directly rather than
  * opening a builder."* Three consequences, each landed below:
  *
- *  1. **Start opens the session, not a session-assembly screen.**
- *     {@link HomeViewDeps.startSession} replaces the old
- *     `openSessionBuilder` — `main.ts` wires it to the review surface she
- *     actually answers from (`revealReviewView`), the "existing session
- *     opener" the bead's own brief names as the fallback ahead of rows
- *     `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`) landing the shared
- *     holder's production callers. **This view deliberately does NOT enter
+ *  1. **Start opens the session, not a session-assembly screen — and now
+ *     enters the shared holder first.** {@link HomeViewDeps.startSession}
+ *     replaces the old `openSessionBuilder` — `main.ts` wires it to call
+ *     `enterStudySessionHolderForStart` before opening the review surface
+ *     she actually answers from (`revealReviewView`). **Corrected**
+ *     (`ol-egov.141.89.41`): `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`)
+ *     have both landed, so this view no longer skips
  *     `packages/plugin/src/session/holder.ts`'s shared
- *     `SittingState<ComposedStudySession>` itself** — see this file's own
- *     "What Start does NOT yet do" note below for why that would mean
- *     freezing a fabricated object, which is worse than not freezing one.
+ *     `SittingState<ComposedStudySession>` the way this paragraph used to
+ *     claim — pressing Start does enter it. See "What Start does NOT yet
+ *     do" below, corrected, for the gap that is still genuinely open.
  *  2. **The three steering inputs render inline, beside the headline**, via
  *     `../session-builder/view.ts`'s exported `renderSteeringControls` — the
  *     same rendering `SessionBuilderView` itself now calls for its own
@@ -66,23 +66,28 @@
  * share, or drafts a reason sentence of its own.
  *
  * **What Start does NOT yet do, and why (reachability, `[D-072]` clause
- * 5).** The design note (`docs/dev/one-assembly-path.md` §3a/§3b, private
- * repo) calls for Start to be the freeze point on the shared holder — enter
- * it with the composed session, one `decideRebuild` call, recompose before
- * entering, never during. `../session-builder/provider.ts` deliberately
- * drops `courseShares`/`forcedCourses`/`obligationClasses`/`overflow` when
- * it builds the `SessionBuilderState` this view (and the holder's own
- * `ComposedStudySession` type) would need (`provider.ts`'s own comment at
- * its `composed.overflow`/`courseShares`/`forcedCourses` line: "deliberately
- * dropped") — so Home has no honest source for the object the holder's type
- * requires, and entering it with a fabricated one would freeze something
- * worse than not freezing at all. Start therefore opens the review surface
- * directly, unrelated to the holder, exactly the way it always has; wiring
- * the holder is `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`)'s job, once
- * the composed session's full shape reaches a surface that can enter it
- * correctly. Disclosed, not hidden: until then, the review surface Start
- * opens still composes independently and does not yet reflect what Home's
- * steering inputs just composed.
+ * 5) — corrected, `ol-egov.141.89.41`.** This paragraph used to say Start
+ * opens the review surface without entering the shared holder at all;
+ * `[SESS-8.3]`/`[SESS-8.4]` (`ol-egov.132.3`/`.4`) have since closed, and
+ * {@link HomeViewDeps.startSession} (wired in `main.ts`) now calls
+ * `enterStudySessionHolderForStart` first, which composes and freezes a real
+ * `ComposedStudySession` into `packages/plugin/src/session/holder.ts`'s
+ * shared holder before the review surface opens — see that method's own doc
+ * for the `decideRebuild`/staleness handling the design note
+ * (`docs/dev/one-assembly-path.md` §3a/§3b, private repo) called for.
+ *
+ * What stays genuinely true: the composition Start freezes carries **no**
+ * course/topic/concept steering — `composeDefaultStudySession`'s own doc in
+ * `main.ts` states it calls the session-builder assembly "with no
+ * course/topic/concept steering" and C5.5's declared default budget. Home's
+ * own inline steering inputs (`renderSteeringControls`, held as this view's
+ * sticky local state, § above) are never threaded into that call, so
+ * whatever course or topic she just picked on Home is not what Start
+ * freezes; pressing Start still sits the plain default-budget composition.
+ * `[D-382]` (open, `ol-egov.141.89.10.62`) frames the open question this
+ * leaves — whether Home's live preview sentence and the frozen session's may
+ * honestly diverge, or whether Home's steering should thread into Start's
+ * composition instead — and is not decided here.
  *
  * **The per-course coverage strip is a REDUCED-size read of the same grove
  * `GroveView` already renders**, not a second computation: `./provider.ts`

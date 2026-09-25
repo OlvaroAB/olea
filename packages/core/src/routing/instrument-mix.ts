@@ -84,7 +84,7 @@
  * answers "which types", not "how many minutes"; that is a separate,
  * not-yet-filed bead.
  *
- * ## Where it runs, and what has no caller yet
+ * ## Where it runs, and who calls it (corrected — `ol-egov.141.89.41`, was stale)
  *
  * `docs/Olea_component_register.md` row 2.2: boundary **service**... but this
  * module itself is pure arithmetic with no model call, no different from
@@ -95,15 +95,21 @@
  * client-side values by the time 2.2 would run. Nothing in this module makes
  * a network call.
  *
- * **No caller exists yet, deliberately** (same shape `../concept/knowledge-kind.js`
- * documents for its own entry point). Component register row 2.2's three
- * named inputs — the knowledge-type label from 1.5, concept size from 1.3,
- * and the concept's existing instrument inventory — are, in the register's
- * own words, "themselves unbuilt, so this sits two hops behind ready
- * inputs." `ConceptInstrumentInventory` below is this module's own minimal
- * shape for the third input, not a claim that a real inventory-tracking
- * component exists; wiring `routeKnowledgeKind` to `../concept/knowledge-kind.js`'s
- * output and to a real inventory reader is future work, not this bead's.
+ * **A production caller has existed since `ol-tz7v` [WIRE-7]; this doc's
+ * former "no caller exists yet" claim was stale.** `routeKnowledgeKindClassification`
+ * and `instrumentMixGaps` are called together inside `decideConceptRouting`
+ * (`packages/plugin/src/generation/routing.ts:237-238`, that function itself
+ * starting at line 233), which `runGenerationSweep`
+ * (`packages/plugin/src/generation/pipeline.ts:430`) calls once per
+ * undrafted candidate; `runGenerationSweep` is what `onUnitsLanded`'s
+ * `this.generation.sweep(...)` call runs (`packages/plugin/src/main.ts:2735`),
+ * fired by the ingestion tick. `ConceptInstrumentInventory` is populated by a
+ * real reader too — `buildConceptInstrumentInventory` (same `routing.ts`)
+ * walks the vault via `enumerateVaultInstruments` rather than a mock — so
+ * both of the component register's "themselves unbuilt" inputs for this row
+ * no longer hold; see `routing.ts`'s own module doc for the one disclosed gap
+ * that reader still carries (no `explain-back` instruments are enumerated
+ * yet, so that count is always zero).
  */
 
 import type { InstrumentType } from 'olea-contracts';
