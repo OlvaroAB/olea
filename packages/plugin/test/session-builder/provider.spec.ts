@@ -223,7 +223,15 @@ function findWidgetItem(model: { items: readonly { conceptName: string; gapScore
 describe('createLocalSessionBuilderProvider — retrievability threading (RANK-3, ol-v7r5.4)', () => {
   it('with recall-tier review history, a degraded recall reading changes the composed gapScore from the neutral (recall = 1) reading', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
-    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    // [D-264] ruling 1: only a review that SUCCEEDED at `independent` support
+    // is eligible recall evidence for readiness — an unaided review (the
+    // ranking's retrievability now reads `readReadinessRecall`, `ol-v7r5.54`)
+    // no longer threads for a mere attempt (the old default here was a
+    // failing `'again'` rating with no support level, which the vitality
+    // fold used to count but the readiness fold does not).
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
+    ]);
 
     const neutralProvider = createLocalSessionBuilderProvider({
       vault,
@@ -663,7 +671,12 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
 
   it('a second load() call with the same request, while the sitting is still open, reuses the frozen composition instead of recomputing', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
-    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    // [D-264] ruling 1: `scheduler.retrievability()` is only queried for an
+    // instrument with an eligible (independent-support) success — see the
+    // retrievability-threading block's own note above.
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
+    ]);
     const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
 
     const provider = createLocalSessionBuilderProvider({
@@ -688,7 +701,11 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
 
   it('a budget change — an explicit new ask — always rebuilds, even mid-sitting: the frozen-sitting contract does not apply to a request she changed herself', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
-    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    // [D-264] ruling 1, as above: an eligible (independent-support) success
+    // so `scheduler.retrievability()` is actually queried.
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
+    ]);
     const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
 
     const provider = createLocalSessionBuilderProvider({
@@ -709,7 +726,11 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
 
   it('endSitting() releases the freeze: the next load() with the same request rebuilds rather than reusing what was frozen', async () => {
     const { conceptKey, instrumentId } = await widgetIdentity();
-    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    // [D-264] ruling 1, as above: an eligible (independent-support) success
+    // so `scheduler.retrievability()` is actually queried.
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
+    ]);
     const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
 
     const provider = createLocalSessionBuilderProvider({
