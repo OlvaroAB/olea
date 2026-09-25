@@ -2,7 +2,7 @@
  * F8.8's computation (`[POST-1]`, `[D-134]`). Fixture ids are opaque
  * (INV-3): no real course code or concept name anywhere in this file.
  */
-import type { ReviewLogRecord } from 'olea-contracts';
+import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptCourses } from '../insights/types.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
@@ -169,6 +169,70 @@ describe('buildRetrospective', () => {
   it('is a pure function: identical input twice yields byte-identical output', () => {
     const input = baseInput();
     expect(buildRetrospective(input)).toEqual(buildRetrospective(input));
+  });
+
+  it('`[D-281]` item 4 (ol-a07q, ol-v7r5.69): a `rejected` verdict against the qualifying instrument excludes its evidence from the displayed stage', () => {
+    // `c-held`'s vitality still needs a recall-tier attempt to read `holding`
+    // (the scheduler stub above configures `qa:c-held:1` at 0.9) — this is
+    // the SAME baseline entry `baseInput()` already supplies for `c-held`.
+    const heldReview = review('c-held', '2026-08-30', 'e1');
+    const qualifyingExplainBack: ReviewLogRecord = {
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'eb-1',
+      timestamp: '2026-08-29T09:00:00+00:00',
+      instrumentId: 'eb:c-held:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c-held'],
+      rating: null,
+      wasUnsure: false,
+      durationMs: 4000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['explain-back'],
+        planVersion: null,
+      },
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    };
+    // A real refusal, not a mere suspend — the proven-invalid signal D-281
+    // item 4 and ol-v7r5.69's close reason both require.
+    const rejectedVerdict: ReviewLogEntry = {
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'verdict-1',
+      timestamp: '2026-08-29T09:30:00+00:00',
+      instrumentId: 'eb:c-held:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c-held'],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+
+    const withoutRejection = buildRetrospective(
+      baseInput({ entries: [heldReview, qualifyingExplainBack] }),
+    );
+    const withRejection = buildRetrospective(
+      baseInput({ entries: [heldReview, qualifyingExplainBack, rejectedVerdict] }),
+    );
+
+    const stageWithout = withoutRejection.held.find((c) => c.conceptId === 'c-held')?.stage;
+    const stageWith = withRejection.held.find((c) => c.conceptId === 'c-held')?.stage;
+
+    expect(stageWithout).toBe('tree');
+    // The exact regression this bead fixes: before the fix, `buildRetrospective`
+    // called `computeConceptMastery` with no `invalidInstrumentIds` at all, so
+    // a rejected verdict never reached the fold and the displayed stage stayed
+    // `tree`.
+    expect(stageWith).not.toBe('tree');
   });
 });
 

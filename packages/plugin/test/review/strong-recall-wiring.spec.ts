@@ -332,6 +332,67 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     expect(decision).not.toHaveProperty('instrumentId');
     expect(decision).not.toHaveProperty('dueAt');
   });
+
+  it("`[D-281]` item 4 (ol-a07q, ol-v7r5.69): a `rejected` verdict against the sole qualifying explain-back drops the concept out of `tree` — the reopening branch above (state === 'tree') no longer fires, and a fresh misconception is answered as `stage-below-sapling` instead of `reopened-by-misconception`", () => {
+    // One qualifying explain-back is enough to reach `tree` alone (no other
+    // recall-tier reviews needed) — the same minimal shape
+    // `registry/build.invalid-instruments.spec.ts` (olea-core) uses to prove
+    // the identical fold directly.
+    const entries: ReviewLogEntry[] = [
+      review({
+        eventId: 'eb-1',
+        timestamp: '2026-08-19T10:00:00+00:00',
+        conceptIds: ['concept-tree'],
+        instrumentType: 'explain-back',
+        instrumentId: 'inst-eb-1',
+        rating: null,
+        explainBackGrade: { soloLevel: 'relational' },
+      }),
+      misconception({
+        eventId: 'm-1',
+        timestamp: '2026-08-20T08:30:00+00:00',
+        conceptIds: ['concept-tree'],
+      }),
+    ];
+
+    const withoutRejection = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const decisionWithout = withoutRejection({ conceptIds: ['concept-tree'] });
+    expect(decisionWithout.shouldPropose).toBe(true);
+    if (!decisionWithout.shouldPropose) throw new Error('expected the reopening branch to fire');
+    expect(decisionWithout.reason.kind).toBe('reopened-by-misconception');
+
+    // A real refusal, not a mere suspend — the proven-invalid signal D-281
+    // item 4 and ol-v7r5.69's close reason both require.
+    const rejectedVerdict: ReviewLogEntry = {
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'verdict-1',
+      timestamp: '2026-08-19T10:30:00+00:00',
+      instrumentId: 'inst-eb-1',
+      instrumentType: 'explain-back',
+      conceptIds: ['concept-tree'],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+
+    const withRejection = createStrongRecallProposalReader({
+      entries: [...entries, rejectedVerdict],
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const decisionWith = withRejection({ conceptIds: ['concept-tree'] });
+
+    // The exact regression this bead fixes: before the fix,
+    // `createStrongRecallProposalReader` called `computeAllConceptMastery`
+    // with no `invalidInstrumentIds` at all, so a rejected verdict never
+    // reached the fold, the concept stayed at `tree`, and the reopening
+    // branch (which requires `state === 'tree'`) still fired.
+    expect(decisionWith).toEqual({ shouldPropose: false, because: 'stage-below-sapling' });
+  });
 });
 
 /**

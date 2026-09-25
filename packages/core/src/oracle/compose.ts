@@ -103,6 +103,7 @@ import type {
 import { readAllConceptReadiness } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import { computeAllConceptMastery } from '../mastery/rollup.js';
+import type { InstrumentValidityProjection } from '../mastery/validity.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
 import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
 import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
@@ -344,8 +345,21 @@ export async function composeOracleRanking(
   // record's `conceptIds`, so this is the join that used to silently miss
   // every entry before the coordinated flip.
   const conceptKeys = [...new Set(edges.edges.map((edge) => edge.conceptKey))].sort();
-  const mastery = computeAllConceptMastery(reviewLog, conceptKeys);
-  const retrievabilityScores = resolveRetrievabilityScores(reviewLog, conceptKeys, retrievability);
+  // `ol-a07q` (`[D-281]` item 4): the same proven-invalid projection
+  // `resolveRetrievabilityScores` below already needed is folded once, here,
+  // and threaded to both — a rejected verdict or a corrected contest against
+  // an instrument must drop its evidence from the mastery this composition
+  // hands `rankOracle`, the same as it already dropped it from readiness.
+  const validity = projectInstrumentValidity(reviewLog);
+  const mastery = computeAllConceptMastery(reviewLog, conceptKeys, {
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+  });
+  const retrievabilityScores = resolveRetrievabilityScores(
+    reviewLog,
+    conceptKeys,
+    retrievability,
+    validity,
+  );
   const tiebreakEligible = resolveTiebreakEligibleConcepts(
     reviewLog,
     asOf,
@@ -463,12 +477,13 @@ export function resolveTiebreakEligibleConcepts(
  * eligible for vitality and still counts toward mastery, but carries no
  * eligible recall evidence for readiness. `readAllConceptReadiness` needs an
  * `InstrumentValidityProjection` (proven-invalid instruments excluded from
- * every current reading, per `[D-338]` item 3); this composition builds it
- * fresh from the same `reviewLog` it already has via
- * `projectInstrumentValidity` (`../mastery/validity.js`) rather than
- * threading a second required input onto `ComposeRetrievabilityInput` — it
- * is a pure fold over the log alone, so there is nothing a caller could
- * supply that this composition cannot derive itself.
+ * every current reading, per `[D-338]` item 3) — `composeOracleRanking`
+ * folds `reviewLog` through `projectInstrumentValidity`
+ * (`../mastery/validity.js`) exactly once and passes the result in here
+ * (`ol-a07q`), rather than this function re-folding the same log a second
+ * time; the mastery join above reads the identical projection for its own
+ * `invalidInstrumentIds`, so the two readers cannot disagree about which
+ * instrument is proven invalid.
  *
  * A concept with no eligible recall-tier instrument (`readAllConceptReadiness`'s
  * `weakest === null` — no evidence, recognition-only, never-practised, or
@@ -483,10 +498,10 @@ function resolveRetrievabilityScores(
   reviewLog: readonly ReviewLogEntry[],
   conceptKeys: readonly string[],
   retrievabilityInput: ComposeRetrievabilityInput | undefined,
+  validity: InstrumentValidityProjection,
 ): ReadonlyMap<string, number> | undefined {
   if (retrievabilityInput === undefined) return undefined;
   const { scheduler, now } = retrievabilityInput;
-  const validity = projectInstrumentValidity(reviewLog);
   const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity);
   const scores = new Map<string, number>();
   for (const [conceptKey, reading] of readings) {

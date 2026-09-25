@@ -364,6 +364,70 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const masteryEntry = result.mastery.get(widgetKey);
     expect(masteryEntry?.evidence.scoredSuccessCount).toBe(1);
   });
+
+  it("`[D-281]` item 4 (ol-a07q, ol-v7r5.69): a `rejected` verdict against the qualifying instrument excludes its evidence from the mastery this composition hands to the ranking — the fold this composition's own module doc names as `rankOracle`'s one mastery producer", async () => {
+    const qualifyingExplainBack: ReviewLogRecord = {
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'eb-1',
+      timestamp: '2026-01-20T09:00:00-04:00',
+      instrumentId: 'qa:widget-theory:1',
+      instrumentType: 'explain-back',
+      conceptIds: [widgetKey],
+      rating: null,
+      wasUnsure: false,
+      durationMs: 4000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['explain-back'],
+        planVersion: null,
+      },
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    };
+    // A real refusal (`../review-log/verdicts.ts`), not a mere suspend — the
+    // proven-invalid signal D-281 item 4 and ol-v7r5.69 both require.
+    const rejectedVerdict: ReviewLogEntry = {
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'verdict-1',
+      timestamp: '2026-01-21T09:00:00-04:00',
+      instrumentId: 'qa:widget-theory:1',
+      instrumentType: 'explain-back',
+      conceptIds: [widgetKey],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+
+    const withoutRejection = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [qualifyingExplainBack],
+      asOf: '2026-08-15',
+      concepts,
+    });
+    const withRejection = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [qualifyingExplainBack, rejectedVerdict],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    expect(withoutRejection.mastery.get(widgetKey)?.state).toBe('tree');
+    // The exact regression this bead fixes: before the fix, `composeOracleRanking`
+    // called `computeAllConceptMastery` with no `invalidInstrumentIds` at all,
+    // so a rejected verdict never reached the fold and the stage stayed `tree`.
+    expect(withRejection.mastery.get(widgetKey)?.state).not.toBe('tree');
+  });
 });
 
 describe("composeOracleRanking — threading oracle.rank.v1's reasoning through (`ol-3ux7.5.57.14.53`)", () => {

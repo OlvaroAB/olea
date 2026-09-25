@@ -81,6 +81,7 @@ import {
   conceptVitalityInstruments,
   evaluateStrongRecallProposal,
   HOLDING_CUT,
+  projectInstrumentValidity,
   readVitality,
   replaySchedulerStates,
 } from 'olea-core';
@@ -185,6 +186,12 @@ export function createStrongRecallProposalReader(
   const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const memo = new Map<string, StrongRecallProposalDecision>();
   let replayed: ReplayResult | null = null;
+  // `ol-a07q` (`[D-281]` item 4): folded once, lazily, over the SAME `deps.entries`
+  // this module already closes over — never re-derived per concept. A
+  // rejected verdict or a contest resolved `corrected` against an instrument
+  // must drop its evidence here too, the same as every other mastery reader
+  // (`../../../core/src/mastery/validity.ts`, `ol-v7r5.69`'s close reason).
+  let invalidInstrumentIds: readonly string[] | null = null;
 
   function decide(conceptId: string): StrongRecallProposalDecision {
     const cached = memo.get(conceptId);
@@ -193,8 +200,11 @@ export function createStrongRecallProposalReader(
     // Once per session, on the first grade — never once per grade, and never
     // at open, so a session she never rates costs nothing.
     replayed ??= replaySchedulerStates(deps.entries, deps.scheduler);
+    invalidInstrumentIds ??= [...projectInstrumentValidity(deps.entries).provenInvalid.keys()];
 
-    const mastery = computeAllConceptMastery(deps.entries, [conceptId]).get(conceptId);
+    const mastery = computeAllConceptMastery(deps.entries, [conceptId], {
+      invalidInstrumentIds,
+    }).get(conceptId);
     const decision: StrongRecallProposalDecision =
       mastery === undefined
         ? { shouldPropose: false, because: 'stage-below-sapling' }

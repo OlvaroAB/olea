@@ -29,6 +29,7 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import { computeConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import type {
   RetrospectiveCarriesLine,
   RetrospectiveConceptLine,
@@ -94,6 +95,13 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     input.holdingCut,
   );
   const courseSets = courseSetsByConcept(input.conceptCourses);
+  // `ol-a07q` (`[D-281]` item 4): the displayed stage must exclude evidence
+  // from an instrument proven invalid — a `rejected` verdict or a contest
+  // resolved `corrected` (`../mastery/validity.ts`, `ol-v7r5.69`'s close
+  // reason) — the same fold `../registry/build.ts`'s `buildRegistryModel`
+  // already threads into its own stage read. Folded once over the whole
+  // input log, not per concept.
+  const invalidInstrumentIds = [...projectInstrumentValidity(entries).provenInvalid.keys()];
 
   const held: RetrospectiveConceptLine[] = [];
   const faded: RetrospectiveConceptLine[] = [];
@@ -114,7 +122,7 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
       continue; // too-early concepts carry no durable evidence for `carries` to read.
     }
 
-    const { state } = computeConceptMastery(entries, conceptId);
+    const { state } = computeConceptMastery(entries, conceptId, { invalidInstrumentIds });
     const line: RetrospectiveConceptLine = {
       conceptId,
       conceptName,
