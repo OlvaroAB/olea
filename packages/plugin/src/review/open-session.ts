@@ -113,18 +113,20 @@ import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import { evaluateSchedulingObservationRouting } from '../grading/wiring.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
+import { createVaultMisconceptionStore } from '../misconception/store.js';
 import type { StudySessionHolder } from '../session/holder.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
-import type {
-  Clock,
-  EditPort,
-  ExplainBackOfferLogPort,
-  NoteExistsPort,
-  ReviewLogPort,
-  SuspendPort,
+import {
+  type Clock,
+  createVaultResolutionEvidenceAppendPort,
+  type EditPort,
+  type ExplainBackOfferLogPort,
+  type NoteExistsPort,
+  type ReviewLogPort,
+  type SuspendPort,
 } from './ports.js';
 import {
   adaptExecutedReviewQueue,
@@ -452,6 +454,34 @@ export async function openReviewSession(
       composed.instruments.records,
     );
 
+    // M2 resolution evidence (`ol-egov.141.89.6.35`, discovered-from
+    // `ol-egov.141.89.6.32`/`ol-egov.141.89.6.19`): the local misconception
+    // projection, read ONCE at composition time over `input.vault`/
+    // `input.deviceId` — the same "needs the whole local misconception
+    // projection, which a per-review-write port neither holds nor should
+    // learn to compute" reason `ports.ts`'s `MisconceptionLookupPort` doc
+    // gives for assigning this read to exactly this module, the same
+    // per-vault-state pattern `liveSchedulingObservations` below follows for
+    // `evaluateSchedulingObservationRouting`. `createVaultMisconceptionStore`
+    // is the same store `main.ts` already calls for
+    // `assessmentErrorAdjacency`: `load()` folds BOTH streams
+    // (`.olea/misconceptions/` and the review log's `misconception-observed`
+    // picks) through `olea-core`'s `projectMisconceptionsFromAllSources`, so
+    // a wrong-MCQ-pick misconception counts here exactly as an authored one
+    // does. `null` (an unreadable vault) reads as "no open misconception
+    // known" — the same honest-absence posture `main.ts` already takes for
+    // the identical `load()` result — never fabricated as "yes".
+    const misconceptionRecords = await createVaultMisconceptionStore({
+      vault: input.vault,
+      deviceId: input.deviceId,
+      now: () => now,
+    }).load();
+    const openMisconceptionConceptIds = new Set(
+      (misconceptionRecords ?? [])
+        .filter((record) => record.status === 'active' || record.status === 'fading')
+        .map((record) => record.conceptId),
+    );
+
     const adapterInput = {
       items: executed.items,
       recordsById: composed.recordsById,
@@ -554,6 +584,22 @@ export async function openReviewSession(
         scheduler: input.scheduler,
         now,
       }),
+      // M2 resolution evidence: always wired, unconditionally, same posture
+      // as `evaluateSchedulingObservationRouting`/`stampOnFirstSight` above —
+      // this is a durability write onto an already-decided outcome
+      // (`decideResolutionEvidence`, pure, lives in `session.ts`), not an AI
+      // feature with an "un-greyed" gate. `misconceptionLookup` closes over
+      // the SAME `openMisconceptionConceptIds` projection read once above;
+      // `resolutionEvidenceAppend` is `ports.ts`'s real, `VaultSource`-backed
+      // append path, over the same `input.vault`/`input.deviceId` every
+      // other real port in this call already uses.
+      misconceptionLookup: {
+        hasOpenMisconceptionOnConcept: (conceptId) => openMisconceptionConceptIds.has(conceptId),
+      },
+      resolutionEvidenceAppend: createVaultResolutionEvidenceAppendPort(
+        input.vault,
+        input.deviceId,
+      ),
     });
 
     return {
