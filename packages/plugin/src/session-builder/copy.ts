@@ -307,11 +307,23 @@ export function countdownLine(model: Pick<StudySessionModel, 'nextAssessment'>):
  * The sentence itself no longer names "a quiz": the declared table now maps
  * several words (quiz, test, exam, midterm, final, mcq) to `'recall-style'`,
  * so a fixed noun would be wrong for most of them.
+ *
+ * **Reads each item's own match, never the session-level `formatPreference`**
+ * (`ol-v7r5.82`, discovered from `ol-v7r5.42` [COMP-1]). `build.ts`'s own doc
+ * on `StudySessionModel.formatPreference` says it plainly: that field is the
+ * session-wide "what does she meet next, across every course here" value,
+ * "not what any one item's `formatMatch` was chosen against" — each course's
+ * own block is matched against that course's own nearest assessment,
+ * resolved separately. A composed multi-course session can carry
+ * `formatPreference: 'written'` (a different course's essay falls sooner)
+ * while a course whose own nearest assessment is recall-style still fills
+ * with `formatMatch: 'preferred-format'` items — correctly, and the sentence
+ * must still show for it. F2.17/F4.8 define one session-level sentence, not
+ * per-course wording, so this stays the single existing sentence — only
+ * *when* it shows changes, to track whether any course block was actually
+ * matched.
  */
-export function formatPreferenceLine(
-  model: Pick<StudySessionModel, 'formatPreference' | 'items'>,
-): string | null {
-  if (model.formatPreference !== 'recall-style') return null;
+export function formatPreferenceLine(model: Pick<StudySessionModel, 'items'>): string | null {
   if (!model.items.some((item) => item.formatMatch === 'preferred-format')) return null;
   return 'Multiple-choice questions come first here, to match the format of your next assessment.';
 }

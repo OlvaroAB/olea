@@ -441,6 +441,41 @@ describe('the format line explains a preference only when one actually fired', (
       ),
     ).toBeNull();
   });
+
+  it('fires from a matched course block even while the session-level next assessment is a different format (ol-v7r5.82)', () => {
+    // `build.ts`'s own doc on `StudySessionModel.formatPreference`: it is
+    // the SESSION-WIDE soonest assessment across every course, not what any
+    // one item's `formatMatch` was chosen against (`ol-v7r5.42` [COMP-1]).
+    // A composed multi-course session can read `formatPreference: 'written'`
+    // (a different course's essay falls sooner) while THIS course's own
+    // nearest assessment is recall-style and its block is genuinely
+    // matched — `formatMatch: 'preferred-format'` on its items says so. The
+    // sentence must still show: it is driven by whether any course block
+    // was actually matched, never by the session-level next-assessment
+    // format alone.
+    expect(
+      formatPreferenceLine(
+        model({
+          formatPreference: 'written',
+          items: [item({ formatMatch: 'preferred-format' })],
+        }),
+      ),
+    ).toBe(
+      'Multiple-choice questions come first here, to match the format of your next assessment.',
+    );
+    // Same for `'unknown'` and `'practical'` — the per-course match is what
+    // decides, not the session-level value.
+    expect(
+      formatPreferenceLine(
+        model({
+          formatPreference: 'unknown',
+          items: [item({ formatMatch: 'preferred-format' })],
+        }),
+      ),
+    ).toBe(
+      'Multiple-choice questions come first here, to match the format of your next assessment.',
+    );
+  });
 });
 
 // --------------------------------------------------------------------------
