@@ -323,6 +323,137 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
   });
 });
 
+describe("composeOracleRanking — threading oracle.rank.v1's reasoning through (`ol-3ux7.5.57.14.53`)", () => {
+  let root: string;
+  let source: FolderSource;
+  let concepts: readonly ConceptRecord[];
+  let widgetKey: string;
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-oracle-compose-reasons-'));
+    source = new FolderSource(root);
+    await write(
+      '05 Zettelkasten/Widget theory.md',
+      '---\ntopic: Widget theory\n---\n\n# Widget theory\n',
+    );
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n',
+    );
+
+    concepts = await extractConcepts(source, {});
+    const widget = concepts.find((c) => c.name === 'Widget theory');
+    if (widget === undefined) throw new Error('expected "Widget theory" to extract');
+    widgetKey = widget.key;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('is empty when no `rankedReasons` input is supplied — every caller today, since oracle.rank.v1 has no production caller', async () => {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    expect(result.rankedReasons.size).toBe(0);
+  });
+
+  it("re-keys a supplied reason from conceptName onto this composition's own conceptKey", async () => {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+      rankedReasons: new Map([
+        ['Widget theory', 'the past paper weights this heavily and she has not reviewed it yet'],
+      ]),
+    });
+
+    expect(result.rankedReasons.size).toBe(1);
+    expect(result.rankedReasons.get(widgetKey)).toBe(
+      'the past paper weights this heavily and she has not reviewed it yet',
+    );
+    // Never keyed by the display name — the same "opaque key, not the name"
+    // discipline `mastery` above already holds.
+    expect(result.rankedReasons.has('Widget theory')).toBe(false);
+  });
+
+  it('drops a reason naming a concept this composition resolved no key for, silently — no-op, matching every other absent-signal lookup on this path', async () => {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+      rankedReasons: new Map([['A concept that does not exist here', 'invented reason']]),
+    });
+
+    expect(result.rankedReasons.size).toBe(0);
+  });
+
+  it("never reads or echoes `ConceptPriority.reasoning` (the deterministic core's own, STY-2-banned string) into `rankedReasons`", async () => {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+    // The deterministic reasoning exists on the ranking entry itself...
+    expect(entry?.reasoning).toBeTruthy();
+    // ...but with no `rankedReasons` input, the LLM-sourced map stays empty
+    // regardless — the two are never conflated.
+    expect(result.rankedReasons.size).toBe(0);
+  });
+});
+
 describe('composeOracleRanking — ol-5y40: a casing slip in her topic value must not read as a material-gap', () => {
   let root: string;
   let source: FolderSource;

@@ -186,6 +186,35 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    */
   readonly resolveTiebreakSourceVersion?: (instrumentId: string) => string | undefined;
   readonly options?: RankOracleOptions;
+  /**
+   * `oracle.rank.v1`'s one-clause reasoning per concept (`ol-3ux7.5.57.14.53`),
+   * keyed by the Worker task's own `conceptName` spelling
+   * (`OracleConceptRanking.reasoning`, prompt v1.2.0, `ol-3ux7.5.57.14.44`
+   * [HARD-23]) — the shape a caller receives straight from a grounded
+   * `OracleRankResponse.rankings` (olea-service's `src/tasks/oracleRank.ts`;
+   * `groundRankings` there already guarantees `conceptName` echoes a real
+   * candidate's own spelling byte-for-byte). This composition is where the
+   * join from a display name to this session's own opaque `conceptKey`
+   * already happens for every other per-concept signal
+   * ({@link resolveCaseInsensitiveConceptKeys}, `retrievability` above) —
+   * the natural seam for this one too: a caller supplies names,
+   * {@link ComposeOracleRankingResult.rankedReasons} on the result reads
+   * keys.
+   *
+   * **Omit — as every caller does today.** `oracle.rank.v1` has no
+   * production caller anywhere in either repo (that task's own module doc);
+   * `ol-egov.142.2` is filed to give it one. Until then this composition's
+   * `rankedReasons` output is always empty, which is the honest state of
+   * production, not a placeholder standing in for a real one.
+   *
+   * **Never `ConceptPriority.reasoning`.** This module already produces
+   * that field on every ranked entry (`rank.ts`'s deterministic,
+   * mechanically-assembled trail) and this input is not it, does not
+   * derive from it, and is never folded into it — two different producers,
+   * kept apart the same way `packages/plugin/src/gap/copy.ts`'s STY-2 ban
+   * already keeps `ConceptPriority.reasoning` off her screen.
+   */
+  readonly rankedReasons?: ReadonlyMap<string, string>;
 }
 
 export interface ComposeOracleRankingResult {
@@ -207,6 +236,21 @@ export interface ComposeOracleRankingResult {
    * unaffected.
    */
   readonly mastery: ReadonlyMap<string, ConceptMasteryResult>;
+  /**
+   * {@link ComposeOracleRankingInput.rankedReasons}, re-keyed from concept
+   * name to this composition's own `conceptKey` — see that field's doc.
+   * Always present, empty when the input was omitted or named no concept
+   * this composition's edges actually resolved a key for (additive,
+   * `ol-3ux7.5.57.14.53`; existing callers reading only `ranking`/`edges`/
+   * `mastery` are unaffected).
+   *
+   * **Not yet wired to any production caller.** `study-session/build.ts`'s
+   * `BuildStudySessionInput.rankedReasons` takes the identical key-keyed
+   * shape, but threading THIS map into THAT input is `study-session/
+   * compose.ts`'s call (outside this bead's owned files) once
+   * `ol-egov.142.2` gives `oracle.rank.v1` a caller to source it from.
+   */
+  readonly rankedReasons: ReadonlyMap<string, string>;
 }
 
 /**
@@ -290,6 +334,7 @@ export async function composeOracleRanking(
     options,
     retrievability,
     resolveTiebreakSourceVersion,
+    rankedReasons,
     ...edgeOptions
   } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
@@ -324,7 +369,42 @@ export async function composeOracleRanking(
     ...(options !== undefined ? { options } : {}),
   });
 
-  return { ranking, edges, mastery };
+  return {
+    ranking,
+    edges,
+    mastery,
+    rankedReasons: resolveRankedReasonsByKey(edges, rankedReasons),
+  };
+}
+
+/**
+ * `ol-3ux7.5.57.14.53`: re-keys {@link ComposeOracleRankingInput.rankedReasons}
+ * from `oracle.rank.v1`'s own `conceptName` spelling onto this composition's
+ * `conceptKey`, using the identical (post-case-resolution) `edges.edges`
+ * name→key join `resolveCaseInsensitiveConceptKeys` already produced above —
+ * no second, independent name resolution invented here. A name the input
+ * names that this composition's edges never resolved a key for (a concept
+ * this ranking has no evidence for at all) is dropped silently, the same
+ * "absent signal, no-op" posture {@link resolveRetrievabilityScores} and
+ * every optional per-concept lookup on this path already take. First edge
+ * wins on a same-name collision, matching {@link resolveCaseInsensitiveConceptKeys}'s
+ * own tiebreak.
+ */
+function resolveRankedReasonsByKey(
+  edges: BuildConceptAssessmentEdgesResult,
+  rankedReasons: ReadonlyMap<string, string> | undefined,
+): ReadonlyMap<string, string> {
+  if (rankedReasons === undefined || rankedReasons.size === 0) return new Map();
+  const keyByName = new Map<string, string>();
+  for (const edge of edges.edges) {
+    if (!keyByName.has(edge.conceptName)) keyByName.set(edge.conceptName, edge.conceptKey);
+  }
+  const byKey = new Map<string, string>();
+  for (const [name, reason] of rankedReasons) {
+    const key = keyByName.get(name);
+    if (key !== undefined) byKey.set(key, reason);
+  }
+  return byKey;
 }
 
 /**

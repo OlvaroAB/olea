@@ -361,6 +361,32 @@ export interface StudySessionItem {
    * (see `queue/types.ts`'s `QueueItemReason` doc for both values).
    */
   readonly dedupeReason?: QueueItemReason;
+  /**
+   * `oracle.rank.v1`'s one-clause reasoning for this item's concept
+   * (olea-service's `src/tasks/oracleRank.ts`, prompt v1.2.0,
+   * `ol-3ux7.5.57.14.44` [HARD-23]) — model-authored, citation-grounded,
+   * disciplined to one clause naming the decisive factor. `undefined` when
+   * the caller supplied no {@link BuildStudySessionInput.rankedReasons} for
+   * this row's `conceptKey` — **every caller today**, since `oracle.rank.v1`
+   * has no production caller anywhere in either repo yet (that task's own
+   * module doc; `ol-egov.142.2` is filed to give it one).
+   *
+   * **Never `GapRow.reasoning` / `ConceptPriority.reasoning`.** Those name
+   * the deterministic core's own mechanically-assembled audit trail
+   * (`../oracle/rank.ts`'s `buildReasoning`) — STY-2
+   * (`packages/plugin/src/gap/copy.ts`'s `masteryGapLine`) already bans that
+   * string from display, and this field is never populated from it, derived
+   * from it, or a synonym for it: a wholly separate producer, and this
+   * module never reads `row.reasoning` to fill it.
+   *
+   * **Held, not shown by default (F2.22).** "Per-item reasons are available
+   * on request and never shown by default... The reason exists for every
+   * item and she can always ask for it; what is ruled here is where it is
+   * displayed, not whether it is held." This field is the holding; F2.22's
+   * on-request render call site is `ol-3ux7.5.57.14.54`, not this module —
+   * nothing here decides or builds a surface for it.
+   */
+  readonly rankedReason?: string;
 }
 
 /** One considered concept the session does not contain, and why. */
@@ -564,6 +590,26 @@ export interface BuildStudySessionInput {
    * behaves the same as an absent map for that one item.
    */
   readonly obligationClasses?: ReadonlyMap<string, ObligationClass>;
+  /**
+   * `oracle.rank.v1`'s one-clause reasoning per concept, keyed by
+   * `conceptKey` (`ol-3ux7.5.57.14.53`) — a caller-supplied lookup exactly
+   * like {@link obligationClasses} above and {@link arrivalDays} below, never
+   * a member of `GapRow` and never re-derived from one. **Omitted entirely
+   * means every item's {@link StudySessionItem.rankedReason} is `undefined`**
+   * — every caller today, since `oracle.rank.v1` has no production caller
+   * yet (see that field's doc). A `conceptKey` absent from the map behaves
+   * the same as an absent map, for that one item only.
+   *
+   * **Never `GapRow.reasoning`.** That field is `ConceptPriority`'s own
+   * mechanically-assembled audit trail (the deterministic core's, computed
+   * with no model call), already banned from display by STY-2
+   * (`packages/plugin/src/gap/copy.ts`'s `masteryGapLine`); this map's
+   * values come from a wholly different producer — `oracle.rank.v1`'s
+   * model-authored, citation-grounded, one-clause `reasoning` (prompt
+   * v1.2.0, `ol-3ux7.5.57.14.44` [HARD-23]) — and this module never reads
+   * `GapRow.reasoning` to populate it.
+   */
+  readonly rankedReasons?: ReadonlyMap<string, string>;
   /**
    * `[D-240]` item 2 (`ol-2zfj.71` [SESS-7]): every instrument's replayed FSRS
    * state, keyed by `instrumentId` — `ReplayResult.states` folded to its
@@ -1198,6 +1244,11 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
           )
             ? 'recall-overdue'
             : undefined;
+          // `ol-3ux7.5.57.14.53`: `oracle.rank.v1`'s one-clause reasoning,
+          // threaded through verbatim from the caller's own lookup — never
+          // `queue.row.reasoning` (the deterministic core's own, STY-2-banned
+          // from display). See `StudySessionItem.rankedReason`'s doc.
+          const rankedReason = input.rankedReasons?.get(queue.row.conceptKey);
           items.push({
             position: items.length + 1,
             instrumentId: record.instrumentId,
@@ -1215,6 +1266,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
             ...(supportLevel !== undefined ? { supportLevel } : {}),
             ...(obligationClass !== undefined ? { obligationClass } : {}),
             ...(dedupeReason !== undefined ? { dedupeReason } : {}),
+            ...(rankedReason !== undefined ? { rankedReason } : {}),
           });
           queue.chose = true;
           taken = true;

@@ -1603,6 +1603,82 @@ describe('obligationClasses threaded onto each StudySessionItem (F6.7, `ol-y237`
 });
 
 // ---------------------------------------------------------------------------
+// `oracle.rank.v1`'s one-clause reasoning, threaded through verbatim
+// (`ol-3ux7.5.57.14.53`)
+// ---------------------------------------------------------------------------
+
+describe('rankedReasons threaded onto each StudySessionItem (`ol-3ux7.5.57.14.53`)', () => {
+  it('every StudySessionItem carries no rankedReason at all when no rankedReasons map is supplied — the state of every caller today', () => {
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(Object.hasOwn(session.items[0] ?? {}, 'rankedReason')).toBe(false);
+  });
+
+  it("attaches the supplied map's reason for the item's own conceptKey, verbatim — never re-derived", () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      rankedReasons: new Map([
+        ['A', 'the past paper weights this heavily and she has not reviewed it yet'],
+        ['B', 'her objectives name this as core and mastery is still seed'],
+      ]),
+    });
+
+    expect(session.items.map((i) => [i.conceptName, i.rankedReason])).toEqual([
+      ['A', 'the past paper weights this heavily and she has not reviewed it yet'],
+      ['B', 'her objectives name this as core and mastery is still seed'],
+    ]);
+  });
+
+  it('a conceptKey absent from the map behaves the same as an absent map, for that one item only', () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      rankedReasons: new Map([['A', 'reason for A only']]),
+    });
+
+    const byName = new Map(session.items.map((i) => [i.conceptName, i]));
+    expect(byName.get('A')?.rankedReason).toBe('reason for A only');
+    expect(Object.hasOwn(byName.get('B') ?? {}, 'rankedReason')).toBe(false);
+  });
+
+  it("never carries `GapRow.reasoning` (the deterministic core's own, STY-2-banned string) even though every fixture row already carries one", () => {
+    // `row()`'s own fixture always sets `reasoning: 'Because the evidence
+    // says so.'` — proof this module never reaches for that field even when
+    // it is present, not merely that this suite never gave it one to find.
+    const session = buildStudySession({
+      rows: rankedRows([{ conceptName: 'A', gapScore: 9 }]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(Object.hasOwn(session.items[0] ?? {}, 'rankedReason')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The gap view's `build-session` affordance
 // ---------------------------------------------------------------------------
 
