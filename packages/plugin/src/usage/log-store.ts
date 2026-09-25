@@ -8,11 +8,12 @@
  *
  * **Capped, not unbounded.** A call log with no ceiling is exactly the kind
  * of "queue holding documents" shape C6/D-005 are wary of in spirit even
- * though these rows carry no content — task id, prompt version and model
- * id only (see `types.ts`). Capping is plain hygiene for a JSON blob
- * Obsidian round-trips on every save, not a privacy control. Oldest
- * entries are dropped first (FIFO) so the summary always reflects the most
- * recent activity.
+ * though these rows carry no content — task id, prompt version, model id
+ * and (`ol-egov.141.89.10.50`) a failed row's closed error code only (see
+ * `types.ts`). Capping is plain hygiene for a JSON blob Obsidian
+ * round-trips on every save, not a privacy control. Oldest entries are
+ * dropped first (FIFO) so the summary always reflects the most recent
+ * activity.
  *
  * **Wired into production** (`main.ts`'s `onload()`, via
  * `WorkerHttpTransport`'s `onCallRecorded` — see that file and
@@ -25,6 +26,17 @@
  * because extending that callback's shape touches `worker/transport.ts`,
  * `worker/obsidian-transport.ts` and `main.ts`, all outside this bead's
  * owned paths (see this bead's report for the exact proposed patch).
+ *
+ * **`ol-egov.141.89.10.50`: a failed call is a row too, once wired.** This
+ * store's `record` already takes any `UsageLogEntry` — including one built
+ * by `types.ts`'s `buildFailedUsageLogEntry` — and appends it exactly like a
+ * successful one; nothing in this file needed to change for that (`load`'s
+ * validation is `types.ts`'s `isUsageLogEntry`, updated there). What is
+ * still missing is the production call: `main.ts`'s wiring above only
+ * passes `onCallRecorded`, not `worker/transport.ts`'s newer `onCallFailed`,
+ * to `createObsidianWorkerTransport` — see this bead's report for the exact
+ * `main.ts` patch and for `usage/aggregate.ts`'s required reader-side fix,
+ * both outside this bead's owned paths.
  */
 
 import type { UsageLogEntry } from './types.js';

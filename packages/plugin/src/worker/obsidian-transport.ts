@@ -20,6 +20,19 @@
  * body to come back as a *value* the caller can inspect for its error code,
  * never as a throw (see `transport.ts`'s module doc). Passing `throw: false`
  * is the one line that keeps this adapter honest to that contract.
+ *
+ * **`ol-egov.141.89.10.50`: `onCallFailed` is now a pure pass-through too**,
+ * same as `onCallRecorded` — see `transport.ts`'s doc on that parameter for
+ * what it carries and why it is a separate callback rather than a widened
+ * `onCallRecorded`. This file's own parameter type additionally allows an
+ * optional `latencyMs`, which `transport.ts`'s current callback type does
+ * not yet carry: `WorkerHttpTransport`'s own `onCallFailed` type has fewer
+ * required/possible fields than this one, so a plain pass-through still
+ * typechecks (an object missing an optional field still satisfies a wider
+ * optional-field type) — no measurement is added here, this file still has
+ * nothing to compute a real duration from; it is a forward-compatible seam
+ * for the day `transport.ts` measures and passes one through (proposed in
+ * this bead's report, `transport.ts` outside this bead's owned paths).
  */
 
 import { requestUrl } from 'obsidian';
@@ -52,6 +65,7 @@ export function createObsidianWorkerTransport(
     costUsd?: number;
     latencyMs?: number;
   }) => void,
+  onCallFailed?: (entry: { taskId: string; errorCode?: string; latencyMs?: number }) => void,
 ): WorkerHttpTransport {
-  return new WorkerHttpTransport(obsidianHttpRequest, config, onCallRecorded);
+  return new WorkerHttpTransport(obsidianHttpRequest, config, onCallRecorded, onCallFailed);
 }

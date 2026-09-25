@@ -95,4 +95,52 @@ describe('aggregateUsageByFeature', () => {
     const summaries = aggregateUsageByFeature(entries);
     expect(summaries.map((s) => s.taskId)).toEqual(['a.task.v1', 'b.task.v1']);
   });
+
+  // ol-egov.141.89.10.53: a failed row (ol-egov.141.89.10.50) has no
+  // promptVersion/modelId/costUsd — it must not appear in call count, cost,
+  // tokens, versions or models. Failed calls were never recorded before this
+  // bead, so what she sees stays exactly as if the failed row were absent.
+  it('excludes a failed row from every aggregate — call count, cost, versions and models — leaving what she sees unchanged from success-only rows', () => {
+    const successOnly: UsageLogEntry[] = [
+      entry({
+        taskId: 'quiz.generate.v1',
+        promptVersion: '1.0.0',
+        modelId: 'model-a',
+        recordedAt: '2026-08-01T00:00:00.000Z',
+        costUsd: 0.01,
+      }),
+      entry({
+        taskId: 'quiz.generate.v1',
+        promptVersion: '1.1.0',
+        modelId: 'model-b',
+        recordedAt: '2026-08-02T00:00:00.000Z',
+      }),
+    ];
+    const failedRow: UsageLogEntry = {
+      taskId: 'quiz.generate.v1',
+      recordedAt: '2026-08-03T00:00:00.000Z',
+      outcome: 'failed',
+      errorCode: 'UPSTREAM_ERROR',
+    };
+
+    const withFailed = aggregateUsageByFeature([...successOnly, failedRow]);
+    const successOnlyResult = aggregateUsageByFeature(successOnly);
+
+    expect(withFailed).toEqual(successOnlyResult);
+    expect(withFailed[0]?.callCount).toBe(2);
+    expect(withFailed[0]?.lastCalledAt).toBe('2026-08-02T00:00:00.000Z');
+  });
+
+  it('aggregates a log of only failed rows to an empty summary list', () => {
+    const entries: UsageLogEntry[] = [
+      { taskId: 'quiz.generate.v1', recordedAt: '2026-08-01T00:00:00.000Z', outcome: 'failed' },
+      {
+        taskId: 'quiz.generate.v1',
+        recordedAt: '2026-08-02T00:00:00.000Z',
+        outcome: 'failed',
+        errorCode: 'TIMEOUT',
+      },
+    ];
+    expect(aggregateUsageByFeature(entries)).toEqual([]);
+  });
 });
