@@ -61,6 +61,21 @@
  * SIGNALS in C5.10's sense: they trade off smoothly and never remove a
  * concept the way a veto does.
  *
+ * **Two outputs, named apart (`ol-v7r5.55` [IL-D7]; see `./types.ts`'s own
+ * section of that name for the full argument).** `preMasteryScore` IS
+ * assessment relevance — the evidence question, "how strongly does this
+ * concept's evidence say it will be examined," computed only from the
+ * assessment side and never from anything about her. `priorityScore` IS
+ * learner priority — that relevance with her mastery-need (and
+ * retrievability) folded in, the policy question of how much of her time it
+ * should get. Naming stays doc-only (no field renamed, so `./compose.ts` and
+ * every plugin caller keep reading `priorityScore` unchanged): a caller that
+ * wants relevance alone reads `preMasteryScore` directly rather than trying
+ * to divide it back out of `priorityScore`, which is exactly the reasoning
+ * that risks counting the mastery-need discount twice under two different
+ * names (`./gap/build.ts`'s `GapRow.assessmentRelevance` does this for the
+ * gap view specifically).
+ *
  * **Per `[D-110]` (`ol-egov.28`), the proximity half-life, the assessment
  * weight divisor and the mastery-need ladder are DERIVED, not declared: the
  * component register's boundary column names them service-boundary, so their

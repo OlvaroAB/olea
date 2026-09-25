@@ -49,6 +49,19 @@
  * module re-sorts is the oracle's, multiplied by a *readiness* weight that
  * never touches mastery.
  *
+ * **Three named numbers, not one blended `gapScore` (`ol-v7r5.64` [DOS-C6]).**
+ * `GapRow` carries `assessmentRelevance` (the oracle's pre-mastery-need
+ * blend), `priorityScore` (mastery-need-adjusted, verbatim from the oracle —
+ * `oracle/types.ts`'s "Two outputs, named apart" section), and `gapScore`
+ * (this view's own further readiness adjustment) as three separately
+ * inspectable fields, precisely so a reasoning surface never has to recover
+ * one from the other two. Doing so risks double-counting: `priorityScore`
+ * already has the mastery-need discount folded in, and readiness's own
+ * weight is a distinct, format-specific adjustment (see `./readiness.js`) —
+ * reading `assessmentRelevance` directly, rather than dividing `gapScore` or
+ * `priorityScore` back apart, is what keeps the two effects attributable to
+ * the right factor instead of one being counted twice under two names.
+ *
  * **INV-1 / §7.1.** Pure. No `obsidian`, no vault I/O, no clock, no network,
  * nothing stored. Same inputs in, same view out, forever — a local projection,
  * which is what makes "the Worker is a calculator, not a database" hold on this
@@ -131,9 +144,48 @@ export interface GapRow {
   readonly rank: number;
   /** 1-based position in the oracle's own ranking, kept so the two orders can be compared rather than conflated. */
   readonly oracleRank: number;
-  /** `ConceptPriority.priorityScore`, verbatim — knowledge-side. */
+  /**
+   * `ConceptPriority.factors.preMasteryScore`, verbatim — the veto-survived,
+   * four-factor blend BEFORE the mastery-need multiplier is applied. Named
+   * "assessment relevance" by `oracle/types.ts`'s "Two outputs, named apart"
+   * section (`ol-v7r5.55` [IL-D7]): how likely and how soon this concept is
+   * examined, computed entirely from assessment evidence and never from
+   * anything about her.
+   *
+   * **The moved factor (`ol-v7r5.64` [DOS-C6]).** Before this field existed,
+   * a caller wanting to explain "why is this row here, apart from what she
+   * already knows" had only {@link priorityScore} (already mastery-adjusted)
+   * and {@link gapScore} (also readiness-adjusted) to read from — recovering
+   * relevance meant re-deriving it from one of the two, which risks
+   * attributing the same mastery-need or readiness effect a second time
+   * (review-response row 7b's "double count of the same underlying signal
+   * through two paths"). This field is read once, from the oracle's own
+   * `preMasteryScore`, so a reasoning surface can cite relevance directly
+   * rather than reconstructing it.
+   *
+   * **Optional only so object literals built before this field existed still
+   * typecheck** (the same reason `ConceptMaterialPresence.size`,
+   * `OracleConceptFactors.objectivesCitations` and `.retrievabilityWeight`
+   * are optional) — `study-session/` and `checks/` fixtures outside this
+   * bead's `owns` construct `GapRow` literals by hand and are not this
+   * bead's to edit. `buildRow` below always sets it for every row this
+   * module actually produces.
+   */
+  readonly assessmentRelevance?: number;
+  /**
+   * `ConceptPriority.priorityScore`, verbatim — knowledge-side: relevance
+   * with her mastery-need (and retrievability) already folded in. Named
+   * "learner priority" / "study priority" by `oracle/types.ts`'s "Two
+   * outputs, named apart" section — the number ranking and ordering
+   * actually use, never {@link assessmentRelevance} alone.
+   */
   readonly priorityScore: number;
-  /** `priorityScore × readiness.weight` — readiness-side, and what this view sorts on. */
+  /**
+   * `priorityScore × readiness.weight` — a THIRD, orthogonal adjustment on
+   * top of `priorityScore`, never a restatement of {@link assessmentRelevance}
+   * or of the mastery-need discount already folded into `priorityScore`.
+   * Readiness-side, and what this view sorts on.
+   */
   readonly gapScore: number;
   readonly readiness: ReadinessFactors;
   /**
@@ -316,6 +368,7 @@ function buildRow(
     course: entry.course,
     gapClass,
     oracleRank: entry.rank,
+    assessmentRelevance: entry.factors.preMasteryScore,
     priorityScore: entry.priorityScore,
     gapScore: entry.priorityScore * readiness.weight,
     readiness,

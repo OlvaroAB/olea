@@ -53,6 +53,20 @@
  * disables the weighting entirely and returns the oracle's own ordering, which
  * is what makes this reversible from the outside rather than by a code change.
  *
+ * **`ReadinessFactors.weight` is a third, orthogonal multiplier — never a
+ * restatement of `oracle/rank.ts`'s `masteryNeedWeight` (`ol-v7r5.64`
+ * [DOS-C6]).** Both happen to read facts about the same recognition-tier
+ * evidence (mastery's own stage ceiling for recognition-only practice, and
+ * this module's format-match discount), but they answer different questions
+ * for different reasons — R7's own point, restated here so the two are never
+ * folded into one explanation. A caller building reasoning text should read
+ * `factors.masteryNeedWeight` for "what her mastery stage discounts" and
+ * `ReadinessFactors.weight`/`.applied` for "what THIS paper's format
+ * discounts further," never inferring one from the other or from the
+ * combined `gapScore` — see `./build.js`'s module doc and `GapRow`'s
+ * `assessmentRelevance` field for the third, pre-mastery-need number that
+ * makes this attribution possible without recomputation.
+ *
  * **INV-1.** Pure; no `obsidian`, no I/O, no clock.
  */
 

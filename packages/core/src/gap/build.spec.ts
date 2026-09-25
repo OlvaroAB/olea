@@ -330,3 +330,136 @@ describe("GapRow.conceptSize — study-session's coarse/fine slot pricing seam (
     expect(row?.conceptSize).toBeUndefined();
   });
 });
+
+describe('GapRow.assessmentRelevance — the pre-mastery-need blend, named apart (`ol-v7r5.64` [DOS-C6])', () => {
+  // `oracle/types.ts`'s "Two outputs, named apart" section (`ol-v7r5.55`
+  // [IL-D7]) names `OracleConceptFactors.preMasteryScore` as assessment
+  // relevance and `priorityScore` as learner priority — relevance with her
+  // mastery-need (and retrievability) already folded in. Review-response
+  // row 7b's "double count" concern is that a gap-view consumer wanting to
+  // explain "why here" had only `priorityScore` (already mastery-adjusted)
+  // and `gapScore` (also readiness-adjusted) to read from, and reconstructing
+  // relevance from either risks attributing the SAME mastery-need or
+  // readiness effect twice. `assessmentRelevance` is the moved factor: it is
+  // read once, from `factors.preMasteryScore`, and exposed here so a reasoning
+  // surface never needs to undo `priorityScore`/`gapScore` to find it.
+  function entryWithMasteryDiscount(
+    conceptName: string,
+    preMasteryScore: number,
+    masteryNeedWeight: number,
+  ): ConceptPriority {
+    const priorityScore = preMasteryScore * masteryNeedWeight;
+    const citation = {
+      sourcePath: '03 Research/paper-2024.pdf' as VaultPath,
+      questionLabel: 'Q1',
+      questionText: 'A question.',
+      provenance: {
+        location: { page: 1, charRange: { start: 0, end: 10 } },
+      } as ConceptPriority['citations'][number]['provenance'],
+    };
+    return {
+      conceptName,
+      conceptKey: conceptName,
+      course: 'CRS101',
+      rank: 1,
+      priorityScore,
+      factors: {
+        citations: [citation],
+        distinctSourceCount: 1,
+        contributions: [
+          {
+            assessmentPath: ASSESSMENT_PATH,
+            yieldRank: 1,
+            yieldScore: 1,
+            confidence: 1,
+            assessmentWeightKnown: true,
+            assessmentWeightScore: 1,
+            daysUntilDue: 10,
+            examProximityScore: 1,
+            evidenceStrength: 1,
+            contribution: preMasteryScore,
+          },
+        ],
+        preMasteryScore,
+        masteryState: 'sapling',
+        masteryNeedWeight,
+        priorityScore,
+      },
+      citations: [citation],
+      reasoning: 'Cited once.',
+    };
+  }
+
+  it('carries factors.preMasteryScore verbatim, distinct from the mastery-adjusted priorityScore', () => {
+    // sapling's need weight (0.35) discounts priorityScore well below
+    // preMasteryScore — a case where the two genuinely differ, so an
+    // assertion that only checked equality could not catch a copy-paste of
+    // the wrong field.
+    const view = build(new Map(), [entryWithMasteryDiscount('Alpha', 0.8, 0.35)]);
+    const [row] = allGapRows(view);
+    expect(row?.assessmentRelevance).toBeCloseTo(0.8, 10);
+    expect(row?.priorityScore).toBeCloseTo(0.28, 10);
+    expect(row?.assessmentRelevance).not.toBeCloseTo(row?.priorityScore ?? 0, 5);
+  });
+
+  it('stays the relevance reading even where readiness further discounts gapScore', () => {
+    // Distinguishes all three now-separately-named numbers: relevance
+    // (pre-mastery-need), priority (mastery-adjusted), and gapScore
+    // (readiness-adjusted on top of priority) — the three-way split the
+    // "double count" acceptance criterion asks reasoning to read from,
+    // rather than reconstructing one from the other two.
+    const masteryMap = new Map([
+      [
+        'Alpha',
+        {
+          conceptId: 'Alpha',
+          state: 'sapling' as const,
+          evidence: {
+            scoredEventCount: 5,
+            scoredSuccessCount: 4,
+            explainBackAttempts: 0,
+            tiersPracticed: { recognition: true, recall: false, explanation: false },
+            tiersSucceeded: { recognition: true, recall: false, explanation: false },
+            gradedExplainBackCount: 0,
+            recognitionOnly: true,
+            successfulScoredDays: 3,
+            deepestSoloLevel: null,
+            depthGateCleared: false,
+            topStageQualified: false,
+          },
+        },
+      ],
+    ]);
+    const model = buildGapView({
+      ranking: ranking([entryWithMasteryDiscount('Alpha', 0.8, 0.35)]),
+      // `type: 'Quiz'` resolves to the recall-style format class (see
+      // `format-class.ts`), matched against `ASSESSMENT_PATH` — the same
+      // path `entryWithMasteryDiscount`'s one contribution cites — so the
+      // readiness weighting actually fires.
+      assessments: [
+        {
+          path: ASSESSMENT_PATH,
+          course: 'CRS101',
+          type: 'Quiz',
+          weight: 40,
+          weightRaw: '40',
+          due: '2026-09-01',
+          status: 'todo',
+        },
+      ],
+      mastery: masteryMap,
+      materialPresence: new Map(),
+      sourceCoverage: COVERAGE,
+    });
+    const course = model.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected a ranked course');
+    const row = course.rows[0];
+    expect(row?.assessmentRelevance).toBeCloseTo(0.8, 10);
+    expect(row?.priorityScore).toBeCloseTo(0.28, 10);
+    expect(row?.gapScore).toBeCloseTo(0.168, 10); // 0.28 * 0.6
+    // Three distinct numbers — relevance > priority > gapScore here — each
+    // separately readable without recomputing it from the others.
+    expect(row?.assessmentRelevance).not.toBeCloseTo(row?.priorityScore ?? 0, 5);
+    expect(row?.priorityScore).not.toBeCloseTo(row?.gapScore ?? 0, 5);
+  });
+});
