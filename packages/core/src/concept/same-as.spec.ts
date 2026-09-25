@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
 import { listRelationCacheRecords, writeRelationCache } from './relation-cache.js';
 import {
+  checkSameAsClosureCompatibility,
   confirmSameAsLink,
   declineSameAsLink,
   edgesEligibleForSplitMigration,
@@ -334,5 +335,106 @@ describe('remapIncidentRelationCacheRecords / edgesEligibleForSplitMigration', (
 
     const result = await remapIncidentRelationCacheRecords(source, 'surviving-key', 'losing-key');
     expect(result).toEqual({ remapped: 0, collided: 1 });
+  });
+});
+
+// Scenarios: docs/dev/intelligence-build/cpt.md section 4, "Three-way closure conflict: A=B
+// proposed, B=C confirmed, A and C declined" ([D-295 / CPT-D2] item 2, [IL-D8], ol-2zfj.147).
+describe('checkSameAsClosureCompatibility / confirmSameAsLink — class-level compatibility before closure', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-same-as-closure-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('reports compatible when no confirmed link touches either key', async () => {
+    const result = await checkSameAsClosureCompatibility(source, 'a', 'b');
+    expect(result.compatible).toBe(true);
+    expect(result.conflict).toBeUndefined();
+  });
+
+  it('reports compatible for an ordinary two-key confirm with nothing else on file', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    const result = await checkSameAsClosureCompatibility(source, 'a', 'b');
+    expect(result.compatible).toBe(true);
+  });
+
+  it('a DECLINED link on the SAME pair never counts as its own conflict ([D-257] ruling 3 stays true for closure too)', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    await declineSameAsLink(source, 'a', 'b');
+    const result = await checkSameAsClosureCompatibility(source, 'a', 'b');
+    expect(result.compatible).toBe(true);
+  });
+
+  it('detects the three-way conflict: A=B proposed, B=C confirmed, A/C declined — confirming A=B is incompatible', async () => {
+    // A and C were proposed and declined once.
+    await proposeSameAsLink(source, 'a', 'c');
+    await declineSameAsLink(source, 'a', 'c');
+    // B and C are already confirmed as one identity.
+    await proposeSameAsLink(source, 'b', 'c');
+    await confirmSameAsLink(source, 'b', 'c');
+    // A=B is only proposed so far.
+    await proposeSameAsLink(source, 'a', 'b');
+
+    const result = await checkSameAsClosureCompatibility(source, 'a', 'b');
+    expect(result.compatible).toBe(false);
+    expect(result.conflict).toEqual({ keyA: 'a', keyB: 'c', status: 'declined' });
+    expect(result.resultingClass).toEqual(['a', 'b', 'c']);
+  });
+
+  it('confirmSameAsLink throws on the three-way conflict instead of closing the class, and writes nothing', async () => {
+    await proposeSameAsLink(source, 'a', 'c');
+    await declineSameAsLink(source, 'a', 'c');
+    await proposeSameAsLink(source, 'b', 'c');
+    await confirmSameAsLink(source, 'b', 'c');
+    await proposeSameAsLink(source, 'a', 'b');
+
+    await expect(confirmSameAsLink(source, 'a', 'b')).rejects.toThrow(
+      /closure|compatibility/i,
+    );
+
+    // The proposal for a/b is left exactly as it was — the confirm never wrote anything.
+    const records = await listSameAsLinkRecords(source);
+    const abRecord = records.find(
+      ({ record }) => record.keyA === 'a' && record.keyB === 'b',
+    )?.record;
+    expect(abRecord?.status).toBe('proposed');
+  });
+
+  it('a SEVERED pair elsewhere in the resulting class also blocks the confirm', async () => {
+    // A and B were once confirmed as one identity, then severed.
+    await proposeSameAsLink(source, 'a', 'b');
+    await confirmSameAsLink(source, 'a', 'b');
+    await severSameAsLink(source, 'a', 'b');
+    // C and A are confirmed as one identity.
+    await proposeSameAsLink(source, 'a', 'c');
+    await confirmSameAsLink(source, 'a', 'c');
+    // Now B=C is proposed — confirming it would rejoin A and B transitively through C.
+    await proposeSameAsLink(source, 'b', 'c');
+
+    const result = await checkSameAsClosureCompatibility(source, 'b', 'c');
+    expect(result.compatible).toBe(false);
+    expect(result.conflict).toEqual({ keyA: 'a', keyB: 'b', status: 'severed' });
+
+    await expect(confirmSameAsLink(source, 'b', 'c')).rejects.toThrow(/closure|compatibility/i);
+  });
+
+  it('confirming a re-proposed pair with no OTHER conflicting members still succeeds', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    const confirmed = await confirmSameAsLink(source, 'a', 'b');
+    expect(confirmed.status).toBe('confirmed');
+  });
+
+  it('re-confirming an already-confirmed link is still a no-op and never re-checks (idempotent short-circuit)', async () => {
+    await proposeSameAsLink(source, 'a', 'b');
+    const first = await confirmSameAsLink(source, 'a', 'b');
+    const second = await confirmSameAsLink(source, 'a', 'b');
+    expect(second).toEqual(first);
   });
 });

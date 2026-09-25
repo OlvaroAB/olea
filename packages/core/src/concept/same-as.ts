@@ -273,16 +273,132 @@ export async function proposeSameAsLink(
 }
 
 /**
+ * A conflict `checkSameAsClosureCompatibility` found: two keys inside the class a confirm would
+ * close, which are already linked as `'declined'` or `'severed'` — evidence she has already read
+ * as (for now) two identities, not one.
+ */
+export interface SameAsClosureConflict {
+  /** The conflicting pair, in canonical sorted order — see `canonicalPair`. */
+  readonly keyA: string;
+  readonly keyB: string;
+  readonly status: 'declined' | 'severed';
+}
+
+export interface SameAsClosureCheckResult {
+  readonly compatible: boolean;
+  /** Present only when `compatible` is `false`. */
+  readonly conflict?: SameAsClosureConflict;
+  /** Every key that would share one equivalence class if `keyA`/`keyB` were confirmed, sorted. Computed whether or not the check finds a conflict, so a caller can log or display the class either way. */
+  readonly resultingClass: readonly string[];
+}
+
+/**
+ * The class-level compatibility check `[D-295 / CPT-D2]` item 2 and `docs/dev/intelligence-build
+ * /cpt.md` section 2's "1.1a closure" row require, run before a confirm closes a class
+ * transitively (`[IL-D8]`). **Never a write** — this is a pure read over the currently persisted
+ * same-as links, so a caller may compute it before deciding whether to confirm at all, exactly
+ * the same "compute without committing" posture `remapIncidentRelationCacheRecords`'s own doc
+ * comment claims for itself.
+ *
+ * **What "the resulting class" means.** Same-as links form an undirected graph; a `'confirmed'`
+ * link is an edge two keys already share, so confirming `keyA`/`keyB` adds one more edge to that
+ * graph. This function takes every `'confirmed'` edge on file, adds the hypothetical `keyA`/`keyB`
+ * edge, and returns the connected component (the transitive class) `keyA` and `keyB` would then
+ * both belong to — the three-way case `docs/dev/intelligence-build/cpt.md` section 4 names by
+ * example (A=B proposed, B=C confirmed, A and C declined) is exactly two existing keys reached
+ * through one hop each, not a hardcoded three-key special case.
+ *
+ * **What counts as a conflict.** Every pair of DISTINCT keys within that resulting class, other
+ * than the `keyA`/`keyB` pair itself, is checked against the currently persisted same-as link (if
+ * any) between them: a `'declined'` or `'severed'` status there blocks the confirm. The
+ * `keyA`/`keyB` pair's OWN history is never checked here — `[D-257]` ruling 3's "a decline never
+ * blocks a future confirm" already governs that pair directly (`confirmSameAsLink` allows
+ * confirming a `'declined'` or `'severed'` record for the SAME pair); this function only adds the
+ * further, transitive check ONT-R1 and `[D-295]` ask for: pairs OTHER than the one being decided,
+ * that closing this class would newly read as one identity.
+ *
+ * A `'proposed'` link between two class members is never a conflict — proposing something is not
+ * her evidential read of it, and this function's whole job is checking against what she HAS read
+ * (`'declined'`/`'severed'`), never against an unresolved proposal.
+ */
+export async function checkSameAsClosureCompatibility(
+  vault: VaultSource,
+  keyA: string,
+  keyB: string,
+): Promise<SameAsClosureCheckResult> {
+  const all = await listSameAsLinkRecords(vault);
+  const byIdentity = new Map<string, SameAsLinkRecord>();
+  for (const { record } of all) {
+    byIdentity.set(linkIdentity(record.keyA, record.keyB), record);
+  }
+
+  const adjacency = new Map<string, Set<string>>();
+  const addEdge = (x: string, y: string): void => {
+    if (!adjacency.has(x)) adjacency.set(x, new Set());
+    if (!adjacency.has(y)) adjacency.set(y, new Set());
+    adjacency.get(x)?.add(y);
+    adjacency.get(y)?.add(x);
+  };
+  for (const { record } of all) {
+    if (record.status === 'confirmed') addEdge(record.keyA, record.keyB);
+  }
+  // The hypothetical edge this confirm would add — included so keyA's and keyB's existing
+  // classes (if any) are reached in the same walk, whether or not either key has any confirmed
+  // link yet.
+  addEdge(keyA, keyB);
+
+  const visited = new Set<string>([keyA]);
+  const stack: string[] = [keyA];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) continue;
+    for (const neighbor of adjacency.get(current) ?? []) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        stack.push(neighbor);
+      }
+    }
+  }
+  const resultingClass = [...visited].sort(byCodeUnit);
+  const [confirmingA, confirmingB] = canonicalPair(keyA, keyB);
+
+  for (let i = 0; i < resultingClass.length; i += 1) {
+    for (let j = i + 1; j < resultingClass.length; j += 1) {
+      const x = resultingClass[i];
+      const y = resultingClass[j];
+      if (x === undefined || y === undefined) continue;
+      if (x === confirmingA && y === confirmingB) continue; // the pair being decided: not its own conflict ([D-257] ruling 3).
+      const record = byIdentity.get(linkIdentity(x, y));
+      if (record?.status === 'declined' || record?.status === 'severed') {
+        return {
+          compatible: false,
+          conflict: { keyA: x, keyB: y, status: record.status },
+          resultingClass,
+        };
+      }
+    }
+  }
+
+  return { compatible: true, resultingClass };
+}
+
+/**
  * The evidential-read verdict, recorded. **Never mints a proposal** — a confirm with no existing
  * record at all is a caller error (there was no candidate to resolve), mirroring
  * `./key-store.ts`'s `bindConceptKeyToNote` throwing rather than silently minting. Idempotent:
- * confirming an already-`'confirmed'` link for the same pair writes nothing new.
+ * confirming an already-`'confirmed'` link for the same pair writes nothing new — and, since the
+ * class is already closed in that case, the closure check below is skipped rather than re-run.
  *
  * **Confirming a `'declined'` link is allowed, deliberately** (`[D-257]` ruling 3: "a decline
  * never asserts the two are different and never blocks a future confirm"). A decline is a hard
  * labelled negative on the *proposal*, not a verdict that the two concepts differ, so the student
  * accepting later is not a contradiction this function needs to guard against — it is exactly the
  * outcome the ruling anticipates.
+ *
+ * **The class-level compatibility check (`[D-295 / CPT-D2]` item 2, `[IL-D8]`) runs before the
+ * write.** If closing this pair would transitively join the resulting equivalence class to a pair
+ * she has already declined or severed, `checkSameAsClosureCompatibility` reports the conflict and
+ * this function throws instead of writing — the record on file is left exactly as it was.
  */
 export async function confirmSameAsLink(
   vault: VaultSource,
@@ -299,6 +415,17 @@ export async function confirmSameAsLink(
     );
   }
   if (existing.record.status === 'confirmed') return existing.record;
+
+  const closureCheck = await checkSameAsClosureCompatibility(vault, keyA, keyB);
+  if (!closureCheck.compatible) {
+    const conflict = closureCheck.conflict;
+    throw new Error(
+      `confirmSameAsLink: confirming ${JSON.stringify(keyA)} = ${JSON.stringify(keyB)} would ` +
+        `close an equivalence class also containing ${JSON.stringify(conflict?.keyA)} and ` +
+        `${JSON.stringify(conflict?.keyB)}, which are already '${conflict?.status}' — the ` +
+        'class-level compatibility check blocks this closure (ONT-R1, [D-295 / CPT-D2]).',
+    );
+  }
 
   const confirmed: SameAsLinkRecord = {
     ...existing.record,
