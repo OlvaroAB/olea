@@ -289,6 +289,52 @@ export const HOLDING_CUT = 0.9;
 export const ADMITTED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 'prompted'];
 
 /**
+ * **Which successes count toward `sapling` — `[D-346]`, OPEN** (the attainment
+ * chain spec's proposal 2, `olea-service`; `ol-egov.141.89.9.4`). R7 says a
+ * concept "may reach `sapling` on any evidence mix" and, a sentence later,
+ * that "recall evidence must spread across at least three distinct days"; the
+ * vocabulary registry maps recognition-only practice to sprout and permits
+ * "you recalled this successfully across at least three distinct days". The
+ * three options the ruling chooses between, each built so a case can record
+ * the answer under each:
+ *
+ * - `'any-scored-success'` — (a), **today's rule and the default until the
+ *   ruling lands**: any non-explain-back success (quiz answers, and recall at
+ *   any support level) on `minSpacedRetrievalDays` distinct days.
+ * - `'unaided-recall'` — (b), the chain spec's recommendation: recall-tier
+ *   successes shown at `independent` or `prompted` support on that many
+ *   distinct days; quiz answers and guided recall count toward sprout only.
+ *   **Unknown support never admits**, the same discipline `[D-281]` item 3
+ *   gives the top stage — so a legacy recall review written before
+ *   `supportLevelShown` existed never counts under this option, a consequence
+ *   the ruling should state.
+ * - `'mix-with-unaided-recall'` — (c): any scored success on that many days,
+ *   with at least one recall-tier success at `independent` support. The
+ *   spec's option names "at least one unaided recall success"; its pseudo-code
+ *   distinguishes "unaided or prompted", so unaided is read here as
+ *   `independent` — flagged for the ruling to confirm.
+ *
+ * Adopting (b) or (c) lowers some concepts from sapling to sprout once, which
+ * F2.11 forbids unless ruled: that is why the default stays (a).
+ */
+export type SaplingRule = 'any-scored-success' | 'unaided-recall' | 'mix-with-unaided-recall';
+
+/** `[D-346]` is open: today's rule. See {@link SaplingRule}. */
+export const DEFAULT_SAPLING_RULE: SaplingRule = 'any-scored-success';
+
+const SAPLING_RULES: readonly SaplingRule[] = [
+  'any-scored-success',
+  'unaided-recall',
+  'mix-with-unaided-recall',
+];
+
+/** `[D-346]` option (b)'s admitted support levels — the same two `[D-281]` admits for the top stage. */
+const UNAIDED_RECALL_SUPPORT_LEVELS: ReadonlySet<SupportLevel> = new Set([
+  'independent',
+  'prompted',
+]);
+
+/**
  * Tunable parameters for `computeConceptMastery`. Both defaults are
  * **declared** — argued in plain English where the constant is defined above,
  * never fitted from data (`eval/CLAUDE.md` forbids tuning any threshold from
@@ -328,8 +374,34 @@ export interface MasteryRollupOptions {
    * verdict at all when the grading it came from was rejected as stale
    * (`packages/plugin/src/explain-back/solo-review.ts`), so a stale-source
    * attempt cannot qualify even where no caller supplies this list.
+   *
+   * **Top stage only, as today.** The attainment entry point
+   * (`./attainment.ts`, `ol-egov.141.89.9.4`) removes proven-invalid evidence
+   * at every stage instead (`[D-338]` items 2 and 3), through
+   * {@link foldConceptStage}'s scope; this option keeps its existing meaning
+   * for the readers that pass it until they move to that entry point
+   * (`ol-egov.141.89.9.5`).
    */
   readonly invalidInstrumentIds?: readonly string[];
+  /**
+   * `[D-346]`, open: which successes count toward `sapling`. Defaults to
+   * {@link DEFAULT_SAPLING_RULE}, today's rule. See {@link SaplingRule}.
+   */
+  readonly saplingRule?: SaplingRule;
+  /**
+   * `[D-319]` (ruled 2026-09-25): the event ids of graded explain-backs whose
+   * restates-the-source finding shows **the requested explanation is
+   * missing**. Such an attempt never qualifies for the top stage; it still
+   * counts as a graded attempt everywhere else. The finding is `XBK`'s to
+   * produce and, per the ruling, rides `ol-95vv.8`'s review-log version as a
+   * persisted field — until that field exists nothing produces this list, so
+   * it defaults to empty and changes nothing. **Word overlap is never read
+   * here** (`[D-279]`): the fold takes the finding, never the overlap measure,
+   * so resemblance alone cannot withhold the top stage, and a correct short
+   * definition or necessary technical wording (which the finding's own
+   * criteria exclude) cannot either.
+   */
+  readonly explanationMissingEventIds?: readonly string[];
 }
 
 interface ResolvedOptions {
@@ -337,11 +409,14 @@ interface ResolvedOptions {
   readonly depthGate: SoloLevel;
   readonly admittedSupportLevels: ReadonlySet<SupportLevel>;
   readonly invalidInstrumentIds: ReadonlySet<string>;
+  readonly saplingRule: SaplingRule;
+  readonly explanationMissingEventIds: ReadonlySet<string>;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
   const minSpacedRetrievalDays = options?.minSpacedRetrievalDays ?? MIN_SPACED_RETRIEVAL_DAYS;
   const depthGate = options?.depthGate ?? DEPTH_GATE_SOLO_LEVEL;
+  const saplingRule = options?.saplingRule ?? DEFAULT_SAPLING_RULE;
   if (!Number.isInteger(minSpacedRetrievalDays) || minSpacedRetrievalDays < 1) {
     throw new Error(
       `computeConceptMastery: minSpacedRetrievalDays must be a positive integer, got ${minSpacedRetrievalDays}`,
@@ -350,12 +425,44 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
   if (soloRank(depthGate) < 0) {
     throw new Error(`computeConceptMastery: depthGate must be a SOLO level, got ${depthGate}`);
   }
+  if (!SAPLING_RULES.includes(saplingRule)) {
+    throw new Error(
+      `computeConceptMastery: saplingRule must be one of ${SAPLING_RULES.join(', ')}, got ${saplingRule}`,
+    );
+  }
   return {
     minSpacedRetrievalDays,
     depthGate,
     admittedSupportLevels: new Set(options?.admittedSupportLevels ?? ADMITTED_SUPPORT_LEVELS),
     invalidInstrumentIds: new Set(options?.invalidInstrumentIds ?? []),
+    saplingRule,
+    explanationMissingEventIds: new Set(options?.explanationMissingEventIds ?? []),
   };
+}
+
+/**
+ * Which part of the log a stage fold reads (`ol-egov.141.89.9.4`) — the
+ * attainment entry point's three questions, asked of ONE fold so the stage
+ * rule lives in one place:
+ *
+ * - the displayed stage: every stage over evidence that stands now
+ *   (`excludedInstrumentIds` = the instruments proven invalid now);
+ * - the award: the same fold as of an instant (`asOf`, with the instruments
+ *   proven invalid as of then) — records after the instant are not yet
+ *   evidence, and a re-grade logged after it does not yet supersede;
+ * - "did anything ever reach higher": no exclusion and `supersession:
+ *   'ignored'`, the cheap upper bound that decides whether the as-of scan is
+ *   needed at all.
+ *
+ * An empty scope is exactly `computeConceptMastery`.
+ */
+export interface StageFoldScope {
+  /** Instruments whose records are removed at every stage, not only the top one. */
+  readonly excludedInstrumentIds?: ReadonlySet<string>;
+  /** Epoch ms: only records at or before this instant are evidence. A record whose timestamp cannot be read is left out of an as-of fold. */
+  readonly asOf?: number;
+  /** `'applied'` (default): a corrective re-grade's `revisionOf` disqualifies the attempt it names. */
+  readonly supersession?: 'applied' | 'ignored';
 }
 
 /**
@@ -431,6 +538,29 @@ export interface ConceptMasteryEvidence {
    * This, not depth alone, is what sets the top stage.
    */
   readonly topStageQualified: boolean;
+  /**
+   * `[D-346]` option (b)'s input (`ol-egov.141.89.9.4`): distinct calendar
+   * days on which a recall-tier review succeeded at `independent` or
+   * `prompted` support. Unknown support never counts. Optional, like
+   * `tiersSucceeded`, so literals built elsewhere still type-check;
+   * `computeConceptMastery` always sets it.
+   */
+  readonly unaidedRecallSuccessDays?: number;
+  /** `[D-346]` option (c)'s extra condition: at least one recall-tier review succeeded at `independent` support. */
+  readonly independentRecallSuccess?: boolean;
+  /**
+   * The earliest attempt, by `(instant, eventId)`, that qualifies for the top
+   * stage — what the historical award names (`[D-338]` item 1). `null` when
+   * none qualifies; optional for the same reason as the fields above.
+   */
+  readonly topStageAttempt?: {
+    readonly eventId: string;
+    readonly instrumentId: string;
+    /** The attempt's timestamp, as written. */
+    readonly at: string;
+  } | null;
+  /** `[D-319]`: attempts that met every other top-stage condition but whose restates-the-source finding shows the requested explanation missing. */
+  readonly withheldByRestatementFinding?: number;
 }
 
 /** One concept's rolled-up mastery: the state, and the evidence it was read from. */
@@ -562,6 +692,7 @@ function conceptEvidence(
   entries: readonly ReviewLogEntry[],
   conceptId: string,
   resolved: ResolvedOptions,
+  scope: StageFoldScope = {},
 ): ConceptMasteryEvidence {
   const tiersPracticed: Record<EvidenceTier, boolean> = {
     recognition: false,
@@ -574,6 +705,8 @@ function conceptEvidence(
     explanation: false,
   };
   const successDays = new Set<string>();
+  const unaidedRecallDays = new Set<string>();
+  let independentRecallSuccess = false;
   let scoredEventCount = 0;
   let scoredSuccessCount = 0;
   let recognitionScoredCount = 0;
@@ -581,19 +714,40 @@ function conceptEvidence(
   let gradedExplainBackCount = 0;
   let deepestSoloLevel: SoloLevel | null = null;
   let topStageQualified = false;
+  let topStageAttempt: {
+    eventId: string;
+    instrumentId: string;
+    at: string;
+    instant: number;
+  } | null = null;
+  let withheldByRestatementFinding = 0;
 
-  const records = indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
+  const allRecords = indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
+  const { excludedInstrumentIds, asOf } = scope;
+  const records =
+    excludedInstrumentIds === undefined && asOf === undefined
+      ? allRecords
+      : allRecords.filter((record) => {
+          if (excludedInstrumentIds?.has(record.instrumentId) === true) return false;
+          if (asOf === undefined) return true;
+          const instant = Date.parse(record.timestamp);
+          return Number.isFinite(instant) && instant <= asOf;
+        });
 
   // `[D-281]` correction: "where a grade supersedes an earlier one, the later
   // grade wins in the projection." `revisionOf` names the event a corrective
   // re-grade replaces, so the replaced event stops supporting anything —
   // collected before the fold below so a correction recorded later in the log
   // still disqualifies the attempt it corrects, whatever order the records
-  // arrive in (this fold has no total order and needs none).
+  // arrive in (this fold has no total order and needs none). An as-of fold
+  // reads only the re-grades logged by then, because `records` is already cut
+  // at that instant.
   const supersededEventIds = new Set<string>();
-  for (const record of records) {
-    const revisionOf = record.explainBackGrade?.revisionOf;
-    if (revisionOf !== undefined && revisionOf !== null) supersededEventIds.add(revisionOf);
+  if (scope.supersession !== 'ignored') {
+    for (const record of records) {
+      const revisionOf = record.explainBackGrade?.revisionOf;
+      if (revisionOf !== undefined && revisionOf !== null) supersededEventIds.add(revisionOf);
+    }
   }
   for (const record of records) {
     tiersPracticed[evidenceTierOf(record.instrumentType)] = true;
@@ -611,7 +765,27 @@ function conceptEvidence(
         // never counts as demonstrated.
         if (grade.correctness === 'correct') tiersSucceeded.explanation = true;
         if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
-          topStageQualified = true;
+          if (resolved.explanationMissingEventIds.has(record.eventId)) {
+            // `[D-319]`: every other condition held, and the finding shows the
+            // requested explanation missing — the one thing that withholds it.
+            withheldByRestatementFinding += 1;
+          } else {
+            topStageQualified = true;
+            const instant = Date.parse(record.timestamp);
+            const candidate = {
+              eventId: record.eventId,
+              instrumentId: record.instrumentId,
+              at: record.timestamp,
+              instant,
+            };
+            if (
+              topStageAttempt === null ||
+              instant < topStageAttempt.instant ||
+              (instant === topStageAttempt.instant && record.eventId < topStageAttempt.eventId)
+            ) {
+              topStageAttempt = candidate;
+            }
+          }
         }
       }
       continue;
@@ -621,9 +795,17 @@ function conceptEvidence(
     if (record.instrumentType === 'mcq') recognitionScoredCount += 1;
     if (isSuccessRating(record.rating)) {
       scoredSuccessCount += 1;
-      tiersSucceeded[evidenceTierOf(record.instrumentType)] = true;
+      const tier = evidenceTierOf(record.instrumentType);
+      tiersSucceeded[tier] = true;
       const day = calendarDayOfTimestamp(record.timestamp);
       if (day !== null) successDays.add(day);
+      if (tier === 'recall') {
+        const support = record.supportLevelShown;
+        if (support !== undefined && UNAIDED_RECALL_SUPPORT_LEVELS.has(support) && day !== null) {
+          unaidedRecallDays.add(day);
+        }
+        if (support === 'independent') independentRecallSuccess = true;
+      }
     }
   }
 
@@ -640,7 +822,46 @@ function conceptEvidence(
     depthGateCleared:
       deepestSoloLevel !== null && soloRank(deepestSoloLevel) >= soloRank(resolved.depthGate),
     topStageQualified,
+    unaidedRecallSuccessDays: unaidedRecallDays.size,
+    independentRecallSuccess,
+    topStageAttempt:
+      topStageAttempt === null
+        ? null
+        : {
+            eventId: topStageAttempt.eventId,
+            instrumentId: topStageAttempt.instrumentId,
+            at: topStageAttempt.at,
+          },
+    withheldByRestatementFinding,
   };
+}
+
+/** `[D-346]`: whether the evidence reaches `sapling` under the resolved rule. See {@link SaplingRule}. */
+function saplingReached(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): boolean {
+  const days = resolved.minSpacedRetrievalDays;
+  switch (resolved.saplingRule) {
+    case 'any-scored-success':
+      return evidence.successfulScoredDays >= days;
+    case 'unaided-recall':
+      return (evidence.unaidedRecallSuccessDays ?? 0) >= days;
+    case 'mix-with-unaided-recall':
+      return evidence.successfulScoredDays >= days && evidence.independentRecallSuccess === true;
+  }
+}
+
+/** The stage the evidence unlocks: the strongest stage any predicate reaches. */
+function stageOf(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): MasteryState {
+  // The high-water mark: the strongest stage any monotone predicate unlocks.
+  // Each predicate can only turn from false to true as events are appended,
+  // so the stage can only rise — R3's "no implementation may express decay by
+  // lowering it", held by construction rather than by a later check.
+  let state: MasteryState = 'seed';
+  if (evidence.scoredEventCount > 0 || evidence.gradedExplainBackCount > 0) state = 'sprout';
+  if (saplingReached(evidence, resolved)) state = 'sapling';
+  // `[D-281]`: depth alone no longer grants the top stage — all four pieces of
+  // qualifying evidence must sit on one un-superseded attempt.
+  if (evidence.topStageQualified) state = 'tree';
+  return state;
 }
 
 /**
@@ -668,7 +889,13 @@ function conceptEvidence(
  *
  * Plus correction: an attempt a later grade supersedes (`revisionOf`) supports
  * nothing, so a wrongly high grade that was afterwards corrected does not keep
- * the stage it was awarded in error.
+ * the stage it was awarded in error. (The historical award, `[D-338]` item 1,
+ * keeps what stood before the correction — `./attainment.ts` asks this same
+ * predicate as of an earlier instant; see {@link StageFoldScope}.)
+ *
+ * `[D-319]`'s restatement condition is read by the caller right after this
+ * predicate holds (`conceptEvidence`), so the evidence can count attempts it
+ * withheld apart from attempts that failed on their own.
  *
  * **This is the one place the stage is no longer a pure high-water mark**, and
  * deliberately so: `[D-281]` rules that a corrected judgement *replaces* the
@@ -703,30 +930,46 @@ export function computeConceptMastery(
   conceptId: string,
   options?: MasteryRollupOptions,
 ): ConceptMasteryResult {
+  return foldConceptStage(entries, conceptId, options ?? {}, {});
+}
+
+/**
+ * The stage fold over a SCOPED part of the log — see {@link StageFoldScope}.
+ * `computeConceptMastery` is this with an empty scope; `./attainment.ts`'s
+ * one entry point (`ol-egov.141.89.9.4`) asks it for the displayed stage,
+ * the award as of an instant, and the unscoped upper bound, so the stage rule
+ * is written once. Pure, like `computeConceptMastery`.
+ */
+export function foldConceptStage(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+  options: MasteryRollupOptions,
+  scope: StageFoldScope,
+): ConceptMasteryResult {
   if (conceptId.length === 0) {
     throw new Error('computeConceptMastery: conceptId must be non-empty');
   }
   const resolved = resolveOptions(options);
-  const { minSpacedRetrievalDays } = resolved;
-  const evidence = conceptEvidence(entries, conceptId, resolved);
-
-  // The high-water mark: the strongest stage any monotone predicate unlocks.
-  // Each predicate can only turn from false to true as events are appended,
-  // so the stage can only rise — R3's "no implementation may express decay by
-  // lowering it", held by construction rather than by a later check.
-  let state: MasteryState = 'seed';
-  if (evidence.scoredEventCount > 0 || evidence.gradedExplainBackCount > 0) state = 'sprout';
-  if (evidence.successfulScoredDays >= minSpacedRetrievalDays) state = 'sapling';
-  // `[D-281]`: depth alone no longer grants the top stage — all four pieces of
-  // qualifying evidence must sit on one un-superseded attempt.
-  if (evidence.topStageQualified) state = 'tree';
-
-  return { conceptId, state, evidence };
+  const evidence = conceptEvidence(entries, conceptId, resolved, scope);
+  return { conceptId, state: stageOf(evidence, resolved), evidence };
 }
 
 /** Every concept id at least one `kind: 'review'` entry in `entries` names. */
 export function conceptIdsInLog(entries: readonly ReviewLogEntry[]): readonly string[] {
   return indexEntries(entries).conceptIds;
+}
+
+/**
+ * Every `kind: 'review'` record naming `conceptId`, in log order — the same
+ * cached single-pass grouping the stage fold reads, exposed for
+ * `./attainment.ts`'s award and correction scans (`ol-egov.141.89.9.4`), so
+ * they iterate exactly the records the fold counts and never re-scan the log.
+ */
+export function reviewRecordsForConcept(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+): readonly ReviewLogRecord[] {
+  return indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
 }
 
 /**

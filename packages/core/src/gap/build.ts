@@ -72,7 +72,9 @@ import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { EvidenceQuestionCitation } from '../evidence-edge/types.js';
+import { type NeedReading, readNeed } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import type { PaperDemand } from '../oracle/paper-types.js';
 import type {
   ConceptPriority,
   OracleAbstainReason,
@@ -185,8 +187,26 @@ export interface GapRow {
    * top of `priorityScore`, never a restatement of {@link assessmentRelevance}
    * or of the mastery-need discount already folded into `priorityScore`.
    * Readiness-side, and what this view sorts on.
+   *
+   * **When the caller supplies need** (`BuildGapViewInput.need`,
+   * `ol-egov.141.89.9.4`), it is instead `assessmentRelevance × need.value ×
+   * readiness.weight` — the attainment chain spec's gap row, which reads
+   * relevance and never the ranking's priority, so mastery is counted once
+   * (review-response row 7b; `[D-332]`).
    */
   readonly gapScore: number;
+  /**
+   * The need reading this row's `gapScore` used, with its basis — present
+   * exactly when the caller supplied need. An `'unknown'` basis is never
+   * worded or drawn as weakness (`[D-348]`, open).
+   */
+  readonly need?: NeedReading;
+  /**
+   * The assessment's declared demands not met now for this concept, passed
+   * through from `BuildGapViewInput.unmetDemands` — present exactly when the
+   * caller supplied them (`[D-349]`, open; `./demand.ts`).
+   */
+  readonly unmetDemands?: readonly PaperDemand[];
   readonly readiness: ReadinessFactors;
   /**
    * The oracle's mastery reading, verbatim. **Never rewritten by the readiness
@@ -257,6 +277,34 @@ export interface BuildGapViewInput {
   /** `extractTier3Evidence`'s own `sourceCoverage`, unmodified. */
   readonly sourceCoverage: readonly SourceCoverage[];
   readonly readiness?: ReadinessOptions;
+  /**
+   * Per concept KEY: whether a correct, current, standing quiz answer exists
+   * (`../mastery/attainment.ts`'s `readAllCurrentRecognition`,
+   * `ol-egov.141.89.9.4`). **Omitted means today's behaviour** — the
+   * recognition credit reads any past success. Supplied, the credit reads
+   * only this fact, and a concept missing from the map reads as having no
+   * current answer (never credited), so a stale, wrong or invalid answer never
+   * lowers need. No production caller supplies it yet (`ol-egov.141.89.9.5`).
+   */
+  readonly currentRecognition?: ReadonlyMap<string, boolean>;
+  /**
+   * Per concept KEY: need with its basis (`../mastery/attainment.ts`'s
+   * `readNeed`, over the per-concept readiness reading; `ol-egov.141.89.9.4`).
+   * **Omitted means today's row.** Supplied, the row's `gapScore` becomes
+   * relevance × need × credit (see `GapRow.gapScore`), and a concept missing
+   * from the map reads need unknown at the declared value. No production
+   * caller supplies it yet (`ol-egov.141.89.9.5`).
+   */
+  readonly need?: ReadonlyMap<string, NeedReading>;
+  /**
+   * Per concept KEY: the assessment's declared demands not met now
+   * (`./demand.ts`'s `demandsMetNow`, `[D-349]` open). Supplied, a concept
+   * with any unmet demand gets no recognition credit (the chain spec's
+   * section 2.5: the credit needs nothing unmet), and the row carries the
+   * list. Omitted means today's behaviour; nothing supplies it until declared
+   * demands reach the client (`ol-2zfj.153`).
+   */
+  readonly unmetDemands?: ReadonlyMap<string, readonly PaperDemand[]>;
 }
 
 /**
@@ -353,14 +401,36 @@ function buildRow(
   const assessmentFormat =
     targetAssessmentPath === null ? 'unknown' : assessmentFormatOf(types.get(targetAssessmentPath));
 
+  // The credit needs nothing unmet (the attainment chain spec's section 2.5):
+  // a supplied, non-empty unmet list withholds it whatever the quiz evidence.
+  const unmetDemands =
+    input.unmetDemands === undefined ? undefined : (input.unmetDemands.get(entry.conceptKey) ?? []);
+  const currentRecognition =
+    unmetDemands !== undefined && unmetDemands.length > 0
+      ? false
+      : input.currentRecognition === undefined
+        ? undefined
+        : (input.currentRecognition.get(entry.conceptKey) ?? false);
   const readiness = readinessFactorsFor(
     input.mastery?.get(entry.conceptKey),
     assessmentFormat,
     input.readiness ?? {},
+    currentRecognition,
   );
 
   const presence = input.materialPresence.get(entry.conceptKey);
   const gapClass = classifyGap(presence);
+
+  // Need supplied: relevance × need × credit, never the ranking's priority
+  // (mastery counted once). A concept missing from the map reads unknown.
+  const need =
+    input.need === undefined
+      ? undefined
+      : (input.need.get(entry.conceptKey) ?? readNeed({ weakest: null, instrumentsRead: 0 }));
+  const gapScore =
+    need === undefined
+      ? entry.priorityScore * readiness.weight
+      : entry.factors.preMasteryScore * need.value * readiness.weight;
 
   return {
     conceptName: entry.conceptName,
@@ -370,7 +440,9 @@ function buildRow(
     oracleRank: entry.rank,
     assessmentRelevance: entry.factors.preMasteryScore,
     priorityScore: entry.priorityScore,
-    gapScore: entry.priorityScore * readiness.weight,
+    gapScore,
+    ...(need !== undefined ? { need } : {}),
+    ...(unmetDemands !== undefined ? { unmetDemands } : {}),
     readiness,
     masteryState: entry.factors.masteryState,
     targetAssessmentPath,

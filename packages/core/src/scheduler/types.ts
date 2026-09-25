@@ -166,6 +166,52 @@ export interface RetrievabilityOutput {
 }
 
 /**
+ * The scheduler's whole configuration (`ol-egov.141.89.9.4`; the attainment
+ * chain spec's section 2.2 in `olea-service`). **Every field is DECLARED,
+ * never fitted** — the library's published FSRS weights, a retention target
+ * that is identity with the holding cut (`[D-115]`), and the two switches
+ * this product keeps off — so under `[D-191]` it may live in client source.
+ * Nothing delivers a configuration today: the study plan carries no scheduler
+ * parameter until a DERIVED one exists (a personalised weight set fitted on
+ * held-out data, R3's `[D-104]` sentence), at which point its derivation stays
+ * service-side and only the numbers travel.
+ *
+ * Plain data we own, like every other shape in this file — no library type.
+ * A change to any field is a change of `version`: replay stores no state, so
+ * a new configuration re-derives every schedule at once, and the version is
+ * how a reading says which configuration produced it (never a silent drift).
+ */
+export interface SchedulerConfiguration {
+  /** Names this exact set of values. Two configurations with different values never share a version. */
+  readonly version: string;
+  /** The FSRS weight vector. */
+  readonly weights: readonly number[];
+  /** The retention target the intervals are set against, in `(0, 1)`. */
+  readonly requestRetention: number;
+  /** The longest interval the scheduler may set, in whole days. */
+  readonly maximumIntervalDays: number;
+  /** Same-day (re)learning steps — off: Olea's queue is daily (see `fsrs-scheduler.ts`'s module doc). */
+  readonly sameDaySteps: boolean;
+  /** Interval jitter — off: determinism is worth more than load-spreading for one user. */
+  readonly fuzz: boolean;
+}
+
+/**
+ * Where a scheduler's configuration came from. `declared` is the cold start
+ * and, today, the only case: nothing is cached, nothing waits on the service.
+ * `delivered` exists for the day a derived set is handed down;
+ * `declared-fallback` means a delivered set was present but unreadable, so the
+ * declared set was used instead — recorded, never silent.
+ */
+export type SchedulerConfigurationSource = 'declared' | 'delivered' | 'declared-fallback';
+
+/** What a scheduler says about the configuration that produced its readings. */
+export interface SchedulerConfigurationStamp {
+  readonly version: string;
+  readonly source: SchedulerConfigurationSource;
+}
+
+/**
  * The scheduling port. `schedule` and `retrievability` are the only two
  * methods, deliberately: everything queue composition (P2-T07), rating
  * mapping (P2-T06), and any product surface reading a recall estimate needs
@@ -182,4 +228,12 @@ export interface RetrievabilityOutput {
 export interface Scheduler {
   schedule(input: ScheduleInput): ScheduleOutput;
   retrievability(input: RetrievabilityInput): RetrievabilityOutput;
+  /**
+   * Which configuration produced this scheduler's outputs (`ol-egov.141.89.9.4`).
+   * Optional so a test double or another port implementation need not carry
+   * one; `createFsrsScheduler` always sets it, and a reading built over a
+   * scheduler without it reports its scheduler version as unknown rather
+   * than guessing.
+   */
+  readonly configuration?: SchedulerConfigurationStamp;
 }

@@ -37,6 +37,21 @@
  * user with a small deck, so that load-spreading problem doesn't exist yet,
  * and determinism (this bead's own requirement) is worth more than it right
  * now. Revisit if the queue ever needs to break up same-day pile-ups.
+ *
+ * **The configuration is declared, versioned and carried on every scheduler
+ * (`ol-egov.141.89.9.4`).** `DECLARED_SCHEDULER_CONFIGURATION` below names
+ * every value the engine runs on — the library's published FSRS-6 weights,
+ * retention 0.90 (identity with the holding cut, `[D-115]`), the default
+ * maximum interval, same-day steps and fuzz off — rather than inheriting
+ * them silently from whatever `ts-fsrs` version is installed. It schedules
+ * byte-identically to the library-default engine this file built before
+ * (`configuration.spec.ts` proves it), and a library upgrade that moves the
+ * defaults fails that spec instead of quietly re-deriving every schedule.
+ * **The cold start is that declared set**: nothing is cached, nothing waits on
+ * the service, and `resolveSchedulerConfiguration` records whether a reading
+ * came from the declared set, a delivered one, or the declared set after an
+ * unreadable delivery. A Class B reading of boundary row 3.2 and C5.4's tuning
+ * sentence under `[D-191]`, flagged for review in the chain spec.
  */
 
 import type { Rating } from 'olea-contracts';
@@ -55,10 +70,91 @@ import type {
   ScheduleInput,
   ScheduleOutput,
   Scheduler,
+  SchedulerConfiguration,
+  SchedulerConfigurationSource,
   SchedulerState,
 } from './types.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * The version of {@link DECLARED_SCHEDULER_CONFIGURATION}. Bumped whenever any
+ * declared value changes — including a library upgrade that changes its
+ * published defaults, which `configuration.spec.ts` catches.
+ */
+export const SCHEDULER_CONFIGURATION_VERSION = 'fsrs6-declared-1';
+
+/**
+ * **THE DECLARED SCHEDULER CONFIGURATION** — every value the scheduler runs
+ * on, named. Declared, never fitted: the weights are the FSRS-6 defaults
+ * `ts-fsrs` 5.4.1 publishes (the population fit its maintainers ship, not a
+ * fit to her data — no personalised set exists, R3's `[D-104]` sentence); the
+ * retention target is 0.90, identity with `HOLDING_CUT` (`[D-115]`: "needs
+ * tending" means exactly "past due"); the maximum interval is the library's
+ * own; same-day steps and fuzz are off for the reasons the module doc gives.
+ */
+export const DECLARED_SCHEDULER_CONFIGURATION: SchedulerConfiguration = Object.freeze({
+  version: SCHEDULER_CONFIGURATION_VERSION,
+  weights: Object.freeze([
+    0.212, 1.2931, 2.3065, 8.2956, 6.4133, 0.8334, 3.0194, 0.001, 1.8722, 0.1666, 0.796, 1.4835,
+    0.0614, 0.2629, 1.6483, 0.6014, 1.8729, 0.5425, 0.0912, 0.0658, 0.1542,
+  ]),
+  requestRetention: 0.9,
+  maximumIntervalDays: 36500,
+  sameDaySteps: false,
+  fuzz: false,
+});
+
+/** A configuration and where it came from — what `createFsrsScheduler` is built from. */
+export interface ResolvedSchedulerConfiguration {
+  readonly configuration: SchedulerConfiguration;
+  readonly source: SchedulerConfigurationSource;
+}
+
+/** FSRS-6's weight-vector length — the shape `DECLARED_SCHEDULER_CONFIGURATION.weights` has. */
+const FSRS6_WEIGHT_COUNT = 21;
+
+function isSchedulerConfiguration(value: unknown): value is SchedulerConfiguration {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<Record<keyof SchedulerConfiguration, unknown>>;
+  const { version, weights, requestRetention, maximumIntervalDays, sameDaySteps, fuzz } = candidate;
+  return (
+    typeof version === 'string' &&
+    version.length > 0 &&
+    Array.isArray(weights) &&
+    weights.length === FSRS6_WEIGHT_COUNT &&
+    weights.every((w) => typeof w === 'number' && Number.isFinite(w)) &&
+    typeof requestRetention === 'number' &&
+    requestRetention > 0 &&
+    requestRetention < 1 &&
+    typeof maximumIntervalDays === 'number' &&
+    Number.isInteger(maximumIntervalDays) &&
+    maximumIntervalDays > 0 &&
+    typeof sameDaySteps === 'boolean' &&
+    typeof fuzz === 'boolean'
+  );
+}
+
+/**
+ * The cold-start rule (the chain spec's section 2.2): **nothing delivered
+ * reads the declared set**, the same as every other session, and says so.
+ * Nothing delivers a set today; if one ever does, a missing one (`undefined`
+ * or `null`) reads the declared set, and one that cannot be read falls back to
+ * the declared set with `source: 'declared-fallback'` — never silently to
+ * another set, and never an error that would stop her session.
+ */
+export function resolveSchedulerConfiguration(delivered?: unknown): ResolvedSchedulerConfiguration {
+  if (delivered === undefined || delivered === null) {
+    return { configuration: DECLARED_SCHEDULER_CONFIGURATION, source: 'declared' };
+  }
+  if (delivered === DECLARED_SCHEDULER_CONFIGURATION) {
+    return { configuration: DECLARED_SCHEDULER_CONFIGURATION, source: 'declared' };
+  }
+  if (!isSchedulerConfiguration(delivered)) {
+    return { configuration: DECLARED_SCHEDULER_CONFIGURATION, source: 'declared-fallback' };
+  }
+  return { configuration: delivered, source: 'delivered' };
+}
 
 /** The four-way rating (frozen contract) onto `ts-fsrs`'s `Grade`. A direct 1:1 map — MCQ's "never Easy" rule (F2.16) is P2-T06's rating-capping function, applied *before* a rating reaches this interface, never here. */
 const RATING_TO_GRADE: Record<Rating, Grade> = {
@@ -125,11 +221,27 @@ function fromCard(card: Card): SchedulerState {
   };
 }
 
-/** Builds a `Scheduler` backed by `ts-fsrs`, using the library's default weights and request-retention (no personalisation in v0.9 — nothing in the contract calls for it) with short-term learning steps and fuzz both off (see module doc). */
-export function createFsrsScheduler(): Scheduler {
-  const engine = fsrs({ enable_short_term: false });
+/**
+ * Builds a `Scheduler` backed by `ts-fsrs` from a resolved configuration —
+ * by default the declared set (the cold start; no personalisation in v0.9,
+ * nothing in the contract calls for it). The returned scheduler carries the
+ * configuration's version and source, so every reading built over it can say
+ * which configuration produced it.
+ */
+export function createFsrsScheduler(
+  resolved: ResolvedSchedulerConfiguration = resolveSchedulerConfiguration(),
+): Scheduler {
+  const { configuration, source } = resolved;
+  const engine = fsrs({
+    w: [...configuration.weights],
+    request_retention: configuration.requestRetention,
+    maximum_interval: configuration.maximumIntervalDays,
+    enable_short_term: configuration.sameDaySteps,
+    enable_fuzz: configuration.fuzz,
+  });
 
   return {
+    configuration: { version: configuration.version, source },
     schedule(input: ScheduleInput): ScheduleOutput {
       const priorCard: CardInput | Card = input.state
         ? toCardInput(input.state)

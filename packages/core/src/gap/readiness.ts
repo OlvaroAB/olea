@@ -46,12 +46,26 @@
  * `readinessFactorsFor`/`GapRow.readiness` for overlap; the only shared file
  * is `../index.js`'s barrel re-export, which is not a computation.
  *
- * **Every number in this module is provisional and unratified (Class B).**
- * `DEFAULT_MCQ_RECOGNITION_WEIGHT` is a guess with an argument, not a
- * measurement, exactly like `rank.ts`'s parameters — and, like them, it may
- * never be tuned on synthetic data (`eval/CLAUDE.md`). Setting it to `1`
- * disables the weighting entirely and returns the oracle's own ordering, which
- * is what makes this reversible from the outside rather than by a code change.
+ * **The one number in this module is ratified as a measured provisional
+ * baseline — `[D-278]`, 2026-09-24.** `DEFAULT_MCQ_RECOGNITION_WEIGHT` (0.60)
+ * was swept against real rankings and replayed term logs and adopted as the
+ * baseline, with a written revisit condition and a rule for moving it (see the
+ * constant's own doc). It is declared-with-baseline, not a fit: it may never
+ * be tuned on synthetic data (`eval/CLAUDE.md`), and it moves only by decision
+ * bead. Setting it to `1` still disables the weighting entirely and returns
+ * the oracle's own ordering, which is what keeps it reversible from the
+ * outside rather than by a code change.
+ *
+ * **When the credit fires (`ol-egov.141.89.9.4`).** On a recall-style
+ * assessment, for a concept with demonstrated recognition. By default
+ * "demonstrated" still means any past successful quiz answer
+ * (`tiersSucceeded.recognition`), as today; a caller that supplies
+ * `currentRecognition` (`../mastery/attainment.ts`'s
+ * `readAllCurrentRecognition`) narrows it to a correct answer that is
+ * current (not yet due again) and standing (not proven invalid), so a stale
+ * or invalid answer never lowers need either (review 3.4; the attainment
+ * chain spec's section 2.5). Wiring the gap view's caller to supply it is
+ * `ol-egov.141.89.9.5`'s.
  *
  * **`ReadinessFactors.weight` is a third, orthogonal multiplier — never a
  * restatement of `oracle/rank.ts`'s `masteryNeedWeight` (`ol-v7r5.64`
@@ -114,14 +128,24 @@ export function assessmentFormatOf(type: string | undefined): AssessmentFormat {
  * How much a concept's need is discounted when recognition evidence is the
  * predictive signal for this paper's format.
  *
- * **Provisional, unratified, unmeasured.** 0.6 is "meaningfully less pressing,
- * nowhere near settled" and that sentence is its entire justification. It is
- * deliberately not near 0: a concept she has only ever recognised is still a
- * concept she has never produced, and F4.9's always-cover-the-full-syllabus
- * clause is the reason no weight in this pipeline is ever allowed to zero a
- * row out (`rank.ts`'s `masteryNeedWeight` makes the same argument for the
- * same reason). Ratifying it needs a real MCQ-format assessment, her review
- * log across it, and how she actually did — through a decision bead.
+ * **Ratified as the measured provisional baseline — `[D-278]` (2026-09-24).**
+ * A sensitivity sweep over real rankings and replayed term logs (zero spend;
+ * the finding and the sweep live in the private repo,
+ * `findings/e7-gap-recognition-weight.md`) could not yet see the weight: no
+ * replayed log holds a course whose concepts have mixed recognition evidence,
+ * so the flat result is evidence neither for nor against 0.60. David adopted
+ * 0.60 as the provisional baseline on that footing, never as a fit, with a
+ * written pre-commitment. Its **revisit condition**: the first
+ * completed recall-style assessment whose recorded scope holds at least three
+ * concepts with mixed recognition evidence. It **moves only** under the
+ * moved-enough rule (an order change in the part of the list she actually
+ * walks AND worse recorded outcomes than the replayed counterfactual at 1.00),
+ * after two such occasions in different courses, and only through a decision
+ * bead. It stays deliberately not near 0: a concept she has only ever
+ * recognised is still a concept she has never produced, and F4.9's
+ * always-cover-the-full-syllabus clause is the reason no weight in this
+ * pipeline is ever allowed to zero a row out (`rank.ts`'s `masteryNeedWeight`
+ * makes the same argument for the same reason).
  */
 export const DEFAULT_MCQ_RECOGNITION_WEIGHT = 0.6;
 
@@ -129,7 +153,8 @@ export interface ReadinessOptions {
   /**
    * See {@link DEFAULT_MCQ_RECOGNITION_WEIGHT}. **`1` disables the weighting
    * entirely** — the gap view then returns the oracle ranking's own order,
-   * which is the supported way to turn an unratified parameter off.
+   * the supported way to turn the weighting off from outside for a replay or
+   * a counterfactual.
    */
   readonly mcqRecognitionWeight?: number;
 }
@@ -148,7 +173,9 @@ export interface ReadinessFactors {
    * MCQ answer is not demonstrated recognition and must never set this
    * (ol-lfhj, R7, review 3.4: "a wrong answer never lowers need") — reading
    * `tiersPracticed` here instead would make a wrong answer discount need
-   * the same as a right one.
+   * the same as a right one. When the caller supplies `currentRecognition`
+   * to {@link readinessFactorsFor}, this is that fact instead: a correct
+   * answer that is current and standing (`ol-egov.141.89.9.4`).
    */
   readonly recognitionEvidence: boolean;
   /** Every scored event is recognition — carried for the surface, never used to zero a row (R7's framing clause). */
@@ -168,11 +195,18 @@ export interface ReadinessFactors {
  * oracle's own `masteryNeedWeight` already reads that absence (`'seed'` vs.
  * `'unknown'`, which `rank.ts` keeps distinct). Weighting on top of it here
  * would double-count one silence.
+ *
+ * `currentRecognition` (`ol-egov.141.89.9.4`): when supplied, whether a
+ * correct, current, standing quiz answer exists for this concept
+ * (`../mastery/attainment.ts`'s `readAllCurrentRecognition`) — and the credit
+ * reads that instead of any past success, so a stale, wrong or invalid answer
+ * never lowers need. Omitted, the credit reads exactly as it did before.
  */
 export function readinessFactorsFor(
   mastery: ConceptMasteryResult | undefined,
   assessmentFormat: AssessmentFormat,
   options: ReadinessOptions = {},
+  currentRecognition?: boolean,
 ): ReadinessFactors {
   const configured = options.mcqRecognitionWeight ?? DEFAULT_MCQ_RECOGNITION_WEIGHT;
   if (!(configured > 0 && configured <= 1)) {
@@ -181,7 +215,8 @@ export function readinessFactorsFor(
     );
   }
 
-  const recognitionEvidence = mastery?.evidence.tiersSucceeded?.recognition ?? false;
+  const recognitionEvidence =
+    currentRecognition ?? mastery?.evidence.tiersSucceeded?.recognition ?? false;
   const recognitionOnly = mastery?.evidence.recognitionOnly ?? false;
   const applied = assessmentFormat === 'recall-style' && recognitionEvidence;
 
