@@ -253,6 +253,119 @@ describe('buildStudyPlan', () => {
       const version = await studyPlanVersion('2026-08-16', []);
       expect(version).toMatch(/^sp1-[0-9a-f]{16}$/);
     });
+
+    // `ol-egov.141.89.10.23`: `floorsFundable` never reaches `StudyPlanBody`,
+    // and until this bead the version hashed only `{asOf, courses}` — two
+    // plans differing only in the cross-course allocation, or only in which
+    // ranking weights produced them, shared one version.
+    it('differs when only the allocation differs — the same ranking, a different split, is a different policy', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const withoutSplit = await buildStudyPlan({ ranking: source, computedAt: COMPUTED_AT });
+      const withSplit = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        allocation: [
+          {
+            courseId: 'COURSE-A',
+            share: 0.6,
+            minBlockSeconds: 180,
+            contributions: [{ name: 'risk', value: 0.5 }],
+            reason: 'COURSE-A has an assessment in nine days.',
+          },
+        ],
+      });
+      const differentShare = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        allocation: [
+          {
+            courseId: 'COURSE-A',
+            share: 0.4,
+            minBlockSeconds: 180,
+            contributions: [{ name: 'risk', value: 0.5 }],
+            reason: 'COURSE-A has an assessment in nine days.',
+          },
+        ],
+      });
+
+      expect(withSplit.policyVersion).not.toBe(withoutSplit.policyVersion);
+      expect(differentShare.policyVersion).not.toBe(withSplit.policyVersion);
+    });
+
+    it('the same allocation content gives the same version regardless of key order — stable canonical ordering', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const allocationA = [
+        {
+          courseId: 'COURSE-A',
+          share: 0.6,
+          minBlockSeconds: 180,
+          contributions: [{ name: 'risk', value: 0.5 }],
+          reason: 'COURSE-A has an assessment in nine days.',
+        },
+      ];
+      // Same content, struct literal written with its keys in a different
+      // order — object key order is not what `canonicalise` relies on.
+      const allocationB = [
+        {
+          reason: 'COURSE-A has an assessment in nine days.',
+          share: 0.6,
+          contributions: [{ name: 'risk', value: 0.5 }],
+          courseId: 'COURSE-A',
+          minBlockSeconds: 180,
+        },
+      ];
+      const first = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        allocation: allocationA,
+      });
+      const second = await buildStudyPlan({
+        ranking: source,
+        computedAt: '2026-08-19T23:45:00.000Z',
+        allocation: allocationB,
+      });
+
+      expect(second.policyVersion).toBe(first.policyVersion);
+    });
+
+    it('differs when only the delivered ranking weights differ — a changed weight set is a changed policy even if the ranking read the same', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const withoutWeights = await buildStudyPlan({ ranking: source, computedAt: COMPUTED_AT });
+      const withWeights = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        rankWeights: { proximityHalfLifeDays: 14 },
+      });
+      const differentWeights = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        rankWeights: { proximityHalfLifeDays: 21 },
+      });
+
+      expect(withWeights.policyVersion).not.toBe(withoutWeights.policyVersion);
+      expect(differentWeights.policyVersion).not.toBe(withWeights.policyVersion);
+    });
+
+    it('identical rank weights across two builds give the same version', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const rankWeights = { proximityHalfLifeDays: 14, assessmentWeightDivisor: 1 };
+      const first = await buildStudyPlan({ ranking: source, computedAt: COMPUTED_AT, rankWeights });
+      const second = await buildStudyPlan({
+        ranking: source,
+        computedAt: '2026-08-19T23:45:00.000Z',
+        rankWeights: { ...rankWeights },
+      });
+
+      expect(second.policyVersion).toBe(first.policyVersion);
+    });
   });
 
   describe('allocation (ol-v7r5.25)', () => {

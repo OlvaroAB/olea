@@ -18,8 +18,10 @@
  * different versions, and two that would order it identically share one. So
  * `policyVersion` (the envelope's field for what this module used to call
  * `planVersion` — `[D-122]`'s mechanical mapping) is a SHA-256 over the
- * **policy body** — the courses, in their canonical form — and deliberately
- * not over `computedAt` or the D7.3 `stamp`.
+ * **policy body** — the courses, the cross-course allocation and the
+ * ranking-weight factors that produced them, when the caller has them in
+ * hand, in their canonical form — and deliberately not over `computedAt` or
+ * the D7.3 `stamp`.
  *
  * Recomputing an unchanged plan therefore produces the same version. That is
  * the property, not a side effect: A2.5 has the Worker recomputing "daily, or on
@@ -59,7 +61,7 @@ import {
   studyPlanEnvelope,
 } from 'olea-contracts';
 import { hashText } from '../ingestion/hash.js';
-import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
+import type { ConceptPriority, RankOracleOptions, RankOracleResult } from '../oracle/types.js';
 
 /**
  * Prefix on every `policyVersion`, so a value found in a log line six months
@@ -107,6 +109,21 @@ export interface BuildStudyPlanInput {
    * is nothing to carry.
    */
   readonly allocation?: readonly StudyPlanAllocationEntry[];
+  /**
+   * `[D-110]`'s delivered-or-fallback ranking-weight factors (proximity
+   * half-life, assessment weight divisor, mastery-need ladder), when the
+   * caller has them in hand — `plan/provider.ts`'s own `readRankWeights`
+   * result, the same `RankOracleOptions` already passed to
+   * `composeOracleRanking`. **Not landed onto `body`** (that is a contract
+   * change outside this module's reach, `ol-egov.141.89.10.23`'s proposed
+   * decision) — folded only into `policyVersion`'s hash, so two plans that
+   * differ only in which weights produced them are never read as the same
+   * policy. Omitted has the same "no policy travelled" reading `allocation`
+   * above documents: a plan built before this field existed, or with
+   * `readRankWeights` absent (F7.8), hashes exactly as it did before this
+   * bead.
+   */
+  readonly rankWeights?: RankOracleOptions;
 }
 
 /**
@@ -211,12 +228,27 @@ function canonicalise(value: unknown): unknown {
  * The `asOf` day is inside the derivation because exam proximity is measured
  * from it: the identical ranking read from a different day is a different
  * policy, even when every score happens to coincide.
+ *
+ * **`allocation` and `rankWeights` are in the hash too (`ol-egov.141.89.10.23`).**
+ * Component 3.5's cross-course split and `[D-110]`'s ranking-weight factors
+ * both change what she is actually served without necessarily moving a single
+ * `courses` entry — two plans that would divide her time differently, or that
+ * were ranked under different weights, must not share one version just
+ * because the ranked list happens to read the same. Both are optional and
+ * `canonicalise` drops an `undefined` key entirely, so a plan built with
+ * neither (every plan before this bead, and every plan built today with no
+ * allocation policy and no delivered weights) hashes exactly as it always
+ * has — this is additive to the derivation, not a reshuffle of it.
  */
 export async function studyPlanVersion(
   asOf: string,
   courses: readonly StudyPlanCourse[],
+  allocation?: readonly StudyPlanAllocationEntry[],
+  rankWeights?: RankOracleOptions,
 ): Promise<string> {
-  const digest = await hashText(JSON.stringify(canonicalise({ asOf, courses })));
+  const digest = await hashText(
+    JSON.stringify(canonicalise({ asOf, courses, allocation, rankWeights })),
+  );
   return `${PLAN_VERSION_PREFIX}-${digest.slice(0, PLAN_VERSION_HEX_LENGTH)}`;
 }
 
@@ -236,7 +268,12 @@ export async function studyPlanVersion(
  */
 export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyPlanEnvelope> {
   const courses = input.ranking.courses.map(toStudyPlanCourse);
-  const policyVersion = await studyPlanVersion(input.ranking.asOf, courses);
+  const policyVersion = await studyPlanVersion(
+    input.ranking.asOf,
+    courses,
+    input.allocation,
+    input.rankWeights,
+  );
   const envelope: StudyPlanEnvelope = {
     envelopeVersion: ARTIFACT_ENVELOPE_VERSION,
     kind: STUDY_PLAN_KIND,

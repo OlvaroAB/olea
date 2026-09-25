@@ -315,6 +315,16 @@ export function createLocalStudyPlanProvider(
       return buildStudyPlan({
         ranking,
         computedAt: now.toISOString(),
+        // `ol-egov.141.89.10.23`: `options` is the exact `RankOracleOptions`
+        // already handed to `composeOracleRanking` above — folded into
+        // `policyVersion`'s hash so a plan ranked under different delivered
+        // (or fallback) weights never shares a version with one ranked under
+        // today's, even in the degenerate case where the reordering happens
+        // to leave `courses` byte-identical. Absent exactly when it was
+        // absent to `composeOracleRanking` (`readRankWeights` unset, or
+        // resolving `undefined` — F7.8's fallback path), so a plan built
+        // with no delivered weights hashes exactly as it did before this bead.
+        ...(options !== undefined ? { rankWeights: options } : {}),
         ...(policy !== undefined
           ? {
               allocation: policy.allocation.map((entry) => ({
