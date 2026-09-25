@@ -551,7 +551,7 @@ function resolveCourseOrTopicFilter(
  * is already known at freeze time; only `asOf` moves between the freeze
  * snapshot and a later re-check.
  */
-interface FrozenScopeConcept {
+export interface FrozenScopeConcept {
   readonly conceptKey: string;
   readonly notePaths: readonly VaultPath[];
   readonly masteryState: OracleMasteryState;
@@ -640,7 +640,7 @@ const RETRIEVAL_BASELINE_STAGE_LADDER_DAYS: Readonly<
 > = Object.freeze({ sprout: 5, sapling: 12, tree: 21 });
 
 /** One frozen candidate assessment — the note path and the raw `due` string, banded fresh at every snapshot instant. */
-interface FrozenScopeAssessment {
+export interface FrozenScopeAssessment {
   readonly path: VaultPath;
   readonly due: string | undefined;
 }
@@ -658,31 +658,55 @@ function bandFor(assessment: FrozenScopeAssessment, asOf: CalendarDay): Assessme
  * any later instant, over the exact candidate set (`GapRow`s, not just
  * chosen items) `buildFresh` considered. Exported so
  * {@link ComposeStudySessionForRequestResult} can carry one back to
- * `buildFresh`'s own closure (`[SESS-8.4]`) — opaque to every other caller.
+ * `buildFresh`'s own closure (`[SESS-8.4]`), and so any other caller that
+ * holds a sitting of its own across calls — `ol-egov.141.89.10.46`'s reason
+ * for exporting this: the shared session holder (`session/holder.ts`) is the
+ * first such caller — can rebuild a snapshot from it through the same
+ * exported {@link buildScopeSnapshotAt} this file's own `load()` uses below,
+ * rather than a second, independently-drifting definition of staleness
+ * (`docs/dev/one-assembly-path.md`, D-033).
+ *
+ * Deliberately no live capability on this type (no `VaultSource`, no vault
+ * at all) — this is frozen DATA, cheap to hold in a closure for a whole
+ * sitting's lifetime. The one I/O {@link buildScopeSnapshotAt} needs (a
+ * `firstSeen` read) is supplied by its caller at call time instead, via an
+ * injected function, never read off this scope or a global.
  */
 export interface FrozenSittingScope {
   readonly concepts: readonly FrozenScopeConcept[];
   readonly assessments: readonly FrozenScopeAssessment[];
-  readonly vault: VaultSource;
 }
 
 /**
  * Builds a {@link SittingScopeSnapshot} at `asOf` from a {@link
  * FrozenSittingScope} — no I/O for the due-concept half (pure re-run of
- * already-read facts, see this file's module doc), a light
- * `vault.firstSeen` re-read for the arrival-watermark half (the same stat
- * calls `arrivalDaysByConceptKey` already makes at freeze time).
+ * already-read facts, see this file's module doc), a light `firstSeen`
+ * re-read for the arrival-watermark half (the same stat calls
+ * `arrivalDaysByConceptKey` already makes at freeze time).
+ *
+ * Exported (`ol-egov.141.89.10.46`) so every holder over a `FrozenSittingScope`
+ * computes `[D-162]`'s three facts through this ONE definition — this file's
+ * own `load()` below calls this exact export at both its call sites, never a
+ * parallel internal copy, and a second holder (the shared session holder,
+ * `session/holder.ts`) is expected to call it the same way.
+ *
+ * `firstSeen` is an injected function, not a `VaultSource` reached for off
+ * the scope or a module-level global — the same shape `arrivalDaysByConceptKey`
+ * above already uses (`vault.firstSeen?.bind(vault)`, resolved once by the
+ * caller against whatever vault instance is live). Omitted — no host support,
+ * or a caller that cannot supply one — reads exactly as before: no arrival
+ * signal, never a fabricated day.
  */
-async function buildScopeSnapshotAt(
+export async function buildScopeSnapshotAt(
   scope: FrozenSittingScope,
   asOf: CalendarDay,
+  firstSeen?: (path: VaultPath) => Promise<number | null> | number | null,
 ): Promise<SittingScopeSnapshot> {
   const dueConceptKeys = new Set<string>();
   for (const concept of scope.concepts) {
     if (isDueClass(concept, asOf)) dueConceptKeys.add(concept.conceptKey);
   }
 
-  const firstSeen = scope.vault.firstSeen?.bind(scope.vault);
   let materialArrivalWatermark: CalendarDay | undefined;
   if (firstSeen !== undefined) {
     const allPaths = scope.concepts.flatMap((concept) => concept.notePaths);
@@ -712,7 +736,15 @@ export interface ComposeStudySessionForRequestResult {
   /** The unstripped composition — `.full` is exactly the `ComposedStudySession` shape `session/holder.ts`'s shared holder carries. */
   readonly composed: ComposedReentrySession;
   readonly courseOrTopicOptions: readonly CourseOrTopicOption[];
-  /** `buildFresh`'s own freeze-staleness bookkeeping (`ol-v7r5.26`) — opaque to every other caller, which needs only `composed`. */
+  /**
+   * `buildFresh`'s own freeze-staleness bookkeeping (`ol-v7r5.26`) — most
+   * callers need only `composed`, but a caller that holds its own sitting
+   * across calls (`ol-egov.141.89.10.46`: the shared session holder,
+   * `session/holder.ts`, is the first) keeps this alongside its own copy
+   * and rebuilds a {@link SittingScopeSnapshot} from it via the exported
+   * {@link buildScopeSnapshotAt}, the same way this file's own `load()`
+   * does below.
+   */
   readonly frozenScope: FrozenSittingScope;
   /**
    * `[SESS-8.6]` (`ol-egov.132.6`): the exact `BuildComposedStudySessionInput`
@@ -960,7 +992,6 @@ export async function composeStudySessionForRequest(
         path,
         due: edges.assessmentsRead.records.find((record) => record.path === path)?.due,
       })),
-    vault: deps.vault,
   };
 
   // F2.19 (`ol-v7r5.11`): both resolvers are pure and synchronous, over
@@ -1189,7 +1220,11 @@ export function createLocalSessionBuilderProvider(
           elapsedMs >= DEFAULT_SITTING_IDLE_THRESHOLD_MS && frozenScope !== undefined
             ? diffSittingScopeSnapshots(
                 frozenSnapshot ?? EMPTY_SITTING_SCOPE_SNAPSHOT,
-                await buildScopeSnapshotAt(frozenScope, localToday(now)),
+                await buildScopeSnapshotAt(
+                  frozenScope,
+                  localToday(now),
+                  deps.vault.firstSeen?.bind(deps.vault),
+                ),
               )
             : {
                 itemsDueInScope: false,
@@ -1242,7 +1277,11 @@ export function createLocalSessionBuilderProvider(
         frozenScope = pendingFrozenScope;
         frozenSnapshot =
           frozenScope !== undefined
-            ? await buildScopeSnapshotAt(frozenScope, localToday(now))
+            ? await buildScopeSnapshotAt(
+                frozenScope,
+                localToday(now),
+                deps.vault.firstSeen?.bind(deps.vault),
+              )
             : undefined;
       }
       return resultWithReason;
