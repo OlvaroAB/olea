@@ -1266,29 +1266,47 @@ describe('composeSessionRows', () => {
 });
 
 // ---------------------------------------------------------------------------
-// [D-292] citation freshness (`ol-2zfj.154`) — read here, actioned only where ruled.
-// One test per state: fresh, stale, unknown. [D-351] (open) governs whether/how a
-// stale citation withholds an instrument, so `stale` is read (reported) but never
-// excludes — see compose.ts's module doc, "Citation freshness" section.
+// [D-292]/[D-351]/[D-330] citation validity (`ol-2zfj.154`, `ol-2zfj.147`,
+// `ol-egov.141.89.5.13`) — read here, and now ACTIONED. `citationFreshness`
+// (unchanged from before this bead — `ol-egov.141.89.10.33`'s
+// `resolveCitationFreshness` already resolves it in production) supplies
+// `'fresh'`/`'stale'`/`'unknown'`; `citationPendingRevalidation` is the new,
+// separately-optional `[D-351]` pending-revalidation id set, which takes
+// precedence when both are supplied. `[D-330]` (ruled 2026-09-25) withholds a
+// `'stale'` reading and a pending id alike; `'unknown'` (or no signal at all)
+// still never withholds on its own and never reads as fresh — see compose.ts's
+// module doc, "Citation validity" section.
 // ---------------------------------------------------------------------------
 
-describe('composeSessionRows: [D-292] citation freshness', () => {
-  function threeConceptFixture() {
+describe('composeSessionRows: [D-292]/[D-351]/[D-330] citation validity', () => {
+  function fourConceptFixture() {
     const theRows = rows([
       { conceptName: 'FreshConcept', gapScore: 5 },
       { conceptName: 'StaleConcept', gapScore: 5 },
+      { conceptName: 'PendingConcept', gapScore: 5 },
       { conceptName: 'UnknownConcept', gapScore: 5 },
     ]);
     const instruments = buildConceptInstrumentIndex([
       qa('fresh-1', ['FreshConcept']),
       qa('stale-1', ['StaleConcept']),
+      qa('pending-1', ['PendingConcept']),
       qa('unknown-1', ['UnknownConcept']),
     ]);
     return { theRows, instruments };
   }
 
-  it('fresh: an instrument whose citationFreshness reads fresh is served, queued for neither', () => {
-    const { theRows, instruments } = threeConceptFixture();
+  const freshnessMap = new Map([
+    ['fresh-1', 'fresh' as const],
+    ['stale-1', 'stale' as const],
+    ['unknown-1', 'unknown' as const],
+    // `pending-1` deliberately carries no `citationFreshness` entry at all — its withholding
+    // must come purely from `citationPendingRevalidation` below, proving the two signals are
+    // genuinely independent rather than one gating the other.
+  ]);
+  const pendingSet = new Set(['pending-1']);
+
+  it('fresh: an instrument whose citationFreshness reads fresh (and is not pending) is served, queued for neither', () => {
+    const { theRows, instruments } = fourConceptFixture();
     const result = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1296,15 +1314,13 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 3600,
-      citationFreshness: new Map([
-        ['fresh-1', 'fresh'],
-        ['stale-1', 'stale'],
-        ['unknown-1', 'unknown'],
-      ]),
+      citationFreshness: freshnessMap,
+      citationPendingRevalidation: pendingSet,
     });
 
     expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual([
       'FreshConcept',
+      'PendingConcept',
       'StaleConcept',
       'UnknownConcept',
     ]);
@@ -1312,8 +1328,8 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
     expect(result.citationRevalidationPending.has('fresh-1')).toBe(false);
   });
 
-  it('stale: read and reported, but NOT withheld — [D-351] (open) governs withholding, so today\'s serving behaviour is kept', () => {
-    const { theRows, instruments } = threeConceptFixture();
+  it('stale: read AND actioned — reported on citationRevalidationPending, the set buildComposedStudySession withholds', () => {
+    const { theRows, instruments } = fourConceptFixture();
     const result = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1321,22 +1337,18 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 3600,
-      citationFreshness: new Map([
-        ['fresh-1', 'fresh'],
-        ['stale-1', 'stale'],
-        ['unknown-1', 'unknown'],
-      ]),
+      citationFreshness: freshnessMap,
+      citationPendingRevalidation: pendingSet,
     });
 
-    // Still composed — nothing here withholds it (this bead's own scope: build only
-    // what [D-292] rules and [D-351] has already gated the withholding action).
-    expect(result.orderedRows.some((r) => r.conceptName === 'StaleConcept')).toBe(true);
+    // The CONCEPT row is still selected here — this module has no per-instrument view at
+    // selection time (see the module doc) — but the instrument id is flagged for withholding.
     expect(result.citationRevalidationPending.has('stale-1')).toBe(true);
     expect(result.citationRecheckQueued.has('stale-1')).toBe(false);
   });
 
-  it('unknown: read and actioned — served, with a re-check queued (explicit "unknown" entry)', () => {
-    const { theRows, instruments } = threeConceptFixture();
+  it("pending: read AND actioned exactly like stale — [D-351]'s revalidation-in-flight state, driven by citationPendingRevalidation alone", () => {
+    const { theRows, instruments } = fourConceptFixture();
     const result = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1344,11 +1356,42 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
       durations: flatDurations(60),
       asOf: AS_OF,
       budgetSeconds: 3600,
-      citationFreshness: new Map([
-        ['fresh-1', 'fresh'],
-        ['stale-1', 'stale'],
-        ['unknown-1', 'unknown'],
-      ]),
+      citationFreshness: freshnessMap,
+      citationPendingRevalidation: pendingSet,
+    });
+
+    expect(result.citationRevalidationPending.has('pending-1')).toBe(true);
+    expect(result.citationRecheckQueued.has('pending-1')).toBe(false);
+  });
+
+  it('pending takes precedence over a fresh citationFreshness reading for the same instrument', () => {
+    const { theRows, instruments } = fourConceptFixture();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: new Map([['pending-1', 'fresh']]),
+      citationPendingRevalidation: pendingSet,
+    });
+
+    expect(result.citationRevalidationPending.has('pending-1')).toBe(true);
+    expect(result.citationRecheckQueued.has('pending-1')).toBe(false);
+  });
+
+  it('unknown: read and actioned — served, with a re-check queued, never withheld on its own', () => {
+    const { theRows, instruments } = fourConceptFixture();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: freshnessMap,
+      citationPendingRevalidation: pendingSet,
     });
 
     expect(result.orderedRows.some((r) => r.conceptName === 'UnknownConcept')).toBe(true);
@@ -1356,10 +1399,11 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
     expect(result.citationRevalidationPending.has('unknown-1')).toBe(false);
   });
 
-  it('unknown is also the default: an omitted citationFreshness map, or an instrument missing from it, both queue a re-check rather than reading as fresh', () => {
-    const { theRows, instruments } = threeConceptFixture();
+  it('unknown is also the default: omitted maps, or an instrument missing from them, both queue a re-check rather than reading as fresh', () => {
+    const { theRows, instruments } = fourConceptFixture();
 
-    // No `citationFreshness` supplied at all.
+    // Neither `citationFreshness` nor `citationPendingRevalidation` supplied at all — exactly
+    // today's production shape before `[D-351]`'s store lands a caller for the second field.
     const omitted = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1370,10 +1414,11 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
     });
     expect(omitted.citationRecheckQueued.has('fresh-1')).toBe(true);
     expect(omitted.citationRecheckQueued.has('stale-1')).toBe(true);
+    expect(omitted.citationRecheckQueued.has('pending-1')).toBe(true);
     expect(omitted.citationRecheckQueued.has('unknown-1')).toBe(true);
     expect(omitted.citationRevalidationPending.size).toBe(0);
 
-    // A map that names only one of the three instruments.
+    // A freshness map that names only one of the four instruments, no pending set at all.
     const partial = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1385,7 +1430,75 @@ describe('composeSessionRows: [D-292] citation freshness', () => {
     });
     expect(partial.citationRecheckQueued.has('fresh-1')).toBe(false);
     expect(partial.citationRecheckQueued.has('stale-1')).toBe(true);
+    expect(partial.citationRecheckQueued.has('pending-1')).toBe(true);
     expect(partial.citationRecheckQueued.has('unknown-1')).toBe(true);
+    expect(partial.citationRevalidationPending.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [D-330] withholding, actually served — buildComposedStudySession filters the fill's
+// own instrument index, never only reports. The concept is still selected (this module
+// has no per-instrument view at selection time); only the withheld instrument itself
+// drops, and nothing takes its place.
+// ---------------------------------------------------------------------------
+
+describe('buildComposedStudySession: [D-330] withholds a stale/pending instrument from the fill', () => {
+  it('a stale instrument never reaches model.items; a fresh sibling instrument for the same concept still does', () => {
+    const theRows = rows([{ conceptName: 'Alpha', gapScore: 9 }]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a-stale', ['Alpha']),
+      qa('a-fresh', ['Alpha']),
+    ]);
+    const overdue = replay({
+      'a-stale': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      'a-fresh': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const result = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetMinutes: 10,
+      citationFreshness: new Map([['a-stale', 'stale']]),
+    });
+
+    const servedIds = result.model.items.map((i) => i.instrumentId);
+    expect(servedIds).not.toContain('a-stale');
+    expect(servedIds).toContain('a-fresh');
+    expect(result.citationRevalidationPending.has('a-stale')).toBe(true);
+  });
+
+  it('an instrument marked pending (via citationPendingRevalidation, with no citationFreshness entry at all) is withheld the same way — nothing takes its place', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+    ]);
+    // Alpha's only instrument is pending; Bravo's is unaffected. `[D-330]`: nothing replaces
+    // Alpha's dropped slot — Bravo is served exactly as it already would be, no substitute row.
+    const instruments = buildConceptInstrumentIndex([
+      qa('a-pending', ['Alpha']),
+      qa('b1', ['Bravo']),
+    ]);
+    const overdue = replay({
+      'a-pending': { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+
+    const result = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetMinutes: 10,
+      citationPendingRevalidation: new Set(['a-pending']),
+    });
+
+    expect(result.model.items.map((i) => i.instrumentId)).toEqual(['b1']);
+    expect(result.citationRevalidationPending.has('a-pending')).toBe(true);
   });
 });
 
@@ -3177,5 +3290,85 @@ describe('extendComposedStudySession (`[SESS-11]`)', () => {
     expect(byCourse.get('BIG')).toBe(18);
     expect(byCourse.get('SMALL')).toBe(2);
     expect(extended.length).toBe(20);
+  });
+
+  // -------------------------------------------------------------------------
+  // `[D-330]` (David's clarification: "including within an already-open session")
+  // — removal reaches items `previous` already served, not only what the wider
+  // recomposition would newly add. See compose.ts's own doc above this function.
+  // -------------------------------------------------------------------------
+
+  it('[D-330]: a previously-served instrument that has since gone stale is dropped, with the rest renumbered contiguously', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+      { conceptName: 'Charlie', gapScore: 7 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('a1', ['Alpha']),
+      qa('b1', ['Bravo']),
+      qa('c1', ['Charlie']),
+    ]);
+    const overdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      c1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    };
+
+    // All three fit inside the frozen sitting.
+    const previous = buildComposedStudySession({ ...baseInput, budgetMinutes: 3 });
+    expect(previous.model.items.map((i) => i.instrumentId)).toEqual(['a1', 'b1', 'c1']);
+
+    // The middle item's citation has since gone `stale` — discovered while the session is
+    // still open, at the SAME budget, so nothing new could be appended either. Widening it a
+    // little proves this isn't merely a coincidence of the wider composition never choosing it.
+    const extended = extendComposedStudySession(
+      { ...baseInput, budgetMinutes: 5, citationFreshness: new Map([['b1', 'stale']]) },
+      previous,
+    );
+
+    expect(extended.map((i) => i.instrumentId)).toEqual(['a1', 'c1']);
+    expect(extended.map((i) => i.position)).toEqual([1, 2]);
+    // The surviving items are otherwise byte-identical to what `previous` already held.
+    expect(extended[0]).toEqual(previous.model.items[0]);
+  });
+
+  it('[D-330]: withholding and growth compose together — the withheld item drops, a genuinely new one still appends after it', () => {
+    const theRows = rows([
+      { conceptName: 'Alpha', gapScore: 9 },
+      { conceptName: 'Bravo', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['Alpha']), qa('b1', ['Bravo'])]);
+    const overdue = replay({
+      a1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+      b1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const baseInput = {
+      rows: theRows,
+      instruments,
+      replay: overdue,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    };
+
+    // 60s target -> she reaches exactly Alpha before the target and stops.
+    const previous = buildComposedStudySession({ ...baseInput, budgetMinutes: 1 });
+    expect(previous.model.items.map((i) => i.instrumentId)).toEqual(['a1']);
+
+    // She outruns it AND Alpha's own citation has since gone `pending` — both apply at once.
+    const extended = extendComposedStudySession(
+      { ...baseInput, budgetMinutes: 3, citationPendingRevalidation: new Set(['a1']) },
+      previous,
+    );
+
+    expect(extended.map((i) => i.instrumentId)).toEqual(['b1']);
+    expect(extended.map((i) => i.position)).toEqual([1]);
   });
 });

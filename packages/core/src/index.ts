@@ -836,6 +836,18 @@ export {
   readInstrumentCitation,
   writeInstrumentCitation,
 } from './instrument/citation-store.js';
+// `[IL-D8]`/`[D-292]`/`[D-351]` (`ol-2zfj.147`) — a passage citation's current-validity read: a
+// pure derived four-state classification (`'current'`/`'superseded'`/`'pending'`/`'unknown'`) over
+// `./instrument/citation-store.js`'s own fields plus an optional `[D-351]` pending-revalidation
+// signal, never a new persisted field. `./study-session/compose.js`'s citation-validity withholding
+// (`[D-330]`) is this barrel's one production-shaped consumer so far.
+export type {
+  CitationValidityEvidence,
+  CitationValidityResult,
+  CitationValidityStatus,
+  PendingRevalidationEvidence,
+} from './instrument/citation-validity.js';
+export { citationValidityStatus } from './instrument/citation-validity.js';
 // Cloze identity (D-030, D-107, `ol-k7eg`) — the frontmatter-map stamping
 // path for the one instrument type that cannot carry a visible marker.
 export type { ClozeIdAnchor } from './instrument/cloze-identity.js';

@@ -287,32 +287,65 @@
  * (`session-builder/provider.ts`) is deliberately left to a follow-up
  * (`ol-4pue`'s notes name it), not guessed at here.
  *
- * ## Citation freshness (`[D-292]`, `ol-2zfj.154`) — read here, actioned only where ruled
+ * ## Citation validity (`[D-292]`, `[D-351]`, `[D-330]`; `ol-2zfj.154`, `ol-2zfj.147`,
+ * `ol-egov.141.89.5.13`) — read here, and now ACTIONED
  *
- * `../instrument/citation-store.js`'s `[D-292]` fields let a caller classify an instrument's
- * passage citation as `'fresh'`, `'stale'` or `'unknown'` ({@link CitationFreshnessState},
- * `classifyCitationFreshness`). This module stays pure (see "INV-1 / §7.1" below), so it never
- * computes that classification itself — {@link ComposeSessionRowsInput.citationFreshness} is a
- * caller-resolved map, keyed by `instrumentId`, the same "optional and safe to omit" shape every
- * other caller-resolved signal on this input already has. An omitted map, or an instrument
- * missing from it, both read as `'unknown'` — never as fresh; this bead's own evidence names
- * exactly that silent-fresh gap (review-response.md section 1 row 10) as the defect being closed.
+ * `../instrument/citation-validity.js`'s `citationValidityStatus` is the ruled four-state
+ * classification a caller can compute per instrument — `'current'`, `'superseded'`, `'pending'`
+ * or `'unknown'` (`CitationValidityStatus`) — folding `[D-292]`'s digest comparison and
+ * `[D-351]`'s pending-revalidation fact into one status, with `'pending'` taking precedence over a
+ * digest comparison whenever both are available (that function's own doc). This module stays
+ * pure (see "INV-1 / §7.1" below) and never reads an `InstrumentCitation` record, a digest or
+ * `citationValidityStatus` itself — it takes the SAME two pieces of evidence that function does,
+ * as two independently-optional, already-resolved, caller-supplied signals, and applies the
+ * identical precedence rule in its own terms, so a production caller already wired to the older
+ * three-state shape (`ol-egov.141.89.10.33`'s `resolveCitationFreshness`, which this bead's own
+ * evidence confirms is already live) keeps working unmodified:
  *
- * **`'unknown'` is read AND actioned**: an unknown-freshness instrument is still composed
- * (never withheld — nothing here has grounds to treat "no observation yet" as "broken"), and its
- * id is surfaced on {@link ComposeSessionRowsResult.citationRecheckQueued} — `ol-2zfj.154`'s own
- * "serve with a re-check queued."
+ * - {@link ComposeSessionRowsInput.citationFreshness} — `[D-292]`'s digest comparison, keyed by
+ *   `instrumentId`, `'fresh'`/`'stale'`/`'unknown'` ({@link CitationFreshnessState}). Unchanged in
+ *   name, type and "optional, safe to omit, absence reads unknown" shape from before this bead —
+ *   only what `'stale'` now DOES has changed (see below).
+ * - {@link ComposeSessionRowsInput.citationPendingRevalidation} — `[D-351]`'s pending-revalidation
+ *   fact, a set of instrument ids whose citation currently has a revalidation outstanding FOR THE
+ *   EXACT SOURCE REVISION being checked. This module has no `InstrumentCitation` to check that
+ *   revision against itself (see above), so an id belongs in this set only once the caller has
+ *   already applied `citationValidityStatus`'s own scoping rule (its doc's "`[D-351]`'s scoping
+ *   rule" section) — the same "arrives here already resolved" posture every other caller-resolved
+ *   signal on this input takes. `[D-351]`'s stored field this evidence would normally come from is
+ *   not built yet (`ol-egov.141.89.5.4`, open); omitted (as every production caller does today)
+ *   this reads as "nothing pending," never as a reason to withhold anything on its own.
  *
- * **`'stale'` is read but NOT yet actioned.** `ol-2zfj.154`'s text asks for "revalidate before
- * serving," which means withholding a stale instrument until it is rechecked — but `[D-351]`
- * (`ol-egov.141.89.5.12`, open at the time this landed) is the decision that rules WHERE the
- * pending-revalidation fact persists and, with it, how/where a stale citation withholds an
- * instrument (`[D-343]`). Building a withholding mechanism ahead of that ruling would be
- * deciding a Class C persisted-fact question this module has no standing to decide. So a stale
- * instrument is composed exactly as a fresh one is today — today's serving behaviour, unchanged
- * — and its id is only surfaced on {@link ComposeSessionRowsResult.citationRevalidationPending}
- * for a future caller to act on once `[D-351]` rules. Treat that absence of filtering as a stop,
- * never as this module's own ruling.
+ * **`'unknown'` is read AND actioned, alone**: an unknown-freshness instrument with no pending
+ * evidence is still composed (never withheld — nothing here has grounds to treat "no observation
+ * yet" as "broken"), and its id is surfaced on {@link ComposeSessionRowsResult.citationRecheckQueued}
+ * — `ol-2zfj.154`'s own "serve with a re-check queued."
+ *
+ * **`'stale'` (a confirmed digest disagreement) and pending (`[D-351]`'s revalidation in flight)
+ * are both now WITHHELD** — `[D-330]` (David, 2026-09-25, amending C5.8) generalises `[D-343]`'s
+ * specific ruling into one removal rule for every cause an instrument can no longer be shown as
+ * composed (suspended, withdrawn, its note gone, or its cited passage marked changed and pending
+ * revalidation): the instrument drops from today's list, nothing takes its place, the remaining
+ * order is kept, and nothing is recorded against her — David's own clarification names this
+ * explicitly for "pending revalidation after a known cited-passage change, including within an
+ * already-open session." Both causes are already-ruled and already reachable today: `'stale'`
+ * needs only `[D-292]`'s digest fields (already landed, and already wired through
+ * `resolveCitationFreshness` above — this bead's change alone flips that existing signal from
+ * reported to withheld, with no other file's edit required), and `citationPendingRevalidation`
+ * is ready for the day `[D-351]`'s store lands and a caller resolves it, exactly the "ready for
+ * the signal the day a caller supplies it" posture {@link relatedConceptKeys} states elsewhere on
+ * this input. Both ids are surfaced on {@link ComposeSessionRowsResult.citationRevalidationPending}
+ * — read AND actioned, unlike `'unknown'` above: {@link buildComposedStudySession} filters exactly
+ * this set out of the instrument index it hands `buildStudySession`'s fill (`./build.js`, not this
+ * module's own file, so the filtering happens on this module's side of that boundary — see
+ * {@link withholdInstruments}), and {@link extendComposedStudySession} applies the identical filter
+ * to an already-open session's own previously-served items, never only to what a widened
+ * recomposition would add (`[D-330]`'s "including within an already-open session"). Concept
+ * SELECTION above (which rows make `orderedRows`) is untouched: a concept with one withheld
+ * instrument among several is still selected and still served by whichever of its instruments
+ * remain eligible; a concept whose every instrument is withheld is selected exactly as before
+ * (this module has no per-instrument view at selection time) but the fill then finds nothing to
+ * serve for it — "nothing takes its place," never a replacement row.
  *
  * ## INV-1 / §7.1
  *
@@ -331,6 +364,7 @@ import type { OracleMasteryState } from '../oracle/types.js';
 import type { SchedulerState } from '../scheduler/types.js';
 import { containerConceptKeysToDrop } from '../session/containment.js';
 import type { ReplayResult } from '../session/replay.js';
+import type { VaultInstrumentRecord } from '../session/types.js';
 import {
   type CalendarDay,
   calendarDayOfTimestamp,
@@ -1540,17 +1574,29 @@ export interface ComposeSessionRowsInput {
   readonly relations?: readonly ConceptRelation[];
   /**
    * `[D-292]`'s citation freshness, keyed by `instrumentId` — see the module doc's "Citation
-   * freshness" section for the full account of what is read here vs. actioned. **Optional, and
+   * validity" section for the full account of what is read vs. actioned, and for why this
+   * field's own name/type/shape are unchanged from before `[D-330]` (a real production caller,
+   * `ol-egov.141.89.10.33`'s `resolveCitationFreshness`, already resolves it). **Optional, and
    * safe to omit entirely**: an omitted map, or an instrument missing from it, both read as
    * `'unknown'`, never `'fresh'` — this module never treats "no signal" as "no problem" for a
    * citation the way it does for {@link arrivalDays}/{@link relatedConceptKeys} above, because
    * `'unknown'` is itself one of `[D-292]`'s three ruled states, not a degraded fallback outside
-   * them. No production caller resolves this map yet — the same "ready for the signal the day a
-   * caller supplies it" posture {@link relatedConceptKeys} states above; resolving it (a
-   * `CitationRecord` per instrument, plus a current passage observation to compare against) is
-   * left to a follow-up, across this lane's file-ownership boundary.
+   * them. What changed is what `'stale'` now DOES — see {@link citationPendingRevalidation} and
+   * the module doc.
    */
   readonly citationFreshness?: ReadonlyMap<string, CitationFreshnessState>;
+  /**
+   * `[D-351]`'s pending-revalidation fact — instrument ids with a revalidation currently
+   * outstanding for the exact source revision being checked. See the module doc's "Citation
+   * validity" section for why this module takes it as an id set rather than resolving
+   * `citationValidityStatus`'s own scoping rule itself (it has no `InstrumentCitation` to check a
+   * revision against). **Optional, and safe to omit entirely** — an omitted set, or an
+   * instrument missing from it, both read as "nothing pending," the same posture `[D-351]`'s
+   * stored field not existing yet (`ol-egov.141.89.5.4`, open) already leaves every production
+   * caller in today. Takes precedence over {@link citationFreshness} when both are supplied for
+   * the same instrument — the same precedence `citationValidityStatus` itself states.
+   */
+  readonly citationPendingRevalidation?: ReadonlySet<string>;
 }
 
 export interface ComposeSessionRowsResult {
@@ -1618,22 +1664,47 @@ export interface ComposeSessionRowsResult {
   /** Item 5's ratified sentence fragment for {@link focusBranch} — see {@link FOCUS_BRANCH_SENTENCE}. `undefined` exactly when {@link focusBranch} is. */
   readonly focusReason?: string;
   /**
-   * `[D-292]`'s `'unknown'` citation state, ACTIONED — see the module doc's "Citation freshness"
+   * The `'unknown'` citation-validity state, ACTIONED — see the module doc's "Citation validity"
    * section. Instrument ids, among the instruments backing {@link orderedRows}' own concepts,
-   * whose {@link ComposeSessionRowsInput.citationFreshness} reads `'unknown'` (an omitted map,
-   * or an instrument missing from it, both count). The instrument IS in `orderedRows` — this is
-   * the re-check signal a caller enqueues alongside serving it (`ol-2zfj.154`'s "serve with a
-   * re-check queued"), never a reason to withhold it.
+   * whose {@link ComposeSessionRowsInput.citationFreshness} reads `'unknown'` (an omitted map, or
+   * an instrument missing from it, both count) AND which have no pending evidence either. The
+   * instrument IS in `orderedRows` — this is the re-check signal a caller enqueues alongside
+   * serving it (`ol-2zfj.154`'s "serve with a re-check queued"), never a reason to withhold it.
    */
   readonly citationRecheckQueued: ReadonlySet<string>;
   /**
-   * `[D-292]`'s `'stale'` citation state, read but NOT yet actioned — `[D-351]` (open when this
-   * landed) governs whether/how a stale instrument is withheld; see the module doc's "Citation
-   * freshness" section and {@link ComposeSessionRowsInput.citationFreshness}'s doc. Instrument
-   * ids, among the instruments backing {@link orderedRows}' own concepts, whose freshness reads
-   * `'stale'`. Reported for visibility only: nothing in this module excludes them today.
+   * The `'stale'` freshness state and `[D-351]`'s pending-revalidation fact, read AND now
+   * ACTIONED — `[D-330]`/`[D-351]` (both ruled 2026-09-25) settle the withholding this field used
+   * to only report; see the module doc's "Citation validity" section and
+   * {@link ComposeSessionRowsInput.citationFreshness}/{@link ComposeSessionRowsInput.citationPendingRevalidation}'s
+   * docs. Instrument ids, among the instruments backing {@link orderedRows}' own concepts, whose
+   * freshness reads `'stale'` (a confirmed digest disagreement) or which appear in
+   * `citationPendingRevalidation` (a revalidation for this citation's own source revision is
+   * outstanding) — both are the same "cited passage marked changed" cause `[D-330]`'s removal
+   * rule names, and both are withheld the same way. This set names the instruments a caller
+   * (and {@link buildComposedStudySession}/{@link extendComposedStudySession}, downstream in this
+   * same module) must exclude from what is actually served; it does NOT mean the instrument still
+   * appears in the fill the way `citationRecheckQueued`'s does.
    */
   readonly citationRevalidationPending: ReadonlySet<string>;
+}
+
+/**
+ * `[D-330]`/`[D-351]`'s removal test for one instrument, mirroring `citationValidityStatus`'s own
+ * precedence (that function's doc: pending wins whenever it applies, before any digest
+ * comparison is even consulted) — see the module doc's "Citation validity" section for why this
+ * module takes the two pieces of evidence separately rather than calling that function itself.
+ * `'pending'` (in `citationPendingRevalidation`) is checked first and, on its own, is sufficient;
+ * otherwise a `'stale'` freshness reading withholds; anything else (`'fresh'`, `'unknown'`, or no
+ * signal at all) does not.
+ */
+function isCitationWithheld(
+  instrumentId: string,
+  citationFreshness: ReadonlyMap<string, CitationFreshnessState> | undefined,
+  citationPendingRevalidation: ReadonlySet<string> | undefined,
+): boolean {
+  if (citationPendingRevalidation?.has(instrumentId) === true) return true;
+  return citationFreshness?.get(instrumentId) === 'stale';
 }
 
 /**
@@ -1812,19 +1883,27 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     orderedBlocks.map((c) => [c.row.conceptKey, c.klass]),
   );
 
-  // `[D-292]` citation freshness — see the module doc's "Citation freshness" section for what is
-  // read here vs. actioned. Walked over the CHOSEN set's own instruments only (the same
-  // `orderedBlocks` scope `obligationClasses` above uses), never the full candidate pool.
+  // `[D-292]`/`[D-330]`/`[D-351]` citation validity — see the module doc's "Citation validity"
+  // section for what is read vs. actioned. Walked over the CHOSEN set's own instruments only (the
+  // same `orderedBlocks` scope `obligationClasses` above uses), never the full candidate pool.
   const citationRecheckQueued = new Set<string>();
   const citationRevalidationPending = new Set<string>();
   for (const c of orderedBlocks) {
     for (const record of instruments.instrumentsFor(c.row.conceptKey)) {
-      const state = input.citationFreshness?.get(record.instrumentId) ?? 'unknown';
-      if (state === 'unknown') citationRecheckQueued.add(record.instrumentId);
-      // `'stale'` is read here (the loop reaches every chosen instrument's own state) but not
-      // acted on beyond this report — see the module doc for why `[D-351]` (open) gates any
-      // withholding.
-      else if (state === 'stale') citationRevalidationPending.add(record.instrumentId);
+      // `[D-330]`: `'stale'` (a confirmed digest disagreement) and `[D-351]`'s pending fact are
+      // the same "cited passage marked changed" removal cause — both withheld the same way. See
+      // `buildComposedStudySession`'s `withholdInstruments` call for where this set is actioned.
+      if (
+        isCitationWithheld(
+          record.instrumentId,
+          input.citationFreshness,
+          input.citationPendingRevalidation,
+        )
+      ) {
+        citationRevalidationPending.add(record.instrumentId);
+      } else if ((input.citationFreshness?.get(record.instrumentId) ?? 'unknown') === 'unknown') {
+        citationRecheckQueued.add(record.instrumentId);
+      }
     }
   }
 
@@ -1895,8 +1974,10 @@ export interface BuildComposedStudySessionInput
   readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
   /** C7.9 (`[SESS-11]`) — see `ComposeSessionRowsInput.relations`, passed straight through. */
   readonly relations?: readonly ConceptRelation[];
-  /** `[D-292]` (`ol-2zfj.154`) — see `ComposeSessionRowsInput.citationFreshness`, passed straight through. */
+  /** `[D-292]`/`[D-330]` — see `ComposeSessionRowsInput.citationFreshness`, passed straight through and now additionally used (a `'stale'` reading) to withhold an instrument from the fill below. */
   readonly citationFreshness?: ReadonlyMap<string, CitationFreshnessState>;
+  /** `[D-351]`/`[D-330]` — see `ComposeSessionRowsInput.citationPendingRevalidation`, passed straight through and used to withhold an instrument from the fill below. */
+  readonly citationPendingRevalidation?: ReadonlySet<string>;
 }
 
 /**
@@ -1978,6 +2059,38 @@ function schedulerStatesOf(replay: ReplayResult): ReadonlyMap<string, SchedulerS
 }
 
 /**
+ * `[D-330]`/`[D-351]`'s removal action: a view of `instruments` that omits exactly the instrument
+ * ids `withheldInstrumentIds` names, so `buildStudySession`'s own per-instrument fill (`./build.js`,
+ * a file this module does not own) never offers one of them a slot. See the module doc's "Citation
+ * validity" section for why this filter — never a `build.js` change — is where the withholding
+ * happens: this module already computes {@link ComposeSessionRowsResult.citationRevalidationPending}
+ * from its own `input.citationFreshness`/`input.citationPendingRevalidation`, and
+ * `ComposeSessionRowsInput.instruments`'s own doc already
+ * establishes "the caller hands the fill an already-filtered index" as this module's posture for a
+ * suspended or withdrawn instrument — this is the identical posture applied to the one signal this
+ * module itself reads and can therefore filter without any other file's cooperation.
+ *
+ * `concepts`/`recordCount` are passed through unchanged: they describe what went INTO the index (a
+ * fact about the vault enumeration), never what the fill is offered out of it — the same distinction
+ * `buildConceptInstrumentIndex`'s own doc draws for those two fields.
+ */
+function withholdInstruments(
+  instruments: ConceptInstrumentIndex,
+  withheldInstrumentIds: ReadonlySet<string>,
+): ConceptInstrumentIndex {
+  if (withheldInstrumentIds.size === 0) return instruments;
+  return {
+    concepts: instruments.concepts,
+    recordCount: instruments.recordCount,
+    instrumentsFor(conceptId: string): readonly VaultInstrumentRecord[] {
+      return instruments
+        .instrumentsFor(conceptId)
+        .filter((record) => !withheldInstrumentIds.has(record.instrumentId));
+    },
+  };
+}
+
+/**
  * `composeSessionRows` + `buildStudySession(order: 'given')` — the whole
  * SESS-1 layer, end to end. This is what a production caller wants; the two
  * halves stay separately exported for testing and for a caller that needs
@@ -2025,12 +2138,21 @@ export function buildComposedStudySession(
     ...(input.citationFreshness !== undefined
       ? { citationFreshness: input.citationFreshness }
       : {}),
+    ...(input.citationPendingRevalidation !== undefined
+      ? { citationPendingRevalidation: input.citationPendingRevalidation }
+      : {}),
   });
 
   const model = buildStudySession({
     ...input,
     rows: composed.orderedRows,
     order: 'given',
+    // `[D-330]`/`[D-351]`: an instrument whose citation reads `'superseded'` or `'pending'`
+    // (both in `composed.citationRevalidationPending`) is withheld from the fill entirely — see
+    // `withholdInstruments`'s own doc and the module doc's "Citation validity" section. Derived
+    // from the composition just run, never a caller input, the same reason `obligationClasses`
+    // below is.
+    instruments: withholdInstruments(input.instruments, composed.citationRevalidationPending),
     // Derived from the composition just run, not a caller input — see
     // `BuildComposedStudySessionInput`'s Omit and its comment above.
     obligationClasses: composed.obligationClasses,
@@ -2087,15 +2209,21 @@ export function buildComposedStudySession(
  * ("this module contains no second selection mechanism of its own"), applied
  * to growth instead of shrinkage.
  *
- * **Never reorders, never drops, never duplicates** — the same three-word
- * contract `packages/plugin/src/review/queue-adapter.ts`'s
+ * **Never reorders, never duplicates — and now drops exactly what `[D-330]` rules removable.**
+ * The same three-word contract `packages/plugin/src/review/queue-adapter.ts`'s
  * `FrozenReviewQueue.extend` already states for the queue path (`extend`'s
- * own doc: "grow, never replace, never reorder, never duplicate"). `previous`'s
- * own items are returned byte-identical and in their existing positions;
- * only items the wider composition offers that are not already among them
- * (matched by `instrumentId`, the same key `extend` matches on) are appended,
- * in the order the wider fill produced them, with `position` renumbered to
- * continue the sequence.
+ * own doc: "grow, never replace, never reorder, never duplicate") holds for reordering and
+ * duplication; `previous`'s own items keep their relative order and are never reordered. But
+ * `[D-330]` (David's clarification: "including within an already-open session") makes removal the
+ * one exception this function must apply too, not only `buildComposedStudySession`'s fresh fill —
+ * an item of `previous.model.items` whose `instrumentId` reads `'stale'` (freshness) or appears
+ * in `citationPendingRevalidation`, against THIS call's own `input`, is dropped, never carried
+ * forward, before anything is appended (see
+ * {@link ComposeSessionRowsResult.citationRevalidationPending}'s doc).
+ * Every surviving previous item keeps its own byte-identical value; only positions are renumbered
+ * to stay contiguous. Items the wider composition offers that are not already among the survivors
+ * (matched by `instrumentId`, the same key `extend` matches on) are appended, in the order the
+ * wider fill produced them, with `position` continuing the renumbered sequence.
  *
  * **The gap this closes.** `ComposedStudySession.model.leftOut`/`.overflow`
  * are per-CONCEPT (`StudySessionOmission`/`ObligationOverflowEntry`) — there
@@ -2107,26 +2235,47 @@ export function buildComposedStudySession(
  * `instrumentId` produces the missing per-instrument view without inventing
  * a second per-instrument bookkeeping structure inside this module.
  *
- * **Reachability.** `packages/plugin/src/review/open-session.ts` and
- * `packages/plugin/src/main.ts` (row 6/`ol-egov.132.6`'s owned paths) are the
- * production callers this needs — wiring `FrozenReviewQueue`-shaped growth
- * for the composed session's holder onto this function is filed as a note on
- * that bead rather than built here, across this lane's file-ownership
- * boundary (see `[SESS-11]`'s own close evidence).
+ * **Reachability.** Wired: `packages/plugin/src/main.ts`'s outrun handling calls this function
+ * directly, at the site building `items` from `result.composedInput` widened to
+ * `widerBudgetMinutes` (its `extendComposedStudySession(...)` call) — `result.composedInput`
+ * comes from `session-builder/provider.ts`'s `composeStudySessionForRequest`, which already
+ * carries `citationFreshness` (that file's `resolveCitationFreshness` call), so this function's
+ * `[D-330]` removal reaches production without any further wiring.
  */
 export function extendComposedStudySession(
   input: BuildComposedStudySessionInput,
   previous: ComposedStudySession,
 ): readonly StudySessionItem[] {
   const widened = buildComposedStudySession(input);
-  const alreadyServed = new Set(previous.model.items.map((item) => item.instrumentId));
+  // `[D-330]`/`[D-351]`: removal reaches an already-open session's own previously-served items,
+  // not only what this wider recomposition would newly offer — read against THIS call's own
+  // `citationFreshness`/`citationPendingRevalidation`, never `previous`'s, so the freshest
+  // evidence always governs. See the module doc's own "Citation validity" section and this
+  // function's doc.
+  const retainedPrevious = previous.model.items.filter(
+    (item) =>
+      !isCitationWithheld(
+        item.instrumentId,
+        input.citationFreshness,
+        input.citationPendingRevalidation,
+      ),
+  );
+  const somethingWasRemoved = retainedPrevious.length !== previous.model.items.length;
+  const alreadyServed = new Set(retainedPrevious.map((item) => item.instrumentId));
   const appended = widened.model.items.filter((item) => !alreadyServed.has(item.instrumentId));
-  if (appended.length === 0) return previous.model.items;
+  if (appended.length === 0 && !somethingWasRemoved) return previous.model.items;
+  // A removal reopens gaps in `position` (e.g. 1, 2, 3 with 2 removed) that appending after
+  // `retainedPrevious.length` alone would collide with — renumbered only when something was
+  // actually removed, so the ordinary append-only path keeps every retained item's own
+  // `position` byte-identical, exactly as it already did before `[D-330]`.
+  const renumberedPrevious = somethingWasRemoved
+    ? retainedPrevious.map((item, index) => ({ ...item, position: index + 1 }))
+    : retainedPrevious;
   return [
-    ...previous.model.items,
+    ...renumberedPrevious,
     ...appended.map((item, index) => ({
       ...item,
-      position: previous.model.items.length + index + 1,
+      position: renumberedPrevious.length + index + 1,
     })),
   ];
 }
