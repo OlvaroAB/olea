@@ -411,26 +411,26 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
           grove.kind === 'model'
             ? await findCourseAvoidanceQuestion(deps, grove.courses, avoidanceStore)
             : undefined;
-        // F2.22 / F6.4 (`ol-egov.141.89.10.19`): `./view.ts`'s `HomeViewState`
-        // can carry a `focusReason` for `./copy.ts#sessionCompositionSentence`
-        // to render, but `session` above (`SessionBuilderState`,
-        // `../session-builder/view.ts`) has no field to carry it through yet
-        // — `../session-builder/provider.ts`'s `buildFresh` builds the
-        // `'model'` branch as `{ kind: 'model', model: composed.full.model,
-        // courseOrTopicOptions }`, dropping `composed.full.focusReason`
-        // (`ComposedStudySession.focusReason`, already computed, never read
-        // by any plugin surface — this bead's own finding). Neither file is
-        // in this bead's `owns`; the one-line fix is widening that object
-        // literal to also carry `focusReason: composed.full.focusReason` and
-        // adding the matching optional field to `SessionBuilderState`'s
-        // `'model'` variant, after which this line becomes
-        // `...(session.kind === 'model' && session.focusReason !== undefined
-        // ? { focusReason: session.focusReason } : {})`. Reported, not made,
-        // per this bead's own scope.
+        // F2.22 / F6.4 (`ol-egov.141.89.10.61`, closing the one-line gap
+        // `ol-egov.141.89.10.19` reported and `ol-egov.141.89.10.60` set up):
+        // `./view.ts`'s `HomeViewState` can carry a `focusReason` for
+        // `./copy.ts#sessionCompositionSentence` to render, and `session`
+        // above (`SessionBuilderState`, `../session-builder/view.ts`) now
+        // carries one too — `../session-builder/provider.ts`'s `buildFresh`
+        // threads `composed.full.focusReason`
+        // (`ComposedStudySession.focusReason`) through unchanged on its
+        // `'model'` branch. Optional-spread, not a `?? undefined`
+        // assignment, so an absent reason (no dominant course; `session.kind`
+        // other than `'model'`) stays absent on `HomeViewState` rather than
+        // an explicit `focusReason: undefined` key — the same honest-absence
+        // posture `composed.full.focusReason` itself already takes.
         return {
           kind: 'dashboard',
           session,
           courses,
+          ...(session.kind === 'model' && session.focusReason !== undefined
+            ? { focusReason: session.focusReason }
+            : {}),
           ...(avoidanceQuestion !== undefined ? { avoidanceQuestion } : {}),
         };
       } catch (error) {

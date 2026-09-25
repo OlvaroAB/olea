@@ -18,6 +18,7 @@ import {
 } from 'olea-contracts';
 import { createFsrsScheduler, provisionalConceptKey, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { sessionCompositionSentence } from '../../src/home/copy.js';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -469,6 +470,70 @@ describe('createLocalHomeProvider — Home composes with the same windowDeficit 
     );
     const item = widgetItem(sessionModel(state));
     expect(item.gapScore).toBeGreaterThan(0);
+  });
+});
+
+// F2.22 / F6.4 (`ol-egov.141.89.10.61`, closing the gap `ol-egov.141.89.10.19`
+// reported and `ol-egov.141.89.10.60` set up): `createLocalHomeProvider`
+// threads `session.focusReason` (the real, composed
+// `SessionBuilderState`'s `'model'`-branch field `ol-egov.141.89.10.60`
+// added) onto `HomeViewState.focusReason` — this suite proves that against a
+// REAL composition (never a mock session), both the presence case and the
+// honest-absence case. `test/home/view.spec.ts` already pins, at the source
+// level, that `HomeView` reads `HomeViewState.focusReason` and renders it
+// through `../home/copy.js#sessionCompositionSentence` exactly once, gated
+// on `session.kind === 'model' && focusReason !== undefined` — `home/view.ts`
+// is read only for this bead, so this suite does not repeat that pin; it
+// proves the OTHER half, that a real composed reason actually reaches the
+// field that gate reads, and calls the same rendering function directly
+// (`home/copy.ts` is also read only) with the real, un-mocked value to prove
+// the exact sentence a real session produces, the same "reuse
+// `test/home/view.spec.ts`'s approach" (assert against real source/values,
+// never a mounted DOM — `view.ts` imports `obsidian`, which cannot load
+// under Vitest, per that file's own module doc).
+describe("createLocalHomeProvider — threads the composed session's focusReason onto HomeViewState (F2.22/F6.4, ol-egov.141.89.10.61)", () => {
+  it('a real composition with a dominant course spreads session.focusReason onto the dashboard state, verbatim — never a paraphrase', async () => {
+    const state = dashboard(
+      await provider(twoCourseVault(), hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
+    const session = sessionModel(state);
+    // Guards the rest of this test against a silently-undefined reason —
+    // `twoCourseVault()` unsteered always has a dominant course (the F4.6
+    // steering suite above establishes TESTC101 wins the deficit tie-break).
+    expect(session.focusReason).toBeDefined();
+    expect(state.focusReason).toBe(session.focusReason);
+
+    // The real value, run through the exact function `home/view.ts` renders
+    // it with (`home/copy.ts#sessionCompositionSentence`, read only here) —
+    // proves the end-to-end sentence a real composed session produces, not
+    // just that some string made it across.
+    if (state.focusReason === undefined) throw new Error('expected a focusReason');
+    expect(sessionCompositionSentence(state.focusReason)).toBe(
+      'This course because it is behind its share from your recent sessions.',
+    );
+  });
+
+  it('a configured plan with no eligible course at all composes an ordinary, empty model with no dominant course — no focusReason, honest absence', async () => {
+    const state = dashboard(
+      await provider(fixtureVault(), hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
+    const session = sessionModel(state);
+    expect(session.model.items).toEqual([]);
+    expect(session.focusReason).toBeUndefined();
+    // The spread itself: no `session.focusReason` means no
+    // `HomeViewState.focusReason` — never an explicit `focusReason:
+    // undefined` key (the same optional-spread posture
+    // `session-builder/provider.ts`'s own `buildFresh` takes).
+    expect('focusReason' in state).toBe(false);
+    expect(state.focusReason).toBeUndefined();
+  });
+
+  it('the unavailable-session case (no study plan configured) carries no focusReason either', async () => {
+    const state = dashboard(
+      await provider(fixtureVault(), new FakeDataHost()).load(DEFAULT_REQUEST),
+    );
+    expect(state.session).toEqual({ kind: 'unavailable' });
+    expect(state.focusReason).toBeUndefined();
   });
 });
 
