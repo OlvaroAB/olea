@@ -17,10 +17,13 @@
  * reviewed", which is the worst kind of bug — it looks like new material.
  *
  * So this reads every log file it can see, and takes the folder listing as its
- * only discovery mechanism. That is a real limitation on hosts that hide
- * dot-prefixed folders, and it is stated rather than papered over: pass
- * `additionalPaths` for the files a caller knows exist by name (this device's
- * own, via `reviewLogPath`), exactly as the Today panel probes for its own.
+ * only discovery mechanism. The listing goes through `../vault/list-folder.ts`,
+ * which reaches `.olea/reviews/` on `ObsidianSource` via its adapter walk
+ * (`listUnder`) rather than `list()`, which never sees a dot folder there
+ * (`ol-egov.141.89.10.52`). A host with neither route still sees nothing, so
+ * `additionalPaths` stays: pass the files a caller knows exist by name (this
+ * device's own, via `reviewLogPath`), exactly as the Today panel probes for
+ * its own.
  *
  * ## Tolerant, per line
  *
@@ -35,6 +38,7 @@ import { mergeReviewLogRecords } from '../review-log/merge.js';
 import type { InvalidReviewLogLine } from '../review-log/parse.js';
 import { parseReviewLog } from '../review-log/parse.js';
 import { REVIEW_LOG_FOLDER } from '../review-log/path.js';
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** The extension every C5.2 log file carries. */
@@ -76,7 +80,9 @@ export async function readReviewLogHistory(
 
   const paths = new Set<VaultPath>(options.additionalPaths ?? []);
   try {
-    for (const path of await vault.list({ under: folder, extensions: [REVIEW_LOG_EXTENSION] })) {
+    // `listFolder`, not `vault.list`: on `ObsidianSource` only `listUnder` can see `.olea/reviews/`
+    // (`ol-egov.141.89.10.52`); a non-dot harness folder still goes through plain `list`.
+    for (const path of await listFolder(vault, folder, { extensions: [REVIEW_LOG_EXTENSION] })) {
       paths.add(path);
     }
   } catch {

@@ -39,6 +39,7 @@
  * `same-as.ts` and `../outcome/store.ts` already make).
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/same-as/` and `.olea/outcomes/` — its own folder, never a subfolder of either. */
@@ -114,8 +115,8 @@ export async function listOutcomeConceptNearMatchRecords(
 ): Promise<
   readonly { readonly path: VaultPath; readonly record: OutcomeConceptNearMatchRecord }[]
 > {
-  const paths = await vault.list({
-    under: OUTCOME_CONCEPT_NEAR_MATCH_FOLDER,
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder (`ol-egov.141.89.10.52`).
+  const paths = await listFolder(vault, OUTCOME_CONCEPT_NEAR_MATCH_FOLDER, {
     extensions: ['json'],
   });
   const out: { readonly path: VaultPath; readonly record: OutcomeConceptNearMatchRecord }[] = [];

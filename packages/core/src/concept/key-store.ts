@@ -85,6 +85,7 @@
  * change to this module's contract.
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import {
   conceptIdentityNormalizationIndex,
@@ -278,7 +279,9 @@ export function conceptKeyRecordPath(key: string): VaultPath {
 export async function listConceptKeyRecords(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: ConceptKeyRecord }[]> {
-  const paths = await vault.list({ under: CONCEPT_KEY_STORE_FOLDER, extensions: ['json'] });
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder, so this scan
+  // came back empty on every real host and every lookup re-minted (`ol-egov.141.89.10.52`).
+  const paths = await listFolder(vault, CONCEPT_KEY_STORE_FOLDER, { extensions: ['json'] });
   const out: { readonly path: VaultPath; readonly record: ConceptKeyRecord }[] = [];
   for (const path of paths) {
     try {

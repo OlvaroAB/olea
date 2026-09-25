@@ -48,6 +48,7 @@
  * architecture boundary reserves for her acts (relation-landing-design.md §2, §6).
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { RelationType } from './relation.js';
 import type { RelationCacheRecord } from './relation-cache.js';
@@ -106,7 +107,8 @@ function serialize(log: EdgeDispositionLog): string {
 export async function listEdgeDispositionLogs(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly log: EdgeDispositionLog }[]> {
-  const paths = await vault.list({ under: EDGE_DISPOSITION_FOLDER, extensions: ['json'] });
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder (`ol-egov.141.89.10.52`).
+  const paths = await listFolder(vault, EDGE_DISPOSITION_FOLDER, { extensions: ['json'] });
   const out: { readonly path: VaultPath; readonly log: EdgeDispositionLog }[] = [];
   for (const path of paths) {
     try {

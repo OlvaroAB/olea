@@ -14,15 +14,16 @@
  * the byte-safety logic they share would cost an abstraction for a
  * coincidence, not a real one."
  *
- * **Same known limitation as the function this mirrors, inherited rather
- * than introduced here**: `vault.list()` only surfaces a dot-prefixed
- * folder on hosts that choose to allow it (most do not — see
- * `review-log/path.ts`'s own doc), so a second device's files are found
- * only where the host cooperates. This device's own files are always found,
- * because they are probed by exact, constructed path rather than listed.
- * There is currently no way to discover *another* device's id at all
- * (`today/data-source.ts`'s module doc names the identical gap) — flagged
- * as follow-on work in this bead's report, not solved here.
+ * **Listing a dot folder** (`ol-egov.141.89.10.52`): `ObsidianSource.list()`
+ * never surfaces a dot-prefixed folder (it is built on Obsidian's
+ * `getFiles()`), so the folder is listed with `listUnder` where the host has
+ * it — the adapter walk on `ObsidianSource` — and with plain `list` otherwise,
+ * the same routing `olea-core`'s `vault/list-folder.ts` gives every core
+ * store and `today/data-source.ts` gives `.olea/reviews/`. It is restated
+ * here rather than imported only because `olea-core`'s barrel does not
+ * export that helper yet (a one-line follow-up). A host with neither route
+ * still finds this device's own files, because they are probed by exact,
+ * constructed path rather than listed.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
@@ -39,10 +40,25 @@ const LOG_FILE_RE = /^\d{4}-\d{2}-\d{2}\.[^/]+\.jsonl$/;
  */
 export const DEFAULT_LOG_PROBE_DAYS = 3650;
 
+/** `listUnder` sits outside the `VaultSource` contract, so it is feature-detected (see the module doc). */
+interface ListUnderCapableVault {
+  listUnder(
+    dotPath: VaultPath,
+    options?: { readonly extensions?: readonly string[] },
+  ): Promise<readonly VaultPath[]>;
+}
+
+function listLogFolder(vault: VaultSource, folder: VaultPath): Promise<readonly VaultPath[]> {
+  const dotFolder = folder.split('/')[0]?.startsWith('.') ?? false;
+  const listUnder = (vault as Partial<ListUnderCapableVault>).listUnder;
+  if (dotFolder && typeof listUnder === 'function') return listUnder.call(vault, folder);
+  return vault.list({ under: folder });
+}
+
 /**
- * Every path under `folder` this call can find: whatever `vault.list()`
- * surfaces (any device, when the host allows listing a dot-prefixed
- * folder) unioned with `deviceId`'s own file for each of the last
+ * Every path under `folder` this call can find: whatever the folder listing
+ * surfaces (any device, where the host can list it — see the module doc)
+ * unioned with `deviceId`'s own file for each of the last
  * `probeDays` calendar days (found by exact path, regardless of host
  * listing support). Returned paths are de-duplicated and sorted.
  */
@@ -57,15 +73,15 @@ export async function discoverLogPaths(
   const candidates = new Set<VaultPath>();
 
   try {
-    const listed = await vault.list({ under: folder });
+    const listed = await listLogFolder(vault, folder);
     for (const path of listed) {
       const name = path.slice(path.lastIndexOf('/') + 1);
       if (LOG_FILE_RE.test(name)) candidates.add(path);
     }
   } catch {
-    // A host that refuses to list a dot-prefixed folder is the expected
-    // case (see the module doc) — this device's own files are still found
-    // by exact-path probing below.
+    // A host that refuses to list a dot-prefixed folder, or whose walk
+    // throws, is an expected case (see the module doc) — this device's own
+    // files are still found by exact-path probing below.
   }
 
   if (isValidDeviceId(deviceId)) {

@@ -26,6 +26,7 @@
  * `retireOutcome` directly, by id, never by re-deriving a source match.
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { OutcomeEvent } from './events.js';
 import { applyOutcomeEvent } from './project.js';
@@ -106,7 +107,8 @@ export function outcomeRecordPath(id: string): VaultPath {
 export async function listOutcomeRecords(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: OutcomeRecord }[]> {
-  const paths = await vault.list({ under: OUTCOME_STORE_FOLDER, extensions: ['json'] });
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder (`ol-egov.141.89.10.52`).
+  const paths = await listFolder(vault, OUTCOME_STORE_FOLDER, { extensions: ['json'] });
   const out: { readonly path: VaultPath; readonly record: OutcomeRecord }[] = [];
   for (const path of paths) {
     try {

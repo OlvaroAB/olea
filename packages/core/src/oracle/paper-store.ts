@@ -43,6 +43,7 @@
  * exists to drive it (named here rather than silently assumed).
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { PaperGeneratedItem } from './paper-items.js';
 import type { PaperBlueprint, PaperEmptySlot } from './paper-types.js';
@@ -287,7 +288,8 @@ export function mintOpaquePaperId(
 export async function listPaperRecords(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: PaperRecord }[]> {
-  const paths = await vault.list({ under: PAPER_STORE_FOLDER, extensions: ['json'] });
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder (`ol-egov.141.89.10.52`).
+  const paths = await listFolder(vault, PAPER_STORE_FOLDER, { extensions: ['json'] });
   const out: { readonly path: VaultPath; readonly record: PaperRecord }[] = [];
   for (const path of paths) {
     try {
