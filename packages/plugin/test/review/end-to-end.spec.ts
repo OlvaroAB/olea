@@ -93,7 +93,7 @@
 // directory for sandboxes whose `os.tmpdir()` is not writable.
 
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +129,26 @@ import { createVaultInstrumentSource, loadTodayPanel } from '../../src/today/dat
 const here = dirname(fileURLToPath(import.meta.url));
 /** `packages/plugin/test/review` -> `packages/core/fixtures/vault`. */
 const FIXTURE_VAULT = join(here, '..', '..', '..', 'core', 'fixtures', 'vault');
+
+/**
+ * `[SESS-17]` (`ol-may1`): a second, purpose-built fixture — see the module
+ * doc's `[SESS-16]` note for why `FIXTURE_VAULT` above cannot exercise claim
+ * 2. Restructuring `FIXTURE_VAULT` (or its oracle ranking) to give cloze/mcq
+ * a concept of their own to win would touch
+ * `core/test/session/fixture-vault.spec.ts`'s and
+ * `core/test/instrument/vault-instruments.spec.ts`'s own counts and
+ * `study-session/build.ts`'s ranking — both outside this bead's owned files
+ * (`packages/plugin/test/review/end-to-end.spec.ts` plus new fixtures under
+ * `packages/plugin/test/`). So claim 2 is proved here instead, over a
+ * second, minimal real vault on disk, synthetic per INV-3: one course, two
+ * Zettelkasten-bound concepts, each with exactly ONE instrument in vault
+ * order — a cloze and an mcq, no Q&A sibling ahead of either to lose
+ * `[HARD-2b]`'s per-concept cap — and one past paper citing both by name so
+ * neither abstains `no-evidence`. Same recipe `oracle/compose.spec.ts` and
+ * `open-session.spec.ts`'s `configuredStudyVault` already validate for the
+ * real `composeOracleRanking`/`composeStudySessionForRequest` chain.
+ */
+const CROSS_FORMAT_VAULT = join(here, 'fixtures', 'cross-format-vault');
 
 const DEVICE = 'olea-e2e-device';
 
@@ -974,5 +994,165 @@ describe('INV-2 — every write to her notes is an addition, never a mutation (D
       expect(updated.length).toBeGreaterThan(original.length);
       expect(isPureInsertion(original, updated)).toBe(true);
     }
+  });
+});
+
+/**
+ * `[SESS-17]` (`ol-may1`): claim 2 — "every format survives being rated" —
+ * proved over `CROSS_FORMAT_VAULT` (see that constant's doc), a real vault on
+ * disk built specifically because `FIXTURE_VAULT` above never gives cloze or
+ * mcq a concept of their own to win. Deliberately smaller than the suite
+ * above: one composition, driven once, with no INV-2/agreement/convergence
+ * claims re-proved here — those are already proved against `FIXTURE_VAULT`
+ * and re-proving them again here would only be asserting that the harness
+ * code path is shared, not that this fixture adds anything.
+ */
+describe('[SESS-17] (ol-may1) — cloze and mcq survive the real loop too (claim 2)', () => {
+  let root: string;
+  let composedCount: number;
+  let rated: RatedItem[];
+  let logged: readonly LoggedReview[];
+
+  /** Mirrors this file's top-level `ports()`, parameterised on `source` rather than the shared `vaultRoot`. */
+  function xfmtPorts(source: FolderSource): {
+    readonly ports: ReviewSessionPorts;
+    readonly logged: LoggedReview[];
+  } {
+    const capturedLogged: LoggedReview[] = [];
+    const realReviewLog = createVaultReviewLogPort(source, DEVICE);
+    const reviewLog: ReviewLogPort = {
+      async recordReview(input) {
+        capturedLogged.push({
+          instrumentId: input.instrument.instrumentId,
+          rating: input.rating,
+          sourcePath: input.instrument.sourcePath,
+        });
+        await realReviewLog.recordReview(input);
+      },
+    };
+    return {
+      logged: capturedLogged,
+      ports: {
+        reviewLog,
+        suspendPort: {
+          async suspend() {
+            throw new Error('cross-format vault: no instrument here should ever be suspended');
+          },
+        },
+        editPort: {
+          async edit() {
+            throw new Error('cross-format vault: no instrument here should ever be edited');
+          },
+        },
+        noteExists: createVaultNoteExistsPort(source),
+        clock,
+        // Same posture as the top-level `ports()`: no draft item in this fixture.
+        draftAcceptPort: {
+          accept() {
+            throw new Error('cross-format vault: no draft item in this suite should call accept');
+          },
+          reject() {
+            throw new Error('cross-format vault: no draft item in this suite should call reject');
+          },
+        },
+      },
+    };
+  }
+
+  /** Mirrors this file's top-level `compose()`/`composeCapturingLog()`, over `root` rather than `vaultRoot`. */
+  function xfmtCompose(): {
+    readonly outcome: ReturnType<typeof openReviewSession>;
+    readonly logged: readonly LoggedReview[];
+  } {
+    const source = new FolderSource(root);
+    const { ports: wired, logged: capturedLogged } = xfmtPorts(source);
+    return {
+      outcome: openReviewSession({
+        vault: source,
+        scheduler: createFsrsScheduler(),
+        deviceId: DEVICE,
+        ports: wired,
+        random: seeded(20260814),
+        studySessionHolder: createStudySessionHolder(),
+        composeDefaultStudySession: async () => {
+          const result = await composeStudySessionForRequest(
+            {
+              vault: source,
+              deviceId: DEVICE,
+              settingsHost: new FakeSettingsHost(),
+              now: () => NOW,
+              scheduler: createFsrsScheduler(),
+            },
+            { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+            NOW,
+          );
+          return result?.composed.full ?? null;
+        },
+      }),
+      logged: capturedLogged,
+    };
+  }
+
+  beforeAll(async () => {
+    const parent = process.env.OLEA_E2E_TMPDIR ?? tmpdir();
+    root = await mkdtemp(join(parent, 'olea-review-e2e-xfmt-'));
+    await cp(CROSS_FORMAT_VAULT, root, { recursive: true });
+
+    // The committed fixture's `due:` is a placeholder (`2999-01-01`) —
+    // `composeOracleRanking` vetoes a concept whose only assessment evidence
+    // is already-passed (`reason: 'assessment-passed'`, measured directly
+    // against this exact fixture while building this suite), so a literal
+    // date would eventually go stale exactly like `FIXTURE_VAULT`'s own
+    // assignments do not (they span many months either side of `[SESS-16]`'s
+    // writing). Patched here to `NOW` plus 45 days — comfortably inside the
+    // same horizon `FIXTURE_VAULT`'s own furthest assignments use — so this
+    // suite never depends on which real calendar day it happens to run.
+    const quizPath = join(root, '02 Assignments', 'Quiz 1.md');
+    const quizSource = await readFile(quizPath, 'utf8');
+    const futureDue = new Date(NOW.getTime() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    if (!quizSource.includes('due: 2999-01-01')) {
+      throw new Error('cross-format-vault fixture: expected the Quiz 1.md placeholder due date');
+    }
+    await writeFile(quizPath, quizSource.replace('due: 2999-01-01', `due: ${futureDue}`), 'utf8');
+
+    const { outcome, logged: roundLog } = xfmtCompose();
+    const opened = await outcome;
+    if (!opened.ok) throw opened.error;
+    composedCount = opened.itemCount;
+    rated = await driveToCompletion(opened.session, 1);
+    logged = roundLog;
+  });
+
+  afterAll(async () => {
+    if (root !== undefined) await rm(root, { recursive: true, force: true });
+  });
+
+  it('composes both instruments — the cloze and the mcq each get a concept of their own, past `[HARD-2b]`\'s per-concept cap', () => {
+    expect(composedCount).toBe(2);
+  });
+
+  it('reaches and rates one of each format through the real ReviewSession (claim 2)', () => {
+    expect(rated).toHaveLength(2);
+    expect(new Set(rated.map((item) => item.type))).toEqual(new Set(['cloze', 'mcq']));
+  });
+
+  it('every rating round-trips through a fresh FolderSource and the real parser (D7.1/INV-4), for both formats', async () => {
+    const reader = new FolderSource(root);
+    const parsed = parseReviewLog(await reader.read(reviewLogPath(TODAY, DEVICE)));
+
+    expect(parsed.invalidLines).toEqual([]);
+    const reviews = parsed.records.filter((record) => record.kind === 'review');
+    expect(reviews).toHaveLength(rated.length);
+    expect(new Set(reviews.map((record) => record.instrumentType))).toEqual(
+      new Set(['cloze', 'mcq']),
+    );
+    // Same instruments, same order, same ratings as the session actually wrote
+    // — compared against `logged` (captured at the `recordReview` call
+    // itself), never `rated` (the pre-`rate()`/`mcqNext()` view snapshot) —
+    // same reasoning as the top-level suite's identical assertion.
+    expect(reviews.map((record) => record.instrumentId)).toEqual(
+      logged.map((item) => item.instrumentId),
+    );
+    expect(reviews.map((record) => record.rating)).toEqual(logged.map((item) => item.rating));
   });
 });

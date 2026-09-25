@@ -1,0 +1,10 @@
+filters:
+  and:
+    - file.inFolder("02 Assignments")
+    - file.ext == "md"
+properties:
+  class:
+  type:
+  weight:
+  due:
+  status:
