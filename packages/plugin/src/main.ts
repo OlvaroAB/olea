@@ -103,6 +103,7 @@ import {
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
+import { frozenCourseOrTopicFilter } from './extend-outrun-course-filter.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
@@ -293,8 +294,20 @@ interface ReviewWiring {
   /**
    * The cached study plan in force (F2.8 Phase B), or `null` (Phase A) —
    * P5-T07's switch-on. Mutated in place by `refreshCachedStudyPlan` as
-   * fresher plans arrive; `composeReviewSession` reads it at the instant a
-   * session opens, never a stale copy captured at `onload`.
+   * fresher plans arrive, and read live, at that instant, by every FRESH
+   * compose (`composeDefaultStudySession`, `extendDefaultStudySession`, the
+   * session-builder view and Home's own preview all read this field through
+   * a thunk, never a stale copy captured at `onload`).
+   *
+   * **A RESUMED sitting is the one exception** (C5.8, `[D-193]`,
+   * `ol-egov.141.89.10.45`/`ol-egov.141.89.10.47`): `enterStudySessionHolderForStart`
+   * passes this field's value into `StudySessionHolder.enter` as the plan
+   * argument, captured beside the composition at the exact instant a fresh
+   * sitting begins; every later join against that sitting (a plain resume, or
+   * the SESS-8.6 outrun extend) reads the COPY `enter` captured then
+   * (`session/holder.ts`'s own `resolveCompositionPlan`), never whatever this
+   * field has since become — see `open-session.ts`'s `compositionPlan` for
+   * the reader that joins the review log against it.
    */
   plan: StudyPlanEnvelope | null;
 }
@@ -2945,14 +2958,40 @@ export default class OleaPlugin extends Plugin {
    * more `DEFAULT_SESSION_BUDGET_MINUTES`-sized step — a declared, plain-
    * English default (C5.5's "her typical session length" unit, reused as the
    * growth step rather than inventing a second number), not a fitted
-   * threshold, so it needs no decision bead — and every other steering input
-   * (courses, conceptIds, allocation, focusPolicy) held identical, which is
-   * what makes the growth "the same plan's shares" (C5.5) by construction,
-   * per `extendComposedStudySession`'s own doc.
+   * threshold, so it needs no decision bead.
+   *
+   * **`courseOrTopic` is pinned to `previous`'s own course**
+   * (`ol-egov.141.89.10.15`, F2.18/C5.6, C5.8 as amended: "where she outruns
+   * it, C5.8's outrun extends this course's own material under the same
+   * plan's shares"), read off `previous.dominantCourse`, NOT
+   * `previous.courseShares.keys()` — `courseShares` carries a zero entry for
+   * every course in the wider candidate pool whenever nothing narrowed the
+   * candidates first, so its key count is not reliably one; `dominantCourse`
+   * is `study-session/compose.ts`'s own unambiguous "which course did this
+   * composition choose" field, set on every call here since `focusPolicy`
+   * always defaults to `'single'` (`[FOCUS-5]`, never overridden in this
+   * package). {@link frozenCourseOrTopicFilter} (its own module, since
+   * `main.ts` cannot be imported under Vitest — see that file's doc) reads it
+   * and hands back the `CourseOrTopicOption` `resolveCourseOrTopicFilter`
+   * (`session-builder/provider.ts`) turns into a `courses: [that course]`
+   * restriction. Without this the request carried no course/topic steering
+   * at all, so `selectDominantCourse` (`study-session/compose.ts`) reran its
+   * own filter/urgency/deficit hierarchy fresh and was free to land on a
+   * DIFFERENT course than the frozen composition being extended — this
+   * method's own doc used to claim the opposite ("every other steering input
+   * … held identical"), which was itself a second, closely-related stale
+   * comment; both are corrected by this fix. Every OTHER steering input
+   * (conceptIds, allocation, focusPolicy) is still held identical by re-
+   * assembling the same composer input.
    *
    * `null` means the same "nothing to compose" condition
    * {@link composeDefaultStudySession} already reports — `open-session.ts`
-   * reads that as "nothing new to append," never a failure.
+   * reads that as "nothing new to append," never a failure. If the frozen
+   * course itself has nothing left to serve, no ruled clause decides that
+   * case specially: `extendComposedStudySession` (`olea-core`) already
+   * returns `previous.model.items` unchanged when nothing new was appended —
+   * today's existing empty-extend behaviour, preserved as-is (see this
+   * bead's close evidence).
    */
   private async extendDefaultStudySession(
     previous: ComposedStudySession,
@@ -2960,6 +2999,7 @@ export default class OleaPlugin extends Plugin {
     const wiring = this.review;
     if (wiring === null) return null;
     const now = new Date();
+    const courseOrTopic = frozenCourseOrTopicFilter(previous.dominantCourse);
     const result = await composeStudySessionForRequest(
       {
         vault: wiring.vault,
@@ -2981,7 +3021,12 @@ export default class OleaPlugin extends Plugin {
           ? { readRankWeights: this.rankWeights.readRankWeights }
           : {}),
       },
-      { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+      {
+        budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,
+        // `ol-egov.141.89.10.15`: pin the frozen composition's own course —
+        // see this method's own doc above.
+        ...(courseOrTopic !== undefined ? { courseOrTopic } : {}),
+      },
       now,
     );
     if (result === null) return null;
@@ -3070,7 +3115,13 @@ export default class OleaPlugin extends Plugin {
       this.studySessionHolder.exit();
     }
     const composed = await this.composeDefaultStudySession();
-    if (composed !== null) this.studySessionHolder.enter(now, composed);
+    // `ol-egov.141.89.10.47` (C5.8, `[D-193]`): pass the live review plan as
+    // `enter`'s third argument, so the composition PLAN is captured at the
+    // exact instant this fresh sitting begins, not lazily at the first
+    // `resolveCompositionPlan` call (previously the first review-tab open) —
+    // see `ReviewWiring.plan`'s own doc and `session/holder.ts`'s
+    // `resolveCompositionPlan`.
+    if (composed !== null) this.studySessionHolder.enter(now, composed, this.review?.plan ?? null);
   }
 
   /**

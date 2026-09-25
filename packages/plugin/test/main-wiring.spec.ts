@@ -1461,9 +1461,13 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   });
 
   it('main.ts:2474 — extendDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
+    // `ol-egov.141.89.10.15`'s course pin (below) turned the second argument
+    // multi-line, so this pattern matches `budgetMinutes` inside that object
+    // rather than the old single-line `{ budgetMinutes: ... }` — the
+    // `readRankWeights` spread and the overall call shape are unaffected.
     expect(main).toMatch(
       new RegExp(
-        `private async extendDefaultStudySession\\([\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
+        `private async extendDefaultStudySession\\([\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{\\s*budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,[\\s\\S]{0,200}?\\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
       ),
     );
   });
@@ -1475,6 +1479,81 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     // `ol-egov.141.89.10.40` adds: 1 + 5 + 1 = 7.
     expect(occurrences.length).toBe(7);
   });
+});
+
+describe('ol-egov.141.89.10.15 (bug): extending an outrun session holds the same course it is extending', () => {
+  // CONFIRMED bug: `extendDefaultStudySession` used to call
+  // `composeStudySessionForRequest` with `{ budgetMinutes: ... }` and no
+  // `courseOrTopic`, so `resolveCourseOrTopicFilter` (`session-builder/
+  // provider.ts`) returned no restriction and `selectDominantCourse`
+  // (`study-session/compose.ts`) reran its filter/urgency/deficit hierarchy
+  // fresh, free to land on a different course than `previous`'s own frozen
+  // composition — contradicting F2.18/C5.6 and C5.8 as amended ("where she
+  // outruns it, C5.8's outrun extends this course's own material"). The
+  // behavioural half (a real composition proving the course actually stays
+  // pinned across a changed urgency/deficit signal) lives in
+  // `test/extend-outrun-course-filter.spec.ts`, since `main.ts` cannot be
+  // imported under Vitest (this file's own module doc) — this is the
+  // source-level wiring pin that a future edit dropping the pin, or
+  // reordering the call so it is computed but never passed, still fails.
+
+  it('derives courseOrTopic from the frozen composition through frozenCourseOrTopicFilter, not inline here', () => {
+    expect(main).toMatch(
+      /const courseOrTopic = frozenCourseOrTopicFilter\(previous\.dominantCourse\);/,
+    );
+  });
+
+  it('imports frozenCourseOrTopicFilter from its own obsidian-free module', () => {
+    expect(main).toMatch(
+      /import \{ frozenCourseOrTopicFilter \} from '\.\/extend-outrun-course-filter\.js';/,
+    );
+  });
+
+  it("passes the derived courseOrTopic into composeStudySessionForRequest's request argument, omitting the key when undefined (exactOptionalPropertyTypes)", () => {
+    expect(main).toMatch(
+      /budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,\s*\.\.\.\(courseOrTopic !== undefined \? \{ courseOrTopic \} : \{\}\),/,
+    );
+  });
+
+  it('the courseOrTopic derivation and the composeStudySessionForRequest call both live inside extendDefaultStudySession, not composeDefaultStudySession', () => {
+    const extendBody = main.slice(main.indexOf('private async extendDefaultStudySession('));
+    expect(extendBody.indexOf('const courseOrTopic = frozenCourseOrTopicFilter')).toBeGreaterThan(
+      -1,
+    );
+    expect(extendBody.indexOf('courseOrTopic !== undefined ? { courseOrTopic }')).toBeGreaterThan(
+      extendBody.indexOf('const courseOrTopic = frozenCourseOrTopicFilter'),
+    );
+    // composeDefaultStudySession (the sibling "open" path) is never given a
+    // courseOrTopic restriction — see its own doc for why (no steering on a
+    // fresh compose).
+    const composeBody = main.slice(
+      main.indexOf('private async composeDefaultStudySession('),
+      main.indexOf('private async extendDefaultStudySession('),
+    );
+    expect(composeBody).not.toMatch(/courseOrTopic/);
+  });
+});
+
+describe('ol-egov.141.89.10.47: Start’s holder entry captures the composing plan, not just a fresh sitting', () => {
+  // CONFIRMED bug: `enterStudySessionHolderForStart` called
+  // `this.studySessionHolder.enter(now, composed)` with no third argument,
+  // so `StudySessionHolder.enter` (`session/holder.ts`) left the sitting's
+  // composition plan uncaptured — captured only lazily, at the first
+  // `resolveCompositionPlan` call, which in practice is the first review-tab
+  // open rather than the true entry instant (C5.8, `[D-193]`).
+
+  it('enter is called with the live review plan as its third argument', () => {
+    expect(main).toMatch(
+      /if \(composed !== null\) this\.studySessionHolder\.enter\(now, composed, this\.review\?\.plan \?\? null\);/,
+    );
+  });
+
+  // `ReviewWiring.plan`'s doc-comment correction (it used to claim the
+  // opposite of C5.8/`[D-193]`'s resumed-sitting rule) is prose, stripped by
+  // this file's own `codeOf` before `main` is built — "a doc paragraph
+  // describing the wiring must not satisfy an assertion about it" (this
+  // file's own module doc). Not asserted here for that reason; see this
+  // bead's close evidence / report for the corrected text.
 });
 
 describe('ol-egov.141.89.10.14 (bug): the shared session holder cannot yet compute real staleness', () => {
