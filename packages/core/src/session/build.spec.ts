@@ -286,6 +286,76 @@ describe('suspension, read from the whole log', () => {
     });
     expect(restoredQueue.items.map((i) => i.instrumentId)).toContain(gamma.instrumentId);
   });
+
+  // `ol-egov.141.89.10.13`: P1, "the composed session path does not filter
+  // suspended or withdrawn instruments". `session.suspended` was always
+  // computed correctly (the test above), but `session.candidates` — the pool
+  // `study-session/` and `session-builder/` compose from in production,
+  // neither of which ever reads `.suspended` itself (only the legacy
+  // `composeQueue` path takes it as an explicit parameter) — was never
+  // filtered against it, so a suspended or withdrawn instrument could reach a
+  // session she opens. This asserts the fix at the source: `candidates`
+  // itself excludes it, so every caller is protected, not only one that
+  // remembers to pass `suspended` to `composeQueue`.
+  it('a suspended instrument never appears in candidates at all, regardless of what a caller does with `composeQueue`', async () => {
+    const vault = smallVault();
+    const base = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const gamma = base.instruments.records.find((r) => r.conceptIds.includes(unboundKey('Gamma')));
+    if (gamma === undefined) throw new Error('expected a Gamma instrument');
+    expect(base.candidates.map((c) => c.instrumentId)).toContain(gamma.instrumentId);
+
+    const session = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries: [
+        {
+          schemaVersion: 5,
+          kind: 'suspend',
+          eventId: 's1',
+          timestamp: '2026-08-01T09:00:00+00:00',
+          instrumentId: gamma.instrumentId,
+          conceptIds: [unboundKey('Gamma')],
+        },
+      ],
+    });
+
+    expect(session.suspended.has(gamma.instrumentId)).toBe(true);
+    // The defect this bead fixes: `candidates` (not merely `composeQueue`'s
+    // downstream filter) must not carry the suspended instrument.
+    expect(session.candidates.map((c) => c.instrumentId)).not.toContain(gamma.instrumentId);
+    // Every other, still-eligible instrument stays — this is exclusion, not
+    // an accidental truncation of the whole pool.
+    expect(session.candidates.length).toBe(base.candidates.length - 1);
+  });
+
+  it('a "withdrawn" instrument (F8.5\'s registry prune — the identical suspend record) is excluded from candidates the same way', async () => {
+    const vault = smallVault();
+    const base = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const gamma = base.instruments.records.find((r) => r.conceptIds.includes(unboundKey('Gamma')));
+    if (gamma === undefined) throw new Error('expected a Gamma instrument');
+
+    // `registry/ports.ts`'s `createVaultPruneInstrumentPort` writes exactly
+    // this shape (a plain `appendSuspendRecord` wrapper) — replicated here
+    // rather than imported since that port lives in the plugin package.
+    const session = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries: [
+        {
+          schemaVersion: 5,
+          kind: 'suspend',
+          eventId: 'w1',
+          timestamp: '2026-08-01T09:00:00+00:00',
+          instrumentId: gamma.instrumentId,
+          conceptIds: [unboundKey('Gamma')],
+        },
+      ],
+    });
+
+    expect(session.candidates.map((c) => c.instrumentId)).not.toContain(gamma.instrumentId);
+  });
 });
 
 // F2.5's `filter` is `composeQueue`'s own field, not `BuildReviewSessionInput`'s

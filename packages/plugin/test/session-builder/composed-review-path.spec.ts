@@ -464,23 +464,40 @@ describe('case 2 (ol-egov.141.6.16 acceptance criterion 2) — a suspended and a
 
     // Observed, current behaviour: both the suspended and the withdrawn
     // instrument DO reach the served queue. This is not asserted as
-    // correct — it is `ol-egov.141.89.10.13`'s own confirmed finding
-        // (`packages/core/src/session/build.ts:264-285`: `candidates` is never
-    // filtered against the `suspended` set it computes), read again here
-    // through the plugin's real path rather than fixed. `ol-4mse` (the
-    // Today panel's mastery fold, `packages/core/src/today/panel.ts`
-    // ~line 272) is a separate call site this suite's composed-review-tab
-    // path never reaches, so it is not exercised or re-confirmed here.
+    // correct — it is `ol-egov.141.89.10.13`'s own confirmed finding, read
+    // again here through the plugin's real path. `ol-4mse` (the Today
+    // panel's mastery fold, `packages/core/src/today/panel.ts` ~line 272)
+    // is a separate call site this suite's composed-review-tab path never
+    // reaches, so it is not exercised or re-confirmed here.
     expect(servedIds).toContain(widget.instrumentId);
     expect(servedIds).toContain(gadget.instrumentId);
 
-    // What SHOULD hold once `ol-egov.141.89.10.13` is fixed — a suspended
-    // or withdrawn instrument excluded from the served queue. Pinned as an
-    // EXPECTED failure (`it.fails`), not a passing assertion of the
-    // over-inclusion, so this file never locks the bug in as correct: this
-    // flips to a genuine pass, and the `.fails` must be removed, once
-    // `ol-egov.141.89.10.13` filters `candidates` against `suspended` at
-    // `packages/core/src/session/build.ts:277-285`.
+    // What SHOULD hold, and does NOT yet on this real path — a suspended or
+    // withdrawn instrument excluded from the served queue. Pinned as an
+    // EXPECTED failure (`it.fails`) below, not a passing assertion of the
+    // over-inclusion, so this file never locks the bug in as correct.
+    //
+    // `ol-egov.141.89.10.13` landed `session/build.ts`'s own fix (its
+    // `candidates` field, built at `session/build.ts:277-285`, now excludes
+    // `suspended`/withdrawn) and a core unit test proving it. Verified here,
+    // empirically, that this alone does NOT flip the two `it.fails` below:
+    // `composeThroughProductionPath` selects instruments through
+    // `composeStudySessionForRequest` (`session-builder/provider.ts:770`,
+    // `enumerateVaultInstruments` called directly) into
+    // `study-session/compose.ts`'s `buildComposedStudySession` — a path that
+    // never calls `session/build.ts`'s `buildReviewSession` and never reads
+    // `.suspended` at all (`buildConceptInstrumentIndex(enumeration.records)`,
+    // `session-builder/provider.ts:827`/`:911`, takes the raw, unfiltered
+    // enumeration). `open-session.ts`'s own `buildReviewSession` call
+    // (`:378`) is a SECOND, independent enumeration, used only to fill in
+    // `state`/`conceptIds` on the already-selected rows
+    // (`queueItemsFromComposedSession`, which never drops a row) — so
+    // `session/build.ts`'s fix protects a caller that composes directly over
+    // `candidates` (the workbench/simulator, `composeQueue`'s legacy
+    // callers), but not this, the real "Olea: Start today's review" path.
+    // Remains `it.fails` until a follow-up bead wires suspension into
+    // `session-builder/provider.ts`/`study-session/compose.ts` themselves
+    // (outside `ol-egov.141.89.10.13`'s `owns`) — see this bead's report.
   });
 
   it.fails(

@@ -34,11 +34,14 @@
  *
  * ## What it does not do
  *
- * It does not order, prioritise, dedupe or filter beyond the containment rule
- * below. It does not read a clock: `now` is the caller's, same discipline as
- * `ScheduleInput.now`, so a caller's own composition over this enumeration is
- * deterministic and a replay of it is trustworthy. And it writes nothing at
- * all, into the vault or beside it.
+ * It does not order, prioritise or dedupe. The only filtering it does is the
+ * containment rule below and excluding a currently-suspended or withdrawn
+ * instrument from `candidates` (see "Suspension comes from the whole log,
+ * deliberately" below; `ol-egov.141.89.10.13`). It does not read a clock:
+ * `now` is the caller's, same discipline as `ScheduleInput.now`, so a
+ * caller's own composition over this enumeration is deterministic and a
+ * replay of it is trustworthy. And it writes nothing at all, into the vault
+ * or beside it.
  *
  * ## Suspension comes from the whole log, deliberately
  *
@@ -48,6 +51,22 @@
  * projection that forgot it would put an instrument she stopped studying back
  * in front of her. This is the component F2.6's scenarios mean when they say
  * "the queue reads the full history".
+ *
+ * **`candidates` excludes it too (`ol-egov.141.89.10.13`).** Before this bead,
+ * `suspended` was folded and returned as `ReviewSession.suspended`, but
+ * `candidates` (below) was built from the whole `instruments.records` walk
+ * without checking it — a real defect, since nothing in `study-session/` or
+ * `session-builder/` (the production composer, `[SESS-8.6]` above) ever reads
+ * `.suspended` itself; only `composeQueue`'s own legacy `suspended` parameter
+ * did. A suspended or withdrawn instrument could therefore be composed into a
+ * session she opens, which she explicitly asked not to be shown. The record a
+ * suspend action writes and the record F8.5's registry-withdrawal action
+ * writes are the identical `kind: 'suspend'` log entry (`registry/ports.ts`'s
+ * own module doc), so filtering by `suspended` here covers "withdrawn" too —
+ * no second signal is needed. Filtering happens before the containment
+ * co-presence check below, not after: a suspended part must not keep its
+ * container artificially dropped for a co-presence with an instrument that
+ * will never be served anyway.
  *
  * ## C7.9's containment co-presence rule
  *
@@ -136,11 +155,13 @@ export interface ReviewSession {
   /** Everything the walk found, including what it refused and why. */
   readonly instruments: VaultInstrumentEnumeration;
   /**
-   * Every enumerated instrument, in enumeration order, **after** the C7.9
-   * containment co-presence filter — see this file's module doc. Exposed for
-   * diagnostics (`instrumentTypesOfferedAmong`, a candidate's replayed FSRS
-   * state) and for the Today panel's legacy count; it does not decide what is
-   * served — see the module doc for which composer does.
+   * Every enumerated instrument, in enumeration order, **excluding a
+   * currently-suspended or withdrawn instrument** (`ol-egov.141.89.10.13`;
+   * "Suspension comes from the whole log, deliberately" above) and **after**
+   * the C7.9 containment co-presence filter — see this file's module doc.
+   * Exposed for diagnostics (`instrumentTypesOfferedAmong`, a candidate's
+   * replayed FSRS state) and for the Today panel's legacy count; it does not
+   * decide what is served — see the module doc for which composer does.
    */
   readonly candidates: readonly QueueCandidate[];
   /**
@@ -274,9 +295,14 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   );
   const targetAssessmentPathByConceptKey = targetAssessmentPathIndex(assessmentContext);
 
-  const enumeratedCandidates = instruments.records.map((record) =>
-    toQueueCandidate(record, replay, targetAssessmentPathByConceptKey),
-  );
+  // `ol-egov.141.89.10.13`: a currently-suspended or withdrawn instrument
+  // (the identical `kind: 'suspend'` log entry either action writes) is
+  // dropped here, before containment co-presence runs — never a candidate at
+  // all, so no caller composing over `candidates` can serve it. See the
+  // module doc's "Suspension comes from the whole log, deliberately".
+  const enumeratedCandidates = instruments.records
+    .filter((record) => !suspended.has(record.instrumentId))
+    .map((record) => toQueueCandidate(record, replay, targetAssessmentPathByConceptKey));
   const containment = filterContainmentCoPresence(
     enumeratedCandidates,
     input.relations ?? [],
