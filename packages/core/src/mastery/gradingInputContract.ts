@@ -49,6 +49,12 @@
  *    `buildGradingSourceMaterial` assemble the subject's defining passages, the edge's own
  *    provenance passages, and the neighbour's defining passages as context — every one of those is
  *    a field already on a record C7.10/`[D-082]` requires to exist, never a fresh retrieval.
+ *    `resolveGradingRelationContext`/`resolveRelationProvenance` are the retrieval-input builders
+ *    `buildGradingSourceMaterial` had no caller producing (review-response.md §1 row 12): given the
+ *    graph's already-resolved edge, they apply `docs/dev/intelligence-build/rel.md` §3 Default 4's
+ *    per-endpoint freshness gate before the edge is ever used — a non-`current` edge is treated as
+ *    `no-edge`, the same abstention `servedRelations` already enforces for every other reader
+ *    (`../concept/relation.js:567-568`). Freshness itself is computed upstream, not here.
  * 3. **The three provenance cases, including both "written nowhere" sub-cases** — `RelationProvenance`'s
  *    three-armed union: `edge-provenance` (stated in one document, or implied across two — the same
  *    shape either way, per F5.2a), `asserted-no-provenance` (her own link, no textual provenance),
@@ -85,6 +91,7 @@
  *   this module receives already-resolved passages and decides what to do with them.
  */
 
+import type { RelationEvidenceState, RelationProvenanceKind } from '../concept/relation.js';
 import type { SourceBlockRef } from '../grading/gradingPipeline.js';
 
 // ---------------------------------------------------------------------------
@@ -167,6 +174,104 @@ export interface GradingRetrievalInput {
    * that is not part of the prompt has no defining passages to retrieve for it here.
    */
   readonly neighbourDefiningPassages?: ConceptDefiningPassages;
+}
+
+// ---------------------------------------------------------------------------
+// 2c. Resolving relation provenance from the graph, freshness-gated
+//     (rel.md §3 Default 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * The already-resolved facts about one candidate neighbour edge that
+ * `resolveRelationProvenance` needs — the graph's own fold result for that
+ * edge (`packages/core/src/concept/relation.ts`'s `RelationSetEntry`,
+ * narrowed to the fields this module reads), never fetched, folded or
+ * freshness-computed here. This module's "lookup, not a search" doc above
+ * applies to this input exactly as it applies to `ConceptDefiningPassages`.
+ */
+export interface ResolvedRelationEdge {
+  /**
+   * rel.md §3 Default 4's per-endpoint freshness gate, already collapsed to
+   * one state for the edge (the worse of its two endpoints, `unverified`
+   * folded into `stale`) by whichever stage computed it —
+   * `relation.ts`'s `RelationSetEntry.evidence`. **This module does not
+   * compute freshness** (that is Default 4's own build scope, not yet
+   * wired: `relation.ts:532` hard-codes `'current'` today) — it only
+   * honours the same gate `servedRelations` already enforces for every
+   * other reader (`relation.ts:567-568`, `entry.evidence === 'current'`):
+   * a `stale` edge is never used here either, exactly as if it did not
+   * exist.
+   */
+  readonly evidence: RelationEvidenceState;
+  readonly provenance: RelationProvenanceKind;
+  /** The edge's own introducing passages, already resolved to source blocks — empty when none exist. */
+  readonly introducingPassages: readonly SourceBlockRef[];
+  /** Her own linking note, present when `provenance` is `'hers'` and no textual provenance was found. */
+  readonly linkingNote?: SourceBlockRef;
+}
+
+/**
+ * Resolves `RelationProvenance` for a named neighbour from the graph's own
+ * (already-resolved) edge, gating on rel.md §3 Default 4 **before the edge
+ * is ever used**: a non-`current` edge — `stale`, or `unverified` collapsed
+ * into it — is treated exactly as `servedRelations` treats it for every
+ * other reader, never served, as if the edge were absent. That collapses to
+ * F5.2a's own `no-edge` case: a stale edge is, for grading purposes,
+ * indistinguishable from no edge at all, which is Default 4's "abstention
+ * is automatic" read onto this consumer.
+ *
+ * `edge` is `undefined` when the graph has no candidate edge between the
+ * two concepts at all — the ordinary `no-edge` case, unaffected by
+ * freshness.
+ *
+ * Pure and synchronous, like every other export in this module: freshness
+ * itself is computed upstream, not here (see `ResolvedRelationEdge.evidence`'s
+ * own doc); this function only decides what to do with it once resolved.
+ */
+export function resolveRelationProvenance(
+  edge: ResolvedRelationEdge | undefined,
+): RelationProvenance {
+  if (edge === undefined || edge.evidence !== 'current') {
+    return { kind: 'no-edge' };
+  }
+  if (edge.introducingPassages.length > 0) {
+    return { kind: 'edge-provenance', passages: edge.introducingPassages };
+  }
+  if (edge.provenance === 'hers' && edge.linkingNote) {
+    return { kind: 'asserted-no-provenance', linkingNote: edge.linkingNote };
+  }
+  // A model-proposed edge with no textual provenance and no linking note is
+  // not a case C7.10 defines (a candidate always carries the passages that
+  // produced it) — treated as no usable edge rather than inventing a fourth
+  // provenance case this module has no evidence for.
+  return { kind: 'no-edge' };
+}
+
+/**
+ * Resolves the whole `GradingRelationContext` for one grading call: whether
+ * the prompt named a neighbour at all, and if so, that neighbour's
+ * freshness-gated `RelationProvenance` (`resolveRelationProvenance` above).
+ * This, together with `subject`/`subjectDefiningPassages`/
+ * `neighbourDefiningPassages`, is the retrieval input `buildGradingSourceMaterial`
+ * needs — assembled here from already-resolved facts (F5.2a, C5.12: "a
+ * lookup, not a search"), never by this module fetching anything itself.
+ *
+ * `named` is `undefined` for a concept-only explanation — the prompt named
+ * no neighbour, so there is no edge to resolve.
+ */
+export function resolveGradingRelationContext(
+  named:
+    | { readonly neighbourConceptId: string; readonly edge: ResolvedRelationEdge | undefined }
+    | undefined,
+): GradingRelationContext {
+  if (named === undefined) {
+    return { kind: 'concept-only' };
+  }
+  return {
+    kind: 'relation',
+    neighbourConceptId: named.neighbourConceptId,
+    provenance: resolveRelationProvenance(named.edge),
+  };
 }
 
 // ---------------------------------------------------------------------------

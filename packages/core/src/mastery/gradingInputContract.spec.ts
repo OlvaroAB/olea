@@ -14,8 +14,11 @@ import type { SourceBlockRef } from '../grading/gradingPipeline.js';
 import {
   buildGradingSourceMaterial,
   buildSchedulingObservationField,
+  resolveGradingRelationContext,
+  resolveRelationProvenance,
   type ConceptDefiningPassages,
   type GradingRetrievalInput,
+  type ResolvedRelationEdge,
 } from './gradingInputContract.js';
 
 function block(blockId: string, text = `text for ${blockId}`): SourceBlockRef {
@@ -164,6 +167,179 @@ describe('buildGradingSourceMaterial', () => {
     };
 
     expect(buildGradingSourceMaterial(input)).toEqual(buildGradingSourceMaterial(input));
+  });
+});
+
+// rel.md §3 Default 4 (`ol-egov.141.89.4.11`), consumed here: a stale (or
+// unverified) edge is never used, exactly as `servedRelations`
+// (`packages/core/src/concept/relation.ts:567-568`) never serves one to any
+// other reader. This module does not compute freshness (`relation.ts:532`
+// still hard-codes `'current'` today) — it only honours the state it is
+// given.
+describe('resolveRelationProvenance — freshness-gated (rel.md §3 Default 4)', () => {
+  it('a current edge with introducing passages resolves to edge-provenance', () => {
+    const edge: ResolvedRelationEdge = {
+      evidence: 'current',
+      provenance: 'model-proposed',
+      introducingPassages: [block('edge-1'), block('edge-2')],
+    };
+
+    expect(resolveRelationProvenance(edge)).toEqual({
+      kind: 'edge-provenance',
+      passages: [block('edge-1'), block('edge-2')],
+    });
+  });
+
+  // Beside the current case directly above: same edge shape, only `evidence`
+  // differs, and the result is `no-edge` — a stale edge is excluded, never
+  // read as `edge-provenance` and never as `asserted-no-provenance` either,
+  // because both of those claim a real, current edge exists.
+  it('a stale edge is excluded, resolving to no-edge, even though it carries introducing passages', () => {
+    const edge: ResolvedRelationEdge = {
+      evidence: 'stale',
+      provenance: 'model-proposed',
+      introducingPassages: [block('edge-1'), block('edge-2')],
+    };
+
+    expect(resolveRelationProvenance(edge)).toEqual({ kind: 'no-edge' });
+  });
+
+  it('a current edge with no textual provenance but her own linking note resolves to asserted-no-provenance', () => {
+    const edge: ResolvedRelationEdge = {
+      evidence: 'current',
+      provenance: 'hers',
+      introducingPassages: [],
+      linkingNote: block('her-note'),
+    };
+
+    expect(resolveRelationProvenance(edge)).toEqual({
+      kind: 'asserted-no-provenance',
+      linkingNote: block('her-note'),
+    });
+  });
+
+  it('a stale edge with her own linking note is still excluded, resolving to no-edge', () => {
+    const edge: ResolvedRelationEdge = {
+      evidence: 'stale',
+      provenance: 'hers',
+      introducingPassages: [],
+      linkingNote: block('her-note'),
+    };
+
+    expect(resolveRelationProvenance(edge)).toEqual({ kind: 'no-edge' });
+  });
+
+  it('no edge at all (undefined) resolves to no-edge, unaffected by freshness', () => {
+    expect(resolveRelationProvenance(undefined)).toEqual({ kind: 'no-edge' });
+  });
+
+  it('a model-proposed edge with neither introducing passages nor a linking note resolves to no-edge', () => {
+    const edge: ResolvedRelationEdge = {
+      evidence: 'current',
+      provenance: 'model-proposed',
+      introducingPassages: [],
+    };
+
+    expect(resolveRelationProvenance(edge)).toEqual({ kind: 'no-edge' });
+  });
+});
+
+describe('resolveGradingRelationContext', () => {
+  it('a concept-only explanation (no named neighbour) resolves to concept-only', () => {
+    expect(resolveGradingRelationContext(undefined)).toEqual({ kind: 'concept-only' });
+  });
+
+  it('a named neighbour with a current edge resolves to relation + edge-provenance', () => {
+    const context = resolveGradingRelationContext({
+      neighbourConceptId: 'concept-y',
+      edge: {
+        evidence: 'current',
+        provenance: 'model-proposed',
+        introducingPassages: [block('edge-1')],
+      },
+    });
+
+    expect(context).toEqual({
+      kind: 'relation',
+      neighbourConceptId: 'concept-y',
+      provenance: { kind: 'edge-provenance', passages: [block('edge-1')] },
+    });
+  });
+
+  // The current/stale pair again, this time through the whole-context resolver, proving the
+  // gate holds at the level `buildGradingSourceMaterial`'s caller actually calls.
+  it('a named neighbour with a stale edge resolves to relation + no-edge, not edge-provenance', () => {
+    const context = resolveGradingRelationContext({
+      neighbourConceptId: 'concept-y',
+      edge: {
+        evidence: 'stale',
+        provenance: 'model-proposed',
+        introducingPassages: [block('edge-1')],
+      },
+    });
+
+    expect(context).toEqual({
+      kind: 'relation',
+      neighbourConceptId: 'concept-y',
+      provenance: { kind: 'no-edge' },
+    });
+  });
+
+  it('a named neighbour with no graph edge at all resolves to relation + no-edge', () => {
+    const context = resolveGradingRelationContext({
+      neighbourConceptId: 'concept-y',
+      edge: undefined,
+    });
+
+    expect(context).toEqual({ kind: 'relation', neighbourConceptId: 'concept-y', provenance: { kind: 'no-edge' } });
+  });
+
+  it('feeds straight into buildGradingSourceMaterial: a current edge is used as edge-provenance end to end', () => {
+    const relation = resolveGradingRelationContext({
+      neighbourConceptId: 'concept-y',
+      edge: {
+        evidence: 'current',
+        provenance: 'model-proposed',
+        introducingPassages: [block('edge-1')],
+      },
+    });
+
+    const result = buildGradingSourceMaterial({
+      subject: { subjectConceptId: 'concept-x' },
+      subjectDefiningPassages: passages('concept-x', 'x-1'),
+      relation,
+      neighbourDefiningPassages: passages('concept-y', 'y-1'),
+    });
+
+    expect(result.sourceBlocks.map((b) => b.blockId)).toEqual(['x-1', 'edge-1', 'y-1']);
+    expect(result.omissionDenominator?.map((b) => b.blockId)).toEqual(['x-1', 'edge-1']);
+  });
+
+  it('feeds straight into buildGradingSourceMaterial: a stale edge degrades to no-edge end to end (denominator null, candidate nominated)', () => {
+    const relation = resolveGradingRelationContext({
+      neighbourConceptId: 'concept-y',
+      edge: {
+        evidence: 'stale',
+        provenance: 'model-proposed',
+        introducingPassages: [block('edge-1')],
+      },
+    });
+
+    const result = buildGradingSourceMaterial({
+      subject: { subjectConceptId: 'concept-x' },
+      subjectDefiningPassages: passages('concept-x', 'x-1'),
+      relation,
+      neighbourDefiningPassages: passages('concept-y', 'y-1'),
+    });
+
+    // The stale edge's own passage ("edge-1") never reaches source blocks at all — excluded, not
+    // merely un-denominated.
+    expect(result.sourceBlocks.map((b) => b.blockId)).toEqual(['x-1', 'y-1']);
+    expect(result.omissionDenominator).toBeNull();
+    expect(result.candidateEdgeNomination).toEqual({
+      subjectConceptId: 'concept-x',
+      neighbourConceptId: 'concept-y',
+    });
   });
 });
 
