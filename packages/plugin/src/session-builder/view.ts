@@ -82,6 +82,22 @@ export type SessionBuilderState =
       readonly model: StudySessionModel;
       readonly courseOrTopicOptions?: readonly CourseOrTopicOption[];
       readonly staleReasonLine?: string;
+      /**
+       * F2.22 / F6.4 (`ol-egov.141.89.10.60`, closing the one-line gap
+       * `ol-egov.141.89.10.19` reported): `ComposedStudySession.focusReason`
+       * (`olea-core`'s `study-session/compose.ts`), carried through
+       * unchanged by `./provider.ts`'s `buildFresh` — never a paraphrase —
+       * so `../home/provider.ts` can thread it onto
+       * `HomeViewState.focusReason` for
+       * `../home/copy.ts#sessionCompositionSentence` to render (that
+       * provider's own doc comment names the exact one-line spread this
+       * still needs, outside this file's `owns`). `undefined` when the
+       * composed session had no dominant course to explain (`focusPolicy:
+       * 'every-course'`, or no eligible course at all) — the same
+       * honest-absence posture `ComposedStudySession.focusReason` itself
+       * already takes; never a placeholder sentence.
+       */
+      readonly focusReason?: string;
     }
   | {
       readonly kind: 'reentry';

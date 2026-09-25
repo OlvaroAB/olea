@@ -66,6 +66,31 @@ describe('the review view is registered, not merely written', () => {
   });
 });
 
+describe('ReviewView reads the composition sentence through the shared study-session holder (F2.22/F6.4, ol-egov.141.89.10.60)', () => {
+  // `main.ts` cannot be loaded under Vitest (it imports `obsidian`), so this
+  // is the source-level pin for the `getFocusReason` callback `ReviewView`'s
+  // own constructor doc names as its real wiring site.
+  // `test/session-builder/provider.spec.ts`'s "the composed session's
+  // focusReason reaches SessionBuilderState" suite reproduces this exact
+  // guard against a real `StudySessionHolder` and proves it resolves active
+  // vs. idle correctly — that behaviour cannot be checked here.
+
+  it('passes a getFocusReason callback as the last ReviewView argument, reading the shared holder', () => {
+    expect(main).toMatch(
+      /\(\) => reviewSessionOpener\.close\(\),\s*\(\) => \{\s*const sitting = this\.studySessionHolder\.getSitting\(\);\s*return sitting\.status === 'active' \? sitting\.items\.focusReason : undefined;\s*\},\s*\);/,
+    );
+  });
+
+  it('reads this.studySessionHolder — the SAME single instance enterStudySessionHolderForStart enters/exits, never a second one', () => {
+    expect(main).toMatch(
+      /private readonly studySessionHolder: StudySessionHolder = createStudySessionHolder\(\);/,
+    );
+    // Constructed exactly once on the class; every reader (including this
+    // callback) goes through `this.studySessionHolder`.
+    expect(main.match(/createStudySessionHolder\(\)/g)?.length).toBe(1);
+  });
+});
+
 describe('the Today panel refreshes after a review session closes — ol-h3wy', () => {
   // `TodayView.refresh` carried a doc comment saying it was "called by
   // main.ts after a session" while nothing called it — a completed review

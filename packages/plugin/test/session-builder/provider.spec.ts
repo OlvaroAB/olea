@@ -50,6 +50,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
+import { createStudySessionHolder } from '../../src/session/holder.js';
 import {
   composeStudySessionForRequest,
   createLocalSessionBuilderProvider,
@@ -921,6 +922,82 @@ describe('createLocalSessionBuilderProvider — F6.6 re-entry composition wiring
 
     const state = await provider.load({ budgetMinutes: 60 });
     expect(state.kind).toBe('model');
+  });
+});
+
+/**
+ * F2.22 / F6.4 (`ol-egov.141.89.10.60`, closing `ol-egov.141.89.10.19`'s own
+ * gap): `SessionBuilderState`'s `'model'` variant now carries the composed
+ * session's `focusReason` through unchanged (`./view.ts`'s own doc). This
+ * suite proves two things a wiring test, not `compose.ts`'s own suite, is
+ * responsible for: (a) `buildFresh` really does thread
+ * `composed.full.focusReason` rather than a copy or a paraphrase, and (b)
+ * the SAME composed session, read through the OTHER production surface —
+ * `main.ts`'s `ReviewView` `getFocusReason` callback, reading
+ * `session/holder.ts`'s shared `StudySessionHolder` — resolves to the
+ * identical string while the sitting is active, and to `undefined` once it
+ * is idle. `main.ts` cannot be loaded under Vitest (it imports `obsidian`),
+ * so this test reproduces its callback's exact guard
+ * (`sitting.status === 'active' ? sitting.items.focusReason : undefined`)
+ * against a real `StudySessionHolder` instance rather than a stub —
+ * `test/main-wiring.spec.ts`'s own source-level assertion pins that
+ * `main.ts` actually wires this literal guard at its `ReviewView` call
+ * site.
+ */
+describe("createLocalSessionBuilderProvider — the composed session's focusReason reaches SessionBuilderState, identically to how the review view reads it (F2.22/F6.4, ol-egov.141.89.10.60)", () => {
+  it("a model composition's focusReason is composed.full.focusReason verbatim, never a paraphrase", async () => {
+    const deps = {
+      vault: vaultWithReviewLog([]),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    };
+
+    const composeResult = await composeStudySessionForRequest(deps, { budgetMinutes: 60 }, NOW);
+    if (composeResult === null)
+      throw new Error('expected a real composition (study plan is configured)');
+    // The one-course fixture always has a dominant course to explain —
+    // guards the rest of this test against a silently-undefined reason.
+    expect(composeResult.composed.full.focusReason).toBeDefined();
+
+    const provider = createLocalSessionBuilderProvider(deps);
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('model');
+    if (state.kind !== 'model') throw new Error('expected an ordinary model');
+    expect(state.focusReason).toBe(composeResult.composed.full.focusReason);
+  });
+
+  it('the same composed session resolves to the identical focusReason through the shared study-session holder while active, and to none once idle — the two surfaces can never diverge for one composed session', async () => {
+    const deps = {
+      vault: vaultWithReviewLog([]),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: stubScheduler({}),
+    };
+
+    const composeResult = await composeStudySessionForRequest(deps, { budgetMinutes: 60 }, NOW);
+    if (composeResult === null)
+      throw new Error('expected a real composition (study plan is configured)');
+
+    const provider = createLocalSessionBuilderProvider(deps);
+    const state = await provider.load({ budgetMinutes: 60 });
+    if (state.kind !== 'model') throw new Error('expected an ordinary model');
+
+    const holder = createStudySessionHolder();
+    // `main.ts`'s own `ReviewView` `getFocusReason` call site, reproduced
+    // verbatim — see this describe block's own doc.
+    const getFocusReason = (): string | undefined => {
+      const sitting = holder.getSitting();
+      return sitting.status === 'active' ? sitting.items.focusReason : undefined;
+    };
+
+    expect(getFocusReason()).toBeUndefined(); // idle: no sentence, never a stale one
+    holder.enter(NOW, composeResult.composed.full);
+    expect(getFocusReason()).toBe(state.focusReason);
+    holder.exit();
+    expect(getFocusReason()).toBeUndefined(); // exited: back to no sentence
   });
 });
 

@@ -205,3 +205,29 @@ describe('the session builder reads what only a real vault has', () => {
     expect(provider).not.toMatch(/buildConceptInstrumentIndex\(enumeration\.records\)/);
   });
 });
+
+/**
+ * F2.22 / F6.4 (`ol-egov.141.89.10.60`, closing `ol-egov.141.89.10.19`'s own
+ * gap): `SessionBuilderState`'s `'model'` variant widened to carry the
+ * composed session's `focusReason`, and `buildFresh` threading it through —
+ * see `view.ts`'s and `provider.ts`'s own doc comments at the same spots.
+ * `test/session-builder/provider.spec.ts`'s own describe block (same title
+ * fragment) is the BEHAVIOURAL proof this value is real and matches the raw
+ * composed session; this is the source-level pin that the exact field/spread
+ * this bead added actually landed, the same "reachability, not correctness"
+ * split every other suite in this file uses.
+ */
+describe("SessionBuilderState's 'model' variant carries focusReason through, unchanged (F2.22/F6.4, ol-egov.141.89.10.60)", () => {
+  const view = codeOf('session-builder/view.ts');
+  const provider = codeOf('session-builder/provider.ts');
+
+  it("view.ts declares an optional focusReason field on the 'model' variant", () => {
+    expect(view).toMatch(/readonly focusReason\?: string;/);
+  });
+
+  it('buildFresh spreads composed.full.focusReason onto the model result, never a copy or a paraphrase', () => {
+    expect(provider).toMatch(
+      /composed\.full\.model,\s*courseOrTopicOptions,\s*\.\.\.\(composed\.full\.focusReason !== undefined\s*\?\s*\{\s*focusReason:\s*composed\.full\.focusReason\s*\}\s*:\s*\{\}\),/,
+    );
+  });
+});

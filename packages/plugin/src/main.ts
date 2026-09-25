@@ -992,6 +992,19 @@ export default class OleaPlugin extends Plugin {
         () => this.extendReviewSession(reviewSessionOpener),
         // `ol-v7r5.35`: releases this tab's own sitting on close.
         () => reviewSessionOpener.close(),
+        // `ol-egov.141.89.10.60` (F2.22/F6.4, closing `ol-egov.141.89.10.19`'s
+        // own gap): the composition sentence's raw reason, read fresh from
+        // `this.studySessionHolder` (`session/holder.ts`) — the SAME shared
+        // holder `enterStudySessionHolderForStart` above already reads/
+        // writes, never a second source of truth. Only while a sitting is
+        // active: an idle holder (never entered, or exited) renders no
+        // sentence rather than a stale one from a sitting that already
+        // ended — see `ReviewView`'s own param doc for why this is a thunk,
+        // not a value captured once.
+        () => {
+          const sitting = this.studySessionHolder.getSitting();
+          return sitting.status === 'active' ? sitting.items.focusReason : undefined;
+        },
       );
     });
 

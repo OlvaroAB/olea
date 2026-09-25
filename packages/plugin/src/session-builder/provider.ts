@@ -1171,7 +1171,20 @@ export function createLocalSessionBuilderProvider(
       // to remember to check.
       return composed.isReentry
         ? { kind: 'reentry', view: composed.view, courseOrTopicOptions }
-        : { kind: 'model', model: composed.full.model, courseOrTopicOptions };
+        : {
+            kind: 'model',
+            model: composed.full.model,
+            courseOrTopicOptions,
+            // `ol-egov.141.89.10.60` (F2.22/F6.4): carried through unchanged
+            // from `composed.full.focusReason` — see `SessionBuilderState`'s
+            // own doc (`./view.js`) for the full chain this closes.
+            // Optional-spread, not a `?? undefined` assignment, so an
+            // absent reason (no dominant course) stays absent on the
+            // object rather than an explicit `focusReason: undefined` key.
+            ...(composed.full.focusReason !== undefined
+              ? { focusReason: composed.full.focusReason }
+              : {}),
+          };
     } catch (error) {
       console.error('Olea: could not build a study session', error);
       return { kind: 'unavailable' };
