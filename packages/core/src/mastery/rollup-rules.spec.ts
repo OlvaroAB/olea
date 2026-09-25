@@ -3,8 +3,15 @@
 // `[D-346]` (what earns sapling) is OPEN, so its options are built behind a
 // default that is today's rule; `[D-319]` (the restatement finding) is ruled.
 // Ids are structural placeholders, never fixture vocabulary (INV-3).
-import type { ReviewLogEntry, ReviewLogRecord, SoloLevel, SupportLevel } from 'olea-contracts';
+import type {
+  ReviewLogEntry,
+  ReviewLogRecord,
+  SoloLevel,
+  SupportLevel,
+  VerdictLogRecord,
+} from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { latestVerdictByInstrument } from '../review-log/verdicts.js';
 import {
   computeConceptMastery,
   DEFAULT_SAPLING_RULE,
@@ -281,5 +288,125 @@ describe('foldConceptStage — the scoped fold the attainment entry point reads'
     expect(
       foldConceptStage([graded, regrade], 'concept-a', {}, { supersession: 'ignored' }).state,
     ).toBe('tree');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Knowledge model §8 test 6 / `[D-097]` — rejecting an item as defective
+// excludes its evidence at read time (features/F2-review.md, "Feature:
+// Knowledge model §8 test 6 / [D-097] — Rejecting an item as defective
+// excludes at read time", tagged `@auto:core/mastery/rollup.spec`).
+//
+// The existing "@auto:MAT-C5-instrument-validity" test above (this file's
+// sibling `rollup.spec.ts`) proves only that a rejected instrument's TOP
+// stage is withheld (`invalidInstrumentIds`, "as today"); it does not prove
+// "no reading anywhere moves on those reviews" — the scenario's own words.
+// These tests close that: `../review-log/verdicts.ts`'s own
+// `latestVerdictByInstrument` (a rejected verdict, exactly as it is
+// produced end to end) feeds `foldConceptStage`'s `excludedInstrumentIds`
+// scope, and the rejected item's reviews are shown to move NO reading —
+// not the stage, not the underlying evidence counts either — whatever the
+// timing of the rejection.
+// -----------------------------------------------------------------------------
+
+function verdict(
+  instrumentId: string,
+  value: VerdictLogRecord['verdict'],
+  timestamp: string,
+  eventId: string,
+): VerdictLogRecord {
+  return {
+    schemaVersion: 5,
+    kind: 'verdict',
+    eventId,
+    timestamp,
+    instrumentId,
+    instrumentType: 'qa',
+    conceptIds: ['concept-a'],
+    verdict: value,
+    artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+  };
+}
+
+/** Rejected instruments per `../review-log/verdicts.ts`, ready for `StageFoldScope.excludedInstrumentIds`. */
+function rejectedInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+  const rejected = new Set<string>();
+  for (const [instrumentId, record] of latestVerdictByInstrument(entries)) {
+    if (record.verdict === 'rejected') rejected.add(instrumentId);
+  }
+  return rejected;
+}
+
+describe('Knowledge model §8 test 6 / `[D-097]` — a rejected item’s reviews move no scoring reading', () => {
+  it('a rejected instrument’s reviews move no reading — not the stage, and not the evidence counts behind it', () => {
+    const goodInstrument = onDays(THREE_DAYS, () => ({
+      instrumentId: 'qa:concept-a:1',
+      supportLevelShown: 'independent',
+    }));
+    const rejectedInstrument = onDays(['2026-01-11'], () => ({
+      instrumentId: 'qa:concept-a:2',
+      supportLevelShown: 'independent',
+    }));
+    const entries = [
+      ...goodInstrument,
+      ...rejectedInstrument,
+      verdict('qa:concept-a:2', 'rejected', '2026-01-20T09:00:00-04:00', 'v1'),
+    ];
+
+    // With no exclusion, all four reviews (three good, one on the
+    // to-be-rejected instrument) are scoring evidence.
+    const unscoped = foldConceptStage(entries, 'concept-a', {}, {});
+    expect(unscoped.evidence.scoredEventCount).toBe(4);
+
+    const excluded = rejectedInstrumentIds(entries);
+    expect([...excluded]).toEqual(['qa:concept-a:2']);
+    const scoped = foldConceptStage(entries, 'concept-a', {}, { excludedInstrumentIds: excluded });
+
+    // The rejected instrument's single review is gone from the evidence
+    // entirely — not merely disqualified from the top stage. Only the three
+    // good-instrument reviews remain.
+    expect(scoped.evidence.scoredEventCount).toBe(3);
+    expect(scoped.evidence.successfulScoredDays).toBe(3);
+    expect(scoped.state).toBe('sapling');
+
+    // The verdict event itself never becomes scoring evidence either — it
+    // carries no rating and is a different `kind` than `review`.
+    expect(scoped.evidence.scoredEventCount).toBe(
+      foldConceptStage(goodInstrument, 'concept-a', {}, {}).evidence.scoredEventCount,
+    );
+  });
+
+  it('rejection at any later time works exactly as rejection at first use does — same mechanism, same result', () => {
+    // Item A: rejected before its first review is ever folded in (first
+    // use). Item B: rejected a month and many reviews after its first use.
+    const firstUseId = 'qa:concept-a:first-use';
+    const laterId = 'qa:concept-a:later';
+
+    const firstUseEntries = [
+      ...onDays(['2026-01-10'], () => ({
+        instrumentId: firstUseId,
+        supportLevelShown: 'independent',
+      })),
+      verdict(firstUseId, 'rejected', '2026-01-10T09:05:00-04:00', 'v-first'),
+    ];
+    const laterEntries = [
+      ...onDays(THREE_DAYS, () => ({ instrumentId: laterId, supportLevelShown: 'independent' })),
+      verdict(laterId, 'rejected', '2026-02-15T09:00:00-04:00', 'v-later'),
+    ];
+
+    for (const entries of [firstUseEntries, laterEntries]) {
+      const excluded = rejectedInstrumentIds(entries);
+      const scoped = foldConceptStage(
+        entries,
+        'concept-a',
+        {},
+        { excludedInstrumentIds: excluded },
+      );
+      // Whatever reviews the rejected instrument produced, none of them
+      // move the fold — the same "seed, no evidence at all" result either
+      // way, whether the rejection followed one review or several.
+      expect(scoped.evidence.scoredEventCount).toBe(0);
+      expect(scoped.state).toBe('seed');
+    }
   });
 });

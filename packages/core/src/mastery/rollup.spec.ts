@@ -11,7 +11,15 @@
 //
 // Concept and instrument ids below are structural placeholders
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
-import type { ReviewLogEntry, ReviewLogRecord, SoloLevel, SuspendLogRecord } from 'olea-contracts';
+import type {
+  InstrumentType,
+  Rating,
+  ReviewLogEntry,
+  ReviewLogRecord,
+  SoloLevel,
+  SupportLevel,
+  SuspendLogRecord,
+} from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
@@ -1049,5 +1057,185 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
       expect(result.state).toBe('tree');
       expect(result.evidence.topStageAttempt?.eventId).toBe('g3');
     }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Knowledge model §8 test 5 / `[D-087]` — strip-invariance
+// (features/F2-review.md, "Feature: Knowledge model §8 test 5 / [D-087] —
+// Strip-invariance", tagged `@auto:core/mastery/rollup.spec`; no matching
+// test previously existed in this file — see ol-v7r5.69's report).
+//
+// The contract: folding a log and a copy of it with every
+// `schedulingObservation` field and every stamped belief (`masteryAtTime`)
+// removed must give byte-identical scoring readings — "a property over all
+// logs ... the injected-case version is the smoke test, this is the
+// contract" (knowledge model §8). A small seeded PRNG stands in for a
+// property-test library (none is a dependency of this package) so the suite
+// still runs over generated shapes rather than a fixed set of hand-built
+// cases, deterministically across runs.
+// -----------------------------------------------------------------------------
+
+/** Deterministic PRNG (mulberry32) — no `fast-check` dependency in this package. */
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pick<T>(rand: () => number, values: readonly T[]): T {
+  const value = values[Math.floor(rand() * values.length)];
+  if (value === undefined) throw new Error('pick: empty array');
+  return value;
+}
+
+const GENERATED_INSTRUMENT_TYPES: readonly InstrumentType[] = [
+  'qa',
+  'mcq',
+  'cloze',
+  'explain-back',
+];
+const GENERATED_RATINGS: readonly Rating[] = ['again', 'hard', 'good', 'easy'];
+const GENERATED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 'prompted', 'guided'];
+const GENERATED_SOLO_LEVELS: readonly SoloLevel[] = [
+  'prestructural',
+  'unistructural',
+  'multistructural',
+  'relational',
+  'extended-abstract',
+];
+const GENERATED_CORRECTNESS: readonly ('correct' | 'partial' | 'incorrect')[] = [
+  'correct',
+  'partial',
+  'incorrect',
+];
+const GENERATED_CONCEPT_IDS = ['concept-a', 'concept-b', 'concept-c'] as const;
+const GENERATED_MASTERY_STATES = ['seed', 'sprout', 'sapling', 'tree'] as const;
+
+/**
+ * One pseudo-random log covering the full space of event shapes this fold
+ * reads plus the two fields it must never read
+ * (`schedulingObservation`, `masteryAtTime`) — every instrument type, every
+ * rating including lapses, present/absent support level, a mix of concepts,
+ * and correction chains via `explainBackGrade.revisionOf`.
+ */
+function generateRandomLog(seed: number, length: number): ReviewLogRecord[] {
+  const rand = mulberry32(seed);
+  const entries: ReviewLogRecord[] = [];
+  let lastExplainBackEventId: string | null = null;
+  for (let i = 0; i < length; i += 1) {
+    const instrumentType = pick(rand, GENERATED_INSTRUMENT_TYPES);
+    const conceptId = pick(rand, GENERATED_CONCEPT_IDS);
+    const isExplainBack = instrumentType === 'explain-back';
+    const day = 1 + Math.floor(rand() * 25);
+    const eventId = `gen-${seed}-${i}`;
+    const record = review({
+      eventId,
+      timestamp: `2026-01-${String(day).padStart(2, '0')}T09:00:00-04:00`,
+      instrumentId: `${instrumentType}:${conceptId}:${Math.floor(rand() * 3)}`,
+      instrumentType,
+      conceptIds: [conceptId],
+      rating: isExplainBack ? null : pick(rand, GENERATED_RATINGS),
+      ...(rand() > 0.3 ? { supportLevelShown: pick(rand, GENERATED_SUPPORT_LEVELS) } : {}),
+      ...(isExplainBack
+        ? {
+            explainBackGrade: {
+              soloLevel: pick(rand, GENERATED_SOLO_LEVELS),
+              correctness: pick(rand, GENERATED_CORRECTNESS),
+              contentRef: 'content-ref-placeholder',
+              // Occasionally supersedes the previous explain-back event, so
+              // the generated space includes correction chains too.
+              revisionOf: rand() > 0.7 ? lastExplainBackEventId : null,
+              artifactProvenance: {
+                taskId: 'explain-back-grade',
+                promptVersion: 'v0',
+                modelId: 'model-placeholder',
+              },
+            },
+          }
+        : {}),
+      // The two fields the fold must never read — attached on roughly half
+      // the events, so both their presence and absence are exercised.
+      ...(rand() > 0.5
+        ? { schedulingObservation: { neighbourConceptId: pick(rand, GENERATED_CONCEPT_IDS) } }
+        : {}),
+      ...(rand() > 0.5
+        ? {
+            masteryAtTime: {
+              attribution: 'per-concept' as const,
+              byConcept: { [conceptId]: pick(rand, GENERATED_MASTERY_STATES) },
+            },
+          }
+        : {}),
+    });
+    entries.push(record);
+    if (isExplainBack) lastExplainBackEventId = eventId;
+  }
+  return entries;
+}
+
+/** `entries`, with every `schedulingObservation` and every `masteryAtTime` field removed. */
+function stripObservationsAndStamps(entries: readonly ReviewLogRecord[]): ReviewLogRecord[] {
+  return entries.map((entry) => {
+    const { schedulingObservation: _observation, masteryAtTime: _stamp, ...stripped } = entry;
+    return stripped as ReviewLogRecord;
+  });
+}
+
+describe('Knowledge model §8 test 5 / `[D-087]` — strip-invariance', () => {
+  it('stripping every scheduling-observation field and every stamped belief changes no scoring reading — generated logs, not a fixed set of injected cases', () => {
+    // 30 seeds, varying lengths — the full space of event shapes this module
+    // reads (and the two fields it must not), not three hand-built logs.
+    let anyHadObservation = false;
+    let anyHadStamp = false;
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const length = 5 + (seed % 12);
+      const original = generateRandomLog(seed, length);
+      const stripped = stripObservationsAndStamps(original);
+
+      const hadObservation = original.some((e) => e.schedulingObservation !== undefined);
+      const hadStamp = original.some((e) => e.masteryAtTime !== undefined);
+      anyHadObservation ||= hadObservation;
+      anyHadStamp ||= hadStamp;
+
+      const conceptIds = [...new Set(original.flatMap((e) => e.conceptIds))];
+      const before = computeAllConceptMastery(original, conceptIds);
+      const after = computeAllConceptMastery(stripped, conceptIds);
+      expect(
+        [...after],
+        `seed ${seed} (hadObservation=${hadObservation}, hadStamp=${hadStamp})`,
+      ).toEqual([...before]);
+    }
+    // Not vacuous: across the 30 generated logs, both stripped fields were
+    // actually present on at least one event.
+    expect(anyHadObservation).toBe(true);
+    expect(anyHadStamp).toBe(true);
+  });
+
+  it('the exclusion is by field semantics, never by filtering an event type — the same event, minus the field, still counts', () => {
+    // One event carrying both a rating the fold must read and a scheduling
+    // observation it must not: stripping the field must change nothing,
+    // and the event must still be counted (not dropped as a whole).
+    const withObservation = review({
+      eventId: 'r-1',
+      instrumentType: 'qa',
+      conceptIds: ['concept-a'],
+      rating: 'good',
+      supportLevelShown: 'independent',
+      schedulingObservation: { neighbourConceptId: 'concept-b' },
+    });
+    const { schedulingObservation: _observation, ...withoutObservation } = withObservation;
+
+    const withResult = computeConceptMastery([withObservation], 'concept-a');
+    const withoutResult = computeConceptMastery([withoutObservation], 'concept-a');
+    expect(withoutResult).toEqual(withResult);
+    // The rating is still read either way — the event was not dropped.
+    expect(withResult.evidence.scoredEventCount).toBe(1);
+    expect(withResult.evidence.scoredSuccessCount).toBe(1);
+    expect(withoutResult.evidence.scoredEventCount).toBe(1);
   });
 });
