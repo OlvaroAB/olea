@@ -82,6 +82,23 @@ export interface GotoSimulatorOptions {
    */
   readonly world?: string;
   readonly persona?: string;
+  /**
+   * The carried world to select inside a multi-world dist
+   * (`ol-3ux7.5.57.13` [MOM-9b], `ol-r5ur` [MOM-9c];
+   * `docs/dev/simulator-design.md` §2a/§4b). `main.ts`'s router
+   * (`writeRoute`) only ever rewrites the HASH on every render — a world
+   * named there would be dropped on the very first remount — so this goes
+   * in the SEARCH instead (`?world=<id>`, before the `#`), which
+   * `SimulatorController`'s `requestedWorldId(location.search)`
+   * (`packages/workbench/src/simulator/world.ts`) is what actually reads a
+   * world choice from. Falls back to `WB_SIM_SELECT_WORLD` when not passed
+   * explicitly (the seam `scripts/simulator-tour.mjs` in the private repo
+   * sets for the shared journey specs, which construct their own URL and
+   * cannot take this option directly). Omitted entirely — no search
+   * parameter at all — when neither is set, so a caller that never asks for
+   * a world gets the exact URL this helper always built.
+   */
+  readonly selectWorld?: string;
 }
 
 /**
@@ -140,7 +157,16 @@ export async function gotoSimulator(page: Page, options: GotoSimulatorOptions = 
   // walked by a different script diverges in payload and never replays (the first attempt did).
   const transport = process.env.WB_SIM_TRANSPORT;
   const transportParam = transport === undefined ? '' : `&transport=${transport}`;
-  await page.goto(`/#/simulator?world=${world}&persona=${persona}${transportParam}`);
+  // `?world=<id>` in the SEARCH (before the `#`) — see this file's own `GotoSimulatorOptions.
+  // selectWorld` doc for why it has to live there and not in the hash query above. Left out
+  // entirely when no selection is requested, so a caller that never asks for a world (the default,
+  // every existing call site) gets the byte-identical URL this helper always built.
+  const selectWorld = options.selectWorld ?? process.env.WB_SIM_SELECT_WORLD;
+  const searchParam =
+    selectWorld === undefined || selectWorld === ''
+      ? ''
+      : `?world=${encodeURIComponent(selectWorld)}`;
+  await page.goto(`/${searchParam}#/simulator?world=${world}&persona=${persona}${transportParam}`);
   await waitForSettled(page, SIMULATOR_STATE_ID);
   await dismissCourseSetupModals(page);
 }
