@@ -301,6 +301,35 @@ function declinedRenameSignaturesFrom(overrides: RegistryOverrides): ReadonlySet
   return new Set(overrides.declinedRenameSignatures ?? []);
 }
 
+/**
+ * Mirrors `../../core/concept/zettelkasten.ts`'s `noteTitle` — not exported
+ * from `olea-core`'s index (out of `ol-egov.141.89.10.48`'s `owns`, a shared
+ * file other lanes are live on this round; same technique this file's module
+ * doc already uses for `gateRenameProposal` and its neighbours, for the
+ * identical reason). Vault-relative path's filename with a trailing `.md`
+ * removed, verbatim otherwise.
+ */
+function noteTitleFromPath(path: VaultPath): string {
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  return base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base;
+}
+
+/**
+ * `ol-egov.141.89.10.48`: the full vault listing
+ * `BuildRegistryModelInput.vaultNoteTitles` wants — every markdown note's
+ * title, not just the ones this run's extraction bound to a concept. One
+ * extra `VaultSource.list()` call: paths only, no `read()` per file, so this
+ * is not a second "vault walk" in the sense `enumerateVaultInstruments`
+ * already pays for (that call reads every note's CONTENT to find
+ * instruments; this one only lists paths). Titles are deduplicated (two
+ * notes can share a title — `[D-203]`'s own ambiguous case — and the
+ * existing-note check only cares whether a title exists at all).
+ */
+async function vaultNoteTitlesFrom(vault: VaultSource): Promise<readonly string[]> {
+  const paths = await vault.list({ extensions: ['md'] });
+  return [...new Set(paths.map(noteTitleFromPath))];
+}
+
 /** Mirrors `../../core/registry/rename-proposal.ts`'s `recordDeclinedRenameProposal` — `[D-206]`'s persisted form, operating on the whole `RegistryOverrides` rather than a bare `Set`, so the caller can save it through `overridesStore` exactly as `rename`/`withdrawConcept`/`restoreConcept` already do. */
 function recordDeclinedRenameProposal(
   overrides: RegistryOverrides,
@@ -323,10 +352,10 @@ export interface OpenSourceLocationPort {
 
 /**
  * F8.4a's `[D-176]` accept half: given an eligible concept, create the new
- * Zettelkasten note the offer promised — see `./obsidian-ports.ts`'s
- * `createObsidianAcceptNoteOfferPort` for the one production implementation
- * and its own doc for what it does and does not yet do about binding the
- * concept's existing key onto the new note.
+ * Zettelkasten note the offer promised — see `./ports.ts`'s
+ * `createObsidianAcceptNoteOfferPort` (moved from `obsidian-ports.ts`,
+ * `ol-2zfj.55`) for the one production implementation — its own doc now
+ * shows the key-binding gap closed via `bindConceptKeyToNote`.
  */
 export interface AcceptNoteOfferPort {
   accept(entry: RegistryConceptEntry): Promise<void>;
@@ -561,10 +590,11 @@ function createLoadModel(
       const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
       const additionalPaths = await additionalReviewLogPaths(today, probeDays, deps.deviceId);
 
-      const [{ entries, files }, enumeration, overrides] = await Promise.all([
+      const [{ entries, files }, enumeration, overrides, vaultNoteTitles] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
         enumerateVaultInstruments(deps.vault),
         overridesStore.load(),
+        vaultNoteTitlesFrom(deps.vault),
       ]);
       const [disputes, courseRankings] = await Promise.all([
         disputesFromFiles(deps.vault, files),
@@ -591,6 +621,12 @@ function createLoadModel(
         suspendedInstrumentIds: suspendedInstrumentIds(entries),
         disputes,
         courseRankings,
+        // `ol-egov.141.89.10.48`: the full vault listing — see
+        // `BuildRegistryModelInput.vaultNoteTitles`'s own doc for why
+        // `./build.ts` does not yet MERGE this into the existing-note check
+        // (that file is read-only for this bead; report names the exact
+        // change).
+        vaultNoteTitles,
       });
 
       const declinedSignatures = declinedRenameSignaturesFrom(overrides);

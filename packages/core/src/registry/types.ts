@@ -433,6 +433,37 @@ export interface BuildRegistryModelInput {
    * than the caller inventing one or the whole registry failing to build.
    */
   readonly courseRankings?: readonly CourseOracleRanking[];
+  /**
+   * `ol-egov.141.89.10.48`: every Zettelkasten note title in her vault, from
+   * the caller's own full listing (`packages/plugin/src/registry/provider.ts`'s
+   * `load()`, one extra `VaultSource.list()` call — paths only, no per-file
+   * `read()`, so it is not the heavier "second vault walk"
+   * `enumerateVaultInstruments` already pays for). Contrast `./build.ts`'s own
+   * internal `existingNoteTitlesFrom(input.concepts)`, a PARTIAL listing built
+   * from this run's extraction alone (`boundNotePath`/`ambiguousNotePaths`) —
+   * see that function's doc for why a note nothing ever cited or matched by
+   * name is invisible to it. This field is the honest full listing that
+   * `./concept/note-offer.js`'s `NoteOfferEvidence.existingNoteTitles`
+   * ultimately wants, gathered where the I/O may actually happen (this
+   * module does none, by its own doc).
+   *
+   * **Optional, and absent is a real, non-error state**, matching
+   * `disputes`/`courseRankings` above: a caller not yet updated to pass this
+   * (or a listing read that failed) falls back to whatever partial coverage
+   * `existingNoteTitlesFrom` already derives from `concepts` alone — never a
+   * crash, never a fabricated absence.
+   *
+   * **Not yet read by `./build.ts` (`ol-egov.141.89.10.48`'s own scope
+   * boundary: that file is read-only for this bead).** `noteOfferFor` still
+   * calls the concepts-only `existingNoteTitlesFrom` unconditionally, so
+   * declaring this field alone does not yet close the partial-listing gap —
+   * see this bead's report for the exact merge `./build.ts` needs
+   * (`existingNoteTitlesFrom` unioning this field's titles with its own
+   * concepts-derived set) and the regression test (`ol-egov.141.89.10.48`
+   * in `packages/plugin/test/registry/provider.spec.ts`) pinned red until
+   * that lands.
+   */
+  readonly vaultNoteTitles?: readonly string[];
 }
 
 /** One concept's rename history and current override. */
