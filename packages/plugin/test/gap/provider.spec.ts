@@ -10,11 +10,36 @@
  * settings gate, the two concurrent vault walks, the join between them, and
  * the honest pass-through of `sourceCoverage` into `model.scope`.
  */
+import { studyPlanEnvelope } from 'olea-contracts';
+import type { Scheduler } from 'olea-core';
+import {
+  createFsrsScheduler,
+  type RetrievabilityInput,
+  type RetrievabilityOutput,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createLocalGapProvider } from '../../src/gap/provider.js';
+import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { memoryVault } from '../review/memory-vault.js';
+
+/**
+ * A `Scheduler` whose `retrievability` always answers the same fixed
+ * probability, regardless of the instrument or state it is asked about —
+ * the identical helper `plan/provider.spec.ts` uses for the same C5.6/
+ * `[D-264]` wiring proof, mirrored here rather than imported (test-only,
+ * no shared module owns it).
+ */
+function fixedRetrievabilityScheduler(recallProbability: number): Scheduler {
+  const real = createFsrsScheduler();
+  return {
+    schedule: (input) => real.schedule(input),
+    retrievability(input: RetrievabilityInput): RetrievabilityOutput {
+      return { instrumentId: input.instrumentId, recallProbability };
+    },
+  };
+}
 
 const DEVICE = 'olea-testdevice1';
 const BASE_PATH = '02 Assignments/Assignments.base';
@@ -424,5 +449,216 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
     const row = course.rows.find((r) => r.conceptName === 'Widget theory');
     const baselineRow = baselineCourse.rows.find((r) => r.conceptName === 'Widget theory');
     expect(row?.priorityScore).toBeCloseTo(baselineRow?.priorityScore ?? -1, 10);
+  });
+});
+
+/**
+ * C5.6/`[D-264]` (`ol-egov.141.89.10.22`): before this bead, this call site
+ * never passed `retrievability` to `composeOracleRanking` at all — every
+ * concept's `retrievabilityWeight` read as the neutral default (1)
+ * regardless of her real recall state, unlike `plan/provider.ts` and
+ * `session-builder/provider.ts`, which already threaded it (`ol-v7r5.53`).
+ * D-264 ruling 1 counts only an unaided (`'independent'` support) success as
+ * eligible recall evidence, so every fixture below carries one.
+ */
+describe('createLocalGapProvider — threads retrievability into the ranking (C5.6/[D-264], ol-egov.141.89.10.22)', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+
+  async function vaultWithIndependentReview() {
+    const vault = gapVault();
+    await vault.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'r1',
+        timestamp: '2026-08-09T09:00:00-04:00',
+        instrumentId: 'qa:widget-theory:1',
+        instrumentType: 'qa',
+        // The join key `resolveRetrievabilityScores` actually iterates —
+        // `provisionalConceptKey`'s derivation (`concept-key.ts`), not the
+        // display name — confirmed against this exact fixture's own
+        // `GapRow.conceptKey`.
+        conceptIds: ['concept-prov1:Widget theory'],
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`,
+    );
+    return vault;
+  }
+
+  function priorityScoreOf(
+    state: Awaited<ReturnType<ReturnType<typeof createLocalGapProvider>['load']>>,
+  ) {
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    const score = row?.priorityScore;
+    if (score === undefined) throw new Error('expected a priorityScore on the ranked row');
+    return score;
+  }
+
+  it('REGRESSION (fails pre-fix): an injected Scheduler with a lower recall probability scales priorityScore down by exactly that factor', async () => {
+    const neutral = await createLocalGapProvider({
+      vault: await vaultWithIndependentReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(1),
+    }).load();
+
+    const halved = await createLocalGapProvider({
+      vault: await vaultWithIndependentReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(0.5),
+    }).load();
+
+    const neutralScore = priorityScoreOf(neutral);
+    const halvedScore = priorityScoreOf(halved);
+    // Pre-fix, `gap/provider.ts` passed no `retrievability` at all, so both
+    // schedulers were never consulted and `halvedScore` equalled
+    // `neutralScore` exactly — this is the failing assertion the lane rules
+    // ask to be shown red before the fix: `expect(halvedScore).toBeCloseTo(neutralScore * 0.5, 10)`
+    // with `halvedScore === neutralScore` (unaffected) fails that check.
+    expect(neutralScore).toBeGreaterThan(0);
+    expect(halvedScore).toBeCloseTo(neutralScore * 0.5, 10);
+  });
+
+  it('with no scheduler override at all, production now defaults to a real FSRS Scheduler — retrievability is no longer always neutral', async () => {
+    const withDefault = await createLocalGapProvider({
+      vault: await vaultWithIndependentReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+    }).load();
+
+    const neutralControl = await createLocalGapProvider({
+      vault: await vaultWithIndependentReview(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: fixedRetrievabilityScheduler(1),
+    }).load();
+
+    // A real FSRS read one day after a single 'good' rating is not exactly
+    // 1 (some decay has already happened), so the default (no override)
+    // path must differ from the neutral control — proof this call site now
+    // builds and consults a real `Scheduler` by default.
+    expect(priorityScoreOf(withDefault)).not.toBe(priorityScoreOf(neutralControl));
+  });
+
+  // `gap/provider.ts` (`enumerateVaultInstruments`) and `plan/provider.ts`
+  // (`extractConceptsFromVault`) mint two DIFFERENT concept-key shapes for
+  // the identical vault content — a provisional, content-derived key here
+  // vs an opaque, persisted-key-store mint there (`concept-key.ts`'s own
+  // module doc names this residual gap; not this bead's to close). So a
+  // single hardcoded `conceptIds` value can never join to both providers'
+  // real keys at once. This test proves the acceptance criterion's actual
+  // claim — the SAME vault/review state produces the SAME priority score
+  // through both providers — by discovering each provider's own real key
+  // first (a bare load/fetch against a review-free vault; the opaque mint
+  // is stable on a SECOND call against the SAME vault instance, since the
+  // key store persists it), then keying an independent-success review with
+  // that provider's own key before the scored call.
+  it("the gap view and the study plan compute the identical priority score for the same underlying concept and review state (the bead's acceptance criterion)", async () => {
+    const scheduler = fixedRetrievabilityScheduler(0.5);
+    const reviewFor = (conceptKey: string) =>
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'r1',
+        timestamp: '2026-08-09T09:00:00-04:00',
+        instrumentId: 'qa:widget-theory:1',
+        instrumentType: 'qa',
+        conceptIds: [conceptKey],
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`;
+
+    const gapVaultForKey = gapVault();
+    const gapKeyState = await createLocalGapProvider({
+      vault: gapVaultForKey,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+    }).load();
+    if (gapKeyState.kind !== 'model') throw new Error('expected a model');
+    const gapKeyCourse = gapKeyState.model.courses.find((c) => c.course === 'TESTC101');
+    if (gapKeyCourse?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const gapKey = gapKeyCourse.rows.find((r) => r.conceptName === 'Widget theory')?.conceptKey;
+    if (gapKey === undefined) throw new Error('missing gap conceptKey');
+    await gapVaultForKey.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      reviewFor(gapKey),
+    );
+
+    const planVaultForKey = gapVault();
+    const planKeyRaw = await createLocalStudyPlanProvider({
+      vault: planVaultForKey,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+    }).fetchPlan();
+    const planKeyCourse = studyPlanEnvelope
+      .parse(planKeyRaw)
+      .body.courses.find((c) => c.course === 'TESTC101');
+    if (planKeyCourse?.status !== 'ranked')
+      throw new Error('expected TESTC101 to rank in the plan');
+    const planKey = planKeyCourse.concepts[0]?.conceptId;
+    if (planKey === undefined) throw new Error('missing plan conceptId');
+    await planVaultForKey.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      reviewFor(planKey),
+    );
+
+    const gapState = await createLocalGapProvider({
+      vault: gapVaultForKey,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler,
+    }).load();
+
+    const planRaw = await createLocalStudyPlanProvider({
+      vault: planVaultForKey,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler,
+    }).fetchPlan();
+
+    const gapScore = priorityScoreOf(gapState);
+    const plan = studyPlanEnvelope.parse(planRaw);
+    const planCourse = plan.body.courses.find((c) => c.course === 'TESTC101');
+    if (planCourse?.status !== 'ranked') throw new Error('expected TESTC101 to rank in the plan');
+    const planWeight = planCourse.concepts[0]?.weight;
+    if (planWeight === undefined) throw new Error('expected a weight on the ranked plan concept');
+
+    // Both retrievability-adjusted, both halved from the neutral (0.5
+    // scheduler over an independent-success review): if either provider
+    // still omitted `retrievability`, its own score would read the FULL,
+    // un-halved value instead and this equality would fail.
+    expect(gapScore).toBeCloseTo(planWeight, 10);
   });
 });

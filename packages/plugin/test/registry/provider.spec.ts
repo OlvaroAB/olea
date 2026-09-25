@@ -14,10 +14,14 @@ import {
   appendReviewLogRecord,
   type ConceptRecord,
   contestClaim,
+  createFsrsScheduler,
   listSameAsLinkRecords,
   proposeSameAsLink,
   type RegistryInstrumentSummary,
   type RegistrySourceLocation,
+  type RetrievabilityInput,
+  type RetrievabilityOutput,
+  type Scheduler,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
@@ -890,5 +894,160 @@ describe('createLocalRegistryProvider — threads the delivered rank weights ([D
 
     await modelFrom(await provider.load());
     expect(calls).toBe(0);
+  });
+});
+
+/**
+ * C5.6/`[D-264]` (`ol-egov.141.89.10.22`): before this bead,
+ * `courseRankingsForNoteOffer` never accepted a `Scheduler`/`now` pair at
+ * all, so `composeOracleRanking`'s `retrievability` input was never passed
+ * for the note-offer ranking — unlike `plan/provider.ts` and
+ * `gap/provider.ts` (once ol-egov.141.89.10.22 also fixes that one), which
+ * already thread it. D-264 ruling 1 only counts an unaided (`'independent'`
+ * support) success as eligible recall evidence, so the fixture below carries
+ * one (`mastery/attainment.ts`'s `instrumentsWithIndependentSuccess`).
+ *
+ * `deps.scheduler` (added by this bead) is shared with `buildRegistryModel`'s
+ * own vitality reading, which already calls `scheduler.retrievability` once
+ * per reviewed recall-tier instrument regardless of D-264 eligibility or
+ * whether the assignments Base is configured — see the `ol-owyn` suite
+ * above. This suite isolates the NOTE-OFFER path's own call by comparing
+ * total call counts between an otherwise-identical configured vs
+ * unconfigured fixture: the delta is exactly `courseRankingsForNoteOffer`'s
+ * own consultation, which is zero before this fix and one after it.
+ */
+describe('createLocalRegistryProvider — threads retrievability into the note-offer ranking (C5.6/[D-264], ol-egov.141.89.10.22)', () => {
+  const ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
+  const ASSIGNMENTS_BASE_FILE = [
+    'filters:',
+    '  and:',
+    '    - file.inFolder("02 Assignments")',
+    '    - file.ext == "md"',
+    'properties:',
+    '  class:',
+    '  type:',
+    '  weight:',
+    '  due:',
+    '  status:',
+  ].join('\n');
+  const NOTE = [
+    '---',
+    'topic: [Concept A]',
+    'course: TESTC101',
+    '---',
+    '',
+    'Front text::Back text',
+    '',
+  ].join('\n');
+  // `courseRankingsForNoteOffer`'s `composeOracleRanking` call only ever
+  // reaches a concept's `readAllConceptReadiness` fold when that concept has
+  // real assessment EVIDENCE (`edges.edges` — the tier-3 citation join), not
+  // merely a topic-bound note — a past paper citing the concept's own term,
+  // matching `gap/provider.spec.ts`'s identical fixture shape, is what gives
+  // it one.
+  const PAST_PAPER = [
+    '---',
+    'role: past-paper',
+    'course: TESTC101',
+    '---',
+    '',
+    '# TESTC101 Past Paper — 2023',
+    '',
+    '## Question 1 (10 marks)',
+    '',
+    'Explain the core mechanism behind Concept A and why it matters.',
+    '',
+  ].join('\n');
+  const QUIZ =
+    '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n';
+
+  function hostWithAssignmentsBase(): FakeDataHost {
+    const host = new FakeDataHost();
+    host.blob = {
+      [STUDY_PLAN_SETTINGS_STORAGE_KEY]: { version: 1, assignmentsBasePath: ASSIGNMENTS_BASE_PATH },
+    };
+    return host;
+  }
+
+  function fixtureVaultWithBase(configured: boolean) {
+    return memoryVault({
+      '05 Zettelkasten/Concept A.md': '# Concept A\n',
+      'Notes/one.md': NOTE,
+      '03 Research/TESTC101 Past Paper 2023.md': PAST_PAPER,
+      ...(configured
+        ? { [ASSIGNMENTS_BASE_PATH]: ASSIGNMENTS_BASE_FILE, '02 Assignments/Quiz 1.md': QUIZ }
+        : {}),
+    });
+  }
+
+  /** Counts every `retrievability` consultation while still answering for real, so both scenarios' vitality/mastery readings stay honest. */
+  function trackingScheduler(): { readonly scheduler: Scheduler; readonly calls: () => number } {
+    const real = createFsrsScheduler();
+    let calls = 0;
+    return {
+      scheduler: {
+        schedule: (input) => real.schedule(input),
+        retrievability(input: RetrievabilityInput): RetrievabilityOutput {
+          calls += 1;
+          return real.retrievability(input);
+        },
+      },
+      calls: () => calls,
+    };
+  }
+
+  async function callCountFor(configured: boolean): Promise<number> {
+    const vault = fixtureVaultWithBase(configured);
+    const key = (
+      await modelFrom(await makeProvider(vault, new FakeDataHost(), new FakeEditPort()).load())
+    ).concepts[0]?.key;
+    if (key === undefined) throw new Error('missing concept key');
+
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-01-01T09:00:00Z',
+        instrumentId: 'qa:noteoffer-retrievability:1',
+        instrumentType: 'qa',
+        conceptIds: [key],
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'noteoffer-retrievability-1' },
+    );
+
+    const tracker = trackingScheduler();
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: configured ? hostWithAssignmentsBase() : new FakeDataHost(),
+      now: () => new Date('2026-01-02T09:00:00Z'),
+      editPort: new FakeEditPort(),
+      scheduler: tracker.scheduler,
+    });
+    const model = await modelFrom(await provider.load());
+    if (model.concepts.length === 0)
+      throw new Error('expected the fixture concept to be enumerated');
+    return tracker.calls();
+  }
+
+  it('REGRESSION (fails pre-fix): scheduler.retrievability is consulted one extra time when the note-offer ranking actually runs', async () => {
+    const configuredCalls = await callCountFor(true);
+    const unconfiguredCalls = await callCountFor(false);
+    // Pre-fix, `courseRankingsForNoteOffer` never received or used a
+    // `Scheduler`, so both counts equalled buildRegistryModel's own vitality
+    // consultation only (`configuredCalls === unconfiguredCalls`) — this is
+    // the failing assertion the lane rules ask to be shown red before the
+    // fix: `expect(configuredCalls).toBe(unconfiguredCalls + 1)`.
+    expect(configuredCalls).toBe(unconfiguredCalls + 1);
   });
 });

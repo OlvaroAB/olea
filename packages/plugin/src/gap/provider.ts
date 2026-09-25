@@ -60,6 +60,7 @@ import type {
   ConceptMaterialPresence,
   GapRow,
   RankOracleOptions,
+  Scheduler,
   VaultPath,
   VaultSource,
 } from 'olea-core';
@@ -68,6 +69,7 @@ import {
   buildMaterialPresence,
   calendarDaysEndingOn,
   composeOracleRanking,
+  createFsrsScheduler,
   enumerateVaultInstruments,
   readReviewLogHistory,
   reviewLogPath,
@@ -115,6 +117,21 @@ export interface CreateLocalGapProviderDeps {
    * `main.ts` wiring that passes it, close that gap.
    */
   readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  /**
+   * C5.6/`[D-264]` (`ol-egov.141.89.10.22`): the port `composeOracleRanking`'s
+   * `retrievability` input needs — same field, same reasoning as
+   * `plan/provider.ts`'s own `scheduler` dep, which this mirrors exactly.
+   * Omitting it left this view's ranking reading every concept's
+   * retrievability as neutral while `plan/provider.ts` and
+   * `session-builder/provider.ts` already read her real recall state — a gap
+   * view and a plan that disagreed on the same underlying ordering.
+   * **Overridable for tests** (a fake `Scheduler` makes retrievability
+   * deterministic); production gets a fresh `createFsrsScheduler()` when
+   * this is omitted — the same stateless, weights-fixed construction
+   * `plan/provider.ts`'s own comment explains is safe to build a second time
+   * without risking drift from another call site's instance.
+   */
+  readonly scheduler?: Scheduler;
 }
 
 /**
@@ -140,6 +157,7 @@ function instrumentCountsByNotePath(
  */
 export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapViewDeps {
   const settingsStore = new ObsidianStudyPlanSettingsStore(deps.settingsHost);
+  const scheduler = deps.scheduler ?? createFsrsScheduler();
 
   return {
     // `exactOptionalPropertyTypes`: omit the key entirely rather than assign
@@ -179,6 +197,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // (`ol-63e1`) — already extracted by the instrument walk above, so
           // this pays no second walk.
           concepts: enumeration.concepts,
+          // C5.6/`[D-264]` (`ol-egov.141.89.10.22`): thread the same
+          // `retrievability` input `plan/provider.ts` and
+          // `session-builder/provider.ts` already pass, so this view's
+          // ranking reads her real recall state rather than the neutral
+          // default — see `scheduler`'s own doc on `CreateLocalGapProviderDeps`.
+          retrievability: { scheduler, now },
           // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered
           // component 3.3 weights when `deps.readRankWeights` resolved one
           // — `exactOptionalPropertyTypes`: omit the key entirely rather

@@ -165,6 +165,7 @@ import {
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
   reviewLogPath,
+  type Scheduler,
   suspendedInstrumentIds,
   unpruneConcept as unpruneConceptOverride,
   type VaultPath,
@@ -409,6 +410,18 @@ export interface CreateLocalRegistryProviderDeps {
    * wiring that passes it, close that gap.
    */
   readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  /**
+   * C5.6/`[D-264]` (`ol-egov.141.89.10.22`): overrides the `Scheduler` this
+   * provider builds below (`scheduler`, used both for `buildRegistryModel`'s
+   * vitality reading and, as of this bead, for `courseRankingsForNoteOffer`'s
+   * `composeOracleRanking` call's `retrievability` input) — mirrors
+   * `plan/provider.ts`'s field of the same name. Before this bead, the
+   * note-offer gate's F4.2 ranking read every concept's retrievability as
+   * neutral, unlike `plan/provider.ts` and `session-builder/provider.ts`.
+   * **Overridable for tests**; production gets a fresh `createFsrsScheduler()`
+   * when this is omitted.
+   */
+  readonly scheduler?: Scheduler;
 }
 
 /**
@@ -492,6 +505,8 @@ async function courseRankingsForNoteOffer(
   concepts: readonly ConceptRecord[],
   asOf: string,
   readRankWeights: (() => Promise<RankOracleOptions | undefined>) | undefined,
+  scheduler: Scheduler,
+  now: Date,
 ): Promise<readonly CourseOracleRanking[]> {
   try {
     const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
@@ -506,6 +521,12 @@ async function courseRankingsForNoteOffer(
       reviewLog: entries,
       asOf,
       concepts,
+      // C5.6/`[D-264]` (`ol-egov.141.89.10.22`): the same `retrievability`
+      // input `plan/provider.ts` and `session-builder/provider.ts` already
+      // pass, so F4.2's note-offer ranking reads her real recall state
+      // rather than the neutral default — see `scheduler`'s own doc on
+      // `CreateLocalRegistryProviderDeps`.
+      retrievability: { scheduler, now },
       // `exactOptionalPropertyTypes`: omit the key entirely rather than
       // assign `undefined` to it, matching the other two callers.
       ...(options !== undefined ? { options } : {}),
@@ -530,7 +551,7 @@ export function createLocalRegistryProvider(
     deps.deviceId,
   );
   const holdingCut = deps.holdingCut ?? HOLDING_CUT;
-  const scheduler = createFsrsScheduler();
+  const scheduler = deps.scheduler ?? createFsrsScheduler();
   const openSourceLocationPort: OpenSourceLocationPort = deps.openSourceLocationPort ?? {
     async open(location: RegistrySourceLocation) {
       console.error(
@@ -583,6 +604,8 @@ export function createLocalRegistryProvider(
             enumeration.concepts,
             today,
             deps.readRankWeights,
+            scheduler,
+            now,
           ),
         ]);
 
