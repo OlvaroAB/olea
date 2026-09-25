@@ -98,6 +98,7 @@ import {
   type CalendarDay,
   type ComposedStudySession,
   type ConceptCourses,
+  type ConceptReadCoverage,
   type ConceptRelation,
   type CourseFloorShare,
   type CourseFreshnessReading,
@@ -117,6 +118,7 @@ import {
   extractTier3Evidence,
   type GroveCourseModel,
   HOLDING_CUT,
+  isConceptPruned,
   latestVerdictByInstrument,
   listFolder,
   loadCachedStudyPlan,
@@ -139,6 +141,9 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
+import { ObsidianGroveReadCompletenessStore } from '../grove/read-completeness-store.js';
+import type { ObsidianDataHost } from '../plan/settings-store.js';
+import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
 import type { StudySessionHolder } from '../session/holder.js';
 import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
 import type { ObsidianTermWindowStore } from './term-window-store.js';
@@ -870,6 +875,27 @@ export interface VaultScopeSourceDeps {
   /** Injected so the source is deterministic under test; production passes `() => new Date()`. */
   readonly now: () => Date;
   readonly probeDays?: number;
+  /**
+   * `ol-egov.141.89.11.12`: the same durable store `../grove/provider.ts`
+   * reads its F8.5 withdrawal state and its `ol-2zfj.157` [DOS-I15]
+   * read-completeness rows from. **Optional, and absent keeps today's
+   * unfiltered reading** (no withdrawn-concept filter, `readCompleteness`
+   * stays `'unknown'`) — the same "a caller that predates this field stays
+   * valid" posture `BuildGroveModelInput.relations`/`.readCoverage` already
+   * hold, so no existing caller of this function needs to change. See
+   * `docs/dev/intelligence-build/vew.md` item 3 (`olea-service`) for why the
+   * grove's own provider already threads both and this source did not.
+   */
+  readonly settingsHost?: ObsidianDataHost;
+  /**
+   * `ol-kghd`'s C7.9 part-of fold, threaded here the same way
+   * `../grove/provider.ts`'s `CreateLocalGroveProviderDeps.relations` and
+   * `createVaultInstrumentSource`'s own `relations` field already are — a
+   * thunk, not a value, for the identical staleness reason
+   * `CreateLocalGroveProviderDeps.relations`'s own doc gives. Absent means no
+   * fold runs, today's unchanged behaviour.
+   */
+  readonly relations?: () => readonly ConceptRelation[];
 }
 
 /**
@@ -977,8 +1003,27 @@ async function disputesFromFiles(
  * no scope of its own, matching `olea-core`'s own `gap/scope-overview.ts`
  * module doc ("this module computes no scope of its own").
  *
- * **Lighter than the grove screen's own read, on purpose.** Two things
- * `../grove/provider.ts` does that this source does not:
+ * **Now reads the same population the grove does (`ol-egov.141.89.11.12`,
+ * `docs/dev/intelligence-build/vew.md` item 3, `olea-service`).** Until this
+ * bead, this source built `buildGroveModel`'s input with no F8.5
+ * withdrawn-concept filter, no C7.9 `relations` fold and no `ol-2zfj.157`
+ * [DOS-I15] `readCoverage` row — the same three inputs `../grove/
+ * provider.ts` already threads — so the two readers could disagree on the
+ * very same course. `VaultScopeSourceDeps.settingsHost` and `.relations` are
+ * the two new, OPTIONAL deps that close that gap, reusing the identical core
+ * readers `../grove/provider.ts` reads them through rather than
+ * re-implementing the fold: `isConceptPruned` (`olea-core`) over
+ * `ObsidianRegistryOverridesStore`'s load — the same store `../registry/
+ * overrides-store.ts` and the grove screen both read F8.5 state from — for
+ * the filter, and `ObsidianGroveReadCompletenessStore` (`../grove/read-
+ * completeness-store.ts`) for the read-completeness row. Both are optional
+ * and a caller that omits them (any caller that predates this bead) gets
+ * exactly today's prior, unfiltered reading — the same "absent means
+ * withheld, never guessed" posture `BuildGroveModelInput.relations`/
+ * `.readCoverage` already hold on the `olea-core` side.
+ *
+ * **Still lighter than the grove screen's own read, on purpose.** One thing
+ * `../grove/provider.ts` does that this source still does not:
  *
  *  - **No ground-streak persistence.** `classifyDeclaredConcept`'s
  *    `priorGroundStreak` only ever changes the `stall` FLAG on a `ground`
@@ -987,12 +1032,6 @@ async function disputesFromFiles(
  *    states a concept classifies as. `buildCrossCourseScopeOverview` never
  *    reads `cells`/`stall` at all, only `summary`'s two counts and its
  *    source paths, so omitting persistence here costs this reading nothing.
- *  - **No F8.5 withdrawn-concept filter.** The grove screen excludes
- *    `pruned` concepts via `buildRegistryModel`; this source does not, the
- *    same simplification `../today/mastery-overview.ts`'s own per-course
- *    mastery reading already makes (it is built from `extractConcepts`
- *    directly, with no pruning either) — this reading is at that same
- *    grain, not the grove screen's.
  *
  * **Whole-log mastery, not windowed** — same reasoning `../grove/
  * provider.ts` states for its own read: growth stage is a current-state
@@ -1011,12 +1050,40 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
           reviewLogPath(day, deps.deviceId),
         );
 
-        const [{ entries, files }, enumeration] = await Promise.all([
-          readReviewLogHistory(deps.vault, { additionalPaths }),
-          // `[D-357]`: keyed by the permanent concept key, the same key the trends source below
-          // and every review-log entry carry, so F6.2's scope and mastery join one identity.
-          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
-        ]);
+        // `ol-egov.141.89.11.12`: the same two stores `../grove/provider.ts`
+        // reads unconditionally, read here only when `deps.settingsHost` is
+        // supplied — see this function's own doc for why absence must not
+        // throw or degrade the rest of the read.
+        const overridesStore =
+          deps.settingsHost !== undefined
+            ? new ObsidianRegistryOverridesStore(deps.settingsHost)
+            : undefined;
+        const readCompletenessStore =
+          deps.settingsHost !== undefined
+            ? new ObsidianGroveReadCompletenessStore(deps.settingsHost)
+            : undefined;
+
+        const [{ entries, files }, enumeration, overrides, readCompletenessByCourse] =
+          await Promise.all([
+            readReviewLogHistory(deps.vault, { additionalPaths }),
+            // `[D-357]`: keyed by the permanent concept key, the same key the trends source below
+            // and every review-log entry carry, so F6.2's scope and mastery join one identity.
+            enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
+            overridesStore?.load() ?? Promise.resolve(EMPTY_REGISTRY_OVERRIDES),
+            readCompletenessStore?.load() ??
+              Promise.resolve(new Map<string, readonly ConceptReadCoverage[]>()),
+          ]);
+
+        // F8.5: withdrawn concepts stay off the default reading here too —
+        // the same `isConceptPruned` read `../grove/provider.ts` folds
+        // through `buildRegistryModel`, applied directly since this source
+        // needs only the boolean, not that module's heavier mastery/
+        // vitality computation. A concept never withdrawn (or `settingsHost`
+        // absent, `overrides` is `EMPTY_REGISTRY_OVERRIDES`) keeps today's
+        // behaviour: nothing is filtered.
+        const visibleConcepts = enumeration.concepts.filter(
+          (concept) => !isConceptPruned(overrides, concept.key),
+        );
 
         const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
         // `disputesFromFiles` re-reads the same `files` this walk already
@@ -1046,8 +1113,11 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
         // with a registered objectives document but no concepts extracted
         // yet still belongs on this reading (F8.1's own "declared, zero
         // built" state), the same roster `../grove/provider.ts` derives.
+        // `visibleConcepts`, not `enumeration.concepts` — a course whose
+        // only concept was withdrawn drops from this roster too, the same
+        // grain `../grove/provider.ts`'s own `courseNames` loop reads.
         const courseNames = new Set<string>();
-        for (const concept of enumeration.concepts) {
+        for (const concept of visibleConcepts) {
           for (const course of concept.courses) courseNames.add(course);
         }
         for (const source of tier3.sourcesReport.sources) {
@@ -1055,9 +1125,10 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
         }
 
         return [...courseNames].sort().map((course) => {
-          const courseConcepts = enumeration.concepts.filter((concept) =>
+          const courseConcepts = visibleConcepts.filter((concept) =>
             concept.courses.includes(course),
           );
+          const courseReadCoverage = readCompletenessByCourse.get(course);
           return buildGroveModel({
             course,
             concepts: courseConcepts,
@@ -1065,6 +1136,8 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
             citations: tier3.citations,
             materialPresence,
             mastery,
+            relations: deps.relations?.() ?? [],
+            ...(courseReadCoverage !== undefined ? { readCoverage: courseReadCoverage } : {}),
           }).model;
         });
       } catch {

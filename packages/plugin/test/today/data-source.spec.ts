@@ -30,6 +30,7 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
 import type {
   ComposedStudySession,
+  ConceptReadCoverage,
   ConceptRelation,
   StudyPlanStore,
   StudySessionItem,
@@ -43,12 +44,18 @@ import {
   computeAllConceptMastery,
   contestClaim,
   createFsrsScheduler,
+  EMPTY_REGISTRY_OVERRIDES,
+  enumerateVaultInstruments,
+  pruneConcept,
   provisionalConceptKey,
   readReviewLogHistory,
   resolveDispute,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
+import { createLocalGroveProvider } from '../../src/grove/provider.js';
+import { ObsidianGroveReadCompletenessStore } from '../../src/grove/read-completeness-store.js';
+import { ObsidianRegistryOverridesStore } from '../../src/registry/overrides-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
 import {
   createRhythmSource,
@@ -1932,6 +1939,211 @@ describe('createVaultScopeSource — the real F6.2 scope source (ol-4qvc)', () =
       now: () => NOW,
     });
     expect(await source.listCourseGroveModels()).toBeNull();
+  });
+});
+
+/**
+ * `ol-egov.141.89.11.12`: Today's scope reading disagreed with the grove on
+ * the very same course — no F8.5 withdrawn-concept filter, no C7.9
+ * `relations` fold and no `ol-2zfj.157` [DOS-I15] read-completeness row, all
+ * three `../grove/provider.ts` already threads (`docs/dev/intelligence-
+ * build/vew.md` item 3, `olea-service`). `VaultScopeSourceDeps.settingsHost`
+ * and `.relations` are the fix: reusing the same core readers and the same
+ * durable stores the grove's own provider reads them through, never a
+ * second, independent computation.
+ *
+ * Fixture: TESTC101 has two registered-objectives documents each declaring
+ * one of two concepts, both with a real instrument — the identical shape
+ * `../grove/provider.spec.ts` uses for its own multi-source declared-scope
+ * suite. INV-3: every course code and concept name is invented.
+ */
+describe('createVaultScopeSource reads the same population the grove does (ol-egov.141.89.11.12)', () => {
+  const NOW = new Date('2026-09-01T09:00:00Z');
+
+  function fixtureVaultTwoDeclaredConcepts() {
+    return memoryVault({
+      '03 Research/Objectives.md': [
+        '---',
+        'role: objectives',
+        'course: TESTC101',
+        '---',
+        '',
+        'The course covers Concept A in depth.',
+        '',
+      ].join('\n'),
+      '03 Research/Objectives Extra.md': [
+        '---',
+        'role: objectives',
+        'course: TESTC101',
+        '---',
+        '',
+        'The course also covers Concept C in depth.',
+        '',
+      ].join('\n'),
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      'Notes/three.md': [
+        '---',
+        'topic: [Concept C]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+    });
+  }
+
+  it('a withdrawn (F8.5-pruned) concept: Today and the grove now agree — one built cell, one material gap', async () => {
+    const vault = fixtureVaultTwoDeclaredConcepts();
+    const settingsHost = new FakeDataHost();
+
+    // Resolve Concept C's permanent key the same way both readers do — a
+    // second `enumerateVaultInstruments` call over the same vault content
+    // finds the key the first call (inside `load`/`listCourseGroveModels`)
+    // already stamped, never mints a second one (`[D-357]`'s "one store
+    // turn").
+    const { concepts } = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const conceptC = concepts.find((c) => c.name === 'Concept C');
+    if (conceptC === undefined) throw new Error('fixture did not extract Concept C');
+    await new ObsidianRegistryOverridesStore(settingsHost).save(
+      pruneConcept(EMPTY_REGISTRY_OVERRIDES, conceptC.key),
+    );
+
+    const grove = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+    });
+    const groveState = await grove.load();
+    if (groveState.kind !== 'model') throw new Error('expected the grove to read a model');
+    const groveCourse = groveState.courses.find(
+      (section) => section.course === 'TESTC101',
+    )?.model;
+    if (groveCourse === undefined || groveCourse.status !== 'declared') {
+      throw new Error(`expected the grove to read TESTC101 declared, got ${groveCourse?.status}`);
+    }
+    // The grove excludes the pruned concept from `cells`; its declared name
+    // survives as a material gap instead of vanishing (`[D-355]`: "keep
+    // every declared unit").
+    expect(groveCourse.summary.builtCount).toBe(1);
+    expect(groveCourse.materialGaps.map((gap) => gap.conceptName)).toEqual(['Concept C']);
+
+    const today = createVaultScopeSource({
+      vault,
+      deviceId: DEVICE,
+      now: () => NOW,
+      settingsHost,
+    });
+    const todayModels = await today.listCourseGroveModels();
+    const todayCourse = (todayModels ?? []).find((model) => model.course === 'TESTC101');
+    if (todayCourse === undefined || todayCourse.status !== 'declared') {
+      throw new Error(`expected Today to read TESTC101 declared, got ${todayCourse?.status}`);
+    }
+
+    // Before this bead's fix this failed: `createVaultScopeSource` had no
+    // F8.5 filter, so Concept C still counted as built there —
+    // `todayCourse.summary.builtCount` read `2`, not the grove's `1`, and
+    // `todayCourse.materialGaps` was empty (`expect(2).toBe(1)` failed).
+    // Fixed, both readers agree.
+    expect(todayCourse.summary.builtCount).toBe(groveCourse.summary.builtCount);
+    expect(todayCourse.materialGaps.map((gap) => gap.conceptName)).toEqual(
+      groveCourse.materialGaps.map((gap) => gap.conceptName),
+    );
+  });
+
+  it('no settingsHost: keeps the prior, unfiltered reading — every existing caller stays valid', async () => {
+    const source = createVaultScopeSource({
+      vault: fixtureVaultTwoDeclaredConcepts(),
+      deviceId: DEVICE,
+      now: () => NOW,
+    });
+    const models = await source.listCourseGroveModels();
+    const course = (models ?? []).find((model) => model.course === 'TESTC101');
+    if (course === undefined || course.status !== 'declared') {
+      throw new Error(`expected TESTC101 declared, got ${course?.status}`);
+    }
+    expect(course.summary.builtCount).toBe(2);
+    expect(course.summary.readCompleteness).toBe('unknown');
+  });
+
+  it('a real read-completeness row threads through, the same store the grove reads (ol-2zfj.157 [DOS-I15])', async () => {
+    const vault = fixtureVaultTwoDeclaredConcepts();
+    const settingsHost = new FakeDataHost();
+    const truncatedRow: ConceptReadCoverage = {
+      sourcePath: '03 Research/Objectives.md',
+      passagesOffered: 4,
+      passagesRead: 2,
+      conceptsFound: 1,
+      calls: 1,
+      truncatedByBudget: true,
+      sections: ['Introduction'],
+    };
+    await new ObsidianGroveReadCompletenessStore(settingsHost).save(
+      new Map([['TESTC101', [truncatedRow]]]),
+    );
+
+    const source = createVaultScopeSource({
+      vault,
+      deviceId: DEVICE,
+      now: () => NOW,
+      settingsHost,
+    });
+    const models = await source.listCourseGroveModels();
+    const course = (models ?? []).find((model) => model.course === 'TESTC101');
+    if (course === undefined || course.status !== 'declared') {
+      throw new Error(`expected TESTC101 declared, got ${course?.status}`);
+    }
+    // Before this bead's fix this failed: with no `readCoverage` wired at
+    // all, `readCompleteness` always read `'unknown'`, never `'truncated'`.
+    expect(course.summary.readCompleteness).toBe('truncated');
+    expect(course.summary.pendingSections).toEqual(['Introduction']);
+  });
+
+  it('a live part-of edge folds the container the same way the grove does (C7.9)', async () => {
+    const source = createVaultScopeSource({
+      vault: fixtureVaultTwoDeclaredConcepts(),
+      deviceId: DEVICE,
+      now: () => NOW,
+      relations: () => [
+        {
+          type: 'part-of',
+          from: 'Concept C',
+          to: 'Concept A',
+          provenance: 'model-proposed',
+          confidence: 0.9,
+          introducingPassages: {
+            from: {
+              sourcePath: 'Notes/three.md',
+              location: { page: 1, charRange: { start: 0, end: 1 } },
+            },
+            to: {
+              sourcePath: 'Notes/one.md',
+              location: { page: 1, charRange: { start: 0, end: 1 } },
+            },
+          },
+        },
+      ],
+    });
+    const models = await source.listCourseGroveModels();
+    const course = (models ?? []).find((model) => model.course === 'TESTC101');
+    if (course === undefined || course.status !== 'declared') {
+      throw new Error(`expected TESTC101 declared, got ${course?.status}`);
+    }
+    // Before this bead's fix this failed: `denominatorCount` read `2` (no
+    // fold ran at all). Concept A is the container (`to`); folded out, so
+    // the denominator names only Concept C.
+    expect(course.summary.denominatorCount).toBe(1);
   });
 });
 
