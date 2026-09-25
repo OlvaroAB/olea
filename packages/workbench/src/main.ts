@@ -65,6 +65,8 @@ import {
 } from './generate-scenarios.js';
 import { GroveView } from './grove-bridge.js';
 import { buildGroveScenario, findGroveState, GROVE_STATES } from './grove-scenarios.js';
+import { HomeView, type HomeViewDeps, type HomeViewState } from './home-bridge.js';
+import { buildHomeScenario, findHomeState, type HomeScenario } from './home-scenarios.js';
 import { createHostFrame, type HostFrame, loadModalHostCascade } from './host-frame.js';
 import { installObsidianDomHelpers } from './obsidian-shim/dom.js';
 import { Notice, type WorkspaceLeaf } from './obsidian-shim/index.js';
@@ -187,6 +189,7 @@ type RouteSurface =
   | 'registry'
   | 'plugin-surface'
   | 'grove'
+  | 'home'
   | 'walk'
   | 'simulator';
 
@@ -205,6 +208,7 @@ const DEFAULT_BULK_REVIEW_STATE = 'bulk-review-two-groups';
 const DEFAULT_REGISTRY_STATE = 'registry-populated';
 const DEFAULT_PLUGIN_SURFACE_STATE = 'plugin-surface-fresh';
 const DEFAULT_GROVE_STATE = 'grove-declared';
+const DEFAULT_HOME_STATE = 'home-composed';
 
 /**
  * `#/simulator` (`ol-3ux7.64.2` [WBX-1]) has exactly one addressable "state"
@@ -339,6 +343,8 @@ function defaultStateFor(surface: RouteSurface): string {
       return DEFAULT_PLUGIN_SURFACE_STATE;
     case 'grove':
       return DEFAULT_GROVE_STATE;
+    case 'home':
+      return DEFAULT_HOME_STATE;
     case 'review':
       return DEFAULT_STATE;
     case 'walk':
@@ -381,6 +387,8 @@ function findStateFor(
       return findPluginSurfaceState(stateId);
     case 'grove':
       return findGroveState(stateId);
+    case 'home':
+      return findHomeState(stateId);
     case 'review':
       return findState(stateId);
     case 'walk': {
@@ -438,11 +446,13 @@ function readRoute(): Route {
                               ? 'plugin-surface'
                               : segments[0] === 'grove'
                                 ? 'grove'
-                                : segments[0] === 'walk'
-                                  ? 'walk'
-                                  : segments[0] === 'simulator'
-                                    ? 'simulator'
-                                    : 'review';
+                                : segments[0] === 'home'
+                                  ? 'home'
+                                  : segments[0] === 'walk'
+                                    ? 'walk'
+                                    : segments[0] === 'simulator'
+                                      ? 'simulator'
+                                      : 'review';
   const requestedStateId = segments[1] ?? defaultStateFor(surface);
   const setId = params.get('set') ?? DEFAULT_VARIABLE_SET;
   const personaId = params.get('persona') ?? DEFAULT_PERSONA;
@@ -881,7 +891,8 @@ async function main(): Promise<void> {
       | SessionBuilderView
       | BulkReviewView
       | RegistryView
-      | GroveView;
+      | GroveView
+      | HomeView;
   } | null = null;
   /**
    * `ExplainBackModal` (`ol-z6x2` F5 tranche) is a `Modal`, not an `ItemView`
@@ -1670,6 +1681,88 @@ async function main(): Promise<void> {
       document.documentElement.setAttribute('data-wb-ready', 'true');
     }
 
+    /**
+     * `[D-243]`'s own gap (`ol-qq61`, follow-up to `ol-z6x2` [WB-2]): the
+     * REAL `HomeView` over `home-scenarios.ts`'s reuse of the REAL fixture-
+     * vault session composition — never `composed`/`loaded.history`, same
+     * reasoning as `mountSession`, which this mounter's states borrow their
+     * whole composed-session half from. `courses` stays empty on every state
+     * here (see `home-scenarios.ts`'s own module doc); the navigation
+     * callbacks below route to this workbench's own real flat surfaces where
+     * one exists (review, grove, explain-back — the same doors production's
+     * `main.ts` wires `HomeView` to) and surface an honest Notice where none
+     * does (the retrospective view and a real dismiss write, neither of
+     * which this harness has a destination for).
+     */
+    async function mountHome(stateId: string): Promise<void> {
+      const scenario = await buildHomeScenario(stateId, vault);
+      if (run !== generation) return;
+
+      const sessionScenario = scenario.sessionScenario;
+      if (
+        sessionScenario?.state.instruments === 'borrowed' ||
+        sessionScenario?.state.history === 'borrowed'
+      ) {
+        host.createDiv({ cls: 'wb-illustrative-label', text: SESSION_ILLUSTRATIVE_LABEL });
+        renderSyntheticProvisionalBadge(host);
+      }
+
+      let latestScenario: HomeScenario = scenario;
+      const deps: HomeViewDeps = {
+        load: async (request) => {
+          const reloaded = await buildHomeScenario(stateId, vault);
+          const reloadedSession = reloaded.sessionScenario;
+          const nextState: HomeViewState =
+            reloadedSession === undefined
+              ? reloaded.state
+              : {
+                  kind: 'dashboard',
+                  session: await reloadedSession.deps.load(request),
+                  courses: [],
+                };
+          latestScenario = { ...reloaded, state: nextState };
+          renderHomeInspector(inspector, { setNote: activeSet.note, scenario: latestScenario });
+          return nextState;
+        },
+        openRetrospective: () => {
+          new Notice(
+            'Workbench: Home would open the retrospective view here. There is no flat-surface ' +
+              'mount for it in this workbench yet.',
+          );
+        },
+        startSession: () => {
+          // Production wires this to `enterStudySessionHolderForStart` then
+          // `revealReviewView` — the real review surface this workbench
+          // already mounts (`mountReview`) is the honest equivalent.
+          writeRoute({ ...readRoute(), surface: 'review', stateId: DEFAULT_STATE });
+        },
+        openGrove: () => {
+          writeRoute({ ...readRoute(), surface: 'grove', stateId: DEFAULT_GROVE_STATE });
+        },
+        dismiss: async (assessmentPath) => {
+          new Notice(`Workbench: would dismiss the offer for ${assessmentPath}. Not written here.`);
+        },
+        openExplainBack: () => {
+          writeRoute({
+            ...readRoute(),
+            surface: 'explain-back',
+            stateId: DEFAULT_EXPLAIN_BACK_STATE,
+          });
+        },
+      };
+
+      const view = new HomeView(makeLeaf(), deps);
+      host.appendChild(view.containerEl);
+      mounted = { view };
+
+      void view.onOpen();
+      await settle();
+      if (run !== generation) return;
+
+      renderHomeInspector(inspector, { setNote: activeSet.note, scenario: latestScenario });
+      document.documentElement.setAttribute('data-wb-ready', 'true');
+    }
+
     async function mountTrends(stateId: string): Promise<void> {
       // Synchronous and self-contained, same reasoning as `mountOracle`: each
       // trends state replays its own persona stream through the product's own
@@ -2145,6 +2238,10 @@ async function main(): Promise<void> {
     }
     if (route.surface === 'grove') {
       await mountGrove(route.stateId);
+      return;
+    }
+    if (route.surface === 'home') {
+      await mountHome(route.stateId);
       return;
     }
     if (route.surface === 'today') {
@@ -2926,6 +3023,54 @@ function renderSessionInspector(inspector: HTMLElement, input: SessionInspectorI
     text:
       `${String(scenario.instrumentCount)} instrument(s), ${String(scenario.conceptCount)} concept(s), ` +
       `${String(scenario.gapRowCount)} ranked row(s), ${String(scenario.borrowedInstrumentCount)} re-bound`,
+  });
+}
+
+interface HomeInspectorInput {
+  readonly setNote: string;
+  readonly scenario: HomeScenario;
+}
+
+/**
+ * `HomeView`'s own numbers, alongside the real view — never a second source
+ * of truth, only a read of the same `HomeViewState`. Delegates the
+ * composed-session rows to `renderSessionInspector` (with this state's OWN
+ * note swapped in, so a reader sees why this workbench state exists, not the
+ * session state it was reused from) rather than re-deriving them, the same
+ * "one read, not a second computation" discipline `home/view.ts` itself
+ * documents.
+ */
+function renderHomeInspector(inspector: HTMLElement, input: HomeInspectorInput): void {
+  const { scenario } = input;
+
+  if (scenario.sessionScenario !== undefined) {
+    renderSessionInspector(inspector, {
+      setNote: input.setNote,
+      scenario: { ...scenario.sessionScenario, note: scenario.note },
+    });
+  } else {
+    inspector.empty();
+    inspector.createDiv({ cls: 'wb-inspector-note', text: scenario.note });
+    inspector.createDiv({ cls: 'wb-inspector-note wb-inspector-note--dim', text: input.setNote });
+  }
+
+  const kindRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  kindRow.createSpan({ cls: 'wb-inspector-label', text: 'home.kind' });
+  kindRow.createSpan({ cls: 'wb-inspector-value', text: scenario.state.kind });
+
+  if (scenario.state.kind !== 'dashboard') return;
+
+  const sessionKindRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  sessionKindRow.createSpan({ cls: 'wb-inspector-label', text: 'home.session.kind' });
+  sessionKindRow.createSpan({ cls: 'wb-inspector-value', text: scenario.state.session.kind });
+
+  const coursesRow = inspector.createDiv({ cls: 'wb-inspector-row' });
+  coursesRow.createSpan({ cls: 'wb-inspector-label', text: 'home.courses' });
+  coursesRow.createSpan({
+    cls: 'wb-inspector-value',
+    text:
+      `${String(scenario.state.courses.length)} row(s) — always 0 here, see home-scenarios.ts's ` +
+      'own module doc for why',
   });
 }
 
