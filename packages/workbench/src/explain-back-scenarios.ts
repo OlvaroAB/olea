@@ -228,7 +228,17 @@ export function buildExplainBackScenario(stateId: string): ExplainBackScenario {
       pending: PendingExplainBackGrading,
       _context: AcceptExplainBackGradingWithObservationContext,
     ): Promise<AcceptExplainBackGradingWithObservationResult | null> {
-      return { status: 'accepted', accepted: acceptedFrom(pending), observations: [] };
+      // `resolutionEvidence: null` matches the real accept path
+      // (`buildResolutionEvidenceForAcceptedGrading`, `grading/wiring.ts`):
+      // this fixture's own `buildObservationContext` above never sets
+      // `subjectConceptId`, so the real function would short-circuit to
+      // `null` before touching `candidateRecordsForConcept` at all.
+      return {
+        status: 'accepted',
+        accepted: acceptedFrom(pending),
+        observations: [],
+        resolutionEvidence: null,
+      };
     },
     async retrieveSourceBlocks(_query: string): Promise<readonly ExplainBackSourceBlock[]> {
       return FIXTURE_SOURCE_BLOCKS;
