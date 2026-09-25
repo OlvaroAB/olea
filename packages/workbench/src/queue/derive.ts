@@ -50,6 +50,22 @@
  * item's `dueState`, `priorState` or ordering is fabricated to reach it. A
  * screenshot taken at that instant is a screenshot of a real session; it is
  * simply not a session on 15 January.
+ *
+ * **That still leaves a format's own instrument overdue.** At `sessionInstant`
+ * nearly every recall-tier candidate is overdue by at least its own interval,
+ * so under the product's default serving policy (`'interval-bound'`, `[D-240]`
+ * item 2, `recallOutranksFormatPreference` in `scheduler/serving.ts`) it takes
+ * its concept's slot outright, whatever `formatPreference` asks for — correct
+ * for what she is actually served, and exactly wrong for a harness whose whole
+ * point is to show the cloze or MCQ state. So `servingPolicy` is threaded
+ * through `compose` only for the three format-preferring compositions
+ * (`qa`, `cloze`, `mcq` below): they pass `'today'`, the pre-amendment,
+ * unbounded arm `[SESS-4]`'s sweep named for exactly this replay, so a format
+ * preference always reaches its format. `offered` — the plain, no-preference
+ * composition the counts strip and the inspector treat as "what she is
+ * served" — keeps `servingPolicy` omitted, i.e. the product default. The
+ * counts strip's "reachable" wording and this paragraph are the two places
+ * that say so.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -60,6 +76,7 @@ import type {
   ReviewSession,
   SchedulableInstrumentType,
   Scheduler,
+  ServingPolicy,
   VaultInstrumentRecord,
   VaultSource,
 } from 'olea-core';
@@ -167,12 +184,16 @@ export async function deriveWorkbenchQueue(
   });
 
   const at = sessionInstant(session.candidates);
-  const compose = (formatPreference: readonly SchedulableInstrumentType[]): ComposedQueue =>
+  const compose = (
+    formatPreference: readonly SchedulableInstrumentType[],
+    servingPolicy?: ServingPolicy,
+  ): ComposedQueue =>
     composeQueue({
       candidates: session.candidates,
       now: at,
       suspended: session.suspended,
       formatPreference,
+      ...(servingPolicy === undefined ? {} : { servingPolicy }),
     });
 
   // One fixed-seed source, threaded through every adaptation this call makes,
@@ -181,11 +202,14 @@ export async function deriveWorkbenchQueue(
   // composes at a deterministic instant. See ../deterministic-random.ts.
   const random = createDeterministicRandom();
 
+  // `offered` keeps `servingPolicy` at the product default; the three
+  // format-preferring compositions below pass `'today'` instead — see the
+  // module doc's "That still leaves a format's own instrument overdue".
   const offered = compose([]);
   return {
-    qa: itemsOfType(compose(['qa']), session.recordsById, 'qa', random),
-    cloze: itemsOfType(compose(['cloze']), session.recordsById, 'cloze', random),
-    mcq: itemsOfType(compose(['mcq']), session.recordsById, 'mcq', random),
+    qa: itemsOfType(compose(['qa'], 'today'), session.recordsById, 'qa', random),
+    cloze: itemsOfType(compose(['cloze'], 'today'), session.recordsById, 'cloze', random),
+    mcq: itemsOfType(compose(['mcq'], 'today'), session.recordsById, 'mcq', random),
     session,
     offered,
     at,
@@ -200,7 +224,8 @@ export function describeWorkbenchQueue(queue: WorkbenchQueue, fixtureFileCount: 
   return (
     `${String(records.length)} instruments in ${String(fixtureFileCount)} fixture files · ` +
     `${String(queue.offered.items.length)} offered, ${String(queue.offered.deferred.length)} deferred by per-concept dedupe (F2.17) · ` +
-    `${String(queue.qa.length)} Q&A · ${String(queue.cloze.length)} cloze · ${String(queue.mcq.length)} MCQ reachable · ` +
+    `${String(queue.qa.length)} Q&A · ${String(queue.cloze.length)} cloze · ${String(queue.mcq.length)} MCQ reachable ` +
+    `(format-preferring counts use today's unbounded serving policy, not what she is actually served) · ` +
     (shifted
       ? `composed as of ${composedAt}, the day her latest-scheduled instrument comes due`
       : `composed as of ${composedAt}`)
