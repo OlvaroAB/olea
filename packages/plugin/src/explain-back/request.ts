@@ -13,32 +13,43 @@
  * ===========================================================================
  * WHAT THIS DELIBERATELY DOES NOT DO (disclosed, not hidden — DF-20)
  * ===========================================================================
- * - **Relation-context retrieval is half-built, and the other half is
- *   blocked outside this file's ownership (`ol-egov.141.89.6.30`).**
+ * - **Relation-context retrieval is wired end to end; this file still
+ *   cannot see the role split it produces (`ol-egov.141.89.6.48`).**
  *   `resolveExplainBackRelationEdge` below resolves the subject's live
  *   "causes" partner (rel.md section 1's "Explain-back partner (causes)"
  *   row) from the SAME gated graph read every other reader uses
- *   (`servedRelations`, rel.md section 3 Default 4) — a stale endpoint is
- *   excluded there, not reimplemented here. What still cannot be built here:
- *   `mastery/gradingInputContract.ts`'s `resolveGradingRelationContext` and
- *   `buildGradingSourceMaterial` (F5.2a) — the functions that would turn a
- *   resolved edge into `GradingSourceMaterial`'s subject+edge+neighbour
- *   passages — are not exported from `packages/core/src/index.ts` (only
- *   that module's `SchedulingObservation`/`buildSchedulingObservationField`
- *   are). `packages/plugin` imports `olea-core` only through that barrel
- *   (no subpath `exports`, `package.json`'s `main`/`types` name the barrel
- *   only), and `index.ts` sits outside this bead's `owns`. Until that export
- *   lands, this file only ever grades a single concept ("concept-only"),
- *   using a plain `retrieve()` call over her indexed notes — the same
- *   simplification `review/explainWhy.ts`'s F2.7 grounding half already
- *   uses. Even once it lands, wiring a real neighbour concept id and its
- *   defining passages into `buildExplainBackPromptContextFromInstrument`/
- *   `FromTopic` below is composition-root work in `main.ts`/`modal.ts`,
- *   also outside this bead's `owns` — see `resolveExplainBackRelationEdge`'s
- *   own doc and this lane's report for the exact file:line gaps.
- *   `ol-cqz8`'s `buildGradeSoloInputFromTypedAnswer` below inherits the same
- *   concept-only simplification for the SOLO depth pipeline, for the
- *   identical reason: `relationExpected` is always `false`.
+ *   (`servedRelations`, rel.md section 3 Default 4). `ol-egov.141.89.6.31`
+ *   barrel-exported `mastery/gradingInputContract.ts`'s
+ *   `resolveGradingRelationContext`/`buildGradingSourceMaterial`
+ *   (`GradingSourceMaterial` is now importable from `olea-core` directly),
+ *   and `ol-egov.141.89.6.33` wired `main.ts`/`modal.ts` to call both in
+ *   production (`main.ts:3787` supplies `resolveCausesPartner`;
+ *   `modal.ts`'s `resolveGradingSourceBlocks` calls
+ *   `buildGradingSourceMaterial`). **But `resolveGradingSourceBlocks`
+ *   flattens `GradingSourceMaterial.sourceBlocks` into one undifferentiated
+ *   `ExplainBackSourceBlock[]` and discards `.omissionDenominator`
+ *   entirely** before that array becomes `ExplainBackPromptContext
+ *   .sourceBlocks` — the one field this file ever receives. Neither
+ *   `ExplainBackSourceBlock` nor the `SourceBlockRef` inside it carries a
+ *   role or provenance tag (subject vs. edge-provenance vs. neighbour):
+ *   every block, whichever it came from, is minted through the identical
+ *   `${path}#${blockIndex}#${index}` convention
+ *   (`retrieveExplainBackSourceBlocks` below, and `modal.ts`'s
+ *   `resolveEdgeIntroducingPassages`). `GradeSoloInput`'s own doc
+ *   (`olea-core`'s `grading/explainBackSolo.ts`) says the identical thing
+ *   from the producing side: "there is nothing in `GradingSourceMaterial`
+ *   itself that distinguishes the two cases once the source blocks are
+ *   flattened." So this file cannot recompute F5.3's narrower omission
+ *   denominator (subject material plus the edge's own provenance,
+ *   **never** the neighbour's full defining passages) from
+ *   `context.sourceBlocks` alone — see `buildGradeSoloInputFromTypedAnswer`
+ *   below for the accepted fix (an optional pass-through parameter) and
+ *   this bead's report for the exact `modal.ts`/`solo-review.ts` follow-up
+ *   that would start supplying it. The whole causes-edge path stays
+ *   observably dormant regardless: `concept/relation.ts`'s
+ *   `RELATION_EMISSION_STATUS.causes` is still `'blocked-on-deferred-reader'`
+ *   — no production reader ever emits a causes edge, so `resolveCausesPartner`
+ *   is live and called but never resolves one today.
  * - **No synthesized reference answer.** `explainBackJudgeRequest`'s
  *   `referenceAnswer` is documented service-side as "synthesized ground
  *   truth", distinct from `sourceBlocks`. No generation task exists to
@@ -55,6 +66,7 @@ import {
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
   type GradeSoloInput,
+  type GradingSourceMaterial,
   type RelationSet,
   type RetrieveDeps,
   retrieve,
@@ -221,32 +233,71 @@ export function buildGradeExplainBackInputFromTypedAnswer(
  * above, reusing the SAME `ExplainBackPromptContext` this view already
  * resolved for the correctness pipeline rather than a second retrieval.
  *
- * **Concept-only, same simplification as this module's own module doc
- * states for the correctness pipeline**: `mastery/gradingInputContract.ts`'s
- * `buildGradingSourceMaterial` assembles subject+edge+neighbour passages for
- * a RELATION-shaped prompt from already-resolved `ConceptDefiningPassages` —
- * this view never builds those, so `sourceMaterial` is constructed directly
- * here rather than through that function (whose concept-only branch needs
- * nothing `context.sourceBlocks` doesn't already give: the subject's
- * passages ARE the omission denominator, and there is no edge to nominate).
- * `relationExpected: false` follows from the same fact — `groundSoloResponse`
- * (`olea-core`) drops `neighbourUseDemonstrated` entirely whenever this is
- * false, so `schedulingObservation` never gets fabricated from a
- * concept-only prompt.
+ * **`resolved` is the role-separated escape hatch this module doc's
+ * "Relation-context retrieval is wired end to end" note names
+ * (`ol-egov.141.89.6.48`).** `context.sourceBlocks` alone cannot tell
+ * subject, edge-provenance and neighbour blocks apart (see that note for
+ * why — no role tag survives `modal.ts`'s flattening), so this function
+ * cannot derive F5.3's omission denominator from `context` by itself.
+ * `resolved.sourceMaterial`, when a caller has one, is threaded straight
+ * through: it is `GradingSourceMaterial` itself (`mastery
+ * /gradingInputContract.ts`'s `buildGradingSourceMaterial`, now
+ * barrel-exported), and `omissionDenominator` on it already implements
+ * F5.3 exactly — subject material plus the edge's own provenance passages,
+ * **never** the neighbour's own defining passages, and `null` (not `[]`)
+ * under F5.3's named degradation (no textual provenance at all). Likewise
+ * `resolved.relationExpected`: `GradeSoloInput`'s own doc says this is
+ * "decided by whatever built `sourceMaterial`" (true exactly when a real
+ * relation context — not concept-only — was resolved), a fact this file
+ * cannot re-derive either.
+ *
+ * **Omitted, both fall back to the EXACT pre-existing behaviour** — every
+ * production call today, since supplying a real `GradingSourceMaterial`
+ * here is composition-root work in `modal.ts`/`solo-review.ts`
+ * (`resolveGradingSourceBlocks` already builds one, in a local it discards;
+ * `recordSoloGradeAndReview`, `./solo-review.ts:370`, is the one caller of
+ * this function and would need to carry it from there) — both outside this
+ * bead's `owns`; named as a follow-up rather than guessed. The
+ * concept-only default (the whole retrieved source doubling as the
+ * denominator, `relationExpected: false`) is not a guess for that case: F5.3
+ * only narrows the denominator for a RELATION prompt, and
+ * `buildGradingSourceMaterial`'s own `'concept-only'` branch sets
+ * `omissionDenominator: passages`, the identical list `sourceBlocks` gets —
+ * this default is what that branch would return. `relationExpected: false`
+ * still means `groundSoloResponse` (`olea-core`) drops
+ * `neighbourUseDemonstrated` entirely, so `schedulingObservation` never
+ * gets fabricated from a concept-only prompt.
  */
 export function buildGradeSoloInputFromTypedAnswer(
   studentAnswer: string,
   context: ExplainBackPromptContext,
+  resolved?: {
+    /**
+     * A caller-supplied `GradingSourceMaterial` — e.g. the value
+     * `modal.ts`'s `resolveGradingSourceBlocks` already computes and
+     * currently discards — used verbatim in place of the concept-only
+     * default below. See this function's own doc for why this file cannot
+     * build one itself from `context` alone.
+     */
+    readonly sourceMaterial?: GradingSourceMaterial;
+    /**
+     * True exactly when `sourceMaterial` was built from a relation context
+     * (`GradingRelationContext.kind === 'relation'`), per `GradeSoloInput
+     * .relationExpected`'s own doc. See this function's own doc for why
+     * this file cannot decide that itself.
+     */
+    readonly relationExpected?: boolean;
+  },
 ): GradeSoloInput {
   return {
     question: context.question,
     studentAnswer,
-    sourceMaterial: {
+    sourceMaterial: resolved?.sourceMaterial ?? {
       sourceBlocks: context.sourceBlocks,
       omissionDenominator: context.sourceBlocks,
       candidateEdgeNomination: null,
     },
-    relationExpected: false,
+    relationExpected: resolved?.relationExpected ?? false,
   };
 }
 

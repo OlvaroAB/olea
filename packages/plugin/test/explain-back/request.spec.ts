@@ -216,6 +216,110 @@ describe('buildGradeSoloInputFromTypedAnswer (ol-cqz8)', () => {
     expect(input.sourceMaterial.candidateEdgeNomination).toBeNull();
     expect(input.relationExpected).toBe(false);
   });
+
+  // `ol-egov.141.89.6.48`: F5.3 (`[D-083]`) — "the omission denominator is
+  // the subject concept's defining material plus the edge's provenance
+  // passages, and nothing wider... the neighbour contributes only what the
+  // edge's passages say about it." Before this bead, `sourceMaterial` was
+  // ALWAYS built from `context.sourceBlocks` alone, so a resolved causes
+  // partner's full defining passages leaked into the denominator. This
+  // block failed against the pre-existing two-argument signature (no third
+  // parameter existed to carry a role-separated `sourceMaterial` in at
+  // all — the call below would not type-check, and even ignoring that, the
+  // function unconditionally set `omissionDenominator: context.sourceBlocks`
+  // regardless of any extra argument), so it is the regression test for the
+  // fix: with a causes partner present, the neighbour's own defining
+  // passages are excluded from the denominator while the edge's own
+  // provenance passages remain in it, and the full judge source is
+  // unaffected.
+  describe('a causes partner present (resolved.sourceMaterial supplied, edge-provenance case)', () => {
+    const subjectBlock = { blockId: 'subject#0#0', text: 'subject defining passage' };
+    const edgeBlock = { blockId: 'edge#0#0', text: 'edge provenance passage' };
+    const neighbourBlock = { blockId: 'neighbour#0#0', text: "neighbour's own defining passage" };
+
+    const entries = [
+      { block: subjectBlock, path: 'subject.md', blockIndex: 0 },
+      { block: edgeBlock, path: 'edge.md', blockIndex: 0 },
+      { block: neighbourBlock, path: 'neighbour.md', blockIndex: 0 },
+    ];
+    const context = buildExplainBackPromptContextFromInstrument(qaFixture(), entries);
+
+    const sourceMaterial = {
+      // The correctness judge's full source (F5.2a) — subject, edge
+      // provenance AND the neighbour's full defining passages.
+      sourceBlocks: [subjectBlock, edgeBlock, neighbourBlock],
+      // F5.3's narrower denominator — subject material plus the edge's own
+      // provenance, never the neighbour's full defining passages.
+      omissionDenominator: [subjectBlock, edgeBlock],
+      candidateEdgeNomination: null,
+    };
+
+    it('excludes the neighbour defining passage from the denominator, keeps edge provenance', () => {
+      const input = buildGradeSoloInputFromTypedAnswer('her explanation', context, {
+        sourceMaterial,
+        relationExpected: true,
+      });
+
+      expect(input.sourceMaterial.omissionDenominator).toEqual([subjectBlock, edgeBlock]);
+      expect(input.sourceMaterial.omissionDenominator).not.toContainEqual(neighbourBlock);
+    });
+
+    it('leaves the correctness/depth source (sourceBlocks) at the full grading source, unchanged', () => {
+      const input = buildGradeSoloInputFromTypedAnswer('her explanation', context, {
+        sourceMaterial,
+        relationExpected: true,
+      });
+
+      expect(input.sourceMaterial.sourceBlocks).toEqual([subjectBlock, edgeBlock, neighbourBlock]);
+    });
+
+    it('forwards the supplied relationExpected rather than the concept-only default', () => {
+      const input = buildGradeSoloInputFromTypedAnswer('her explanation', context, {
+        sourceMaterial,
+        relationExpected: true,
+      });
+
+      expect(input.relationExpected).toBe(true);
+    });
+  });
+
+  // F5.3's named degradation: "where no provenance exists, omission-scoring
+  // is undefined... omission-scoring is simply absent rather than invented
+  // against a denominator that isn't grounded." `null`, never `[]`
+  // (`GradingSourceMaterial.omissionDenominator`'s own doc,
+  // `mastery/gradingInputContract.ts`) — this must survive unchanged, not
+  // collapse to the concept-only default.
+  it('a supplied sourceMaterial with a null denominator (no provenance) is threaded through as null, never replaced by context.sourceBlocks', () => {
+    const entries = [
+      { block: { blockId: 'b1', text: 'subject passage' }, path: 's.md', blockIndex: 0 },
+      { block: { blockId: 'b2', text: 'neighbour passage' }, path: 'n.md', blockIndex: 0 },
+    ];
+    const context = buildExplainBackPromptContextFromInstrument(qaFixture(), entries);
+
+    const input = buildGradeSoloInputFromTypedAnswer('her explanation', context, {
+      sourceMaterial: {
+        sourceBlocks: context.sourceBlocks,
+        omissionDenominator: null,
+        candidateEdgeNomination: null,
+      },
+      relationExpected: true,
+    });
+
+    expect(input.sourceMaterial.omissionDenominator).toBeNull();
+  });
+
+  it('with no resolved argument at all (no partner), the pre-existing behaviour is unchanged: the whole grading source still doubles as the denominator', () => {
+    const entries = [
+      { block: { blockId: 'b1', text: 'first passage' }, path: 'p.md', blockIndex: 0 },
+    ];
+    const context = buildExplainBackPromptContextFromInstrument(qaFixture(), entries);
+
+    const input = buildGradeSoloInputFromTypedAnswer('her explanation', context);
+
+    expect(input.sourceMaterial.omissionDenominator).toEqual(input.sourceMaterial.sourceBlocks);
+    expect(input.sourceMaterial.omissionDenominator).toEqual(context.sourceBlocks);
+    expect(input.relationExpected).toBe(false);
+  });
 });
 
 // `ol-egov.141.89.6.30`: rel.md section 1's "Explain-back partner (causes)"
