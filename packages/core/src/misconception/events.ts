@@ -9,6 +9,8 @@
  * the second).
  */
 
+import type { MaterialityAuthorship } from '../source/materiality.js';
+import { assertBeliefBearingStatement } from './belief-source.js';
 import type { MisconceptionMatchCandidate } from './matcher.js';
 import { DEFAULT_M1_THRESHOLD, matchExistingMisconception } from './matcher.js';
 import {
@@ -30,6 +32,28 @@ export interface ObservationInput {
   readonly originInstrumentId: string;
   readonly originReviewEventId: string | null;
   readonly timestamp: string;
+  /**
+   * `[D-101]`'s authorship fact for this statement's source prose (knowledge
+   * model §4.1's statement field, amended `[D-101]`): `'hers'` admits;
+   * `'not-hers'`/`'unknown'` both exclude, per `belief-source.ts`'s
+   * `admitBeliefBearingStatement`. **Optional** — no production caller
+   * supplies a real value yet. The observation path today
+   * (`accepted-grading-observation.ts`'s `buildObservationEventsFromAcceptedGrading`,
+   * called from `packages/plugin/src/grading/wiring.ts`'s
+   * `computeAcceptExplainBackGradingWithObservation`) builds its candidates
+   * from `AcceptedExplainBackGrading.misconceptionCandidates`
+   * (`../grading/gradingPipeline.js`, not this directory's `owns`) with no
+   * authorship fact attached anywhere upstream. The plugin caller that must
+   * start supplying one is `packages/plugin/src/grading/wiring.ts` (or the
+   * materiality wiring it already has under
+   * `packages/plugin/src/ingestion/materiality/`), classifying the graded
+   * answer's source prose via `classifyMateriality`/`resolveMateriality`
+   * before building each `AcceptedGradingMisconceptionCandidate`. Omitting
+   * this field leaves existing behaviour unchanged — see
+   * `admitBeliefBearingStatement`'s own doc for why an absent fact admits
+   * rather than guesses at an exclusion.
+   */
+  readonly statementAuthorship?: MaterialityAuthorship;
 }
 
 export interface BuildObservationEventOptions {
@@ -89,6 +113,12 @@ export function buildObservationEvent(
   input: ObservationInput,
   options: BuildObservationEventOptions,
 ): BuildObservationEventResult {
+  // `[D-101]`: in front of the `statement` field below — defense-in-depth,
+  // not the expected control flow. See `belief-source.ts`'s
+  // `assertBeliefBearingStatement` doc for why a real production caller
+  // gates earlier and never reaches this throw.
+  assertBeliefBearingStatement(input.statementAuthorship);
+
   const threshold = options.threshold ?? DEFAULT_M1_THRESHOLD;
   const matchedId =
     options.statementEmbedding === undefined

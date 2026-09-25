@@ -39,8 +39,10 @@
  * `buildObservationEvent`'s own no-embedder fallback applies to the matching
  * decision: the honest response to "no signal to resolve this" is "don't
  * record it," never "guess." A caller can inspect and count how often a
- * candidate was skipped, and why (`'uncitable'` / `'unresolved-concept'`) —
- * never the candidate's own text (D-005).
+ * candidate was skipped, and why (`'uncitable'` / `'unresolved-concept'` /
+ * `'not-hers'` / `'unknown-authorship'`, the last two being `[D-101]`'s own
+ * belief-source exclusion, `./belief-source.js`) — never the candidate's own
+ * text (D-005).
  *
  * ===========================================================================
  * FAILURE ISOLATION IS THE CALLER'S JOB, NOT THIS FILE'S
@@ -59,6 +61,8 @@
  * acceptance" to protect.
  */
 
+import type { MaterialityAuthorship } from '../source/materiality.js';
+import { admitBeliefBearingStatement, type ExcludedBeliefSourceReason } from './belief-source.js';
 import type { MisconceptionEmbeddingCacheEngine } from './embedding-cache.js';
 import type { BuildObservationEventResult, ObservationInput } from './events.js';
 import { buildObservationEventWithEmbedding } from './observe.js';
@@ -74,6 +78,16 @@ export interface AcceptedGradingMisconceptionCandidate {
   readonly statement: string;
   readonly correction: string;
   readonly correctionSourceBlockIds: readonly string[];
+  /**
+   * `[D-101]`'s authorship fact for `statement`'s source prose — see
+   * `events.ts`'s `ObservationInput.statementAuthorship` doc for the exact
+   * rule and for the plugin caller that must start supplying a real value.
+   * **Optional and not supplied by any caller today**: `../grading/
+   * gradingPipeline.js`'s `MisconceptionCandidate` (this type's mirror, per
+   * the module doc) carries no such fact, so this field is dormant until a
+   * plugin caller starts populating it when it builds each candidate.
+   */
+  readonly statementAuthorship?: MaterialityAuthorship;
 }
 
 /**
@@ -111,7 +125,10 @@ export interface AcceptedGradingObservationDeps {
 }
 
 /** Why a candidate produced no observation event — never the candidate's own text (D-005). */
-export type SkippedAcceptedGradingCandidateReason = 'uncitable' | 'unresolved-concept';
+export type SkippedAcceptedGradingCandidateReason =
+  | 'uncitable'
+  | 'unresolved-concept'
+  | ExcludedBeliefSourceReason;
 
 export type AcceptedGradingObservationOutcome =
   | {
@@ -155,6 +172,17 @@ export async function buildObservationEventsFromAcceptedGrading(
       continue;
     }
 
+    // `[D-101]`: the real, non-throwing gate — checked before building
+    // `ObservationInput` or spending an embed call, the same shape as the
+    // `'uncitable'`/`'unresolved-concept'` skips above. See
+    // `belief-source.ts`'s `admitBeliefBearingStatement` doc for why an
+    // absent `statementAuthorship` admits rather than excludes.
+    const admission = admitBeliefBearingStatement(candidate.statementAuthorship);
+    if (!admission.admitted) {
+      outcomes.push({ candidate, skipped: true, reason: admission.reason ?? 'not-hers' });
+      continue;
+    }
+
     const confusedWithConceptId = candidate.confusedWith
       ? context.resolveConceptId(candidate.confusedWith)
       : null;
@@ -168,6 +196,9 @@ export async function buildObservationEventsFromAcceptedGrading(
       originInstrumentId: context.originInstrumentId,
       originReviewEventId: context.originReviewEventId,
       timestamp: context.timestamp,
+      ...(candidate.statementAuthorship !== undefined
+        ? { statementAuthorship: candidate.statementAuthorship }
+        : {}),
     };
 
     const result = await buildObservationEventWithEmbedding(input, {

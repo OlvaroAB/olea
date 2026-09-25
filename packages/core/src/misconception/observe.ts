@@ -59,6 +59,7 @@
  * `buildObservationEvent` directly.
  */
 
+import { assertBeliefBearingStatement } from './belief-source.js';
 import type { MisconceptionEmbeddingCacheEngine } from './embedding-cache.js';
 import {
   type BuildObservationEventResult,
@@ -153,6 +154,13 @@ export async function buildObservationEventWithEmbedding(
   input: ObservationInput,
   deps: BuildObservationEventWithEmbeddingDeps,
 ): Promise<BuildObservationEventResult> {
+  // `[D-101]`: checked here, before any embedding work runs (never spend an
+  // embed call on prose that cannot become a statement) — defense-in-depth,
+  // same as `events.ts`'s own guard below it. See `belief-source.ts`'s
+  // `assertBeliefBearingStatement` doc for why a real production caller
+  // gates earlier still and never reaches this throw.
+  assertBeliefBearingStatement(input.statementAuthorship);
+
   const overrides = {
     ...(deps.threshold !== undefined ? { threshold: deps.threshold } : {}),
     ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
