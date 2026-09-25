@@ -147,6 +147,16 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
      * double stays untouched; `usage/log-store.ts` is the production
      * consumer, via `usage/types.ts`'s `UsageLogEntry` (same field names, by
      * design, so `main.ts`'s wiring is a plain spread).
+     *
+     * **Kept exactly this shape, unwidened** (`ol-egov.141.89.10.25`, item
+     * 5): a failed call has no `stamp`, so it can never honestly supply
+     * `promptVersion`/`modelId` here — widening this callback's fields to
+     * optional would make them structurally incompatible with every existing
+     * caller's own copy of this shape (`obsidian-transport.ts`'s
+     * `createObsidianWorkerTransport`, outside this bead's owned paths;
+     * verified against the repo's actual `tsc --strict` behaviour, not
+     * assumed). `onCallFailed` below is the separate, honest recorder for
+     * that case.
      */
     private readonly onCallRecorded?: (entry: {
       taskId: string;
@@ -159,24 +169,46 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
       costUsd?: number;
       latencyMs?: number;
     }) => void,
+    /**
+     * F7.3 usage recording's failed-call counterpart (`ol-egov.141.89.10.25`,
+     * item 5): "the transport records usage for failed calls too, so failed
+     * spend is counted." Checked against what the wire actually carries:
+     * `errorResponse` (`packages/contracts/src/worker.ts`) has no `stamp` and
+     * so never carries token/cost/latency figures — adding those to the
+     * error body would be a contract change, out of this bead's scope. What
+     * IS honestly available without touching the contract is the task id
+     * (known from the request, not the response) and the Worker's own
+     * `ErrorCode` when the response was well-formed. This is deliberately a
+     * separate optional callback rather than a widened `onCallRecorded`: see
+     * that parameter's doc for why widening it in place would break an
+     * unowned file's typecheck. A new, additional parameter that existing
+     * callers simply omit is the backward-compatible way to make the
+     * recorder's shape able to say "failed" at all — today it structurally
+     * cannot. No production caller supplies this yet (`obsidian-transport.ts`
+     * would need a matching parameter added to wire it through to
+     * `usage/log-store.ts`; flagged for the orchestrator, D-072).
+     */
+    private readonly onCallFailed?: (entry: { taskId: string; errorCode?: string }) => void,
   ) {}
 
   async send(request: WorkerTaskRequest): Promise<unknown> {
     const result = await sendWorkerTask(this.httpRequest, this.config, request);
-    if (this.onCallRecorded && typeof result === 'object' && result !== null) {
+    if (typeof result === 'object' && result !== null) {
       const r = result as Record<string, unknown>;
-      const stamp = r.stamp as Record<string, unknown> | undefined;
-      if (
-        r.ok === true &&
-        stamp &&
-        typeof stamp.promptVersion === 'string' &&
-        typeof stamp.modelId === 'string'
-      ) {
-        this.onCallRecorded({
+      if (this.onCallRecorded && r.ok === true) {
+        const stamp = r.stamp as Record<string, unknown> | undefined;
+        if (stamp && typeof stamp.promptVersion === 'string' && typeof stamp.modelId === 'string') {
+          this.onCallRecorded({
+            taskId: request.taskId,
+            promptVersion: stamp.promptVersion,
+            modelId: stamp.modelId,
+            ...extractUsageFigures(stamp.usage as Record<string, unknown> | undefined),
+          });
+        }
+      } else if (this.onCallFailed && r.ok === false) {
+        this.onCallFailed({
           taskId: request.taskId,
-          promptVersion: stamp.promptVersion,
-          modelId: stamp.modelId,
-          ...extractUsageFigures(stamp.usage as Record<string, unknown> | undefined),
+          ...(typeof r.code === 'string' ? { errorCode: r.code } : {}),
         });
       }
     }

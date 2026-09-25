@@ -79,6 +79,37 @@ export const MIN_BACKOFF_MS = 30_000;
  */
 export const MAX_BACKOFF_MS = 30 * 60_000;
 
+/**
+ * Attempt cap for a retryable job: once a job's `attempts` count reaches
+ * this many, `IngestionQueueEngine` parks it as `'failed'` on its next
+ * retryable outcome instead of scheduling another backoff — a job that keeps
+ * failing must stop consuming drain slots forever, and a UI owes her "this
+ * one didn't work" rather than a queue that quietly retries across weeks
+ * (`ol-egov.141.89.10.25`).
+ *
+ * **Declared, not fitted** — no eval or production data sizes this; it is
+ * plain-English engineering judgement, argued from the shape `backoffDelayMs`
+ * already has. `backoffDelayMs`'s own exponent is capped at 8 (`engine.ts`'s
+ * comment on that cap): from the 8th attempt on, every further attempt waits
+ * the same `MAX_BACKOFF_MS` ceiling, with only jitter varying — so retrying
+ * past 8 buys no additional spacing between attempts, only more elapsed
+ * calendar time for a job that has already had a geometrically-growing
+ * series of chances to recover from a transient fault. Setting the attempt
+ * cap AT that existing anchor, rather than picking a fresh number, keeps this
+ * bound tied to reasoning already in the file instead of adding a second free
+ * parameter: `8` is not re-derived, it is the same `8` `backoffDelayMs`
+ * already treats as "no further backoff growth past here." Sensitivity: a
+ * genuinely transient fault (a cold start, a brief network blip) is expected
+ * to clear within the first two or three attempts, so this cap is generous
+ * relative to that case and only bites a job whose failure has already
+ * proven durable across a geometric backoff series spanning tens of minutes
+ * to hours; moving it to 5 or 12 changes how long a permanently-broken job
+ * keeps retrying before parking, not whether a transient one recovers.
+ * Revisit if real usage shows transient faults taking longer to clear than
+ * this series allows.
+ */
+export const MAX_ATTEMPTS = 8;
+
 export type HeadroomBand = 'ample' | 'low' | 'exhausted';
 
 /**

@@ -3,6 +3,7 @@ import {
   backoffDelayMs,
   classifyHeadroom,
   EXHAUSTED_HEADROOM_THRESHOLD,
+  MAX_ATTEMPTS,
   MAX_BACKOFF_MS,
   MAX_PACING_DELAY_MS,
   MIN_BACKOFF_MS,
@@ -14,6 +15,29 @@ import {
 import type { RandomSource } from './types.js';
 
 const fixedRandom = (value: number): RandomSource => ({ next: () => value });
+
+describe('MAX_ATTEMPTS — a declared attempt cap, not fitted', () => {
+  it('is a positive integer, tied to the exponent cap backoffDelayMs already uses', () => {
+    expect(Number.isInteger(MAX_ATTEMPTS)).toBe(true);
+    expect(MAX_ATTEMPTS).toBeGreaterThan(0);
+    // Declared to match backoffDelayMs's own exponent cap of 8 (see that
+    // function's comment): past this attempt count, further backoff growth
+    // is already flat, so parking here rather than retrying forever adds no
+    // new free parameter.
+    expect(MAX_ATTEMPTS).toBe(8);
+  });
+
+  it('is well past MIN_BACKOFF_MS territory once reached — a genuinely transient fault has had several geometrically-spaced chances to clear', () => {
+    const random = fixedRandom(0.5); // no jitter
+    let cumulativeMs = 0;
+    for (let attempts = 1; attempts <= MAX_ATTEMPTS; attempts++) {
+      cumulativeMs += backoffDelayMs(attempts, random);
+    }
+    // Several minutes of cumulative backoff before the cap bites — not an
+    // aggressive cap that punishes a single blip.
+    expect(cumulativeMs).toBeGreaterThan(5 * 60_000);
+  });
+});
 
 describe('classifyHeadroom', () => {
   it('treats null (nothing reported yet) as ample — optimistic by design', () => {

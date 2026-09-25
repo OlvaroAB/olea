@@ -227,6 +227,89 @@ describe('WorkerHttpTransport — `[D-123]` usage figures reach `onCallRecorded`
   });
 });
 
+describe('WorkerHttpTransport — item 5 (ol-egov.141.89.10.25): failed calls are recorded too, via onCallFailed', () => {
+  it('calls onCallFailed, not onCallRecorded, on a well-formed error response — so failed spend is counted rather than invisible', async () => {
+    const body = { ok: false, code: 'upstream-error', message: 'The model could not be reached.' };
+    const httpRequest: HttpRequestFn = async () => ({ status: 502, text: JSON.stringify(body) });
+    const recordedOk: unknown[] = [];
+    const recordedFailed: unknown[] = [];
+    const transport = new WorkerHttpTransport(
+      httpRequest,
+      CONFIG,
+      (entry) => recordedOk.push(entry),
+      (entry) => recordedFailed.push(entry),
+    );
+
+    await transport.send(REQUEST);
+
+    expect(recordedOk).toHaveLength(0);
+    expect(recordedFailed).toEqual([{ taskId: REQUEST.taskId, errorCode: 'upstream-error' }]);
+  });
+
+  it('carries whichever ErrorCode came back — quota-exceeded, grounding-refused, unauthenticated all recorded honestly', async () => {
+    for (const code of [
+      'quota-exceeded',
+      'grounding-refused',
+      'unauthenticated',
+      'invalid-request',
+    ]) {
+      const body = { ok: false, code, message: 'x' };
+      const httpRequest: HttpRequestFn = async () => ({ status: 400, text: JSON.stringify(body) });
+      const recordedFailed: unknown[] = [];
+      const transport = new WorkerHttpTransport(httpRequest, CONFIG, undefined, (entry) =>
+        recordedFailed.push(entry),
+      );
+
+      await transport.send(REQUEST);
+
+      expect(recordedFailed).toEqual([{ taskId: REQUEST.taskId, errorCode: code }]);
+    }
+  });
+
+  it('never fabricates promptVersion/modelId/usage figures for a failed call — none are on the wire for an error response', async () => {
+    const body = { ok: false, code: 'internal-error', message: 'x' };
+    const httpRequest: HttpRequestFn = async () => ({ status: 500, text: JSON.stringify(body) });
+    const recordedFailed: Record<string, unknown>[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, undefined, (entry) =>
+      recordedFailed.push(entry),
+    );
+
+    await transport.send(REQUEST);
+
+    const entry = recordedFailed[0] as Record<string, unknown>;
+    expect(entry.promptVersion).toBeUndefined();
+    expect(entry.modelId).toBeUndefined();
+    expect(entry.inputTokens).toBeUndefined();
+    expect(entry.outputTokens).toBeUndefined();
+    expect(entry.costUsd).toBeUndefined();
+  });
+
+  it('does nothing when onCallFailed is omitted — purely additive, every existing construction site untouched', async () => {
+    const body = { ok: false, code: 'internal-error', message: 'x' };
+    const httpRequest: HttpRequestFn = async () => ({ status: 500, text: JSON.stringify(body) });
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG);
+
+    await expect(transport.send(REQUEST)).resolves.toEqual(body);
+  });
+
+  it('does not call onCallFailed on a successful response', async () => {
+    const body = {
+      ok: true,
+      stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' },
+      result: {},
+    };
+    const httpRequest: HttpRequestFn = async () => ({ status: 200, text: JSON.stringify(body) });
+    const recordedFailed: unknown[] = [];
+    const transport = new WorkerHttpTransport(httpRequest, CONFIG, undefined, (entry) =>
+      recordedFailed.push(entry),
+    );
+
+    await transport.send(REQUEST);
+
+    expect(recordedFailed).toHaveLength(0);
+  });
+});
+
 describe('transport.ts never logs — no console call exists in the source at all', () => {
   // Source-level check, the same technique `test/main-wiring.spec.ts` uses
   // for a different reachability property: this is the one instrument that

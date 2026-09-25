@@ -5,7 +5,7 @@
  * points at the specific mechanism rather than the whole simulation.
  */
 import { describe, expect, it } from 'vitest';
-import { EXHAUSTED_HEADROOM_THRESHOLD, PACING_HEADROOM_THRESHOLD } from './budget.js';
+import { EXHAUSTED_HEADROOM_THRESHOLD, MAX_ATTEMPTS, PACING_HEADROOM_THRESHOLD } from './budget.js';
 import type { JobPriorityComparator } from './engine.js';
 import { IngestionQueueEngine } from './engine.js';
 import type {
@@ -639,6 +639,152 @@ describe('transient failures', () => {
 
     expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
     expect(calls).toBe(1);
+  });
+});
+
+describe('attempt cap (item 1, ol-egov.141.89.10.25) — a job past MAX_ATTEMPTS retryable failures is parked as failed, never retried forever', () => {
+  it('defers on every retryable failure up to the cap, then fails instead of scheduling another backoff', async () => {
+    const clock = new ManualClock(0);
+    let calls = 0;
+    const runner: JobRunner = async (): Promise<JobRunOutcome> => {
+      calls++;
+      return { ok: false, retryable: true };
+    };
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner,
+      clock,
+      random: fixedRandom(),
+    });
+    await engine.enqueue({ contentHash: 'h1', label: 'L1', payload: {} });
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const result = await engine.tick();
+      expect(result).toEqual({ kind: 'ran', contentHash: 'h1', outcome: 'deferred' });
+      const resumeNotBefore = engine.list()[0]?.resumeNotBefore;
+      expect(resumeNotBefore).toBeDefined();
+      clock.set((resumeNotBefore as number) + 1);
+    }
+    expect(calls).toBe(MAX_ATTEMPTS);
+
+    // The cap-th+1 retryable failure parks the job as failed instead of deferring again.
+    const capped = await engine.tick();
+    expect(capped).toEqual({ kind: 'ran', contentHash: 'h1', outcome: 'failed' });
+    expect(calls).toBe(MAX_ATTEMPTS + 1);
+    const job = engine.list()[0];
+    expect(job?.status).toBe('failed');
+    expect(job?.failedReason).toContain(String(MAX_ATTEMPTS));
+
+    // Never retried again — no further calls to the runner.
+    expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(calls).toBe(MAX_ATTEMPTS + 1);
+  });
+});
+
+describe('supersede on enqueue (item 3, ol-egov.141.89.10.25) — same sourceUnitId, newer content drops the stale queued job', () => {
+  it('marks a queued job for the same sourceUnitId failed (superseded) once a newer-content job for it is enqueued', async () => {
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+    });
+
+    await engine.enqueue({
+      contentHash: 'h1-old',
+      label: 'Lecture 1 v1',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+    expect(engine.snapshot().queued).toBe(1);
+
+    const result = await engine.enqueue({
+      contentHash: 'h2-new',
+      label: 'Lecture 1 v2',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+    expect(result).toEqual({ status: 'queued' });
+
+    const jobs = engine.list();
+    const stale = jobs.find((j) => j.contentHash === 'h1-old');
+    const fresh = jobs.find((j) => j.contentHash === 'h2-new');
+    // Never dropped silently — the record survives, honestly labelled.
+    expect(stale?.status).toBe('failed');
+    expect(stale?.failedReason).toContain('superseded');
+    expect(fresh?.status).toBe('queued');
+    expect(engine.snapshot().queued).toBe(1);
+  });
+
+  it('also supersedes a job currently deferred for a transient error under the same sourceUnitId', async () => {
+    let calls = 0;
+    const runner: JobRunner = async () => {
+      calls++;
+      return { ok: false, retryable: true };
+    };
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner,
+      random: fixedRandom(),
+    });
+    await engine.enqueue({
+      contentHash: 'h1-old',
+      label: 'Lecture 1 v1',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+    await engine.tick(); // -> deferred (transient-error)
+    expect(engine.list()[0]?.status).toBe('deferred');
+
+    await engine.enqueue({
+      contentHash: 'h2-new',
+      label: 'Lecture 1 v2',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+
+    const stale = engine.list().find((j) => j.contentHash === 'h1-old');
+    expect(stale?.status).toBe('failed');
+    expect(stale?.failedReason).toContain('superseded');
+    expect(calls).toBe(1); // the deferred job never got a second attempt
+  });
+
+  it('never supersedes a job that already completed (done) — only still-pending jobs are dropped', async () => {
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+    });
+    await engine.enqueue({
+      contentHash: 'h1-old',
+      label: 'Lecture 1 v1',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+    await engine.tick(); // -> done
+    expect(engine.list()[0]?.status).toBe('done');
+
+    await engine.enqueue({
+      contentHash: 'h2-new',
+      label: 'Lecture 1 v2',
+      payload: {},
+      sourceUnitId: 'vault/Lecture1.md',
+    });
+
+    expect(engine.list().find((j) => j.contentHash === 'h1-old')?.status).toBe('done');
+  });
+
+  it("leaves jobs alone when sourceUnitId is never supplied — every current production caller's behaviour is unchanged", async () => {
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: alwaysSucceeds,
+    });
+    await engine.enqueue({ contentHash: 'h1', label: 'Lecture 1', payload: {} });
+    await engine.enqueue({ contentHash: 'h2', label: 'Lecture 2', payload: {} });
+    expect(engine.snapshot().queued).toBe(2);
+    expect(engine.list().every((j) => j.status === 'queued')).toBe(true);
   });
 });
 

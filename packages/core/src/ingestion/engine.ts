@@ -70,7 +70,13 @@
  * reinvent one just to be deterministic.
  */
 
-import { backoffDelayMs, classifyHeadroom, nextUtcMidnightMs, pacingDelayMs } from './budget.js';
+import {
+  backoffDelayMs,
+  classifyHeadroom,
+  MAX_ATTEMPTS,
+  nextUtcMidnightMs,
+  pacingDelayMs,
+} from './budget.js';
 import type { EnqueueDebouncePolicy } from './enqueue-debounce.js';
 import { evaluateEnqueueDebounce } from './enqueue-debounce.js';
 import type {
@@ -112,6 +118,39 @@ export type TickResult =
  * concern, not this seam's.
  */
 export type JobPriorityComparator = (a: PersistedJob, b: PersistedJob) => number;
+
+/**
+ * Widens `EnqueueInput` (`types.ts`) with an optional stable per-source
+ * identifier, so `enqueue` can recognise "this is a newer revision of a job
+ * already queued" and retire the stale one (`ol-egov.141.89.10.25`, item 3:
+ * "same unit, newer content"). Declared here rather than folded into
+ * `EnqueueInput` itself — `types.ts` sits outside this bead's owned paths —
+ * following the same opt-in shape `enqueueDebounce`'s `lastChangedAt`
+ * already uses one field over: a caller that never supplies `sourceUnitId`
+ * (every current production caller — `process-now.ts`, `arrival-watch.ts`,
+ * `generation-queue.ts` per a repo-wide grep) sees no change in behaviour at
+ * all. Flagged for the orchestrator: this should move into `EnqueueInput`
+ * proper the next time `types.ts` is touched, so a caller doesn't have to
+ * import from two places for one input shape, and so a production caller can
+ * actually supply it — nothing does yet, which is this item's reachability
+ * gap (D-072).
+ */
+export type SupersedeAwareEnqueueInput = EnqueueInput & {
+  /**
+   * A stable identifier for the source this content came from (e.g. a
+   * vault-relative path) — stays the SAME across revisions while
+   * `contentHash` changes with every edit. `label` cannot serve this role:
+   * `types.ts` documents it as "never interpreted by the engine" and two
+   * unrelated sources can share a label (e.g. the same lecture title across
+   * courses), so treating it as a unit key would risk dropping the wrong
+   * job. Omitted (every current production caller): `enqueue` behaves
+   * exactly as before this field existed.
+   */
+  readonly sourceUnitId?: string;
+};
+
+/** `PersistedJob` plus the same optional `sourceUnitId` this engine now persists internally when a caller supplies one — see `SupersedeAwareEnqueueInput`'s doc. Not exported into `types.ts`'s `PersistedQueue` shape (out of this bead's owned paths); `QueueStore.save` still receives plain `PersistedJob[]` structurally, since the extra field is optional and additive. */
+type StoredJob = PersistedJob & { readonly sourceUnitId?: string };
 
 export interface EngineDeps {
   readonly store: QueueStore;
@@ -166,7 +205,7 @@ function requeueStaleInFlight(jobs: readonly PersistedJob[]): {
 }
 
 /** Drops the `deferReason`/`resumeNotBefore` keys entirely (never sets them to `undefined` — `exactOptionalPropertyTypes`). */
-function clearDefer(job: PersistedJob): PersistedJob {
+function clearDefer(job: StoredJob): StoredJob {
   const { deferReason: _deferReason, resumeNotBefore: _resumeNotBefore, ...rest } = job;
   return rest;
 }
@@ -180,7 +219,7 @@ export class IngestionQueueEngine {
   private readonly enqueueDebounce: EnqueueDebouncePolicy | null;
   private readonly priority: JobPriorityComparator | null;
 
-  private jobs: PersistedJob[];
+  private jobs: StoredJob[];
   private headroom: number | null;
   /** Set once headroom is observed `'exhausted'`; cleared once `clock.now()` passes it and jobs are requeued. */
   private budgetResumeAt: number | null = null;
@@ -235,7 +274,7 @@ export class IngestionQueueEngine {
     await this.store.save(queue);
   }
 
-  private replace(job: PersistedJob): void {
+  private replace(job: StoredJob): void {
     this.jobs = this.jobs.map((j) => (j.contentHash === job.contentHash ? job : j));
   }
 
@@ -250,8 +289,19 @@ export class IngestionQueueEngine {
    * call's `input.lastChangedAt` is not `undefined` — see `EnqueueInput`'s
    * own doc. Every existing caller supplies neither, so this is purely
    * additive: unchanged behaviour until a caller opts in on both sides.
+   *
+   * **Supersede (item 3, `ol-egov.141.89.10.25`).** When `input.sourceUnitId`
+   * is supplied, any still-pending job (`'queued'`, or `'deferred'` with
+   * `'transient-error'`) sharing that same `sourceUnitId` but a DIFFERENT
+   * `contentHash` is for a stale revision of the same source: this enqueue is
+   * the newer content, so the stale job is retired to `'failed'` with an
+   * honest `failedReason` rather than left to eventually run on content she
+   * has already moved past. Never a silent drop — the record survives, it
+   * simply stops being eligible (see `SupersedeAwareEnqueueInput`'s doc for
+   * why `label` can't serve as the unit key, and why no production caller
+   * supplies `sourceUnitId` yet).
    */
-  async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
+  async enqueue(input: SupersedeAwareEnqueueInput): Promise<EnqueueResult> {
     const existing = this.jobs.find((j) => j.contentHash === input.contentHash);
     if (existing) return { status: 'duplicate', existingStatus: existing.status };
 
@@ -266,13 +316,28 @@ export class IngestionQueueEngine {
       }
     }
 
-    const job: PersistedJob = {
+    if (input.sourceUnitId !== undefined) {
+      const sourceUnitId = input.sourceUnitId;
+      this.jobs = this.jobs.map((j) => {
+        const stillPending =
+          j.status === 'queued' || (j.status === 'deferred' && j.deferReason === 'transient-error');
+        if (j.sourceUnitId !== sourceUnitId || !stillPending) return j;
+        return {
+          ...clearDefer(j),
+          status: 'failed' as const,
+          failedReason: `superseded — a newer revision of this source was enqueued (content hash ${input.contentHash})`,
+        };
+      });
+    }
+
+    const job: StoredJob = {
       contentHash: input.contentHash,
       label: input.label,
       payload: input.payload,
       enqueuedAt: this.clock.now(),
       status: 'queued',
       attempts: 0,
+      ...(input.sourceUnitId !== undefined ? { sourceUnitId: input.sourceUnitId } : {}),
     };
     this.jobs.push(job);
     await this.persist();
@@ -381,7 +446,7 @@ export class IngestionQueueEngine {
     const eligible = this.jobs[index]!;
 
     const attempts = eligible.attempts + 1;
-    const inFlight: PersistedJob = { ...clearDefer(eligible), status: 'in-flight', attempts };
+    const inFlight: StoredJob = { ...clearDefer(eligible), status: 'in-flight', attempts };
     this.replace(inFlight);
     await this.persist(); // persist-before-await — see the module doc.
 
@@ -396,7 +461,7 @@ export class IngestionQueueEngine {
   }
 
   private async recordOutcome(
-    job: PersistedJob,
+    job: StoredJob,
     outcome: Awaited<ReturnType<JobRunner>>,
   ): Promise<TickResult> {
     const now = this.clock.now();
@@ -409,6 +474,27 @@ export class IngestionQueueEngine {
     }
 
     if (outcome.retryable) {
+      // Attempt cap (item 1, `ol-egov.141.89.10.25`): `job.attempts` is this
+      // attempt's own count (incremented before the run — see `tick()`). A
+      // job PAST `MAX_ATTEMPTS` failed attempts is parked as `'failed'`
+      // instead of scheduled for another backoff — i.e. attempts
+      // `1..MAX_ATTEMPTS` each still get the normal backoff-and-retry
+      // treatment (a genuinely transient fault gets the full geometric
+      // series to clear), and only the `(MAX_ATTEMPTS + 1)`th failure is the
+      // one that stops it, so a persistently-broken job stops consuming
+      // drain slots forever rather than retrying across weeks (`budget.ts`'s
+      // `MAX_ATTEMPTS` doc has the sensitivity reasoning).
+      if (job.attempts > MAX_ATTEMPTS) {
+        this.replace({
+          ...clearDefer(job),
+          status: 'failed',
+          failedReason: `attempt cap reached (${MAX_ATTEMPTS} attempts)`,
+        });
+        this.applyHeadroom(outcome.budgetHeadroom, now);
+        await this.persist();
+        return { kind: 'ran', contentHash: job.contentHash, outcome: 'failed' };
+      }
+
       const resumeNotBefore = now + backoffDelayMs(job.attempts, this.random);
       this.replace({
         ...job,
