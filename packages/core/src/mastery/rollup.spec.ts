@@ -433,6 +433,54 @@ describe('computeConceptMastery — the two declared constants are honoured and 
   });
 });
 
+describe('the fold reads the depth gate through the option a study plan can supply, with the declared value as the cold-start fallback (ol-egov.141.89.9.18, att.md item 12)', () => {
+  it('a delivered gate looser than the declared cut admits a verdict the cold-start fallback would refuse', () => {
+    const entries = [gradedExplainBack('multistructural')];
+    // No plan cached: the declared cut (`relational`) applies, and a
+    // `multistructural` verdict falls short of it.
+    expect(computeConceptMastery(entries, 'concept-a').state).toBe('sprout');
+    // A plan-delivered gate loosens the cut, and the same verdict now
+    // qualifies — the delivered value changes the outcome.
+    expect(
+      computeConceptMastery(entries, 'concept-a', { depthGate: 'multistructural' }).state,
+    ).toBe('tree');
+  });
+
+  it('with no plan cached, the fold falls back to the declared cut, not to no gate at all', () => {
+    const entries = [gradedExplainBack('relational')];
+    const noOptionSupplied = computeConceptMastery(entries, 'concept-a');
+    const explicitDeclaredValue = computeConceptMastery(entries, 'concept-a', {
+      depthGate: DEPTH_GATE_SOLO_LEVEL,
+    });
+    expect(noOptionSupplied.state).toBe(explicitDeclaredValue.state);
+    expect(noOptionSupplied.evidence).toEqual(explicitDeclaredValue.evidence);
+  });
+
+  it('computeAllConceptMastery threads a delivered gate to every concept it folds, not only the single-concept entry point', () => {
+    const entries = [
+      gradedExplainBack('multistructural', {
+        eventId: 'eb-a',
+        instrumentId: 'explain-back:concept-a',
+        conceptIds: ['concept-a'],
+      }),
+      gradedExplainBack('multistructural', {
+        eventId: 'eb-b',
+        instrumentId: 'explain-back:concept-b',
+        conceptIds: ['concept-b'],
+      }),
+    ];
+    const coldStart = computeAllConceptMastery(entries);
+    expect(coldStart.get('concept-a')?.state).toBe('sprout');
+    expect(coldStart.get('concept-b')?.state).toBe('sprout');
+
+    const delivered = computeAllConceptMastery(entries, undefined, {
+      depthGate: 'multistructural',
+    });
+    expect(delivered.get('concept-a')?.state).toBe('tree');
+    expect(delivered.get('concept-b')?.state).toBe('tree');
+  });
+});
+
 describe('rebuild-from-log equivalence and idempotent replay (this task N-013 requirement)', () => {
   it('projecting, discarding, and re-projecting the same log gives byte-identical results', () => {
     const entries = [

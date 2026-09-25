@@ -203,12 +203,23 @@ function soloRank(level: SoloLevel): number {
  * it — the verdict it thresholds is defined over free text a ratings corpus
  * does not contain (row 3.1's own amendment says exactly this).
  *
- * **Boundary note.** Row 3.1 assigns the depth threshold and the depth gate
- * to the service and the fold over the local event log to the client, and
- * whether a now-declared constant may move client-side is the standing
- * question `[BND-5]` (`ol-3ux7.3`) — **not re-decided here**. The number
- * ships in the client fold, as `minSpacedDays` already did, and
- * `MasteryRollupOptions.depthGate` lets a service-side caller hand its own.
+ * **Boundary note.** `ol-3ux7.3` (`[BND-5]`) ruled 2026-08-28: the depth gate
+ * stays service-side — not because the comparison itself must execute on the
+ * Worker, but because the cut is exactly the kind of number that may later
+ * be fitted against real data, at which point its derivation is private
+ * (`[D-069]`). That is the same shape `[D-110]` already gave component 3.3's
+ * ranking weights: the service derives and delivers the parameter, and the
+ * client runs the (trivial, one-line) comparison over it.
+ * `MasteryRollupOptions.depthGate` below is that hand-in option, and this
+ * constant is the fallback the fold applies when no plan is cached (the
+ * cold start).
+ *
+ * **Not wired today.** Nothing delivers a value through `depthGate` yet —
+ * `packages/contracts/src/study-plan.ts`'s `studyPlanArtifact` carries no
+ * field for it, and `artifact-envelope.ts` defines no delivered-parameter
+ * kind for component 3.1 the way `rankWeightsBody` does for 3.3. Adding
+ * either is a contract change and Class C
+ * (`docs/dev/intelligence-build/att.md` item 12, `ol-egov.141.89.9.18`).
  */
 export const DEPTH_GATE_SOLO_LEVEL: SoloLevel = 'relational';
 
