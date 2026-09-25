@@ -94,10 +94,7 @@ import { wireDocumentSourceRegistration } from './course-setup/register-source-w
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { ensureDeviceId } from './device/device-id.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
-import {
-  buildExplainBackObservationContext,
-  hasExplainBackSourceRevisionChanged,
-} from './explain-back/observation.js';
+import { buildExplainBackObservationContext } from './explain-back/observation.js';
 import {
   type ExplainBackSourceBlock,
   resolveExplainBackRelationEdge,
@@ -105,6 +102,7 @@ import {
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
+import { hasExplainBackSourceFingerprintChanged } from './explain-back/source-fingerprint-staleness.js';
 import { frozenCourseOrTopicFilter } from './extend-outrun-course-filter.js';
 import { createLocalGapProvider } from './gap/provider.js';
 import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
@@ -3553,18 +3551,27 @@ export default class OleaPlugin extends Plugin {
    * `misconceptionStore` read above already follows, since a projection this
    * cheap gains nothing from staleness risk.
    *
-   * **`ol-gavc` gives `sourceRevisionStale` its first live producer.**
-   * `ol-0r92.89` built `hasExplainBackSourceRevisionChanged`
-   * (`explain-back/observation.ts`) and the reject-on-stale guard one layer
-   * down, but named this method — the only place a fresh retrieval can be
-   * composed — as the missing caller. `params.query` (the same string the
-   * view retrieved `params.sourceBlocks` against originally —
-   * `modal.ts`'s `acceptGrading` now threads `prompt.context.question`
-   * through) is re-run through `composeExplainBackSourceBlocks`, mirroring
-   * how `resolveInstrumentPrompt`/`resolveTopicPrompt` retrieved the graded
-   * blocks in the first place; the two block lists are compared and the
-   * verdict is passed through as `sourceRevisionStale`, never re-derived
-   * downstream.
+   * **`ol-egov.141.89.6.39` replaces `sourceRevisionStale`'s producer with a
+   * direct per-block check.** `ol-gavc` gave it a first live producer by
+   * re-running retrieval with the frozen query
+   * (`composeExplainBackSourceBlocks`) and comparing the returned block list
+   * against the graded one (`hasExplainBackSourceRevisionChanged`,
+   * `explain-back/observation.ts`) — but `ol-egov.141.89.6.16`'s own
+   * follow-up flagged the real defect that leaves open: a retrieval that
+   * merely ranks or selects a different top-K set reads as stale even when
+   * none of the graded passages changed. This method now calls
+   * `hasExplainBackSourceFingerprintChanged`
+   * (`./explain-back/source-fingerprint-staleness.js`) instead, which reads
+   * each of `params.sourceBlocks`' own `{path, blockIndex}` directly off
+   * `vault` (the same instance this method already constructs for the
+   * misconception store, mirroring `resolve-introducing-passage.ts`'s narrow
+   * read) and compares a content fingerprint of the frozen text against the
+   * current text — no retrieval, no query involved at all. Stale now means
+   * exactly "a graded block's passage changed or disappeared," never "a
+   * fresh index ranked differently." `params.query` stays on this method's
+   * own parameter type only because `ExplainBackModalDeps.buildObservationContext`
+   * (`modal.ts`, outside this bead's `owns`) still declares and passes it;
+   * it is no longer read here.
    *
    * **`ol-egov.141.89.6.31` threads `params.subjectConceptId` onto the
    * returned context too**, as `subjectConceptId` — `buildExplainBackObservationContext`
@@ -3585,7 +3592,10 @@ export default class OleaPlugin extends Plugin {
     const deviceId = await ensureDeviceId(this);
     const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
     const records = (await store.load()) ?? [];
-    const freshSourceBlocks = await this.composeExplainBackSourceBlocks(params.query);
+    const sourceRevisionStale = await hasExplainBackSourceFingerprintChanged(
+      vault,
+      params.sourceBlocks,
+    );
     return {
       ...buildExplainBackObservationContext({
         subjectConceptId: params.subjectConceptId,
@@ -3597,10 +3607,7 @@ export default class OleaPlugin extends Plugin {
         sourceBlocks: params.sourceBlocks,
         records,
         now: () => new Date(),
-        sourceRevisionStale: hasExplainBackSourceRevisionChanged(
-          params.sourceBlocks,
-          freshSourceBlocks,
-        ),
+        sourceRevisionStale,
       }),
       subjectConceptId: params.subjectConceptId,
     };

@@ -585,30 +585,41 @@ describe('an accepted explain-back grading now persists its misconception observ
   });
 });
 
-describe('a fresh retrieval at accept time feeds the stale-source rejection for real (ol-gavc)', () => {
-  // `ol-0r92.89` built `hasExplainBackSourceRevisionChanged`
-  // (`explain-back/observation.ts`) and the reject-on-stale guard one layer
-  // down (`grading/wiring.ts`), but no production caller set
-  // `sourceRevisionStale` — this method is the named missing caller.
+describe('accept-time staleness is a direct per-block fingerprint check, not a fresh retrieval (ol-egov.141.89.6.39)', () => {
+  // `ol-gavc` gave `sourceRevisionStale` a first live producer by re-running
+  // retrieval with the frozen query and comparing the returned block SET
+  // against the graded one — but a retrieval that merely ranks or selects a
+  // different top-K set could read as stale even when none of the graded
+  // passages themselves changed (`ol-egov.141.89.6.16`'s own follow-up).
+  // This bead replaces that comparison with a direct read of each graded
+  // block's own `{path, blockIndex}` and a content-fingerprint compare —
+  // see `test/explain-back/source-fingerprint-staleness.spec.ts` for the
+  // regression coverage this source-level pin cannot itself provide (`main.ts`
+  // cannot be instantiated under Vitest).
 
-  it('re-retrieves the source blocks against the same query the prompt was graded against', () => {
+  it('no longer re-retrieves the source blocks against the frozen query', () => {
     expect(main).toMatch(
       /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
     );
+    expect(main).not.toMatch(/composeExplainBackSourceBlocks\(params\.query\)/);
+    expect(main).not.toMatch(/hasExplainBackSourceRevisionChanged/);
+  });
+
+  it('computes sourceRevisionStale from a direct fingerprint check against the same vault instance, and passes it through never re-derived', () => {
     expect(main).toMatch(
-      /const freshSourceBlocks = await this\.composeExplainBackSourceBlocks\(params\.query\);/,
+      /const sourceRevisionStale = await hasExplainBackSourceFingerprintChanged\(\s*vault,\s*params\.sourceBlocks,\s*\);/,
+    );
+    expect(main).toMatch(
+      /sourceRevisionStale,\s*\}\),\s*subjectConceptId: params\.subjectConceptId,/,
     );
   });
 
-  it('passes the comparison through as sourceRevisionStale, never re-derived downstream', () => {
+  it('imports hasExplainBackSourceFingerprintChanged from the new staleness helper, not observation.ts', () => {
     expect(main).toMatch(
-      /sourceRevisionStale:\s*hasExplainBackSourceRevisionChanged\(\s*params\.sourceBlocks,\s*freshSourceBlocks,\s*\),/,
+      /import\s*\{\s*hasExplainBackSourceFingerprintChanged\s*\}\s*from\s*'\.\/explain-back\/source-fingerprint-staleness\.js';/,
     );
-  });
-
-  it('imports hasExplainBackSourceRevisionChanged alongside the observation-context builder', () => {
     expect(main).toMatch(
-      /import\s*\{\s*buildExplainBackObservationContext,\s*hasExplainBackSourceRevisionChanged,\s*\}\s*from\s*'\.\/explain-back\/observation\.js';/,
+      /import\s*\{\s*buildExplainBackObservationContext\s*\}\s*from\s*'\.\/explain-back\/observation\.js';/,
     );
   });
 
