@@ -6,7 +6,7 @@ import type { ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { SESSION_CLUSTERING_GAP_SECONDS } from '../session/cluster.js';
 import { chooseSupportLevel } from '../study-session/support-level-chooser.js';
-import { buildSupportLevelHistory } from './history.js';
+import { buildSupportLevelHistory, NO_LADDER_SUPPORT_LEVEL } from './history.js';
 
 const MIN = 60 * 1000;
 const BASE = Date.parse('2026-02-01T09:00:00.000Z');
@@ -147,6 +147,25 @@ describe('what has no ladder, or no honest reading, is skipped (L6)', () => {
       review(0, { conceptIds: ['concept-a', 'concept-b'] }),
     ]);
     expect(history.outcomesFor('concept-b', 'recall')).toHaveLength(1);
+  });
+});
+
+describe("the recognition tier's level is the ruled sentinel, never a ladder cold start ([D-094] item 4)", () => {
+  it("is the attainment case set's S5 a4 target: 'none'", () => {
+    expect(NO_LADDER_SUPPORT_LEVEL).toBe('none');
+  });
+
+  it("is never the recall tier's cold-start answer, even from an mcq-only log", () => {
+    const history = buildSupportLevelHistory([
+      review(0, { instrumentId: 'mcq:a:1', instrumentType: 'mcq' }),
+    ]);
+    // An mcq review leaves the recall cell cold, so its chosen level is the
+    // recall/explanation ladder's cold start ('prompted', L6) — a caller
+    // that mistakenly ran the recognition tier through this same path would
+    // read that value, not the ruled recognition answer.
+    const recallCellLevel = chooseSupportLevel(history.outcomesFor('concept-a', 'recall')).level;
+    expect(recallCellLevel).toBe('prompted');
+    expect(recallCellLevel).not.toBe(NO_LADDER_SUPPORT_LEVEL);
   });
 });
 

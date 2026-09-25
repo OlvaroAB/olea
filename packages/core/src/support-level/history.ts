@@ -28,6 +28,11 @@
  * `hintUptake: false` — never a fabricated positive — so the ratchet's
  * "a hint taken holds a level" half cannot fire until the field exists.
  *
+ * **The recognition tier has no ladder** (`[D-094]` item 4): this module
+ * builds history for `'recall'` and `'explanation'` only, per
+ * `SupportLadderTier`. {@link NO_LADDER_SUPPORT_LEVEL} is that tier's ruled
+ * answer for a caller building a reading across all three instrument tiers.
+ *
  * This is the plugin's per-review fold (`packages/plugin/src/review/
  * queue-adapter.ts`'s `buildSupportLevelHistoryLookup`, fixed per session by
  * `5d1487f` and given explanations by `abd69d7`) moved into core, with the
@@ -59,6 +64,29 @@ export interface SupportLevelHistoryOptions {
   /** Override the declared clustering gap — sweeps and tests only, as `clusterReviewSessions` itself says. */
   readonly gapSeconds?: number;
 }
+
+/**
+ * The recognition tier's support-level reading (`[D-094]` item 4's scope
+ * clause, restated at the attainment chain spec's §2.6: "at composition, per
+ * concept × tier (recall, explanation; recognition has no ladder)"). Not a
+ * cold start and never one of `SupportLevel`'s three ladder values ---
+ * `[D-094]`'s own words: "a hinted MCQ is a different question — the
+ * excluded case". There is no history to fold and no level to choose, so
+ * this is a constant, not a computation over `entries`. The chain spec's §5
+ * class L6 and the attainment case set's S5 assertion a4 both target this
+ * value by name (`eval/data/ilb/att` in the service repo, cited by path
+ * only).
+ *
+ * `SupportLevelHistory.outcomesFor`'s `tier` parameter is typed to
+ * `SupportLadderTier`, which excludes `'recognition'`; a caller answering a
+ * support-level reading across all three instrument tiers reads this
+ * constant for the third, rather than routing an empty history through this
+ * module's recall/explanation cold start (`chooseSupportLevel`'s
+ * `'prompted'`, `study-session/support-level-chooser.ts`) and reading the
+ * wrong tier's default by mistake — an mcq-only log's `'recall'` cell is
+ * still cold, not the recognition tier's answer.
+ */
+export const NO_LADDER_SUPPORT_LEVEL = 'none' as const;
 
 /** Escalation shapes rank equally, above a minor slip, above a clean pass. */
 const FAILURE_SHAPE_SEVERITY: Readonly<Record<FailureShape, number>> = {
