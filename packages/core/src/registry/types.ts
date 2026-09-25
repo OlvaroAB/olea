@@ -434,7 +434,7 @@ export interface BuildRegistryModelInput {
    */
   readonly courseRankings?: readonly CourseOracleRanking[];
   /**
-   * `ol-egov.141.89.10.48`: every Zettelkasten note title in her vault, from
+   * `ol-egov.141.89.10.48`: every markdown note title in her vault, from
    * the caller's own full listing (`packages/plugin/src/registry/provider.ts`'s
    * `load()`, one extra `VaultSource.list()` call — paths only, no per-file
    * `read()`, so it is not the heavier "second vault walk"
@@ -453,15 +453,11 @@ export interface BuildRegistryModelInput {
    * `existingNoteTitlesFrom` already derives from `concepts` alone — never a
    * crash, never a fabricated absence.
    *
-   * **Not yet read by `./build.ts` (`ol-egov.141.89.10.48`'s own scope
-   * boundary: that file is read-only for this bead).** `noteOfferFor` still
-   * calls the concepts-only `existingNoteTitlesFrom` unconditionally, so
-   * declaring this field alone does not yet close the partial-listing gap —
-   * see this bead's report for the exact merge `./build.ts` needs
-   * (`existingNoteTitlesFrom` unioning this field's titles with its own
-   * concepts-derived set) and the regression test (`ol-egov.141.89.10.48`
-   * in `packages/plugin/test/registry/provider.spec.ts`) pinned red until
-   * that lands.
+   * `./build.ts` unions these titles with its concepts-derived set
+   * (`ol-egov.141.89.10.58`): any markdown note anywhere counts as existing,
+   * because no concept-note location is ratified (C7.11, `[D-176]`; the accept
+   * port writes at the vault root for that reason). `[D-383]` asks what that
+   * does to the offer's reachability.
    */
   readonly vaultNoteTitles?: readonly string[];
 }
