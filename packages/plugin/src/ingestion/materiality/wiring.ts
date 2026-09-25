@@ -747,11 +747,25 @@ export class MaterialityTrigger {
     if ((recordAfterJudge?.revision ?? 0) !== persistedRevision) {
       return { kind: 'judge-unavailable' };
     }
+    // `ol-egov.141.89.5.17`: a free-gate write (debounced/formatting-only/
+    // below-floor/no-groundable-content, all in `evaluateUnderLock`) on this
+    // SAME path never bumps `revision` -- every one of those `store.save`
+    // calls carries `revision: persistedRevision` forward unchanged. Such a
+    // write can therefore land between this call's dispatch and this commit
+    // without tripping the guard just above, yet it is a REAL, later
+    // observation of `lastChangedAt` (every free-gate branch advances it to
+    // that call's own `now`). `recordAfterJudge` was just reloaded to check
+    // the guard -- reuse it here rather than overwrite its `lastChangedAt`
+    // outright: take whichever is later, this call's own capture or
+    // whatever is now persisted. When no such write happened, the reloaded
+    // record's `lastChangedAt` is this call's own (nothing else touched the
+    // path since it was loaded), so the merge is a no-op.
+    const mergedLastChangedAt = Math.max(lastChangedAt, recordAfterJudge?.lastChangedAt ?? 0);
     await this.deps.store.save({
       path,
       hashes: current,
       canonicalLength,
-      lastChangedAt,
+      lastChangedAt: mergedLastChangedAt,
       lastVerdictAt: now,
       revision: persistedRevision + 1,
     });
