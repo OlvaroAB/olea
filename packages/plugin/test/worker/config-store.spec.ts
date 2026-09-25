@@ -106,6 +106,34 @@ describe('ObsidianWorkerConfigStore.save — namespacing inside the shared data.
   });
 });
 
+describe('ObsidianWorkerConfigStore — a local metered-proxy address round-trips exactly like any other baseUrl ([D-341], ol-egov.141.89.43)', () => {
+  // The bounded integrated run points the plugin at `scripts/simulator-serve.mjs`'s
+  // `/__olea/v1/*` metering route instead of the real Worker — done entirely by pasting a
+  // different baseUrl into this same field, never a code change. This store has no opinion about
+  // scheme or host (see `isWorkerConfigured`'s tests below for the one thing it does check —
+  // non-blank), so a loopback address with the proxy's path prefix persists byte-for-byte, and
+  // `transport.ts`'s `buildTaskUrl` (proved separately in transport.spec.ts) composes it with the
+  // frozen `/v1/task` suffix into exactly `PROXY_PREFIX + "task"` — `/__olea/v1/task` — which is
+  // the one path `simulator-serve.mjs`'s request handler routes to the proxy rather than to
+  // static file serving.
+  const proxyShapedConfig: PersistedWorkerConfig = {
+    version: 1,
+    baseUrl: 'http://127.0.0.1:4322/__olea',
+    token: 'a-pasted-token',
+  };
+
+  it('round-trips a proxy-shaped local baseUrl (host, port, and path prefix) unchanged', async () => {
+    const host = new FakeDataHost();
+    const store = new ObsidianWorkerConfigStore(host);
+    await store.save(proxyShapedConfig);
+    expect(await store.load()).toEqual(proxyShapedConfig);
+  });
+
+  it('is configured once both fields are pasted in, exactly as for a real workers.dev URL', () => {
+    expect(isWorkerConfigured(proxyShapedConfig)).toBe(true);
+  });
+});
+
 describe('isWorkerConfigured', () => {
   it('is false when nothing is configured', () => {
     expect(isWorkerConfigured(EMPTY_WORKER_CONFIG)).toBe(false);
