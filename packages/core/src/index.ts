@@ -238,7 +238,7 @@ export type {
   NoteOfferEvidence,
   NoteOfferVerdict,
 } from './concept/note-offer.js';
-export { noteOfferEligible } from './concept/note-offer.js';
+export { noteOfferEligible, recheckNoteOfferAtAccept } from './concept/note-offer.js';
 // C7.10's `prerequisite` reader (`MOM-8.2`, `ol-3ux7.5.57.9.2`): resolves the
 // corpus stage's `prerequisite` edges into a dependent→prerequisites map and
 // orders a set by it, inside an exact overdue tie band only. See
@@ -687,11 +687,10 @@ export type {
   SessionLedgerItem,
 } from './history/index.js';
 // The History ledger projections ([D-102], `ol-0r92.53`) — read-only folds
-// over the review log into the per-document and per-session shapes. No view,
-// command or registered surface reads these yet: [D-102]'s contract clause is
-// unwritten and no user-visible affordance may exist without one. They land
-// first so the clause is ratified against a shape known to be derivable, and
-// so the two facts the log CANNOT supply (a document path on any event; any
+// over the review log into the per-document and per-session shapes. F6.11
+// ([D-227]) now writes the clause these serve, but no view, command or
+// registered surface reads them yet. They landed first so the clause was
+// ratified against a shape known to be derivable, and so the two facts the log CANNOT supply (a document path on any event; any
 // session identity at all) are visible in code rather than discovered during
 // the build. See history/types.ts's module doc.
 export {
