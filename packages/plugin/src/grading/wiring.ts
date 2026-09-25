@@ -120,17 +120,14 @@
  * establishes: an embedding failure never fails the grade acceptance it rode
  * on.
  *
- * **Still no production caller of `acceptExplainBackGradingWithObservation`
- * itself**, for the same reason `gradeExplainBackAttempt` above has none: there
- * is nowhere in the product yet that produces a `PendingExplainBackGrading` to
- * accept in the first place. Per `[D-072]` clause 5's escape hatch, the next
- * caller is named rather than guessed at or built past this bead's `owns`: the
- * explain-back UI destination (e.g. `ol-qbbb` [F5a], or an equivalent
- * contract-cited surface) plus whatever reads the misconception store
- * (`packages/plugin/src/misconception/store.ts`) to supply
- * `AcceptExplainBackGradingWithObservationContext`'s `resolveCitation` /
- * `resolveConceptId` / `candidateRecordsForConcept` for real — none of which
- * this bead's `owns` reaches.
+ * **This "still no production caller" claim was true when this paragraph was
+ * written and is superseded by the `ol-12gs` update immediately below**:
+ * `main.ts`'s `openExplainBackModal` wires `acceptExplainBackGradingWithObservation`
+ * (via `OleaPlugin.acceptExplainBackGradingWithObservation`, `main.ts:3397`)
+ * as `ExplainBackModal`'s `deps.acceptWithObservation` (`main.ts:3782-3783`),
+ * and `modal.ts`'s production accept flow calls `deps.acceptWithObservation`
+ * (`modal.ts:1035`). The escape hatch this paragraph invoked is moot — the
+ * caller it was waiting for (the explain-back UI destination) has landed.
  *
  * ===========================================================================
  * `ol-12gs` UPDATE (2026-08-31): THE ABOVE GAP IS CLOSED — `ol-cqz8` UPDATE

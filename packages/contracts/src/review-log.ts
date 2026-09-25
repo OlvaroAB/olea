@@ -57,15 +57,35 @@
  * schema.** The design draft wrote `supportLevelShown` as required-but-nullable
  * to match `selectionContext`'s explicit-null discipline; this build instead
  * follows the same "true absence, not a placeholder" rule v4's `masteryAtTime`
- * already established, because nothing produces any of the three fields yet
- * (the grading pipeline has no production caller — `ol-drfy`; D-094's support
- * ladder has no writer either) and a required field would force every
- * existing call to `appendReviewLogRecord` to invent a value it does not have.
+ * already established. **All three now have production writers, which does
+ * not by itself argue for `.nullable()`-required — see below.**
+ * `explainBackGrade` (and, when the accepted grading demonstrated a
+ * neighbour concept's use, `schedulingObservation` riding the same event) is
+ * written by `recordGradedExplainBackReview`
+ * (`packages/core/src/study-session/explain-back-grade-write.ts`,
+ * `ol-95vv.3`), reached through `ExplainBackModal`'s accept flow (`ol-cqz8`)
+ * via `main.ts`'s `recordExplainBackSoloGradeAndReview` (`ol-38kp`).
+ * `supportLevelShown` is written by
+ * `packages/plugin/src/review/ports.ts`'s `createVaultReviewLogPort`
+ * (row 3.9, `[SUPP-2]`/`ol-95vv.4`, `[SUPP-3]`/`ol-lpl4`), fed by the
+ * chooser decision `packages/core/src/study-session/build.ts` composes onto
+ * the study-session item and wired into production at `main.ts:896`. None of
+ * that makes a writer universal: `explainBackGrade` and the
+ * `schedulingObservation` this same path can produce are absent from every
+ * non-explain-back review by construction, `schedulingObservation` also has
+ * no wired producer yet for a qa/cloze/mcq review specifically
+ * (`review/session.ts`'s `evaluateSchedulingObservationForGradeWrite` — see
+ * that hook's own doc), `supportLevelShown` is absent for MCQ (out of
+ * `[D-094]`'s ladder scope by rule) and for any review whose item carried no
+ * chooser decision, and every record written before its writer landed
+ * carries none of the three. A required field would still force every one
+ * of those calls to `appendReviewLogRecord` to invent a value it does not
+ * have.
  * **What would force a genuine v6 rather than a value inside this baseline:**
- * if a future ruling requires `supportLevelShown` to be non-omittable (explicit
- * `null` on every record, matching the older context fields) once D-094 ships
- * a real writer — that is a schema-shape change (optional → required-nullable),
- * not a value change, and belongs in its own version.
+ * if a future ruling requires `supportLevelShown` to be non-omittable
+ * (explicit `null` on every record, matching the older context fields) —
+ * that is a schema-shape change (optional → required-nullable), not a value
+ * change, and belongs in its own version.
  *
  * **What v3's migration can and cannot do.** `upgradeV2` maps `conceptId` to
  * `[conceptId]` and nothing cleverer. A v2 record on disk names one concept
@@ -1041,9 +1061,13 @@ export const reviewLogRecordV5 = z
     masteryAtTime: masteryAtTime.optional(),
     /**
      * Objective support level presented (principle 16, F2.20, `[D-094]`).
-     * Optional, not required-nullable — nothing writes it yet (no D-094
-     * writer exists), and this file's header explains why that differs from
-     * the design draft's literal schema.
+     * Optional, not required-nullable — a production writer exists
+     * (`packages/plugin/src/review/ports.ts`'s `createVaultReviewLogPort`,
+     * `[SUPP-2]`/`ol-95vv.4`), but it merges the field only when the item
+     * carried a chooser decision (absent for MCQ, out of D-094's ladder
+     * scope, and for any caller not yet wired to the chooser); this file's
+     * header explains why that differs from the design draft's literal
+     * schema.
      */
     supportLevelShown: supportLevel.optional(),
     /** Present only for graded explain-back reviews. Written in production by `recordGradedExplainBackReview` (`ol-95vv.3`), reached via `ExplainBackModal`'s accept flow (`ol-cqz8`, `ol-38kp`) — see this field's own doc above for the chain. */
