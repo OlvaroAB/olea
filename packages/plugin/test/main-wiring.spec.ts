@@ -1847,3 +1847,85 @@ describe('the plugin clock reaches diagnostics and the relation-cache sync', () 
     expect(rawMain).not.toMatch(/calls this right after mounting, before any view\s*opens/);
   });
 });
+
+// `ol-egov.141.89.9.34` round 2 (`[D-360]`): the queued regrading workflow's
+// three call sites — build at startup (judge omitted, activation off by
+// construction), enqueue on dispute, and drain on reconnect through the
+// gated wrapper, never `engine.tick()` directly. Source-level pins, same
+// reasoning as every other block in this file.
+describe('[D-360]: the contest-regrade engine is built at startup with judge omitted', () => {
+  it('builds this.contestRegradeEngine via createContestRegradeEngine before this.review is assigned', () => {
+    const engineIndex = main.indexOf('this.contestRegradeEngine = await createContestRegradeEngine(');
+    const reviewIndex = main.indexOf('this.review = {');
+    expect(engineIndex).toBeGreaterThan(-1);
+    expect(reviewIndex).toBeGreaterThan(-1);
+    expect(engineIndex).toBeLessThan(reviewIndex);
+  });
+
+  it('passes port, loadDispute, loadRecords and appendCorrectiveRegrade — and no judge', () => {
+    const start = main.indexOf('this.contestRegradeEngine = await createContestRegradeEngine(');
+    const end = main.indexOf('obsidianDeviceCapability(),', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const call = main.slice(start, end);
+    expect(call).toMatch(/port: gradeContestPort,/);
+    expect(call).toMatch(/loadDispute: \(disputeEventId\) =>\s*this\.findDisputeForContestRegrade\(vault, disputeEventId\),/);
+    expect(call).toMatch(/loadRecords: \(\) => this\.loadReviewLogEntriesForContestRegrade\(vault\),/);
+    expect(call).toMatch(/appendCorrectiveRegrade: \(\) =>/);
+    // The one thing this round deliberately omits — see the doc this test
+    // cannot read (comments are stripped), and this bead's report.
+    expect(call).not.toMatch(/judge:/);
+  });
+
+  it('shares one GradeContestPort instance between this.review.ports.gradeContestPort and the engine', () => {
+    expect(main).toMatch(
+      /const gradeContestPort = createVaultGradeContestPort\(vault, deviceId, \(\) =>\s*isoWithLocalOffset\(this\.now\(\)\),\s*\);/,
+    );
+    // Both readers use the SAME local, never a second construction.
+    expect(main.match(/createVaultGradeContestPort\(/g)?.length).toBe(1);
+    expect(main).toMatch(/port: gradeContestPort,/);
+    expect(main).toMatch(/gradeContestPort,\s*\n/);
+  });
+});
+
+describe('[D-360]: the reconnect drain calls the gated wrapper, never engine.tick() directly', () => {
+  it('registers runContestRegradeDrain in the same interval as the other per-tick drains', () => {
+    const intervalStart = main.indexOf('this.registerInterval(');
+    const intervalEnd = main.indexOf('INGESTION_TICK_INTERVAL_MS),\n    );', intervalStart);
+    expect(intervalStart).toBeGreaterThan(-1);
+    expect(intervalEnd).toBeGreaterThan(intervalStart);
+    const interval = main.slice(intervalStart, intervalEnd);
+    expect(interval).toMatch(/void this\.tickIngestionAndMaybeRunCorpusRelations\(\);/);
+    expect(interval).toMatch(/void this\.runContestRegradeDrain\(\);/);
+  });
+
+  it('runContestRegradeDrain calls drainContestRegradeQueue(this.contestRegradeEngine), and nothing in this file calls .tick() on it directly', () => {
+    expect(main).toMatch(
+      /private async runContestRegradeDrain\(\): Promise<void> \{\s*if \(this\.contestRegradeEngine === null\) return;\s*await drainContestRegradeQueue\(this\.contestRegradeEngine\);\s*\}/,
+    );
+    expect(main).not.toMatch(/this\.contestRegradeEngine\.tick\(\)/);
+  });
+});
+
+describe('[D-360]: the enqueue-on-dispute helper is real and reuses enqueueContestRegradeJobOnDispute', () => {
+  it('enqueueContestRegradeJobOnDisputeBestEffort reads records fresh and calls the shared enqueue function', () => {
+    expect(main).toMatch(
+      /private async enqueueContestRegradeJobOnDisputeBestEffort\(\s*vault: VaultSource,\s*dispute: DisputeLogRecord,\s*\): Promise<void> \{\s*const engine = this\.contestRegradeEngine;\s*if \(engine === null\) return;\s*try \{\s*const records = await this\.loadReviewLogEntriesForContestRegrade\(vault\);\s*await enqueueContestRegradeJobOnDispute\(engine, dispute, records\);/,
+    );
+  });
+
+  // This is the one wire `main.ts` cannot complete on its own: `ports`'s
+  // type (`ReviewSessionPorts`) and the `new ReviewSession({...})`
+  // construction site both live in `review/open-session.ts`, outside this
+  // bead's `owns`. This test reads the RAW source (comments included,
+  // unlike `main` above) because the honest reason is stated in a comment
+  // right where `gradeContestPort` is threaded — pinning it here means a
+  // silent, incomplete "fix" (removing the comment without actually wiring
+  // open-session.ts) fails this test rather than going unnoticed.
+  it('names the exact open-session.ts gap in a comment beside gradeContestPort, and does not silently claim contestRegradeEnqueuer is wired into ports', () => {
+    const rawMain = readFileSync(`${srcDir}main.ts`, 'utf8');
+    expect(rawMain).toMatch(/ReviewSessionPorts`, is declared in `\.\/review\/open-session\.js`/);
+    expect(rawMain).toMatch(/outside this bead's `owns`/);
+    expect(main).not.toMatch(/contestRegradeEnqueuer:\s*\{/);
+  });
+});

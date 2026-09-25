@@ -7,11 +7,16 @@
  * binds on it. These are the state-machine half; the rendered half is
  * `view.ts`, which has no Vitest runtime (its module doc).
  */
+import type { DisputeLogRecord } from 'olea-core';
 import { parseReviewLog, quarantinedGradeInstrumentIds, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultGradeContestPort } from '../../src/review/contest.js';
 import { CONTEST_GESTURE_LABEL, CONTEST_QUARANTINE_BADGE } from '../../src/review/copy.js';
-import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
+import {
+  type ContestRegradeEnqueuePort,
+  ReviewSession,
+  type ReviewSessionDeps,
+} from '../../src/review/session.js';
 import {
   fakeDraftAcceptPort,
   fakeEditPort,
@@ -36,6 +41,19 @@ function baseDeps(overrides: Partial<ReviewSessionDeps> = {}): ReviewSessionDeps
     clock: fixedClock('2026-08-10T09:00:00Z'),
     draftAcceptPort: fakeDraftAcceptPort(),
     ...overrides,
+  };
+}
+
+/** Records every dispute handed to `[D-360]`'s enqueue port — never rejects, matching the real contract (`ContestRegradeEnqueuePort`'s own doc). */
+function fakeContestRegradeEnqueuer(): ContestRegradeEnqueuePort & {
+  readonly calls: DisputeLogRecord[];
+} {
+  const calls: DisputeLogRecord[] = [];
+  return {
+    calls,
+    async enqueueOnDispute(dispute) {
+      calls.push(dispute);
+    },
   };
 }
 
@@ -142,5 +160,95 @@ describe('every claim contestable — including the grade the session just asser
     await session.start();
     await session.contestGrade();
     expect(vault.writes).toEqual([]);
+  });
+});
+
+describe('[D-360]: contestGrade enqueues the queued regrading workflow', () => {
+  it('hands the just-written dispute record to contestRegradeEnqueuer.enqueueOnDispute', async () => {
+    const vault = memoryVault();
+    const enqueuer = fakeContestRegradeEnqueuer();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(mcqFixture())],
+        gradeContestPort: createVaultGradeContestPort(
+          vault,
+          'device-1',
+          () => '2026-08-21T09:00:00+02:00',
+        ),
+        contestRegradeEnqueuer: enqueuer,
+      }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.contestGrade();
+
+    const log = parseReviewLog(vault.contentOf(reviewLogPath('2026-08-21', 'device-1')) ?? '');
+    expect(enqueuer.calls).toHaveLength(1);
+    // The SAME record the log carries — not a re-derived or partial copy.
+    expect(enqueuer.calls[0]).toEqual(log.disputes[0]);
+  });
+
+  it('never enqueues twice for one gesture-and-event — the second tap already returns before reaching the enqueuer', async () => {
+    const vault = memoryVault();
+    const enqueuer = fakeContestRegradeEnqueuer();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(mcqFixture())],
+        gradeContestPort: createVaultGradeContestPort(
+          vault,
+          'device-1',
+          () => '2026-08-21T09:00:00+02:00',
+        ),
+        contestRegradeEnqueuer: enqueuer,
+      }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.contestGrade();
+    await session.contestGrade();
+
+    expect(enqueuer.calls).toHaveLength(1);
+  });
+
+  it('records the dispute normally with no contestRegradeEnqueuer wired at all — the enqueuer is optional and absent is not an error', async () => {
+    const vault = memoryVault();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(mcqFixture())],
+        gradeContestPort: createVaultGradeContestPort(
+          vault,
+          'device-1',
+          () => '2026-08-21T09:00:00+02:00',
+        ),
+        // contestRegradeEnqueuer intentionally omitted.
+      }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.contestGrade();
+
+    const vm = session.getViewModel();
+    if (vm.phase !== 'mcq-answered') throw new Error('expected mcq-answered');
+    expect(vm.contestBadge).toBe(CONTEST_QUARANTINE_BADGE);
+  });
+
+  it('never calls the enqueuer outside mcq-answered (no dispute was ever recorded to hand it)', async () => {
+    const vault = memoryVault();
+    const enqueuer = fakeContestRegradeEnqueuer();
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [queueItem(mcqFixture())],
+        gradeContestPort: createVaultGradeContestPort(
+          vault,
+          'device-1',
+          () => '2026-08-21T09:00:00+02:00',
+        ),
+        contestRegradeEnqueuer: enqueuer,
+      }),
+    );
+    await session.start();
+    await session.contestGrade();
+
+    expect(enqueuer.calls).toEqual([]);
   });
 });

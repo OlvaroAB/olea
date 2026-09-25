@@ -21,6 +21,7 @@ import type {
   ConfusionRoutingInput,
   ConfusionRoutingOfferKind,
   DirectPrerequisiteEvidence,
+  DisputeLogRecord,
   McqRating,
   QueueItemReason,
   Scheduler,
@@ -125,6 +126,23 @@ export type ReviewViewModel =
       readonly contestBadge: string | null;
     }
   | { readonly phase: 'complete'; readonly summary: SessionCompleteSummary };
+
+/**
+ * `[D-360]` (`ol-egov.141.89.9.34`): the port `contestGrade` (below) calls
+ * the instant a grade dispute is durably recorded, to enqueue the queued
+ * regrading workflow's background job — `../contest-regrade/enqueue.js`'s
+ * `enqueueContestRegradeJobOnDispute`, composed with a real engine and a
+ * fresh log read by `main.ts`. Defined here, not imported from
+ * `../contest-regrade/`, because this file's only real dependency is the
+ * SHAPE of "hand the written dispute record somewhere" — the queue, the
+ * engine and the vault read are all `main.ts`'s composition, exactly as
+ * `GradeContestPort` itself is composed there and only its narrow shape is
+ * imported here.
+ */
+export interface ContestRegradeEnqueuePort {
+  /** Never rejects — see `ReviewSessionDeps.contestRegradeEnqueuer`'s own doc. */
+  enqueueOnDispute(dispute: DisputeLogRecord): Promise<void>;
+}
 
 export interface ReviewSessionDeps {
   readonly queue: readonly ReviewQueueItem[];
@@ -286,6 +304,25 @@ export interface ReviewSessionDeps {
    * record".
    */
   readonly gradeContestPort?: GradeContestPort;
+  /**
+   * `[D-360]` (`ol-egov.141.89.9.34`): the moment-of-dispute trigger for the
+   * queued regrading workflow. Called right after `gradeContestPort
+   * .contestGrade` succeeds, with the just-written `DisputeLogRecord` — see
+   * `contestGrade` below. Optional and absent by default, same "simply
+   * cannot offer it" posture every other optional port here has: a session
+   * built with none wired still records the contest (through
+   * `gradeContestPort` above, unaffected) and simply never enqueues a
+   * regrade job for it.
+   *
+   * **Never rejects.** The composed production implementation
+   * (`main.ts`'s `enqueueContestRegradeJobOnDisputeBestEffort`) catches and
+   * logs internally, the same "must never fail the primary flow it rode in
+   * on" posture `../ingestion/wiring.js`'s `withOutcomesExtractHook` already
+   * documents for an analogous best-effort hook — a contest is already
+   * durably recorded by the time this runs, and a failure here must never
+   * make the contest gesture itself look like it failed.
+   */
+  readonly contestRegradeEnqueuer?: ContestRegradeEnqueuePort;
   /**
    * `ol-2zfj.53`'s first-sight stamping trigger for a vault-AUTHORED
    * instrument (`instrument-stamping/port.ts`): consulted at the top of
@@ -721,7 +758,7 @@ export class ReviewSession {
     const instrument = this.requireMcq(item);
     if (this.contestedGrades.has(instrument.instrumentId)) return;
 
-    await port.contestGrade({
+    const dispute = await port.contestGrade({
       instrumentId: instrument.instrumentId,
       conceptIds: instrument.conceptIds,
       // The evidence this grade rests on is the answer she gave to this
@@ -732,6 +769,12 @@ export class ReviewSession {
       evidenceBasis: `mcq|${instrument.instrumentId}|${this.mcqSelectedIndex ?? -1}|${this.wasUnsure}`,
     });
     this.contestedGrades.add(instrument.instrumentId);
+
+    // `[D-360]`: the dispute is already durably recorded above — this only
+    // enqueues the (currently paid-activation-OFF) regrading job for it,
+    // and never rejects (`ContestRegradeEnqueuePort`'s own doc), so it can
+    // never turn a successful contest into a failed one.
+    await this.deps.contestRegradeEnqueuer?.enqueueOnDispute(dispute);
   }
 
   /**

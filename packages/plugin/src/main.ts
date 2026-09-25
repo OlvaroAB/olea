@@ -31,6 +31,7 @@ import {
   DEFAULT_COURSES_FOLDER,
   type DeviceCapability,
   detectCourseProposals,
+  type DisputeLogRecord,
   EMPTY_REGISTRY_OVERRIDES,
   type ExplainBackPromptContext,
   type ExtractedUnit,
@@ -55,6 +56,7 @@ import {
   type RelationSet,
   readAssessments,
   readList,
+  readReviewLogFile,
   readReviewLogHistory,
   refreshStudyPlan,
   type Scheduler,
@@ -88,6 +90,8 @@ import {
   readConceptsAndRelations,
   readConceptsFromVault,
 } from './concept/wiring.js';
+import { enqueueContestRegradeJobOnDispute } from './contest-regrade/enqueue.js';
+import { createContestRegradeEngine, drainContestRegradeQueue } from './contest-regrade/wiring.js';
 import { buildRecognitionClaimCopy } from './course-setup/copy.js';
 import { readCourseSetupRecognitions } from './course-setup/recognition-source.js';
 import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
@@ -395,6 +399,20 @@ export default class OleaPlugin extends Plugin {
     this.clock = clock;
   }
   private ingestion: IngestionWiring | null = null;
+  /**
+   * `[D-360]` (`ol-egov.141.89.9.34`): the queued regrading workflow's own
+   * `IngestionQueueEngine` instance — a separate one from `this.ingestion`
+   * above, over its own persisted key (`contest-regrade/queue-store.js`),
+   * so the two queues never share state. `null` before `onload` builds it,
+   * same "not ready yet" posture `this.ingestion` itself has; every reader
+   * below (`enqueueContestRegradeJobOnDisputeBestEffort`,
+   * `runContestRegradeDrain`) treats `null` as "nothing to do yet" rather
+   * than throwing. Typed off `createContestRegradeEngine`'s own return
+   * rather than importing `IngestionQueueEngine` here — the class lives in
+   * `olea-core` and this file has no other reason to name it directly.
+   */
+  private contestRegradeEngine: Awaited<ReturnType<typeof createContestRegradeEngine>> | null =
+    null;
   /**
    * `[D-152]` (F3.3, `ol-0r92.21`): the manual process-now timing override —
    * one instance for the plugin's whole session so its in-flight coalescing
@@ -952,6 +970,49 @@ export default class OleaPlugin extends Plugin {
       }),
     );
 
+    // `[D-360]` (`ol-egov.141.89.9.34`): the queued regrading workflow's
+    // engine, built once here so both `this.review.ports.gradeContestPort`
+    // below and this engine's own `port` dep share the SAME
+    // `GradeContestPort` instance — one stateless wrapper over
+    // `vault`/`deviceId`/`this.now`, never two independently constructed
+    // ones drifting apart. `judge` is deliberately omitted this round: the
+    // real, heavier Worker judge caller (`ol-egov.141.89.38`) does not
+    // exist yet, and `runner.ts`'s own gate defers rather than throws when
+    // it is absent. Paid activation itself stays OFF regardless
+    // (`contest-regrade/wiring.js`'s `DEFAULT_CONTEST_REGRADE_ACTIVATION`,
+    // hardcoded — not a flag this call site could override even if it
+    // tried).
+    const gradeContestPort = createVaultGradeContestPort(vault, deviceId, () =>
+      isoWithLocalOffset(this.now()),
+    );
+    this.contestRegradeEngine = await createContestRegradeEngine(
+      this,
+      {
+        port: gradeContestPort,
+        loadDispute: (disputeEventId) =>
+          this.findDisputeForContestRegrade(vault, disputeEventId),
+        loadRecords: () => this.loadReviewLogEntriesForContestRegrade(vault),
+        // Unreachable today: `runner.ts` returns before ever calling this —
+        // both because `judge` above is omitted, and (independently)
+        // because activation is off. Real rather than a lazy stub so
+        // `[D-072]` reachability holds automatically the day both flip,
+        // without a second wiring pass through this file: it still names,
+        // honestly, the one piece genuinely missing (the frozen answer/
+        // context, which live in the `[D-077]` content store behind the
+        // original grade event's own `contentRef` — resolving that is
+        // outside this bead's `owns`).
+        appendCorrectiveRegrade: () =>
+          Promise.reject(
+            new Error(
+              'contest-regrade: appendCorrectiveRegrade is not implemented yet (needs the ' +
+                'frozen answer/context from the [D-077] content store) — unreachable while ' +
+                'runner.ts has no judge wired',
+            ),
+          ),
+      },
+      obsidianDeviceCapability(),
+    );
+
     this.review = {
       vault,
       scheduler,
@@ -992,9 +1053,21 @@ export default class OleaPlugin extends Plugin {
         // knowledge, so it carries the same gesture every other claim
         // carries. Absent means the gesture is not drawn at all — never
         // drawn and inert.
-        gradeContestPort: createVaultGradeContestPort(vault, deviceId, () =>
-          isoWithLocalOffset(this.now()),
-        ),
+        gradeContestPort,
+        // `[D-360]` STOPS HERE, NAMED RATHER THAN FORCED: this file cannot
+        // thread `enqueueContestRegradeJobOnDisputeBestEffort` (below) onto
+        // `ReviewSession` through this object, because `ports`'s type,
+        // `ReviewSessionPorts`, is declared in `./review/open-session.js`
+        // — outside this bead's `owns` — and that module also performs the
+        // actual `new ReviewSession({...})` construction with each
+        // `ReviewSessionPorts` field named individually (no wholesale
+        // spread), so BOTH a type addition there AND one more line at that
+        // call site are needed before this reaches production. See this
+        // bead's report for the exact two edits (mirroring
+        // `gradeContestPort` just above, field-for-field, in both places).
+        // `enqueueContestRegradeJobOnDisputeBestEffort` and
+        // `this.contestRegradeEngine` are real and tested; only this one
+        // wire is missing.
       },
     };
 
@@ -1990,6 +2063,10 @@ export default class OleaPlugin extends Plugin {
         // `[DOS-3]` (`ol-2zfj.159`): see `drainPendingMaterialityEdits`'s own
         // doc for why this interval is the intended caller.
         void this.drainPendingMaterialityEdits();
+        // `[D-360]`: the queued regrading workflow's own reconnect drain —
+        // see `runContestRegradeDrain`'s own doc for why it calls the gated
+        // wrapper, never `engine.tick()` directly.
+        void this.runContestRegradeDrain();
         // `[D-167]`/`ol-egov.141.89.10.17`: the between-sessions half of
         // A2.5's recompute trigger — see `refresh-schedule.ts`'s module doc.
         // The predicate is a free, local `YYYY-MM-DD` string compare; the
@@ -2376,6 +2453,96 @@ export default class OleaPlugin extends Plugin {
       }
     }
     void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_HOME);
+  }
+
+  /**
+   * `[D-360]`'s `loadRecords` dependency: a fresh, whole-log read for the
+   * contest-regrade queue's runner. `resolveContestedGradeAndRegrade`
+   * (via `originalGradeEventIdFor`) only ever reads REVIEW-kind entries off
+   * this — never disputes — so `readReviewLogHistory`'s own `entries`
+   * (`olea-core`) is already the exact shape needed; no widening of that
+   * function is required (it deliberately does not surface disputes — see
+   * its own module doc, and `registry/provider.ts`'s `disputesFromFiles`
+   * for the analogous gap on the dispute side, mirrored below for
+   * `findDisputeForContestRegrade`).
+   */
+  private async loadReviewLogEntriesForContestRegrade(
+    vault: VaultSource,
+  ): Promise<readonly ReviewLogEntry[]> {
+    const { entries } = await readReviewLogHistory(vault);
+    return entries;
+  }
+
+  /**
+   * `[D-360]`'s `loadDispute` dependency: finds the `DisputeLogRecord` a
+   * queued job's `disputeEventId` names. Re-reads exactly the files
+   * `readReviewLogHistory` already reports (its own `.files`) — no new
+   * discovery, no new merge policy — the same reuse `registry/provider.ts`'s
+   * `disputesFromFiles` documents for the identical "`readReviewLogHistory`
+   * drops disputes" gap, applied to a by-id lookup instead of a whole-set
+   * fold.
+   *
+   * **Unreachable today.** `runner.ts`'s own gate returns before ever
+   * calling this — activation is off, and (independently) `onload` above
+   * omits `judge` — so this is real, tested code with no path to it yet,
+   * kept real rather than a stub so `[D-072]` reachability holds the
+   * instant both flip.
+   */
+  private async findDisputeForContestRegrade(
+    vault: VaultSource,
+    disputeEventId: string,
+  ): Promise<DisputeLogRecord | null> {
+    const { files } = await readReviewLogHistory(vault);
+    const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+    for (const read of reads) {
+      for (const dispute of read.disputes) {
+        if (dispute.eventId === disputeEventId) return dispute;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * `[D-360]`'s moment-of-dispute trigger — `review/session.ts`'s
+   * `contestGrade` calls `this.review.ports.contestRegradeEnqueuer
+   * .enqueueOnDispute`, which is this method. Best-effort: a contest is
+   * already durably recorded by the time this runs (`gradeContestPort
+   * .contestGrade` succeeded first), so a failure here must never look
+   * like the contest itself failed — the same "must never fail the
+   * primary flow it rode in on" posture `ingestion/wiring.js`'s
+   * `withOutcomesExtractHook` already documents for an analogous hook.
+   * A no-op before `onload` finishes building `this.contestRegradeEngine`,
+   * the same "not ready yet" posture every other `this.ingestion`-shaped
+   * field already has.
+   */
+  private async enqueueContestRegradeJobOnDisputeBestEffort(
+    vault: VaultSource,
+    dispute: DisputeLogRecord,
+  ): Promise<void> {
+    const engine = this.contestRegradeEngine;
+    if (engine === null) return;
+    try {
+      const records = await this.loadReviewLogEntriesForContestRegrade(vault);
+      await enqueueContestRegradeJobOnDispute(engine, dispute, records);
+    } catch (error) {
+      console.error('Olea: contest-regrade enqueue failed (the contest itself is unaffected)', error);
+    }
+  }
+
+  /**
+   * `[D-360]`'s reconnect drain — called from the same interval every other
+   * per-tick drain in this file already registers (`onload`'s
+   * `registerInterval` block). Calls `drainContestRegradeQueue`
+   * (`./contest-regrade/wiring.js`), **never** `this.contestRegradeEngine
+   * .tick()` directly — that wrapper's own doc explains why: gating the
+   * CALL, not just the runner, is what stops `IngestionQueueEngine`'s
+   * `MAX_ATTEMPTS` from eventually failing a job parked only because
+   * activation is off. A no-op before `onload` finishes building the
+   * engine.
+   */
+  private async runContestRegradeDrain(): Promise<void> {
+    if (this.contestRegradeEngine === null) return;
+    await drainContestRegradeQueue(this.contestRegradeEngine);
   }
 
   /**
