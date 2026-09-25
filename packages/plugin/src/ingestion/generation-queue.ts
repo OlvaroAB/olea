@@ -6,25 +6,17 @@
  * while Obsidian is open (`ol-egov.127` [D-238 / GEN-3], `ol-2zfj.63`
  * [GEN-3.1]).
  *
- * **A deliberate, documented mirror of `packages/core/src/generation/`.**
- * The canonical, fully-tested decision logic (`primaryKindFor`,
- * `evaluateGenerationTriggers`, `createGenerationAwareJobRunner`) lives
- * there, in this bead's other owned path. It is NOT re-exported from
- * `olea-core`'s `src/index.ts` — this run's own brief asks every concurrent
- * lane to leave that one shared barrel file alone rather than race edits
- * into it — and `olea-core`'s `package.json` resolves every cross-package
- * import through that single file (`"main"`/`"types"`: `"./src/index.ts"`),
- * so nothing in `packages/plugin` can reach the core module today. This file
- * is the minimal subset of that logic re-declared here, using only what
- * `olea-core` ALREADY exports (`SchedulableInstrumentType`, `JobEnqueuer`,
- * `JobRunner`/`JobRunnerView`/`JobRunOutcome`, `EnqueueInput`/`EnqueueResult`,
- * `hashText`) — so the client can actually run this policy today rather than
- * waiting on a barrel update. **Named follow-up:** once `core/src/index.ts`
- * exports `packages/core/src/generation/`, delete the duplicated pieces here
- * (`isGenerationJobPayload`, `primaryKindFor`,
- * `createGenerationAwareJobRunner`) and import them instead — everything
- * else in this file (the vault-walk/enqueue wiring) has no core equivalent
- * and stays.
+ * The canonical, fully-tested decision logic (`isGenerationJobPayload`,
+ * `primaryKindFor`, `generationJobIdentityString`, `buildGenerationJobPayload`,
+ * `createGenerationAwareJobRunner`) lives in `packages/core/src/generation/`
+ * and is imported from `olea-core`'s barrel — re-exported here unchanged so
+ * every existing caller of this module keeps working (`ol-2zfj.137`
+ * [GEN-3.6] deleted the mirror this file used to carry while the barrel was
+ * locked to concurrent lanes; see `packages/core/src/index.ts`'s own
+ * `generation/` export block for the history). Everything below this file's
+ * imports is the vault-walk/enqueue glue — `courseCodesForLandedUnits`,
+ * `enqueuePrimaryGenerationCallsForLandedUnits`, `buildGenerationArrivalDeps`
+ * — which has no core equivalent and stays here.
  *
  * **Only `'mcq'` has an execution path today.** See
  * `packages/core/src/generation/primary-kind.ts`'s module doc — "no
@@ -35,103 +27,50 @@
  */
 
 import {
+  type BuildGenerationJobPayloadInput,
+  buildGenerationJobPayload,
   type ConceptRecord,
   courseFromPath,
+  createGenerationAwareJobRunner,
   DEFAULT_COURSES_FOLDER,
+  DEFAULT_PRIMARY_KIND_FLOOR,
   type EnqueueInput,
   type EnqueueResult,
   type ExtractedUnit,
   extractConcepts,
-  hashText,
+  generationJobContentHash,
+  generationJobIdentityString,
+  isGenerationJobPayload,
   type JobEnqueuer,
-  type JobRunner,
-  type JobRunnerView,
-  type JobRunOutcome,
+  primaryKindFor,
   type SchedulableInstrumentType,
   type VaultSource,
 } from 'olea-core';
 
-// ---------------------------------------------------------------------------
-// Mirrors `packages/core/src/generation/types.ts` — see this file's own doc.
-// ---------------------------------------------------------------------------
+// Re-exported unchanged so every existing caller (this module's own tests,
+// `ingestion/wiring.ts`) keeps importing them from here rather than needing
+// to know they now live in `olea-core`.
+export {
+  createGenerationAwareJobRunner,
+  DEFAULT_PRIMARY_KIND_FLOOR,
+  generationJobIdentityString,
+  isGenerationJobPayload,
+  primaryKindFor,
+};
 
-export type GenerationTriggerKind =
-  | 'arrival'
-  | 'top-band'
-  | 'format-ask'
-  | 'deck-served-out-or-lapsed'
-  | 'repeated-rejection';
-
-export interface GenerationJobPayload {
-  readonly kind: 'generation';
-  readonly courseCode: string;
-  readonly conceptKey: string;
-  readonly conceptName: string;
-  readonly instrumentKind: SchedulableInstrumentType;
-  readonly trigger: GenerationTriggerKind;
-}
-
-/** Narrows `PersistedJob.payload` (`unknown` by contract) to the shape this family understands — mirrors `isExtractionJobPayload`/`isInstrumentRevisionJobPayload`, one payload family over. */
-export function isGenerationJobPayload(value: unknown): value is GenerationJobPayload {
-  if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    v.kind === 'generation' &&
-    typeof v.courseCode === 'string' &&
-    v.courseCode.length > 0 &&
-    typeof v.conceptKey === 'string' &&
-    v.conceptKey.length > 0 &&
-    typeof v.conceptName === 'string' &&
-    v.conceptName.length > 0 &&
-    typeof v.instrumentKind === 'string' &&
-    typeof v.trigger === 'string'
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Mirrors `packages/core/src/generation/primary-kind.ts` — see this file's own doc.
-// ---------------------------------------------------------------------------
-
-export const DEFAULT_PRIMARY_KIND_FLOOR: SchedulableInstrumentType = 'mcq';
-
-export interface PrimaryKindInput {
-  readonly formatMatch: SchedulableInstrumentType | null;
-  readonly recordedPreference: readonly SchedulableInstrumentType[];
-}
-
-export function primaryKindFor(input: PrimaryKindInput): SchedulableInstrumentType {
-  if (input.formatMatch !== null) return input.formatMatch;
-  return input.recordedPreference[0] ?? DEFAULT_PRIMARY_KIND_FLOOR;
-}
-
-// ---------------------------------------------------------------------------
-// Mirrors `packages/core/src/generation/job.ts` — see this file's own doc.
-// ---------------------------------------------------------------------------
-
-export interface GenerationJobKeyInput {
-  readonly courseCode: string;
-  readonly conceptKey: string;
-  readonly instrumentKind: SchedulableInstrumentType;
-}
-
-/** D-238's idempotency key: one (course, concept, kind) triple is one call, ever — `IngestionQueueEngine.enqueue`'s own content-hash dedup does the rest, for free. */
-export function generationJobIdentityString(input: GenerationJobKeyInput): string {
-  return `generation:${input.courseCode}:${input.conceptKey}:${input.instrumentKind}`;
-}
-
-export interface BuildGenerationEnqueueInputArgs {
-  readonly courseCode: string;
-  readonly conceptKey: string;
-  readonly conceptName: string;
-  readonly instrumentKind: SchedulableInstrumentType;
-  readonly trigger: GenerationTriggerKind;
-}
-
+/**
+ * Builds a generation call's `EnqueueInput`: `olea-core`'s
+ * `generationJobContentHash` supplies D-238's idempotency key
+ * (`IngestionQueueEngine.enqueue`'s own content-hash dedup does the rest,
+ * for free) and `buildGenerationJobPayload` supplies the payload — this
+ * function's own job is only the `EnqueueInput` wrapper (the label) neither
+ * core function has a reason to know about.
+ */
 export async function buildGenerationEnqueueInput(
-  input: BuildGenerationEnqueueInputArgs,
+  input: BuildGenerationJobPayloadInput,
 ): Promise<EnqueueInput> {
-  const contentHash = await hashText(generationJobIdentityString(input));
-  const payload: GenerationJobPayload = { kind: 'generation', ...input };
+  const contentHash = await generationJobContentHash(input);
+  const payload = buildGenerationJobPayload(input);
   return {
     contentHash,
     label: `${input.courseCode} · ${input.conceptName} · ${input.instrumentKind}`,
@@ -142,7 +81,7 @@ export async function buildGenerationEnqueueInput(
 /** `enqueuer` is anything structurally satisfying `JobEnqueuer` — `IngestionQueueEngine` itself in production, the same duck-typed dependency `arrival-watch.ts` already takes. */
 export async function enqueueGenerationJob(
   enqueuer: JobEnqueuer,
-  input: BuildGenerationEnqueueInputArgs,
+  input: BuildGenerationJobPayloadInput,
 ): Promise<EnqueueResult> {
   const enqueueInput = await buildGenerationEnqueueInput(input);
   return enqueuer.enqueue(enqueueInput);
@@ -151,34 +90,9 @@ export async function enqueueGenerationJob(
 /** A trigger already decided elsewhere (e.g. `evaluateGenerationTriggers` once reachable) — enqueues the further call it names. */
 export function enqueueTriggeredGenerationCall(
   enqueuer: JobEnqueuer,
-  input: {
-    readonly courseCode: string;
-    readonly conceptKey: string;
-    readonly conceptName: string;
-    readonly trigger: GenerationTriggerKind;
-    readonly instrumentKind: SchedulableInstrumentType;
-  },
+  input: BuildGenerationJobPayloadInput,
 ): Promise<EnqueueResult> {
   return enqueueGenerationJob(enqueuer, input);
-}
-
-// ---------------------------------------------------------------------------
-// Mirrors `packages/core/src/generation/job-runner.ts` — see this file's own doc.
-// ---------------------------------------------------------------------------
-
-export interface GenerationAwareJobRunnerDeps {
-  /** Services one drained generation job. Never called for a non-generation payload. */
-  readonly draft: (job: JobRunnerView) => Promise<JobRunOutcome>;
-  /** Whatever runner a host already has for every other payload kind (`createExtractionJobRunner`, optionally already wrapped by `createRevisionAwareJobRunner`). */
-  readonly fallback: JobRunner;
-}
-
-/** The `'generation'` job-kind consumer — mirrors `createRevisionAwareJobRunner`'s dispatch/fallback shape one payload family over (`revision-job-runner.ts`'s own module doc). */
-export function createGenerationAwareJobRunner(deps: GenerationAwareJobRunnerDeps): JobRunner {
-  return async (job) => {
-    if (isGenerationJobPayload(job.payload)) return deps.draft(job);
-    return deps.fallback(job);
-  };
 }
 
 // ---------------------------------------------------------------------------

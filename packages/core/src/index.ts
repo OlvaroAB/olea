@@ -555,6 +555,34 @@ export type {
   VoiceExemplars,
 } from './generate/voice-sources.js';
 export { assembleVoiceExemplars } from './generate/voice-sources.js';
+// `[D-238]`/GEN-3's generation-call policy (`ol-egov.127`, `ol-2zfj.63`
+// [GEN-3.1]): which kind is primary (F4.8's format match else F2.14's
+// recorded preference), the ingestion-queue job payload shape and its
+// (course, concept, kind) idempotency key, and the `'generation'` job-kind
+// dispatcher. Was deliberately NOT exported when GEN-3.1 landed (concurrent
+// lanes were touching this one barrel file), which forced
+// `packages/plugin/src/ingestion/generation-queue.ts` to re-declare a
+// mirror of this logic to run the policy at all; `ol-2zfj.137` [GEN-3.6]
+// opens the barrel and deletes that mirror, importing these instead.
+// `./generation/triggers.js`'s further-call rules (top-band, format-ask,
+// deck-served-out-or-lapsed, repeated-rejection) stay unexported — nothing
+// outside this package calls them yet.
+export type { BuildGenerationJobPayloadInput, GenerationJobKeyInput } from './generation/job.js';
+export {
+  buildGenerationJobPayload,
+  generationJobContentHash,
+  generationJobIdentityString,
+} from './generation/job.js';
+export type { GenerationAwareJobRunnerDeps } from './generation/job-runner.js';
+export { createGenerationAwareJobRunner } from './generation/job-runner.js';
+export type { PrimaryKindInput } from './generation/primary-kind.js';
+export { DEFAULT_PRIMARY_KIND_FLOOR, primaryKindFor } from './generation/primary-kind.js';
+export type {
+  GenerationJobPayload,
+  GenerationTrigger,
+  GenerationTriggerKind,
+} from './generation/types.js';
+export { isGenerationJobPayload } from './generation/types.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
 // this is the one impure export in that file. `ol-cqz8` widens this block to
