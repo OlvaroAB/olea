@@ -75,15 +75,21 @@
  * threads a vitality-fold output through this composition at all — that gap
  * is closed: `retrievability` (`ComposeRetrievabilityInput`, below) accepts a
  * `Scheduler` and an instant, and this module folds them through
- * `readAllConceptVitality` (register join 1-2, `[D-087]`, `ol-95vv.1`) into
- * exactly the `ReadonlyMap<string, number>` shape `rankOracle` wants. What
- * remains open is reachability one hop further out: none of the three
- * production callers above passes this field yet.
+ * `readAllConceptReadiness` (`../mastery/attainment.js`, the C5.6/`[D-264]`
+ * entry point, `ol-v7r5.54`) into exactly the `ReadonlyMap<string, number>`
+ * shape `rankOracle` wants. `readAllConceptReadiness` — not the plain
+ * `readAllConceptVitality` fold this composition used before — is what
+ * carries `[D-264]` ruling 1's supported-only exclusion: an instrument whose
+ * only successes were shown at `'prompted'` or `'guided'` support carries no
+ * eligible recall evidence for readiness, though it still schedules and
+ * still counts toward mastery under `[D-094]`'s discount. What remains open
+ * is reachability one hop further out: none of the three production callers
+ * above passes this field yet.
  * `session-builder/provider.ts` already holds both a `Scheduler` and `now` in
  * its own deps for an unrelated obligation-classifier replay, which makes it
  * the natural next call site — but threading it is outside this composition's
- * own file, and outside this bead's owned files (`ol-sxfl`'s `owns` names
- * only `oracle/compose.ts` and `mastery/vitality.ts`), so it is left as a
+ * own file, and outside this bead's owned files (`ol-v7r5.54`'s `owns` names
+ * only `oracle/compose.ts` and `mastery/rollup.ts`), so it is left as a
  * named follow-on rather than done here.
  */
 
@@ -94,8 +100,10 @@ import type {
   BuildConceptAssessmentEdgesOptions,
   BuildConceptAssessmentEdgesResult,
 } from '../evidence-edge/types.js';
+import { readAllConceptReadiness } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
-import { computeAllConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
+import { computeAllConceptMastery } from '../mastery/rollup.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
 import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
 import type { Scheduler } from '../scheduler/types.js';
@@ -128,23 +136,6 @@ export interface ComposeRetrievabilityInput {
   readonly now: Date;
 }
 
-/**
- * `readVitality`'s fold (`../mastery/vitality.ts`) is gated on a `holdingCut`
- * that decides `holding` vs `tending`. `VIT-1` / `ol-1bjz` closed 2026-08-25:
- * `[D-115]` ratified 0.90, provisional, as the ADOPTED VALUE, but this module
- * still takes it as a handed parameter with no default (see that module's
- * doc) — the ratification settled the number, not this call site's shape. This
- * composition never reads a vitality READING (the `holding`/`tending`/`early`
- * classification) — it only reads `VitalityReading.weakest.recallProbability`,
- * the raw number the classification is computed FROM, which does not depend
- * on where the cut sits. `1` here is not a stand-in for VIT-1's answer; it is
- * an inert argument to a required parameter of a function whose *other*
- * output this call never looks at, chosen because passing a value that could
- * be mistaken for a considered guess (e.g. something mid-range) is worse than
- * one that plainly cannot be.
- */
-const UNUSED_VITALITY_HOLDING_CUT = 1;
-
 export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOptions {
   readonly vault: VaultSource;
   /**
@@ -158,16 +149,21 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
   /** The calendar day exam proximity is measured from — passed straight to `rankOracle`. */
   readonly asOf: string;
   /**
-   * Retrievability's producer (register join 1-2, `[D-087]`, `ol-95vv.1`).
-   * Omit for a caller with no `Scheduler` handy — `rankOracle` reads every
-   * concept as neutral in that case, exactly as
-   * `RankOracleInput.retrievability`'s own doc requires. Supplied, this
-   * composition folds each ranked concept's instruments through
-   * `readAllConceptVitality` (D-087's minimum-over-instruments shape) and
-   * passes the weakest instrument's recall probability through as the
-   * signal — never the `holding`/`tending`/`early` classification, which
-   * this composition does not compute a cut for (see
-   * `UNUSED_VITALITY_HOLDING_CUT`'s doc, below).
+   * Retrievability's producer (register join 1-2, `[D-087]`, `ol-95vv.1`;
+   * `[D-264]` ruling 1's supported-only exclusion, `ol-v7r5.54`). Omit for a
+   * caller with no `Scheduler` handy — `rankOracle` reads every concept as
+   * neutral in that case, exactly as `RankOracleInput.retrievability`'s own
+   * doc requires. Supplied, this composition folds each ranked concept's
+   * instruments through `readAllConceptReadiness`
+   * (`../mastery/attainment.js`) and passes the weakest ELIGIBLE instrument's
+   * recall probability through as the signal — eligible meaning recall-tier
+   * (never recognition), with at least one completed review, AND at least
+   * one success shown at `'independent'` support: an instrument whose only
+   * successes were supported (`'prompted'`/`'guided'`) is excluded from the
+   * fold entirely, per `[D-264]` ruling 1, even though it still schedules and
+   * still counts toward mastery. There is no `holding`/`tending`/`early`
+   * classification here — `readAllConceptReadiness` computes no cut at all,
+   * unlike the vitality fold it is a sibling of.
    */
   readonly retrievability?: ComposeRetrievabilityInput;
   /**
@@ -452,20 +448,36 @@ export function resolveTiebreakEligibleConcepts(
 }
 
 /**
- * Register join 1-2 (`[D-087]`, `ol-95vv.1`): the producer for
+ * Register join 1-2 (`[D-087]`, `ol-95vv.1`), now carrying `[D-264]` ruling
+ * 1's supported-only exclusion (`ol-v7r5.54`): the producer for
  * `RankOracleInput.retrievability`, over exactly the concepts this
  * composition already ranks. `undefined` when `retrievabilityInput` is
  * omitted — `rankOracle` reads that as neutral for every concept, the same
  * "absent signal is neutral" rule its own doc states.
  *
- * A concept with no recall-tier instrument read (`readAllConceptVitality`'s
- * `weakest === null` — no evidence, or recognition-only, or never-practised;
- * `../mastery/vitality.ts`'s sufficiency floor) is left OUT of the returned
- * map rather than defaulted to some placeholder number — `resolveRetrievabilityWeight`
- * (`./rank.ts`) already reads a missing key as neutral for that one concept,
- * which is the honest answer: "no reading" is not the same fact as "reading
- * of 1", and this composition should not manufacture the latter out of the
- * former.
+ * Folds through `readAllConceptReadiness` (`../mastery/attainment.js`), the
+ * C5.6/`[D-264]` entry point — not the plain `readAllConceptVitality`
+ * (`../mastery/rollup.js`) this composition used before, which applies R3's
+ * recall-tier filter but not the supported-only exclusion: an instrument
+ * whose only successes were shown at `'prompted'` or `'guided'` support is
+ * eligible for vitality and still counts toward mastery, but carries no
+ * eligible recall evidence for readiness. `readAllConceptReadiness` needs an
+ * `InstrumentValidityProjection` (proven-invalid instruments excluded from
+ * every current reading, per `[D-338]` item 3); this composition builds it
+ * fresh from the same `reviewLog` it already has via
+ * `projectInstrumentValidity` (`../mastery/validity.js`) rather than
+ * threading a second required input onto `ComposeRetrievabilityInput` — it
+ * is a pure fold over the log alone, so there is nothing a caller could
+ * supply that this composition cannot derive itself.
+ *
+ * A concept with no eligible recall-tier instrument (`readAllConceptReadiness`'s
+ * `weakest === null` — no evidence, recognition-only, never-practised, or
+ * every success was supported; `../mastery/vitality.ts#readReadinessRecall`'s
+ * sufficiency floor) is left OUT of the returned map rather than defaulted to
+ * some placeholder number — `resolveRetrievabilityWeight` (`./rank.ts`)
+ * already reads a missing key as neutral for that one concept, which is the
+ * honest answer: "no reading" is not the same fact as "reading of 1", and
+ * this composition should not manufacture the latter out of the former.
  */
 function resolveRetrievabilityScores(
   reviewLog: readonly ReviewLogEntry[],
@@ -474,13 +486,8 @@ function resolveRetrievabilityScores(
 ): ReadonlyMap<string, number> | undefined {
   if (retrievabilityInput === undefined) return undefined;
   const { scheduler, now } = retrievabilityInput;
-  const readings = readAllConceptVitality(
-    reviewLog,
-    conceptKeys,
-    scheduler,
-    now,
-    UNUSED_VITALITY_HOLDING_CUT,
-  );
+  const validity = projectInstrumentValidity(reviewLog);
+  const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity);
   const scores = new Map<string, number>();
   for (const [conceptKey, reading] of readings) {
     if (reading.weakest !== null) {

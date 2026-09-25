@@ -26,9 +26,9 @@ import { composeOracleRanking, resolveTiebreakEligibleConcepts } from './compose
  * the same technique `mastery/rollup.spec.ts`'s own `stubScheduler` uses, so
  * a test can say "this instrument reads 0.35" without reverse-engineering an
  * FSRS stability that produces it. `schedule` still returns a real-shaped
- * `SchedulerState`, because `readAllConceptVitality` (the producer this
- * suite is threading) calls `replaySchedulerStates` internally, which needs
- * something to fold.
+ * `SchedulerState`, because `readAllConceptReadiness` (`../mastery/attainment.js`
+ * — the producer this suite is threading, since `ol-v7r5.54`) calls
+ * `replaySchedulerStates` internally, which needs something to fold.
  */
 function stubScheduler(byInstrument: Readonly<Record<string, number>>): Scheduler {
   return {
@@ -259,11 +259,15 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
   it('threads retrievability from a supplied Scheduler + instant into the ranking (register join 1-2, `[D-087]`, `ol-95vv.1`)', async () => {
     const scheduler = stubScheduler({ 'qa:widget-theory:1': 0.35 });
     const now = new Date('2026-08-15T09:00:00.000Z');
+    // `[D-264]` ruling 1: eligible for readiness needs an INDEPENDENT
+    // success, not merely a completed review — see the dedicated
+    // supported-only test below for the case this excludes.
+    const eligibleReview = review(widgetKey, { rating: 'good', supportLevelShown: 'independent' });
 
     const withRetrievability = await composeOracleRanking({
       vault: source,
       basePath: BASE_PATH,
-      reviewLog: [review(widgetKey)],
+      reviewLog: [eligibleReview],
       asOf: '2026-08-15',
       concepts,
       retrievability: { scheduler, now },
@@ -271,7 +275,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const withoutRetrievability = await composeOracleRanking({
       vault: source,
       basePath: BASE_PATH,
-      reviewLog: [review(widgetKey)],
+      reviewLog: [eligibleReview],
       asOf: '2026-08-15',
       concepts,
     });
@@ -320,6 +324,45 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
     expect(entry?.factors.retrievabilityWeight).toBeUndefined();
+  });
+
+  it('`[D-264]` ruling 1: an instrument whose only success was SUPPORTED carries no eligible recall evidence for readiness — the behaviour delta `ol-v7r5.54` closes', async () => {
+    const scheduler = stubScheduler({ 'qa:widget-theory:1': 0.35 });
+    const now = new Date('2026-08-15T09:00:00.000Z');
+    // A completed, successful review — recall-tier, not recognition — but
+    // its only success was shown at `'prompted'` support. Before this bead,
+    // `resolveRetrievabilityScores` folded through the plain
+    // `readAllConceptVitality` (R3's recall-tier filter only), so this
+    // instrument WOULD have set a real, non-neutral `retrievabilityWeight`.
+    // It still schedules and still counts toward mastery ([D-094]'s
+    // discount) — only the readiness fold excludes it.
+    const supportedOnlyReview = review(widgetKey, {
+      rating: 'good',
+      supportLevelShown: 'prompted',
+    });
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [supportedOnlyReview],
+      asOf: '2026-08-15',
+      concepts,
+      retrievability: { scheduler, now },
+    });
+
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+    // Absent, not a defaulted 1 and not the stub's 0.35 — no eligible
+    // evidence, so the blend reads neutral, exactly as "no review history"
+    // does (the prior test), even though a review happened and succeeded.
+    expect(entry?.factors.retrievabilityWeight).toBeUndefined();
+    // The mastery join is unaffected: the same log still counts as a scored
+    // success for mastery ([D-094]'s discount for supported success), which
+    // is what makes this a readiness-only exclusion rather than a second,
+    // accidental change to the mastery join this suite already covers.
+    const masteryEntry = result.mastery.get(widgetKey);
+    expect(masteryEntry?.evidence.scoredSuccessCount).toBe(1);
   });
 });
 
