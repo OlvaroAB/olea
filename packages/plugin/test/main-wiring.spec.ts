@@ -432,6 +432,32 @@ describe('the explain-back full-depth encouragement has a real mastery-state rea
   });
 });
 
+describe("a live causes edge's introducing passages now resolve through a real vault read (ol-egov.141.89.6.49)", () => {
+  // `ol-egov.141.89.6.36` built `ExplainBackModalDeps.resolveIntroducingPassage`
+  // and its caller (`resolveEdgeIntroducingPassages`, `explain-back/modal.ts`)
+  // but left the port unwired here — an omitted dep, so every real vault
+  // resolved nothing for an edge's own introducing passages until this
+  // bead. These assertions are the source-level proof a real reader
+  // (`resolveIntroducingPassageFromVault`, `explain-back/resolve-introducing-passage.ts`)
+  // is now supplied, off the SAME `ObsidianSource` instance this modal's
+  // other ports share.
+
+  it('builds one ObsidianSource for the modal and supplies resolveIntroducingPassage from it', () => {
+    expect(main).toMatch(
+      /const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;\s*const vault = new ObsidianSource\(this\.app\);\s*new ExplainBackModal\(/,
+    );
+    expect(main).toMatch(
+      /resolveIntroducingPassage: \(provenance\) =>\s*resolveIntroducingPassageFromVault\(vault, provenance\),/,
+    );
+  });
+
+  it('imports resolveIntroducingPassageFromVault from ./explain-back/resolve-introducing-passage.js', () => {
+    expect(main).toMatch(
+      /import \{ resolveIntroducingPassageFromVault \} from '\.\/explain-back\/resolve-introducing-passage\.js';/,
+    );
+  });
+});
+
 describe('the explain-back non-attempt record has a real production caller for every entry point (ol-0r92.104, ol-egov.141.89.6.44)', () => {
   // `ol-0r92.104` built `ExplainBackModalDeps.recordNonAttempt` and its two
   // callers inside `explain-back/modal.ts` (`skipPrompt`, `onClose`'s

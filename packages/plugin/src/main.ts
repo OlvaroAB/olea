@@ -103,6 +103,7 @@ import {
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
+import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
 import { frozenCourseOrTopicFilter } from './extend-outrun-course-filter.js';
 import { createLocalGapProvider } from './gap/provider.js';
@@ -3773,6 +3774,7 @@ export default class OleaPlugin extends Plugin {
   ): void {
     const nonAttemptTrigger: ExplainBackOfferTrigger | undefined =
       seed.kind === 'freeform' ? 'on-demand' : trigger;
+    const vault = new ObsidianSource(this.app);
     new ExplainBackModal(
       this.app,
       {
@@ -3786,6 +3788,12 @@ export default class OleaPlugin extends Plugin {
         // it through `resolveGradingRelationContext`/`buildGradingSourceMaterial`.
         resolveCausesPartner: (subjectConceptId) =>
           this.resolveExplainBackCausesPartner(subjectConceptId),
+        // `ol-egov.141.89.6.49`: the targeted vault read behind the edge's
+        // own introducing-passage endpoints — see
+        // `resolve-introducing-passage.ts`'s own doc for the grain it can
+        // and cannot resolve.
+        resolveIntroducingPassage: (provenance) =>
+          resolveIntroducingPassageFromVault(vault, provenance),
         buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
         recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGradeAndReview(params),
         loadMisconceptionDigest: (conceptIds) =>
