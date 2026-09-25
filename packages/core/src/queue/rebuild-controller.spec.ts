@@ -204,7 +204,7 @@ describe('decideRebuild — the freeze contract', () => {
     expect(decision).toEqual({ action: 'hold' });
   });
 
-  it('throws if now precedes the sitting entry — a caller clock bug, never a negative elapsed time', () => {
+  it('throws if now precedes the session entry — a caller clock bug, never a negative elapsed time', () => {
     const enteredAt = new Date('2026-08-10T09:00:00.000Z');
     const state = enterSitting(enteredAt, ['a']);
     expect(() =>
@@ -213,7 +213,7 @@ describe('decideRebuild — the freeze contract', () => {
         trigger: noTrigger(),
         staleness: noStaleness(),
       }),
-    ).toThrow(/precedes the sitting's own entry time/);
+    ).toThrow(/precedes the session's own entry time/);
   });
 
   it('evaluates the named trigger set only while idle', () => {
