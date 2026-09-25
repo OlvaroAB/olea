@@ -50,12 +50,20 @@
  * module doc).
  */
 
-import type { RankOracleOptions, Scheduler, StudyPlanProvider, VaultSource } from 'olea-core';
+import type {
+  RankOracleOptions,
+  Scheduler,
+  StudyPlanProvider,
+  StudyPlanStore,
+  VaultSource,
+} from 'olea-core';
 import {
   buildStudyPlan,
   calendarDaysEndingOn,
   composeOracleRanking,
   createFsrsScheduler,
+  loadCachedStudyPlan,
+  pastSessionsFromReviewLog,
   readAssessments,
   readReviewLogHistory,
   resolvePlanPolicyCourseInputs,
@@ -117,6 +125,54 @@ export interface CreateLocalStudyPlanProviderDeps {
    * provider does not need `main.ts`'s to reach the same answer.
    */
   readonly scheduler?: Scheduler;
+  /**
+   * `[DOS-C4-a]` / `ol-feza`, follow-up to `ol-v7r5.63`'s pure
+   * `sittingsSinceFloorMet` producer (`resolvePlanPolicyCourseInputs`,
+   * `olea-core`): the previous cached plan is this device's one honest
+   * source of a real per-course floor share (component 3.5 is `boundary:
+   * service`, boundary document §1 — this file does not recompute one), read
+   * the same way `today/data-source.ts`'s `createVaultTrendsSource
+   * #listCourseFloorShares` already reads it: `loadCachedStudyPlan`, then
+   * each allocation entry's `'floor'`-named contribution. Paired below with
+   * a fresh `pastSessionsFromReviewLog` read over the SAME `entries`/
+   * `concepts` this function already walked, so `sittingsSinceFloorMet`
+   * finally reaches a production caller.
+   *
+   * **Optional, and every existing caller/test keeps compiling and
+   * behaving unchanged when it is absent** — `readFloorSharesByCourse`
+   * below returns `new Map()` for `undefined`, which is exactly
+   * `resolvePlanPolicyCourseInputs`'s own default, so `sittingsSinceFloorMet`
+   * stays absent from the wire shape precisely as it did before this bead.
+   */
+  readonly studyPlanStore?: StudyPlanStore;
+}
+
+/**
+ * The previous cached plan's per-course floor shares — `[DOS-C4-a]`'s other
+ * half of `sittingsSinceFloorMet`'s two new inputs. `undefined` `store`,
+ * "never cached", "unreadable blob", "expired envelope" and "cached before
+ * `ol-v7r5.17` [ALLOC-2] added `allocation`" all collapse to the same empty
+ * map — the same four-way collapse `today/data-source.ts`'s
+ * `listCourseFloorShares` already documents for this identical read, and the
+ * same "absence, not a fabricated number" convention
+ * `CourseFloorShare.floorShare` and `sittingsSinceFloorMet` itself use.
+ */
+async function readFloorSharesByCourse(
+  store: StudyPlanStore | undefined,
+  now: Date,
+): Promise<ReadonlyMap<string, number>> {
+  if (store === undefined) return new Map();
+  const { plan } = await loadCachedStudyPlan(store, now);
+  const allocation = plan?.body.allocation;
+  if (!allocation) return new Map();
+  const floorShares = new Map<string, number>();
+  for (const entry of allocation) {
+    const floorShare = entry.contributions.find(
+      (contribution) => contribution.name === 'floor',
+    )?.value;
+    if (floorShare !== undefined) floorShares.set(entry.courseId, floorShare);
+  }
+  return floorShares;
 }
 
 /**
@@ -189,6 +245,22 @@ export function createLocalStudyPlanProvider(
         ...(options !== undefined ? { options } : {}),
       });
 
+      // `[DOS-C4-a]` / `ol-feza`: `sittingsSinceFloorMet`'s two inputs,
+      // resolved from what this device already has. `sittingsHistory` reuses
+      // the SAME `entries`/`concepts` this function already walked above —
+      // the identical `pastSessionsFromReviewLog` construction
+      // `main.ts`'s `windowDeficitFromReviewLog` already uses for `[SESS-14]`
+      // — over the current ranking's own course set (every course
+      // `rankOracle` reported on this tick). `floorSharesByCourse` reads the
+      // PREVIOUS cached plan through `deps.studyPlanStore`, when supplied;
+      // both default to empty when there is nothing to read yet, which is
+      // `resolvePlanPolicyCourseInputs`'s own pre-this-bead behaviour.
+      const sittingsHistory = pastSessionsFromReviewLog(entries, {
+        coursesOfConcept: new Map(concepts.map((concept) => [concept.key, concept.courses])),
+        runningCourses: ranking.courses.map((course) => course.course),
+      });
+      const floorSharesByCourse = await readFloorSharesByCourse(deps.studyPlanStore, now);
+
       // `[D-167]` / `ol-v7r5.25`: resolve component 3.5's per-course inputs
       // from what this device already has, ask for the allocation policy
       // behind the fingerprint gate, and land whatever comes back (or
@@ -202,6 +274,8 @@ export function createLocalStudyPlanProvider(
         ranking,
         assessmentReport.records,
         concepts,
+        sittingsHistory,
+        floorSharesByCourse,
       );
       const policy =
         courses.length === 0 ? undefined : await deps.readPlanPolicy?.({ asOf: today, courses });
