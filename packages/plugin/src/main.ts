@@ -155,6 +155,9 @@ import {
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
 import { createVaultMisconceptionStore } from './misconception/store.js';
+import { OLEA_COMMAND_PRACTICE_PAPER_OPEN } from './paper/ids.js';
+import { PaperView, VIEW_TYPE_OLEA_PAPER } from './paper/view.js';
+import { buildPracticePaperProvider, courseForActiveFileInApp } from './paper/wiring.js';
 import type { PlanPolicyHttpPost } from './plan/plan-policy-provider.js';
 import { buildPlanPolicyWiring, type PlanPolicyWiring } from './plan/plan-policy-wiring.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
@@ -994,6 +997,28 @@ export default class OleaPlugin extends Plugin {
       },
     });
 
+    // `ol-0r92.75.1` [PAPER-10] (F4.11): "one affordance, on the course" —
+    // hidden from the palette wherever the active file does not resolve to a
+    // course (`courseForActiveFileInApp`, `paper/wiring.ts`), the same
+    // `checkCallback` shape `processNoteNowCheckCallback` above uses for the
+    // same reason (palette VISIBILITY itself reacting to which file is
+    // active). A direct `this.addCommand` call, not folded into
+    // `registerOleaCommands`/`commands/register-commands.ts`, since this
+    // bead's owned path is `main.ts` only — the identical constraint
+    // `paper/ids.ts`'s own module doc already gives for keeping the command
+    // id local to `./paper/` rather than `commands/ids.ts`.
+    this.addCommand({
+      id: OLEA_COMMAND_PRACTICE_PAPER_OPEN,
+      name: 'Olea: Give me a practice paper for this course',
+      checkCallback: (checking: boolean) => {
+        const course = courseForActiveFileInApp(this.app);
+        if (course === undefined) return false;
+        if (checking) return true;
+        void this.revealPracticePaperView(course);
+        return true;
+      },
+    });
+
     // Same store, same "read fresh on every call, never cached" discipline
     // `plan/provider.ts`, `gap/provider.ts` and `session-builder/provider.ts`
     // already hold for `assignmentsBasePath` — a settings change she makes
@@ -1154,6 +1179,22 @@ export default class OleaPlugin extends Plugin {
           }),
         ),
     );
+
+    // `ol-0r92.75.1` [PAPER-10] (F4.11): the practice-paper surface `ol-
+    // egov.141.6.1` [PAPER-8] built at `./paper/` — everything that decides
+    // WHAT to show lives there, already unit-tested; this is the one
+    // composition seam `paper/wiring.ts`'s own module doc names, built once
+    // (not per leaf, unlike the gap/session-builder providers above) since
+    // `PaperView` is seeded per open via `setCourse` rather than rebuilt —
+    // the same "one provider, many leaves" shape `buildPracticePaperProvider`'s
+    // own doc comment gives for this exact call.
+    const practicePaper = buildPracticePaperProvider({
+      vault,
+      dataHost: this,
+      createTransport: createObsidianWorkerTransport,
+      settingsStore: new ObsidianStudyPlanSettingsStore(this),
+    });
+    this.registerView(VIEW_TYPE_OLEA_PAPER, (leaf) => new PaperView(leaf, practicePaper));
 
     // `ol-p5t06b`: the session builder (F4.6, F4.7, F4.8).
     // `createLocalSessionBuilderProvider` recomputes on every `load()` — no
@@ -3856,6 +3897,33 @@ export default class OleaPlugin extends Plugin {
     }
     await workspace.revealLeaf(leaf);
     await refreshOpenTodayViews(workspace, VIEW_TYPE_OLEA_GROVE);
+  }
+
+  /**
+   * Opens the practice paper (F4.11, `ol-0r92.75.1` [PAPER-10]) seeded with
+   * `course`, or reveals the one already open and reseeds it — the same
+   * reuse-don't-stack shape `revealHomeView`/`revealGapView` already use for
+   * a course/concept-scoped surface, not a second tab per course. `setCourse`
+   * runs on both the freshly-opened and the already-open leaf (mirroring
+   * `revealHomeView`'s unconditional `setFocusConcept` call), so invoking the
+   * command from a second course's note while the paper tab is already open
+   * rebuilds the pane around that course rather than leaving her looking at
+   * the first one's paper. `PaperView.setCourse` (not `refreshOpenTodayViews`,
+   * which every other `reveal*View` method above calls) is the seam here —
+   * this view is a document composed once per `setCourse` call, not a
+   * standing reading that a shared refresh mechanism re-polls.
+   */
+  private async revealPracticePaperView(course: string): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_OLEA_PAPER);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? workspace.getLeaf('tab');
+    if (leaf === null || leaf === undefined) return;
+    if (existing.length === 0) {
+      await leaf.setViewState({ type: VIEW_TYPE_OLEA_PAPER, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof PaperView) await view.setCourse(course);
   }
 
   override onunload(): void {
