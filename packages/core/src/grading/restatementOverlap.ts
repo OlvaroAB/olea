@@ -12,10 +12,12 @@
  * rule, 6/7 false praise down to 0/7 — but the fix is a sentence a future
  * prompt edit or model swap can silently stop honouring. `ol-nvdk` asked for
  * a MECHANICAL, deterministic overlap measure as defence-in-depth against
- * exactly that drift. `[D-089]` and then `[D-138]` (see "RECORD-ONLY" below)
- * settled that the measure stays record-only rather than gating anything: it
- * does not veto a model call, and does not replace the prompt rule — see
- * "WHAT THIS DOES NOT CATCH" below.
+ * exactly that drift. `[D-089]` and `[D-138]` gave two conflicting readings
+ * of whether that measure should gate anything (see "RECORD-ONLY" below);
+ * `[D-279]` decided the question afresh rather than adjudicate between them,
+ * and settled that the measure stays record-only rather than gating
+ * anything: it does not veto a model call, and does not replace the prompt
+ * rule — see "WHAT THIS DOES NOT CATCH" below.
  *
  * ===========================================================================
  * WHERE THIS RUNS: CLIENT, NOT WORKER
@@ -131,7 +133,7 @@
  * against.
  */
 
-/** One trap-category measurement — record-only per `[D-138]`, see the module header. */
+/** One trap-category measurement — record-only per `[D-279]`, see the module header. */
 export interface OverlapMeasurement {
   /**
    * Fraction (0..1) of the answer's `ngramSize`-word shingles that occur
