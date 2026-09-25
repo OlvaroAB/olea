@@ -67,6 +67,51 @@
  * chain spec's section 2.5). Wiring the gap view's caller to supply it is
  * `ol-egov.141.89.9.5`'s.
  *
+ * **`currentRecognition` is `[D-349]`'s narrower claim, RULED 2026-09-25:**
+ * "one qualifying success can provisionally demonstrate that particular
+ * demand" — never a persistent capability, and this module treats it as
+ * exactly that provisional, one that a later fact can withdraw. David's
+ * ruling asked four things be defined for it (att.md section 7, proposal 5,
+ * private repo); this module's answers, for the credit it consumes:
+ *
+ * 1. **"Current"** is `readAllCurrentRecognition`'s own definition: the
+ *    LATEST rated review on the instrument succeeded, AND that instrument's
+ *    recall estimate right now is at or above the retention target
+ *    (`HOLDING_CUT`). Both conditions, not either alone.
+ * 2. **A subsequent failure** withdraws the credit immediately: because
+ *    "current" reads the latest rated review, one later "again" on the same
+ *    instrument turns `currentRecognition` false the moment it is logged,
+ *    whatever earlier success qualified it — there is no window in which a
+ *    stale success keeps discounting need after it is known to have lapsed.
+ * 3. **Confidence is a binary gate on one fixed discount, never graded.**
+ *    This module shows no separate confidence number: `applied` is true or
+ *    false, and the only weight it ever produces is `1` (not provisionally
+ *    demonstrated) or {@link DEFAULT_MCQ_RECOGNITION_WEIGHT} (provisionally
+ *    demonstrated) — never a value between them, and never a value derived
+ *    from how many qualifying reviews occurred or by how much the recall
+ *    estimate cleared the cut. That flatness *is* this module's answer to
+ *    "if it is shown at all": a magnitude of confidence is not shown.
+ * 4. **Missing qualifying evidence reads as unknown, never as inability.**
+ *    Withdrawn, absent or never-supplied `currentRecognition` all land on
+ *    `weight = 1` — the oracle's own unweighted order, identical to "no
+ *    signal either way" — never a value below `1`, which would read as a
+ *    measured demonstration that she cannot do it (F4.9's floor; the same
+ *    argument {@link DEFAULT_MCQ_RECOGNITION_WEIGHT}'s own doc makes for why
+ *    nothing in this module is ever allowed to zero a row out).
+ *
+ * **Never restated here: which demand was checked, or whether it was the
+ * right one.** This module receives `currentRecognition` as an opaque,
+ * already-vetted fact — it does not know or decide that the assessment's
+ * declared demand is `recall-a-fact` rather than, say, `calculate`, that the
+ * success was unaided rather than assisted, or that the instrument declares
+ * this demand at all. Every one of those checks is `../gap/demand.ts`'s
+ * `demandsMetNow` (`[D-349]`'s own vocabulary match) and `./build.ts`'s
+ * `unmetDemands` gate, which forces `currentRecognition` to `false` whenever
+ * any declared demand is unmet (`./build.ts`'s `buildRow`) — so a "calculate"
+ * demand is never satisfied by recognition-only practice, but that gate is
+ * enforced once, upstream, rather than re-derived in this module from a
+ * `PaperDemand` it never sees.
+ *
  * **`ReadinessFactors.weight` is a third, orthogonal multiplier — never a
  * restatement of `oracle/rank.ts`'s `masteryNeedWeight` (`ol-v7r5.64`
  * [DOS-C6]).** Both happen to read facts about the same recognition-tier
@@ -175,14 +220,22 @@ export interface ReadinessFactors {
    * `tiersPracticed` here instead would make a wrong answer discount need
    * the same as a right one. When the caller supplies `currentRecognition`
    * to {@link readinessFactorsFor}, this is that fact instead: a correct
-   * answer that is current and standing (`ol-egov.141.89.9.4`).
+   * answer that is current and standing (`ol-egov.141.89.9.4`;
+   * `[D-349]`'s ruled definition of "current," and what a subsequent
+   * failure does to it, are on {@link readinessFactorsFor}'s doc).
    */
   readonly recognitionEvidence: boolean;
   /** Every scored event is recognition — carried for the surface, never used to zero a row (R7's framing clause). */
   readonly recognitionOnly: boolean;
   /** Whether the weighting actually fired. `false` whenever the format is not MCQ, there is no mastery entry, or there is no recognition evidence. */
   readonly applied: boolean;
-  /** `mcqRecognitionWeight` when `applied`, otherwise exactly `1`. Multiplies the oracle's `priorityScore` to give the gap view's own `gapScore`. */
+  /**
+   * `mcqRecognitionWeight` when `applied`, otherwise exactly `1`. Multiplies
+   * the oracle's `priorityScore` to give the gap view's own `gapScore`.
+   * **The only two values this ever takes** (`[D-349]`'s criterion 3): no
+   * confidence gradient is expressed between "not provisionally
+   * demonstrated" (`1`) and "provisionally demonstrated" (`mcqRecognitionWeight`).
+   */
   readonly weight: number;
 }
 
