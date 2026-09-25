@@ -98,7 +98,7 @@ import type {
   TodayPanelInput,
   VaultSource,
 } from 'olea-core';
-import { appendReviewLogRecord, buildTodayPanel, createFsrsScheduler } from 'olea-core';
+import { appendReviewLogRecord, buildTodayPanel, createFsrsScheduler, HOLDING_CUT } from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
 import type { PersonaHistory } from './persona/history.js';
@@ -320,14 +320,6 @@ const WB_SCOPE_CONCEPTS: readonly ConceptCourses[] = [
  */
 type TodayVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
 
-/**
- * `[D-115]`'s ratified retrievability cut, declared independently — see
- * `trends-scenarios.ts`'s identical declaration and its own doc for why
- * there is no single shared constant to import instead. A plain-English
- * default, not a derivation.
- */
-const WB_SCOPE_HOLDING_CUT = 0.8;
-
 const scopeVitalityScheduler = createFsrsScheduler();
 
 export function buildTodayScenario(options: BuildTodayScenarioOptions): TodayScenario {
@@ -531,7 +523,7 @@ export function buildTodayScenario(options: BuildTodayScenarioOptions): TodaySce
       const vitality: TodayVitalityInputs = {
         scheduler: scopeVitalityScheduler,
         now: WORKBENCH_NOW,
-        holdingCut: WB_SCOPE_HOLDING_CUT,
+        holdingCut: HOLDING_CUT,
       };
       return {
         deps: {

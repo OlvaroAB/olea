@@ -30,7 +30,7 @@
 
 import type { DisputeLogRecord, ReviewLogEntry, SoloLevel } from 'olea-contracts';
 import type { ConceptRecord, VaultInstrumentRecord } from 'olea-core';
-import { createFsrsScheduler } from 'olea-core';
+import { createFsrsScheduler, HOLDING_CUT } from 'olea-core';
 import type {
   BuildRegistryModelInput,
   CourseOracleRanking,
@@ -51,7 +51,6 @@ import {
 } from './registry-bridge.js';
 
 const NOW = new Date('2027-01-15T09:00:00-08:00');
-const HOLDING_CUT = 0.8;
 const scheduler = createFsrsScheduler();
 
 export interface RegistryWorkbenchState {
