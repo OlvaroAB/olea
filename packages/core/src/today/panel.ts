@@ -31,7 +31,7 @@
  * which is a fact and not an absence of evidence.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
 import {
   buildCrossCourseScopeOverview,
   type CrossCourseScopeOverview,
@@ -40,6 +40,7 @@ import type { CourseFloorShare } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
 import type { MasteryVitalityInputs } from '../mastery/sprig.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { CourseFreshnessReading } from '../schedule/freshness.js';
 import type { GroveCourseModel } from '../scope/grove.js';
 import type { CalendarDay } from './calendar-day.js';
@@ -65,6 +66,41 @@ export interface TodayPanelInput {
   readonly instruments: readonly DueInstrument[] | null;
   /** Suspended instruments (F2.6), folded from the log by `review-log/suspension.ts`. */
   readonly suspendedInstrumentIds?: ReadonlySet<string>;
+  /**
+   * `[D-095]` grade-contest records, read alongside `entries` to derive
+   * D-281 item 4's proven-invalid instrument set for the mastery section
+   * below (`../mastery/validity.js#projectInstrumentValidity`).
+   *
+   * **`suspendedInstrumentIds` above is not this set, and must never
+   * substitute for it.** `[D-338]`/`ol-v7r5.69`: a plain `suspend`/
+   * `unsuspend` record cannot say why it was written — the citation-revision
+   * tick, her own withdrawal (F8.5) and a confirmed defect all write the
+   * identical event — so a suspension never proves a defect and must never
+   * retract an earned growth stage. Only two facts do: an instrument's
+   * LATEST verdict is `rejected`, or a grade contest about it resolved
+   * `corrected` — both already present in `entries`/`disputes`, so
+   * `projectInstrumentValidity` needs nothing else. `registry/build.ts` and
+   * `packages/plugin/src/today/data-source.ts` derive the identical set for
+   * their own production mastery/instrument folds (their local
+   * `provenInvalidInstrumentIds` mirrors). Unlike `courseFreshness`/
+   * `courseScopeModels` below, this needs no vault-wide read — `entries` and
+   * `disputes` are both already read off the log by the caller — so this
+   * function folds them into the proven-invalid set itself, through the one
+   * shared projection every reader is meant to converge on
+   * (`ol-egov.141.89.9.5`, `olea-service`), rather than take a third
+   * caller-side mirror of the same fold.
+   *
+   * Optional and defaults to none, the same "absent means nothing to add"
+   * resolution `suspendedInstrumentIds` already takes: a caller that has not
+   * wired dispute records through yet still gets rejected-verdict exclusion
+   * (already inside `entries`), just not the corrected-contest half.
+   * **No production caller supplies this field yet** —
+   * `packages/plugin/src/today/data-source.ts`'s `loadTodayPanel` already
+   * reads `readReviewHistory`'s `disputes` return but currently discards it
+   * before building `TodayPanelInput`; wiring that discard shut is this
+   * bead's (`ol-4mse`) named follow-up.
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
   /** Her local calendar day. */
   readonly today: CalendarDay;
   /** The instant her local today ends — see `due.ts`. */
@@ -272,6 +308,20 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
       : buildMasteryOverview({
           entries: input.entries,
           concepts,
+          // D-281 item 4 (`ol-4mse`): proven-invalid evidence — a rejected
+          // verdict, or a `[D-095]` grade contest resolved `corrected`, never
+          // a plain suspend/withdrawal (`[D-338]`, `TodayPanelInput.disputes`
+          // doc above) — excluded from the top growth stage the same way
+          // `registry/build.ts` and `today/data-source.ts` already exclude it
+          // from their own production mastery folds.
+          options: {
+            invalidInstrumentIds: [
+              ...projectInstrumentValidity(
+                input.entries,
+                input.disputes ?? EMPTY_DISPUTES,
+              ).provenInvalid.keys(),
+            ],
+          },
           ...(vitality !== undefined ? { vitality } : {}),
         });
   const insights =
@@ -332,3 +382,6 @@ const EMPTY_SUSPENDED: ReadonlySet<string> = new Set<string>();
 
 /** Same reasoning: frozen, so "no floor shares supplied" cannot become a caller's scratch array. */
 const EMPTY_FLOOR_SHARES: readonly CourseFloorShare[] = Object.freeze([]);
+
+/** Same reasoning: "no disputes supplied" degrades to rejected-verdict exclusion only, never a mutable scratch array. */
+const EMPTY_DISPUTES: readonly DisputeLogRecord[] = Object.freeze([]);

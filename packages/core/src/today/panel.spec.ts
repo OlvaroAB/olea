@@ -1,5 +1,6 @@
-import type { ReviewLogRecord } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { contestClaim, resolveDispute } from '../review-log/contest.js';
 import type { GroveCourseModel } from '../scope/grove.js';
 import type { VaultPath } from '../vault/types.js';
 import type { DueInstrument } from './due.js';
@@ -391,5 +392,164 @@ describe('buildTodayPanel — the new count travels with the due summary or not 
     const vm = buildTodayPanel(input({ instruments, suspendedInstrumentIds: new Set(['a', 'c']) }));
     expect(vm.due?.total).toBe(1);
     expect(vm.due?.newCount).toBe(0);
+  });
+});
+
+/**
+ * `ol-4mse`: `buildMasteryOverview` (called from `buildTodayPanel` above)
+ * never forwarded D-281 item 4's proven-invalid evidence into
+ * `MasteryRollupOptions.invalidInstrumentIds`, so the panel's rendered
+ * growth stage could still count a proven-invalid instrument's evidence.
+ *
+ * `[D-338]`/`ol-v7r5.69`: **proven invalid is a rejected verdict, or a
+ * `[D-095]` grade contest resolved `corrected` — never a plain suspend or
+ * withdrawal record**, which cannot say why it was written and so never
+ * proves a defect (`suspendedInstrumentIds` above stays scoped to the due
+ * count only). Mirrors `../registry/build.invalid-instruments.spec.ts`'s
+ * fixtures, the wiring `registry/build.ts` and `packages/plugin/src/today/
+ * data-source.ts` already carry for their own mastery/instrument folds.
+ *
+ * INV-3: every concept id, instrument id and course code below is a
+ * structural placeholder, never fixture vocabulary.
+ */
+function qualifyingExplainBack(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
+  return {
+    schemaVersion: 5,
+    kind: 'review',
+    eventId: 'eb-1',
+    timestamp: '2026-08-01T09:00:00-04:00',
+    instrumentId: 'qa:clast-imbrication:1',
+    instrumentType: 'explain-back',
+    conceptIds: ['clast-imbrication'],
+    rating: null,
+    wasUnsure: false,
+    durationMs: 4000,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['explain-back'],
+      planVersion: null,
+    },
+    supportLevelShown: 'independent',
+    explainBackGrade: {
+      soloLevel: 'relational',
+      correctness: 'correct',
+      contentRef: 'content-ref-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    },
+    ...overrides,
+  } as ReviewLogRecord;
+}
+
+function rejectedVerdict(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
+  return {
+    schemaVersion: 5,
+    kind: 'verdict',
+    eventId: 'verdict-1',
+    timestamp: '2026-08-02T09:00:00-04:00',
+    instrumentId: 'qa:clast-imbrication:1',
+    instrumentType: 'qa',
+    conceptIds: ['clast-imbrication'],
+    verdict: 'rejected',
+    artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    ...overrides,
+  } as ReviewLogEntry;
+}
+
+/** The one `suspend` shape the log has — a citation-revision tick, her own withdrawal, and a confirmed defect all write it identically, so `[D-338]` reads none of them as proof. */
+function suspendRecord(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
+  return {
+    schemaVersion: 3,
+    kind: 'suspend',
+    eventId: 'suspend-1',
+    timestamp: '2026-08-03T09:00:00-04:00',
+    instrumentId: 'qa:clast-imbrication:1',
+    conceptIds: ['clast-imbrication'],
+    ...overrides,
+  } as ReviewLogEntry;
+}
+
+function contestedGradeDisputes(
+  outcome: 'upheld' | 'corrected' = 'corrected',
+): readonly DisputeLogRecord[] {
+  const opening = contestClaim({
+    claim: {
+      rendering: 'explain-back-grade',
+      conceptIds: ['clast-imbrication'],
+      instrumentId: 'qa:clast-imbrication:1',
+      evidenceBasis: 'evidence-fingerprint-1',
+    },
+    timestamp: '2026-08-04T09:00:00-04:00',
+  });
+  const openingRecord: DisputeLogRecord = {
+    schemaVersion: 5,
+    kind: 'dispute',
+    eventId: 'dispute-1',
+    ...opening.record,
+  };
+  const resolution = resolveDispute({
+    dispute: openingRecord,
+    outcome,
+    timestamp: '2026-08-05T09:00:00-04:00',
+  });
+  const resolutionRecord: DisputeLogRecord = {
+    schemaVersion: 5,
+    kind: 'dispute',
+    eventId: 'dispute-2',
+    ...resolution,
+  };
+  return [openingRecord, resolutionRecord];
+}
+
+describe('buildTodayPanel — D-281 item 4: proven-invalid evidence excluded from the mastery fold (ol-4mse)', () => {
+  const concepts = [{ conceptId: 'clast-imbrication', courses: ['BIOL204'] }];
+
+  it('a qualifying attempt with no invalidity reaches tree', () => {
+    const vm = buildTodayPanel(input({ entries: [qualifyingExplainBack()], concepts }));
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
+
+  it('the SAME attempt, once its instrument is merely suspended, KEEPS the top stage — suspension never proves a defect', () => {
+    const vm = buildTodayPanel(
+      input({
+        entries: [qualifyingExplainBack(), suspendRecord()],
+        concepts,
+        suspendedInstrumentIds: new Set(['qa:clast-imbrication:1']),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
+
+  it('the SAME attempt, once its instrument carries a rejected verdict, no longer qualifies the top stage', () => {
+    const vm = buildTodayPanel(
+      input({ entries: [qualifyingExplainBack(), rejectedVerdict()], concepts }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(0);
+    expect(vm.mastery?.courses[0]?.distribution.counts.sprout).toBe(1);
+  });
+
+  it('the SAME attempt, once a grade contest against it resolves corrected, no longer qualifies the top stage', () => {
+    const vm = buildTodayPanel(
+      input({
+        entries: [qualifyingExplainBack()],
+        concepts,
+        disputes: contestedGradeDisputes('corrected'),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(0);
+    expect(vm.mastery?.courses[0]?.distribution.counts.sprout).toBe(1);
+  });
+
+  it('the SAME contest resolved upheld instead KEEPS the top stage — nothing was found defective', () => {
+    const vm = buildTodayPanel(
+      input({
+        entries: [qualifyingExplainBack()],
+        concepts,
+        disputes: contestedGradeDisputes('upheld'),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
   });
 });
