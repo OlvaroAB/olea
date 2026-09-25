@@ -101,11 +101,17 @@
  * `packages/plugin/src/session/holder.ts`'s `createStudySessionHolder`
  * (`ol-egov.132.2`) is the single `SittingState<ComposedStudySession>` per
  * plugin instance the design note's §3a calls for — built ahead of its
- * callers, per the note's own build order. It is not yet wired to a
- * production caller: `ol-egov.132.3` widens the plan-execution stage to take
- * composed rows, `.4` moves the review tab onto the holder, and `.5` moves
- * Today onto it — only once those land do the two instances above retire in
- * favour of the one.
+ * callers, per the note's own build order. **Corrected — wired, but the two
+ * instances did not retire.** `ol-egov.132.3` (the executor), `.4` (the
+ * review tab) and `.5` (Today) are all closed: `main.ts` builds one shared
+ * holder and Today/the review tab both read it (see `holder.ts`'s own
+ * "Reachability" doc). The two per-surface instances above are still live in
+ * production, though, not retired — `session-builder/provider.ts` keeps its
+ * own per-leaf `SittingState` deliberately (its own module doc argues the
+ * between-sittings trigger set needs a lifetime this holder does not give
+ * it), and `packages/plugin/src/review/queue-adapter.ts`'s
+ * `createFrozenReviewQueue` is still called from `review/open-session.ts`
+ * for its own remaining role there.
  */
 
 import type { CalendarDay } from '../today/calendar-day.js';

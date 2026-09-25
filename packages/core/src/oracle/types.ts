@@ -200,8 +200,10 @@ export interface OracleConceptFactors {
    * never a gate.
    *
    * **`undefined` — never a defaulted `1` — whenever `RankOracleInput.retrievability`
-   * omitted this concept or was omitted entirely** (which is every caller
-   * today; see that field's doc for the reachability gap). This is a
+   * omitted this concept or was omitted entirely** (real whenever a caller's
+   * scheduler has no scheduling state for the concept yet — **corrected**:
+   * this is no longer every caller; see that field's doc for which
+   * production callers now supply it). This is a
    * deliberate shape, not an artifact of optionality: absence here means "no
    * eligible recall evidence for this concept", distinct from a supplied
    * value that happens to equal a genuinely neutral `1` — a distinction a
@@ -356,16 +358,17 @@ export interface RankOracleInput {
    * present for one concept but not another applies only to the one it
    * names.
    *
-   * **Known gap (reachability, plan §2.7 clause 5): nothing supplies this
-   * today.** `ConceptMasteryResult` (`../mastery/rollup.ts`) does not carry
-   * retrievability — that module's own doc says so outright ("forgetting…
-   * is not modelled in mastery at all today") — and no vitality-fold output
-   * (`../mastery/vitality.ts`'s `retrievability` port) is threaded into
-   * `composeOracleRanking` yet. Wiring an actual producer touches
-   * `mastery/`/`session/`, outside this bead's owned files (`oracle/`,
-   * `gap/`); this field exists so the blend has a structurally correct,
-   * never-a-gate place for it the moment one lands, rather than that arrival
-   * needing to re-litigate veto-vs-signal from scratch.
+   * **Corrected (reachability, plan §2.7 clause 5): this is now supplied.**
+   * `ConceptMasteryResult` (`../mastery/rollup.ts`) still does not carry
+   * retrievability itself — that module's own doc still says so outright
+   * ("forgetting… is not modelled in mastery at all today") — but
+   * `oracle/compose.ts`'s `composeOracleRanking` now folds a `Scheduler`/`now`
+   * pair through `../mastery/attainment.ts`'s `readAllConceptReadiness`
+   * (`ol-v7r5.54`, `[D-264]`) into exactly this shape, and all three
+   * production callers (`plan/provider.ts`, `session-builder/provider.ts`,
+   * `gap/provider.ts`, `ol-egov.141.89.10.22`) now pass it in. See
+   * `oracle/compose.ts`'s own doc, "Retrievability's producer", for the full
+   * account.
    */
   readonly retrievability?: ReadonlyMap<string, number>;
   /**

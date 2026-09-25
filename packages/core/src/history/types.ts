@@ -24,10 +24,14 @@
  *    nothing rather than guessing. The gaps are recorded on the decision bead
  *    that ratifies the clause, not papered over with a heuristic.
  *
- * **No contract clause defines a History surface yet.** These are read-only
- * projections with no view, no command and no registered surface behind them;
- * building one waits on the clause. INV-6 is untouched by construction — this
- * layer writes nothing, anywhere.
+ * **Corrected — the contract clause now exists.** F6.11 (`[D-227]`, "History:
+ * the inspectable ledger") ratifies exactly the three shapes named above —
+ * per-document, per-session, per-composition — and this module's "no
+ * totals/percentages/rates" and "no invented event" postures. What is still
+ * true: these are read-only projections with no view, no command and no
+ * registered surface behind them yet; building one is separate work the
+ * clause now unblocks rather than a gap this module is waiting on. INV-6 is
+ * untouched by construction — this layer writes nothing, anywhere.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';

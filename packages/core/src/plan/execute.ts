@@ -100,9 +100,10 @@
  *   the product), via `oracle-bridge.ts`'s re-export — reachability
  *   (`[D-072]` clause 5): no production caller.
  * - {@link executeStudyPlanOverComposedRows} is the live entry, and
- *   `open-session.ts:441` (`executeStudyPlanOverComposedRows({ items:
- *   queueItems, plan: input.plan ?? null })`) is its one production caller
- *   (`docs/dev/one-assembly-path.md` §2's surviving composer,
+ *   `review/open-session.ts:483` (`executeStudyPlanOverComposedRows({ items:
+ *   queueItems, plan: compositionPlan, courseId })`; line drifts, grep
+ *   `executeStudyPlanOverComposedRows(` if this stops matching) is its one
+ *   production caller (`docs/dev/one-assembly-path.md` §2's surviving composer,
  *   `buildComposedStudySession` / `StudySessionItem`, reached via
  *   `queueItemsFromComposedSession`). It runs the identical plan join —
  *   {@link PlannedQueueItem.selectionContext}'s `yieldRank`/`examProximity`
@@ -513,8 +514,9 @@ export interface ExecuteComposedSessionInput {
 /**
  * Execute a plan against a composed session's own rows, in the order given.
  *
- * Pure, like {@link executeStudyPlan}. `open-session.ts:441` is its one
- * production caller — see the module doc's "Two entries" section.
+ * Pure, like {@link executeStudyPlan}. `review/open-session.ts:483` is its
+ * one production caller (line drifts; grep `executeStudyPlanOverComposedRows(`
+ * if this stops matching) — see the module doc's "Two entries" section.
  * `deferred` is always `[]`: see the module doc for why a composed
  * session's `StudySessionOmission`s are not restated here.
  */

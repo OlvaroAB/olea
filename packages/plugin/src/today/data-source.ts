@@ -770,11 +770,13 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
       }
     },
     async listCourseFloorShares() {
-      // No store supplied — see `VaultTrendsSourceDeps.studyPlanStore`'s doc
-      // for why production does not pass one yet. `[]` reads as "the plan
-      // has nothing to say about any course's floor right now", the same
-      // honest-absence convention `listConceptCourses`'s own `null` uses for
-      // a different failure mode.
+      // Corrected: `main.ts`'s Today-panel call site DOES supply a store in
+      // production (`ol-v7r5.38`, landed `2afcc76`) — see
+      // `VaultTrendsSourceDeps.studyPlanStore`'s own doc. This guard now
+      // only covers a caller (test, or the contest-gesture call site) that
+      // genuinely omits it. `[]` reads as "the plan has nothing to say about
+      // any course's floor right now", the same honest-absence convention
+      // `listConceptCourses`'s own `null` uses for a different failure mode.
       if (!deps.studyPlanStore) return [];
       try {
         const now = deps.now ?? (() => new Date());

@@ -69,7 +69,7 @@
  * See `findings/YIELD-1-exam-likelihood.md` (olea-service) for the full
  * producer/consumer/check account.
  *
- * ## Retrievability's producer is threaded here, not yet reached from a caller
+ * ## Retrievability's producer is threaded here, and now reached from all three callers
  *
  * `RankOracleInput.retrievability`'s doc (`./types.ts`) used to say nothing
  * threads a vitality-fold output through this composition at all — that gap
@@ -82,15 +82,11 @@
  * carries `[D-264]` ruling 1's supported-only exclusion: an instrument whose
  * only successes were shown at `'prompted'` or `'guided'` support carries no
  * eligible recall evidence for readiness, though it still schedules and
- * still counts toward mastery under `[D-094]`'s discount. What remains open
- * is reachability one hop further out: none of the three production callers
- * above passes this field yet.
- * `session-builder/provider.ts` already holds both a `Scheduler` and `now` in
- * its own deps for an unrelated obligation-classifier replay, which makes it
- * the natural next call site — but threading it is outside this composition's
- * own file, and outside this bead's owned files (`ol-v7r5.54`'s `owns` names
- * only `oracle/compose.ts` and `mastery/rollup.ts`), so it is left as a
- * named follow-on rather than done here.
+ * still counts toward mastery under `[D-094]`'s discount. **Corrected — the
+ * reachability gap one hop further out is closed too**: `plan/provider.ts`,
+ * `session-builder/provider.ts` and `gap/provider.ts` (`ol-egov.141.89.10.22`)
+ * now all pass this field, each threading its own `Scheduler` and `now`
+ * through the identical `{ scheduler, now }` shape.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';

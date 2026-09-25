@@ -49,12 +49,14 @@
  *
  * ## Reachability (`[D-072]` clause 5)
  *
- * No plugin surface calls `createStudySessionHolder` yet. Wiring one shared
- * instance into `main.ts` and rewiring Home, the session builder, the review
- * tab and Today to read it is `ol-egov.132.3` (the executor), `.4` (the
- * review tab) and `.5` (Today) — this bead is the holder those rows wire
- * onto, built and tested ahead of its callers per the ordering
- * `one-assembly-path.md` §6 lays out ("2. One session holder ... 3 needs 2").
+ * **Corrected — wired.** `main.ts` constructs one shared instance
+ * (`private readonly studySessionHolder = createStudySessionHolder()`) and
+ * every row this doc named as pending has landed: `ol-egov.132.3` (the
+ * executor, `review/open-session.ts`'s `executeStudyPlanOverComposedRows`
+ * call), `.4` (the review tab, `open-session.ts` calling through this
+ * holder when it finds it idle) and `.5` (Today, `today/data-source.ts`
+ * reading the same holder) are all closed and wired. This bead remains the
+ * one holder those surfaces read — see the module doc's opening paragraph.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';

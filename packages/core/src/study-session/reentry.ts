@@ -35,11 +35,11 @@
  * therefore does not invent a shrink ratio — inventing one would be exactly
  * the "guess wearing a declared label" the register's row 3.1 amendment
  * warns against, for a number the modelling explicitly says is not
- * load-bearing. The caller (a future product/UI layer — no caller exists
- * yet, see the module's reachability note below) picks the candidate
- * smaller budget; this module's only numeric contribution is refusing to
- * let that candidate collapse below a session that could not admit even one
- * instrument.
+ * load-bearing. **Corrected: a production caller now exists** — see the
+ * module's reachability note below for which candidate budget it offers.
+ * The caller picks the candidate smaller budget; this module's only numeric
+ * contribution is refusing to let that candidate collapse below a session
+ * that could not admit even one instrument.
  *
  * ## No count of what accumulated (F6.6)
  *

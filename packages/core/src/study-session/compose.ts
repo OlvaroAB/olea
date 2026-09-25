@@ -137,10 +137,12 @@
  *   **names**; this module partitions and joins on `conceptKey`
  *   (`ol-63e1`), so a caller resolving names to keys is required either way,
  *   the same resolution `retrospective/build.ts`'s `conceptCourses` already
- *   performs for a different join. **No production caller does that
- *   resolution yet** — same shape of gap as `ARRIVE-1`'s `arrivalDays`
- *   before it was wired: this module is ready for the signal the day a
- *   caller supplies it, and degrades identically (see below) until then.
+ *   performs for a different join. **Corrected — a production caller now
+ *   resolves this**: `session-builder/provider.ts`'s `resolveRelatedConceptKeys`
+ *   does the name-to-key join, fed by `main.ts`'s `servedRelationEdges()`
+ *   (the same live, served `part-of`/relation edge fold), and passes the
+ *   result in as `relatedConceptKeys`. Still degrades identically (see
+ *   below) whenever that caller has nothing served yet.
  *   Deliberately type-agnostic over C7.10's six relation types — the clause
  *   says "concepts that connect to each other", not one type, so which
  *   edges count as "connected" is the caller's call.
@@ -1016,13 +1018,17 @@ function urgencyByCourseFrom(
  * never seen — the SAME days-denominated proxy this module's own
  * {@link forcedCourseFloorDays}/{@link forcedCoursesFor} already substitute
  * for C5.6's session-denominated window (see the module doc's "C5.6's rolling
- * floor" note). Real per-session window bookkeeping
- * (`sittingsSinceFloorMet`) is service-side only — `src/plan/allocation.ts`,
- * per the component register's own "boundary: service" line on that row, and
- * `packages/core/src/allocation/resolve-inputs.ts` documents that no
- * client-side producer for it exists. This reuses this module's own existing
- * client-side substitute rather than inventing a second one or reaching into
- * a file this bead does not own.
+ * floor" note). **Corrected**: `sittingsSinceFloorMet` now HAS a pure
+ * client-side producer, `packages/core/src/allocation/resolve-inputs.ts`
+ * (`ol-v7r5.63` / `[DOS-C4]`), wired to a production caller in
+ * `packages/plugin/src/plan/provider.ts` (`ol-feza` / `[DOS-C4-a]`) — but
+ * that walk feeds the study PLAN's own per-course floor accounting
+ * (component 3.5, still `boundary: service` for the forcing decision
+ * itself), not this composer's `deficitByCourse` reading. This function has
+ * no access to that plan-side history and keeps its own days-since-last-seen
+ * substitute for the ordinary (non-`windowDeficit`) path — reusing this
+ * module's own existing client-side substitute rather than reaching into a
+ * file this bead does not own.
  */
 function deficitDaysByCourseFrom(
   byCourse: ReadonlyMap<string, readonly ClassifiedRow[]>,
@@ -1079,14 +1085,16 @@ function groupCost(group: readonly ClassifiedRow[]): number {
  * course's already-{@link withinBlockOrder}ed rows into maximal runs of
  * DIRECTLY connected concepts — F2.19's relatedness (C7.10) or material-
  * arrival cohort (a shared source note) between two ADJACENT rows in that
- * order. **Absent both signals — today's only production shape; see the
- * module doc's "F2.19" section: no production caller resolves
- * `relatedConceptKeys` yet — every row is its own singleton group**, the same
- * no-op-when-absent posture every optional F2.19 signal already takes on this
- * path, never a fabricated cluster. A singleton group can never be "cut", so
- * the group primitive's "never cut a group" guarantee holds by construction
- * on today's only wired inputs, exactly as it will once a caller supplies
- * relatedness.
+ * order. **Corrected — `relatedConceptKeys` now has a production caller**
+ * (`session-builder/provider.ts`'s `resolveRelatedConceptKeys`, fed by
+ * `main.ts`'s served relation edges; see the module doc's "F2.19" section).
+ * **Absent both signals — real whenever no relation edges have been served
+ * yet, or a caller omits the map entirely — every row is still its own
+ * singleton group**, the same no-op-when-absent posture every optional
+ * F2.19 signal already takes on this path, never a fabricated cluster. A
+ * singleton group can never be "cut", so the group primitive's "never cut a
+ * group" guarantee holds by construction whenever the inputs are absent,
+ * exactly as it does now that a caller supplies relatedness.
  */
 function groupConceptRows(
   orderedCourseRows: readonly ClassifiedRow[],
@@ -1368,12 +1376,16 @@ function composeFocusedSelection(
  * resolves from `ConceptRecord[]`. First occurrence wins, the same
  * convention that module uses.
  *
- * A no-op whenever `edges` is empty — which is every real caller today,
- * exactly `session/build.ts`'s own `relations` posture (that module's doc:
- * "a real filter with a real caller ... not yet reachable with a live edge
- * set in production"). Wiring a live edge set through is a separate,
- * pre-existing plumbing gap (`build.ts`'s own module doc names it), not
- * reopened here.
+ * **Corrected — wired to a real edge set.** `session-builder/provider.ts`'s
+ * `composedInput` now passes `deps.relations()` (`main.ts`'s
+ * `servedRelationEdges()`, the same live, served `part-of` edge fold
+ * `session/build.ts`'s own queue-path containment filter already reads) as
+ * `relations` here, so this is no longer the no-op every real caller took
+ * before — see `session/build.ts`'s own module doc, which records the same
+ * correction for its `relations` posture. Still a genuine no-op whenever
+ * `edges` is empty (no relation batch served yet, or a caller omitting the
+ * field), the same "absence is a real no-op" posture every optional signal
+ * on this composer takes.
  */
 function nameToKeyFromRows(rows: readonly GapRow[]): ReadonlyMap<string, string> {
   const map = new Map<string, string>();
@@ -1549,8 +1561,11 @@ export interface ComposeSessionRowsResult {
   readonly forcedCourses: readonly string[];
   /**
    * Rows the C7.9 containment co-presence filter dropped before anything
-   * else ran (`[SESS-11]`) — empty whenever `input.relations` is omitted,
-   * which is every real caller today. Reported rather than folded silently
+   * else ran (`[SESS-11]`) — empty whenever `input.relations` is omitted or
+   * carries no edges; `session-builder/provider.ts` now supplies a real,
+   * served edge set (`main.ts`'s `servedRelationEdges()`), so this is no
+   * longer empty on every real caller — see {@link applyContainmentCoPresence}'s
+   * own doc for the correction. Reported rather than folded silently
    * into `orderedRows`'s absence, the same posture
    * `ReviewSession.containmentDropped` already takes on the retiring queue
    * path. Optional only so a hand-built fixture predating this bead remains

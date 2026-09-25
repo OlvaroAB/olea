@@ -329,12 +329,12 @@ interface ResolvedOptions {
  * `main.ts` wires `rank/wiring.ts`'s `buildRankWeightsWiring` (which fetches
  * and decodes the delivered envelope) into `deps.readRankWeights`, which
  * `plan/provider.ts` awaits and threads onto `composeOracleRanking`'s
- * `options`. That is the *only* production caller that does: the plugin's
- * other two `composeOracleRanking` callers, `gap/provider.ts` and
- * `session-builder/provider.ts`, still omit `options` on every call and
- * always resolve to the declared fallback below — there is no product
- * reason yet for those two call sites to read a delivered ranking-weights
- * artifact themselves rather than reusing the study plan's.
+ * `options`. **Corrected — no longer the only one.** `gap/provider.ts` and
+ * `session-builder/provider.ts` (`main.ts` wires the same `readRankWeights`
+ * thunk into both) now thread it through too, `[D-110]` (`ol-v7r5.55`
+ * [IL-D7]) — all three of `composeOracleRanking`'s production callers read
+ * the delivered artifact when one is available and fall back to the
+ * declared constants below otherwise.
  */
 function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions {
   const proximityHalfLifeDays =

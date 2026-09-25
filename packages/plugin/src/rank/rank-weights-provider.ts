@@ -21,8 +21,10 @@
  * working) applied to this seam without inventing a second one: the
  * ranking still runs, just against the client's own argued-defensible
  * numbers instead of a tuned server-side set. See `rank/wiring.ts` for how
- * this composes with the persisted Worker config, and `plan/provider.ts`
- * for the one production caller today.
+ * this composes with the persisted Worker config. **Corrected — no longer
+ * one caller**: `main.ts` wires the same `readRankWeights` thunk into
+ * `plan/provider.ts`, `session-builder/provider.ts` and `gap/provider.ts`
+ * alike (`[D-110]`, `ol-v7r5.55` [IL-D7]); all three now read this seam.
  *
  * **Deliberately obsidian-free**, same split `worker/transport.ts` and
  * `worker/obsidian-transport.ts` already establish: the HTTP primitive is
