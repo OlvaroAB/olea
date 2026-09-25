@@ -72,6 +72,7 @@
 
 import {
   type Clock,
+  type EnqueueInput,
   formatFromExtension,
   hashContent,
   type JobEnqueuer,
@@ -80,6 +81,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { EXTRACTION_WORKFLOW_VERSION } from './extraction-workflow-version.js';
 
 /**
  * Session-scoped "when did I last observe this path change" cache — same
@@ -139,13 +141,23 @@ async function enqueueArrival(
     // pending job from an earlier arrival of this same path is retired once
     // a newer revision lands (`EnqueueInput.sourceUnitId`, `olea-core`;
     // `ol-egov.141.89.10.49`).
-    await enqueuer.enqueue({
+    //
+    // `workflowVersion` (D-381, `ol-egov.141.89.5.18`; chg.md §11's audit,
+    // row 1) — see `extraction-workflow-version.ts`'s doc for what it
+    // composes and why. Every job before this bead was enqueued with no
+    // `workflowVersion` at all; `IngestionQueueEngine.enqueue` treats that
+    // exactly as before (contentHash-only dedup) — this only starts
+    // mattering the next time either constant it composes changes AND this
+    // exact path arrives again for real.
+    const input: EnqueueInput & { readonly workflowVersion?: string } = {
       contentHash,
       label: path,
       payload: { kind: 'source', sourcePath: path, format },
       lastChangedAt,
       sourceUnitId: path,
-    });
+      workflowVersion: EXTRACTION_WORKFLOW_VERSION,
+    };
+    await enqueuer.enqueue(input);
   } catch (error) {
     console.error('Olea: could not enqueue an arriving source file', error);
   } finally {

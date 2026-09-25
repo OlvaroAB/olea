@@ -408,15 +408,64 @@ export async function runGenerationSweep(
     // nearest assessment, never of any one concept's material.
     const courseFormatMatch = formatMatch?.(courseCode);
 
+    // D-381 (`ol-egov.141.89.5.18`; chg.md §11's cache-key audit): this
+    // course's embedding-note path and its CURRENT content digest, computed
+    // once per course (not per candidate — every candidate in the embedded
+    // case shares one note) and passed as `findByKey`'s version expectation
+    // below, so a materiality-confirmed change to the note is never masked
+    // by an older, now-stale cached draft. Deliberately NOT the same read as
+    // the per-candidate `sourceContentHash` further down (`ol-0r92.87`'s
+    // stale-input guard) — that one is taken immediately before caching, as
+    // fresh as possible; this one is only a dedup-time comparison and an
+    // extra, harmless vault read here costs nothing this module doesn't
+    // already spend elsewhere.
+    //
+    // Bare drops (no embedding note for this course — `[D-179]`'s home-note
+    // case) get no digest here: the home note that WOULD ground the
+    // comparison is itself created lazily, only once a draft is actually
+    // about to be cached (this module's own doc) — hashing it early would
+    // force that creation eagerly for a candidate that turns out to be a
+    // duplicate, which this bead does not change. `expected` stays
+    // version-blind for `promptVersion` for every candidate, embedded or
+    // not: the client has no way to know `quiz.generate`/`cards.generate`'s
+    // currently-configured prompt version ahead of a live response
+    // (`DraftRecord.provenance.promptVersion` is server-stamped, D7.3, and
+    // the private service repo's `prompts/quiz.generate/VERSION` is not
+    // reachable from this repo) — see this bead's report for the proposed
+    // follow-up rather than a guessed value that could silently mislead a
+    // spend decision either direction.
+    const courseNotePath = notePaths.find(
+      (path) => courseFromPath(path, coursesFolder) === courseCode,
+    );
+    const courseSourceContentHash =
+      courseNotePath !== undefined && (await deps.vault.exists(courseNotePath))
+        ? await hashText(await deps.vault.read(courseNotePath))
+        : undefined;
+    const courseVersionExpectation =
+      courseSourceContentHash === undefined
+        ? undefined
+        : { sourceContentHash: courseSourceContentHash };
+
     for (const candidate of sorted) {
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
       if (!candidate.courses.includes(courseCode)) continue;
 
-      const existing = await deps.cache.findByKey(courseCode, candidate.name);
+      const existing = await deps.cache.findByKey(courseCode, candidate.name, courseVersionExpectation);
       if (existing !== null) {
         skippedDuplicate += 1;
         continue;
       }
+      // D-381's clarification: `existing === null` above means either
+      // genuinely nothing cached yet, or a stale record `findByKey` just
+      // declined to treat as blocking. The two cases MUST draft under
+      // different ids — see `staleRecordExists`'s use below and
+      // `deriveDraftId`'s own doc for why, and INV-2/D-381: an existing
+      // draft record (accepted or not) is never silently overwritten by a
+      // fresh one landing on the same deterministic path.
+      const staleRecordExists =
+        courseVersionExpectation === undefined
+          ? false
+          : (await deps.cache.findByKey(courseCode, candidate.name)) !== null;
 
       // Component 2.2's routing consultation (`ol-tz7v` / `[WIRE-7]`),
       // opt-in — see the module doc. Costs a classify call (only when a
@@ -494,7 +543,7 @@ export async function runGenerationSweep(
       const provenance = extractDraftedProvenance(result.response);
       if (questions === null || provenance === null) continue; // unparseable — nothing content-bearing to cache; revisited next sweep
 
-      let notePath = notePaths.find((path) => courseFromPath(path, coursesFolder) === courseCode);
+      let notePath = courseNotePath;
       // `[D-181]`: the unit that resolved this course's drafting target for this sweep — the same
       // approximation `notePath`/`sourcePath` above already make at the concept level (this sweep
       // never determines which unit introduced which concept — see the module doc). `undefined`
@@ -537,8 +586,19 @@ export async function runGenerationSweep(
       const createdAt = now().toISOString();
       let sequence = 0;
       for (const question of questions) {
+        // D-381: a genuinely-first-ever draft keeps the plain, probeable
+        // 3-argument id (`deps.generateDraftId`, unchanged — every caller
+        // before this bead, and every first-time draft this bead's own
+        // caller still makes, land exactly where they always did). Only a
+        // redo superseding a stale record (`staleRecordExists`, above) uses
+        // `deriveDraftId`'s D-381 4-argument form directly — a disjoint id
+        // space by construction (`deriveDraftId`'s own doc) — so this write
+        // can never land on the path the stale record already occupies.
+        const draftId = staleRecordExists
+          ? await deriveDraftId(courseCode, candidate.name, sequence, courseSourceContentHash)
+          : await generateDraftId(courseCode, candidate.name, sequence);
         const record: DraftRecord = {
-          draftId: await generateDraftId(courseCode, candidate.name, sequence),
+          draftId,
           status: 'pending',
           courseCode,
           conceptName: candidate.name,

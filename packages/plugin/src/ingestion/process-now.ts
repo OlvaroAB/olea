@@ -84,6 +84,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { EXTRACTION_WORKFLOW_VERSION } from './extraction-workflow-version.js';
 
 /** Whether `path` is something this action knows how to process at all — a markdown note, or a format `formatFromExtension` claims. Exported so a menu/command host can decide whether to offer the affordance at all, without duplicating this rule. */
 export function isProcessNowSupported(path: VaultPath): boolean {
@@ -193,11 +194,18 @@ async function runSource(
   // still-queued/deferred job from the earlier revision is retired rather
   // than left to eventually run on content she has already moved past
   // (`ol-egov.141.89.10.49`).
-  const input: EnqueueInput = {
+  // `workflowVersion` (D-381, `ol-egov.141.89.5.18`; chg.md §11's audit, row
+  // 1) — see `extraction-workflow-version.ts`'s doc and `arrival-watch.ts`'s
+  // own call site (same value, same reasoning): this override enqueues
+  // through the exact same idempotent mechanism, so it must carry the same
+  // version term or the two paths would silently disagree about whether a
+  // given `done` job is still current.
+  const input: EnqueueInput & { readonly workflowVersion?: string } = {
     contentHash,
     label: path,
     payload: { kind: 'source', sourcePath: path, format },
     sourceUnitId: path,
+    workflowVersion: EXTRACTION_WORKFLOW_VERSION,
   };
   const enqueueResult = await enqueuer.enqueue(input);
   if (enqueueResult.status === 'duplicate' && enqueueResult.existingStatus === 'done') {

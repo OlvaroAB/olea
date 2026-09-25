@@ -148,17 +148,83 @@ function draftPath(draftId: string): VaultPath {
  * keep multiple questions for the same concept from deriving the same id,
  * not to make every record individually probeable (`findByKey` only ever
  * probes `sequence: 0`; see this module's doc).
+ *
+ * `sourceContentHash` (D-381, `ol-egov.141.89.5.18`; optional, additive):
+ * folded into the hashed JSON array ONLY when supplied, producing an id in a
+ * COMPLETELY DISJOINT space from the 3-argument form (`JSON.stringify` of a
+ * 3-element vs. a 4-element array can never coincide). This is what lets
+ * `pipeline.ts` redraft a concept whose cached record `findByKey` reported
+ * stale (a materiality-confirmed content change) without deriving the SAME
+ * id the stale record already occupies — `put()` would otherwise silently
+ * overwrite that record's file, which is exactly the rewrite D-381's
+ * clarification forbids (an accepted, or even merely still-pending,
+ * existing draft must never be silently replaced). Every caller that omits
+ * it (every caller before this bead, and every FIRST-time draft of a
+ * concept this bead's own caller keeps making) gets the byte-identical
+ * 3-argument id — including the property that `findByKey`'s `sequence: 0`
+ * path probe finds it directly. A 4-argument id is only ever discoverable
+ * through `findByKey`'s `index.json` fallback (never its probe) — an
+ * accepted, disclosed trade-off for the redo case, not a correctness gap:
+ * `put()` keeps the index in sync regardless of which id scheme produced
+ * the record.
  */
 export async function deriveDraftId(
   courseCode: string,
   conceptName: string,
   sequence: number,
+  sourceContentHash?: string,
 ): Promise<string> {
-  return hashText(JSON.stringify([courseCode, conceptName, sequence]));
+  return hashText(
+    JSON.stringify(
+      sourceContentHash === undefined
+        ? [courseCode, conceptName, sequence]
+        : [courseCode, conceptName, sequence, sourceContentHash],
+    ),
+  );
 }
 
 /** The `sequence` `findByKey`'s path probe checks — a concept's first drafted question, the one every `draftForConcept` call is guaranteed to produce before any later question in the same call. */
 const DEDUPE_PROBE_SEQUENCE = 0;
+
+/**
+ * D-381 (`ol-egov.141.89.5.18`; chg.md §11's cache-key audit)'s optional
+ * version-awareness for `findByKey`. Omitted entirely (today's only caller,
+ * `pipeline.ts:415`): `findByKey` behaves exactly as before this existed —
+ * version-blind, any prior draft blocks a fresh one. Supplied: a field left
+ * `undefined` here is itself version-blind for JUST that field (matches
+ * whatever the record carries); a field given a value only counts the
+ * record as fresh when its own `sourceContentHash`/`provenance.promptVersion`
+ * equals it. A record that turns out stale by this comparison is treated as
+ * "no blocking record" — `findByKey` returns `null` for it — rather than
+ * rewritten, deleted, or otherwise touched: the stale record's file is
+ * exactly as `put()` last left it (INV-2; D-381's clarification: preserve an
+ * artifact she already accepted, never silently rewrite it). Nothing here
+ * decides what a caller does with that `null` — a future caller drafting a
+ * fresh record for a stale key is `pipeline.ts`'s call, out of this bead's
+ * `owns` (reported, not built here).
+ */
+export interface FindByKeyVersionExpectation {
+  readonly sourceContentHash?: string;
+  readonly promptVersion?: string;
+}
+
+/** True when `record` is fresh against `expected` — see `FindByKeyVersionExpectation`'s doc. `expected` itself omitted means "version-blind," always fresh. */
+function matchesVersionExpectation(
+  record: DraftRecord,
+  expected: FindByKeyVersionExpectation | undefined,
+): boolean {
+  if (expected === undefined) return true;
+  if (expected.sourceContentHash !== undefined && record.sourceContentHash !== expected.sourceContentHash) {
+    return false;
+  }
+  if (
+    expected.promptVersion !== undefined &&
+    record.provenance.promptVersion !== expected.promptVersion
+  ) {
+    return false;
+  }
+  return true;
+}
 
 export interface DraftCacheStore {
   /** Every draft record on file, in no particular order. Corrupt/unreadable per-record files are skipped rather than thrown on — same "report, don't crash" posture `olea-core`'s review-log parser uses for one bad line. */
@@ -166,8 +232,22 @@ export interface DraftCacheStore {
   get(draftId: string): Promise<DraftRecord | null>;
   /** Writes (or overwrites) one draft record and keeps `index.json` in sync. Never removes a file — F3.3's "reject prunes… never deleted" (see this module's doc for the index's own, disclosed exception). */
   put(record: DraftRecord): Promise<void>;
-  /** Dedupe check (`ol-p3t07a`'s acceptance: "dupe-checked against existing instruments"): any prior draft — pending, accepted, edited, or rejected — for this exact (course, concept) pair. Probes the deterministic `sequence: 0` path directly first (`ol-zbnn`, one `exists()` call), falling back to a full index read only when that misses — cheap either way, and no longer solely dependent on `index.json` staying in sync (see this module's doc). */
-  findByKey(courseCode: string, conceptName: string): Promise<DraftRecord | null>;
+  /**
+   * Dedupe check (`ol-p3t07a`'s acceptance: "dupe-checked against existing
+   * instruments"): any prior draft — pending, accepted, edited, or rejected
+   * — for this exact (course, concept) pair. Probes the deterministic
+   * `sequence: 0` path directly first (`ol-zbnn`, one `exists()` call),
+   * falling back to a full index read only when that misses — cheap either
+   * way, and no longer solely dependent on `index.json` staying in sync (see
+   * this module's doc). `expected` (D-381, optional, see
+   * `FindByKeyVersionExpectation`'s doc): when supplied, a record found but
+   * stale against it is treated as no record at all.
+   */
+  findByKey(
+    courseCode: string,
+    conceptName: string,
+    expected?: FindByKeyVersionExpectation,
+  ): Promise<DraftRecord | null>;
   /** Every `status: 'pending'` draft, full records — what `open-session.ts` merges into today's queue. */
   listPending(): Promise<readonly DraftRecord[]>;
 }
@@ -241,7 +321,7 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
       await writeIndex(vault, next);
     },
 
-    async findByKey(courseCode, conceptName) {
+    async findByKey(courseCode, conceptName, expected) {
       // Path-probe fallback (`ol-zbnn`): a caller minting `draftId`
       // deterministically (`deriveDraftId`, `pipeline.ts`'s default
       // `generateDraftId`) puts the concept's first drafted question at a
@@ -259,7 +339,10 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
           probed.courseCode === courseCode &&
           probed.conceptName === conceptName
         ) {
-          return probed;
+          // D-381: a version-stale probe hit is "no blocking record," not a
+          // miss to fall through past — the record itself is left untouched
+          // (see `matchesVersionExpectation`'s doc).
+          return matchesVersionExpectation(probed, expected) ? probed : null;
         }
       }
 
@@ -272,7 +355,9 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
         (e) => e.courseCode === courseCode && e.conceptName === conceptName,
       );
       if (entry === undefined) return null;
-      return this.get(entry.draftId);
+      const found = await this.get(entry.draftId);
+      if (found === null) return null;
+      return matchesVersionExpectation(found, expected) ? found : null;
     },
 
     async listPending() {

@@ -128,8 +128,43 @@ export type JobPriorityComparator = (a: PersistedJob, b: PersistedJob) => number
  * see this bead's report): `QueueStore.save` still receives plain
  * `PersistedJob[]` structurally, since the extra field is optional and
  * additive, so nothing downstream that only knows `PersistedJob` breaks.
+ *
+ * **`workflowVersion` (D-381, `ol-egov.141.89.5.18`).** The task prompt/
+ * contract version this job's `payload` was queued under — same convention
+ * as `sourceUnitId` just above (optional, additive, not folded into
+ * `types.ts`'s `PersistedJob`; see this bead's report for why a persisted-
+ * schema addition stays proposed rather than built here). Read by
+ * `enqueue`'s dedup check below ("Version-aware dedup") and by `replace`, so
+ * that a version-bumped re-`enqueue` of unchanged content is never mistaken
+ * for — or confused with, when recording an outcome — the job already on
+ * record for an earlier version of the same content.
  */
-type StoredJob = PersistedJob & { readonly sourceUnitId?: string };
+type StoredJob = PersistedJob & { readonly sourceUnitId?: string; readonly workflowVersion?: string };
+
+/**
+ * `EnqueueInput` (`types.ts`) plus the same optional `workflowVersion` this
+ * file's `StoredJob` carries — see that type's doc for why it isn't folded
+ * into `types.ts` itself. Every current production caller omits it, so
+ * `enqueue`'s behaviour is byte-identical to before this field existed until
+ * a caller opts in.
+ */
+export type VersionedEnqueueInput = EnqueueInput & { readonly workflowVersion?: string };
+
+/**
+ * Two `StoredJob`s are "the same job" for `replace`'s purposes when they
+ * share both `contentHash` AND `workflowVersion` (`undefined === undefined`
+ * counts as a match — every job before this field existed, and every job a
+ * version-blind caller still enqueues today). Kept as its own predicate
+ * because two jobs CAN legitimately share one `contentHash` now: an older,
+ * version-mismatched `done` job and a freshly re-`enqueue`d one for the
+ * current version — see `enqueue`'s "Version-aware dedup" doc. Matching on
+ * `contentHash` alone here would let recording the new job's outcome
+ * silently overwrite the old one too, which is exactly the INV-2 rewrite
+ * D-381's clarification forbids.
+ */
+function sameStoredJob(a: StoredJob, b: StoredJob): boolean {
+  return a.contentHash === b.contentHash && a.workflowVersion === b.workflowVersion;
+}
 
 export interface EngineDeps {
   readonly store: QueueStore;
@@ -254,7 +289,7 @@ export class IngestionQueueEngine {
   }
 
   private replace(job: StoredJob): void {
-    this.jobs = this.jobs.map((j) => (j.contentHash === job.contentHash ? job : j));
+    this.jobs = this.jobs.map((j) => (sameStoredJob(j, job) ? job : j));
   }
 
   /**
@@ -280,9 +315,35 @@ export class IngestionQueueEngine {
    * simply stops being eligible (see `EnqueueInput.sourceUnitId`'s own doc,
    * `types.ts`, for why `label` can't serve as the unit key and what each
    * caller uses).
+   *
+   * **Version-aware dedup (D-381, `ol-egov.141.89.5.18`; chg.md §11's
+   * cache-key audit).** `input.workflowVersion` is opt-in, same posture as
+   * `enqueueDebounce` above: omitted (every current production caller —
+   * embedded-source extraction via `process-now.ts`/`arrival-watch.ts`, and
+   * the generation path via `job.ts`/`generation-queue.ts`), the dedup check
+   * is exactly `contentHash` alone, unchanged from before this field
+   * existed. Supplied: a job already on record under the same `contentHash`
+   * only counts as "duplicate" when its own recorded `workflowVersion` is
+   * the SAME string — a job recorded under a DIFFERENT version, or with no
+   * version recorded at all (a legacy job from before a caller started
+   * versioning this content), is not a duplicate. The old job is never
+   * rewritten or removed (INV-2; D-381's clarification: "never retroactively
+   * rewrite ... an artifact already accepted") — it is simply no longer what
+   * a version-aware `enqueue` call for this content matches, so a fresh job
+   * is queued for the current version instead. Nothing here re-runs
+   * anything eagerly: this only changes what the NEXT `enqueue` call for
+   * that content is allowed to do; the actual (re)run still waits for a
+   * `tick()` a host schedules on its own terms, and only within whatever
+   * budget/headroom gate is already in force then (`classifyHeadroom`,
+   * unchanged) — i.e. "redo it lazily, only within spend already
+   * authorised," never a batch re-run triggered by the version bump itself.
    */
-  async enqueue(input: EnqueueInput): Promise<EnqueueResult> {
-    const existing = this.jobs.find((j) => j.contentHash === input.contentHash);
+  async enqueue(input: VersionedEnqueueInput): Promise<EnqueueResult> {
+    const existing = this.jobs.find(
+      (j) =>
+        j.contentHash === input.contentHash &&
+        (input.workflowVersion === undefined || j.workflowVersion === input.workflowVersion),
+    );
     if (existing) return { status: 'duplicate', existingStatus: existing.status };
 
     if (this.enqueueDebounce !== null && input.lastChangedAt !== undefined) {
@@ -318,6 +379,7 @@ export class IngestionQueueEngine {
       status: 'queued',
       attempts: 0,
       ...(input.sourceUnitId !== undefined ? { sourceUnitId: input.sourceUnitId } : {}),
+      ...(input.workflowVersion !== undefined ? { workflowVersion: input.workflowVersion } : {}),
     };
     this.jobs.push(job);
     await this.persist();
