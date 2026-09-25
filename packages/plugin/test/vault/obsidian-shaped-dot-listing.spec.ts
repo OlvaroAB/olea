@@ -3,9 +3,10 @@
  * `ObsidianSource`: `list()` filters a flat file map the way `vault.getFiles()` does (no
  * dot-prefixed path ever appears), and `listUnder()` is the real `listUnderViaAdapter` walk over
  * an adapter derived from the same map (the workbench shim's `VaultAdapterShim` does the same
- * grouping). `ObsidianSource` itself cannot be imported under vitest (see its module doc), so this
- * is the closest headless model of the production composition: `main.ts` hands a plain
- * `new ObsidianSource(this.app)` to every caller below.
+ * grouping). It models the production composition (`main.ts` hands a plain
+ * `new ObsidianSource(this.app)` to every caller below) without the class itself; the class is
+ * driven directly, with `obsidian` mocked, in `obsidian-source-hidden-paths.spec.ts`
+ * (`ol-egov.141.89.10.57`).
  */
 
 import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } from 'olea-core';
