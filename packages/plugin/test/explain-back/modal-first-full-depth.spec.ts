@@ -116,13 +116,13 @@ describe('computeAcceptGrading gates the milestone sentence on the confirmed-fir
   });
 });
 
-describe('main.ts does not yet wire getMasteryState — the gate is exercised in its safe, suppressed default in production today', () => {
-  it("openExplainBackModal's construction call has no getMasteryState field", () => {
+describe('main.ts wires getMasteryState into the modal (ol-egov.141.89.6.41), so the gate is live in production', () => {
+  it("openExplainBackModal's construction call supplies a getMasteryState field", () => {
     const start = mainTs.indexOf('private openExplainBackModal(');
     expect(start).toBeGreaterThan(-1);
     // Scan a generous window after the method start for the deps object
-    // literal it builds; getMasteryState must not appear in it.
+    // literal it builds; getMasteryState must now appear in it.
     const window = mainTs.slice(start, start + 4000);
-    expect(window).not.toMatch(/getMasteryState:/);
+    expect(window).toMatch(/getMasteryState:/);
   });
 });

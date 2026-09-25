@@ -130,12 +130,15 @@ describe('every port the session needs is the real one', () => {
     // `persistMisconceptionObservations` awaits it a seventh time to thread
     // the same id into `appendMisconceptionEvent`'s own vault write (the
     // accepted observation event's persistence, keyed to the SAME device
-    // this attempt's misconception-record lookup above already used) —
+    // this attempt's misconception-record lookup above already used), and
+    // `ol-egov.141.89.6.41`'s `recordExplainBackNonAttempt` awaits it an
+    // eighth time to thread the same id into `appendNonAttemptRecord`'s own
+    // vault write (the on-demand explain-back skip/close event) —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // seven. The count below tracks known call sites rather than asserting
+    // eight. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(7);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(8);
   });
 });
 
@@ -366,6 +369,68 @@ describe('the explain-back judge digest has a real production caller (ol-2zfj.75
 
   it('imports buildMisconceptionDigest from olea-core', () => {
     expect(main).toMatch(/buildMisconceptionDigest,/);
+  });
+});
+
+describe('the explain-back full-depth encouragement has a real mastery-state reader (ol-egov.141.89.6.41)', () => {
+  // `ol-egov.141.89.6.18` built `isConfirmedFirstFullDepth`
+  // (`explain-back/first-full-depth.ts`) and its own caller
+  // (`explain-back/modal.ts`'s `computeAcceptGrading`), but left
+  // `openExplainBackModal`'s deps literal without a `getMasteryState` at
+  // all — `ExplainBackModalDeps.getMasteryState` is optional and defaults
+  // to unwired, so production behaviour stayed the safe, suppressed
+  // default (no encouragement ever shown) until this bead. These
+  // assertions are the source-level proof a real reader is now supplied.
+
+  it('exposes a mastery-state reader that snapshots the review log once, fresh, per modal', () => {
+    expect(main).toMatch(
+      /private explainBackMasteryStateReader\(\):\s*\(conceptId: string\) => MasteryState \| null \{\s*const vault = new ObsidianSource\(this\.app\);\s*let snapshot: readonly ReviewLogEntry\[\] \| null = null;\s*void readReviewLogHistory\(vault\)\s*\.then\(\(\{ entries \}\) => \{\s*snapshot = entries;\s*\}\)/,
+    );
+  });
+
+  it('resolves mastery state through computeAllConceptMastery, defaulting to null (unconfirmed) while the snapshot is outstanding', () => {
+    expect(main).toMatch(
+      /return \(conceptId\) =>\s*snapshot === null\s*\?\s*null\s*:\s*\(computeAllConceptMastery\(snapshot, \[conceptId\]\)\.get\(conceptId\)\?\.state \?\? null\);/,
+    );
+  });
+
+  it("supplies that reader as ExplainBackModal's getMasteryState dep", () => {
+    expect(main).toMatch(/getMasteryState: this\.explainBackMasteryStateReader\(\),/);
+  });
+
+  it('imports computeAllConceptMastery from olea-core', () => {
+    expect(main).toMatch(/computeAllConceptMastery,/);
+  });
+});
+
+describe('the explain-back non-attempt record has a real production caller for the on-demand entry points (ol-0r92.104)', () => {
+  // `ol-0r92.104` built `ExplainBackModalDeps.recordNonAttempt` and its two
+  // callers inside `explain-back/modal.ts` (`skipPrompt`, `onClose`'s
+  // `'answering'` guard), but left it optional and unwired — a skip wrote
+  // nothing in production until this bead. `recordNonAttempt` is wired
+  // ONLY for the `'freeform'` seed (F5.1's on-demand command below, F4.6's
+  // session-builder affordance, F6.4's Home affordance): the `'instrument'`
+  // seed hands off through `ReviewView`'s single `openExplainBack`
+  // callback, which collapses F2.12's confusion banner, F5.3a's
+  // scheduling-observation banner and F2.21's strong-recall banner into one
+  // call site with no trigger to tell them apart — see `openExplainBackModal`'s
+  // own doc for why fabricating one would misattribute two-thirds of the time.
+
+  it('exposes a production entry point that appends a non-attempt record with the given trigger', () => {
+    expect(main).toMatch(
+      /private async recordExplainBackNonAttempt\(\s*trigger: NonAttemptLogRecordInput\['trigger'\],\s*params: \{ readonly conceptIds: readonly string\[\]; readonly timestamp: string \},\s*\): Promise<void> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*await appendNonAttemptRecord\(\s*vault,\s*\{ conceptIds: \[\.\.\.params\.conceptIds\], timestamp: params\.timestamp, trigger \},\s*\{ deviceId \},\s*\);/,
+    );
+  });
+
+  it("wires recordNonAttempt for the 'freeform' seed only, with trigger 'on-demand'", () => {
+    expect(main).toMatch(
+      /\.\.\.\(seed\.kind === 'freeform'\s*\?\s*\{\s*recordNonAttempt: \(params: \{ conceptIds: readonly string\[\]; timestamp: string \}\) =>\s*this\.recordExplainBackNonAttempt\('on-demand', params\),\s*\}\s*: \{\}\),/,
+    );
+  });
+
+  it('imports appendNonAttemptRecord and NonAttemptLogRecordInput from olea-core', () => {
+    expect(main).toMatch(/appendNonAttemptRecord,/);
+    expect(main).toMatch(/NonAttemptLogRecordInput,/);
   });
 });
 

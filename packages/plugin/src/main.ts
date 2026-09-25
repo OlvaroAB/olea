@@ -1,5 +1,6 @@
 import { MarkdownView, Notice, Plugin, TFile, type WorkspaceLeaf } from 'obsidian';
 import type {
+  MasteryState,
   ReviewLogEntry,
   SoloLevel,
   StudyPlanAllocationEntry,
@@ -8,6 +9,7 @@ import type {
 import {
   type AcceptedGradingObservationOutcome,
   appendMisconceptionEvent,
+  appendNonAttemptRecord,
   buildMisconceptionDigest,
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
@@ -20,6 +22,7 @@ import {
   type ConfusionRoutingInput,
   type CourseDetectionProposal,
   calendarDayFromLocalDate,
+  computeAllConceptMastery,
   computeWindowDeficit,
   corroborateConfusionPairings,
   courseFromPath,
@@ -38,6 +41,7 @@ import {
   type JudgeRequestRecord,
   loadCachedStudyPlan,
   type MisconceptionResolutionEvidenceEvent,
+  type NonAttemptLogRecordInput,
   notePathCourses,
   type PendingExplainBackGrading,
   parseDocument,
@@ -3461,6 +3465,81 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `ol-egov.141.89.6.41`: `ExplainBackModalDeps.getMasteryState` — a
+   * synchronous port (`explain-back/modal.ts`) over an inherently async
+   * vault read, so `openExplainBackModal` below snapshots the review log
+   * ONCE, fresh, at construction time (before she has typed or submitted
+   * anything for this attempt) and this closure just reads that snapshot.
+   * `computeAllConceptMastery` (`olea-core`'s `mastery/rollup.ts`) is the
+   * exported multi-concept fold over `computeConceptMastery` — the single-
+   * concept function itself is not exported from the package barrel — run
+   * here with a one-element scope so each call resolves exactly the one
+   * concept `first-full-depth.ts`'s `isConfirmedFirstFullDepth` and the
+   * mastery tag (`renderMasteryTag`) ask for, never re-deriving the fold a
+   * second way. Returns `null`, the documented "unconfirmed" default, both
+   * while the snapshot read is still outstanding and for a concept the log
+   * says nothing about — `computeConceptMastery`'s own floor is `'seed'` for
+   * an unseen concept, which is a KNOWN state, not `null`; this only
+   * degrades to `null` on the outstanding-read race, never on genuine seed
+   * evidence.
+   *
+   * **Why a snapshot taken at open time is "before this attempt's writes",
+   * not just "before this call".** `first-full-depth.ts`'s own doc requires
+   * the read to precede the correctness accept and the SOLO write
+   * `computeAcceptGrading` (`explain-back/modal.ts`) makes later — both are
+   * gated behind her reading the prompt, composing an answer and pressing
+   * Accept, which cannot happen before this method returns and the modal
+   * renders. The vault read this starts is asynchronous but unblocked by
+   * anything on her critical path, so in every real session it resolves long
+   * before an accept could reach `computeAcceptGrading`.
+   */
+  private explainBackMasteryStateReader(): (conceptId: string) => MasteryState | null {
+    const vault = new ObsidianSource(this.app);
+    let snapshot: readonly ReviewLogEntry[] | null = null;
+    void readReviewLogHistory(vault)
+      .then(({ entries }) => {
+        snapshot = entries;
+      })
+      .catch((error) => {
+        // D-005: content-free. A failed snapshot read leaves `getMasteryState`
+        // returning `null` for the life of this modal — the safe, suppressed
+        // default `first-full-depth.ts` documents, never a fabricated stage.
+        console.error(
+          'Olea: explain-back mastery snapshot read failed (encouragement stays suppressed)',
+          {
+            error,
+          },
+        );
+      });
+    return (conceptId) =>
+      snapshot === null
+        ? null
+        : (computeAllConceptMastery(snapshot, [conceptId]).get(conceptId)?.state ?? null);
+  }
+
+  /**
+   * `ol-0r92.104` [DOS-I9] (`[D-273]`, `[D-306]`): builds
+   * `ExplainBackModalDeps.recordNonAttempt` — a fresh vault/device id per
+   * call, the same discipline every other explain-back write in this file
+   * follows, wrapping `appendNonAttemptRecord` (`olea-core`'s
+   * `review-log/write.ts`) with the `trigger` the construction site below
+   * closes over rather than asks the view for (the view has no way to know
+   * it — see that field's own doc on `ExplainBackModalDeps`).
+   */
+  private async recordExplainBackNonAttempt(
+    trigger: NonAttemptLogRecordInput['trigger'],
+    params: { readonly conceptIds: readonly string[]; readonly timestamp: string },
+  ): Promise<void> {
+    const vault = new ObsidianSource(this.app);
+    const deviceId = await ensureDeviceId(this);
+    await appendNonAttemptRecord(
+      vault,
+      { conceptIds: [...params.conceptIds], timestamp: params.timestamp, trigger },
+      { deviceId },
+    );
+  }
+
+  /**
    * The ONE construction point for `ExplainBackModal` (`[D-163]`, `ol-12gs`)
    * — every one of the four ruled entry points (the command below, F2.12's
    * confusion banner in `review/view.ts`, and the session-builder/Today
@@ -3468,6 +3547,25 @@ export default class OleaPlugin extends Plugin {
    * than constructing the modal itself, which is what makes "one dedicated
    * view, single rendering implementation" true of the wiring and not just
    * of the class.
+   *
+   * `ol-egov.141.89.6.41`: `recordNonAttempt` is wired ONLY for the
+   * `'freeform'` seed (F5.1's command below, F4.6's session-builder
+   * affordance, F6.4's Home affordance — `ol-12gs`'s three "she opened this
+   * herself" entry points) with `trigger: 'on-demand'`, the one honest
+   * reading of `explainBackOfferTrigger`'s own doc ("her own request",
+   * `olea-contracts`' `review-log.ts`) for a seed she asked for by name.
+   * The `'instrument'` seed (F2.12's confusion banner, F5.3a's scheduling-
+   * observation banner and F2.21's strong-recall banner, per
+   * `review/view.ts`'s module doc) has NO honest trigger to attach here:
+   * all three banners hand off through `ReviewView`'s single
+   * `openExplainBack` callback (`review/view.ts:300`), which takes only a
+   * `ReviewInstrument` and collapses which banner accepted it before this
+   * method ever sees the call. Fabricating one of the three triggers for
+   * that seed would misattribute two-thirds of the time, so `recordNonAttempt`
+   * stays unwired for it — a skip or close from one of those three banners
+   * writes nothing, exactly as before this bead. Disambiguating them needs
+   * `review/view.ts`'s `openExplainBack` callback (outside this bead's
+   * `owns`) to carry a trigger through from each of its three call sites.
    */
   private openExplainBackModal(seed: ExplainBackSeed, onClosed?: () => void): void {
     new ExplainBackModal(
@@ -3488,6 +3586,13 @@ export default class OleaPlugin extends Plugin {
         loadMisconceptionDigest: (conceptIds) =>
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
+        getMasteryState: this.explainBackMasteryStateReader(),
+        ...(seed.kind === 'freeform'
+          ? {
+              recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>
+                this.recordExplainBackNonAttempt('on-demand', params),
+            }
+          : {}),
         ...(onClosed ? { onClosed } : {}),
       },
       seed,
