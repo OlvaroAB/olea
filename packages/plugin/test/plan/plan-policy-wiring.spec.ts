@@ -131,10 +131,43 @@ describe('buildPlanPolicyWiring', () => {
       ...REQUEST,
       courses: [{ ...REQUEST_COURSE, readiness: 0.9 }],
     };
-    const failed = await wiring.readPlanPolicy?.(changed);
-    expect(failed).toBeUndefined();
+    await wiring.readPlanPolicy?.(changed);
 
     const cache = await new ObsidianPlanPolicyCacheStore(dataHost).load();
     expect(cache?.result.allocation[0]?.share).toBe(0.6);
+  });
+
+  it('[ol-egov.141.89.10.44] a failed fetch with a cached result returns that cached result, not undefined', async () => {
+    const httpPost = vi
+      .fn()
+      .mockResolvedValueOnce(okResponse(resultOf(0.6)))
+      .mockResolvedValueOnce({ status: 500, text: 'boom' });
+    const dataHost = fakeDataHost(workerConfigBlob());
+    const wiring = await buildPlanPolicyWiring({ dataHost, httpPost });
+    await wiring.readPlanPolicy?.(REQUEST);
+
+    const changed: PlanPolicyRequest = {
+      ...REQUEST,
+      courses: [{ ...REQUEST_COURSE, readiness: 0.9 }],
+    };
+    const failed = await wiring.readPlanPolicy?.(changed);
+
+    // The fetch failed on a CHANGED fingerprint — the fallback is not a
+    // same-fingerprint lookup (that path already returns early above the
+    // network call and never reaches here); it is the single most-recent
+    // cache entry, which is all this store ever holds.
+    expect(failed?.allocation[0]?.share).toBe(0.6);
+  });
+
+  it('[ol-egov.141.89.10.44] a failed fetch with no cached result propagates the failure as undefined', async () => {
+    const httpPost = vi.fn().mockResolvedValueOnce({ status: 500, text: 'boom' });
+    const dataHost = fakeDataHost(workerConfigBlob());
+    const wiring = await buildPlanPolicyWiring({ dataHost, httpPost });
+
+    const failed = await wiring.readPlanPolicy?.(REQUEST);
+
+    expect(failed).toBeUndefined();
+    const cache = await new ObsidianPlanPolicyCacheStore(dataHost).load();
+    expect(cache).toBeNull();
   });
 });

@@ -28,6 +28,27 @@
  * degrade-on-absence path (`plan-policy-provider.ts`'s own doc) fire on the
  * ordinary, expected case instead of on an actual failure, and would look
  * indistinguishable from "the Worker never answered" in the plan she reads.
+ *
+ * **A failed fetch on a CHANGED fingerprint falls back to the cache too**
+ * (`ol-egov.141.89.10.44`, discovered from `ol-egov.141.89.10.16` making
+ * `plan/provider.ts` throw on an attempted-and-failed allocation fetch
+ * rather than reading it as "no policy applies"). This module's own doc
+ * already promised "a failed call leaves the previous cache entry
+ * standing" — but until this fix that was only true of the PERSISTED
+ * entry; the return value handed back to the caller was `undefined`,
+ * which is exactly the throw-worthy failure `provider.ts` now checks for,
+ * so a transient hiccup lost the fresher parts of the plan a working
+ * fetch had already produced. **The fallback is the single most-recent
+ * cache entry, not a same-fingerprint lookup**: this store keeps only one
+ * entry ever (see `ObsidianPlanPolicyCacheStore` below — no per-fingerprint
+ * history), and the fallback is only ever reached after the fingerprint
+ * has already changed (an unchanged one returns early above, before the
+ * network call) — a same-fingerprint requirement on the fallback would
+ * therefore never fire. "The standing plan stands" (A2.5) reads the same
+ * way here: whatever plan last stood is what keeps standing when the
+ * attempt to refresh it fails, not a plan pinned to the exact input that
+ * failed to refresh it. With no cache entry at all, the failure still
+ * propagates as `undefined`, unchanged from before.
  */
 
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
@@ -99,10 +120,11 @@ export interface PlanPolicyWiring {
   /**
    * `null` when the Worker isn't configured yet (F7.8) — a caller checks
    * this once. When present, calling it fingerprints `request`, reuses the
-   * cached result on no change, and otherwise calls the Worker and caches
-   * whatever it returns (never caching an `undefined` — a failed call
-   * leaves the previous cache entry standing, so a transient failure does
-   * not erase a policy that is still the honest last-known-good one).
+   * cached result on no change, and otherwise calls the Worker: a
+   * successful call caches and returns the fresh result; a failed call
+   * never overwrites the cache, and returns the last-known-good cached
+   * result when one exists (undefined only propagates when there is no
+   * cache yet to fall back to — the first-ever call, still failing).
    */
   readonly readPlanPolicy:
     | ((request: PlanPolicyRequest) => Promise<PlanPolicyResult | undefined>)
@@ -127,8 +149,12 @@ export async function buildPlanPolicyWiring(deps: PlanPolicyWiringDeps): Promise
       const result = await fetchPlanPolicy(deps.httpPost, workerConfig, request);
       if (result !== undefined) {
         await cacheStore.save({ version: 1, fingerprint, result });
+        return result;
       }
-      return result;
+      // The fetch failed. Never overwrite the cache. Fall back to the
+      // last-known-good cached result when one exists (the standing plan
+      // stands — A2.5); with none, the failure propagates as before.
+      return cached?.result;
     },
   };
 }
