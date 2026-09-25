@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EXHAUSTED_HEADROOM_THRESHOLD, PACING_HEADROOM_THRESHOLD } from './budget.js';
+import type { JobPriorityComparator } from './engine.js';
 import { IngestionQueueEngine } from './engine.js';
 import type {
   Clock,
@@ -796,5 +797,108 @@ describe('honest progress reporting', () => {
     const results = await Promise.all(tickPromises);
     expect(results.every((r) => r.kind === 'ran' && r.outcome === 'done')).toBe(true);
     expect(engine.snapshot()).toMatchObject({ inFlight: 0, done: 3 });
+  });
+});
+
+// F3.7's "coverage-first" ordering seam (ol-2zfj.168). See the module doc's
+// "Priority seam" section for why this is only a reordering hook and not
+// the ordering key itself — that key is an unruled Class C question.
+describe('EngineDeps.priority — the F3.7 coverage-first ordering seam', () => {
+  /** Records the order `runner` was actually invoked in — the observable drain order. */
+  function recordingRunner(order: string[]): JobRunner {
+    return async (job) => {
+      order.push(job.contentHash);
+      return { ok: true };
+    };
+  }
+
+  it('omitted (every current production caller): drains in exactly the same arrival order as before this seam existed', async () => {
+    const order: string[] = [];
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: recordingRunner(order),
+    });
+    await engine.enqueue({ contentHash: 'h1', label: 'A', payload: {} });
+    await engine.enqueue({ contentHash: 'h2', label: 'B', payload: {} });
+    await engine.enqueue({ contentHash: 'h3', label: 'C', payload: {} });
+
+    await engine.tick();
+    await engine.tick();
+    await engine.tick();
+
+    expect(order).toEqual(['h1', 'h2', 'h3']); // unchanged FIFO — no `priority` supplied
+  });
+
+  it('supplied: reorders which eligible job drains next, by whatever the comparator ranks first', async () => {
+    const order: string[] = [];
+    // Labels double as a declared priority for this test only — the real
+    // ordering key (mastery/yield) is exactly what F3.7 leaves undecided.
+    const priorityFromLabel: JobPriorityComparator = (a, b) => {
+      const rank = (job: { label: string }) => Number(job.label.slice(1));
+      return rank(a) - rank(b);
+    };
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: recordingRunner(order),
+      priority: priorityFromLabel,
+    });
+    // Enqueued lowest-priority-first, on purpose, so drain order can only
+    // match arrival order by coincidence.
+    await engine.enqueue({ contentHash: 'h1', label: 'p3', payload: {} });
+    await engine.enqueue({ contentHash: 'h2', label: 'p1', payload: {} });
+    await engine.enqueue({ contentHash: 'h3', label: 'p2', payload: {} });
+
+    await engine.tick();
+    await engine.tick();
+    await engine.tick();
+
+    // Drains by declared priority (p1, p2, p3), not arrival order (h1, h2, h3).
+    expect(order).toEqual(['h2', 'h3', 'h1']);
+  });
+
+  it('a job ranked last still drains — priority reorders, it never skips', async () => {
+    const order: string[] = [];
+    const alwaysPreferH2: JobPriorityComparator = (a) => (a.contentHash === 'h2' ? -1 : 1);
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: recordingRunner(order),
+      priority: alwaysPreferH2,
+    });
+    await engine.enqueue({ contentHash: 'h1', label: 'A', payload: {} });
+    await engine.enqueue({ contentHash: 'h2', label: 'B', payload: {} });
+
+    const first = await engine.tick();
+    expect(first).toMatchObject({ kind: 'ran', contentHash: 'h2' });
+
+    // h1 lost every comparison this tick, but is still `queued` — never
+    // removed from eligibility — so the very next tick runs it.
+    expect(engine.list().find((j) => j.contentHash === 'h1')?.status).toBe('queued');
+    const second = await engine.tick();
+    expect(second).toMatchObject({ kind: 'ran', contentHash: 'h1' });
+
+    expect(order).toEqual(['h2', 'h1']); // both ran; nothing skipped for losing every comparison
+  });
+
+  it("two jobs the comparator ranks equal keep arrival order — the seam's declared tie-break", async () => {
+    const order: string[] = [];
+    const neverDecides: JobPriorityComparator = () => 0;
+    const engine = await IngestionQueueEngine.create({
+      store: new MemoryStore(),
+      capability: desktop,
+      runner: recordingRunner(order),
+      priority: neverDecides,
+    });
+    await engine.enqueue({ contentHash: 'h1', label: 'A', payload: {} });
+    await engine.enqueue({ contentHash: 'h2', label: 'B', payload: {} });
+    await engine.enqueue({ contentHash: 'h3', label: 'C', payload: {} });
+
+    await engine.tick();
+    await engine.tick();
+    await engine.tick();
+
+    expect(order).toEqual(['h1', 'h2', 'h3']); // a `0` comparator falls back to arrival order, same as no comparator at all
   });
 });

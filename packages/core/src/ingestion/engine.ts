@@ -43,6 +43,31 @@
  * never silently dropped, and the ordinary case — a crash with no
  * in-flight call, or backgrounding between jobs rather than mid-call — has
  * zero risk at all.
+ *
+ * **Priority seam (`ol-2zfj.168`, F3.7).** F3.7 says pending generation jobs
+ * should drain in "coverage-first" order — mastery and yield decide what is
+ * built FIRST, never what is skipped (`[D-063]`, `[D-238]`) — but the clause
+ * does not pin which mastery reading, which yield, or how ties break, and
+ * `packages/core/src/generation/types.ts`'s own doc names the same gap.
+ * Deciding that key is a Class C question (it changes drain order, which is
+ * what she experiences — F3.7's own words: "order is the whole of the
+ * difference"); the options this bead wrote up rather than guessed at are in
+ * `ol-2zfj.168`'s close evidence in the service repo's backlog (`bd show
+ * ol-2zfj.168`), not a new rationale document (`contract-docs.md`'s
+ * two-hop rule). Until it is ruled, `EngineDeps.priority` is an inert, optional seam:
+ * omitted (every current production caller), `nextEligibleIndex` behaves
+ * exactly as it always has — `Array.prototype.findIndex`, first eligible job
+ * in arrival order, no behaviour change for any job kind sharing this queue
+ * (extraction, generation, instrument-revision alike — `wiring.ts`'s single
+ * `IngestionQueueEngine.create` call composes all three through one opaque
+ * `payload`, which this file still never inspects; see `types.ts`'s
+ * `PersistedJob.payload` doc). Supplied, it only ever REORDERS which already-
+ * eligible job runs next — it can never make a queued job ineligible — so
+ * "nothing is ever skipped because of priority" holds structurally: a job a
+ * comparator ranks last still runs, just not first. Two jobs the comparator
+ * ranks equal keep arrival order (a stable pick, first-encountered wins) —
+ * the seam's own declared tie-break, so a future comparator never has to
+ * reinvent one just to be deterministic.
  */
 
 import { backoffDelayMs, classifyHeadroom, nextUtcMidnightMs, pacingDelayMs } from './budget.js';
@@ -75,6 +100,19 @@ export type TickResult =
       readonly outcome: 'done' | 'deferred' | 'failed';
     };
 
+/**
+ * Orders two currently-ELIGIBLE jobs — never decides eligibility itself
+ * (that stays `nextEligibleIndex`'s job, unchanged). Same contract as
+ * `Array.prototype.sort`'s comparator: negative if `a` should drain before
+ * `b`, positive for the reverse, `0` for "no opinion" (then arrival order
+ * decides — see `EngineDeps.priority`'s doc). Deliberately payload-typed as
+ * `PersistedJob`, not narrowed to any one job kind: the engine stays
+ * agnostic about what `payload` contains (`types.ts`'s own doc), so a
+ * comparator that only cares about `'generation'`-kind jobs is the caller's
+ * concern, not this seam's.
+ */
+export type JobPriorityComparator = (a: PersistedJob, b: PersistedJob) => number;
+
 export interface EngineDeps {
   readonly store: QueueStore;
   readonly capability: DeviceCapability;
@@ -94,6 +132,23 @@ export interface EngineDeps {
    * both sides must opt in.
    */
   readonly enqueueDebounce?: EnqueueDebouncePolicy;
+  /**
+   * Opt-in DRAIN-order seam for F3.7's "coverage-first" ordering
+   * (`ol-2zfj.168`) — distinct from `enqueueDebounce` above, which gates
+   * whether a job is admitted at all, never the order jobs already admitted
+   * drain in. Omitted (every current production caller, `wiring.ts:508`):
+   * `nextEligibleIndex` behaves exactly as before this option existed —
+   * first eligible job in arrival order, for every job kind sharing this
+   * queue alike. Supplied: among the jobs eligible to run *this* tick, the
+   * one `priority` ranks first drains first; a job it ranks last still
+   * drains once nothing ranked ahead of it remains eligible — priority only
+   * ever reorders, never skips (module doc, "Priority seam"). No production
+   * caller supplies this yet: the ordering key F3.7 leaves open
+   * (which mastery reading, which yield, how ties break) is an unruled
+   * Class C question, tracked in the service repo's proposed-decision doc
+   * cited in the module doc above.
+   */
+  readonly priority?: JobPriorityComparator;
 }
 
 /** Any job left `in-flight` belongs to a session that died before recording an outcome — requeue it (see the module doc's "persist-before-await" note). Returns the corrected array and whether anything changed. */
@@ -123,6 +178,7 @@ export class IngestionQueueEngine {
   private readonly clock: Clock;
   private readonly random: RandomSource;
   private readonly enqueueDebounce: EnqueueDebouncePolicy | null;
+  private readonly priority: JobPriorityComparator | null;
 
   private jobs: PersistedJob[];
   private headroom: number | null;
@@ -144,6 +200,7 @@ export class IngestionQueueEngine {
     this.clock = deps.clock ?? defaultClock;
     this.random = deps.random ?? defaultRandom;
     this.enqueueDebounce = deps.enqueueDebounce ?? null;
+    this.priority = deps.priority ?? null;
     this.jobs = [...jobs];
     this.headroom = headroom;
     this.budgetResumeAt = budgetResumeAt;
@@ -253,14 +310,45 @@ export class IngestionQueueEngine {
     return true;
   }
 
+  private static isEligible(job: PersistedJob, now: number): boolean {
+    if (job.status === 'queued') return true;
+    if (job.status === 'deferred' && job.deferReason === 'transient-error') {
+      return (job.resumeNotBefore ?? 0) <= now;
+    }
+    return false;
+  }
+
+  /**
+   * The next job `tick()` should run, by index into `this.jobs`, or `-1` if
+   * none is eligible. With no `priority` comparator (every current
+   * production caller) this is exactly `findIndex` over eligibility, same
+   * as before this seam existed — first eligible job in arrival order. With
+   * one supplied, it scans every eligible job and keeps the one `priority`
+   * ranks ahead, breaking a `0` (or otherwise-unresolved) comparison in
+   * favour of whichever was found first — i.e. arrival order, the seam's
+   * declared tie-break (module doc, "Priority seam"). A job never skips: an
+   * eligible job that loses every comparison this tick is still eligible
+   * next tick, and the tick after that, until it wins one.
+   */
   private nextEligibleIndex(now: number): number {
-    return this.jobs.findIndex((job) => {
-      if (job.status === 'queued') return true;
-      if (job.status === 'deferred' && job.deferReason === 'transient-error') {
-        return (job.resumeNotBefore ?? 0) <= now;
+    if (this.priority === null) {
+      return this.jobs.findIndex((job) => IngestionQueueEngine.isEligible(job, now));
+    }
+
+    let bestIndex = -1;
+    for (let index = 0; index < this.jobs.length; index++) {
+      // biome-ignore lint/style/noNonNullAssertion: index is in-bounds by the loop condition.
+      const job = this.jobs[index]!;
+      if (!IngestionQueueEngine.isEligible(job, now)) continue;
+      if (bestIndex === -1) {
+        bestIndex = index;
+        continue;
       }
-      return false;
-    });
+      // biome-ignore lint/style/noNonNullAssertion: bestIndex was set to an in-bounds index above.
+      const comparison = this.priority(job, this.jobs[bestIndex]!);
+      if (comparison < 0) bestIndex = index;
+    }
+    return bestIndex;
   }
 
   /**
