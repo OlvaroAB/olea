@@ -110,6 +110,25 @@
  * `containment` — surface it to the student, log it, feed a future ratified
  * gate — does so with the number this function reports; inventing that
  * decision is out of scope for this module by design.
+ *
+ * ===========================================================================
+ * D-279's CHOSEN ROUTE — EVIDENCE TO THE JUDGE, STILL NEVER A GATE
+ * ===========================================================================
+ *
+ * `[D-279]` (superseding the `[D-089]`/`[D-138]` restatement-gate reading,
+ * `ol-0r92.99`) settled the open question above: the gate stays off, and
+ * this measurement's `containment` value is instead passed to the
+ * `explain-back.judge.v1` Worker task as evidence for the model to weigh,
+ * never as something that decides the verdict on its own. `[D-319]`
+ * (2026-09-25) is explicit that a correct short definition or necessary
+ * technical wording must not trigger a restatement finding from overlap
+ * alone — see `toRestatementOverlapEvidence` below for the wire shape that
+ * carries the basis a reader needs to judge that correctly, and
+ * `olea-service/src/tasks/explainBackJudge.ts`'s module header for how the
+ * evidence is phrased in the prompt. This does not change anything above:
+ * `precheckRestatement` still only measures, this module still decides
+ * nothing, and no threshold exists anywhere for `containment` to be checked
+ * against.
  */
 
 /** One trap-category measurement — record-only per `[D-138]`, see the module header. */
@@ -281,4 +300,56 @@ export function precheckRestatement(
     ? `${input.referenceAnswer}\n\n${input.sourceExcerpt}`
     : input.referenceAnswer;
   return measureAnswerSourceOverlap(input.studentAnswer, sourceMaterial, options.ngramSize);
+}
+
+// ---------------------------------------------------------------------------
+// The judge-evidence wire shape — D-279 / ol-0r92.99, see "D-279's CHOSEN
+// ROUTE" in the module header. Still record-only: this projects the
+// measurement into what travels to the judge, it does not add a decision.
+// ---------------------------------------------------------------------------
+
+/**
+ * The subset of `OverlapMeasurement` sent to `explain-back.judge.v1` as
+ * evidence (`olea-service/src/tasks/explainBackJudge.ts`'s
+ * `restatementOverlapEvidence` schema — the two must be read together, per
+ * `gradingPipeline.ts`'s "wire types are a mirror, not an import"
+ * convention: `olea-core` cannot import from `olea-service`, and vice
+ * versa). Deliberately a strict subset of the full measurement: `lcsRatio`
+ * and `jaccard` are diagnostic-only signals this module's own header
+ * documents as "not fit to gate on" — sending them to the judge as if they
+ * were gate-worthy would invite exactly the mistake `[D-138]` already
+ * corrected once. `containment` is the measured value; `ngramSize` and
+ * `answerTokenCount` are the basis a reader needs to weigh it, since a short
+ * answer adaptively shrinks `ngramSize` (see `measureAnswerSourceOverlap`
+ * above) — a high `containment` alongside a low `answerTokenCount` reflects
+ * reuse of a handful of necessary words, not a long verbatim passage.
+ */
+export interface RestatementOverlapEvidence {
+  readonly containment: number;
+  readonly ngramSize: number;
+  readonly answerTokenCount: number;
+  readonly sourceTokenCount: number;
+}
+
+/**
+ * Projects an `OverlapMeasurement` down to the evidence shape sent to the
+ * judge. Pure and total — a field selection, no new computation, no I/O.
+ *
+ * Wiring this into an actual outgoing `explain-back.judge.v1` request is
+ * `gradingPipeline.ts`'s job (its `ExplainBackJudgeWireRequest` mirror type
+ * and the call site that builds the request), not this module's — see that
+ * file's own header for the pipeline shape. This function exists so that
+ * wiring has a single, tested place to get the evidence shape from, rather
+ * than each caller re-deriving which fields of `OverlapMeasurement` are
+ * safe to send.
+ */
+export function toRestatementOverlapEvidence(
+  measurement: OverlapMeasurement,
+): RestatementOverlapEvidence {
+  return {
+    containment: measurement.containment,
+    ngramSize: measurement.ngramSize,
+    answerTokenCount: measurement.answerTokenCount,
+    sourceTokenCount: measurement.sourceTokenCount,
+  };
 }

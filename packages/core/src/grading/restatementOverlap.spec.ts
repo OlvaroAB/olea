@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { measureAnswerSourceOverlap, precheckRestatement } from './restatementOverlap.js';
+import {
+  measureAnswerSourceOverlap,
+  precheckRestatement,
+  toRestatementOverlapEvidence,
+} from './restatementOverlap.js';
 
 // Synthetic, invented study material — never real vault content (INV-3).
 // Topic and wording made up for this test only.
@@ -118,5 +122,47 @@ describe('precheckRestatement', () => {
     );
     expect(result.ngramSize).toBeLessThanOrEqual(3);
     expect(result.containment).toBe(1);
+  });
+});
+
+describe('toRestatementOverlapEvidence', () => {
+  // D-279 / ol-0r92.99: the wire shape sent to the judge as evidence. A
+  // strict subset of OverlapMeasurement — this is the load-bearing claim of
+  // the test below, not just a convenience check: lcsRatio and jaccard were
+  // evaluated and rejected as gate-worthy (module header), and this function
+  // is what stops a future edit from accidentally forwarding them to the
+  // judge alongside containment.
+
+  it('keeps containment, ngramSize and both token counts, and drops the diagnostic-only fields', () => {
+    const measurement = measureAnswerSourceOverlap(VERBATIM, SOURCE);
+    const evidence = toRestatementOverlapEvidence(measurement);
+
+    expect(evidence).toEqual({
+      containment: measurement.containment,
+      ngramSize: measurement.ngramSize,
+      answerTokenCount: measurement.answerTokenCount,
+      sourceTokenCount: measurement.sourceTokenCount,
+    });
+    expect(evidence).not.toHaveProperty('lcsRatio');
+    expect(evidence).not.toHaveProperty('jaccard');
+  });
+
+  it('carries a low answerTokenCount alongside a high containment for a short, correct, technical answer', () => {
+    // The exact shape D-319 warns about: a short correct answer necessarily
+    // reuses a few technical words verbatim, so containment can read high
+    // even though nothing is wrong with the answer. The evidence must carry
+    // answerTokenCount so the judge can tell the two situations apart.
+    const measurement = measureAnswerSourceOverlap('membrane bound organelles', SOURCE, 8);
+    const evidence = toRestatementOverlapEvidence(measurement);
+
+    expect(evidence.containment).toBe(1);
+    expect(evidence.answerTokenCount).toBe(3);
+    expect(evidence.ngramSize).toBeLessThanOrEqual(3);
+  });
+
+  it('is a pure projection: measuring the same inputs twice yields equal evidence', () => {
+    const a = toRestatementOverlapEvidence(measureAnswerSourceOverlap(GENUINE_OWN_WORDS, SOURCE));
+    const b = toRestatementOverlapEvidence(measureAnswerSourceOverlap(GENUINE_OWN_WORDS, SOURCE));
+    expect(a).toEqual(b);
   });
 });
