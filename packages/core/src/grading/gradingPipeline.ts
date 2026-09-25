@@ -54,7 +54,10 @@
  *    — this module does not perform the HTTP call itself (no client-side
  *    `/v1/task` transport exists yet anywhere in this repo; that is a
  *    separate, not-yet-built concern), only the request/response shape and
- *    the logic around the call.
+ *    the logic around the call. The request now always carries
+ *    `restatementOverlap` (`toRestatementOverlapEvidence(overlap)`,
+ *    `ol-0r92.99` / `[D-279]`) — evidence for the model to weigh, never a
+ *    gate; see `ExplainBackJudgeWireRequest` below.
  * 4. **Ground every citation (INV-5's confabulation surface for this
  *    feature).** `groundCitations` drops any `citedIssues` or
  *    `misconceptionCandidates` entry whose citation set, once filtered to
@@ -127,7 +130,9 @@ import type { MisconceptionDigestEntry } from '../misconception/digest.js';
 import {
   type OverlapMeasurement,
   precheckRestatement,
+  type RestatementOverlapEvidence,
   type RestatementPrecheckOptions,
+  toRestatementOverlapEvidence,
 } from './restatementOverlap.js';
 
 // ---------------------------------------------------------------------------
@@ -165,13 +170,23 @@ export interface ExplainBackGradingWireResponse {
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
 }
 
-/** The `explain-back.judge.v1` request exactly as the Worker's zod schema shapes it. */
+/**
+ * The `explain-back.judge.v1` request exactly as the Worker's zod schema
+ * shapes it. `restatementOverlap` is `ol-0r92.99` / `[D-279]`'s addition —
+ * `RestatementOverlapEvidence` (from `restatementOverlap.js`) already IS the
+ * mirror of the Worker's `restatementOverlapEvidence` schema, so this field
+ * is typed directly from it rather than re-declared here. Optional on the
+ * wire type for schema symmetry with the Worker's own `.optional()` (an old
+ * caller that never populates it still type-checks), but `gradeExplainBack`
+ * below always supplies it — see that function's call site.
+ */
 export interface ExplainBackJudgeWireRequest {
   readonly question: string;
   readonly studentAnswer: string;
   readonly referenceAnswer: string;
   readonly sourceBlocks: readonly SourceBlockRef[];
   readonly misconceptionDigest: readonly { concept: string; statement: string }[];
+  readonly restatementOverlap?: RestatementOverlapEvidence;
 }
 
 export interface GradeExplainBackInput {
@@ -336,6 +351,13 @@ export async function gradeExplainBack(
     referenceAnswer: input.referenceAnswer,
     sourceBlocks: input.sourceBlocks,
     misconceptionDigest: toWireMisconceptionDigest(input.misconceptionDigest),
+    // `ol-0r92.99` / `[D-279]`: the measurement above, projected to the
+    // strict subset the judge is sent — evidence only, never a gate (see
+    // `overlap` above and restatementOverlap.ts's own header). Sent on
+    // every call now that this pipeline wires it, which is why the prompt
+    // version was bumped alongside this change (D7.3) — see
+    // prompts/explain-back.judge/VERSION in olea-service.
+    restatementOverlap: toRestatementOverlapEvidence(overlap),
   });
   return {
     status: 'pending-review',

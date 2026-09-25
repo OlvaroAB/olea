@@ -604,10 +604,15 @@ export {
 // Record-only since [D-138] deleted the gating threshold — see the module.
 export type {
   OverlapMeasurement,
+  RestatementOverlapEvidence,
   RestatementPrecheckInput,
   RestatementPrecheckOptions,
 } from './grading/restatementOverlap.js';
-export { measureAnswerSourceOverlap, precheckRestatement } from './grading/restatementOverlap.js';
+export {
+  measureAnswerSourceOverlap,
+  precheckRestatement,
+  toRestatementOverlapEvidence,
+} from './grading/restatementOverlap.js';
 // The production `JudgeCaller` (`ol-drfy`): builds the frozen
 // `explain-back.judge.v1` envelope, but leaves the HTTP call itself to an
 // injected `WorkerTaskTransport` — the same seam `WorkerEmbeddingProvider`

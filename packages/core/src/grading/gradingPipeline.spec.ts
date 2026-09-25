@@ -13,6 +13,7 @@ import {
   toWireMisconceptionDigest,
   UnusableGradingInputError,
 } from './gradingPipeline.js';
+import { toRestatementOverlapEvidence } from './restatementOverlap.js';
 
 // Synthetic, invented material throughout — never real vault content (INV-3).
 
@@ -154,7 +155,11 @@ describe('gradeExplainBack — the pipeline (pre-check, model call, grounding)',
   });
 
   it('always calls the model, even for a verbatim paste — [D-138] deleted the gating threshold', async () => {
-    const callJudge = vi.fn().mockResolvedValue(wireResponse());
+    let seen: ExplainBackJudgeWireRequest | undefined;
+    const callJudge = vi.fn(async (req: ExplainBackJudgeWireRequest) => {
+      seen = req;
+      return wireResponse();
+    });
     const verbatimAnswer = SOURCE_BLOCKS.map((b) => b.text).join(' ');
     const result = await gradeExplainBack(
       baseInput({ studentAnswer: verbatimAnswer, sourceBlocks: SOURCE_BLOCKS }),
@@ -162,6 +167,37 @@ describe('gradeExplainBack — the pipeline (pre-check, model call, grounding)',
     );
     // The overlap measurement is still reported — record-only, never gates.
     expect(result.overlap.containment).toBeGreaterThan(0.9);
+    expect(callJudge).toHaveBeenCalledTimes(1);
+    // `ol-0r92.99` / `[D-279]`: a high measurement travels to the judge as
+    // evidence, but it never becomes a reason not to call the model — the
+    // call above already happened before this assertion runs.
+    expect(seen?.restatementOverlap?.containment).toBeGreaterThan(0.9);
+  });
+
+  it('ol-egov.141.89.6.25: the wire request carries restatementOverlap, computed from precheckRestatement via toRestatementOverlapEvidence', async () => {
+    let seen: ExplainBackJudgeWireRequest | undefined;
+    const callJudge = vi.fn(async (req: ExplainBackJudgeWireRequest) => {
+      seen = req;
+      return wireResponse();
+    });
+    const result = await gradeExplainBack(baseInput(), callJudge);
+    // Same projection `summarizeGradingForTelemetry` and the module itself
+    // use — the wire value is exactly the returned `overlap` measurement
+    // narrowed to the evidence shape, not a separately recomputed number.
+    expect(seen?.restatementOverlap).toEqual(toRestatementOverlapEvidence(result.overlap));
+  });
+
+  it('sends restatementOverlap on a low-overlap genuine answer too — never omitted, never gated on', async () => {
+    let seen: ExplainBackJudgeWireRequest | undefined;
+    const callJudge = vi.fn(async (req: ExplainBackJudgeWireRequest) => {
+      seen = req;
+      return wireResponse();
+    });
+    await gradeExplainBack(
+      baseInput({ studentAnswer: 'A totally different, unrelated sentence about Q.' }),
+      callJudge,
+    );
+    expect(seen?.restatementOverlap).toBeDefined();
     expect(callJudge).toHaveBeenCalledTimes(1);
   });
 
