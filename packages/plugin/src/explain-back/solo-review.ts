@@ -239,6 +239,29 @@ export interface RecordSoloGradeAndReviewParams {
    * render method it describes.
    */
   readonly supportLevelShown?: SupportLevel;
+  /**
+   * The `eventId` of the review-log event this attempt corrects, when this
+   * call is a corrective re-grade — absent or `null` for an ordinary fresh
+   * attempt, the historical and still the ordinary case. Forwarded verbatim
+   * to `recordGradedExplainBackReview`'s own `revisionOf`
+   * (`../../../core/src/study-session/explain-back-grade-write.js`), whose
+   * doc states a corrective re-grade "is a DIFFERENT attempt (a fresh
+   * attemptId), never [equal] to instrumentId or revisionOf" — a caller
+   * supplying this must still mint a fresh `attemptId` above, never reuse
+   * the corrected attempt's own id.
+   *
+   * **`[D-281]` (`ol-95vv.10`)'s correction rule is the one ruled exception
+   * to the growth stage's otherwise-monotone high-water mark** — "where one
+   * grade supersedes another via `revisionOf`, the later grade wins"
+   * (`ol-95vv.10`'s close reason). `../../../core/src/mastery/rollup.js`'s
+   * `qualifiesForTopStage` already reads this field, unconditionally, off
+   * whatever the log carries; before this field existed on this module's
+   * params, this — the one production writer of `explainBackGrade` — always
+   * passed `null` regardless of what a caller intended, so the correction
+   * rule had no real value in production to ever act on
+   * (`docs/dev/intelligence-build/att.md` item 7, `olea-service`).
+   */
+  readonly revisionOf?: string | null;
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
@@ -339,7 +362,7 @@ export async function recordSoloGradeAndReview(
     {
       subject,
       accepted,
-      revisionOf: null,
+      revisionOf: params.revisionOf ?? null,
       artifactProvenance: outcome.artifactProvenance,
       studentAnswer: params.answer,
       attemptId,

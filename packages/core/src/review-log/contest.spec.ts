@@ -1,7 +1,9 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ReviewLogRecord } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { computeConceptMastery } from '../mastery/rollup.js';
 import { FolderSource } from '../vault/folder-source.js';
 import {
   CLAIM_ROUTING,
@@ -14,6 +16,7 @@ import {
   contestRateHealthCheck,
   contestRevisitTriggers,
   contestStateForClaim,
+  correctedGradeInstrumentIds,
   isDisputeCurrent,
   quarantinedGradeInstrumentIds,
   resolveDispute,
@@ -402,6 +405,188 @@ describe('consumers read the effect from the log', () => {
 
   it('picks disputes out of a mixed log', () => {
     expect(reviewLogDisputes([dispute()])).toHaveLength(1);
+  });
+});
+
+describe('correctedGradeInstrumentIds — [D-338] proven-invalid evidence, the grade half (att.md item 7)', () => {
+  it('names an instrument whose grade dispute resolved corrected — the tool was wrong', () => {
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: 'i1',
+    });
+    const resolved: DisputeLogRecord = {
+      ...opening,
+      eventId: 'd2',
+      resolves: 'd1',
+      outcome: 'corrected',
+    };
+    expect(correctedGradeInstrumentIds([opening, resolved])).toEqual(['i1']);
+  });
+
+  it('excludes an upheld resolution — nothing was found defective', () => {
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: 'i1',
+    });
+    const resolved: DisputeLogRecord = {
+      ...opening,
+      eventId: 'd2',
+      resolves: 'd1',
+      outcome: 'upheld',
+    };
+    expect(correctedGradeInstrumentIds([opening, resolved])).toEqual([]);
+  });
+
+  it('excludes a still-open quarantine — no resolution has landed yet', () => {
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: 'i1',
+    });
+    expect(correctedGradeInstrumentIds([opening])).toEqual([]);
+  });
+
+  it('excludes a corrected resolution on a non-grade claim kind', () => {
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'reading',
+      claimRendering: 'mastery-reading',
+      effect: 'held',
+    });
+    const resolved: DisputeLogRecord = {
+      ...opening,
+      eventId: 'd2',
+      resolves: 'd1',
+      outcome: 'corrected',
+    };
+    // Readings never resolve in production (`resolveDispute` is called only
+    // from the grade path) — this guards the function against a malformed
+    // or hand-built log rather than describing a reachable state.
+    expect(correctedGradeInstrumentIds([opening, resolved])).toEqual([]);
+  });
+});
+
+describe('[D-338] a corrected grade dispute reaches the growth-stage fold (att.md item 7)', () => {
+  const SELECTION_CONTEXT = {
+    dueState: 'due' as const,
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['explain-back' as const],
+    planVersion: null,
+  };
+
+  /** A top-stage-qualifying graded explain-back review for `concept-a` ([D-281]'s four pieces of evidence). */
+  function qualifyingExplainBack(): ReviewLogRecord {
+    return {
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'g1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      instrumentId: 'explain-back:concept-a',
+      instrumentType: 'explain-back',
+      conceptIds: [CONCEPT_A],
+      rating: null,
+      wasUnsure: false,
+      durationMs: 1200,
+      supportLevelShown: 'independent',
+      selectionContext: SELECTION_CONTEXT,
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: null,
+        artifactProvenance: {
+          taskId: 'explain-back-grade',
+          promptVersion: 'v0',
+          modelId: 'model-placeholder',
+        },
+      },
+    };
+  }
+
+  it('a grade dispute resolved corrected folds the instrument invalid, dropping the top stage', () => {
+    const grade = qualifyingExplainBack();
+
+    // Without the dispute: this attempt qualifies for the top stage, same
+    // as `rollup.spec.ts`'s own `[D-281]` coverage.
+    expect(computeConceptMastery([grade], CONCEPT_A).state).toBe('tree');
+
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: grade.instrumentId,
+      conceptIds: [CONCEPT_A],
+    });
+    const resolved: DisputeLogRecord = {
+      ...opening,
+      eventId: 'd2',
+      resolves: 'd1',
+      outcome: 'corrected',
+    };
+
+    // `../mastery/rollup.ts` is not edited by this fix — it already reads
+    // `invalidInstrumentIds` unconditionally from whatever a caller
+    // supplies; this fold's own bug is that no caller had this fact to
+    // supply for a corrected grade dispute at all. This is that fact.
+    const invalidInstrumentIds = correctedGradeInstrumentIds([opening, resolved]);
+    expect(invalidInstrumentIds).toEqual(['explain-back:concept-a']);
+
+    const result = computeConceptMastery([grade], CONCEPT_A, { invalidInstrumentIds });
+    expect(result.evidence.topStageQualified).toBe(false);
+    expect(result.state).not.toBe('tree');
+  });
+
+  it('an upheld resolution leaves the top stage exactly where it was', () => {
+    const grade = qualifyingExplainBack();
+    const opening = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: grade.instrumentId,
+      conceptIds: [CONCEPT_A],
+    });
+    const resolved: DisputeLogRecord = {
+      ...opening,
+      eventId: 'd2',
+      resolves: 'd1',
+      outcome: 'upheld',
+    };
+
+    const invalidInstrumentIds = correctedGradeInstrumentIds([opening, resolved]);
+    expect(invalidInstrumentIds).toEqual([]);
+    expect(computeConceptMastery([grade], CONCEPT_A, { invalidInstrumentIds }).state).toBe('tree');
+  });
+
+  it('a corrective re-grade with a real revisionOf supersedes the attempt it corrects, through the same unedited fold', () => {
+    const original = qualifyingExplainBack();
+    const correction: ReviewLogRecord = {
+      ...original,
+      eventId: 'g2',
+      timestamp: '2026-01-11T09:00:00-04:00',
+      explainBackGrade: {
+        ...original.explainBackGrade!,
+        soloLevel: 'multistructural',
+        revisionOf: original.eventId,
+      },
+    };
+
+    expect(computeConceptMastery([original], CONCEPT_A).state).toBe('tree');
+    // The correction is a demotion (SOLO depth below the depth gate): the
+    // later grade wins per [D-281]'s correction rule, so the stage follows
+    // the correction, not the original — the one ruled exception to the
+    // otherwise-monotone high-water mark.
+    expect(computeConceptMastery([original, correction], CONCEPT_A).state).not.toBe('tree');
   });
 });
 

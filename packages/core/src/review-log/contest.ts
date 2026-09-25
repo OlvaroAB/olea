@@ -602,6 +602,51 @@ export function quarantinedGradeInstrumentIds(
 }
 
 /**
+ * Instruments whose grade dispute resolved `corrected` — `[D-338]`'s
+ * proven-invalid evidence, the grade half (`ol-egov.141.89.9.21`,
+ * `docs/dev/intelligence-build/att.md` item 7, `olea-service`).
+ *
+ * **Why this exists, and why `quarantinedGradeInstrumentIds` alone was not
+ * enough.** Until a resolution lands, a disputed grade is THIN evidence
+ * (quarantined, above) — dimmed, never dropped. Once it lands `corrected`,
+ * `resolveDispute`'s own doc names what that means: "the tool was wrong."
+ * `[D-338]` item 2 corrects the displayed growth stage only when its
+ * qualifying evidence is proven invalid — "the instrument is found
+ * defective, rejected, or withdrawn as defective" — and a `corrected` grade
+ * dispute is exactly a today-unambiguous "found defective," the identical
+ * shape `registry/build.ts`'s `provenInvalidInstrumentIds` already reads off
+ * a `rejected` verdict record. Before this function, the fold had no way to
+ * read that signal at all: the instrument merely stopped being quarantined
+ * and reverted to ordinary standing, as if the correction had never
+ * happened — the bug `att.md` item 7 names ("a contest resolved corrected is
+ * read only as an ended quarantine").
+ *
+ * **`upheld` is deliberately excluded.** The re-derivation checked the
+ * grading and it held — nothing about the instrument was found defective,
+ * so it stays ordinary evidence once its quarantine ends.
+ *
+ * **A caller-side projection, not a fold change.** Like
+ * `provenInvalidInstrumentIds`, this returns instrument ids for a caller to
+ * fold into `MasteryRollupOptions.invalidInstrumentIds` — `../mastery/
+ * rollup.ts` already reads that option unconditionally and needs no change
+ * of its own. Which reader(s) union this set in (`registry/build.ts`,
+ * `today/data-source.ts`, `grove/provider.ts` — all outside this file's
+ * owns) is this bead's named reachability gap; see its report.
+ */
+export function correctedGradeInstrumentIds(
+  records: readonly (ReviewLogEntry | DisputeLogRecord)[],
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const record of reviewLogDisputes(records)) {
+    if (record.claimKind !== 'grade') continue;
+    if (isOpening(record)) continue;
+    if (record.outcome !== 'corrected') continue;
+    if (record.instrumentId !== undefined) ids.add(record.instrumentId);
+  }
+  return [...ids];
+}
+
+/**
  * Structural claims she has withdrawn — returned to candidate, and never
  * served. Keyed by the concept set the confirmation joined, because that is
  * what a match or an edge IS.

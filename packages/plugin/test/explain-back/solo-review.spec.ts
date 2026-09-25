@@ -209,6 +209,69 @@ describe('recordSoloGradeAndReview — durationMs (ol-yj0k)', () => {
   });
 });
 
+describe('recordSoloGradeAndReview — [D-281] correction: revisionOf (ol-egov.141.89.9.21, att.md item 7)', () => {
+  it('writes null, never a fabricated correction, when the caller supplies no revisionOf (the ordinary fresh attempt)', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.explainBackGrade?.revisionOf).toBeNull();
+  });
+
+  it('forwards a real revisionOf — the corrective re-grade this module was, until now, incapable of writing', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        // ol-0r92.94 [DOS-C1]: a corrective re-grade is a DIFFERENT attempt,
+        // a fresh attemptId, never the corrected attempt's own id.
+        attemptId: 'attempt-for-the-correction',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property, revised.',
+        revisionOf: 'original-grade-event-id',
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.explainBackGrade?.revisionOf).toBe('original-grade-event-id');
+  });
+
+  it('writes an explicit null exactly as it writes an absent one', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+        revisionOf: null,
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.explainBackGrade?.revisionOf).toBeNull();
+  });
+});
+
 describe('recordSoloGradeAndReview — ol-0r92.94 [DOS-C1]: attemptId threading', () => {
   it('forwards a real attemptId into the durable idempotency key, distinct from instrumentId', async () => {
     const vault = memoryVault();
