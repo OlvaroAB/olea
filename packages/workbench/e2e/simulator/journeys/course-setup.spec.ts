@@ -80,10 +80,25 @@ const CONFIRMATION_SELECTOR = '.olea-course-setup-confirmation';
 const NAME_INPUT_SELECTOR = '.olea-course-setup-name-input';
 const CONFIRM_BUTTON_SELECTOR = '.olea-course-setup-confirm';
 
-/** `gotoSimulator`'s own two lines (`../helpers.ts`), minus its `dismissCourseSetupModals()` call — see this file's module doc for why skipping that one line is the whole point of not reusing it. */
+/**
+ * Navigates to the simulator with the same URL logic as `gotoSimulator` (`../helpers.ts`),
+ * respecting `WB_SIM_SELECT_WORLD` and `WB_SIM_TRANSPORT` env vars — but skips the
+ * `dismissCourseSetupModals()` call so this journey can capture them. This journey needs
+ * different modal-keeping behaviour, not worth widening `gotoSimulator`'s shape just for
+ * one caller.
+ */
 async function gotoSimulatorKeepingModals(page: Page): Promise<void> {
-  await page.goto(`/#/simulator?world=${WORLD}&persona=${PERSONA}`);
+  // Match gotoSimulator's URL-building logic to respect transport and world selection
+  const transport = process.env.WB_SIM_TRANSPORT;
+  const transportParam = transport === undefined ? '' : `&transport=${transport}`;
+  const selectWorld = process.env.WB_SIM_SELECT_WORLD;
+  const searchParam =
+    selectWorld === undefined || selectWorld === ''
+      ? ''
+      : `?world=${encodeURIComponent(selectWorld)}`;
+  await page.goto(`/${searchParam}#/simulator?world=${WORLD}&persona=${PERSONA}${transportParam}`);
   await waitForSettled(page, SIMULATOR_STATE_ID);
+  // Intentionally skip dismissCourseSetupModals() to let this journey capture them
 }
 
 test(`@auto-web:simulator/journeys/course-setup ${WORLD}/${PERSONA} — CourseSetupModal's confirmation phase, and the queued second proposal`, async ({
