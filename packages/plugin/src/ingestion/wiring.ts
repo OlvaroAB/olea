@@ -97,9 +97,13 @@ import {
 import type {
   OutcomeSourcePassage,
   OutcomesExtractDocumentKind,
+  OutcomesExtractReadResult,
   PaperSectionCandidate,
 } from './outcomes-extract-adapter.js';
-import { WorkerOutcomesExtractReader } from './outcomes-extract-adapter.js';
+import {
+  OUTCOMES_EXTRACT_TASK_ID,
+  WorkerOutcomesExtractReader,
+} from './outcomes-extract-adapter.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
 import { createWorkerVisionPageRunner, WorkerVisionPageExtractor } from './vision-page-runner.js';
 
@@ -164,6 +168,39 @@ export interface IngestionWiringDeps {
     readonly recordedPreferenceFor?: GenerationArrivalDeps['recordedPreferenceFor'];
     readonly coursesFolder?: string;
   };
+  /**
+   * `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]: when
+   * present, wires `outcomes.extract.v1`'s production trigger onto the SAME landed-unit seam
+   * `onUnitsLanded`/`deps.generation` above already use — see `withOutcomesExtractHook`'s own doc
+   * for why that seam, not a new job kind, is what gives this "the same queue, retries and
+   * background allowance as concept extraction" the ruling asks for. Omitted (every caller before
+   * this bead) leaves `buildIngestionRunner` byte-identical: no landed unit is ever checked
+   * against a registered document, and `outcomes.extract.v1` is never called.
+   */
+  readonly outcomes?: OutcomesExtractTriggerDeps;
+}
+
+/**
+ * `deps.outcomes`'s own shape — see `IngestionWiringDeps.outcomes`'s doc and
+ * `withOutcomesExtractHook`'s module doc for the composition this feeds.
+ */
+export interface OutcomesExtractTriggerDeps {
+  /** Same `ObsidianDataHost`/`createTransport` split `deps.vision` above uses — F7.8's persisted-config load, gated the identical way. */
+  readonly dataHost: ObsidianDataHost;
+  readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+  /**
+   * `[D-344]`'s eligibility test: `null` for a `sourcePath` that is unregistered, or registered as
+   * anything other than `'objectives'`/`'past-paper'` (`'course-material'`, F3.1's own default,
+   * reads as "not this document's job", never a guess). Read fresh on every call — never cached by
+   * this module — because she can register a document at any point after this wiring is built
+   * (`../course-setup/register-source-wiring.ts`'s file-menu gesture). `courses` mirrors
+   * `RunOutcomesExtractOptions.courses`: absent/undetermined reads as an empty array, never a
+   * fabricated course.
+   */
+  readonly registeredDocumentFor: (sourcePath: VaultPath) => Promise<{
+    readonly documentKind: OutcomesExtractDocumentKind;
+    readonly courses: readonly string[];
+  } | null>;
 }
 
 /**
@@ -235,6 +272,156 @@ function withGenerationEnqueueHook(
 }
 
 /**
+ * `[D-344]`'s D7.3 gate: reads `{promptVersion, modelId}` off a Worker response's public `stamp`
+ * envelope — the same fields `worker/transport.ts#WorkerHttpTransport`'s `onCallRecorded` callback
+ * and `../grading/wiring.ts#extractSoloArtifactProvenance` already read for the identical reason,
+ * duplicated here rather than imported (that function's own doc: neither lives in this file's
+ * `owns`, and each reads its own task's response shape). `null` on any malformed or missing piece
+ * — never a fabricated placeholder (D-005): a caller that cannot prove provenance does not persist
+ * the outcome, the same posture `gradeSoloAttempt` already holds for a SOLO grading response.
+ */
+function extractOutcomeProvenanceStamp(body: unknown): OutcomeProvenance | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const envelope = body as Record<string, unknown>;
+  if (envelope.ok !== true) return null;
+  const stamp = envelope.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return { promptVersion: s.promptVersion, modelVersion: s.modelId };
+}
+
+/**
+ * `deps.outcomes`'s production trigger (`[D-344]`, `ol-2zfj.141` [IL-D10], `ol-2zfj.153`
+ * [DOS-I4]) — the "existing ingestion-tick extraction runner extracts its outcomes by document
+ * kind" half of the ruling. Fires for one already-landed document's units (grouped by
+ * `provenance.sourcePath` in `withOutcomesExtractHook` below), checks `deps.registeredDocumentFor`,
+ * and — only when it names an eligible role — makes the ONE real `outcomes.extract.v1` call this
+ * document's current revision gets.
+ *
+ * **Why this seam, not a new job kind.** `createExtractionJobRunner` (`olea-core`) is not this
+ * bead's to touch (it never heard of a "registered document" and does not need to), and the vault
+ * read + retry machinery for THIS revision's text has already run by the time any sink sees units
+ * — so hooking the landed-unit seam inherits the underlying `'source'`/`'note'` job's own queue
+ * membership, its content-hash keying (a new revision is a new job; the SAME revision is drained
+ * at most once, so this fires at most once per revision — `[D-344]`'s "never twice for one
+ * revision", for free), and `IngestionQueueEngine`'s background-allowance gate (this only runs
+ * inside a real `tick()` drain) — exactly "the same queue, retries and background allowance as
+ * concept extraction" the ruling asks for. `[D-344]`'s "never by re-registration" falls out the
+ * same way: registering an already-ingested, unchanged document creates no new job, so nothing
+ * re-fires until its next real revision.
+ *
+ * **The single Worker call, and why provenance cannot be handed in ahead of it.**
+ * `runOutcomesExtract`'s own `options.provenance` is caller-known, supplied BEFORE that function's
+ * one `reader.read()` call — right for a caller that already knows its prompt/model version, wrong
+ * here, where D7.3 requires the REAL stamp off THIS response, not an invented one. So this function
+ * does not call `runOutcomesExtract`/`runOutcomesExtractAndReconcile` (which would mean a second,
+ * budget-doubling network call just to learn the stamp first); it wraps `deps.createTransport`'s
+ * transport in a capturing shim — the same technique `../grading/wiring.ts#gradeSoloAttempt` already
+ * uses for SOLO grading — makes the ONE `reader.read()` call, and only then resolves/persists
+ * through `resolveOutcomeCandidates`/`reconcileResolvedOutcomes` (the exact bodies
+ * `runOutcomesExtract`/`runOutcomesExtractAndReconcile` already run, factored out below so neither
+ * public function's tested behaviour changes).
+ *
+ * Never throws past its caller — `withOutcomesExtractHook` wraps this in its own try/catch, same
+ * "never fails the ingestion job it rode in on" posture as `withUnitsLandedHook`/
+ * `withGenerationEnqueueHook` above (a Worker outage or a missing stamp is F7.8's honest grey-out,
+ * not a retryable job failure — the same posture concept extraction's own Worker-backed read
+ * already holds, per `[D-344]`'s "same ... as concept extraction").
+ */
+async function triggerOutcomesExtractForLandedUnit(
+  vault: VaultSource,
+  deps: OutcomesExtractTriggerDeps,
+  sourcePath: VaultPath,
+  units: readonly ExtractedUnit[],
+): Promise<void> {
+  const registered = await deps.registeredDocumentFor(sourcePath);
+  if (registered === null) return;
+
+  const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
+  const config = await configStore.load();
+  if (!isWorkerConfigured(config)) return; // F7.8 grey-out: honest skip, not a failure.
+
+  let stamp: OutcomeProvenance | null = null;
+  const innerTransport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
+  const capturingTransport: WorkerTaskTransport = {
+    send: async (request) => {
+      const body = await innerTransport.send(request);
+      stamp = extractOutcomeProvenanceStamp(body);
+      return body;
+    },
+  };
+  const reader = new WorkerOutcomesExtractReader({ transport: capturingTransport });
+  const passages: OutcomeSourcePassage<OutcomeSourceReference>[] = units.map((unit, index) => ({
+    text: unit.text,
+    // `blockIndex` here is this document's own landed-unit ordinal (page/passage order), not a
+    // markdown block index — `OutcomeSourceReference.blockIndex` is an opaque, per-document
+    // distinguishing key (`store.ts`'s own conservation match), and `[D-344]`'s eligible documents
+    // are exactly the ones `isRegisterableDocument` accepts: never markdown, so there is no block
+    // structure to index into in the first place.
+    anchor: { path: sourcePath, blockIndex: index },
+  }));
+
+  const result: OutcomesExtractReadResult<OutcomeSourceReference> = await reader.read({
+    documentKind: registered.documentKind,
+    passages,
+  });
+
+  if (stamp === null) {
+    console.error(
+      'Olea: outcomes-extract response carried no D7.3 stamp (promptVersion/modelId) — extraction discarded, not guessed',
+      { taskId: OUTCOMES_EXTRACT_TASK_ID },
+    );
+    return;
+  }
+  const provenance: OutcomeProvenance = stamp;
+
+  const options: RunOutcomesExtractOptions = {
+    documentKind: registered.documentKind,
+    courses: registered.courses,
+    provenance,
+  };
+  const resolved = await resolveOutcomeCandidates(vault, result, options);
+  await reconcileResolvedOutcomes(vault, resolved, options);
+}
+
+/**
+ * Runs `inner` unchanged, then best-effort checks every distinct `provenance.sourcePath` this
+ * batch of landed units carries against `deps.registeredDocumentFor` — `deps.outcomes`'s own
+ * composition, independent of `onUnitsLanded`/`deps.generation` the same way those two are
+ * independent of each other. A `'note'` job's units can span several embedded sources at once
+ * (`extraction-runner.ts`'s own `runNoteJob`), so this groups by `sourcePath` before checking
+ * eligibility, rather than assuming one call's units all belong to a single document. Never fails
+ * the ingestion job it rode in on — see `triggerOutcomesExtractForLandedUnit`'s own doc.
+ */
+function withOutcomesExtractHook(
+  inner: ExtractedUnitSink,
+  vault: VaultSource,
+  outcomesDeps: OutcomesExtractTriggerDeps,
+): ExtractedUnitSink {
+  return {
+    async receive(units) {
+      await inner.receive(units);
+      const unitsBySourcePath = new Map<VaultPath, ExtractedUnit[]>();
+      for (const unit of units) {
+        const path = unit.provenance.sourcePath;
+        const grouped = unitsBySourcePath.get(path);
+        if (grouped) grouped.push(unit);
+        else unitsBySourcePath.set(path, [unit]);
+      }
+      for (const [sourcePath, sourceUnits] of unitsBySourcePath) {
+        try {
+          await triggerOutcomesExtractForLandedUnit(vault, outcomesDeps, sourcePath, sourceUnits);
+        } catch (error) {
+          console.error('Olea: outcomes-extract hook failed (ingestion unaffected)', error);
+        }
+      }
+    },
+  };
+}
+
+/**
  * Builds one real, drainable ingestion pipeline: `createExtractionJobRunner`
  * wired to `deps.vault` and a fresh `PendingIndexingSink`, fed into
  * `IngestionQueueEngine.create` with `deps.queueStore`/`deps.capability`,
@@ -259,6 +446,12 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
   let runnerSink: ExtractedUnitSink = deps.onUnitsLanded
     ? withUnitsLandedHook(sink, deps.onUnitsLanded)
     : sink;
+  // `deps.outcomes` (`[D-344]`): composed right after `onUnitsLanded`'s hook, before
+  // `deps.generation`'s — independent of both, in the same "add-ons over the same base sink"
+  // shape this file's own doc already describes for the other two.
+  if (deps.outcomes) {
+    runnerSink = withOutcomesExtractHook(runnerSink, deps.vault, deps.outcomes);
+  }
   // `deps.generation`'s arrival half: composed AFTER `onUnitsLanded`'s hook
   // (if any) so the two are independent add-ons over the same base sink, in
   // the order this file's own doc lists them. `enqueuer` is safe to close
@@ -625,7 +818,23 @@ export async function runOutcomesExtract(
     documentKind: options.documentKind,
     passages,
   });
+  return resolveOutcomeCandidates(vault, result, options);
+}
 
+/**
+ * The resolve-and-persist half of `runOutcomesExtract`, factored out so `[D-344]`'s production
+ * trigger (`triggerOutcomesExtractForLandedUnit` above) can supply a result it already read
+ * through its own capturing transport — see that function's own doc for why calling
+ * `runOutcomesExtract` itself there would mean a second, budget-doubling `reader.read()` call just
+ * to learn the response's D7.3 stamp before this step can run. Behaviour is byte-identical to
+ * `runOutcomesExtract`'s own inline version before this bead — this function's body IS that
+ * version, unmoved apart from taking `result` as a parameter instead of producing it.
+ */
+async function resolveOutcomeCandidates(
+  vault: VaultSource,
+  result: OutcomesExtractReadResult<OutcomeSourceReference>,
+  options: RunOutcomesExtractOptions,
+): Promise<RunOutcomesExtractResult> {
   const outcomes = await Promise.all(
     result.outcomes.map((candidate) =>
       resolveOutcome(vault, {
@@ -705,7 +914,23 @@ export async function runOutcomesExtractAndReconcile(
   passages: readonly OutcomeSourcePassage<OutcomeSourceReference>[],
   options: RunOutcomesExtractOptions,
 ): Promise<RunOutcomesExtractAndReconcileResult> {
-  const { outcomes, paperStructure } = await runOutcomesExtract(vault, reader, passages, options);
+  const resolved = await runOutcomesExtract(vault, reader, passages, options);
+  return reconcileResolvedOutcomes(vault, resolved, options);
+}
+
+/**
+ * The reconcile half of `runOutcomesExtractAndReconcile`, factored out for the same reason
+ * `resolveOutcomeCandidates` was above: `[D-344]`'s production trigger already has a
+ * `RunOutcomesExtractResult` from its own single `reader.read()` call and must not make a second
+ * one just to reach this step. Body unmoved from `runOutcomesExtractAndReconcile`'s own inline
+ * version before this bead.
+ */
+async function reconcileResolvedOutcomes(
+  vault: VaultSource,
+  resolved: RunOutcomesExtractResult,
+  options: RunOutcomesExtractOptions,
+): Promise<RunOutcomesExtractAndReconcileResult> {
+  const { outcomes, paperStructure } = resolved;
   const conceptRecords = await listConceptKeyRecords(vault);
   const concepts = courseScopedConceptRegistry(conceptRecords, options.courses);
   const reconciliation = await reconcileOutcomeConcepts(vault, outcomes, concepts);

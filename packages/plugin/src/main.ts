@@ -43,11 +43,13 @@ import {
   parseFrontmatter,
   pastSessionsFromReviewLog,
   pickNextExplainBackInvitation,
+  projectRegisteredFiles,
   type QueueSnapshot,
   type RegistryOverrides,
   type RelationSet,
   readAssessments,
   readList,
+  readReviewLogHistory,
   refreshStudyPlan,
   type Scheduler,
   servedRelations,
@@ -1437,6 +1439,22 @@ export default class OleaPlugin extends Plugin {
       revision: {
         cache: generationWiring.cache,
         draftDeps: () => this.draftQuizCardsDeps(),
+      },
+      // `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]:
+      // outcomes.extract.v1's production trigger — a registered objectives/past-paper document's
+      // landed units (this SAME ingestion tick's own extraction, `deps.vault` above) are checked
+      // against the D-226 registration event and, when eligible, resolved into persisted Outcome
+      // records. Same F7.8-gated `dataHost`/`createRecordingTransport` pair as `vision` just
+      // below, so an outcomes.extract.v1 call lands in the same F7.3 usage log as every other
+      // task. See `ingestion/wiring.ts`'s `withOutcomesExtractHook`/
+      // `triggerOutcomesExtractForLandedUnit` for why this rides the landed-unit seam rather than
+      // a new job kind (the ruling's "same queue, retries and background allowance as concept
+      // extraction").
+      outcomes: {
+        dataHost: this,
+        createTransport: createRecordingTransport,
+        registeredDocumentFor: (sourcePath) =>
+          this.registeredOutcomesDocumentFor(vault, sourcePath),
       },
       // `ol-15f8`/`ol-ua2f`: the standalone-image vision runner (C3.1/C3.3),
       // wired the same F7.8 way every other Worker-backed port in this
@@ -3362,6 +3380,32 @@ export default class OleaPlugin extends Plugin {
   async readConceptsFromVault(options: ReadConceptsFromVaultOptions = {}) {
     if (this.concept === null) return null;
     return readConceptsFromVault(this.concept, new ObsidianSource(this.app), options);
+  }
+
+  /**
+   * `outcomes.extract.v1`'s eligibility test (`[D-344]`, `ol-2zfj.163`, option b) —
+   * `IngestionWiringDeps.outcomes.registeredDocumentFor`'s production implementation. Folds
+   * `olea-core#projectRegisteredFiles` over the WHOLE review log (`readReviewLogHistory`, the
+   * same read `../grove/provider.ts`'s `load()` already does for this exact projection) fresh on
+   * every call — never cached on `this` — because she can register a document via either S1
+   * (`../grove/view.ts`) or S2 (`./course-setup/register-source-wiring.ts`) at any point after
+   * this wiring is built, including between two ingestion ticks.
+   *
+   * Only `'objectives'`/`'past-paper'` are eligible; `'course-material'` (F3.1's own manual-
+   * registration default) and an unregistered path both read as `null` — the honest "not this
+   * document's job" answer, never a guess. `spec.course` (her own attribution, when the
+   * registering surface recorded one) wins over `courseFromPath`'s folder-derived guess; when
+   * neither exists, `courses` comes back empty rather than invented, mirroring
+   * `ingestion/wiring.ts#courseScopedConceptRegistry`'s own never-guess posture for concept scoping.
+   */
+  private async registeredOutcomesDocumentFor(vault: VaultSource, sourcePath: VaultPath) {
+    const { entries } = await readReviewLogHistory(vault);
+    const spec = projectRegisteredFiles(entries).find((candidate) => candidate.path === sourcePath);
+    if (spec === undefined) return null;
+    if (spec.role !== 'objectives' && spec.role !== 'past-paper') return null;
+
+    const course = spec.course ?? courseFromPath(sourcePath, DEFAULT_COURSES_FOLDER);
+    return { documentKind: spec.role, courses: course === undefined ? [] : [course] };
   }
 
   /**
