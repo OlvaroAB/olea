@@ -408,19 +408,28 @@ describe('an accepted explain-back grading now persists its misconception observ
 
   it("persists every accepted result's observations before returning it", () => {
     expect(main).toMatch(
-      /async acceptExplainBackGradingWithObservation\(\s*pending:\s*PendingExplainBackGrading,\s*context:\s*AcceptExplainBackGradingWithObservationContext,\s*\):\s*Promise<AcceptExplainBackGradingWithObservationResult \| null> \{\s*if \(this\.grading === null\) return null;\s*const result = await acceptExplainBackGradingWithObservation\(this\.grading, pending, context\);\s*if \(result !== null && result\.status === 'accepted'\) \{\s*await this\.persistMisconceptionObservations\(context\.originInstrumentId, result\.observations\);\s*\}\s*return result;/,
+      /async acceptExplainBackGradingWithObservation\(\s*pending:\s*PendingExplainBackGrading,\s*context:\s*AcceptExplainBackGradingWithObservationContext,\s*\):\s*Promise<AcceptExplainBackGradingWithObservationResult \| null> \{\s*if \(this\.grading === null\) return null;\s*const result = await acceptExplainBackGradingWithObservation\(this\.grading, pending, context\);\s*if \(result !== null && result\.status === 'accepted'\) \{\s*await this\.persistMisconceptionObservations\(\s*context\.originInstrumentId,\s*result\.observations,\s*result\.resolutionEvidence,\s*\);\s*\}\s*return result;/,
     );
   });
 
   it('persistMisconceptionObservations is idempotent on originInstrumentId, memoizing the in-flight Promise itself', () => {
     expect(main).toMatch(
-      /private persistMisconceptionObservations\(\s*originInstrumentId:\s*string,\s*outcomes:\s*readonly AcceptedGradingObservationOutcome\[\],\s*\):\s*Promise<void> \{\s*const existing = this\.persistedMisconceptionObservationsByAttempt\.get\(originInstrumentId\);\s*if \(existing !== undefined\) return existing;/,
+      /private persistMisconceptionObservations\(\s*originInstrumentId:\s*string,\s*outcomes:\s*readonly AcceptedGradingObservationOutcome\[\],\s*resolutionEvidence:\s*MisconceptionResolutionEvidenceEvent \| null = null,\s*\):\s*Promise<void> \{\s*const existing = this\.persistedMisconceptionObservationsByAttempt\.get\(originInstrumentId\);\s*if \(existing !== undefined\) return existing;/,
     );
     expect(main).toMatch(
       /this\.persistedMisconceptionObservationsByAttempt\.set\(originInstrumentId, promise\);\s*return promise;/,
     );
     expect(main).toMatch(
       /private readonly persistedMisconceptionObservationsByAttempt = new Map<string, Promise<void>>\(\);/,
+    );
+  });
+
+  // `ol-egov.141.89.6.31`: the same persistence step now also appends M2's
+  // resolution-evidence event, when `decideResolutionEvidence` (composed one
+  // layer down in `grading/wiring.ts`) produced one for the accepted grading.
+  it('appends resolutionEvidence through the same appendMisconceptionEvent call, after the observation loop, logging rather than rethrowing on failure', () => {
+    expect(main).toMatch(
+      /if \(resolutionEvidence !== null\) \{\s*try \{\s*await appendMisconceptionEvent\(vault, resolutionEvidence, deviceId\);\s*\} catch \(error\) \{\s*console\.error\('Olea: failed to persist a misconception resolution-evidence event', error\);\s*\}\s*\}/,
     );
   });
 
@@ -465,6 +474,16 @@ describe('a fresh retrieval at accept time feeds the stale-source rejection for 
   it('imports hasExplainBackSourceRevisionChanged alongside the observation-context builder', () => {
     expect(main).toMatch(
       /import\s*\{\s*buildExplainBackObservationContext,\s*hasExplainBackSourceRevisionChanged,\s*\}\s*from\s*'\.\/explain-back\/observation\.js';/,
+    );
+  });
+
+  // `ol-egov.141.89.6.31`: `buildExplainBackObservationContext` does not
+  // declare `subjectConceptId` on its own return shape (outside this bead's
+  // `owns`) — this proves `main.ts` adds it back explicitly rather than
+  // silently losing the concept binding the accept step's M2 decision needs.
+  it('threads params.subjectConceptId onto the returned context, not just into the observation-context builder call', () => {
+    expect(main).toMatch(
+      /return \{\s*\.\.\.buildExplainBackObservationContext\(\{[\s\S]*?\}\),\s*subjectConceptId:\s*params\.subjectConceptId,\s*\};/,
     );
   });
 });

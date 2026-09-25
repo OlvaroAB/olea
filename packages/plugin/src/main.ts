@@ -37,6 +37,7 @@ import {
   type GradeExplainBackInput,
   type JudgeRequestRecord,
   loadCachedStudyPlan,
+  type MisconceptionResolutionEvidenceEvent,
   notePathCourses,
   type PendingExplainBackGrading,
   parseDocument,
@@ -3113,6 +3114,12 @@ export default class OleaPlugin extends Plugin {
    * through `persistMisconceptionObservations` below, awaited before
    * returning — INV-6: this is Olea's own layer (the misconception log), not
    * her authored notes, so nothing here needs her consent to land.
+   *
+   * `ol-egov.141.89.6.31` gives M2's `resolutionEvidence` the same real
+   * write: `result.resolutionEvidence` (`grading/wiring.ts`'s own doc) is
+   * threaded into the same `persistMisconceptionObservations` call, one
+   * persistence step and one idempotency key rather than a second memoized
+   * method duplicating the same vault/deviceId construction.
    */
   async acceptExplainBackGradingWithObservation(
     pending: PendingExplainBackGrading,
@@ -3121,7 +3128,11 @@ export default class OleaPlugin extends Plugin {
     if (this.grading === null) return null;
     const result = await acceptExplainBackGradingWithObservation(this.grading, pending, context);
     if (result !== null && result.status === 'accepted') {
-      await this.persistMisconceptionObservations(context.originInstrumentId, result.observations);
+      await this.persistMisconceptionObservations(
+        context.originInstrumentId,
+        result.observations,
+        result.resolutionEvidence,
+      );
     }
     return result;
   }
@@ -3141,10 +3152,21 @@ export default class OleaPlugin extends Plugin {
    * failure of the grade acceptance it rode on, mirroring
    * `buildObservationEventsFromAcceptedGrading`'s own embedder-failure
    * isolation one layer down.
+   *
+   * `ol-egov.141.89.6.31`: `resolutionEvidence` (`null` unless the accepted
+   * grading was M2 resolution evidence for its subject concept's own open
+   * misconception, per `grading/wiring.ts`'s
+   * `buildResolutionEvidenceForAcceptedGrading`) appends through the SAME
+   * `appendMisconceptionEvent` call, after the observation loop, under the
+   * identical log-and-never-rethrow discipline — riding the same memoized
+   * promise as the observations above rather than a second idempotency key,
+   * since both are facts about the one accepted attempt this
+   * `originInstrumentId`/`attemptId` names.
    */
   private persistMisconceptionObservations(
     originInstrumentId: string,
     outcomes: readonly AcceptedGradingObservationOutcome[],
+    resolutionEvidence: MisconceptionResolutionEvidenceEvent | null = null,
   ): Promise<void> {
     const existing = this.persistedMisconceptionObservationsByAttempt.get(originInstrumentId);
     if (existing !== undefined) return existing;
@@ -3157,6 +3179,13 @@ export default class OleaPlugin extends Plugin {
           await appendMisconceptionEvent(vault, outcome.result.event, deviceId);
         } catch (error) {
           console.error('Olea: failed to persist a misconception observation event', error);
+        }
+      }
+      if (resolutionEvidence !== null) {
+        try {
+          await appendMisconceptionEvent(vault, resolutionEvidence, deviceId);
+        } catch (error) {
+          console.error('Olea: failed to persist a misconception resolution-evidence event', error);
         }
       }
     })();
@@ -3212,6 +3241,15 @@ export default class OleaPlugin extends Plugin {
    * blocks in the first place; the two block lists are compared and the
    * verdict is passed through as `sourceRevisionStale`, never re-derived
    * downstream.
+   *
+   * **`ol-egov.141.89.6.31` threads `params.subjectConceptId` onto the
+   * returned context too**, as `subjectConceptId` — `buildExplainBackObservationContext`
+   * (`explain-back/observation.ts`, outside this bead's `owns`) does not
+   * declare that field on its own return shape, so it is added here by
+   * spreading that call's result and setting it explicitly, the same value
+   * already threaded into the `resolveConceptId` closure two lines above.
+   * `grading/wiring.ts`'s accept step reads it to decide M2 resolution
+   * evidence for the concept she was actually explaining.
    */
   private async buildExplainBackObservationContextFor(params: {
     readonly subjectConceptId: string | null;
@@ -3224,21 +3262,24 @@ export default class OleaPlugin extends Plugin {
     const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
     const records = (await store.load()) ?? [];
     const freshSourceBlocks = await this.composeExplainBackSourceBlocks(params.query);
-    return buildExplainBackObservationContext({
+    return {
+      ...buildExplainBackObservationContext({
+        subjectConceptId: params.subjectConceptId,
+        originInstrumentId: params.originInstrumentId,
+        // Recording the graded verdict into a review-log event is `ol-95vv`'s
+        // mastery-fold job, not this view's (see `explain-back/modal.ts`'s
+        // module doc) — so there is never a review-log event id to attach here.
+        originReviewEventId: null,
+        sourceBlocks: params.sourceBlocks,
+        records,
+        now: () => new Date(),
+        sourceRevisionStale: hasExplainBackSourceRevisionChanged(
+          params.sourceBlocks,
+          freshSourceBlocks,
+        ),
+      }),
       subjectConceptId: params.subjectConceptId,
-      originInstrumentId: params.originInstrumentId,
-      // Recording the graded verdict into a review-log event is `ol-95vv`'s
-      // mastery-fold job, not this view's (see `explain-back/modal.ts`'s
-      // module doc) — so there is never a review-log event id to attach here.
-      originReviewEventId: null,
-      sourceBlocks: params.sourceBlocks,
-      records,
-      now: () => new Date(),
-      sourceRevisionStale: hasExplainBackSourceRevisionChanged(
-        params.sourceBlocks,
-        freshSourceBlocks,
-      ),
-    });
+    };
   }
 
   /**

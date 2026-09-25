@@ -11,7 +11,7 @@
  * for that half, mirroring the split `test/retrieval/wiring.spec.ts` already
  * uses for `buildRetrievalWiring`.
  */
-import type { WorkerTaskRequest } from 'olea-core';
+import type { MisconceptionRecord, WorkerTaskRequest } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   type AcceptExplainBackGradingWithObservationContext,
@@ -922,5 +922,248 @@ describe('acceptExplainBackGradingWithObservation — ol-0r92.89: stale source r
     );
 
     expect(result.status).toBe('accepted');
+  });
+});
+
+// ---- ol-egov.141.89.6.31: M2 resolution evidence on the accept-and-observe path --------
+
+/** A minimal `MisconceptionRecord` on `concept-heap`, `active` unless overridden — an "open" record per `MisconceptionStatus`'s own doc (active/fading, never resolved). */
+function openMisconceptionRecord(
+  overrides: Partial<MisconceptionRecord> = {},
+): MisconceptionRecord {
+  return {
+    id: 'misconception-1',
+    conceptId: 'concept-heap',
+    confusedWithConceptId: null,
+    statement: 'A placeholder statement, not real vault content.',
+    correction: 'A placeholder correction, not real vault content.',
+    citation: null,
+    firstSeen: '2026-08-01T00:00:00Z',
+    lastSeen: '2026-08-20T00:00:00Z',
+    occurrenceCount: 2,
+    status: 'active',
+    originInstrumentId: 'qa:concept-heap:1',
+    ...overrides,
+  };
+}
+
+function pendingForVerdict(
+  verdict: 'correct' | 'partial' | 'incorrect',
+  misconceptionCandidates: PendingWithVerdictCandidate[] = [],
+) {
+  return {
+    status: 'pending-review' as const,
+    overlap: {
+      containment: 0,
+      ngramSize: 3,
+      matchedNgramCount: 0,
+      totalNgramCount: 0,
+      lcsRatio: 0,
+      jaccard: 0,
+      answerTokenCount: 0,
+      sourceTokenCount: 0,
+    },
+    grading: {
+      verdict,
+      feedback: 'Feedback text.',
+      missedPoints: [],
+      citedIssues: [],
+      misconceptionCandidates,
+      citationsAvailable: true,
+      droppedCitationCount: 0,
+      droppedMisconceptionCount: 0,
+    },
+  };
+}
+
+interface PendingWithVerdictCandidate {
+  readonly concept: string;
+  readonly confusedWith?: string;
+  readonly statement: string;
+  readonly correction: string;
+  readonly correctionSourceBlockIds: readonly string[];
+}
+
+/** `subjectConceptId: 'concept-heap'`, carrying one `active` record on that concept by default — override `candidateRecordsForConcept` to simulate "no open misconception". */
+function resolutionContext(
+  overrides: Partial<AcceptExplainBackGradingWithObservationContext> = {},
+): AcceptExplainBackGradingWithObservationContext {
+  return {
+    originInstrumentId: 'explain-back:concept-heap:1',
+    originReviewEventId: 'review-event-1',
+    timestamp: '2026-08-29T09:00:00-04:00',
+    subjectConceptId: 'concept-heap',
+    resolveCitation: () => null,
+    resolveConceptId: () => null,
+    candidateRecordsForConcept: (conceptId) =>
+      conceptId === 'concept-heap' ? [openMisconceptionRecord()] : [],
+    ...overrides,
+  };
+}
+
+async function unconfiguredWiring() {
+  return buildGradingWiring({
+    dataHost: new FakeDataHost(),
+    createTransport: () => fakeMultiTaskTransport(),
+  });
+}
+
+describe('acceptExplainBackGradingWithObservation — ol-egov.141.89.6.31: M2 resolution evidence', () => {
+  it('a correct verdict on a concept with an open misconception appends a resolution-evidence event, through the production path', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext(),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).not.toBeNull();
+    expect(result.resolutionEvidence?.kind).toBe('resolution-evidence');
+    expect(result.resolutionEvidence?.conceptId).toBe('concept-heap');
+    expect(result.resolutionEvidence?.evidenceKind).toBe('explanation');
+    expect(result.resolutionEvidence?.originInstrumentId).toBe('explain-back:concept-heap:1');
+    // No fresh observation candidate on THIS grading — resolution evidence is
+    // independent of whether misconceptionCandidates is non-empty.
+    expect(result.observations).toEqual([]);
+  });
+
+  it('a partial verdict appends no resolution-evidence event, even with an open misconception', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('partial'),
+      resolutionContext(),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).toBeNull();
+  });
+
+  it('an incorrect verdict appends no resolution-evidence event, even with an open misconception', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('incorrect'),
+      resolutionContext(),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).toBeNull();
+  });
+
+  it('a correct verdict on a concept with NO open misconception appends nothing', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({ candidateRecordsForConcept: () => [] }),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).toBeNull();
+  });
+
+  it('a correct verdict on a concept whose only record is already resolved appends nothing — resolved is not open', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({
+        candidateRecordsForConcept: (conceptId) =>
+          conceptId === 'concept-heap' ? [openMisconceptionRecord({ status: 'resolved' })] : [],
+      }),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).toBeNull();
+  });
+
+  it('no subjectConceptId (the free-form entry point) appends nothing, regardless of verdict', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({ subjectConceptId: null }),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).toBeNull();
+  });
+
+  it('a fading (not just active) open misconception also counts as open', async () => {
+    const wiring = await unconfiguredWiring();
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({
+        candidateRecordsForConcept: (conceptId) =>
+          conceptId === 'concept-heap' ? [openMisconceptionRecord({ status: 'fading' })] : [],
+      }),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.resolutionEvidence).not.toBeNull();
+    expect(result.resolutionEvidence?.evidenceKind).toBe('explanation');
+  });
+
+  it('resolution evidence and a fresh observation both land from the same accepted grading', async () => {
+    const transport = fakeMultiTaskTransport(
+      new Map([['Thinks a heap is always fully sorted.', [1, 0, 0]]]),
+    );
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
+
+    const result = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct', [
+        {
+          concept: 'confusable-concept',
+          statement: 'Thinks a heap is always fully sorted.',
+          correction: 'A heap only guarantees parent-child ordering, not full sortedness.',
+          correctionSourceBlockIds: ['block-1'],
+        },
+      ]),
+      resolutionContext({
+        resolveCitation: (blockId) =>
+          blockId === 'block-1' ? { path: 'Courses/CS/notes.md', blockIndex: 2 } : null,
+        resolveConceptId: (concept) =>
+          concept === 'confusable-concept' ? 'concept-confusable' : null,
+      }),
+    );
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+
+    expect(result.observations).toHaveLength(1);
+    expect(result.resolutionEvidence).not.toBeNull();
+    expect(result.resolutionEvidence?.conceptId).toBe('concept-heap');
+  });
+
+  it('is memoized on retry, same as the observations it rides alongside — not recomputed into a second event', async () => {
+    const wiring = await unconfiguredWiring();
+    const context = resolutionContext({ attemptId: 'resolution-retry-1' });
+
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      context,
+    );
+    const second = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      context,
+    );
+
+    expect(second).toBe(first);
   });
 });

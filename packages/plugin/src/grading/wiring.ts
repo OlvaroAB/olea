@@ -191,10 +191,12 @@ import {
   type AcceptedGradingObservationOutcome,
   acceptExplainBackGrading,
   buildObservationEventsFromAcceptedGrading,
+  buildResolutionEvidenceEvent,
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
   createWorkerJudgeCaller,
   createWorkerSoloJudgeCaller,
+  decideResolutionEvidence,
   EXPLAIN_BACK_SOLO_TASK_ID,
   evaluateConfusionRouting as evaluateConfusionRoutingCore,
   evaluateSchedulingObservationRouting as evaluateSchedulingObservationRoutingCore,
@@ -206,6 +208,7 @@ import {
   type MisconceptionEmbedder,
   type MisconceptionEmbeddingCacheEngine,
   type MisconceptionRecord,
+  type MisconceptionResolutionEvidenceEvent,
   type MisconceptionSourceCitation,
   type PendingExplainBackGrading,
   type PendingSoloGrading,
@@ -416,6 +419,22 @@ export interface AcceptExplainBackGradingWithObservationContext {
    * degrade like the embedder failure path.
    */
   readonly sourceRevisionStale?: boolean;
+  /**
+   * `ol-egov.141.89.6.31`: the explain-back prompt's subject concept id — the
+   * concept SHE was explaining, not a `misconceptionCandidates` entry's own
+   * concept (those are resolved separately, per-candidate, by
+   * `resolveConceptId` above). `null`/omitted for the free-form entry point,
+   * where no concept binding is known (`explain-back/observation.ts`'s own
+   * `subjectConceptId` doc). Threaded through so the accept step below can
+   * decide M2 resolution evidence (`olea-core`'s `decideResolutionEvidence`)
+   * for the concept she was actually demonstrating understanding of — see
+   * that function's own module doc for why the caller, not that pure
+   * decision, is responsible for computing `hasOpenMisconceptionOnConcept`.
+   * Reuses `candidateRecordsForConcept` above for that lookup rather than
+   * adding a second field: no separate query the caller would have to
+   * satisfy, just this decision's own read of the same records.
+   */
+  readonly subjectConceptId?: string | null;
 }
 
 /**
@@ -432,10 +451,70 @@ export type AcceptExplainBackGradingWithObservationResult =
       readonly accepted: AcceptedExplainBackGrading;
       /** Empty when there were no misconceptionCandidates to observe, or when the observation step failed — see this function's doc. */
       readonly observations: readonly AcceptedGradingObservationOutcome[];
+      /**
+       * `ol-egov.141.89.6.31`: `olea-core`'s `decideResolutionEvidence` verdict
+       * for `context.subjectConceptId`, already built into an event via
+       * `buildResolutionEvidenceEvent` — `null` when there is no
+       * `subjectConceptId`, the concept carries no open (`active`/`fading`)
+       * misconception record, or the verdict/rating does not count as M2
+       * evidence (see that function's own doc for the exact rule). Computed
+       * independently of `observations` above — a correct explanation on a
+       * concept with an open misconception is resolution evidence whether or
+       * not THIS grading also produced a fresh `misconceptionCandidates`
+       * entry, so this is set even when `observations` is empty. A caller
+       * (`main.ts`'s `acceptExplainBackGradingWithObservation`) appends it to
+       * the vault the same way it appends `observations`.
+       */
+      readonly resolutionEvidence: MisconceptionResolutionEvidenceEvent | null;
     }
   | {
       readonly status: 'stale';
     };
+
+/**
+ * `ol-egov.141.89.6.31`: decides and builds M2's resolution-evidence event
+ * for `context.subjectConceptId`, or `null` when there is nothing to record.
+ * Pure composition over `olea-core`'s `decideResolutionEvidence` — this
+ * function's only job is resolving the two things that function declines to
+ * (see its module doc): the caller's `hasOpenMisconceptionOnConcept` read
+ * (via `context.candidateRecordsForConcept`, filtered to `active`/`fading`
+ * — the same statuses `MisconceptionRecord.status`'s own doc calls "open"),
+ * and the `ExplainBackResolutionCandidate` shape the accepted grading's
+ * verdict already satisfies unchanged.
+ *
+ * `context.subjectConceptId` absent or `null` (the free-form entry point,
+ * `explain-back/observation.ts`'s own doc) short-circuits to `null` before
+ * touching `candidateRecordsForConcept` at all — no concept binding, nothing
+ * to decide.
+ */
+function buildResolutionEvidenceForAcceptedGrading(
+  context: AcceptExplainBackGradingWithObservationContext,
+  accepted: AcceptedExplainBackGrading,
+): MisconceptionResolutionEvidenceEvent | null {
+  const conceptId = context.subjectConceptId;
+  if (conceptId === undefined || conceptId === null) return null;
+
+  const hasOpenMisconceptionOnConcept = context
+    .candidateRecordsForConcept(conceptId)
+    .some((record) => record.status === 'active' || record.status === 'fading');
+  if (!hasOpenMisconceptionOnConcept) return null;
+
+  const evidenceKind = decideResolutionEvidence({
+    source: 'explain-back',
+    conceptId,
+    verdict: accepted.verdict,
+    hasOpenMisconceptionOnConcept,
+  });
+  if (evidenceKind === null) return null;
+
+  return buildResolutionEvidenceEvent({
+    conceptId,
+    evidenceKind,
+    originInstrumentId: context.originInstrumentId,
+    originReviewEventId: context.originReviewEventId,
+    timestamp: context.timestamp,
+  });
+}
 
 /**
  * `ol-4053`: the accepted-grading path `buildObservationEventWithEmbedding`
@@ -541,8 +620,14 @@ async function computeAcceptExplainBackGradingWithObservation(
   }
 
   const accepted = acceptExplainBackGrading(pending);
+  // `ol-egov.141.89.6.31`: decided once, ahead of the misconceptionCandidates
+  // branch below — a correct explanation is resolution evidence for its
+  // subject concept's own open misconception whether or not this SAME
+  // grading also surfaced a fresh candidate to observe.
+  const resolutionEvidence = buildResolutionEvidenceForAcceptedGrading(context, accepted);
+
   if (accepted.misconceptionCandidates.length === 0) {
-    return { status: 'accepted', accepted, observations: [] };
+    return { status: 'accepted', accepted, observations: [], resolutionEvidence };
   }
 
   try {
@@ -556,13 +641,13 @@ async function computeAcceptExplainBackGradingWithObservation(
           : {}),
       },
     );
-    return { status: 'accepted', accepted, observations };
+    return { status: 'accepted', accepted, observations, resolutionEvidence };
   } catch (error) {
     console.error('Olea: misconception observation failed (grade acceptance unaffected)', {
       misconceptionCandidateCount: accepted.misconceptionCandidates.length,
       error,
     });
-    return { status: 'accepted', accepted, observations: [] };
+    return { status: 'accepted', accepted, observations: [], resolutionEvidence };
   }
 }
 

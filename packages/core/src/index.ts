@@ -914,11 +914,23 @@ export { MASTERY_DISPLAY, MASTERY_ORDER, masteryTitle } from './mastery/display.
 // shares (`../grading/explainBackSolo.js`'s own `buildExplainBackGradeReviewFields`
 // is now just its first caller). Barrel-exported so a future MCQ/QA/cloze
 // grade-write path can call it without a deep import into `mastery/`.
+// The same module's relation-provenance/source-material resolution — needed
+// outside `mastery/` by `ol-egov.141.89.6.30` (`explain-back/request.ts`).
 export type {
   BuildSchedulingObservationFieldInput,
+  ConceptDefiningPassages,
+  GradingRelationContext,
+  GradingSourceMaterial,
+  RelationProvenance,
+  ResolvedRelationEdge,
   SchedulingObservation,
 } from './mastery/gradingInputContract.js';
-export { buildSchedulingObservationField } from './mastery/gradingInputContract.js';
+export {
+  buildGradingSourceMaterial,
+  buildSchedulingObservationField,
+  resolveGradingRelationContext,
+  resolveRelationProvenance,
+} from './mastery/gradingInputContract.js';
 // `ConceptMasteryResult`/`computeAllConceptMastery` (`ol-4qvc`): the same
 // per-concept mastery fold `today/mastery-overview.js#buildMasteryOverview`
 // already builds on via `../mastery/sprig.js`, exported here so a caller
@@ -1103,6 +1115,17 @@ export {
   misconceptionLogPath,
 } from './misconception/path.js';
 export { projectMisconceptions } from './misconception/project.js';
+// M2's resolution-evidence decision (`ol-egov.141.89.6.19`): whether a
+// just-graded explain-back or recall outcome counts as resolution evidence
+// for a concept's open misconception, and which `ResolutionEvidenceKind` it
+// demonstrates — see the module doc for why `hasOpenMisconceptionOnConcept`
+// stays the caller's job.
+export type {
+  ExplainBackResolutionCandidate,
+  RecallResolutionCandidate,
+  ResolutionEvidenceCandidate,
+} from './misconception/resolution-evidence-decision.js';
+export { decideResolutionEvidence } from './misconception/resolution-evidence-decision.js';
 // F5.3a / R7's third trigger for the SAME F2.21 on-demand offer (`[D-083]`/
 // `[D-087]`, `ol-0r92.11`): an unconsumed scheduling observation naming the
 // just-graded instrument's concept as a neighbour. Lives beside
@@ -1595,6 +1618,7 @@ export {
   contestOutcomeShapes,
   contestRateHealthCheck,
   contestStateForClaim,
+  correctedGradeInstrumentIds,
   FORBIDDEN_CONTEST_STRINGS,
   isDisputeCurrent,
   isRoutedRendering,
