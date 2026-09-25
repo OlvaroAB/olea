@@ -460,7 +460,16 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const conceptIds = concepts.map((c) => c.key);
   const idsForRollup = new Set([...conceptIds, ...conceptIdsInLog(input.entries)]);
 
-  const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup]);
+  // `[D-281]` item 4 (`ol-vrlp`): the fold's `invalidInstrumentIds` is not
+  // derived by the fold itself (see `../mastery/rollup.ts`'s own doc on why),
+  // so this, the registry's own build, is one of the two production callers
+  // that must supply the instrument's CURRENT standing. `suspendedInstrumentIds`
+  // is exactly F8.5's withdrawn set — the same projection this module already
+  // reads to mark an instrument summary `pruned` above — so a withdrawn
+  // instrument's attempt can no longer qualify a concept for `tree`.
+  const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup], {
+    invalidInstrumentIds: [...input.suspendedInstrumentIds],
+  });
   const vitalityByConcept = readAllConceptVitality(
     input.entries,
     [...idsForRollup],

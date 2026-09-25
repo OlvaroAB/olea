@@ -128,6 +128,7 @@ import {
   reviewLogPath,
   type Scheduler,
   type StudyPlanStore,
+  suspendedInstrumentIds,
   type TermWindow,
   type TodayPanelInput,
   type TodayViewModel,
@@ -898,9 +899,15 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
           enumeration.concepts,
           instrumentCountsByNotePath(enumeration.records),
         );
+        // `[D-281]` item 4 (`ol-vrlp`): this reading's own fold, so it must
+        // supply the instrument's CURRENT standing itself — `suspendedInstrumentIds`
+        // is F8.5's withdrawn set, the same projection `../registry/build.ts`
+        // (olea-core) reads for its own registry fold, derived fresh from
+        // this read's own `entries` rather than cached on any review record.
         const mastery = computeAllConceptMastery(
           entries,
           enumeration.concepts.map((concept) => concept.key),
+          { invalidInstrumentIds: [...suspendedInstrumentIds(entries)] },
         );
 
         // Every course a concept or a registered source names — a course
