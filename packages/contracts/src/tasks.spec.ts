@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these twenty-one ids, spelled exactly this way', () => {
+  it('is exactly these twenty-two ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -36,6 +36,7 @@ describe('the closed task-id catalogue', () => {
       'retrieval.rerank.v1',
       'sections.summarize.v1',
       'vision.extract.v1',
+      'vision.extract.v2',
     ]);
   });
 
@@ -119,7 +120,14 @@ describe('the closed task-id catalogue', () => {
     // two are never resolved by a third model call (`[D-231]`). A named
     // production caller is still owed by `[PROBE-5]` (`ol-v7r5.46`)'s
     // still-open design ruling.
-    expect(ALL_TASK_IDS).toHaveLength(21);
+    //
+    // `vision.extract.v2` (`[D-325]`, `ol-egov.141.89.8.7`, registered by
+    // `ol-egov.141.89.8.18`) is NOT a second workload shape — it is W2's
+    // same perception entry, served beside `v1` only because this file's own
+    // naming rule gives an incompatible response shape a new id rather than
+    // breaking `v1`'s live client consumer. See `vision.extract.v2`'s own
+    // doc comment in `tasks.ts` for what the shape change is.
+    expect(ALL_TASK_IDS).toHaveLength(22);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

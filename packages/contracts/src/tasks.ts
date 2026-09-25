@@ -248,6 +248,36 @@ export const TASK_IDS = {
    */
   VISION_EXTRACT: 'vision.extract.v1',
   /**
+   * `[D-325]`'s reading shape (`ol-egov.141.89.8.7`, `olea-service`'s
+   * `docs/dev/intelligence-build/per.md` §7 decision 2; acceptance carried
+   * onto `ol-2zfj.156`), served beside `v1` above under this file's own
+   * naming rule (module doc, `:33-38`): `v1` has a live production consumer
+   * (`packages/plugin/src/ingestion/vision-page-runner.ts`, composed from
+   * `main.ts`), and an incompatible response shape gets a new id rather than
+   * breaking that consumer silently at the next deploy.
+   *
+   * **What changes from `v1`.** A page's own transcribed text is kept
+   * separate from the model's own description of a figure
+   * (`figureDescription`) — the two are never mixed, and a figure
+   * description is never citable as her source's own words. `v1`'s two-way
+   * `readable`/`unreadableReason` shape becomes three named outcomes:
+   * `complete`, `partial` (names what portion it covered), or `unreadable`
+   * (one of the same three closed reasons `v1` uses). A service outage is
+   * never a value this schema can express — `unavailable` is operational,
+   * surfaced the way every other task's transport/parse failure already is,
+   * and retried rather than treated as a judgement about the page (see
+   * `olea-service/src/tasks/visionExtract.ts`'s
+   * `VISION_UNAVAILABLE_IS_NOT_AN_OUTCOME`). That file's own module doc also
+   * records `[D-325]`'s figure-only-page reclassification: a page with no
+   * text but a describable figure is `complete`, not `unreadable`.
+   *
+   * Payload/response fixed by `olea-service/src/tasks/visionExtract.ts`'s
+   * `visionExtractV2Task`; re-vendored here and given a registry row by
+   * `ol-egov.141.89.8.18`, which also migrates the client runner named above
+   * off `v1`'s shape onto this one.
+   */
+  VISION_EXTRACT_V2: 'vision.extract.v2',
+  /**
    * Slot O — the whole-term governor OBSERVER for the `[D-157]` shadow
    * experiment (`ol-3ux7.5.13`, task built by `ol-itkl`). Carries no
    * W-number: it serves a pre-registered measurement

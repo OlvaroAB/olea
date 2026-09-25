@@ -1,7 +1,8 @@
 /**
- * `vision-page-runner.ts` tests (`ol-15f8`) — see
+ * `vision-page-runner.ts` tests (`ol-15f8`, migrated to `vision.extract.v2`
+ * by `ol-egov.141.89.8.18` — `[D-325]`, `ol-egov.141.89.8.7`) — see
  * `features/F3-learn-from-anything.md`'s "Standalone image reaches
- * vision.extract.v1" scenarios, which this file's `describe`/`it` names are
+ * vision.extract" scenarios, which this file's `describe`/`it` names are
  * written to satisfy directly.
  *
  * Two layers, tested separately, mirroring `workerGroundingJudge.spec.ts` /
@@ -30,7 +31,7 @@ import {
   bytesToBase64,
   createWorkerVisionPageRunner,
   VISION_EXTRACT_CONTRACT_VERSION,
-  VISION_EXTRACT_TASK_ID,
+  VISION_EXTRACT_V2_TASK_ID,
   type VisionPageExtractPort,
   type VisionPageExtractRequest,
   type VisionPageExtractResult,
@@ -48,8 +49,27 @@ class RecordingTransport {
   }
 }
 
+/** A transport whose `send` itself fails — a raw transport/outage failure, never a well-formed Worker response. */
+class FailingTransport {
+  constructor(private readonly error: Error) {}
+  async send(_request: WorkerTaskRequest): Promise<unknown> {
+    throw this.error;
+  }
+}
+
 function okResponse(result: unknown) {
   return { ok: true, stamp: { contractVersion: 2, promptVersion: '1.0.0', modelId: 'm' }, result };
+}
+
+/** A `vision.extract.v2` `'complete'` result with no figure and no reason — the common case. */
+function completeResult(extractedText: string): VisionPageExtractResult {
+  return {
+    outcome: 'complete',
+    extractedText,
+    figureDescription: null,
+    coverage: null,
+    unreadableReason: null,
+  };
 }
 
 // A tiny, real PNG signature followed by junk IHDR bytes — enough to be
@@ -60,38 +80,38 @@ const FAKE_PNG_BYTES = new Uint8Array([
 ]);
 
 describe('WorkerVisionPageExtractor — the frozen vocabulary it mirrors', () => {
-  it('sends the task id the frozen catalogue reserves for W2/Slot V vision extraction', () => {
-    expect(VISION_EXTRACT_TASK_ID).toBe(TASK_IDS.VISION_EXTRACT);
+  it('sends the task id the frozen catalogue reserves for vision.extract.v2 (D-325)', () => {
+    expect(VISION_EXTRACT_V2_TASK_ID).toBe(TASK_IDS.VISION_EXTRACT_V2);
   });
 
-  it('sends the current contract version', () => {
+  it('sends the current contract version (unchanged by the v1 -> v2 task-shape migration)', () => {
     expect(VISION_EXTRACT_CONTRACT_VERSION).toBe(2);
   });
 });
 
 describe('WorkerVisionPageExtractor — the request it builds', () => {
   it('sends exactly pageImageBase64 and mimeType, field for field with the service request shape', async () => {
-    const transport = new RecordingTransport(() =>
-      okResponse({ readable: true, extractedText: 'a page of text', unreadableReason: null }),
-    );
+    const transport = new RecordingTransport(() => okResponse(completeResult('a page of text')));
     const extractor = new WorkerVisionPageExtractor({ transport });
 
     await extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
 
     expect(transport.sent).toHaveLength(1);
     const request = transport.sent[0];
-    expect(request?.taskId).toBe('vision.extract.v1');
+    expect(request?.taskId).toBe('vision.extract.v2');
     expect(request?.contractVersion).toBe(2);
     expect(request?.payload).toEqual({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
   });
 });
 
 describe('WorkerVisionPageExtractor — the response it reads', () => {
-  it('returns readable/extractedText/unreadableReason field for field on a readable page', async () => {
+  it('returns outcome/extractedText/figureDescription/coverage/unreadableReason field for field on a complete page', async () => {
     const transport = new RecordingTransport(() =>
       okResponse({
-        readable: true,
+        outcome: 'complete',
         extractedText: 'Stratigraphic succession',
+        figureDescription: null,
+        coverage: null,
         unreadableReason: null,
       }),
     );
@@ -100,21 +120,72 @@ describe('WorkerVisionPageExtractor — the response it reads', () => {
     const result = await extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
 
     expect(result).toEqual({
-      readable: true,
+      outcome: 'complete',
       extractedText: 'Stratigraphic succession',
+      figureDescription: null,
+      coverage: null,
       unreadableReason: null,
     });
   });
 
-  it("returns a readable: false result just as faithfully — INV-5's honest refusal, not an error", async () => {
+  it('carries a non-null figureDescription through untouched, field for field', async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ readable: false, extractedText: '', unreadableReason: 'blank-page' }),
+      okResponse({
+        outcome: 'complete',
+        extractedText: '',
+        figureDescription: 'A labelled diagram of the rock cycle, arrows between three states.',
+        coverage: null,
+        unreadableReason: null,
+      }),
     );
     const extractor = new WorkerVisionPageExtractor({ transport });
 
     const result = await extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
 
-    expect(result).toEqual({ readable: false, extractedText: '', unreadableReason: 'blank-page' });
+    expect(result.figureDescription).toBe(
+      'A labelled diagram of the rock cycle, arrows between three states.',
+    );
+  });
+
+  it("carries a partial reading's coverage through untouched", async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        outcome: 'partial',
+        extractedText: 'the top half of the page',
+        figureDescription: null,
+        coverage: 'the top half of the page',
+        unreadableReason: null,
+      }),
+    );
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    const result = await extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
+
+    expect(result.outcome).toBe('partial');
+    expect(result.coverage).toBe('the top half of the page');
+  });
+
+  it("returns an unreadable outcome just as faithfully — INV-5's honest refusal, not an error", async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        outcome: 'unreadable',
+        extractedText: '',
+        figureDescription: null,
+        coverage: null,
+        unreadableReason: 'blank-page',
+      }),
+    );
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    const result = await extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' });
+
+    expect(result).toEqual({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: 'blank-page',
+    });
   });
 });
 
@@ -129,7 +200,7 @@ describe('WorkerVisionPageExtractor — refuses to hand back an unusable shape, 
   });
 
   it('throws when the response carries no `ok` discriminant', async () => {
-    const transport = new RecordingTransport(() => ({ result: { readable: true } }));
+    const transport = new RecordingTransport(() => ({ result: { outcome: 'complete' } }));
     const extractor = new WorkerVisionPageExtractor({ transport });
 
     await expect(
@@ -154,9 +225,15 @@ describe('WorkerVisionPageExtractor — refuses to hand back an unusable shape, 
     }
   });
 
-  it('throws when result.readable is missing or not boolean', async () => {
+  it('throws when result.outcome is missing or not one of the three named outcomes', async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ extractedText: '', unreadableReason: null }),
+      okResponse({
+        outcome: 'readable',
+        extractedText: '',
+        figureDescription: null,
+        coverage: null,
+        unreadableReason: null,
+      }),
     );
     const extractor = new WorkerVisionPageExtractor({ transport });
 
@@ -167,7 +244,12 @@ describe('WorkerVisionPageExtractor — refuses to hand back an unusable shape, 
 
   it('throws when result.extractedText is missing or not a string', async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ readable: true, unreadableReason: null }),
+      okResponse({
+        outcome: 'complete',
+        figureDescription: null,
+        coverage: null,
+        unreadableReason: null,
+      }),
     );
     const extractor = new WorkerVisionPageExtractor({ transport });
 
@@ -176,16 +258,26 @@ describe('WorkerVisionPageExtractor — refuses to hand back an unusable shape, 
     ).rejects.toThrow(WorkerVisionPageExtractorError);
   });
 
-  it('throws when result.unreadableReason is present but neither null nor a string', async () => {
-    const transport = new RecordingTransport(() =>
-      okResponse({ readable: false, extractedText: '', unreadableReason: 42 }),
-    );
-    const extractor = new WorkerVisionPageExtractor({ transport });
+  it.each(['figureDescription', 'coverage', 'unreadableReason'] as const)(
+    'throws when result.%s is present but neither null nor a string',
+    async (field) => {
+      const transport = new RecordingTransport(() =>
+        okResponse({
+          outcome: 'complete',
+          extractedText: '',
+          figureDescription: null,
+          coverage: null,
+          unreadableReason: null,
+          [field]: 42,
+        }),
+      );
+      const extractor = new WorkerVisionPageExtractor({ transport });
 
-    await expect(
-      extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
-    ).rejects.toThrow(WorkerVisionPageExtractorError);
-  });
+      await expect(
+        extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
+      ).rejects.toThrow(WorkerVisionPageExtractorError);
+    },
+  );
 });
 
 describe('bytesToBase64', () => {
@@ -195,7 +287,7 @@ describe('bytesToBase64', () => {
     expect(Array.from(decoded)).toEqual(Array.from(FAKE_PNG_BYTES));
   });
 
-  it('carries no `data:` prefix — the exact shape vision.extract.v1 requires', () => {
+  it('carries no `data:` prefix — the exact shape vision.extract.v2 requires', () => {
     const encoded = bytesToBase64(FAKE_PNG_BYTES);
     expect(encoded.startsWith('data:')).toBe(false);
     expect(encoded).toMatch(/^[A-Za-z0-9+/]+=*$/);
@@ -288,15 +380,11 @@ function visionPageJob(overrides: Partial<JobRunnerView> = {}): JobRunnerView {
 }
 
 describe('createWorkerVisionPageRunner — a readable standalone image', () => {
-  it('reads the file, sends it as base64, and lands one ExtractedUnit in the sink', async () => {
+  it('reads the file, sends it as base64, and lands one ExtractedUnit in the sink on a complete reading', async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'Figure 3: the rock cycle',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('Figure 3: the rock cycle'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(visionPageJob());
@@ -322,11 +410,7 @@ describe('createWorkerVisionPageRunner — a readable standalone image', () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/diagram.jpg', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'embedded figure text',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('embedded figure text'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const embeddedIn = { notePath: 'Notes/lecture.md', blockStart: 10, blockEnd: 40 };
@@ -350,11 +434,7 @@ describe('createWorkerVisionPageRunner — a readable standalone image', () => {
     const path = `Slides/diagram.${ext}` as VaultPath;
     vault.setBinary(path, FAKE_PNG_BYTES);
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'text',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('text'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -367,14 +447,101 @@ describe('createWorkerVisionPageRunner — a readable standalone image', () => {
   });
 });
 
+describe('createWorkerVisionPageRunner — a partial reading', () => {
+  it('lands the covered text as an ExtractedUnit, the same shape a complete reading gets', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/dense.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'partial',
+      extractedText: 'the first three paragraphs',
+      figureDescription: null,
+      coverage: 'the first three paragraphs',
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/dense.png', format: 'image', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(sink.calls).toHaveLength(1);
+    expect(sink.calls[0]?.[0]?.text).toBe('the first three paragraphs');
+  });
+});
+
+describe('createWorkerVisionPageRunner — figure description is kept apart from passages', () => {
+  it("never merges a non-null figureDescription into the landed unit's text", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/labelled.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'complete',
+      extractedText: 'The caption above the figure.',
+      figureDescription: 'A diagram with three labelled arrows between states A, B and C.',
+      coverage: null,
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    await runner(
+      visionPageJob({
+        payload: {
+          kind: 'vision-page',
+          sourcePath: 'Slides/labelled.png',
+          format: 'image',
+          page: 1,
+        },
+      }),
+    );
+
+    expect(sink.calls).toHaveLength(1);
+    expect(sink.calls[0]?.[0]?.text).toBe('The caption above the figure.');
+    expect(sink.calls[0]?.[0]?.text).not.toContain('labelled arrows');
+  });
+
+  it('[D-325] figure-only page (empty extractedText, non-null figureDescription) lands zero units — nowhere for the figure to flow yet', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/figure-only.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'complete',
+      extractedText: '',
+      figureDescription: 'A bare full-bleed diagram with no surrounding text.',
+      coverage: null,
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: {
+          kind: 'vision-page',
+          sourcePath: 'Slides/figure-only.png',
+          format: 'image',
+          page: 1,
+        },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(sink.calls).toHaveLength(0);
+  });
+});
+
 describe('createWorkerVisionPageRunner — INV-5: an unreadable page is a refusal, never a fabrication', () => {
-  it("a readable: false result (the server's empty-context guard, or the model's own refusal) produces zero units and ok: true", async () => {
+  it("an unreadable outcome (the server's empty-context guard, or the model's own refusal) produces zero units and ok: true", async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/blank.png', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => ({
-      readable: false,
+      outcome: 'unreadable',
       extractedText: '',
+      figureDescription: null,
+      coverage: null,
       unreadableReason: 'blank-page',
     }));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
@@ -389,15 +556,11 @@ describe('createWorkerVisionPageRunner — INV-5: an unreadable page is a refusa
     expect(sink.calls).toHaveLength(0); // never called with an empty array — see ExtractedUnitSink's own contract
   });
 
-  it('a readable: true result with empty text is treated the same honest way — no unit invented from nothing', async () => {
+  it('a complete outcome with empty text is treated the same honest way — no unit invented from nothing', async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/edge.png', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: '',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult(''));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -415,11 +578,7 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
   it('a non-vision-page payload is a non-retryable failure, not a crash', async () => {
     const vault = new MemoryVaultSource();
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'x',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('x'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -436,11 +595,7 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
   it('a page inside a pdf/pptx/docx names the missing renderer (ol-9cle) and is non-retryable', async () => {
     const vault = new MemoryVaultSource();
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'x',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('x'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -460,11 +615,7 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/scan.gif', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'x',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('x'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -483,11 +634,7 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
     const vault = new MemoryVaultSource();
     vault.failOn('Slides/flaky.png');
     const sink = new RecordingSink();
-    const extractor = new FakeExtractor(() => ({
-      readable: true,
-      extractedText: 'x',
-      unreadableReason: null,
-    }));
+    const extractor = new FakeExtractor(() => completeResult('x'));
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
     const outcome = await runner(
@@ -498,13 +645,88 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
 
     expect(outcome).toEqual({ ok: false, retryable: true });
   });
+});
 
-  it('anything wrong with the vision.extract.v1 call itself is non-retryable per DF-21 — retrying reaches the same bytes and the same refusal', async () => {
+describe('createWorkerVisionPageRunner — [D-325] unavailable is retryable, a genuine refusal is not', () => {
+  it('a raw transport failure (the transport itself threw, no response arrived) is retryable — the regression this bead fixes', async () => {
+    // Before this bead, EVERY failure from the extract() call — including a
+    // plain transport/outage failure — was reported non-retryable. This is
+    // the failing-first assertion: with the pre-fix catch (a bare
+    // `catch { return { ok: false, retryable: false, ... } }`), this
+    // expectation would fail because the outcome would read
+    // `retryable: false`.
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor: VisionPageExtractPort = {
+      async extract() {
+        throw new TypeError('fetch failed: network unreachable');
+      },
+    };
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(sink.calls).toHaveLength(0);
+  });
+
+  it("a well-formed Worker refusal naming upstream-error is retryable — D-325's 'unavailable is operational, never a result'", async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => {
-      throw new WorkerVisionPageExtractorError('the Worker refused the request (upstream-error)');
+      throw new WorkerVisionPageExtractorError(
+        'WorkerVisionPageExtractor: the Worker refused the request (upstream-error): The model could not be reached.',
+        'upstream-error',
+      );
+    });
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(sink.calls).toHaveLength(0);
+  });
+
+  it.each([
+    'invalid-request',
+    'grounding-refused',
+    'quota-exceeded',
+    'internal-error',
+    undefined,
+  ] as const)(
+    'a Worker refusal naming %s stays non-retryable per DF-21 — retrying reaches the same bytes and the same outcome',
+    async (code) => {
+      const vault = new MemoryVaultSource();
+      vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+      const sink = new RecordingSink();
+      const extractor = new FakeExtractor(() => {
+        throw new WorkerVisionPageExtractorError('the Worker refused the request', code);
+      });
+      const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+      const outcome = await runner(visionPageJob());
+
+      expect(outcome).toEqual({
+        ok: false,
+        retryable: false,
+        reason: expect.stringContaining('hash-abc123'),
+      });
+      expect(sink.calls).toHaveLength(0);
+    },
+  );
+
+  it('a malformed/unusable response body stays non-retryable, same as any other unrecognised shape', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => {
+      // No `code` at all — the shape `readVisionResult` throws for a body it
+      // cannot parse (e.g. no `ok` discriminant), never an outage.
+      throw new WorkerVisionPageExtractorError(
+        'WorkerVisionPageExtractor: the Worker response carried no `ok` discriminant.',
+      );
     });
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
@@ -515,7 +737,15 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
       retryable: false,
       reason: expect.stringContaining('hash-abc123'),
     });
-    expect(sink.calls).toHaveLength(0);
+  });
+
+  it('the FailingTransport shape at the extractor layer also throws a raw, unwrapped error (sanity check on the fake)', async () => {
+    const transport = new FailingTransport(new Error('ECONNRESET'));
+    const extractor = new WorkerVisionPageExtractor({ transport });
+
+    await expect(
+      extractor.extract({ pageImageBase64: 'QUJD', mimeType: 'image/png' }),
+    ).rejects.not.toBeInstanceOf(WorkerVisionPageExtractorError);
   });
 });
 
@@ -524,7 +754,7 @@ describe('createWorkerVisionPageRunner — D-005: never names her material', () 
     const vault = new MemoryVaultSource();
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => {
-      throw new Error('boom');
+      throw new WorkerVisionPageExtractorError('boom', 'invalid-request');
     });
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
 
