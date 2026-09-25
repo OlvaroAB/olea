@@ -133,8 +133,14 @@ describe('ExplainBackModal loads a real misconception digest for an instrument-s
     const resolveStart = modal.indexOf('private async resolveInstrumentPrompt(');
     const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
     const body = modal.slice(resolveStart, resolveTopicStart);
+    // `ol-egov.141.89.6.33`: the judge's own source blocks are
+    // `gradingSourceBlocks` (threaded through `resolveGradingSourceBlocks`),
+    // not the plain `sourceBlocks` retrieval — see that function's own doc
+    // for why `ResolvedPrompt.sourceBlocks` (a few lines further down, used
+    // for citation lookup and the accept-time staleness comparison) stays
+    // the plain retrieval unchanged.
     expect(body).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*sourceBlocks,\s*misconceptionDigest,\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
     );
   });
 

@@ -92,6 +92,7 @@ import {
 } from './explain-back/observation.js';
 import {
   type ExplainBackSourceBlock,
+  resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
@@ -3217,8 +3218,57 @@ export default class OleaPlugin extends Plugin {
           embeddingProvider,
           registryOverrides: this.registryOverridesCache,
         },
+        // `ol-egov.141.89.6.33`: the live relation graph
+        // `resolveExplainBackCausesPartner` below reads — a thunk, not a
+        // captured value, for the same "a later ingestion tick's fresh
+        // batch reaches a session built earlier" reason every other
+        // `relations` thunk in this file gives (see `servedRelationEdges`'s
+        // own doc). `retrieveExplainBackSourceBlocks` itself never reads
+        // this field; it is here so `ExplainBackRetrievalDeps` is complete
+        // at its one construction point, matching the field's own doc
+        // (`explain-back/request.ts`) that names `this.relations` directly.
+        relations: () => this.relations,
       },
       query,
+    );
+  }
+
+  /**
+   * `ol-egov.141.89.6.33`: the composition-root half of rel.md section 1's
+   * "Explain-back partner (causes)" row. `explain-back/request.ts`'s
+   * `resolveExplainBackRelationEdge` needs a candidate `neighbourConceptId`
+   * handed in — "which neighbour a prompt names is decided upstream of
+   * retrieval," that function's own doc — and this method is that upstream
+   * decision: the first live 'causes' edge touching `subjectConceptId`,
+   * either endpoint, found via `servedRelations(this.relations)` (the SAME
+   * gated read `servedRelationEdges()` above already uses, never a second,
+   * ungated scan). `resolveExplainBackRelationEdge` is then called with the
+   * RAW `this.relations` thunk, never `servedRelationEdges()`'s
+   * already-filtered array, so the real, exported freshness gate (rel.md
+   * section 3 Default 4) is what actually decides currency here, not this
+   * method's own candidate search — a stale or superseded edge for the same
+   * pair is excluded there exactly as `servedRelations` excludes it for
+   * every other reader.
+   *
+   * `causes` is `RELATION_EMISSION_STATUS['blocked-on-deferred-reader']`
+   * (`concept/relation.ts`): no production reader mints one today, so every
+   * real vault resolves `undefined` here, unchanged from before this method
+   * existed. `explain-back/modal.ts`'s `resolveGradingSourceBlocks` is the
+   * real caller (via `ExplainBackModalDeps.resolveCausesPartner` below) that
+   * makes the day a reader ships one reachable without a second wiring pass.
+   */
+  private resolveExplainBackCausesPartner(subjectConceptId: string): ConceptRelation | undefined {
+    if (this.relations === null) return undefined;
+    const candidate = servedRelations(this.relations).find(
+      (edge) =>
+        edge.type === 'causes' && (edge.from === subjectConceptId || edge.to === subjectConceptId),
+    );
+    if (candidate === undefined) return undefined;
+    const neighbourConceptId = candidate.from === subjectConceptId ? candidate.to : candidate.from;
+    return resolveExplainBackRelationEdge(
+      { relations: () => this.relations },
+      subjectConceptId,
+      neighbourConceptId,
     );
   }
 
@@ -3357,6 +3407,12 @@ export default class OleaPlugin extends Plugin {
         acceptWithObservation: (pending, context) =>
           this.acceptExplainBackGradingWithObservation(pending, context),
         retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
+        // `ol-egov.141.89.6.33`: the resolved-neighbour half —
+        // `resolveGradingSourceBlocks` (`explain-back/modal.ts`) calls this
+        // to find a live 'causes' partner for the subject before threading
+        // it through `resolveGradingRelationContext`/`buildGradingSourceMaterial`.
+        resolveCausesPartner: (subjectConceptId) =>
+          this.resolveExplainBackCausesPartner(subjectConceptId),
         buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
         recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGradeAndReview(params),
         loadMisconceptionDigest: (conceptIds) =>

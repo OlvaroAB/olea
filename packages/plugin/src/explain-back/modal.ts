@@ -75,13 +75,19 @@ import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
 import type { MasteryState, SoloLevel, SupportLevel } from 'olea-contracts';
 import {
+  buildGradingSourceMaterial,
   type CitedIssue,
+  type ConceptDefiningPassages,
+  type ConceptRelation,
   discardExplainBackGrading,
   type ExplainBackPromptContext,
   formatSourceCitation,
   type GradeExplainBackInput,
+  type GradingRelationContext,
   type GroundedGrading,
   type PendingExplainBackGrading,
+  type ResolvedRelationEdge,
+  resolveGradingRelationContext,
 } from 'olea-core';
 import type {
   AcceptExplainBackGradingWithObservationContext,
@@ -171,6 +177,18 @@ export interface ExplainBackModalDeps {
     context: AcceptExplainBackGradingWithObservationContext,
   ) => Promise<AcceptExplainBackGradingWithObservationResult | null>;
   readonly retrieveSourceBlocks: (query: string) => Promise<readonly ExplainBackSourceBlock[]>;
+  /**
+   * `ol-egov.141.89.6.33`: resolves the subject concept's live "causes"
+   * partner (rel.md section 1's "Explain-back partner (causes)" row) from
+   * the plugin's in-memory relation graph — `main.ts`'s wrapper around
+   * `explain-back/request.ts`'s `resolveExplainBackRelationEdge`, already
+   * gated on rel.md section 3 Default 4 freshness (a stale or absent edge
+   * resolves `undefined`, never served). `resolveGradingSourceBlocks` below
+   * is the one caller. Optional and absent by default, same posture as
+   * `getMasteryState`/`recordSoloGradeAndReview`: an omitted dep keeps the
+   * pre-existing concept-only path exactly as it was.
+   */
+  readonly resolveCausesPartner?: (subjectConceptId: string) => ConceptRelation | undefined;
   readonly buildObservationContext: (params: {
     readonly subjectConceptId: string | null;
     readonly originInstrumentId: string;
@@ -272,6 +290,113 @@ export interface ExplainBackModalDeps {
   readonly loadMisconceptionDigest?: (
     conceptIds: readonly string[],
   ) => Promise<GradeExplainBackInput['misconceptionDigest']>;
+}
+
+/**
+ * `ol-egov.141.89.6.33`: widens a subject's retrieved source blocks into the
+ * real grading source material, threading a live 'causes' partner through
+ * the two core functions `explain-back/request.ts`'s own module doc names
+ * as the missing half (`olea-core`'s `resolveGradingRelationContext`/
+ * `buildGradingSourceMaterial`) — never reimplemented here. Exported and
+ * pure (no `Modal`, no `App`) so it is directly unit-testable, unlike the
+ * class below (`obsidian`'s `package.json` `main` is `""`, so `Modal`
+ * cannot be instantiated under Vitest — see this file's sibling specs).
+ *
+ * **Always runs through both core functions, concept-only or not.** The
+ * concept-only branch is `buildGradingSourceMaterial`'s identity case
+ * (`sourceBlocks` returned unchanged) — so a call that finds no resolvable
+ * neighbour changes nothing observable. That is what keeps the judge's wire
+ * shape unchanged for `causes`'s current, `RELATION_EMISSION_STATUS`
+ * `'blocked-on-deferred-reader'` state (`concept/relation.ts`): a real
+ * `no-op` outcome, not a bypass that skips calling either function.
+ *
+ * **A `null` subjectConceptId (the free-form topic entry point) never
+ * builds a `GradingSourceMaterial`.** `buildGradingSourceMaterial` requires
+ * `GradingSubject.subjectConceptId`, and a topic she typed herself
+ * genuinely has none (`resolveTopicPrompt`'s own `subjectConceptId: null`).
+ * `resolveGradingRelationContext(undefined)` still runs, so both entry
+ * points share one code path through it; its `{kind: 'concept-only'}`
+ * result is simply not acted on further, and `sourceBlocks` returns
+ * unchanged — this path's exact pre-existing behaviour.
+ *
+ * **The neighbour's defining passages are retrieved through
+ * `deps.retrieveSourceBlocks`, keyed by the neighbour's own concept
+ * name.** The same retrieval port every entry point already uses for an
+ * arbitrary natural-language string (`resolveTopicPrompt` already retrieves
+ * against a topic she typed) — no second reader is invented.
+ * `ConceptRelation.from`/`.to` (`olea-core`) are concept NAMES, its own
+ * doc's wording — the identical vocabulary `subjectConceptId` already
+ * carries everywhere else in this file (the mastery tag, the misconception
+ * digest, the accept-time observation context all key on it the same way),
+ * so this is consistent with every other consumer of that field, not a new
+ * convention.
+ *
+ * **The edge's own introducing-passage text is not resolved here.**
+ * `ConceptRelation.introducingPassages` is a `Provenance` (a source path
+ * plus a location) on each endpoint, never a `SourceBlockRef` (no `text`
+ * field) — turning one into cited passage text needs a targeted vault read
+ * this view has no port for. `evidence: 'current'` is asserted directly
+ * rather than left for `resolveRelationProvenance` to re-derive, because
+ * `deps.resolveCausesPartner` (main.ts's wrapper around
+ * `resolveExplainBackRelationEdge`) already applies rel.md Default 4's
+ * freshness gate before ever returning an edge — one reaching this function
+ * is, by construction, already current. With no introducing passages and no
+ * linking note, `resolveRelationProvenance` degrades this to
+ * `{kind: 'no-edge'}` (F5.2a's own third, "written nowhere" case) — which
+ * still includes the neighbour's defining passages in `sourceBlocks`
+ * (`buildGradingSourceMaterial`'s `'no-edge'` branch), the one observable
+ * effect a real 'causes' edge has here today. Resolving the edge's own
+ * provenance text for the richer `'edge-provenance'` case is a disclosed
+ * follow-up, not silently absorbed.
+ */
+export async function resolveGradingSourceBlocks(
+  deps: Pick<ExplainBackModalDeps, 'retrieveSourceBlocks' | 'resolveCausesPartner'>,
+  subjectConceptId: string | null,
+  sourceBlocks: readonly ExplainBackSourceBlock[],
+): Promise<readonly ExplainBackSourceBlock[]> {
+  const edge =
+    subjectConceptId !== null ? deps.resolveCausesPartner?.(subjectConceptId) : undefined;
+
+  let named:
+    | { readonly neighbourConceptId: string; readonly edge: ResolvedRelationEdge }
+    | undefined;
+  let neighbourBlocks: readonly ExplainBackSourceBlock[] = [];
+  if (edge !== undefined && subjectConceptId !== null) {
+    const neighbourConceptId = edge.from === subjectConceptId ? edge.to : edge.from;
+    neighbourBlocks = await deps.retrieveSourceBlocks(neighbourConceptId);
+    named = {
+      neighbourConceptId,
+      edge: { evidence: 'current', provenance: edge.provenance, introducingPassages: [] },
+    };
+  }
+
+  const relation: GradingRelationContext = resolveGradingRelationContext(named);
+  if (subjectConceptId === null) return sourceBlocks;
+
+  const subjectDefiningPassages: ConceptDefiningPassages = {
+    conceptId: subjectConceptId,
+    passages: sourceBlocks.map((entry) => entry.block),
+  };
+  const material = buildGradingSourceMaterial({
+    subject: { subjectConceptId },
+    subjectDefiningPassages,
+    relation,
+    ...(named
+      ? {
+          neighbourDefiningPassages: {
+            conceptId: named.neighbourConceptId,
+            passages: neighbourBlocks.map((entry) => entry.block),
+          },
+        }
+      : {}),
+  });
+
+  const lookup = new Map<string, ExplainBackSourceBlock>();
+  for (const entry of [...sourceBlocks, ...neighbourBlocks]) lookup.set(entry.block.blockId, entry);
+  return material.sourceBlocks.flatMap((block) => {
+    const entry = lookup.get(block.blockId);
+    return entry ? [entry] : [];
+  });
 }
 
 interface ResolvedPrompt {
@@ -401,6 +526,21 @@ export class ExplainBackModal extends Modal {
   private async resolveInstrumentPrompt(instrument: ReviewInstrument): Promise<void> {
     const query = questionQuery(instrument);
     const sourceBlocks = await this.deps.retrieveSourceBlocks(query);
+    const subjectConceptId = instrument.conceptIds[0] ?? null;
+    // `ol-egov.141.89.6.33`: widened ONLY for what the judge is sent
+    // (`context` below) — `prompt.sourceBlocks` a few lines down stays the
+    // plain retrieval, unchanged, because it also feeds the accept-time
+    // staleness comparison (`main.ts`'s `buildExplainBackObservationContextFor`,
+    // re-retrieving against the SAME `query` this file passed originally)
+    // and a comparison against a widened list would misreport every
+    // relation-aware accept as stale. See `resolveGradingSourceBlocks`'s
+    // own doc for why concept-only (today, always, until a `causes` reader
+    // ships) leaves this identical to `sourceBlocks` regardless.
+    const gradingSourceBlocks = await resolveGradingSourceBlocks(
+      this.deps,
+      subjectConceptId,
+      sourceBlocks,
+    );
     // `ol-2zfj.75` (C7.9/F5.6): a real digest when the concept(s) this
     // instrument targets have prior misconception history, `[]` otherwise —
     // never thrown into the prompt-resolution path (see the dep's own doc).
@@ -410,12 +550,12 @@ export class ExplainBackModal extends Modal {
         : [];
     const context = buildExplainBackPromptContextFromInstrument(
       instrument,
-      sourceBlocks,
+      gradingSourceBlocks,
       misconceptionDigest,
     );
     const prompt: ResolvedPrompt = {
       context,
-      subjectConceptId: instrument.conceptIds[0] ?? null,
+      subjectConceptId,
       originInstrumentId: instrument.instrumentId,
       sourceBlocks,
     };
@@ -428,7 +568,14 @@ export class ExplainBackModal extends Modal {
     this.state = { phase: 'loading' };
     this.render();
     const sourceBlocks = await this.deps.retrieveSourceBlocks(topic);
-    const context = buildExplainBackPromptContextFromTopic(topic, sourceBlocks);
+    // `ol-egov.141.89.6.33`: a topic prompt's `subjectConceptId` is always
+    // `null` below — there is genuinely no concept id for a topic she typed
+    // herself — so `resolveGradingSourceBlocks` always returns `sourceBlocks`
+    // unchanged here (see that function's own doc); called anyway so both
+    // entry points share the one code path through
+    // `resolveGradingRelationContext`, never a second, divergent one.
+    const gradingSourceBlocks = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
+    const context = buildExplainBackPromptContextFromTopic(topic, gradingSourceBlocks);
     if (context.referenceAnswer.trim() === '') {
       const prompt: ResolvedPrompt = {
         context,
