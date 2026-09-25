@@ -44,12 +44,49 @@
  * so `priorGroundStreak` comes in from the caller and the (possibly
  * incremented) streak comes back out on every classification, for the caller
  * to persist and hand back next time. `./grove.ts`'s `buildGroveModel`
- * plumbs this per concept; **no production caller yet has a durable store for
- * it** (there is no local ground-streak persistence built this round) — see
- * that module's doc and this bead's close notes for the honest gap.
- * `GROUND_STALL_STREAK_THRESHOLD` is a plain-English default (declared, not
- * derived — this project has no real semester of ground-persistence data to
- * fit against yet), reversible via an ordinary Class B tuning pass.
+ * plumbs this per concept, and `../../../plugin/src/grove/ground-streak-
+ * store.ts`'s `ObsidianGroveGroundStreakStore` is the durable store
+ * `./grove.ts`'s own module doc once named as missing — it now closes that
+ * gap (`ol-0r92.20`). `GROUND_STALL_STREAK_THRESHOLD` is a plain-English
+ * default (declared, not derived — this project has no real semester of
+ * ground-persistence data to fit against yet), reversible via an ordinary
+ * Class B tuning pass.
+ *
+ * **"Every classification" was wrong, not just imprecise (`ol-egov.141.89.11.14`,
+ * found by the standing-views trace, review 4.7).** The durable store above
+ * closed "does the streak survive a restart" but not "what counts as ONE
+ * evaluation" — `../../../plugin/src/grove/provider.ts`'s `load()` (the
+ * grove's only production caller, unowned by this bead) runs once per grove
+ * READ, i.e. once per time she opens or refreshes the pane, which has no
+ * relationship to how often the generation/ingestion queue has actually
+ * attempted to turn this concept's `ground` into a built instrument. Under
+ * the ORIGINAL contract (`priorGroundStreak` in, `groundStreak` out,
+ * unconditionally `+1` while still `ground`), reopening the grove twice with
+ * no processing in between advanced the streak twice — "opening the grove
+ * more often makes a course look stalled sooner," never what F4.5 or this
+ * doc's own "consecutive evaluations" meant. `[D-063]`'s Class B default,
+ * stated at review item 4.7: **a stall counts processing passes, not
+ * renders.**
+ *
+ * `processingPassId` (optional, alongside `priorProcessingPassId` /
+ * {@link DeclaredConceptClassification}'s `groundStreakProcessingPassId`) is
+ * the fix: an opaque token the caller mints once per PROCESSING pass (the
+ * generation/ingestion queue's own sweep — never a grove read), never
+ * derived by this pure module itself (no clock, no I/O — see above). Two
+ * calls carrying the SAME token are two READS of the same pass's outcome
+ * and the streak holds; two calls carrying DIFFERENT tokens are two DISTINCT
+ * passes and the streak advances — see `classifyDeclaredConcept`'s
+ * implementation. **Omitting `processingPassId` preserves this function's
+ * original, unconditional-`+1` behaviour exactly** — required so that
+ * `./grove.ts` (owned by `ol-egov.141.89.7.4`, sequenced after this bead,
+ * not this bead's to edit) keeps compiling and running unchanged: today's
+ * only production caller does not pass this field yet, so today's
+ * production behaviour, including this defect, is UNCHANGED by this bead
+ * alone. The fix takes effect once `./grove.ts`/`provider.ts` are wired to
+ * mint a real per-sweep token and thread `groundStreakProcessingPassId` back
+ * through the ground-streak store's own new `loadProcessingPasses`/
+ * `saveProcessingPasses` pair (see that module's doc) — that wiring is
+ * `ol-egov.141.89.7.4`'s work, named here as the honest gap this bead leaves.
  *
  * ## The C7.9 part-of fold (`ol-5phn`, discovered from `ol-i8at`)
  *
@@ -182,11 +219,25 @@ import type { ConceptRelation } from '../concept/relation.js';
 export type GroveDeclaredState = 'ground' | MasteryState;
 
 /**
- * How many consecutive evaluations a concept must read `ground` before it is
- * flagged a stall (F4.5) rather than an ordinary in-flight reading. Declared,
- * not derived (see module doc) — 2 is "more than the first time we looked",
- * the smallest count that actually says "persisting" rather than "just
- * seen".
+ * An opaque token naming ONE processing pass — one sweep of whatever process
+ * actually attempts to turn a `ground` concept into a built instrument (the
+ * generation/ingestion queue), never a grove read or a render. See the
+ * module doc's "The stall flag" section for why `classifyDeclaredConcept`
+ * needs this to tell "read twice" apart from "processed twice, still stuck".
+ * The token's identity (a counter, a queue-run id, a timestamp) is entirely
+ * the caller's choice — this module only ever compares two tokens for
+ * equality, never interprets one.
+ */
+export type ProcessingPassToken = string;
+
+/**
+ * How many consecutive PROCESSING PASSES a concept must read `ground` before
+ * it is flagged a stall (F4.5) rather than an ordinary in-flight reading —
+ * see the module doc's "The stall flag" section for why this is passes, not
+ * calls to this function, and why a caller that omits `processingPassId`
+ * gets the pre-fix, per-call reading instead. Declared, not derived (see
+ * module doc) — 2 is "more than the first time we looked", the smallest
+ * count that actually says "persisting" rather than "just seen".
  */
 export const GROUND_STALL_STREAK_THRESHOLD = 2;
 
@@ -299,6 +350,30 @@ export interface ClassifyDeclaredConceptInput {
   readonly masteryState?: MasteryState;
   /** The ground-streak this concept carried INTO this evaluation — 0 for "never read ground before, or this is the first evaluation". See module doc for why this is a caller-supplied value rather than internal state. */
   readonly priorGroundStreak: number;
+  /**
+   * `ol-egov.141.89.11.14`: which processing pass THIS evaluation's
+   * `hasMaterial`/`instrumentCount` reading came from — see
+   * {@link ProcessingPassToken} and the module doc's "The stall flag"
+   * section for why a call count is the wrong thing to advance
+   * `priorGroundStreak` on. **Omitted (today's only production caller, not
+   * yet wired — see module doc) preserves this function's original,
+   * unconditional `+1` behaviour exactly** — this field only ever changes
+   * anything when supplied.
+   */
+  readonly processingPassId?: ProcessingPassToken;
+  /**
+   * The processing-pass identity {@link priorGroundStreak} was last advanced
+   * against — the caller's own persisted value, mirroring
+   * `priorGroundStreak`'s own "in, mutate, out, persist" contract (see
+   * {@link DeclaredConceptClassification}'s `groundStreakProcessingPassId`
+   * and `../../../plugin/src/grove/ground-streak-store.ts`'s
+   * `loadProcessingPasses`/`saveProcessingPasses` for the durable half).
+   * Omitted means "unknown" (a fresh install, or data predating this field)
+   * — treated as "differs from `processingPassId`", so the FIRST call that
+   * supplies `processingPassId` still advances the streak once. Ignored
+   * entirely when `processingPassId` itself is omitted.
+   */
+  readonly priorProcessingPassId?: ProcessingPassToken;
   /** F8.2's taught-signal steps two through five (`[D-247]`) — see `TaughtSignalEvidence` and the module doc's "taught-signal chain" section. Absent means none of those steps have been checked yet; `hasMaterial` (step one) still applies on its own. */
   readonly taughtSignal?: TaughtSignalEvidence;
   /**
@@ -327,8 +402,19 @@ export type DeclaredConceptClassification =
       readonly state: GroveDeclaredState;
       /** F4.5's stall flag — always `false` for a growth-stage state; only ever `true` for `state: 'ground'`. */
       readonly stall: boolean;
-      /** The ground-streak AFTER this evaluation — 0 for a growth-stage state (the streak resets the moment an instrument exists), incremented by one for `ground`. Hand this back to the next evaluation's `priorGroundStreak` for the same concept. */
+      /** The ground-streak AFTER this evaluation — 0 for a growth-stage state (the streak resets the moment an instrument exists), advanced by one for `ground` (see module doc: unconditionally when `processingPassId` is omitted, only across a DISTINCT `processingPassId` when supplied). Hand this back to the next evaluation's `priorGroundStreak` for the same concept. */
       readonly groundStreak: number;
+      /**
+       * `ol-egov.141.89.11.14`: the processing-pass identity {@link groundStreak}
+       * was just advanced (or held) against — present only when the caller
+       * supplied `processingPassId` on this call, and always `undefined` for a
+       * growth-stage state (mirrors `groundStreak: 0`'s own "resets the moment
+       * an instrument exists" reasoning — there is no pass identity left to
+       * carry once a concept leaves `ground`). Hand this back as the next
+       * evaluation's `priorProcessingPassId` for the same concept, exactly
+       * mirroring `groundStreak`/`priorGroundStreak`'s own contract.
+       */
+      readonly groundStreakProcessingPassId?: ProcessingPassToken;
       /** F8.2's teaching-arrival provenance (`[D-247]`) — always `yes` here: a cell only ever exists because step one (her own note) or step two (the week's slide deck) opened it (`resolveTeachingArrival`'s `opensAutomatically`). */
       readonly teachingArrivalProvenance: TeachingArrivalProvenance;
       /**
@@ -371,12 +457,24 @@ export function classifyDeclaredConcept(
     : {};
 
   if (input.instrumentCount === 0) {
-    const groundStreak = input.priorGroundStreak + 1;
+    // `ol-egov.141.89.11.14`: advance only across a DISTINCT processing pass,
+    // never merely because this function was called again (a grove
+    // read/render) — see `processingPassId`'s own doc. Omitting
+    // `processingPassId` (today's only production caller, not yet wired —
+    // module doc) falls through to the ORIGINAL unconditional-`+1` reading,
+    // unchanged.
+    const advancesStreak =
+      input.processingPassId === undefined ||
+      input.processingPassId !== input.priorProcessingPassId;
+    const groundStreak = advancesStreak ? input.priorGroundStreak + 1 : input.priorGroundStreak;
     return {
       kind: 'cell',
       state: 'ground',
       stall: groundStreak >= GROUND_STALL_STREAK_THRESHOLD,
       groundStreak,
+      ...(input.processingPassId !== undefined
+        ? { groundStreakProcessingPassId: input.processingPassId }
+        : {}),
       teachingArrivalProvenance: 'yes',
       ...thinCoverage,
     };

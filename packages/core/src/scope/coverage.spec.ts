@@ -145,6 +145,115 @@ describe('classifyDeclaredConcept — F4.5 stall, under [D-063]', () => {
   });
 });
 
+describe('classifyDeclaredConcept — F4.5 stall counts processing passes, not grove reads (ol-egov.141.89.11.14, review 4.7)', () => {
+  it("DEFECT (unfixed, pre-`processingPassId` shape): three repeated reads with no processing pass in between still advance the streak to a stall — today's only production caller (`../../../plugin/src/grove/provider.ts` via `./grove.ts`) calls exactly this way, unwired", () => {
+    // This is the bug this bead exists to fix, still reachable today because
+    // `processingPassId` is optional and the production caller omits it (see
+    // module doc). Three grove reads, no generation activity between any of
+    // them, each carrying forward the streak from the last — and the streak
+    // climbs on every single one.
+    let streak = 0;
+    for (let read = 0; read < 3; read++) {
+      const result = classifyDeclaredConcept({
+        hasMaterial: true,
+        instrumentCount: 0,
+        priorGroundStreak: streak,
+      });
+      expect(result).toMatchObject({ state: 'ground' });
+      streak = (result as { groundStreak: number }).groundStreak;
+    }
+    expect(streak).toBe(3); // one per read, not per processing pass
+    expect(streak).toBeGreaterThanOrEqual(GROUND_STALL_STREAK_THRESHOLD); // a false stall from reads alone
+  });
+
+  it('FIX: repeated evaluations carrying the SAME processingPassId (repeated grove reads within one processing pass) do not advance the streak', () => {
+    let streak = 0;
+    let priorProcessingPassId: string | undefined;
+    for (let read = 0; read < 3; read++) {
+      const result = classifyDeclaredConcept({
+        hasMaterial: true,
+        instrumentCount: 0,
+        priorGroundStreak: streak,
+        processingPassId: 'sweep-1',
+        priorProcessingPassId,
+      });
+      expect(result).toMatchObject({ state: 'ground', groundStreakProcessingPassId: 'sweep-1' });
+      streak = (result as { groundStreak: number }).groundStreak;
+      priorProcessingPassId = (result as { groundStreakProcessingPassId?: string })
+        .groundStreakProcessingPassId;
+    }
+    // The first call under a never-before-seen pass id advances once (0 -> 1,
+    // matching a genuinely first-sight `ground` reading); the second and
+    // third calls carry the identical pass id and must NOT advance further —
+    // three READS, one PASS.
+    expect(streak).toBe(1);
+    expect(streak).toBeLessThan(GROUND_STALL_STREAK_THRESHOLD);
+  });
+
+  it('FIX: a genuinely DISTINCT processing pass, still stuck at `ground`, does advance the streak — "two distinct processing passes that had it queued" (vew.md §2.2) still flags a stall', () => {
+    const passOne = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+      processingPassId: 'sweep-1',
+      priorProcessingPassId: undefined,
+    });
+    expect(passOne).toMatchObject({ groundStreak: 1, stall: false });
+
+    // Re-read the SAME pass twice more first — must not move the streak.
+    const rereadSamePass = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: (passOne as { groundStreak: number }).groundStreak,
+      processingPassId: 'sweep-1',
+      priorProcessingPassId: (passOne as { groundStreakProcessingPassId?: string })
+        .groundStreakProcessingPassId,
+    });
+    expect(rereadSamePass).toMatchObject({ groundStreak: 1, stall: false });
+
+    // A genuinely new pass, concept still stuck at `ground` — this is the
+    // real "two distinct processing passes" case and DOES advance.
+    const passTwo = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: (rereadSamePass as { groundStreak: number }).groundStreak,
+      processingPassId: 'sweep-2',
+      priorProcessingPassId: (rereadSamePass as { groundStreakProcessingPassId?: string })
+        .groundStreakProcessingPassId,
+    });
+    expect(passTwo).toEqual({
+      kind: 'cell',
+      state: 'ground',
+      stall: true,
+      groundStreak: GROUND_STALL_STREAK_THRESHOLD,
+      groundStreakProcessingPassId: 'sweep-2',
+      teachingArrivalProvenance: 'yes',
+    });
+  });
+
+  it('omitting `processingPassId` entirely carries no `groundStreakProcessingPassId` on the output — a caller that has not wired this yet sees exactly the pre-fix object shape', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 0,
+      priorGroundStreak: 0,
+    });
+    expect(result).not.toHaveProperty('groundStreakProcessingPassId');
+  });
+
+  it('leaving `ground` (an instrument now exists) carries no processing-pass identity forward — the streak and its pass both reset', () => {
+    const result = classifyDeclaredConcept({
+      hasMaterial: true,
+      instrumentCount: 1,
+      masteryState: 'seed',
+      priorGroundStreak: 4,
+      processingPassId: 'sweep-9',
+      priorProcessingPassId: 'sweep-8',
+    });
+    expect(result).toMatchObject({ state: 'seed', groundStreak: 0 });
+    expect(result).not.toHaveProperty('groundStreakProcessingPassId');
+  });
+});
+
 describe('resolveTeachingArrival / classifyDeclaredConcept — the taught-signal chain, F8.2 [D-247]', () => {
   it('her own note opens automatically, provenance `yes` — step one, unchanged from before this chain existed', () => {
     expect(resolveTeachingArrival(true)).toEqual({ provenance: 'yes', opensAutomatically: true });
