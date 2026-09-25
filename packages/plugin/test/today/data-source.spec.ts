@@ -35,7 +35,14 @@ import type {
   StudySessionItem,
   VaultSource,
 } from 'olea-core';
-import { calendarDayFromLocalDate, createFsrsScheduler, provisionalConceptKey } from 'olea-core';
+import {
+  appendReviewLogRecord,
+  calendarDayFromLocalDate,
+  computeAllConceptMastery,
+  createFsrsScheduler,
+  provisionalConceptKey,
+  readReviewLogHistory,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
@@ -140,18 +147,40 @@ function logPath(day: string, deviceId: string): string {
 }
 
 describe('readReviewHistory — this device, by exact path', () => {
-  it('reads the days it was asked about and nothing else', async () => {
+  /**
+   * att.md item 4 (`ol-egov.141.89.9.15`): this used to stop at `windowDays`
+   * back, which fed the mastery overview (F6.2) and insights (F6.5) as well
+   * as the streak — `entries` is whole-log now, and `windowDays` bounds only
+   * `computeStreak`'s own walk (`DEFAULT_STREAK_WINDOW_DAYS`'s doc). The
+   * exact-path probe below is bounded by `probeDays` instead (default
+   * `SCHEDULING_HISTORY_PROBE_DAYS`), which the next test covers.
+   */
+  it('reads every day the whole-log probe reaches, not just the streak window', async () => {
     const { vault, reads } = fakeVault({
       [logPath('2026-08-10', DEVICE)]: `${reviewLine('2026-08-10', 'a')}\n`,
       [logPath('2026-08-09', DEVICE)]: `${reviewLine('2026-08-09', 'b')}\n`,
-      // Outside the window.
+      // Outside the streak's window, inside the whole-log probe.
       [logPath('2026-08-01', DEVICE)]: `${reviewLine('2026-08-01', 'c')}\n`,
     });
     const history = await readReviewHistory(vault, DEVICE, {
       today: '2026-08-10',
       windowDays: 3,
     });
-    expect(history.entries.map((e) => e.eventId).sort()).toEqual(['a', 'b']);
+    expect(history.entries.map((e) => e.eventId).sort()).toEqual(['a', 'b', 'c']);
+    expect(reads).toContain(logPath('2026-08-01', DEVICE));
+  });
+
+  it('probeDays bounds the exact-path probe on a listing-blind host, overridable for tests', async () => {
+    const { vault, reads } = fakeVault({
+      [logPath('2026-08-10', DEVICE)]: `${reviewLine('2026-08-10', 'a')}\n`,
+      // Outside the probe below.
+      [logPath('2026-08-01', DEVICE)]: `${reviewLine('2026-08-01', 'c')}\n`,
+    });
+    const history = await readReviewHistory(vault, DEVICE, {
+      today: '2026-08-10',
+      probeDays: 3,
+    });
+    expect(history.entries.map((e) => e.eventId)).toEqual(['a']);
     expect(reads).not.toContain(logPath('2026-08-01', DEVICE));
   });
 
@@ -1033,6 +1062,114 @@ describe('loadTodayPanel', () => {
       }
       expect(totals).toEqual({ holding: 0, tending: 0, early: 1 });
       expect(course.vitality?.tending).toEqual([]);
+    });
+  });
+
+  /**
+   * att.md item 4 (`ol-egov.141.89.9.15`): `readReviewHistory` used to
+   * window its own read to `windowDays` back (`DEFAULT_STREAK_WINDOW_DAYS`,
+   * 120), and that read fed `entries` for the mastery overview (F6.2) as
+   * well as the streak — so a stage earned before the window dropped off
+   * this panel while every other reader (registry, grove, ...), which folds
+   * `computeAllConceptMastery` over the whole log, kept showing it.
+   *
+   * The "registry" side of the comparison below calls
+   * `computeAllConceptMastery` directly, the same entry point att.md §2.3
+   * says every reader shares — not `createVaultScopeSource`, whose own
+   * concept-key derivation (`enumerateVaultInstruments`, unstamped —
+   * `provisionalConceptKey`) is independent of `createVaultTrendsSource`'s
+   * (`extractConceptsFromVault`, stamped — `resolveConceptKey`'s persisted
+   * opaque key): a real, separate seam this bead's `owns` does not reach,
+   * and mixing the two derivations here would test that seam by accident
+   * rather than att.md item 4.
+   *
+   * The attempt below is `[D-281]`'s qualifying explain-back shape (correct,
+   * relational, independent support) — the same shape
+   * `data-source.invalid-instruments.spec.ts`'s `seedQualifyingAttempt`
+   * uses — placed exactly 130 days before `now`, outside the 120-day
+   * default window. INV-3: every course code and concept name below is
+   * invented.
+   */
+  describe('F6.2 mastery overview reads the whole log, not a 120-day window (att.md item 4, ol-egov.141.89.9.15)', () => {
+    it('a qualifying attempt 130 days old still reaches the top stage, agreeing with a whole-log fold', async () => {
+      const vault = memoryVault({
+        'Notes/old-growth.md': [
+          '---',
+          'topic: [Old Growth Concept]',
+          'course: TESTC707',
+          '---',
+          '',
+          'Front::Back',
+          '',
+        ].join('\n'),
+      });
+
+      // Stamped, so `createVaultTrendsSource` below (which extracts the
+      // SAME way, over the SAME vault instance) resolves this exact key
+      // back rather than minting an independent one — `ol-95vv.6`'s own
+      // suite above uses the identical technique.
+      const extracted = await extractConceptsFromVault(vault, {});
+      const record = extracted[0];
+      if (record === undefined) throw new Error('expected one extracted concept');
+      const conceptId = record.key;
+
+      const attemptTimestamp = '2026-01-01T09:00:00-04:00';
+      // Exactly 130 days after the attempt's own timestamp — safely past the
+      // 120-day default window, by plain millisecond arithmetic so the test
+      // never has to reason about calendar-day rounding.
+      const now = new Date(Date.parse(attemptTimestamp) + 130 * 24 * 60 * 60 * 1000);
+
+      await appendReviewLogRecord(
+        vault,
+        {
+          timestamp: attemptTimestamp,
+          instrumentId: `card:${conceptId}:1`,
+          instrumentType: 'explain-back',
+          conceptIds: [conceptId],
+          rating: null,
+          wasUnsure: false,
+          durationMs: 4000,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            instrumentTypesOffered: ['explain-back'],
+            planVersion: null,
+          },
+          supportLevelShown: 'independent',
+          explainBackGrade: {
+            soloLevel: 'relational',
+            correctness: 'correct',
+            contentRef: 'content-ref-1',
+            revisionOf: null,
+            artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+          },
+        },
+        { deviceId: DEVICE, generateEventId: () => 'old-qualifying-1' },
+      );
+
+      // The registry's own entry point (att.md §2.3), read over the whole
+      // log directly — the oracle every other reader is supposed to agree
+      // with.
+      const { entries } = await readReviewLogHistory(vault, {});
+      const registryMastery = computeAllConceptMastery(entries, [conceptId]);
+      expect(registryMastery.get(conceptId)?.state).toBe('tree');
+
+      // The panel's own reading, over the default 120-day streak window.
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now: () => now,
+        trends: createVaultTrendsSource({ vault }),
+      });
+
+      const course = vm.mastery?.courses.find((c) => c.course === 'TESTC707');
+      if (course === undefined) throw new Error('expected TESTC707 in the mastery overview');
+      // On the unfixed code this reads `{ ..., sprout: 0, sapling: 0, tree: 0 }`
+      // (the concept falls back to `seed`, never reviewed as far as the
+      // windowed read can tell) — the registry above says `tree`.
+      expect(course.distribution.counts.tree).toBe(1);
     });
   });
 

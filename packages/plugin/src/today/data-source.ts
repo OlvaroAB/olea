@@ -142,11 +142,25 @@ import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
 import type { ObsidianTermWindowStore } from './term-window-store.js';
 
 /**
- * How far back the streak reads. 120 days covers a semester's habit without
- * making the panel read a year of files every time she opens the sidebar, and
- * a run that reaches the edge is reported as `N+` rather than as an exact
- * number (`StreakSummary.atWindowEdge`) — so the bound is visible in the UI
- * instead of silently truncating. Class B: a reversible default.
+ * How far back `computeStreak`'s own walk looks (`olea-core`'s
+ * `today/streak.ts`). 120 days covers a semester's habit without asking that
+ * one reading to count forever, and a run that reaches the edge is reported
+ * as `N+` rather than as an exact number (`StreakSummary.atWindowEdge`) — so
+ * the bound is visible in the UI instead of silently truncating. Class B: a
+ * reversible default.
+ *
+ * **This no longer bounds what `readReviewHistory` reads off disk** (att.md
+ * item 4, `ol-egov.141.89.9.15`, `docs/dev/intelligence-build/att.md` in
+ * `olea-service`): `entries` feeds `buildTodayPanel`'s mastery overview
+ * (F6.2) and insights (F6.5) too, by way of `TodayPanelInput.entries`, and
+ * both need her whole log for the same reason `createVaultScopeSource`
+ * below already reads the whole log for its own mastery fold — a stage
+ * earned before this window must not drop off one reader while the
+ * registry, grove and every other reader keep showing it. `computeStreak`
+ * is the one reading here that still legitimately wants a trailing window:
+ * it self-bounds its own walk by `windowDays` regardless of how much history
+ * `entries` actually carries (`core/src/today/streak.ts`'s `oldestDay`), so
+ * handing it the whole log costs that one reading nothing.
  */
 export const DEFAULT_STREAK_WINDOW_DAYS = 120;
 
@@ -173,7 +187,12 @@ export interface ReviewHistory {
    * kind it has nothing to say about.
    */
   readonly disputes: readonly DisputeLogRecord[];
-  /** Days covered, ending on the day asked for — what `computeStreak` needs. */
+  /**
+   * `computeStreak`'s own window, echoed back for `TodayPanelInput
+   * .windowDays` — **not a bound on `entries`' actual coverage**, which is
+   * the whole log now (att.md item 4, `ol-egov.141.89.9.15`; see
+   * `DEFAULT_STREAK_WINDOW_DAYS`'s doc).
+   */
   readonly windowDays: number;
   /** Lines that did not parse. Diagnostics only; never rendered. */
   readonly invalidLineCount: number;
@@ -194,7 +213,16 @@ export interface ReviewHistory {
 
 export interface ReadReviewHistoryOptions {
   readonly today: CalendarDay;
+  /** Bounds `computeStreak` alone now — see `DEFAULT_STREAK_WINDOW_DAYS`'s doc. */
   readonly windowDays?: number;
+  /**
+   * How far back this device's own exact-path probe reaches, on a host
+   * whose `list()`/`listUnder()` cannot see `.olea/reviews/` at all (or
+   * throws). Defaults to `SCHEDULING_HISTORY_PROBE_DAYS`, the same
+   * whole-log bound `createVaultInstrumentSource` and `createVaultScopeSource`
+   * below already use for the identical fallback — overridable for tests.
+   */
+  readonly probeDays?: number;
 }
 
 /** Matches `<YYYY-MM-DD>.<deviceId>.jsonl` — the C5.2 file name, whoever wrote it. */
@@ -225,8 +253,18 @@ function dayOfLogPath(path: VaultPath): CalendarDay | null {
 }
 
 /**
- * Every review-log entry in the window, from every device file the host can
- * actually see, plus this device's own regardless.
+ * Every review-log entry her whole log names, from every device file the
+ * host can actually see, plus this device's own regardless.
+ *
+ * **Whole-log, not windowed** (att.md item 4, `ol-egov.141.89.9.15`): this
+ * used to stop at `windowDays` back, which fed `entries` into the mastery
+ * overview (F6.2) and insights (F6.5) as well as the streak — the same
+ * "current-state reading, not a trailing one" reasoning
+ * `createVaultScopeSource` below already states for its own fold.
+ * `options.windowDays` still bounds `computeStreak`'s own walk, and is
+ * echoed back on `ReviewHistory.windowDays` for exactly that — see
+ * `DEFAULT_STREAK_WINDOW_DAYS`'s doc for why reading more costs that one
+ * reading nothing.
  */
 export async function readReviewHistory(
   vault: VaultSource,
@@ -234,11 +272,13 @@ export async function readReviewHistory(
   options: ReadReviewHistoryOptions,
 ): Promise<ReviewHistory> {
   const windowDays = options.windowDays ?? DEFAULT_STREAK_WINDOW_DAYS;
-  const days = new Set(calendarDaysEndingOn(options.today, windowDays));
+  const probeDays = options.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+  const probeDaySet = new Set(calendarDaysEndingOn(options.today, probeDays));
 
   const paths = new Set<VaultPath>();
 
-  // Other devices, where the host surfaces the folder at all.
+  // Other devices, where the host surfaces the folder at all — every log
+  // file the listing finds, whatever day it names.
   //
   // `listUnder` (ol-2zfj.44/`ol-2zfj.50`) is the PRIMARY path where the host
   // implements it (`ObsidianSource`, real Obsidian): it walks
@@ -262,13 +302,17 @@ export async function readReviewHistory(
     listed = [];
   }
   for (const path of listed) {
-    const day = dayOfLogPath(path);
-    if (day !== null && days.has(day)) paths.add(path);
+    if (dayOfLogPath(path) !== null) paths.add(path);
   }
 
   // This device, by exact path — works on every host, listing or not.
+  // `probeDays` back, the same `SCHEDULING_HISTORY_PROBE_DAYS`-bounded
+  // whole-log fallback `createVaultInstrumentSource` and
+  // `createVaultScopeSource` below already use for a host that cannot list
+  // `.olea/reviews/` — not `windowDays`, which no longer bounds this read
+  // (see this function's own doc).
   const ownPaths = new Set<VaultPath>();
-  for (const day of days) {
+  for (const day of probeDaySet) {
     const ownPath = reviewLogPath(day, deviceId);
     paths.add(ownPath);
     ownPaths.add(ownPath);
