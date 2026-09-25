@@ -1724,3 +1724,46 @@ describe('ol-egov.141.89.10.55: a failed Worker call now reaches the usage log t
     expect(main).toMatch(/import \{ buildFailedUsageLogEntry \} from '\.\/usage\/types\.js';/);
   });
 });
+
+describe("the plugin exposes dataFileHost's atomic readModifyWrite on itself (ol-ppxj.52)", () => {
+  // `ol-ppxj.46`'s report (section 3): about nineteen sites construct a
+  // store with `this` (the plugin instance) as its host — directly (e.g.
+  // `new ObsidianUsageLogStore(this)`), or via `dataHost`/`settingsHost:
+  // this` in a wiring deps object — never with `this.dataFileHost` itself.
+  // Those seventeen stores now take the atomic `readModifyWrite` path
+  // whenever `hasReadModifyWrite` sees it on the host
+  // (`retrieval/serializing-data-host.ts`), but until this bead the plugin
+  // class had no `readModifyWrite` method of its own, so
+  // `hasReadModifyWrite(this)` was false at every one of those production
+  // sites and they all still took the honest, non-atomic fallback — this
+  // bead's fix makes the store-level migration reachable in production.
+  // `main.ts` cannot be instantiated under Vitest (this file's own module
+  // doc), so this is the source-level pin that the passthrough method
+  // exists, declared right after `override loadData`/`saveData` on the
+  // dataFileHost routing. The behavioural proof that a store built with a
+  // plugin-shaped host actually takes the atomic path — not just that this
+  // method is textually present — lives in
+  // `test/retrieval/plugin-shaped-host-atomic-path.spec.ts`, which models
+  // the plugin-shaped host with the identical three-method delegate this
+  // method plus the existing loadData/saveData overrides give `this`.
+
+  it('declares readModifyWrite as a plain instance method delegating to this.dataFileHost.readModifyWrite', () => {
+    expect(main).toMatch(
+      /readModifyWrite\(mutate: \(current: unknown\) => unknown \| Promise<unknown>\): Promise<void> \{\s*return this\.dataFileHost\.readModifyWrite\(mutate\);\s*\}/,
+    );
+  });
+
+  it('is declared right after the override saveData routing, so it sits beside the pair it complements', () => {
+    expect(main).toMatch(
+      // `codeOf` strips comments before building `main`, so the doc comment
+      // between the two methods collapses to whitespace here.
+      /override saveData\(data: unknown\): Promise<void> \{\s*return this\.dataFileHost\.saveData\(data\);\s*\}\s*readModifyWrite\(mutate: \(current: unknown\) => unknown \| Promise<unknown>\): Promise<void> \{/,
+    );
+  });
+
+  it('dataFileHost is the first field declared on the class, so every store construction site — later fields and every onload()-time site alike — sees it already built: no ordering gap for this method to guard', () => {
+    expect(main).toMatch(
+      /class OleaPlugin extends Plugin \{[\s\S]{0,700}?private readonly dataFileHost = new SerializingDataHost\(\{\s*loadData: \(\) => super\.loadData\(\),\s*saveData: \(data\) => super\.saveData\(data\),\s*\}\);/,
+    );
+  });
+});

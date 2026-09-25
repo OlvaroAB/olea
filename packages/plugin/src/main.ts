@@ -763,6 +763,29 @@ export default class OleaPlugin extends Plugin {
     return this.dataFileHost.saveData(data);
   }
 
+  /**
+   * `ol-ppxj.52` (from `ol-ppxj.46`'s report, section 3) — exposes
+   * `dataFileHost`'s atomic `readModifyWrite` on the plugin instance itself,
+   * so every store built with `this` as its host (directly, e.g. `new
+   * ObsidianUsageLogStore(this)`, or via `dataHost`/`settingsHost: this` in a
+   * wiring deps object — about nineteen sites) structurally satisfies
+   * `AtomicDataHost` (`./retrieval/serializing-data-host.ts`) and takes the
+   * race-free path `ol-ppxj.46` added to all seventeen stores, with no change
+   * needed at any individual construction site. `dataFileHost` is the first
+   * field on this class (declared above `override loadData`/`saveData`), so
+   * it is always constructed before any store — every one of the sites above
+   * either runs later in `onload()` or is itself a later field — can ever
+   * reach this method through `this`; there is no ordering gap to guard.
+   *
+   * Delegates to `this.dataFileHost.readModifyWrite`, never to `this.raw`
+   * directly, so this call joins the SAME queue `loadData`/`saveData` above
+   * already enqueue onto — see that host's own doc for why a read-modify-
+   * write must be one link in that queue, not two.
+   */
+  readModifyWrite(mutate: (current: unknown) => unknown | Promise<unknown>): Promise<void> {
+    return this.dataFileHost.readModifyWrite(mutate);
+  }
+
   override async onload(): Promise<void> {
     // F7.3 usage view (`ol-p3t09`): every Worker transport built below records
     // the D-005-safe per-call subset (task id, prompt version, model id) into
