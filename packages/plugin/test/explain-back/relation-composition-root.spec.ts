@@ -155,7 +155,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
       /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
     );
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*query,\s*\};/,
     );
   });
 

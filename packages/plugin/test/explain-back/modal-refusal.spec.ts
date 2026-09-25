@@ -91,13 +91,14 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
 });
 
 describe('ExplainBackModal — acceptGrading threads the graded query through for the live staleness check (ol-gavc)', () => {
-  it('passes prompt.context.question as query on the buildObservationContext call', () => {
+  it('passes prompt.query — the exact string frozen at retrieval time, never a re-derived prompt.context.question (ol-egov.141.89.6.16) — as query on the buildObservationContext call', () => {
     const acceptGradingBody = modal.slice(
       modal.indexOf('private acceptGrading('),
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(
-      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.context\.question,\s*\}\)\),\s*attemptId,\s*\};/,
+      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*\};/,
     );
+    expect(acceptGradingBody).not.toMatch(/query:\s*prompt\.context\.question/);
   });
 });

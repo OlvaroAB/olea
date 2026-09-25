@@ -198,8 +198,22 @@ export interface ExplainBackModalDeps {
      * against (`retrieveSourceBlocks`'s own argument at prompt-resolution
      * time) — a real caller re-retrieves against this at accept time and
      * compares, to detect a source that changed while grading was
-     * outstanding. `acceptGrading` below passes `prompt.context.question`,
-     * the one query string every resolved prompt already carries.
+     * outstanding. `acceptGrading` below passes `prompt.query`, the exact
+     * string frozen on `ResolvedPrompt` at the `retrieveSourceBlocks` call
+     * site that produced `prompt.sourceBlocks` — never `prompt.context
+     * .question`, which is a DIFFERENT string for a cloze instrument
+     * (`questionQuery` joins `before`/`after` with a space;
+     * `questionAndReferenceAnswerForCloze` in `./request.ts` joins them with
+     * a literal `____` blank marker) and, independently, for every
+     * topic-seeded prompt (`resolveTopicPrompt` retrieves against the bare
+     * topic string but `buildExplainBackPromptContextFromTopic` wraps it in
+     * "In your own words: explain …."). Rebuilding the query two ways made
+     * accept-time retrieval read notes that were never part of the graded
+     * prompt, which can misreport a false stale (silently dropping a
+     * correct answer from the record) or miss a real change
+     * (`ol-egov.141.89.6.16`). Freezing the one string used for the real
+     * retrieval, once, closes both divergences for every instrument kind
+     * without re-deriving a query a second way anywhere.
      */
     readonly query: string;
   }) => Promise<AcceptExplainBackGradingWithObservationContext>;
@@ -404,6 +418,16 @@ interface ResolvedPrompt {
   readonly subjectConceptId: string | null;
   readonly originInstrumentId: string;
   readonly sourceBlocks: readonly ExplainBackSourceBlock[];
+  /**
+   * `ol-egov.141.89.6.16`: the EXACT string passed to
+   * `deps.retrieveSourceBlocks` to produce `sourceBlocks` above — frozen
+   * here, at the retrieval call site, rather than re-derived from
+   * `context.question` at accept time (see `buildObservationContext`'s own
+   * `query` param doc on `ExplainBackModalDeps` for why the two can
+   * differ). `computeAcceptGrading` reads this field, never
+   * `context.question`, when it re-retrieves to check staleness.
+   */
+  readonly query: string;
 }
 
 type ModalState =
@@ -531,11 +555,14 @@ export class ExplainBackModal extends Modal {
     // (`context` below) — `prompt.sourceBlocks` a few lines down stays the
     // plain retrieval, unchanged, because it also feeds the accept-time
     // staleness comparison (`main.ts`'s `buildExplainBackObservationContextFor`,
-    // re-retrieving against the SAME `query` this file passed originally)
-    // and a comparison against a widened list would misreport every
-    // relation-aware accept as stale. See `resolveGradingSourceBlocks`'s
-    // own doc for why concept-only (today, always, until a `causes` reader
-    // ships) leaves this identical to `sourceBlocks` regardless.
+    // re-retrieving against `prompt.query`, frozen below to this exact
+    // `query` — never re-derived from `context.question`, which can be a
+    // different string; see `ResolvedPrompt.query`'s own doc,
+    // `ol-egov.141.89.6.16`) and a comparison against a widened list would
+    // misreport every relation-aware accept as stale. See
+    // `resolveGradingSourceBlocks`'s own doc for why concept-only (today,
+    // always, until a `causes` reader ships) leaves this identical to
+    // `sourceBlocks` regardless.
     const gradingSourceBlocks = await resolveGradingSourceBlocks(
       this.deps,
       subjectConceptId,
@@ -558,6 +585,7 @@ export class ExplainBackModal extends Modal {
       subjectConceptId,
       originInstrumentId: instrument.instrumentId,
       sourceBlocks,
+      query,
     };
     this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer: '' };
@@ -582,6 +610,7 @@ export class ExplainBackModal extends Modal {
         subjectConceptId: null,
         originInstrumentId: this.deps.generateInstrumentId(),
         sourceBlocks,
+        query: topic,
       };
       // Never shown an answer box — insufficient-notes is a refusal before
       // any prompt existed to present, so no `presentedAtMs` is set here,
@@ -604,6 +633,7 @@ export class ExplainBackModal extends Modal {
       subjectConceptId: null,
       originInstrumentId: this.deps.generateInstrumentId(),
       sourceBlocks,
+      query: topic,
     };
     this.presentedAtMs = this.now().getTime();
     this.state = { phase: 'answering', prompt, answer: '' };
@@ -716,7 +746,11 @@ export class ExplainBackModal extends Modal {
         subjectConceptId: prompt.subjectConceptId,
         originInstrumentId: prompt.originInstrumentId,
         sourceBlocks: prompt.sourceBlocks,
-        query: prompt.context.question,
+        // `ol-egov.141.89.6.16`: the frozen retrieval query, never
+        // `prompt.context.question` — see `ResolvedPrompt.query`'s own doc
+        // for why the two can differ (cloze's blank marker, every topic
+        // prompt's "In your own words: explain …" wrapper).
+        query: prompt.query,
       })),
       // `ol-0r92.94` [DOS-C1]: attached here, after `buildObservationContext`
       // resolves, rather than threaded through that dep's own params —
