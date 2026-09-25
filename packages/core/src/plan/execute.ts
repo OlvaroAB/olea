@@ -87,22 +87,30 @@
  * generalised — it is left exactly where it is, for exactly the caller that
  * still needs it, and a **second, sort-free entry** is added beside it.
  *
- * - {@link executeStudyPlan} is unchanged. `open-session.ts` (the live "Start
- *   today's review" command) still calls it with a `composeQueue` output
- *   today, and its tests assert the cross-course sort's output — removing
- *   the sort out from under that caller would silently reorder her live
- *   session ahead of the ruling that is supposed to gate it. Row 4
- *   (`ol-egov.132.4`) is what retires that call; until it does, this entry
- *   keeps doing exactly what it did before this bead.
- * - {@link executeStudyPlanOverComposedRows} is the new entry (`docs/dev/
- *   one-assembly-path.md` §2's surviving composer, `buildComposedStudySession`
- *   / `StudySessionItem`). It runs the identical plan join —
+ * - {@link executeStudyPlan} keeps its cross-course sort (unchanged by
+ *   `[SESS-8.3]`) — kept, at the time, for `open-session.ts`'s live
+ *   "Start today's review" call over a `composeQueue` output. **Row 4**
+ *   (`ol-egov.132.4`) has since landed and retired that caller:
+ *   `open-session.ts` no longer consumes `composeQueue`'s output at all
+ *   (`docs/dev/one-assembly-path.md` row 4's close notes). **This doc's
+ *   earlier claim that it "still calls it" was stale and is corrected here**
+ *   (`ol-egov.141.89.10.18` — a live document is current or it is archived,
+ *   never a claim a reader has to independently verify). The only remaining
+ *   caller is `packages/workbench/src/oracle/derive.ts` (a design tool, not
+ *   the product), via `oracle-bridge.ts`'s re-export — reachability
+ *   (`[D-072]` clause 5): no production caller.
+ * - {@link executeStudyPlanOverComposedRows} is the live entry, and
+ *   `open-session.ts:441` (`executeStudyPlanOverComposedRows({ items:
+ *   queueItems, plan: input.plan ?? null })`) is its one production caller
+ *   (`docs/dev/one-assembly-path.md` §2's surviving composer,
+ *   `buildComposedStudySession` / `StudySessionItem`, reached via
+ *   `queueItemsFromComposedSession`). It runs the identical plan join —
  *   {@link PlannedQueueItem.selectionContext}'s `yieldRank`/`examProximity`
  *   are filled from the plan's entry exactly as {@link executeStudyPlan}
- *   fills them, never from anything the composition itself ranked, per this
- *   bead's own hard constraint — but never reorders: the rows arrive in the
- *   order the study-session composer gave them (F2.18's course blocks,
- *   interleaved within a course) and leave in that same order.
+ *   fills them, never from anything the composition itself ranked — but
+ *   never reorders: the rows arrive in the order the study-session composer
+ *   gave them (F2.18: one course per session, concepts interleaved within
+ *   it) and leave in that same order.
  *
  * **Why the input is `QueueItem[]`, not literally `StudySessionItem[]`.**
  * `StudySessionItem` (`study-session/build.ts`) carries no
@@ -110,12 +118,10 @@
  * the study-session composer never touches FSRS scheduling state, so it has
  * nothing to put there. Those three fields are exactly what `QueueItem`
  * already carries and this module's join needs, so the composed-rows entry
- * takes rows in that shape and leaves translating a `StudySessionItem[]`
- * (plus the kept vault enumeration that still knows priorState/dueState/
- * instrumentTypesOffered per instrument) into it to row 4, the first real
- * caller. **Reachability (`[D-072]` clause 5): nothing calls
- * {@link executeStudyPlanOverComposedRows} yet — that is row 4's wiring, not
- * a gap in this one.**
+ * takes rows in that shape, translated from a `StudySessionItem[]` (plus the
+ * kept vault enumeration that still knows priorState/dueState/
+ * instrumentTypesOffered per instrument) by `queueItemsFromComposedSession`
+ * (`open-session.ts`) — row 4's wiring, now landed.
  *
  * `deferred` is always `[]` from this entry: a composed session's own build
  * already decided what did not fit, as a `StudySessionOmission` — a
@@ -123,6 +129,76 @@
  * "already in session") than `DeferredInstrument`'s "deferred behind this
  * other instrument", and restating one as the other would invent a fact
  * neither shape states.
+ *
+ * ## Reading across courses (`ol-egov.141.89.10.18`)
+ *
+ * `indexPlan` used to flatten every course's ranking into one
+ * `conceptId`-keyed map, and when a concept belonged to more than one course
+ * (M:N, knowledge model §4) it picked whichever course's `weight`/`rank`
+ * "won" by {@link isStronger} — exactly the comparison C5.7 forbids: *"A
+ * ranking score never leaves the course that produced it… no consumer may
+ * sort items drawn from more than one course by that score."* A queue item
+ * carries `conceptIds` but no course, so nothing here could even name which
+ * course's claim it was supposed to be reading.
+ *
+ * The fix keeps each course's reading separate — `indexPlanByCourse` builds
+ * `conceptId → (course → PlannedEntry)` and never collapses the inner map —
+ * and resolves it one of two ways ({@link resolveIndex}):
+ *
+ * - A caller that knows which course this queue/session is scoped to passes
+ *   {@link ExecuteStudyPlanInput.courseId} / {@link
+ *   ExecuteComposedSessionInput.courseId}, and every concept is read from
+ *   **that course's entry alone** — "the session's own course entry", never
+ *   a comparison. `study-session/compose.ts`'s composer is always exactly
+ *   one course (F2.18/C5.6), so `executeStudyPlanOverComposedRows`'s real
+ *   caller has this value sitting in `ComposedStudySession.courseShares`'s
+ *   one key; **wiring it through is follow-up work, not done by this
+ *   change** — see this bead's close notes for why (`QueueItem` itself
+ *   carries no course, so today's default is `null`, one course still
+ *   scoped correctly whenever the plan happens to rank its concept in only
+ *   that one course).
+ * - Without a `courseId` (every caller today), a concept ranked in exactly
+ *   one course is unaffected — there is only one reading, so nothing is
+ *   being compared. A concept ranked in **more than one** course is left out
+ *   of the index: unranked (the item keeps its FSRS order, `planWeight:
+ *   null`, `yieldRank: null`), never guessed at. Unranked-but-stamped is a
+ *   real, already-modelled state — see "Unranked items keep their order"
+ *   above — so this costs nothing structurally; it only means a genuinely
+ *   ambiguous concept does not get a rank until a caller names its course.
+ *
+ * ## A held session's stamp must read the composition-time plan (`ol-egov.141.89.10.18`)
+ *
+ * `joinItemsToPlan` stamps `planVersion`/`yieldRank`/`examProximity` from
+ * whatever `plan` its caller hands it — that half was always correct, and
+ * stays a pure function of `(items, plan, courseId)` here, per C5.5 ("no
+ * clock, no provider, no store"). The bug was never in this file: it is that
+ * `open-session.ts:441` passes `plan: input.plan ?? null`, and `input.plan`
+ * traces back to `main.ts`'s `ReviewWiring.plan` — a field **mutated in
+ * place by `refreshCachedStudyPlan` as fresher plans arrive**, read fresh at
+ * `main.ts:3085` on every call into `openReviewSession`, including a plain
+ * resume of an already-active sitting (`studySessionHolder.getSitting()`
+ * returning `status: 'active'`, this file's own caller-side branch at
+ * `open-session.ts:397`). C5.8 freezes the sitting's **items**
+ * (`composedSession = sitting.items`, unchanged on resume) but not the
+ * **plan they are joined against**, so two opens of the same held session
+ * can stamp two different `planVersion`s for the identical offered item —
+ * the record `[D-193]`'s freeze was supposed to make stable.
+ *
+ * This function cannot fix that by itself without breaking C5.5's purity
+ * (caching the composition-time plan in here would be exactly the "no
+ * store" it forbids). **The fix is the caller's**: capture the plan in force
+ * at the moment a fresh sitting is entered (`open-session.ts`'s `else`
+ * branch, `input.studySessionHolder.enter(now, composedSession)` around
+ * line 427) alongside the sitting itself, and on every later read of that
+ * same active sitting pass the captured value back into `plan` here instead
+ * of `input.plan` — never re-resolving it from `main.ts`'s live
+ * `wiring.plan`. `main.ts`'s `ReviewWiring.plan` doc ("`composeReviewSession`
+ * reads it at the instant a session opens, never a stale copy captured at
+ * onload") states the opposite of what a held session needs and should be
+ * corrected alongside the fix. Named as follow-up work, not done here:
+ * `packages/plugin/src/session/holder.ts`'s `StudySessionHolder` (or an
+ * adjacent field) is the natural place to hold the captured plan, since it
+ * already holds the sitting itself.
  */
 
 import type { SelectionContextV4, StudyPlanEnvelope } from 'olea-contracts';
@@ -197,9 +273,17 @@ export interface ExecuteStudyPlanInput {
    * exactly where it used to read `courses`/`planVersion` directly.
    */
   readonly plan: StudyPlanEnvelope | null;
+  /**
+   * C5.7 (`ol-egov.141.89.10.18`): the one course this queue is scoped to,
+   * when the caller knows it. See the module doc's "Reading across courses"
+   * section — `null` (the default; every caller today) means a concept the
+   * plan ranks in more than one course is left unranked rather than
+   * compared across them.
+   */
+  readonly courseId?: string | null;
 }
 
-/** The plan's claim about one concept, flattened across courses for lookup. */
+/** The plan's claim about one concept **in one course** — never flattened across courses (C5.7). */
 interface PlannedEntry {
   readonly rank: number;
   readonly weight: number;
@@ -207,30 +291,88 @@ interface PlannedEntry {
 }
 
 /**
- * `conceptId` → the plan's strongest claim about it.
+ * `conceptId` → `course` → the plan's claim about that concept in that
+ * course, kept separate rather than merged — see the module doc's "Reading
+ * across courses" section for why a merge is exactly what C5.7 forbids.
  *
  * Built once per execution rather than searched per item: a plan has one entry
  * per concept per course and a queue has one item per concept per session, so
  * the naive nested scan is quadratic in exactly the numbers that grow together.
  */
-function indexPlan(plan: StudyPlanEnvelope): ReadonlyMap<string, PlannedEntry> {
-  const index = new Map<string, PlannedEntry>();
+function indexPlanByCourse(
+  plan: StudyPlanEnvelope,
+): ReadonlyMap<string, ReadonlyMap<string, PlannedEntry>> {
+  const index = new Map<string, Map<string, PlannedEntry>>();
   for (const course of plan.body.courses) {
     if (course.status !== 'ranked') continue;
     for (const concept of course.concepts) {
-      const existing = index.get(concept.conceptId);
-      if (existing !== undefined && !isStronger(concept, existing)) continue;
-      index.set(concept.conceptId, {
+      let byCourse = index.get(concept.conceptId);
+      if (byCourse === undefined) {
+        byCourse = new Map<string, PlannedEntry>();
+        index.set(concept.conceptId, byCourse);
+      }
+      const existing = byCourse.get(course.course);
+      const candidate: PlannedEntry = {
         rank: concept.rank,
         weight: concept.weight,
         examProximityDays: concept.examProximityDays,
-      });
+      };
+      // A plan has at most one entry per concept per course by construction
+      // (see "Joining a queue item to the plan" above), so `isStronger` here
+      // is only a defensive tiebreak for a duplicate row WITHIN one course —
+      // never a comparison across two courses' claims about the same concept.
+      if (existing === undefined || isStronger(candidate, existing)) {
+        byCourse.set(course.course, candidate);
+      }
     }
   }
   return index;
 }
 
-/** Higher weight wins; equal weight goes to the better (lower) ordinal. See the module doc on cross-course comparison. */
+/**
+ * Resolve the per-course readings down to one entry per concept — see the
+ * module doc's "Reading across courses" section for the two cases below.
+ */
+function resolveIndex(
+  byCourse: ReadonlyMap<string, ReadonlyMap<string, PlannedEntry>>,
+  courseId: string | null,
+): ReadonlyMap<string, PlannedEntry> {
+  const resolved = new Map<string, PlannedEntry>();
+  for (const [conceptId, courses] of byCourse) {
+    if (courseId !== null) {
+      // The session's own course entry, and nothing else — never a comparison.
+      const entry = courses.get(courseId);
+      if (entry !== undefined) resolved.set(conceptId, entry);
+      continue;
+    }
+    // No course named: safe only when the plan has exactly one claim to read.
+    // More than one course ranking this concept has no single answer here,
+    // and picking one would be the cross-course comparison C5.7 forbids —
+    // so it is left unranked rather than guessed at.
+    if (courses.size === 1) {
+      for (const entry of courses.values()) resolved.set(conceptId, entry);
+    }
+  }
+  return resolved;
+}
+
+function indexPlan(
+  plan: StudyPlanEnvelope,
+  courseId: string | null,
+): ReadonlyMap<string, PlannedEntry> {
+  return resolveIndex(indexPlanByCourse(plan), courseId);
+}
+
+/**
+ * Higher weight wins; equal weight goes to the better (lower) ordinal.
+ *
+ * Two legitimate uses, both within a single course's readings: a defensive
+ * tiebreak for a duplicate plan row in {@link indexPlanByCourse}, and
+ * {@link bestEntryFor}'s choice among one item's several concepts once the
+ * index has already been resolved to a single course's claims. Never valid
+ * across two different courses' entries for the same concept — see the
+ * module doc's "Reading across courses" section.
+ */
 function isStronger(
   candidate: { readonly weight: number; readonly rank: number },
   incumbent: PlannedEntry,
@@ -273,9 +415,10 @@ interface JoinedRow {
 function joinItemsToPlan(
   items: readonly QueueItem[],
   plan: StudyPlanEnvelope | null,
+  courseId: string | null,
 ): { readonly rows: readonly JoinedRow[]; readonly planVersion: string | null } {
   const planVersion = plan === null ? null : plan.policyVersion;
-  const index = plan === null ? new Map<string, PlannedEntry>() : indexPlan(plan);
+  const index = plan === null ? new Map<string, PlannedEntry>() : indexPlan(plan, courseId);
 
   const rows = items.map((item) => {
     const entry = bestEntryFor(item, index);
@@ -317,8 +460,8 @@ function joinItemsToPlan(
  * {@link executeStudyPlanOverComposedRows} does not.
  */
 export function executeStudyPlan(input: ExecuteStudyPlanInput): ExecutedQueue {
-  const { queue, plan } = input;
-  const { rows, planVersion } = joinItemsToPlan(queue.items, plan);
+  const { queue, plan, courseId = null } = input;
+  const { rows, planVersion } = joinItemsToPlan(queue.items, plan, courseId);
 
   // Ranked before unranked; among ranked, by the plan's weight; ties anywhere
   // fall back to the queue's own order, which is plain FSRS due order. Sorting a
@@ -354,20 +497,32 @@ export interface ExecuteComposedSessionInput {
    */
   readonly items: readonly QueueItem[];
   readonly plan: StudyPlanEnvelope | null;
+  /**
+   * C5.7 (`ol-egov.141.89.10.18`): the one course this composed session is
+   * scoped to. `study-session/compose.ts`'s composer is always exactly one
+   * course (F2.18/C5.6) — `ComposedStudySession.courseShares`'s one key —
+   * so the real caller has this value in hand; wiring it through is named
+   * follow-up work, not done by this change (see the module doc's "Reading
+   * across courses" section). `null` (today's default) means a concept the
+   * plan ranks in more than one course is left unranked rather than
+   * compared across them.
+   */
+  readonly courseId?: string | null;
 }
 
 /**
  * Execute a plan against a composed session's own rows, in the order given.
  *
- * Pure, like {@link executeStudyPlan}, and no caller yet — see the module
- * doc's reachability note. `deferred` is always `[]`: see the module doc for
- * why a composed session's `StudySessionOmission`s are not restated here.
+ * Pure, like {@link executeStudyPlan}. `open-session.ts:441` is its one
+ * production caller — see the module doc's "Two entries" section.
+ * `deferred` is always `[]`: see the module doc for why a composed
+ * session's `StudySessionOmission`s are not restated here.
  */
 export function executeStudyPlanOverComposedRows(
   input: ExecuteComposedSessionInput,
 ): ExecutedQueue {
-  const { items, plan } = input;
-  const { rows, planVersion } = joinItemsToPlan(items, plan);
+  const { items, plan, courseId = null } = input;
+  const { rows, planVersion } = joinItemsToPlan(items, plan, courseId);
 
   return {
     items: rows.map(({ item }) => item),

@@ -292,20 +292,68 @@ describe('executeStudyPlan — joins and edge cases', () => {
     expect(offered?.selectionContext.examProximity).toBe(3);
   });
 
-  it('compares across courses by weight, since ranks are ordinals within a course', () => {
+  // C5.7 (ol-egov.141.89.10.18): "A ranking score never leaves the course
+  // that produced it… no consumer may sort items drawn from more than one
+  // course by that score." A concept ranked in two different courses used
+  // to have `isStronger` pick a "winner" by weight/rank ACROSS them — exactly
+  // that forbidden comparison. Before this bead's fix, this test asserted
+  // the winner-picking behaviour (`planWeight` 0.8, the higher-weight
+  // course's entry); the regression below pins the corrected behaviour.
+  it('leaves a concept ranked in more than one course unranked rather than comparing across them, with no course named', () => {
     const executed = executeStudyPlan({
       queue: queue([item('i-shared', ['concept-shared'])]),
       plan: plan([
-        // Rank 1 in a low-weight course, rank 4 in a high-weight one. Taking
-        // the better ordinal would pick the wrong entry.
+        // Rank 1 in a low-weight course, rank 4 in a high-weight one. Picking
+        // either by weight or by rank would be the cross-course comparison
+        // C5.7 forbids, so neither is picked.
         rankedCourse('COURSE-A', [['concept-shared', 1, 0.2, 25]]),
         rankedCourse('COURSE-B', [['concept-shared', 4, 0.8, 6]]),
       ]),
     });
 
-    expect(executed.items[0]?.planWeight).toBe(0.8);
-    expect(executed.items[0]?.selectionContext.yieldRank).toBe(4);
-    expect(executed.items[0]?.selectionContext.examProximity).toBe(6);
+    expect(executed.items[0]?.planWeight).toBeNull();
+    expect(executed.items[0]?.selectionContext.yieldRank).toBeNull();
+    expect(executed.items[0]?.selectionContext.examProximity).toBeNull();
+    // Still stamped: an ambiguous concept is "this plan, no rank for you",
+    // the same statement an unranked concept always makes — see the
+    // planVersion describe block above.
+    expect(executed.items[0]?.selectionContext.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');
+  });
+
+  it('reads only the named course entry for a concept ranked in more than one course, never comparing across them (C5.7)', () => {
+    const twoCoursePlan = plan([
+      rankedCourse('COURSE-A', [['concept-shared', 1, 0.2, 25]]),
+      rankedCourse('COURSE-B', [['concept-shared', 4, 0.8, 6]]),
+    ]);
+
+    const fromA = executeStudyPlan({
+      queue: queue([item('i-shared', ['concept-shared'])]),
+      plan: twoCoursePlan,
+      courseId: 'COURSE-A',
+    });
+    expect(fromA.items[0]?.planWeight).toBe(0.2);
+    expect(fromA.items[0]?.selectionContext.yieldRank).toBe(1);
+    expect(fromA.items[0]?.selectionContext.examProximity).toBe(25);
+
+    const fromB = executeStudyPlan({
+      queue: queue([item('i-shared', ['concept-shared'])]),
+      plan: twoCoursePlan,
+      courseId: 'COURSE-B',
+    });
+    expect(fromB.items[0]?.planWeight).toBe(0.8);
+    expect(fromB.items[0]?.selectionContext.yieldRank).toBe(4);
+    expect(fromB.items[0]?.selectionContext.examProximity).toBe(6);
+  });
+
+  it('a concept ranked in only one course is unaffected by naming no course at all', () => {
+    const executed = executeStudyPlan({
+      queue: queue([item('i-a', ['concept-alpha'])]),
+      plan: plan([rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])]),
+      // courseId omitted entirely — the unambiguous case must not regress.
+    });
+
+    expect(executed.items[0]?.planWeight).toBe(0.9);
+    expect(executed.items[0]?.selectionContext.yieldRank).toBe(1);
   });
 
   it('ignores abstained courses when joining, and never treats an abstention as a ranking', () => {
@@ -388,6 +436,41 @@ describe('executeStudyPlanOverComposedRows — [SESS-8.3] ol-egov.132.3: compose
     });
 
     expect(executed.items.map((i) => i.instrumentId)).toEqual(['i-a', 'i-b']);
+  });
+
+  // C5.7 (ol-egov.141.89.10.18): a composed session is always exactly one
+  // course (F2.18/C5.6), so its own course entry is what the stamp must
+  // read for a concept the plan also ranks elsewhere — never a comparison.
+  it("reads only the session's own course entry for a concept ranked in more than one course, never comparing across them", () => {
+    const sharedAcrossCourses = plan([
+      rankedCourse('COURSE-A', [['concept-shared', 1, 0.2, 25]]),
+      rankedCourse('COURSE-B', [['concept-shared', 4, 0.8, 6]]),
+    ]);
+
+    const asComposedForA = executeStudyPlanOverComposedRows({
+      items: [item('i-shared', ['concept-shared'])],
+      plan: sharedAcrossCourses,
+      courseId: 'COURSE-A',
+    });
+    expect(asComposedForA.items[0]?.planWeight).toBe(0.2);
+    expect(asComposedForA.items[0]?.selectionContext.yieldRank).toBe(1);
+
+    const asComposedForB = executeStudyPlanOverComposedRows({
+      items: [item('i-shared', ['concept-shared'])],
+      plan: sharedAcrossCourses,
+      courseId: 'COURSE-B',
+    });
+    expect(asComposedForB.items[0]?.planWeight).toBe(0.8);
+    expect(asComposedForB.items[0]?.selectionContext.yieldRank).toBe(4);
+
+    // With no course named at all, the ambiguity is left unranked rather
+    // than resolved by comparing weight or rank across the two courses.
+    const withoutCourseId = executeStudyPlanOverComposedRows({
+      items: [item('i-shared', ['concept-shared'])],
+      plan: sharedAcrossCourses,
+    });
+    expect(withoutCourseId.items[0]?.planWeight).toBeNull();
+    expect(withoutCourseId.items[0]?.selectionContext.yieldRank).toBeNull();
   });
 
   it('leaves unranked items interleaved at their given position, never moved after the ranked ones', () => {
@@ -506,5 +589,48 @@ describe('executeStudyPlanOverComposedRows — [SESS-8.3] ol-egov.132.3: compose
 
     const parsed = reviewLogRecordV5.parse(record);
     expect(parsed.selectionContext.planVersion).toBe('sp1-aaaaaaaaaaaaaaaa');
+  });
+});
+
+// ol-egov.141.89.10.18 part 2: "the review stamp reads the plan at open
+// time, not at composition time." The defect is in `open-session.ts`/
+// `main.ts` (see execute.ts's module doc, "A held session's stamp must read
+// the composition-time plan"), not in this pure join — these two tests pin
+// the join's actual contract, so a future attempt to "fix" the staleness by
+// caching a plan inside this module (breaking C5.5's purity) fails loudly.
+describe('executeStudyPlanOverComposedRows — the join is a pure mirror of whatever plan it is given', () => {
+  it('stamps whatever plan the caller passes — proving staleness is entirely the CALLER’s plan-selection responsibility', () => {
+    const items = [item('i-a', ['concept-alpha'])];
+    const compositionTimePlan = plan(
+      [rankedCourse('COURSE-A', [['concept-alpha', 1, 0.9, 5]])],
+      'sp1-composition-time',
+    );
+    const laterCachedPlan = plan(
+      [rankedCourse('COURSE-A', [['concept-alpha', 2, 0.5, 9]])],
+      'sp1-refreshed-later',
+    );
+
+    // A held session's FIRST open, right after composition: the caller must
+    // pass the plan in force at that instant.
+    const atComposition = executeStudyPlanOverComposedRows({ items, plan: compositionTimePlan });
+    expect(atComposition.planVersion).toBe('sp1-composition-time');
+    expect(atComposition.items[0]?.selectionContext.yieldRank).toBe(1);
+
+    // A correct RESUME of the same held session passes the SAME captured
+    // plan again — the stamp does not move.
+    const correctResume = executeStudyPlanOverComposedRows({ items, plan: compositionTimePlan });
+    expect(correctResume).toEqual(atComposition);
+
+    // This is the bug: a resume that instead passes whatever plan is
+    // CURRENTLY cached (`open-session.ts:441`'s `input.plan`, sourced from
+    // `main.ts`'s live-mutated `wiring.plan`) stamps a DIFFERENT record for
+    // the identical held item — the exact defect this bead reports. This
+    // function cannot detect or refuse it: purity means it has no memory of
+    // what it was called with before, so the discipline is the caller's.
+    const buggyResume = executeStudyPlanOverComposedRows({ items, plan: laterCachedPlan });
+    expect(buggyResume.planVersion).not.toBe(atComposition.planVersion);
+    expect(buggyResume.items[0]?.selectionContext.yieldRank).not.toBe(
+      atComposition.items[0]?.selectionContext.yieldRank,
+    );
   });
 });
