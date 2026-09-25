@@ -124,6 +124,21 @@ export interface BuildStudyPlanInput {
    * bead.
    */
   readonly rankWeights?: RankOracleOptions;
+  /**
+   * Component 3.5's infeasible-floors health signal, when `POST
+   * /v1/plan-policy` answered this refresh (`plan-policy-provider.ts`'s
+   * `PlanPolicyResult.floorsFundable`). Landed verbatim onto
+   * `StudyPlanBody.floorsFundable` (`artifact-envelope.ts`) and folded into
+   * `policyVersion`'s hash beside `allocation` and `rankWeights`
+   * (`ol-egov.141.89.10.51`), so a plan whose floors stopped (or started)
+   * being fundable gets a new version even if `courses`/`allocation`/
+   * `rankWeights` numerically coincide. Omitted has the same "no policy
+   * travelled" reading `allocation` documents: a plan built before this
+   * field existed, or with no delivered policy at all, hashes exactly as it
+   * did before this bead. Nothing renders it — see the field's own doc on
+   * `studyPlanBody`.
+   */
+  readonly floorsFundable?: boolean;
 }
 
 /**
@@ -239,15 +254,23 @@ function canonicalise(value: unknown): unknown {
  * neither (every plan before this bead, and every plan built today with no
  * allocation policy and no delivered weights) hashes exactly as it always
  * has — this is additive to the derivation, not a reshuffle of it.
+ *
+ * **`floorsFundable` is in the hash too (`ol-egov.141.89.10.51`).** Same
+ * reasoning: whether the courses' forced floors would have summed within
+ * budget changes what she is actually served without moving `courses` or
+ * `allocation`. Optional, and `canonicalise` drops it when absent, so a plan
+ * built before this field existed, or with no delivered policy at all,
+ * hashes exactly as it always has.
  */
 export async function studyPlanVersion(
   asOf: string,
   courses: readonly StudyPlanCourse[],
   allocation?: readonly StudyPlanAllocationEntry[],
   rankWeights?: RankOracleOptions,
+  floorsFundable?: boolean,
 ): Promise<string> {
   const digest = await hashText(
-    JSON.stringify(canonicalise({ asOf, courses, allocation, rankWeights })),
+    JSON.stringify(canonicalise({ asOf, courses, allocation, rankWeights, floorsFundable })),
   );
   return `${PLAN_VERSION_PREFIX}-${digest.slice(0, PLAN_VERSION_HEX_LENGTH)}`;
 }
@@ -273,6 +296,7 @@ export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyP
     courses,
     input.allocation,
     input.rankWeights,
+    input.floorsFundable,
   );
   const envelope: StudyPlanEnvelope = {
     envelopeVersion: ARTIFACT_ENVELOPE_VERSION,
@@ -287,6 +311,7 @@ export async function buildStudyPlan(input: BuildStudyPlanInput): Promise<StudyP
       asOf: input.ranking.asOf,
       courses,
       ...(input.allocation === undefined ? {} : { allocation: [...input.allocation] }),
+      ...(input.floorsFundable === undefined ? {} : { floorsFundable: input.floorsFundable }),
     },
   };
   return studyPlanEnvelope.parse(envelope);

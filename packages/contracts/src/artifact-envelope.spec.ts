@@ -158,6 +158,42 @@ describe("the study plan's allocation field (A2.5, component 3.5)", () => {
   });
 });
 
+/**
+ * `ol-egov.141.89.10.51` — component 3.5's infeasible-floors health signal,
+ * wired onto `studyPlanBody` as an additive, optional field, the same
+ * precedent as `allocation` above: a plan cached before this field existed
+ * keeps parsing unchanged (`bodyVersion` stays 1).
+ */
+describe("the study plan's floorsFundable field (component 3.5)", () => {
+  it('a plan with no floorsFundable key at all still parses — absence predates the field', () => {
+    const result = studyPlanEnvelope.safeParse(validPlanEnvelope());
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.body.floorsFundable).toBeUndefined();
+  });
+
+  it('accepts a plan carrying floorsFundable: true', () => {
+    const base = validPlanEnvelope();
+    const withField = { ...base, body: { ...base.body, floorsFundable: true } };
+    const result = studyPlanEnvelope.safeParse(withField);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.body.floorsFundable).toBe(true);
+  });
+
+  it('accepts a plan carrying floorsFundable: false', () => {
+    const base = validPlanEnvelope();
+    const withField = { ...base, body: { ...base.body, floorsFundable: false } };
+    const result = studyPlanEnvelope.safeParse(withField);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.body.floorsFundable).toBe(false);
+  });
+
+  it('rejects a non-boolean floorsFundable', () => {
+    const base = validPlanEnvelope();
+    const bad = { ...base, body: { ...base.body, floorsFundable: 'true' } };
+    expect(studyPlanEnvelope.safeParse(bad).success).toBe(false);
+  });
+});
+
 describe('unknown versions are discarded, never migrated and never rendered', () => {
   it('reads a known artifact', () => {
     const result = readArtifactEnvelope(studyPlanEnvelope, STUDY_PLAN_KIND, validPlanEnvelope());

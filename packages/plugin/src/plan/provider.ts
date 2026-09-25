@@ -331,6 +331,12 @@ export function createLocalStudyPlanProvider(
                 ...entry,
                 contributions: [...entry.contributions],
               })),
+              // `ol-egov.141.89.10.51`: `policy.floorsFundable` was decoded
+              // by `plan-policy-provider.ts` and dropped here before this
+              // bead — threaded through the same way `allocation` is,
+              // landed verbatim on `body.floorsFundable` and folded into
+              // `policyVersion`'s hash. Nothing renders it yet.
+              floorsFundable: policy.floorsFundable,
             }
           : {}),
       });

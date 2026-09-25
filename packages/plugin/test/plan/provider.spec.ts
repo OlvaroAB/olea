@@ -329,6 +329,40 @@ describe('createLocalStudyPlanProvider — allocation policy ([D-167], ol-v7r5.2
       },
     ]);
     expect(requestedCourses.map((c) => c.courseId)).toEqual(['TESTC101']);
+    // `ol-egov.141.89.10.51`: `policy.floorsFundable` (mocked `true` above)
+    // is threaded onto `body.floorsFundable` verbatim, the same as
+    // `allocation` just above.
+    expect(plan.body.floorsFundable).toBe(true);
+  });
+
+  it('a delivered floorsFundable: false is threaded onto body.floorsFundable, not dropped as falsy', async () => {
+    const raw = await createLocalStudyPlanProvider({
+      vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      readPlanPolicy: async (request) => ({
+        asOf: request.asOf,
+        rankWeights: {
+          proximityHalfLifeDays: 14,
+          assessmentWeightDivisor: 40,
+          masteryNeedWeight: { seed: 1, sprout: 1, sapling: 1, tree: 1, unknown: 1 },
+        },
+        allocation: [
+          {
+            courseId: 'TESTC101',
+            share: 1,
+            minBlockSeconds: 180,
+            contributions: [{ name: 'risk', value: 1 }],
+            reason: 'the only running course receives the whole session.',
+          },
+        ],
+        floorsFundable: false,
+      }),
+    }).fetchPlan();
+
+    const plan = studyPlanEnvelope.parse(raw);
+    expect(plan.body.floorsFundable).toBe(false);
   });
 });
 

@@ -594,6 +594,21 @@ export const studyPlanBody = z.object({
    * shape and the share-to-seconds conversion it contracts.
    */
   allocation: z.array(studyPlanAllocationEntry).optional(),
+  /**
+   * Component 3.5's infeasible-floors health signal: whether the courses'
+   * forced floors would have summed within budget. **Optional, added
+   * `ol-egov.141.89.10.51`**, the same additive precedent as `allocation`
+   * just above: `bodyVersion` stays `1` because this is additive, not a
+   * shape change — a plan cached before this field existed has no
+   * `floorsFundable` key at all and must keep parsing exactly as it did.
+   * Absence here is a statement about WHEN a plan was computed (or that no
+   * allocation policy travelled with it), never a claim that the floors
+   * were fundable — a caller reading `undefined` must not treat it as
+   * `true`. Nothing renders this field yet (`docs/dev/intelligence-build/pln.md`
+   * section 7, "Not decisions": carrying `floorsFundable` in the plan is
+   * Class B, and nothing renders it) — whether she is told needs a clause.
+   */
+  floorsFundable: z.boolean().optional(),
 });
 export type StudyPlanBody = z.infer<typeof studyPlanBody>;
 

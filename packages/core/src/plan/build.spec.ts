@@ -366,6 +366,70 @@ describe('buildStudyPlan', () => {
 
       expect(second.policyVersion).toBe(first.policyVersion);
     });
+
+    // `ol-egov.141.89.10.51`: floorsFundable never reached StudyPlanBody,
+    // and until this bead the version did not hash it either — two plans
+    // differing only in whether the courses' forced floors summed within
+    // budget shared one version.
+    it('differs when only floorsFundable differs — the same ranking, a different floors verdict, is a different policy', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const withoutField = await buildStudyPlan({ ranking: source, computedAt: COMPUTED_AT });
+      const fundable = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        floorsFundable: true,
+      });
+      const notFundable = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        floorsFundable: false,
+      });
+
+      expect(fundable.policyVersion).not.toBe(withoutField.policyVersion);
+      expect(notFundable.policyVersion).not.toBe(withoutField.policyVersion);
+      expect(notFundable.policyVersion).not.toBe(fundable.policyVersion);
+    });
+
+    it('identical floorsFundable across two builds gives the same version', async () => {
+      const source = ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+      ]);
+      const first = await buildStudyPlan({
+        ranking: source,
+        computedAt: COMPUTED_AT,
+        floorsFundable: true,
+      });
+      const second = await buildStudyPlan({
+        ranking: source,
+        computedAt: '2026-08-19T23:45:00.000Z',
+        floorsFundable: true,
+      });
+
+      expect(second.policyVersion).toBe(first.policyVersion);
+    });
+  });
+
+  describe('floorsFundable (ol-egov.141.89.10.51)', () => {
+    it('a plan built from a policy result carries floorsFundable verbatim onto body.floorsFundable', async () => {
+      const plan = await buildStudyPlan({
+        ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        computedAt: COMPUTED_AT,
+        floorsFundable: true,
+      });
+
+      expect(plan.body.floorsFundable).toBe(true);
+    });
+
+    it('omits body.floorsFundable entirely when none is supplied — absence, never a claim of fundable', async () => {
+      const plan = await buildStudyPlan({
+        ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] }]),
+        computedAt: COMPUTED_AT,
+      });
+
+      expect(Object.hasOwn(plan.body, 'floorsFundable')).toBe(false);
+    });
   });
 
   describe('allocation (ol-v7r5.25)', () => {
