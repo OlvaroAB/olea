@@ -91,6 +91,7 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import { noteOfferEligible } from '../concept/note-offer.js';
+import { noteTitle } from '../concept/zettelkasten.js';
 import type { Provenance } from '../extract/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import {
@@ -302,12 +303,44 @@ function groupInstrumentRecordsByConcept(
 }
 
 /**
+ * Every Zettelkasten note title this walk already knows exists, gathered
+ * from `input.concepts` alone — no second vault read. `boundNotePath` is set
+ * for both tier 1 and tier 3 (`../concept/extract.js`'s own doc: both bind
+ * by the same exact-title match), and `ambiguousNotePaths` (`[D-203]`) names
+ * every path behind a duplicated title the binder refused to pick between —
+ * both are real notes she has, so both feed the set `noteOfferFor` below
+ * checks a concept's `displayName`/`aliases` against
+ * (`../concept/note-offer.js`'s `existingNoteTitles`).
+ *
+ * **This is "the note listing the registry build already has," not a full
+ * Zettelkasten walk**: a note that was never bound to any concept this run
+ * extracted (never matched a `topic:`/wikilink name, never cited by tier-3
+ * evidence, and shares no title with a bound/ambiguous note) is invisible
+ * here, the same honest-absence posture `note-offer.ts`'s own doc states for
+ * a caller with no listing at all — never a fabricated "no note exists."
+ * Closing that gap needs a real vault listing threaded in from the plugin's
+ * walk (`packages/plugin/src/registry/provider.ts`'s `load()`, which already
+ * reads `VaultSource` for `uniqueNotePath`'s collision check one layer up —
+ * see this bead's Follow-ups); this module does no I/O (module doc) and so
+ * cannot fetch that listing itself.
+ */
+function existingNoteTitlesFrom(concepts: BuildRegistryModelInput['concepts']): readonly string[] {
+  const titles = new Set<string>();
+  for (const concept of concepts) {
+    if (concept.boundNotePath !== undefined) titles.add(noteTitle(concept.boundNotePath));
+    for (const path of concept.ambiguousNotePaths ?? []) titles.add(noteTitle(path));
+  }
+  return [...titles];
+}
+
+/**
  * F8.4a's `[D-176]` note-offer gate (`../concept/note-offer.js`'s
  * `noteOfferEligible`) — this function gathers exactly the evidence that
  * module asks for from projections this one already computed
- * (`instrumentRecordsByConcept`, `masteryByConcept`) plus the caller-supplied
- * `courseRankingsByCourse`, and never re-derives any of the three
- * conditions itself.
+ * (`instrumentRecordsByConcept`, `masteryByConcept`, `existingNoteTitles`
+ * above) plus the caller-supplied `displayName`/`aliases`/
+ * `courseRankingsByCourse`, and never re-derives any of the three ratified
+ * conditions, or the existing-note check, itself.
  *
  * **Never evaluated for a tier-1 concept.** `note-offer.ts`'s own doc is
  * explicit that a concept already bound to an authored note should never
@@ -329,20 +362,25 @@ function groupInstrumentRecordsByConcept(
  */
 function noteOfferFor(
   concept: BuildRegistryModelInput['concepts'][number],
+  displayName: string,
+  aliases: readonly string[],
   mastery: ConceptMasteryResult,
   instrumentRecordsByConcept: ReadonlyMap<
     string,
     BuildRegistryModelInput['instrumentRecords'][number][]
   >,
   courseRankingsByCourse: ReadonlyMap<string, CourseOracleRanking>,
+  existingNoteTitles: readonly string[],
 ): RegistryConceptEntry['noteOffer'] {
   if (concept.tier === 1) return { eligible: false };
   const instruments = instrumentRecordsByConcept.get(concept.key) ?? [];
   const eligible = concept.courses.some((course) => {
     const ranking = courseRankingsByCourse.get(course);
     if (ranking === undefined) return false;
-    return noteOfferEligible({ conceptKey: concept.key }, { instruments, mastery, ranking })
-      .eligible;
+    return noteOfferEligible(
+      { conceptKey: concept.key, displayName, aliases },
+      { instruments, mastery, ranking, existingNoteTitles },
+    ).eligible;
   });
   return { eligible };
 }
@@ -498,6 +536,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const courseRankingsByCourse = new Map(
     (input.courseRankings ?? []).map((ranking) => [ranking.course, ranking] as const),
   );
+  const existingNoteTitles = existingNoteTitlesFrom(concepts);
 
   // Every concept id the review log itself names, unioned with the concepts
   // this walk found — a concept whose note has since been renamed away can
@@ -527,6 +566,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
 
   const entries: RegistryConceptEntry[] = concepts.map((concept) => {
     const displayName = resolvedDisplayName(input.overrides, concept.key, concept.name);
+    const aliases = aliasesFor(input.overrides, concept.key);
     const mastery = masteryByConcept.get(concept.key);
     const vitality = vitalityByConcept.get(concept.key);
     if (mastery === undefined || vitality === undefined) {
@@ -544,7 +584,7 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       key: concept.key,
       displayName,
       originalName: concept.name,
-      aliases: aliasesFor(input.overrides, concept.key),
+      aliases,
       courses: concept.courses,
       tier: concept.tier,
       pruned: isConceptPruned(input.overrides, concept.key),
@@ -553,7 +593,15 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
       explainBack: explainBackSummaryFor(input.entries, concept.key),
       mastery,
       vitality,
-      noteOffer: noteOfferFor(concept, mastery, instrumentRecordsByConcept, courseRankingsByCourse),
+      noteOffer: noteOfferFor(
+        concept,
+        displayName,
+        aliases,
+        mastery,
+        instrumentRecordsByConcept,
+        courseRankingsByCourse,
+        existingNoteTitles,
+      ),
       // `exactOptionalPropertyTypes`: an explicit `duplicateTitle: undefined`
       // is a type error on an optional field (matching this file's own
       // `BuildRegistryModelInput.disputes`/`.courseRankings` convention in

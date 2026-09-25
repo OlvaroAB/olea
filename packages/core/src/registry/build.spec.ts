@@ -785,4 +785,31 @@ describe('buildRegistryModel — the note-offer gate (F8.4a, [D-176])', () => {
     expect(model.concepts[0]?.instruments[0]?.pruned).toBe(true);
     expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
   });
+
+  it("an existing note titled under one of the concept's aliases suppresses the offer, even with every other condition satisfied", () => {
+    // concept-a was renamed away from its vault-derived name "Concept A", so
+    // "Concept A" is now an alias (overrides.ts's renameConcept). A second,
+    // unrelated concept is bound (boundNotePath) to a Zettelkasten note
+    // titled exactly "Concept A" — the stray note ol-egov.141.89.10.21's bug
+    // report describes, invisible to a tier-1-only check.
+    const renamed = renameConcept(EMPTY_REGISTRY_OVERRIDES, 'concept-a', 'Concept A', 'Renamed A');
+    const model = buildFor({
+      concepts: [
+        concept({ tier: 2 }),
+        concept({
+          key: 'concept-b',
+          name: 'Concept A',
+          tier: 3,
+          boundNotePath: '05 Zettelkasten/Concept A.md',
+        }),
+      ],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+      overridesState: renamed,
+    });
+    const row = model.concepts.find((c) => c.key === 'concept-a');
+    expect(row?.displayName).toBe('Renamed A');
+    expect(row?.aliases).toEqual(['Concept A']);
+    expect(row?.noteOffer).toEqual({ eligible: false });
+  });
 });
