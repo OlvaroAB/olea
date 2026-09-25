@@ -53,9 +53,23 @@
  * call anywhere in it, the same discipline `explainWhy.ts`/`workerProvider.ts`
  * use for the identical reason; a thrown error carries only structural
  * information (a Worker error code, a shape complaint), never a text field.
+ *
+ * ===========================================================================
+ * THE D7.3 STAMP (`ol-egov.141.89.38`)
+ * ===========================================================================
+ * The Worker's response body carries `stamp.promptVersion`/`stamp.modelId`
+ * alongside `result` — this class reads both. `MaterialityJudge.judge`'s
+ * declared return type (`./types.ts`, owned by a sibling bead) has no
+ * `stamp` field yet, so `judge()` here returns
+ * `StampedMaterialityJudgeVerdict`, a strict superset: TypeScript's method
+ * return-type covariance keeps this class assignable to `MaterialityJudge`
+ * unchanged, while making the stamp available, at runtime and to any caller
+ * that imports the stamped type, for whichever composition site builds a
+ * `StageSeamContext` (`olea-core`'s `stage-contract/provenance.ts`) next.
+ * `stamp` is `null` exactly when the response carried none — never invented.
  */
 
-import type { WorkerTaskTransport } from 'olea-core';
+import type { ModelStamp, WorkerTaskTransport } from 'olea-core';
 import type { MaterialityJudge, MaterialityJudgeInput, MaterialityJudgeVerdict } from './types.js';
 
 /** `TASK_IDS.MATERIALITY_JUDGE`, mirrored — see the module doc for why it is not imported. */
@@ -83,6 +97,11 @@ export interface WorkerMaterialityJudgeDeps {
   readonly transport: WorkerTaskTransport;
 }
 
+/** `MaterialityJudgeVerdict` plus the D7.3 stamp this class reads off the response body — see the module doc's "THE D7.3 STAMP" section. */
+export type StampedMaterialityJudgeVerdict = MaterialityJudgeVerdict & {
+  readonly stamp: ModelStamp | null;
+};
+
 export class WorkerMaterialityJudge implements MaterialityJudge {
   private readonly transport: WorkerTaskTransport;
 
@@ -96,7 +115,7 @@ export class WorkerMaterialityJudge implements MaterialityJudge {
    * does not accept (`materialityJudgeRequest` is `previousText`/
    * `currentText` only). Only the text pair crosses the wire.
    */
-  async judge(input: MaterialityJudgeInput): Promise<MaterialityJudgeVerdict> {
+  async judge(input: MaterialityJudgeInput): Promise<StampedMaterialityJudgeVerdict> {
     const body = await this.transport.send({
       contractVersion: MATERIALITY_JUDGE_CONTRACT_VERSION,
       taskId: MATERIALITY_JUDGE_TASK_ID,
@@ -109,7 +128,24 @@ export class WorkerMaterialityJudge implements MaterialityJudge {
   }
 }
 
-function readVerdict(body: unknown): MaterialityJudgeVerdict {
+/**
+ * Reads `stamp.promptVersion`/`stamp.modelId` off the Worker's response body
+ * (`ResponseStamp`, `olea-contracts`' `worker.ts`). `null` whenever the
+ * response carried no usable stamp — an old Worker, a malformed body —
+ * never invented to fill the field.
+ */
+function readStamp(response: Record<string, unknown>): ModelStamp | null {
+  const stamp = response['stamp'];
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  const promptVersion = s['promptVersion'];
+  const modelId = s['modelId'];
+  if (typeof promptVersion !== 'string' || promptVersion.length === 0) return null;
+  if (typeof modelId !== 'string' || modelId.length === 0) return null;
+  return { promptVersion, modelId };
+}
+
+function readVerdict(body: unknown): StampedMaterialityJudgeVerdict {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerMaterialityJudgeError(
       'WorkerMaterialityJudge: the Worker response was not an object.',
@@ -153,5 +189,5 @@ function readVerdict(body: unknown): MaterialityJudgeVerdict {
     );
   }
 
-  return { material, reason };
+  return { material, reason, stamp: readStamp(response) };
 }

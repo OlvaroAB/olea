@@ -33,14 +33,27 @@
  * `OleaPlugin`'s onload (`packages/plugin/src/main.ts`) — that file is out of
  * this bead's ownership; see `explainBackSolo.ts`'s module header for the
  * named seam.
+ *
+ * ===========================================================================
+ * THE D7.3 STAMP (`ol-egov.141.89.38`)
+ * ===========================================================================
+ * Same reasoning `./workerJudgeCaller.ts` gives, restated for this seam: the
+ * Worker's response body carries `stamp.promptVersion`/`stamp.modelId`
+ * alongside `result`, and `SoloJudgeCaller`'s declared return type
+ * (`explainBackSolo.ts`, owned by a sibling bead) has no `stamp` field yet —
+ * so `readSoloGrading` returns `StampedExplainBackSoloWireResponse`, a
+ * strict superset. `createWorkerSoloJudgeCaller` is typed to return
+ * `StampedSoloJudgeCaller` (declared below, not the imported `SoloJudgeCaller`
+ * itself) so this factory's own callers see `.stamp` on the result — a
+ * `StampedSoloJudgeCaller` value is still usable wherever a bare
+ * `SoloJudgeCaller` is required, since function return types are covariant
+ * and the stamped response is a strict superset. `stamp` is `null` exactly
+ * when the response carried none — never invented.
  */
 
 import type { WorkerTaskTransport } from '../retrieval/workerProvider.js';
-import type {
-  ExplainBackSoloWireRequest,
-  ExplainBackSoloWireResponse,
-  SoloJudgeCaller,
-} from './explainBackSolo.js';
+import type { ModelStamp } from '../stage-contract/provenance.js';
+import type { ExplainBackSoloWireRequest, ExplainBackSoloWireResponse } from './explainBackSolo.js';
 
 /** `TASK_IDS.EXPLAIN_BACK_SOLO`, mirrored — see the module doc. Pinned to the frozen catalogue by `workerSoloJudgeCaller.spec.ts`. */
 export const EXPLAIN_BACK_SOLO_TASK_ID = 'explain-back.solo.v1';
@@ -68,14 +81,32 @@ export interface WorkerSoloJudgeCallerDeps {
   readonly transport: WorkerTaskTransport;
 }
 
+/** `ExplainBackSoloWireResponse` plus the D7.3 stamp this caller reads off the response body — see the module doc's "THE D7.3 STAMP" section. */
+export type StampedExplainBackSoloWireResponse = ExplainBackSoloWireResponse & {
+  readonly stamp: ModelStamp | null;
+};
+
+/**
+ * `SoloJudgeCaller` (`explainBackSolo.ts`), narrowed to the concrete
+ * response this module actually produces — see the module doc's "THE D7.3
+ * STAMP" section for why this is declared here rather than the plain
+ * imported `SoloJudgeCaller`.
+ */
+export type StampedSoloJudgeCaller = (
+  input: ExplainBackSoloWireRequest,
+) => Promise<StampedExplainBackSoloWireResponse>;
+
 /**
  * Builds the production `SoloJudgeCaller` — a plain function, matching the
  * port `explainBackSolo.ts` declares, rather than a class implementing it,
  * because `SoloJudgeCaller` is itself a function type with no other members
- * to satisfy.
+ * to satisfy. Typed `StampedSoloJudgeCaller` here so this factory's own
+ * callers see `.stamp` on the result.
  */
-export function createWorkerSoloJudgeCaller(deps: WorkerSoloJudgeCallerDeps): SoloJudgeCaller {
-  return async (input: ExplainBackSoloWireRequest): Promise<ExplainBackSoloWireResponse> => {
+export function createWorkerSoloJudgeCaller(
+  deps: WorkerSoloJudgeCallerDeps,
+): StampedSoloJudgeCaller {
+  return async (input: ExplainBackSoloWireRequest): Promise<StampedExplainBackSoloWireResponse> => {
     const body = await deps.transport.send({
       contractVersion: EXPLAIN_BACK_SOLO_CONTRACT_VERSION,
       taskId: EXPLAIN_BACK_SOLO_TASK_ID,
@@ -93,7 +124,23 @@ const SOLO_LEVELS = new Set([
   'extended-abstract',
 ]);
 
-function readSoloGrading(body: unknown): ExplainBackSoloWireResponse {
+/**
+ * Reads `stamp.promptVersion`/`stamp.modelId` off the Worker's response body
+ * — same reading `./workerJudgeCaller.ts`'s `readStamp` does. `null`
+ * whenever the response carried no usable stamp; never invented.
+ */
+function readStamp(response: Record<string, unknown>): ModelStamp | null {
+  const stamp = response.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  const promptVersion = s.promptVersion;
+  const modelId = s.modelId;
+  if (typeof promptVersion !== 'string' || promptVersion.length === 0) return null;
+  if (typeof modelId !== 'string' || modelId.length === 0) return null;
+  return { promptVersion, modelId };
+}
+
+function readSoloGrading(body: unknown): StampedExplainBackSoloWireResponse {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerSoloJudgeError('WorkerSoloJudgeCaller: the Worker response was not an object.');
   }
@@ -151,6 +198,7 @@ function readSoloGrading(body: unknown): ExplainBackSoloWireResponse {
     // is not the same as omitting it (same discipline `workerJudgeCaller.ts`
     // uses for `confusedWith`).
     ...(typeof neighbourUseDemonstrated === 'boolean' ? { neighbourUseDemonstrated } : {}),
+    stamp: readStamp(response),
   };
 }
 

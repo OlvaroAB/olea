@@ -46,15 +46,31 @@
  * what the model said about it. This module has no logging call anywhere in
  * it, the same defence `transport.ts`/`config-store.ts` use for the bearer
  * token; `workerJudgeCaller.spec.ts` asserts the source contains none.
+ *
+ * ===========================================================================
+ * THE D7.3 STAMP (`ol-egov.141.89.38`)
+ * ===========================================================================
+ * The Worker's response body carries `stamp.promptVersion`/`stamp.modelId`
+ * (`olea-contracts`' `responseStamp`) alongside `result` — this caller reads
+ * both. `JudgeCaller`'s declared return type (`gradingPipeline.ts`, owned by
+ * a sibling bead) has no `stamp` field yet, so `readGrading` returns a
+ * strict superset, `StampedExplainBackGradingWireResponse`: every field
+ * `ExplainBackGradingWireResponse` has, plus `stamp`. That keeps
+ * `createWorkerJudgeCaller`'s return type assignable to `JudgeCaller`
+ * unchanged (a wider value satisfies a narrower declared type), while making
+ * the stamp available, at runtime and to any caller that imports the
+ * stamped type, for whichever composition site builds a `StageSeamContext`
+ * (`../stage-contract/provenance.ts`) next. `stamp` is `null` exactly when
+ * the response carried no usable stamp — never invented to fill the field.
  */
 
 import type { WorkerTaskTransport } from '../retrieval/workerProvider.js';
+import type { ModelStamp } from '../stage-contract/provenance.js';
 import type {
   CitedIssue,
   CitedIssueKind,
   ExplainBackGradingWireResponse,
   ExplainBackJudgeWireRequest,
-  JudgeCaller,
   MisconceptionCandidate,
 } from './gradingPipeline.js';
 
@@ -87,14 +103,37 @@ export interface WorkerJudgeCallerDeps {
   readonly transport: WorkerTaskTransport;
 }
 
+/** `ExplainBackGradingWireResponse` plus the D7.3 stamp this caller reads off the response body — see the module doc's "THE D7.3 STAMP" section. */
+export type StampedExplainBackGradingWireResponse = ExplainBackGradingWireResponse & {
+  readonly stamp: ModelStamp | null;
+};
+
+/**
+ * `JudgeCaller` (`gradingPipeline.ts`), narrowed to the concrete response
+ * this module actually produces. A `StampedJudgeCaller` value is always
+ * usable wherever a bare `JudgeCaller` is expected — `gradeExplainBack`'s
+ * own call site below is exactly that — because
+ * `StampedExplainBackGradingWireResponse` is a strict superset of
+ * `ExplainBackGradingWireResponse` and function return types are covariant.
+ * Declared here, not imported as `JudgeCaller` itself, so a caller that
+ * wants `.stamp` can see it without a cast.
+ */
+export type StampedJudgeCaller = (
+  input: ExplainBackJudgeWireRequest,
+) => Promise<StampedExplainBackGradingWireResponse>;
+
 /**
  * Builds the production `JudgeCaller` — a plain function, matching the port
  * `gradingPipeline.ts` declares, rather than a class implementing it,
  * because `JudgeCaller` is itself a function type with no other members to
- * satisfy.
+ * satisfy. Typed `StampedJudgeCaller` here so this factory's own callers see
+ * `.stamp` on the result; see that type's doc for why it is still a
+ * `JudgeCaller` wherever one is required.
  */
-export function createWorkerJudgeCaller(deps: WorkerJudgeCallerDeps): JudgeCaller {
-  return async (input: ExplainBackJudgeWireRequest): Promise<ExplainBackGradingWireResponse> => {
+export function createWorkerJudgeCaller(deps: WorkerJudgeCallerDeps): StampedJudgeCaller {
+  return async (
+    input: ExplainBackJudgeWireRequest,
+  ): Promise<StampedExplainBackGradingWireResponse> => {
     const body = await deps.transport.send({
       contractVersion: EXPLAIN_BACK_JUDGE_CONTRACT_VERSION,
       taskId: EXPLAIN_BACK_JUDGE_TASK_ID,
@@ -107,7 +146,24 @@ export function createWorkerJudgeCaller(deps: WorkerJudgeCallerDeps): JudgeCalle
 const VERDICTS = new Set(['correct', 'partial', 'incorrect']);
 const CITED_ISSUE_KINDS = new Set(['omission', 'error', 'confusion']);
 
-function readGrading(body: unknown): ExplainBackGradingWireResponse {
+/**
+ * Reads `stamp.promptVersion`/`stamp.modelId` off the Worker's response body
+ * (`ResponseStamp`, `olea-contracts`' `worker.ts`). `null` whenever the
+ * response did not carry a usable stamp — an old Worker, a malformed body —
+ * never invented to fill the field.
+ */
+function readStamp(response: Record<string, unknown>): ModelStamp | null {
+  const stamp = response.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  const promptVersion = s.promptVersion;
+  const modelId = s.modelId;
+  if (typeof promptVersion !== 'string' || promptVersion.length === 0) return null;
+  if (typeof modelId !== 'string' || modelId.length === 0) return null;
+  return { promptVersion, modelId };
+}
+
+function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerJudgeError('WorkerJudgeCaller: the Worker response was not an object.');
   }
@@ -152,6 +208,7 @@ function readGrading(body: unknown): ExplainBackGradingWireResponse {
     missedPoints: readStringArray(r.missedPoints, 'missedPoints'),
     citedIssues: readCitedIssues(r.citedIssues),
     misconceptionCandidates: readMisconceptionCandidates(r.misconceptionCandidates),
+    stamp: readStamp(response),
   };
 }
 

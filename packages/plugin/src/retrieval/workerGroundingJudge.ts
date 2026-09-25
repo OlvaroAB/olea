@@ -36,12 +36,27 @@
  * `workerGroundingJudge.spec.ts` asserts both constants equal the frozen
  * catalogue's, the same way `workerConceptReader.spec.ts` does for
  * `concepts.extract.v1`.
+ *
+ * ===========================================================================
+ * THE D7.3 STAMP (`ol-egov.141.89.38`)
+ * ===========================================================================
+ * The Worker's response body carries `stamp.promptVersion`/`stamp.modelId`
+ * alongside `result` — this class reads both. `GroundingJudgePort.judge`'s
+ * declared return type (`groundedContext.ts`, owned by a sibling bead) has
+ * no `stamp` field yet, so `judge()` here returns
+ * `StampedGroundingJudgeVerdict`, a strict superset: TypeScript's method
+ * return-type covariance keeps this class assignable to `GroundingJudgePort`
+ * unchanged, while making the stamp available, at runtime and to any caller
+ * that imports the stamped type, for whichever composition site builds a
+ * `StageSeamContext` (`stage-contract/provenance.ts`) next. `stamp` is
+ * `null` exactly when the response carried no usable stamp — never invented.
  */
 
 import type {
   GroundingJudgePort,
   GroundingJudgeRequest,
   GroundingJudgeVerdict,
+  ModelStamp,
   WorkerTaskTransport,
 } from 'olea-core';
 
@@ -72,6 +87,11 @@ export interface WorkerGroundingJudgeDeps {
   readonly transport: WorkerTaskTransport;
 }
 
+/** `GroundingJudgeVerdict` plus the D7.3 stamp this class reads off the response body — see the module doc's "THE D7.3 STAMP" section. */
+export type StampedGroundingJudgeVerdict = GroundingJudgeVerdict & {
+  readonly stamp: ModelStamp | null;
+};
+
 export class WorkerGroundingJudge implements GroundingJudgePort {
   private readonly transport: WorkerTaskTransport;
 
@@ -79,7 +99,7 @@ export class WorkerGroundingJudge implements GroundingJudgePort {
     this.transport = deps.transport;
   }
 
-  async judge(request: GroundingJudgeRequest): Promise<GroundingJudgeVerdict> {
+  async judge(request: GroundingJudgeRequest): Promise<StampedGroundingJudgeVerdict> {
     const body = await this.transport.send({
       contractVersion: GROUNDING_JUDGE_CONTRACT_VERSION,
       taskId: GROUNDING_JUDGE_TASK_ID,
@@ -97,7 +117,24 @@ export class WorkerGroundingJudge implements GroundingJudgePort {
   }
 }
 
-function readVerdict(body: unknown): GroundingJudgeVerdict {
+/**
+ * Reads `stamp.promptVersion`/`stamp.modelId` off the Worker's response body
+ * (`ResponseStamp`, `olea-contracts`' `worker.ts`). `null` whenever the
+ * response carried no usable stamp — an old Worker, a malformed body —
+ * never invented to fill the field.
+ */
+function readStamp(response: Record<string, unknown>): ModelStamp | null {
+  const stamp = response['stamp'];
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  const promptVersion = s['promptVersion'];
+  const modelId = s['modelId'];
+  if (typeof promptVersion !== 'string' || promptVersion.length === 0) return null;
+  if (typeof modelId !== 'string' || modelId.length === 0) return null;
+  return { promptVersion, modelId };
+}
+
+function readVerdict(body: unknown): StampedGroundingJudgeVerdict {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerGroundingJudgeError(
       'WorkerGroundingJudge: the Worker response was not an object.',
@@ -141,5 +178,5 @@ function readVerdict(body: unknown): GroundingJudgeVerdict {
     );
   }
 
-  return { supported, reason };
+  return { supported, reason, stamp: readStamp(response) };
 }

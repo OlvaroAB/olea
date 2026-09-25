@@ -109,6 +109,7 @@ describe('createWorkerJudgeCaller — reading the response', () => {
           correctionSourceBlockIds: ['b1'],
         },
       ],
+      stamp: { promptVersion: '1.2.0', modelId: 'test-model' },
     });
   });
 
@@ -183,6 +184,29 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     const callJudge = createWorkerJudgeCaller({ transport });
 
     await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
+  it('reads the D7.3 prompt/model stamp off the response body (ol-egov.141.89.38)', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ verdict: 'correct', feedback: 'Good.', missedPoints: [] }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+
+    expect(result.stamp).toEqual({ promptVersion: '1.2.0', modelId: 'test-model' });
+  });
+
+  it('reads a null stamp when the response carries none, rather than inventing one', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: { verdict: 'correct', feedback: 'Good.', missedPoints: [] },
+    }));
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+
+    expect(result.stamp).toBeNull();
   });
 
   it('throws when a present citedIssues entry is missing sourceBlockIds — never fabricates one', async () => {

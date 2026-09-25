@@ -94,7 +94,11 @@ describe('WorkerMaterialityJudge — the response it reads', () => {
 
     const verdict = await judge.judge(INPUT);
 
-    expect(verdict).toEqual({ material: true, reason: 'the claim reversed' });
+    expect(verdict).toEqual({
+      material: true,
+      reason: 'the claim reversed',
+      stamp: { promptVersion: '1.0.0', modelId: 'm' },
+    });
   });
 
   it('reads a material:false verdict field for field', async () => {
@@ -109,7 +113,11 @@ describe('WorkerMaterialityJudge — the response it reads', () => {
 
     const verdict = await judge.judge(INPUT);
 
-    expect(verdict).toEqual({ material: false, reason: 'reworded only, same claim' });
+    expect(verdict).toEqual({
+      material: false,
+      reason: 'reworded only, same claim',
+      stamp: { promptVersion: '1.0.0', modelId: 'm' },
+    });
   });
 
   it('drops overriddenToNotMaterial — not part of the MaterialityJudgeVerdict port shape', async () => {
@@ -127,8 +135,33 @@ describe('WorkerMaterialityJudge — the response it reads', () => {
     expect(verdict).toEqual({
       material: false,
       reason: 'no groundable content in the current text',
+      stamp: { promptVersion: '1.0.0', modelId: 'm' },
     });
     expect(verdict).not.toHaveProperty('overriddenToNotMaterial');
+  });
+
+  it('reads the D7.3 prompt/model stamp off the response body (ol-egov.141.89.38)', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ material: true, reason: 'the claim reversed', overriddenToNotMaterial: false }),
+    );
+    const judge = new WorkerMaterialityJudge({ transport });
+
+    const verdict = await judge.judge(INPUT);
+
+    expect(verdict.stamp).toEqual({ promptVersion: '1.0.0', modelId: 'm' });
+  });
+
+  it('reads a null stamp when the response carries none, rather than inventing one', async () => {
+    const judge = new WorkerMaterialityJudge({
+      transport: new RecordingTransport(() => ({
+        ok: true,
+        result: { material: true, reason: 'the claim reversed' },
+      })),
+    });
+
+    const verdict = await judge.judge(INPUT);
+
+    expect(verdict.stamp).toBeNull();
   });
 });
 

@@ -98,6 +98,7 @@ describe('WorkerGroundingJudge — the response it reads', () => {
     expect(verdict).toEqual({
       supported: true,
       reason: 'the passages name the term and define it',
+      stamp: { promptVersion: '1.0.0', modelId: 'm' },
     });
   });
 
@@ -113,6 +114,27 @@ describe('WorkerGroundingJudge — the response it reads', () => {
     const verdict = await judge.judge({ query: 'q', context: 'c' });
 
     expect(verdict.supported).toBe(false);
+  });
+
+  it('reads the D7.3 prompt/model stamp off the response body (ol-egov.141.89.38)', async () => {
+    const transport = new RecordingTransport(() => okResponse({ supported: true, reason: 'ok' }));
+    const judge = new WorkerGroundingJudge({ transport });
+
+    const verdict = await judge.judge({ query: 'q', context: 'c' });
+
+    expect(verdict.stamp).toEqual({ promptVersion: '1.0.0', modelId: 'm' });
+  });
+
+  it('reads a null stamp when the response carries none, rather than inventing one', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: { supported: true, reason: 'ok' },
+    }));
+    const judge = new WorkerGroundingJudge({ transport });
+
+    const verdict = await judge.judge({ query: 'q', context: 'c' });
+
+    expect(verdict.stamp).toBeNull();
   });
 });
 

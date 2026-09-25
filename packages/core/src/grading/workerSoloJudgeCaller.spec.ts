@@ -87,6 +87,7 @@ describe('createWorkerSoloJudgeCaller — reading the response', () => {
       rationale: 'Connects both mechanisms under one principle.',
       citedBlockIds: ['b1'],
       neighbourUseDemonstrated: true,
+      stamp: { promptVersion: '1.0.0', modelId: 'test-model' },
     });
   });
 
@@ -103,6 +104,29 @@ describe('createWorkerSoloJudgeCaller — reading the response', () => {
 
     expect(result.citedBlockIds).toEqual([]);
     expect(Object.hasOwn(result, 'neighbourUseDemonstrated')).toBe(false);
+  });
+
+  it('reads the D7.3 prompt/model stamp off the response body (ol-egov.141.89.38)', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ soloLevel: 'prestructural', rationale: 'No relevant structure.' }),
+    );
+    const callSolo = createWorkerSoloJudgeCaller({ transport });
+
+    const result = await callSolo(baseWireInput);
+
+    expect(result.stamp).toEqual({ promptVersion: '1.0.0', modelId: 'test-model' });
+  });
+
+  it('reads a null stamp when the response carries none, rather than inventing one', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: { soloLevel: 'prestructural', rationale: 'No relevant structure.' },
+    }));
+    const callSolo = createWorkerSoloJudgeCaller({ transport });
+
+    const result = await callSolo(baseWireInput);
+
+    expect(result.stamp).toBeNull();
   });
 
   it('rejects a response with an unrecognised soloLevel', async () => {
