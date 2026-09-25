@@ -59,6 +59,25 @@ export {
   visionRouteBody,
   visionRouteEnvelope,
 } from './artifact-envelope.js';
+// `explain-back.judge.v1`'s optional learning-target bundle and its
+// response-envelope acknowledgement — `[D-277 / TARGET-1]` (`ol-egov.141.87`),
+// landed by TARGET-2 (`ol-0r92.92`). See the module's own header for why this
+// one wire fragment is fixed here rather than restated per caller the way the
+// rest of this task's request/response shape is.
+export {
+  EXPLAIN_BACK_JUDGE_TARGET_SCHEMA_VERSION,
+  type ExplainBackJudgeAdequacyCriterion,
+  type ExplainBackJudgeDemand,
+  type ExplainBackJudgeDisqualifier,
+  type ExplainBackJudgeLearningTarget,
+  type ExplainBackJudgeSpecificationAcknowledgement,
+  explainBackJudgeAdequacyCriterion,
+  explainBackJudgeDemand,
+  explainBackJudgeDisqualifier,
+  explainBackJudgeLearningTarget,
+  explainBackJudgeLearningTargetField,
+  explainBackJudgeSpecificationAcknowledgement,
+} from './explain-back-judge-target.js';
 export { type ContractEntry, type ContractId, contracts, SchemaRegistry } from './registry.js';
 
 // The D7.1 review-log record and the Worker envelope, re-exported together.
