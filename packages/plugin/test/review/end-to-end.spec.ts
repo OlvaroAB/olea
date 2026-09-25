@@ -1159,7 +1159,7 @@ describe('[SESS-17] (ol-may1) — cloze and mcq survive the real loop too (claim
     if (root !== undefined) await rm(root, { recursive: true, force: true });
   });
 
-  it('composes both instruments — the cloze and the mcq each get a concept of their own, past `[HARD-2b]`\'s per-concept cap', () => {
+  it("composes both instruments — the cloze and the mcq each get a concept of their own, past `[HARD-2b]`'s per-concept cap", () => {
     expect(composedCount).toBe(2);
   });
 
