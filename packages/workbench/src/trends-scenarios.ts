@@ -63,13 +63,12 @@
  *
  * `buildTrendsViewModel` now supplies `vitality` for every state except
  * `trends-cramming-neutralised` (`TrendsWorkbenchState.vitalityWired`) —
- * `createFsrsScheduler()`, `WORKBENCH_NOW` and a locally declared holding cut,
- * the identical three-part shape `packages/plugin/src/today/data-source.ts`'s
- * `loadTodayPanel` already assembles for the real product (`ol-95vv.5`), and
- * `packages/plugin/src/registry/provider.ts`'s `DECLARED_FALLBACK_HOLDING_CUT`
- * before it — a THIRD independent Class B declaration of the same
- * unmeasured constant, matching this codebase's existing convention of no
- * single shared `holdingCut`. **No hand-set vitality field anywhere**: the
+ * `createFsrsScheduler()`, `WORKBENCH_NOW` and `olea-core`'s ratified
+ * `HOLDING_CUT` (`[D-115]`), the identical three-part shape
+ * `packages/plugin/src/today/data-source.ts`'s `loadTodayPanel` already
+ * assembles for the real product (`ol-95vv.5`), which itself now defaults to
+ * the same exported constant rather than a locally declared fallback
+ * (`ol-owyn`). **No hand-set vitality field anywhere**: the
  * reading for every course still comes out of `readAllConceptVitality`'s
  * fold over the state's own `entries`, exactly the "real core path, not a
  * hand-set field" this bead's brief asks for — a state with a thin history
@@ -90,6 +89,7 @@ import {
   type ConceptCourses,
   type CourseFloorShare,
   createFsrsScheduler,
+  HOLDING_CUT,
   type TodayPanelInput,
   type TodayViewModel,
 } from 'olea-core';
@@ -330,17 +330,6 @@ const viewModelCache = new Map<string, TodayViewModel>();
  */
 type TrendsVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
 
-/**
- * `[D-115]`'s ratified retrievability cut, declared independently rather than
- * imported — see the module doc, "WB-8": neither
- * `packages/plugin/src/registry/provider.ts`'s `DECLARED_FALLBACK_HOLDING_CUT`
- * nor `packages/plugin/src/today/data-source.ts`'s copy is exported, and this
- * workbench has no dependency on `packages/plugin` to import one from anyway.
- * A plain-English default, not a derivation — this file's own N-015 note
- * already says no number here is evidence about the alpha user.
- */
-const WORKBENCH_HOLDING_CUT = 0.8;
-
 const trendsScheduler = createFsrsScheduler();
 
 /**
@@ -362,7 +351,7 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
   // `MasteryOverviewInput.vitality`'s own doc for why that is an "either all
   // of them carry a reading or none do" choice, not a per-course one.
   const vitality: TrendsVitalityInputs | undefined = state.vitalityWired
-    ? { scheduler: trendsScheduler, now: WORKBENCH_NOW, holdingCut: WORKBENCH_HOLDING_CUT }
+    ? { scheduler: trendsScheduler, now: WORKBENCH_NOW, holdingCut: HOLDING_CUT }
     : undefined;
   const vm = buildTodayPanel({
     entries: stream.entries,
