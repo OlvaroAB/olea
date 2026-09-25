@@ -10,8 +10,12 @@
 //   3. D7.1's fields are present and required: the trigger (the same four
 //      routes the offer record carries) and a non-empty concept list;
 //   4. nothing outside D7.1's set survives a parse — no grade, no answer
-//      reference, no field saying which exit she took, no instrument, no
-//      pointer to the offer.
+//      reference, no field saying which exit she took, no instrument. A
+//      pointer to the offer survives ONLY under its own name, `offerEventId`
+//      (`[D-369]`, additive and optional — see `review-log-non-attempt-offer
+//      .spec.ts` for that field's own tests): a caller reaching for the
+//      wrong key (`answers`, the offer-decline record's own field) still
+//      loses it.
 import { describe, expect, it } from 'vitest';
 import {
   explainBackOfferTrigger,
@@ -92,8 +96,12 @@ describe('nonAttemptLogRecordV5', () => {
     ).toBe(false);
   });
 
-  it('carries exactly D7.1’s fields: no grade, no answer, no exit, no instrument, no offer pointer', () => {
-    // Every key a writer might wrongly reach for, on one line. Unknown keys are
+  it('carries exactly D7.1’s fields: no grade, no answer, no exit, no instrument, no offer pointer under the wrong name', () => {
+    // Every key a writer might wrongly reach for, on one line — `answers` is
+    // the offer-decline record's own field for the SAME purpose, deliberately
+    // wrong here to prove this record accepts a pointer to the offer only
+    // under its real name, `offerEventId` (`[D-369]`, not asserted by this
+    // line: see `review-log-non-attempt-offer.spec.ts`). Unknown keys are
     // stripped rather than refused — the same tolerance every record in this
     // union has, so an older build can still read a line a newer one wrote —
     // so the proof is the parsed shape: none of them survives into the record.

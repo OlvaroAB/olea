@@ -1041,8 +1041,12 @@ export default class OleaPlugin extends Plugin {
         // callback now carries the trigger of whichever of its three
         // banners (F2.12/F5.3a/F2.21) accepted, so `openExplainBackModal`
         // below can build `recordNonAttempt` for the `'instrument'` seed too.
-        (instrument, trigger) =>
-          this.openExplainBackModal({ kind: 'instrument', instrument }, trigger),
+        // `ol-egov.141.89.6.53` (`[D-369]`): now also carries that same
+        // banner's own offerEventId, forwarded straight through to
+        // `openExplainBackModal`'s third parameter — the real offer
+        // reference finally reaches production from here.
+        (instrument, trigger, offerEventId) =>
+          this.openExplainBackModal({ kind: 'instrument', instrument }, trigger, offerEventId),
         // `[D-171]`/`ol-2zfj.47`: the review view's one-step affordance to
         // an instrument's registry entry — see `ReviewView`'s own param
         // doc for why this is a callback rather than an `App` import.
@@ -3803,16 +3807,29 @@ export default class OleaPlugin extends Plugin {
    * `review-log/write.ts`) with the `trigger` the construction site below
    * closes over rather than asks the view for (the view has no way to know
    * it — see that field's own doc on `ExplainBackModalDeps`).
+   *
+   * `ol-egov.141.89.6.53` (`[D-369]`): also takes `offerEventId`, the
+   * `explain-back-offered` record's own event id, whenever `openExplainBackModal`
+   * below has resolved one for this seed — never derived or defaulted here,
+   * only passed through. `undefined` reaches `appendNonAttemptRecord` as a
+   * true absence (its own doc: an `undefined` value is dropped, never kept
+   * as a key), exactly what a self-initiated prompt needs.
    */
   private async recordExplainBackNonAttempt(
     trigger: NonAttemptLogRecordInput['trigger'],
+    offerEventId: string | undefined,
     params: { readonly conceptIds: readonly string[]; readonly timestamp: string },
   ): Promise<void> {
     const vault = new ObsidianSource(this.app);
     const deviceId = await ensureDeviceId(this);
     await appendNonAttemptRecord(
       vault,
-      { conceptIds: [...params.conceptIds], timestamp: params.timestamp, trigger },
+      {
+        conceptIds: [...params.conceptIds],
+        timestamp: params.timestamp,
+        trigger,
+        ...(offerEventId !== undefined ? { offerEventId } : {}),
+      },
       { deviceId },
     );
   }
@@ -3844,14 +3861,47 @@ export default class OleaPlugin extends Plugin {
    * when a future `'instrument'`-seed caller has none to give (there is
    * none today); `recordNonAttempt` is then left unwired for that call,
    * the same safe default this method held before `ol-egov.141.89.6.44`.
+   *
+   * `ol-egov.141.89.6.53` (`[D-369]`): `offerEventId` mirrors `trigger`'s own
+   * posture exactly — the caller's own `explain-back-offered` event id,
+   * present only when a real offer stands behind this seed, never derived
+   * or backfilled here. It resolves to `undefined` below whenever
+   * `nonAttemptTrigger` is `'on-demand'` or stays unresolved: a
+   * self-initiated prompt carries no offer reference at all (the schema
+   * itself refuses one on `'on-demand'`), and an unresolved trigger already
+   * leaves `recordNonAttempt` unwired, so there is nothing to attach it to.
+   * A `null` caller value (no `explainBackOfferLog` port wired at the offer
+   * site) reads as "nothing to give," same as `undefined` — never forwarded
+   * as the literal `null`, which the schema also refuses.
+   *
+   * **No production caller supplies a real value yet.** `review/view.ts`'s
+   * single `openExplainBack` callback — the one call site below that opens
+   * the `'instrument'` seed — still has the type
+   * `(instrument: ReviewInstrument, trigger: ExplainBackOfferTrigger) => void`,
+   * two arguments only; `view.ts` already holds the exact event id at each
+   * of its three accept handlers (`this.confusionBanner.offerEventId`,
+   * `this.schedulingObservationBanner.offerEventId`,
+   * `this.strongRecallBanner.offerEventId`, each set from the paired
+   * `recordXOfferShown` call when the banner first appeared), but `view.ts`
+   * is outside this bead's `owns` and is not touched here — see the filed
+   * follow-up for the small remaining change (widen that callback to a
+   * third `offerEventId` parameter, forward `pending.offerEventId` at each
+   * accept handler). Until that lands, the call below passes no third
+   * argument, so `offerEventId` stays `undefined` here and every written
+   * record keeps its prior true absence — never a fabricated link.
    */
   private openExplainBackModal(
     seed: ExplainBackSeed,
     trigger?: ExplainBackOfferTrigger,
+    offerEventId?: string | null,
     onClosed?: () => void,
   ): void {
     const nonAttemptTrigger: ExplainBackOfferTrigger | undefined =
       seed.kind === 'freeform' ? 'on-demand' : trigger;
+    const nonAttemptOfferEventId: string | undefined =
+      nonAttemptTrigger === 'on-demand' || nonAttemptTrigger === undefined
+        ? undefined
+        : (offerEventId ?? undefined);
     const vault = new ObsidianSource(this.app);
     new ExplainBackModal(
       this.app,
@@ -3882,7 +3932,7 @@ export default class OleaPlugin extends Plugin {
         ...(nonAttemptTrigger !== undefined
           ? {
               recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>
-                this.recordExplainBackNonAttempt(nonAttemptTrigger, params),
+                this.recordExplainBackNonAttempt(nonAttemptTrigger, nonAttemptOfferEventId, params),
             }
           : {}),
         ...(onClosed ? { onClosed } : {}),

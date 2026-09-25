@@ -447,7 +447,7 @@ describe("a live causes edge's introducing passages now resolve through a real v
 
   it('builds one ObsidianSource for the modal and supplies resolveIntroducingPassage from it', () => {
     expect(main).toMatch(
-      /const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;\s*const vault = new ObsidianSource\(this\.app\);\s*new ExplainBackModal\(/,
+      /const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;\s*const nonAttemptOfferEventId: string \| undefined =[\s\S]*?const vault = new ObsidianSource\(this\.app\);\s*new ExplainBackModal\(/,
     );
     expect(main).toMatch(
       /resolveIntroducingPassage: \(provenance\) =>\s*resolveIntroducingPassageFromVault\(vault, provenance\),/,
@@ -473,27 +473,33 @@ describe('the explain-back non-attempt record has a real production caller for e
   // F2.21's strong-recall banner also records its non-attempt, with that
   // banner's own trigger rather than a fabricated one.
 
-  it('exposes a production entry point that appends a non-attempt record with the given trigger', () => {
+  it('exposes a production entry point that appends a non-attempt record with the given trigger and offer reference', () => {
     expect(main).toMatch(
-      /private async recordExplainBackNonAttempt\(\s*trigger: NonAttemptLogRecordInput\['trigger'\],\s*params: \{ readonly conceptIds: readonly string\[\]; readonly timestamp: string \},\s*\): Promise<void> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*await appendNonAttemptRecord\(\s*vault,\s*\{ conceptIds: \[\.\.\.params\.conceptIds\], timestamp: params\.timestamp, trigger \},\s*\{ deviceId \},\s*\);/,
+      /private async recordExplainBackNonAttempt\(\s*trigger: NonAttemptLogRecordInput\['trigger'\],\s*offerEventId: string \| undefined,\s*params: \{ readonly conceptIds: readonly string\[\]; readonly timestamp: string \},\s*\): Promise<void> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*await appendNonAttemptRecord\(\s*vault,\s*\{\s*conceptIds: \[\.\.\.params\.conceptIds\],\s*timestamp: params\.timestamp,\s*trigger,\s*\.\.\.\(offerEventId !== undefined \? \{ offerEventId \} : \{\}\),\s*\},\s*\{ deviceId \},\s*\);/,
     );
   });
 
-  it("openExplainBackModal takes an optional trigger and resolves 'on-demand' for the 'freeform' seed, the caller's trigger otherwise", () => {
+  it("openExplainBackModal takes an optional trigger and offer reference, and resolves 'on-demand' for the 'freeform' seed, the caller's trigger otherwise", () => {
     expect(main).toMatch(
-      /private openExplainBackModal\(\s*seed: ExplainBackSeed,\s*trigger\?: ExplainBackOfferTrigger,\s*onClosed\?: \(\) => void,\s*\): void \{\s*const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;/,
+      /private openExplainBackModal\(\s*seed: ExplainBackSeed,\s*trigger\?: ExplainBackOfferTrigger,\s*offerEventId\?: string \| null,\s*onClosed\?: \(\) => void,\s*\): void \{\s*const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;/,
     );
   });
 
-  it('wires recordNonAttempt whenever a trigger was resolved, for either seed kind', () => {
+  it("D-369: the offer reference is dropped for the 'on-demand'/unresolved trigger and never carries a bare null forward", () => {
     expect(main).toMatch(
-      /\.\.\.\(nonAttemptTrigger !== undefined\s*\?\s*\{\s*recordNonAttempt: \(params: \{ conceptIds: readonly string\[\]; timestamp: string \}\) =>\s*this\.recordExplainBackNonAttempt\(nonAttemptTrigger, params\),\s*\}\s*: \{\}\),/,
+      /const nonAttemptOfferEventId: string \| undefined =\s*nonAttemptTrigger === 'on-demand' \|\| nonAttemptTrigger === undefined\s*\?\s*undefined\s*:\s*\(offerEventId \?\? undefined\);/,
     );
   });
 
-  it("the ReviewView construction site forwards review/view.ts's per-banner trigger into openExplainBackModal", () => {
+  it('wires recordNonAttempt whenever a trigger was resolved, for either seed kind, threading the resolved offer reference', () => {
     expect(main).toMatch(
-      /\(instrument, trigger\) =>\s*this\.openExplainBackModal\(\{ kind: 'instrument', instrument \}, trigger\),/,
+      /\.\.\.\(nonAttemptTrigger !== undefined\s*\?\s*\{\s*recordNonAttempt: \(params: \{ conceptIds: readonly string\[\]; timestamp: string \}\) =>\s*this\.recordExplainBackNonAttempt\(nonAttemptTrigger, nonAttemptOfferEventId, params\),\s*\}\s*: \{\}\),/,
+    );
+  });
+
+  it("the ReviewView construction site forwards review/view.ts's per-banner trigger and offer reference into openExplainBackModal (ol-egov.141.89.6.53, [D-369])", () => {
+    expect(main).toMatch(
+      /\(instrument, trigger, offerEventId\) =>\s*this\.openExplainBackModal\(\{ kind: 'instrument', instrument \}, trigger, offerEventId\),/,
     );
   });
 

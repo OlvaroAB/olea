@@ -112,9 +112,13 @@ describe('ReviewView.handleAcceptConfusionOffer — accepting is never recorded 
   // `session.recordExplainBackOfferShown` above already writes for this
   // banner — so `openExplainBackModal` (`main.ts`) can attribute a skip or
   // close inside the modal to this banner rather than guessing.
-  it('passes the F2.12 trigger through openExplainBack, matching the literal recordExplainBackOfferShown already writes', () => {
+  // `ol-egov.141.89.6.53` (`[D-369]`): `pending.offerEventId` is the SAME id
+  // `recordExplainBackOfferShown` returned above, read here (via `pending`,
+  // which is `this.confusionBanner` itself) before that banner is nulled —
+  // never re-derived or looked up again.
+  it('passes the F2.12 trigger and offer reference through openExplainBack, matching the literal recordExplainBackOfferShown already writes', () => {
     expect(ACCEPT_BODY).toMatch(
-      /this\.openExplainBack\?\.\(pending\.instrument, 'repeated-failure'\);/,
+      /this\.openExplainBack\?\.\(pending\.instrument, 'repeated-failure', pending\.offerEventId\);/,
     );
   });
 });

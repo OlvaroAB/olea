@@ -144,18 +144,22 @@ describe('ReviewView.handleAcceptSchedulingObservationOffer — accepting is nev
 
   it('only opens explain-back when a real destination was found', () => {
     expect(ACCEPT_BODY).toMatch(
-      /if \(destination !== undefined\) this\.openExplainBack\?\.\(destination, 'scheduling-observation'\);/,
+      /if \(destination !== undefined\)\s*this\.openExplainBack\?\.\(destination, 'scheduling-observation', pending\.offerEventId\);/,
     );
   });
 
-  // `ol-egov.141.89.6.44`: F5.3a's own trigger — `olea-contracts`'
-  // `explainBackOfferTrigger` doc names `'scheduling-observation'` as "the
-  // F5.3a reciprocal prompt off a live scheduling observation", the same
-  // literal `session.recordSchedulingObservationOfferShown` above already
-  // writes for this banner.
-  it('passes the F5.3a trigger through openExplainBack, matching the literal recordSchedulingObservationOfferShown already writes', () => {
+  // `ol-egov.141.89.6.44`/`ol-egov.141.89.6.53` (`[D-369]`): F5.3a's own
+  // trigger — `olea-contracts`' `explainBackOfferTrigger` doc names
+  // `'scheduling-observation'` as "the F5.3a reciprocal prompt off a live
+  // scheduling observation", the same literal
+  // `session.recordSchedulingObservationOfferShown` above already writes
+  // for this banner — alongside `pending.offerEventId`, the SAME event id
+  // that write returned, read here (via `pending`, which is
+  // `this.schedulingObservationBanner` itself) before that banner is
+  // nulled.
+  it('passes the F5.3a trigger and offer reference through openExplainBack, matching the literal recordSchedulingObservationOfferShown already writes', () => {
     expect(ACCEPT_BODY).toMatch(
-      /this\.openExplainBack\?\.\(destination, 'scheduling-observation'\)/,
+      /this\.openExplainBack\?\.\(destination, 'scheduling-observation', pending\.offerEventId\)/,
     );
   });
 });
@@ -261,9 +265,13 @@ describe('ReviewView.handleAcceptStrongRecallOffer — accepting is never record
     expect(SR_ACCEPT_BODY).toMatch(/this\.strongRecallBanner\s*=\s*null;/);
   });
 
-  it('opens explain-back on the offer’s OWN instrument — the proposed concept is one that instrument teaches, so nothing is invented', () => {
+  // `ol-egov.141.89.6.53` (`[D-369]`): alongside the SAME event id `this
+  // .strongRecallBanner` already held (set from
+  // `recordStrongRecallOfferShown`'s return) — `pending` is
+  // `this.strongRecallBanner` itself, read before it is nulled.
+  it('opens explain-back on the offer’s OWN instrument, with its offer reference — the proposed concept is one that instrument teaches, so nothing is invented', () => {
     expect(SR_ACCEPT_BODY).toMatch(
-      /this\.openExplainBack\?\.\(pending\.instrument, STRONG_RECALL_PROPOSAL_TRIGGER\)/,
+      /this\.openExplainBack\?\.\(\s*pending\.instrument,\s*STRONG_RECALL_PROPOSAL_TRIGGER,\s*pending\.offerEventId,\s*\)/,
     );
     expect(SR_ACCEPT_BODY).not.toMatch(/queueSnapshot/);
   });
