@@ -56,13 +56,25 @@
  * real term of review history exists are in the private repo at
  * `findings/VIT-1-holding-cut.md`.
  *
- * **This module holds no display strings.** `./display.ts` is the one place
- * mastery vocabulary becomes words on a screen, and that property is worth
- * more than the convenience of putting the three labels next to the arithmetic
- * that produces them. `Vitality`'s three values are the vocabulary registry's
- * own internal names (`holding` / `tending` / `early`, §1 axis 2), so the
- * display map that will eventually join them in `display.ts` has a key set to
- * match rather than a translation to perform.
+ * **This module now also holds vitality's display words** (`VITALITY_DISPLAY`,
+ * below; `ol-egov.141.89.9.45`, discovered from `ol-egov.141.89.9.4`'s
+ * attainment runner, which had nowhere ratified to import them from). The
+ * module doc used to say the display map would "eventually join them in
+ * `display.ts`" — `display.ts` is explicit that it carries the growth-stage
+ * axis only and defers vitality's words to this axis's own file — and by the
+ * time this bead landed, four separate plugin call sites (`registry/copy.ts`,
+ * `retrospective/copy.ts`, `today/copy.ts`, `course-setup/copy.ts`) had each
+ * written their own copy of the same three words as an acknowledged stopgap,
+ * every one of their doc comments naming the absence of a ratified export as
+ * the reason. `VITALITY_DISPLAY` is that export, sourced from the vocabulary
+ * registry's own table (`docs/Olea_vocabulary_registry.md` §1 axis 2) rather
+ * than from any of the four copies, so a caller gets the ratified words next
+ * to the arithmetic that classifies them — `Vitality`'s three values already
+ * are the registry's own internal names (`holding` / `tending` / `early`),
+ * so the display map's key set matches rather than translates. Switching the
+ * four existing call sites to import it, and the display.ts doc comment that
+ * still points elsewhere, are follow-up work — see this bead's report, not a
+ * change made here.
  *
  * **Nothing here is persisted.** The reading is recomputed from scheduler
  * state and a clock instant every time it is asked for. Whether a vitality
@@ -90,6 +102,28 @@ import type { Scheduler, SchedulerState } from '../scheduler/types.js';
  * those is `./display.ts`'s job and no other file's.
  */
 export type Vitality = 'holding' | 'tending' | 'early';
+
+/** One vitality value's ratified display, matching `MasteryDisplay`'s shape in `./display.ts`. */
+export interface VitalityDisplay {
+  /** The user-facing word, exactly as the vocabulary registry writes it (§1 axis 2, "Displayed as"). */
+  readonly label: string;
+  /** The note shown beside the label (§1 axis 2, "Note shown"). */
+  readonly note: string;
+}
+
+/**
+ * The vocabulary registry's own words for the three vitality values
+ * (`docs/Olea_vocabulary_registry.md` §1 axis 2), keyed by this module's
+ * internal names so a caller never needs a second lookup to go from
+ * `Vitality` to what she sees. See this module's doc for why this export
+ * lives here rather than in `./display.ts`, and for the plugin call sites it
+ * is meant to replace.
+ */
+export const VITALITY_DISPLAY: Readonly<Record<Vitality, VitalityDisplay>> = {
+  holding: { label: 'holding', note: 'recall is landing' },
+  tending: { label: 'needs tending', note: 'recall has faded' },
+  early: { label: 'too early to say', note: 'no spaced evidence yet' },
+};
 
 /**
  * The instrument types whose retrievability enters the vitality fold.

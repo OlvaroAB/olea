@@ -1081,17 +1081,28 @@ export { projectInstrumentValidity } from './mastery/validity.js';
 // instead, `oracle/compose.ts`'s existing (non-`[D-264]`-aware) producer.
 // Exported now, alongside the fold it sits beside, for the same "nameable
 // from one place when its consumer lands" reason as `readVitality` above.
+// `VITALITY_DISPLAY` (`ol-egov.141.89.9.45`): the registry's own words for
+// vitality's three values, the sibling export `MASTERY_DISPLAY` above is for
+// growth stage — see `vitality.ts`'s own doc for why it lives beside the
+// fold rather than in `display.ts`, and for the plugin call sites (each a
+// stopgap copy of the same three words) it is meant to replace.
 export type {
   ReadinessRecallInstrument,
   ReadinessRecallReading,
   ReadVitalityInput,
   RecallTierInstrumentType,
   Vitality,
+  VitalityDisplay,
   VitalityInstrument,
   VitalityReading,
   VitalityWeakest,
 } from './mastery/vitality.js';
-export { isRecallTier, readReadinessRecall, readVitality } from './mastery/vitality.js';
+export {
+  isRecallTier,
+  readReadinessRecall,
+  readVitality,
+  VITALITY_DISPLAY,
+} from './mastery/vitality.js';
 // The misconception store (F5.6, knowledge model §4.1, D-008, M1-M4,
 // P4-T04): a local projection folded from its own append-only event log,
 // never a second source of truth — see misconception/types.ts's module doc.

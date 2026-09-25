@@ -18,6 +18,7 @@ import {
   type ReadinessRecallInstrument,
   readReadinessRecall,
   readVitality,
+  VITALITY_DISPLAY,
   type VitalityInstrument,
 } from './vitality.js';
 
@@ -286,6 +287,39 @@ describe('readVitality — the holding cut is handed in, never defaulted', () =>
         `vitality.ts exports a number named ${name}; the holding cut is a derived constant and must not live in this file`,
       ).toBe(false);
     }
+  });
+});
+
+/**
+ * `VITALITY_DISPLAY` against the vocabulary registry's own table
+ * (`docs/Olea_vocabulary_registry.md` §1 axis 2, "Displayed as" / "Note
+ * shown" columns), as literals — not derived from `VITALITY_DISPLAY` itself,
+ * so a typo in the export cannot pass by agreeing with its own value.
+ */
+describe('VITALITY_DISPLAY — registry §1 axis 2, quoted as literals', () => {
+  it('has exactly the three vitality values as keys, no more and no fewer', () => {
+    expect(Object.keys(VITALITY_DISPLAY).sort()).toEqual(['early', 'holding', 'tending']);
+  });
+
+  it('holding displays as "holding", noting recall is landing', () => {
+    expect(VITALITY_DISPLAY.holding).toStrictEqual({
+      label: 'holding',
+      note: 'recall is landing',
+    });
+  });
+
+  it('tending displays as "needs tending", noting recall has faded', () => {
+    expect(VITALITY_DISPLAY.tending).toStrictEqual({
+      label: 'needs tending',
+      note: 'recall has faded',
+    });
+  });
+
+  it('early displays as "too early to say", noting no spaced evidence yet', () => {
+    expect(VITALITY_DISPLAY.early).toStrictEqual({
+      label: 'too early to say',
+      note: 'no spaced evidence yet',
+    });
   });
 });
 
