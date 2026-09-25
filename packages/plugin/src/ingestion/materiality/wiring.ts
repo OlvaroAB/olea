@@ -135,6 +135,23 @@ export interface MaterialityTriggerDeps {
   readonly onVerdict?: ((event: MaterialityVerdictEvent) => Promise<void> | void) | undefined;
 }
 
+/**
+ * The params `dispatchJudgeAndCommit` needs, factored out so `evaluate`'s
+ * locked phase (`evaluateUnderLock`) can hand them to its caller without
+ * itself calling the judge — see `evaluate`'s own doc for why that split
+ * exists.
+ */
+interface JudgeDispatchParams {
+  readonly path: string;
+  readonly currentText: string;
+  readonly previousText: string;
+  readonly persistedRevision: number;
+  readonly canonicalLength: number;
+  readonly current: MaterialityHashes;
+  readonly lastChangedAt: number;
+  readonly now: number;
+}
+
 export class MaterialityTrigger {
   private readonly constants: MaterialityConstants;
   /**
@@ -204,6 +221,16 @@ export class MaterialityTrigger {
    * dropped (no store write, no verdict) rather than committed over it.
    */
   private readonly revisions = new Map<string, number>();
+  /**
+   * `[ol-dpzz]`: the tail of the in-flight `evaluateUnderLock` chain for a
+   * path, so a new `evaluate()` call is queued behind whatever is already
+   * running for the SAME path rather than racing it. In memory only, never
+   * persisted — a restart clears it, same as `pendingSmallEdit`,
+   * `pendingDebounced`, `lastProcessedText` and `revisions` above. See
+   * `evaluate`'s own doc for the failure this closes and why the lock
+   * deliberately stops short of the judge dispatch.
+   */
+  private readonly pathLocks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: MaterialityTriggerDeps) {
     this.constants = deps.constants ?? DEFAULT_MATERIALITY_CONSTANTS;
@@ -216,12 +243,100 @@ export class MaterialityTrigger {
    * caller has no pre-edit copy to hand (the result is then
    * `'judge-unavailable'` rather than a call the judge cannot answer
    * honestly, even when a judge is configured).
+   *
+   * `[ol-dpzz]`: the record load, gate decision and any non-judge write
+   * below (`evaluateUnderLock`) must never interleave with another
+   * `evaluate()` call for the SAME path. Before this fix, `now` was captured
+   * and the free-gate decision made against whatever `store.load(path)`
+   * happened to return WHENEVER its own await settled — with two genuinely
+   * overlapping calls (two rapid vault `'modify'` events, each awaiting its
+   * own `vault.read()` before calling `evaluate()`), that could resolve in
+   * either order relative to the other call's own load and write. An older
+   * call's `now` could end up compared against an already-advanced
+   * `lastChangedAt` from a newer call's write (misreading a real, still-fresh
+   * change as debounced) — and separately, whichever call's OWN
+   * `store.save()` simply happened to settle last would win, even if that
+   * call had read its `record` before the other call wrote: a plain
+   * read-then-write race that could revert the store's cached
+   * hashes/canonicalLength/revision back to pre-edit content, silently
+   * erasing a newer call's already-committed advance.
+   *
+   * Two fixes were possible: moving `now`'s capture to AFTER the load, or
+   * per-path serialisation (`withPathLock` below). Moving `now` alone would
+   * fix the `now`-vs-`lastChangedAt` comparison (both values would then come
+   * from a mutually consistent moment), but does nothing for the SEPARATE
+   * stale-hash-revert failure, which is an ordinary read-then-write race on
+   * `record` itself, unrelated to which line reads the clock — the
+   * store-mediated equivalent of two threads doing `x = x + 1` without a
+   * lock. Serialising the whole load-decide-write window fixes both: with
+   * it, two overlapping calls for the same path can no longer observe or
+   * write over each other's state at all, restoring exactly today's
+   * single-call behaviour for the common (non-overlapping) case, since an
+   * uncontended lock never delays anything.
+   *
+   * The lock deliberately stops short of `dispatchJudgeAndCommit`: that
+   * method already carries its own stale-response guard for a judge call in
+   * flight (the `revisions` field's own doc, `[DOS-C3]`), and
+   * `wiring.spec.ts`'s existing "a newer evaluation completes before an
+   * older one's judge call resolves" test depends on two overlapping
+   * `evaluate()` calls for the same path being able to run concurrently once
+   * one of them is only waiting on the judge. Holding this lock across a
+   * judge network round trip would also serialise unrelated concurrent edits
+   * on the same path behind a paid call, which nothing about this bug calls
+   * for.
    */
   async evaluate(
     path: string,
     currentText: string,
     previousText?: string,
   ): Promise<MaterialityEvaluationResult> {
+    const phase = await this.withPathLock(path, () =>
+      this.evaluateUnderLock(path, currentText, previousText),
+    );
+    if (phase.kind === 'resolved') return phase.result;
+    return this.dispatchJudgeAndCommit(phase.dispatch);
+  }
+
+  /**
+   * Chains `run` after whatever is already queued for `path`, so at most one
+   * `evaluateUnderLock` call is ever in flight per path at a time — see
+   * `evaluate`'s own doc for why. The queued continuation always resolves
+   * (never rejects) regardless of `run`'s own outcome, so a failed call never
+   * wedges the path for whatever calls it next; the promise actually
+   * returned to `evaluate`'s caller is `run`'s own, untouched — a rejection
+   * still propagates to that caller exactly as it would without the lock.
+   */
+  private async withPathLock<T>(path: string, run: () => Promise<T>): Promise<T> {
+    const priorTurn = this.pathLocks.get(path) ?? Promise.resolve();
+    const settledPriorTurn = priorTurn.then(
+      () => undefined,
+      () => undefined,
+    );
+    const thisTurn = settledPriorTurn.then(run);
+    this.pathLocks.set(
+      path,
+      thisTurn.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return thisTurn;
+  }
+
+  /**
+   * The locked portion of `evaluate` — see that method's doc for the race it
+   * closes. Returns either a terminal result (every outcome the free gates
+   * settle without a judge call) or the params for a judge dispatch, left to
+   * `evaluate` to run only AFTER this path's lock has been released.
+   */
+  private async evaluateUnderLock(
+    path: string,
+    currentText: string,
+    previousText: string | undefined,
+  ): Promise<
+    | { readonly kind: 'resolved'; readonly result: MaterialityEvaluationResult }
+    | { readonly kind: 'dispatch'; readonly dispatch: JudgeDispatchParams }
+  > {
     const now = this.deps.clock.now();
     // Defect 2 (ol-egov.141.89.5.7): seed the "last processed" baseline from
     // the FIRST `previousText` this instance ever sees for `path` — the only
@@ -258,7 +373,7 @@ export class MaterialityTrigger {
       currentCanonicalLength: canonicalLength,
     });
 
-    if (outcome.kind === 'unchanged') return outcome;
+    if (outcome.kind === 'unchanged') return { kind: 'resolved', result: outcome };
 
     // `[D-311]`, literally: "records without one [a revision] are treated as
     // unknown and re-judged at their next change." A record persisted before
@@ -363,7 +478,7 @@ export class MaterialityTrigger {
         lastVerdictAt: record?.lastVerdictAt ?? null,
         revision: persistedRevision,
       });
-      return outcome;
+      return { kind: 'resolved', result: outcome };
     }
 
     if (outcome.kind === 'formatting-only') {
@@ -383,7 +498,7 @@ export class MaterialityTrigger {
       this.pendingSmallEdit.delete(path);
       this.pendingDebounced.delete(path);
       this.lastProcessedText.set(path, currentText);
-      return outcome;
+      return { kind: 'resolved', result: outcome };
     }
 
     if (outcome.kind === 'no-groundable-content') {
@@ -399,7 +514,7 @@ export class MaterialityTrigger {
         lastVerdictAt: record?.lastVerdictAt ?? null,
         revision: persistedRevision,
       });
-      return outcome;
+      return { kind: 'resolved', result: outcome };
     }
 
     if (outcome.kind === 'below-floor') {
@@ -422,7 +537,7 @@ export class MaterialityTrigger {
         // [D-311]: deferred again, not decided -- the revision is unchanged.
         revision: persistedRevision,
       });
-      return outcome;
+      return { kind: 'resolved', result: outcome };
     }
 
     // outcome.kind === 'call-judge'
@@ -439,18 +554,21 @@ export class MaterialityTrigger {
     this.pendingSmallEdit.delete(path);
     this.pendingDebounced.delete(path);
     if (this.deps.judge === null || previousText === undefined) {
-      return { kind: 'judge-unavailable' };
+      return { kind: 'resolved', result: { kind: 'judge-unavailable' } };
     }
-    return this.dispatchJudgeAndCommit({
-      path,
-      currentText,
-      previousText: carriedBaseline ?? this.lastProcessedText.get(path) ?? previousText,
-      persistedRevision,
-      canonicalLength,
-      current,
-      lastChangedAt: now,
-      now,
-    });
+    return {
+      kind: 'dispatch',
+      dispatch: {
+        path,
+        currentText,
+        previousText: carriedBaseline ?? this.lastProcessedText.get(path) ?? previousText,
+        persistedRevision,
+        canonicalLength,
+        current,
+        lastChangedAt: now,
+        now,
+      },
+    };
   }
 
   /**
@@ -547,16 +665,9 @@ export class MaterialityTrigger {
    * `drainDuePendingEdits` reports the edit's OWN observed time, not the
    * (much later) moment the drain happened to run.
    */
-  private async dispatchJudgeAndCommit(params: {
-    readonly path: string;
-    readonly currentText: string;
-    readonly previousText: string;
-    readonly persistedRevision: number;
-    readonly canonicalLength: number;
-    readonly current: MaterialityHashes;
-    readonly lastChangedAt: number;
-    readonly now: number;
-  }): Promise<MaterialityEvaluationResult> {
+  private async dispatchJudgeAndCommit(
+    params: JudgeDispatchParams,
+  ): Promise<MaterialityEvaluationResult> {
     const {
       path,
       currentText,
