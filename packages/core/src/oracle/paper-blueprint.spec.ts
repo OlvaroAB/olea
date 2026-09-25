@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPaperBlueprint,
+  conceptWeight,
+  DEFAULT_PAPER_PURPOSE,
   demandServedByGenerator,
   dominantDemand,
   EMPHASIS_WEIGHT_BOOST_DECLARED,
@@ -11,11 +13,13 @@ import {
   matchesEmphasis,
   PAPER_GENERATOR_DECLARED_DEMANDS,
   significantDemands,
+  slotWeightForPurpose,
   validatePaperScope,
 } from './paper-blueprint.js';
 import type {
   PaperDemand,
   PaperFormatClass,
+  PaperPurpose,
   PaperRecoveredStructure,
   PaperScopeConcept,
   PaperScopeOutcome,
@@ -164,6 +168,10 @@ describe('buildPaperBlueprint', () => {
     const heldSources = [{ kind: 'notes', sourceId: 's', chunks: ['x'] }] as const;
     const rankExcludedInput = {
       ...baseInput,
+      // [D-277]/ruling (i): this scenario's whole point is masteryScore differentiating rank, so
+      // it must now explicitly declare the one purpose that reads masteryScore at all — see the
+      // new "purpose [D-277]" describe block below for `'assessment-simulation'` never doing so.
+      purpose: 'focused-practice' as const,
       alpha: 0.25 as const,
       steering: { extent: 'shorter' as const },
       concepts: [
@@ -245,6 +253,10 @@ describe('buildPaperBlueprint', () => {
   it('emphasis reweights only already-eligible concepts, never adds one', () => {
     const blueprint = buildPaperBlueprint({
       ...baseInput,
+      // Focused practice, so the asserted weight below (which reads masteryScore) is meaningful —
+      // see the "purpose [D-277]" describe block for the emphasis boost applying identically to
+      // assessment-simulation's coverage-only weight.
+      purpose: 'focused-practice',
       concepts: [
         concept({
           conceptKey: 'a',
@@ -286,6 +298,197 @@ describe('buildPaperBlueprint', () => {
     });
     expect(blueprint.formatClass).toBe('recall-style');
     expect(blueprint.slots[0]?.taskId).toBe('quiz.generate.v1');
+  });
+});
+
+// Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Practice paper purpose [D-277]",
+// tagged `@auto:core/oracle/paper-blueprint.spec`. `[D-277]` / ol-egov.141.87 ruling (i),
+// TARGET-4 / ol-v7r5.58: the paper declares its purpose, frozen with the paper, governing
+// composition. Two modes; blends deferred.
+describe('purpose [D-277]', () => {
+  const baseInput = {
+    course: 'COURSEA',
+    asOf: '2026-09-16',
+    assessments: [{ type: 'exam', due: '2026-09-30' }],
+    structure: null,
+    alpha: 0.5 as const,
+    formatClassOf: recallFormatClassOf,
+  };
+
+  describe('declared, defaulted, and frozen onto the blueprint', () => {
+    it('defaults to assessment-simulation — the never-weakness mode — when no purpose is declared', () => {
+      const blueprint = buildPaperBlueprint({
+        ...baseInput,
+        concepts: [
+          concept({
+            conceptKey: 'a',
+            heldSources: [{ kind: 'notes', sourceId: 's', chunks: ['x'] }],
+          }),
+        ],
+      });
+      expect(blueprint.purpose).toBe('assessment-simulation');
+      expect(blueprint.purpose).toBe(DEFAULT_PAPER_PURPOSE);
+    });
+
+    it('records whichever purpose the caller declares', () => {
+      const concepts = [
+        concept({
+          conceptKey: 'a',
+          heldSources: [{ kind: 'notes', sourceId: 's', chunks: ['x'] }],
+        }),
+      ];
+      const simulation = buildPaperBlueprint({
+        ...baseInput,
+        purpose: 'assessment-simulation',
+        concepts,
+      });
+      const focused = buildPaperBlueprint({ ...baseInput, purpose: 'focused-practice', concepts });
+      expect(simulation.purpose).toBe('assessment-simulation');
+      expect(focused.purpose).toBe('focused-practice');
+    });
+  });
+
+  describe('slotWeightForPurpose — the one mechanism purpose governs', () => {
+    it('assessment simulation never reads masteryScore: two concepts differing only by a real, demonstrated mastery reading weigh identically', () => {
+      const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+      const wellMastered = concept({ conceptKey: 'a', heldSources, masteryScore: 0.9 });
+      const demonstrablyWeak = concept({ conceptKey: 'b', heldSources, masteryScore: 0.1 });
+      const wA = slotWeightForPurpose(wellMastered, 0.5, 'assessment-simulation');
+      const wB = slotWeightForPurpose(demonstrablyWeak, 0.5, 'assessment-simulation');
+      expect(wA.weight).toBe(wB.weight);
+      expect(wA.weight).toBe(1); // coverage alone, exactly `conceptCoverageScore`
+      expect(wA.masteryFallback).toBe(true);
+      expect(wB.masteryFallback).toBe(true); // never merely down-weighted — never read at all
+    });
+
+    it('focused practice reads masteryScore in the existing coverage/mastery blend, unmodified', () => {
+      const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+      const high = concept({ conceptKey: 'a', heldSources, masteryScore: 0.9 });
+      const low = concept({ conceptKey: 'b', heldSources, masteryScore: 0.1 });
+      const wHigh = slotWeightForPurpose(high, 0.5, 'focused-practice');
+      const wLow = slotWeightForPurpose(low, 0.5, 'focused-practice');
+      expect(wHigh).toEqual(conceptWeight(high, 0.5));
+      expect(wLow).toEqual(conceptWeight(low, 0.5));
+      expect(wHigh.weight).not.toBe(wLow.weight); // a real reading makes a real difference
+      expect(wHigh.masteryFallback).toBe(false);
+    });
+
+    it('never turns thin evidence into a weakness claim: a null masteryScore never scores as though a real, low reading had been read', () => {
+      const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+      const noEvidence = concept({ conceptKey: 'a', heldSources, masteryScore: null });
+      const demonstrablyWeak = concept({ conceptKey: 'b', heldSources, masteryScore: 0.1 });
+      const wNoEvidence = slotWeightForPurpose(noEvidence, 0.5, 'focused-practice');
+      const wWeak = slotWeightForPurpose(demonstrablyWeak, 0.5, 'focused-practice');
+      // Thin evidence falls back to the undiscounted coverage-only weight (masteryFallback: true)
+      // — never the low figure a genuine weak reading produces (0.5*1 + 0.5*0.1 = 0.55).
+      expect(wNoEvidence.masteryFallback).toBe(true);
+      expect(wNoEvidence.weight).toBe(1);
+      expect(wWeak.weight).toBe(0.55);
+      expect(wNoEvidence.weight).not.toBe(wWeak.weight);
+    });
+  });
+
+  describe('purpose changes which asks are selected and in what proportions, and nothing else', () => {
+    function sittingOf(itemCount: number): PaperRecoveredStructure {
+      return {
+        sittingCount: 1,
+        currentCount: 1,
+        historicalCount: 0,
+        sittings: [
+          {
+            regime: 'current',
+            sections: [{ label: 'A', questionForm: 'x', itemCount, marks: itemCount }],
+          },
+        ],
+      };
+    }
+    const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+
+    describe('never widens the taught boundary, and never supplies missing source support', () => {
+      // Cap == eligible count (3), so every eligible concept becomes a live candidate under
+      // EITHER purpose — ranking order cannot itself exclude one, isolating exactly the two
+      // invariants under test from the (separately tested) rank-exclusion mechanism.
+      const scopeInput = {
+        ...baseInput,
+        alpha: 0.25 as const,
+        structure: sittingOf(3),
+        concepts: [
+          concept({
+            conceptKey: 'ghost',
+            conceptName: 'Ghost',
+            taughtSignal: 'possible' as const,
+            heldSources,
+          }),
+          concept({
+            conceptKey: 'noSource',
+            conceptName: 'No Source',
+            heldSources: [],
+            masteryScore: 0.95,
+          }),
+          concept({ conceptKey: 'heldA', conceptName: 'Held A', heldSources, masteryScore: 0.5 }),
+          concept({ conceptKey: 'heldB', conceptName: 'Held B', heldSources, masteryScore: 0.5 }),
+        ],
+      };
+
+      it.each(['assessment-simulation', 'focused-practice'] as const)(
+        'under %s: the ineligible concept never appears, and the no-held-source concept is always empty, never filled',
+        (purpose) => {
+          const blueprint = buildPaperBlueprint({ ...scopeInput, purpose });
+          expect(blueprint.eligibleCount).toBe(3); // every concept but 'ghost'
+          expect(blueprint.slots.some((s) => s.conceptKey === 'ghost')).toBe(false);
+          expect(blueprint.emptySlots.some((s) => s.conceptKey === 'ghost')).toBe(false);
+
+          expect(blueprint.slots.some((s) => s.conceptKey === 'noSource')).toBe(false);
+          expect(blueprint.emptySlots.find((s) => s.conceptKey === 'noSource')?.reasonCode).toBe(
+            'no-held-source',
+          );
+          expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['heldA', 'heldB']);
+        },
+      );
+    });
+
+    describe('purpose alone decides which held-source concept fills a capped slot', () => {
+      // Three held-source concepts, cap 2 (one sitting, itemCount 2). masteryScore is
+      // deliberately UNCORRELATED with alphabetical order, so assessment-simulation's
+      // coverage-only/alphabetical-tiebreak selection and focused-practice's mastery-blend
+      // selection provably differ rather than coinciding by accident.
+      const scopeInput = {
+        ...baseInput,
+        alpha: 0.25 as const,
+        structure: sittingOf(2),
+        concepts: [
+          concept({ conceptKey: 'weak', conceptName: 'Aardvark', heldSources, masteryScore: 0.1 }),
+          concept({ conceptKey: 'mid', conceptName: 'Mango', heldSources, masteryScore: 0.5 }),
+          concept({ conceptKey: 'strong', conceptName: 'Zebra', heldSources, masteryScore: 0.9 }),
+        ],
+      };
+
+      function buildFor(purpose: PaperPurpose) {
+        return buildPaperBlueprint({ ...scopeInput, purpose });
+      }
+
+      it('assessment simulation ties all three at coverage-only weight and fills the cap alphabetically, ignoring masteryScore', () => {
+        const blueprint = buildFor('assessment-simulation');
+        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['mid', 'weak']);
+        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['strong']);
+        expect(blueprint.emptySlots[0]?.reasonCode).toBe('rank-excluded');
+      });
+
+      it('focused practice ranks by the coverage/mastery blend and fills the cap by masteryScore', () => {
+        const blueprint = buildFor('focused-practice');
+        // alpha 0.25: weight = 0.25*1 + 0.75*masteryScore -> weak 0.325, mid 0.625, strong 0.925.
+        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['mid', 'strong']);
+        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['weak']);
+      });
+
+      it('the two purposes disagree on which concept is excluded — direct, decisive proof that purpose governs selection', () => {
+        const simulation = buildFor('assessment-simulation');
+        const focused = buildFor('focused-practice');
+        expect(simulation.slots.map((s) => s.conceptKey).sort()).not.toEqual(
+          focused.slots.map((s) => s.conceptKey).sort(),
+        );
+      });
+    });
   });
 });
 

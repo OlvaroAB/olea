@@ -9,6 +9,15 @@
  * rather than ad hoc harness JSON, and adds ruling 3's steering (emphasis, extent), left out of
  * the harness tier's own scope.
  *
+ * **Purpose governs the ranking weight (`[D-277]`, F4.11 ruling (i), TARGET-4/ol-v7r5.58).** The
+ * paper's declared purpose (`PaperPurpose`, `./paper-types.ts`) picks which weight function ranks
+ * candidates — `slotWeightForPurpose`, below. It is the ONLY thing purpose changes here: which
+ * asks are selected and in what proportions, never eligibility, never held-source grounding, never
+ * demand routing (see `slotWeightForPurpose`'s own doc, and `PaperPurpose`'s doc for the three
+ * things ruling (i) says purpose never does). `input.purpose` is optional
+ * (`DEFAULT_PAPER_PURPOSE` when omitted) but the returned blueprint always states one — see that
+ * constant's doc for why the default is a safe, presently-inert no-op.
+ *
  * **What this function does NOT do.** It never calls a generator — see `./paper-items.ts` for
  * turning a blueprint's slots into generated items. It never reads a sealed judge-reference
  * sitting — `structure` is the CALLER's responsibility to have already excluded one (this
@@ -78,6 +87,7 @@ import type {
   PaperGeneratorTaskId,
   PaperGroundingLabel,
   PaperHeldSource,
+  PaperPurpose,
   PaperRecoveredStructure,
   PaperScopeConcept,
   PaperScopeOutcome,
@@ -143,6 +153,51 @@ export function conceptWeight(concept: PaperScopeConcept, alpha: number): PaperC
   }
   const weight = alpha * coverageScore + (1 - alpha) * concept.masteryScore;
   return { weight, coverageScore, masteryScore: concept.masteryScore, masteryFallback: false };
+}
+
+/**
+ * F4.11 ruling (i) (`[D-277]`) — the purpose a caller has not yet declared one for.
+ * `'assessment-simulation'` is the safe default: it is the mode ruling (i) itself describes as
+ * "never weights selection by her weakness," so a caller silent on purpose gets the STRICTER of
+ * the two behaviours rather than one that reads a weakness signal it never asked for.
+ *
+ * This is also, today, a no-op default for the one real production caller
+ * (`packages/plugin/src/paper/provider.ts`'s `requestPaper`, via `assemble.ts`'s
+ * `buildScopeConceptsForCourse`): every concept it builds carries `masteryScore: null` (C5.4's
+ * mastery rollup has no reader wired into the plugin yet — that module's own doc), and
+ * `conceptWeight`'s `masteryScore === null` branch already falls back to coverage alone
+ * regardless of purpose. Declared, not fitted — see this module's own `EMPHASIS_WEIGHT_BOOST_DECLARED`
+ * for the same posture.
+ *
+ * @provenance declared.
+ */
+export const DEFAULT_PAPER_PURPOSE: PaperPurpose = 'assessment-simulation';
+
+/**
+ * The ranking weight for `concept` under `purpose` — F4.11 ruling (i), the one place purpose
+ * governs composition (module doc). `'assessment-simulation'` reads `conceptCoverageScore` alone
+ * and NEVER `concept.masteryScore`, mirroring `conceptWeight`'s own "mastery absent" fallback
+ * shape exactly (`masteryFallback: true`) regardless of whether a real mastery reading exists for
+ * this concept — the weakness signal is not merely down-weighted for this purpose, it is never
+ * read at all. `'focused-practice'` is the unmodified `conceptWeight` blend, the only purpose that
+ * reads `masteryScore` — "evidence gaps and demonstrated weakness," ruling (i)'s own words.
+ *
+ * Deliberately the ONLY thing purpose changes inside `buildPaperBlueprint`: eligibility
+ * (`isEligibleConcept`), held-source grounding (`no-held-source`) and demand routing
+ * (`demand-unsupported`) are computed identically for both purposes — see this module's own
+ * `buildPaperBlueprint` and `./paper-types.ts`'s `PaperPurpose` doc for the three things ruling
+ * (i) says purpose never does, each with its own test in `./paper-blueprint.spec.ts`.
+ */
+export function slotWeightForPurpose(
+  concept: PaperScopeConcept,
+  alpha: number,
+  purpose: PaperPurpose,
+): PaperConceptWeight {
+  if (purpose === 'assessment-simulation') {
+    const coverageScore = conceptCoverageScore(concept);
+    return { weight: coverageScore, coverageScore, masteryScore: null, masteryFallback: true };
+  }
+  return conceptWeight(concept, alpha);
 }
 
 /**
@@ -418,6 +473,14 @@ export interface BuildPaperBlueprintInput {
   readonly assessments: readonly PaperAssessment[];
   /** Recovered NON-holdout structure (see module doc) — `null` when nothing was recoverable (e.g. no past papers registered for the course). */
   readonly structure: PaperRecoveredStructure | null;
+  /**
+   * F4.11 ruling (i) (`[D-277]`) — declared purpose, frozen onto the returned blueprint
+   * (`PaperBlueprint.purpose`). Optional here so a caller that has not yet been updated to choose
+   * one (today, every real caller — see `DEFAULT_PAPER_PURPOSE`'s doc) still compiles and composes;
+   * omitting it is never silent about WHICH purpose was used, since the returned blueprint always
+   * states one (`DEFAULT_PAPER_PURPOSE` when omitted here).
+   */
+  readonly purpose?: PaperPurpose;
   readonly alpha: PaperWeightingAlpha;
   readonly steering?: PaperSteering;
   /** F4.8's word→class table (`../assessment/format-class.js`'s `formatClassOf`), injected so this module has no opinion of its own about the mapping. */
@@ -428,6 +491,7 @@ export interface BuildPaperBlueprintInput {
 export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBlueprint {
   validatePaperScope(input.concepts);
   const steering = input.steering ?? {};
+  const purpose = input.purpose ?? DEFAULT_PAPER_PURPOSE;
   const outcomesById = new Map((input.outcomes ?? []).map((o) => [o.outcomeId, o]));
   const formatClass = dominantFormatClass(input.assessments, input.formatClassOf);
   const taskId = taskIdForFormatClass(formatClass);
@@ -456,7 +520,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   const eligible = input.concepts.filter(isEligibleConcept);
   const ranked = eligible
     .map((concept) => {
-      const base = conceptWeight(concept, input.alpha);
+      const base = slotWeightForPurpose(concept, input.alpha, purpose);
       const emphasised = matchesEmphasis(concept, steering.emphasis, outcomesById);
       const weight = emphasised ? base.weight * EMPHASIS_WEIGHT_BOOST_DECLARED : base.weight;
       return { concept, ...base, weight, emphasised };
@@ -557,6 +621,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     formatVersion: 'paper-blueprint-v1',
     course: input.course,
     asOf: input.asOf,
+    purpose,
     alpha: input.alpha,
     formatClass,
     intendedDemand,

@@ -162,6 +162,41 @@ export interface PaperSteering {
   readonly extent?: PaperExtent;
 }
 
+/**
+ * F4.11's amended ruling (i) (`[D-277]`, ol-egov.141.87, TARGET-4/ol-v7r5.58) — the paper's
+ * declared purpose, frozen with the paper, governing composition. Two modes this release; blends
+ * are deferred ("two clearly governed modes are easier to explain and to verify than a spectrum").
+ *
+ * - `'assessment-simulation'` — follows the declared blueprint's own supported proportions and
+ *   **never** weights selection by her weakness: `./paper-blueprint.ts`'s ranking reads
+ *   `PaperScopeConcept.masteryScore` for this purpose not at all, regardless of whether a real
+ *   value is present.
+ * - `'focused-practice'` — selects inside the SAME declared scope (eligibility, held-source
+ *   grounding and demand routing are all purpose-blind — see below), using evidence gaps and
+ *   demonstrated weakness: the existing coverage/mastery blend (`conceptWeight`) is read in full.
+ *
+ * Purpose changes **which asks are selected and in what proportions, and nothing else** (ruling
+ * (i)'s own text) — three things it never does, each with its own regression test in
+ * `./paper-blueprint.spec.ts`:
+ *   1. it never widens the taught boundary (`isEligibleConcept`'s gate runs before purpose is
+ *      ever consulted, identically for both modes);
+ *   2. it never supplies missing source support (a concept with no held source is `no-held-source`
+ *      under both modes — a high weakness signal never manufactures grounding that is not there);
+ *   3. it never turns thin evidence into a weakness claim (`masteryScore: null` — "no real mastery
+ *      evidence exists," never a fabricated midpoint — still falls back to the coverage-only,
+ *      undiscounted weight `conceptWeight`'s own `masteryFallback` path already gives it; it is
+ *      never scored as though a real, low mastery reading had been read).
+ *
+ * A student-visible affordance to CHOOSE a purpose is out of this module's scope (no wording lives
+ * here — `packages/plugin/src/paper/copy.ts` is the student-facing surface, not owned by this
+ * bead); see `./paper-blueprint.ts`'s `DEFAULT_PAPER_PURPOSE` doc for what a caller that does not
+ * yet choose one gets, and why.
+ */
+export const PAPER_PURPOSES = Object.freeze(['assessment-simulation', 'focused-practice'] as const);
+
+/** One word from `PAPER_PURPOSES`. */
+export type PaperPurpose = (typeof PAPER_PURPOSES)[number];
+
 /** F4.8's three format classes, restated (see `../assessment/format-class.js`'s `AssessmentFormatClass` — identical values, restated here so this directory's public shape does not couple to that module's own type identity). */
 export type PaperFormatClass = 'recall-style' | 'written' | 'practical';
 
@@ -249,6 +284,22 @@ export interface PaperBlueprint {
   readonly formatVersion: 'paper-blueprint-v1';
   readonly course: string;
   readonly asOf: string;
+  /**
+   * F4.11 ruling (i) (`[D-277]`) — declared, frozen with the paper, governing composition
+   * (`./paper-blueprint.ts`'s ranking; see `PaperPurpose`'s own doc for exactly what it does and
+   * does not change). `buildPaperBlueprint` ALWAYS populates this — it is optional on the type
+   * only so hand-built `PaperCompositionAccount`/`PaperBlueprint` fixtures elsewhere in this
+   * codebase that predate this field (outside this bead's `owns`, so not edited here) stay valid
+   * without a mechanical, unrelated edit; every blueprint the function itself builds carries a
+   * real value, never omits one. Once this blueprint's fields land on the persisted `PaperRecord`
+   * (`./paper-store.ts`'s `PaperCompositionAccount = Omit<PaperBlueprint, 'slots' | 'emptySlots'>`,
+   * a structural derivation from this exact interface), `purpose` is carried through automatically
+   * — no edit to `paper-store.ts` was needed to satisfy ruling (i)'s "frozen with the paper."
+   * "Frozen" itself is this value's own immutability plus the caller's discipline of never
+   * recomposing an existing paper (ruling (i): "a frozen paper may be annotated ... never
+   * recomposed") — this module has no mutation path for an already-built blueprint to begin with.
+   */
+  readonly purpose?: PaperPurpose;
   readonly alpha: PaperWeightingAlpha;
   readonly formatClass: PaperFormatClass;
   /** F4.11 ruling 1/7 (`[D-262]`) — the demand this composition's slots intend (see `PaperBlueprintSlot.intendedDemand`). `'recall-a-fact'` when input (b) recovered nothing to read — the honest default every existing generator already serves, so a course with no demand data behaves exactly as it did before this ruling. */
