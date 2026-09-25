@@ -3023,6 +3023,27 @@ export default class OleaPlugin extends Plugin {
    * holder (items due, material arrived, an assessment band crossed, since
    * whichever surface entered it) is real future work, not this row's to
    * build; see this bead's close evidence.
+   *
+   * `ol-egov.141.89.10.14` (bug): confirmed this is more than "not built
+   * yet" — it is currently **not buildable from this file alone**. The real
+   * facts exist one call away: `composeDefaultStudySession` below already
+   * calls `composeStudySessionForRequest`, whose result carries a
+   * `frozenScope: FrozenSittingScope` (exported), and `diffSittingScopeSnapshots`
+   * / `EMPTY_SITTING_SCOPE_SNAPSHOT` / `SittingScopeSnapshot` are exported
+   * from `olea-core`. But turning a `FrozenSittingScope` into a fresh
+   * `SittingScopeSnapshot` at a later instant is `session-builder/provider.ts`'s
+   * own `buildScopeSnapshotAt` (private, `provider.ts:676`, over
+   * unexported `FrozenScopeConcept`/`FrozenScopeAssessment` and the vault
+   * `firstSeen` read) — the same function `createLocalSessionBuilderProvider`
+   * calls at both freeze time and re-entry time for ITS sitting. Nothing
+   * else in this file or `olea-core` re-derives a due/arrival/band snapshot
+   * from a frozen scope, and duplicating that logic here would give the two
+   * holders two independently-drifting definitions of "stale" — exactly
+   * what `[D-033]`'s one-composer discipline exists to prevent. Wiring this
+   * for real needs `provider.ts` to export `buildScopeSnapshotAt` (or an
+   * equivalent wrapper) so this method can retain the compose result's
+   * `frozenScope` across a sitting and diff a fresh snapshot against it —
+   * see the bead's close evidence for the follow-up that does the export.
    */
   private async enterStudySessionHolderForStart(): Promise<void> {
     const now = new Date();

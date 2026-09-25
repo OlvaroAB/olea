@@ -1476,3 +1476,35 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     expect(occurrences.length).toBe(7);
   });
 });
+
+describe('ol-egov.141.89.10.14 (bug): the shared session holder cannot yet compute real staleness', () => {
+  // CONFIRMED, not merely "unbuilt": `enterStudySessionHolderForStart` has
+  // no exported path to a real `staleness` fact today. The three real
+  // facts live behind `session-builder/provider.ts`'s private
+  // `buildScopeSnapshotAt` (over unexported `FrozenScopeConcept`/
+  // `FrozenScopeAssessment` and a vault `firstSeen` read) — the function
+  // `createLocalSessionBuilderProvider` calls, for ITS OWN sitting, at both
+  // freeze time and re-entry time. `composeStudySessionForRequest`'s result
+  // does carry an exported `frozenScope: FrozenSittingScope`, but nothing
+  // exported turns it into a fresh `SittingScopeSnapshot` to diff against —
+  // so building that here would mean re-deriving the due/arrival/band logic
+  // a second, possibly-drifting way, which `[D-033]`'s one-composer
+  // discipline rules out. This pins BOTH halves of the current gap:
+  // `composeDefaultStudySession` still discards `result.frozenScope`, and
+  // `enterStudySessionHolderForStart` still passes literal `false`s. When
+  // `session-builder/provider.ts` exports `buildScopeSnapshotAt` (or an
+  // equivalent) and this file is wired to use it, BOTH assertions below
+  // need to flip to real-facts assertions — see the bead's close evidence
+  // for the follow-up that does the export.
+
+  it('composeDefaultStudySession returns only composed.full, dropping the frozenScope composeStudySessionForRequest returns', () => {
+    expect(main).toMatch(/return result\?\.composed\.full \?\? null;/);
+    expect(main).not.toMatch(/frozenScope/);
+  });
+
+  it('enterStudySessionHolderForStart still passes literal-false staleness facts to the holder’s decide() call', () => {
+    expect(main).toMatch(
+      /staleness:\s*\{\s*itemsDueInScope:\s*false,\s*materialArrivedInScope:\s*false,\s*assessmentProximityBandCrossedInScope:\s*false,\s*\},/,
+    );
+  });
+});
