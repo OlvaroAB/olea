@@ -90,8 +90,10 @@ export { type ContractEntry, type ContractId, contracts, SchemaRegistry } from '
 // and worker.ts's header explains D-011's versioning discipline for the
 // envelope.
 export {
+  type AnswerEdits,
   type ArtifactProvenance,
   type ArtifactVerdict,
+  answerEdits,
   artifactProvenance,
   artifactVerdict,
   type ContestEffect,

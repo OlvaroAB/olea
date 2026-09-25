@@ -477,20 +477,7 @@ describe('recordSoloGradeAndReview — answerEdits (ol-0r92.123, [D-228 / SIG-3]
     expect(outcome.result.record.answerEdits).toBeUndefined();
   });
 
-  /**
-   * **This is the gap `ol-0r92.123`'s own close evidence discloses, written
-   * down as a failing expectation rather than deleted or weakened** — this
-   * repo's own `it.fails` convention (`packages/core/src/retrieval/engine
-   * .spec.ts`'s precedent). This test is green while `answerEdits` is
-   * accepted by `RecordSoloGradeAndReviewParams` but dropped before the
-   * persisted write, and goes RED the moment a follow-up bead widens
-   * `GradedExplainBackReviewSubject`/`composeGradedExplainBackReviewRecord`
-   * (`../../../core/src/study-session/explain-back-grade-write.ts`, outside
-   * `ol-0r92.123`'s own `owns`) to actually forward it — at which point the
-   * `.fails` comes off and the assertion stands as an ordinary test. It
-   * cannot be forgotten, because it fails when the gap is closed.
-   */
-  it.fails('SHOULD carry answerEdits on the persisted record when captured — ol-0r92.123: it does not yet (needs explain-back-grade-write.ts, out of owns)', async () => {
+  it('carries answerEdits on the persisted record when captured (ol-0r92.124, closing ol-0r92.123)', async () => {
     const vault = memoryVault();
     const wiring = wiringWithSoloReply();
 

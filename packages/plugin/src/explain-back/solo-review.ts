@@ -68,8 +68,8 @@
  *    appends it.
  *
  * ===========================================================================
- * DISCLOSED GAP: `answerEdits` DOES NOT YET REACH THE PERSISTED RECORD
- * (`ol-0r92.123`, from `ol-0r92.56` / `[D-228 / SIG-3]`)
+ * `answerEdits` REACHES THE PERSISTED RECORD (`ol-0r92.124`, closing
+ * `ol-0r92.123` / `ol-0r92.56` / `[D-228 / SIG-3]`)
  * ===========================================================================
  * `modal.ts` (`ol-0r92.56`) seals `answerEdits` at `submitAnswer` and
  * threads it onto `deps.recordSoloGradeAndReview`'s params — the same
@@ -77,22 +77,16 @@
  * just below — and `main.ts`'s untouched, unreconstructed pass-through
  * (`recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGrade
  * AndReview(params)`) means the real value genuinely reaches THIS module's
- * `params.answerEdits` at runtime today, for every production call.
+ * `params.answerEdits` at runtime, for every production call.
  *
- * This module accepts it (see `RecordSoloGradeAndReviewParams.answerEdits`
- * below) but does NOT forward it into `subject`/the persisted write, and
- * cannot: `GradedExplainBackReviewSubject` and `composeGradedExplainBackReview
- * Record` (`../../../core/src/study-session/explain-back-grade-write.ts`)
- * build the final `ReviewLogRecordInput` from an explicit field whitelist —
- * the same mechanism `durationMs`/`supportLevelShown` travel through, both
- * already named fields there — and have no `answerEdits` slot to spread
- * through yet. That file is not this bead's `owns` (`ol-0r92.123`:
- * `packages/plugin/src/explain-back/solo-review.ts` only), so widening it is
- * a disclosed follow-up, not built here. `test/explain-back/solo-review.spec
- * .ts` records the gap as an `it.fails` (this repo's own convention,
- * `packages/core/src/retrieval/engine.spec.ts`'s precedent) rather than
- * hiding it — it goes RED, on purpose, the moment the follow-up lands, so it
- * cannot be forgotten.
+ * `ol-0r92.124` widened `GradedExplainBackReviewSubject` and
+ * `composeGradedExplainBackReviewRecord`
+ * (`../../../core/src/study-session/explain-back-grade-write.ts`) with an
+ * `answerEdits` slot, conditionally spread exactly as `supportLevelShown`
+ * already was — so this module now forwards `params.answerEdits` onto
+ * `subject.answerEdits` (see {@link recordSoloGradeAndReview} below), and it
+ * rides the same one write `recordGradedExplainBackReview` performs. Absence
+ * still means "not captured," never a fabricated zero.
  *
  * ===========================================================================
  * DISCLOSED GAP: `conceptIds` REQUIRES A KNOWN CONCEPT (DF-20)
@@ -190,7 +184,7 @@
  * from `Promise<void>` to `Promise<SoloLevel | void>` to match).
  */
 
-import type { SoloLevel, SupportLevel } from 'olea-contracts';
+import type { AnswerEdits, SoloLevel, SupportLevel } from 'olea-contracts';
 import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
@@ -204,22 +198,6 @@ import {
 import { type GradingWiring, gradeSoloAttempt } from '../grading/wiring.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import { buildGradeSoloInputFromTypedAnswer } from './request.js';
-
-/**
- * `ol-0r92.56` (`[D-228 / SIG-3]`)'s shape, restated locally rather than
- * imported — `AnswerEdits` is not part of `olea-contracts`'s public barrel
- * (`packages/contracts/src/index.ts` re-exports many `review-log.ts` types
- * but not this one), the same accommodation `modal.ts`'s own
- * `ModalAnswerEdits` already makes for the identical reason. Kept structurally
- * identical to the contract's `answerEdits` schema on purpose: `firstEditMs`
- * milliseconds from presentation to the first `'input'` event (`null` if none
- * ever fired), `editBursts` a count of distinct composing sessions, never a
- * per-keystroke count.
- */
-export interface RecordSoloGradeAndReviewAnswerEdits {
-  readonly firstEditMs: number | null;
-  readonly editBursts: number;
-}
 
 export interface RecordSoloGradeAndReviewDeps {
   readonly grading: GradingWiring;
@@ -313,15 +291,16 @@ export interface RecordSoloGradeAndReviewParams {
    * a caller — or an older inline type that doesn't yet name this field —
    * still typechecks without it.
    *
-   * **Accepted here, NOT YET forwarded into the persisted record** — see this
-   * module's own "DISCLOSED GAP: answerEdits DOES NOT YET REACH THE
-   * PERSISTED RECORD" doc section above for exactly what is missing and why
-   * (`GradedExplainBackReviewSubject`/`composeGradedExplainBackReviewRecord`,
-   * outside this bead's `owns`). Absence must keep meaning "not captured",
-   * never "no edits made" (the contract field's own doc) — this module makes
-   * no attempt to default or guess a value when the caller omits it.
+   * **Forwarded onto the persisted record** (`ol-0r92.124`): relayed
+   * unchanged onto `GradedExplainBackReviewSubject.answerEdits`, which
+   * `composeGradedExplainBackReviewRecord`
+   * (`../../../core/src/study-session/explain-back-grade-write.ts`) spreads
+   * conditionally, exactly as `supportLevelShown` already is. Absence must
+   * keep meaning "not captured", never "no edits made" (the contract field's
+   * own doc) — this module makes no attempt to default or guess a value when
+   * the caller omits it.
    */
-  readonly answerEdits?: RecordSoloGradeAndReviewAnswerEdits;
+  readonly answerEdits?: AnswerEdits;
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
@@ -406,6 +385,7 @@ export async function recordSoloGradeAndReview(
     ...(params.supportLevelShown !== undefined
       ? { supportLevelShown: params.supportLevelShown }
       : {}),
+    ...(params.answerEdits !== undefined ? { answerEdits: params.answerEdits } : {}),
     selectionContext: {
       dueState: 'new',
       examProximity: null,

@@ -8,6 +8,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { reviewLogRecordV5 } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AcceptedSoloGrading } from '../grading/explainBackSolo.js';
 import { readContentRecord } from '../review-log/content-store.js';
@@ -126,6 +127,51 @@ describe('composeGradedExplainBackReviewRecord (pure)', () => {
       byConcept: { permeability: 'sapling' },
     });
     expect(record.supportLevelShown).toBe('guided');
+  });
+
+  // `ol-0r92.124` ([D-228 / SIG-3]): the composer's answerEdits slot,
+  // conditionally spread exactly like supportLevelShown — present and
+  // schema-valid when captured, absent (never a fabricated zero) and still
+  // schema-valid when not, with every other field unchanged either way.
+  it('carries answerEdits through only when the subject supplies it, and the record parses under the frozen v5 schema either way', () => {
+    const withoutEdits = composeGradedExplainBackReviewRecord({
+      subject: subject(),
+      accepted: ACCEPTED,
+      contentRef: 'content-ref-6',
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+    });
+    const withEdits = composeGradedExplainBackReviewRecord({
+      subject: subject({ answerEdits: { firstEditMs: 12_000, editBursts: 3 } }),
+      accepted: ACCEPTED,
+      contentRef: 'content-ref-6',
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+    });
+
+    expect(Object.hasOwn(withoutEdits, 'answerEdits')).toBe(false);
+    expect(withEdits.answerEdits).toEqual({ firstEditMs: 12_000, editBursts: 3 });
+
+    // Every other field is identical between the two.
+    const { answerEdits: _omitted, ...withEditsRest } = withEdits;
+    expect(withEditsRest).toEqual(withoutEdits);
+
+    expect(
+      reviewLogRecordV5.safeParse({
+        ...withoutEdits,
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'evt-1',
+      }).success,
+    ).toBe(true);
+    expect(
+      reviewLogRecordV5.safeParse({
+        ...withEdits,
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'evt-2',
+      }).success,
+    ).toBe(true);
   });
 
   it('carries revisionOf through as an explicit backward pointer, never omitted', () => {

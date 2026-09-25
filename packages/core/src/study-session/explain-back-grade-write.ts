@@ -94,7 +94,7 @@
  * any thrown error message.
  */
 
-import type { MasteryAtTime, SelectionContextV4 } from 'olea-contracts';
+import type { AnswerEdits, MasteryAtTime, SelectionContextV4 } from 'olea-contracts';
 import type { AcceptedSoloGrading, SoloArtifactProvenance } from '../grading/explainBackSolo.js';
 import {
   buildExplainBackGradeReviewFields,
@@ -140,6 +140,13 @@ export interface GradedExplainBackReviewSubject {
   readonly masteryAtTime?: MasteryAtTime;
   /** Row 3.9's chooser decision ([SUPP-2]) — absent when this item carried none, never fabricated. */
   readonly supportLevelShown?: SupportLevel;
+  /**
+   * `[D-228 / SIG-3]`: how this attempt's answer was composed. Absent means
+   * "not captured," never "she made no edits" (`AnswerEdits`'s own contract
+   * doc) — travels onto the composed record exactly as `supportLevelShown`
+   * does, never fabricated when the caller has none.
+   */
+  readonly answerEdits?: AnswerEdits;
 }
 
 export interface ComposeGradedExplainBackReviewRecordInput {
@@ -205,6 +212,7 @@ export function composeGradedExplainBackReviewRecord(
     ...(subject.supportLevelShown !== undefined
       ? { supportLevelShown: subject.supportLevelShown }
       : {}),
+    ...(subject.answerEdits !== undefined ? { answerEdits: subject.answerEdits } : {}),
     explainBackGrade: {
       ...gradeFields.explainBackGrade,
       // `[D-281]`: merged here rather than inside
