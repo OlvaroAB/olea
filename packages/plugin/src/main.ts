@@ -550,11 +550,22 @@ export default class OleaPlugin extends Plugin {
   /**
    * `ol-0r92.90` (`[IL-P1c2]`): idempotency memo for persisting an accepted
    * explain-back grading's misconception observation events to the vault —
-   * keyed on `originInstrumentId`, mirroring `GradingWiring
-   * .acceptedObservationsByAttempt`'s own "memoize the in-flight Promise
-   * itself" technique (`grading/wiring.ts`) one layer up, so a retry or a
-   * concurrent double-accept for the SAME attempt persists the event(s)
-   * exactly once rather than once per caller.
+   * mirrors `GradingWiring.acceptedObservationsByAttempt`'s own "memoize the
+   * in-flight Promise itself" technique (`grading/wiring.ts`) one layer up,
+   * so a retry or a concurrent double-accept for the SAME attempt persists
+   * the event(s) exactly once rather than once per caller.
+   *
+   * `ol-egov.141.89.6.17`: keyed on `context.attemptId ?? context
+   * .originInstrumentId` — the SAME fallback `acceptExplainBackGrading
+   * WithObservation` (`grading/wiring.ts`) already uses for its own memo,
+   * per that field's own doc. Originally this map was fed
+   * `originInstrumentId` alone; since that id is the instrument's own id,
+   * shared by every attempt she ever makes at it, a SECOND genuine attempt
+   * at the same instrument in one plugin session collided with the first
+   * attempt's cached key and got back its stale, already-resolved promise —
+   * no new `appendMisconceptionEvent` calls, no new observations written.
+   * The map's own name (`...ByAttempt`) was always right; only the value it
+   * was keyed on at the call site below was wrong.
    */
   private readonly persistedMisconceptionObservationsByAttempt = new Map<string, Promise<void>>();
 
@@ -3162,6 +3173,17 @@ export default class OleaPlugin extends Plugin {
    * threaded into the same `persistMisconceptionObservations` call, one
    * persistence step and one idempotency key rather than a second memoized
    * method duplicating the same vault/deviceId construction.
+   *
+   * `ol-egov.141.89.6.17`: the key passed to `persistMisconceptionObservations`
+   * is `context.attemptId ?? context.originInstrumentId` — NOT
+   * `context.originInstrumentId` alone. `originInstrumentId` names the
+   * instrument, the SAME value across every attempt she ever makes at it;
+   * `attemptId` is the fresh id `modal.ts` mints once per genuine attempt
+   * (see `AcceptExplainBackGradingWithObservationContext.attemptId`'s own
+   * doc, `grading/wiring.ts`) and is what the accept step just above keyed
+   * its own memo on. Falling back to `originInstrumentId` only covers a
+   * caller that has not yet been updated to supply a real `attemptId`;
+   * `modal.ts`'s production call always does.
    */
   async acceptExplainBackGradingWithObservation(
     pending: PendingExplainBackGrading,
@@ -3171,7 +3193,7 @@ export default class OleaPlugin extends Plugin {
     const result = await acceptExplainBackGradingWithObservation(this.grading, pending, context);
     if (result !== null && result.status === 'accepted') {
       await this.persistMisconceptionObservations(
-        context.originInstrumentId,
+        context.attemptId ?? context.originInstrumentId,
         result.observations,
         result.resolutionEvidence,
       );
@@ -3183,11 +3205,11 @@ export default class OleaPlugin extends Plugin {
    * `ol-0r92.90`: appends every non-skipped `AcceptedGradingObservationOutcome`
    * (`olea-core`'s `buildObservationEventsFromAcceptedGrading` output) to the
    * vault's misconception log via `appendMisconceptionEvent`, idempotent on
-   * `originInstrumentId` — `this.persistedMisconceptionObservationsByAttempt`
+   * `attemptKey` — `this.persistedMisconceptionObservationsByAttempt`
    * memoizes the in-flight `Promise` itself, the same technique
    * `GradingWiring.acceptedObservationsByAttempt` (`grading/wiring.ts`) uses
    * one layer up, so a sequential retry or a concurrent double-accept for the
-   * SAME attempt id persists at most once rather than re-appending a
+   * SAME attempt persists at most once rather than re-appending a
    * duplicate line per caller. A per-event append failure is logged (D-005:
    * count only, never the event's own statement/correction text) and never
    * rethrown — an observation-persistence failure must not surface as a
@@ -3202,15 +3224,22 @@ export default class OleaPlugin extends Plugin {
    * `appendMisconceptionEvent` call, after the observation loop, under the
    * identical log-and-never-rethrow discipline — riding the same memoized
    * promise as the observations above rather than a second idempotency key,
-   * since both are facts about the one accepted attempt this
-   * `originInstrumentId`/`attemptId` names.
+   * since both are facts about the one accepted attempt `attemptKey` names.
+   *
+   * `ol-egov.141.89.6.17`: `attemptKey` — NOT `originInstrumentId` alone,
+   * see the caller's own doc immediately above and the field doc on
+   * `persistedMisconceptionObservationsByAttempt`. Two genuine attempts at
+   * the SAME instrument in one session pass two different `attemptKey`
+   * values and each persists its own observations; a retry or concurrent
+   * double-accept of the SAME attempt passes the same `attemptKey` and
+   * stays idempotent.
    */
   private persistMisconceptionObservations(
-    originInstrumentId: string,
+    attemptKey: string,
     outcomes: readonly AcceptedGradingObservationOutcome[],
     resolutionEvidence: MisconceptionResolutionEvidenceEvent | null = null,
   ): Promise<void> {
-    const existing = this.persistedMisconceptionObservationsByAttempt.get(originInstrumentId);
+    const existing = this.persistedMisconceptionObservationsByAttempt.get(attemptKey);
     if (existing !== undefined) return existing;
     const promise = (async () => {
       const vault = new ObsidianSource(this.app);
@@ -3231,7 +3260,7 @@ export default class OleaPlugin extends Plugin {
         }
       }
     })();
-    this.persistedMisconceptionObservationsByAttempt.set(originInstrumentId, promise);
+    this.persistedMisconceptionObservationsByAttempt.set(attemptKey, promise);
     return promise;
   }
 

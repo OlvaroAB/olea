@@ -402,22 +402,22 @@ describe('an accepted explain-back grading now persists its misconception observ
   // reached `acceptExplainBackGradingWithObservation` below and was
   // discarded — `appendMisconceptionEvent` (`olea-core`) had no caller
   // anywhere in the plugin. These assertions are the source-level proof that
-  // an accepted result's observations now reach the vault, idempotent on
-  // `originInstrumentId`, through a persistence step this method's own
+  // an accepted result's observations now reach the vault, idempotent per
+  // attempt (`attemptId`, else `originInstrumentId`; ol-egov.141.89.6.17), through a persistence step this method's own
   // wrapper composes.
 
   it("persists every accepted result's observations before returning it", () => {
     expect(main).toMatch(
-      /async acceptExplainBackGradingWithObservation\(\s*pending:\s*PendingExplainBackGrading,\s*context:\s*AcceptExplainBackGradingWithObservationContext,\s*\):\s*Promise<AcceptExplainBackGradingWithObservationResult \| null> \{\s*if \(this\.grading === null\) return null;\s*const result = await acceptExplainBackGradingWithObservation\(this\.grading, pending, context\);\s*if \(result !== null && result\.status === 'accepted'\) \{\s*await this\.persistMisconceptionObservations\(\s*context\.originInstrumentId,\s*result\.observations,\s*result\.resolutionEvidence,\s*\);\s*\}\s*return result;/,
+      /async acceptExplainBackGradingWithObservation\(\s*pending:\s*PendingExplainBackGrading,\s*context:\s*AcceptExplainBackGradingWithObservationContext,\s*\):\s*Promise<AcceptExplainBackGradingWithObservationResult \| null> \{\s*if \(this\.grading === null\) return null;\s*const result = await acceptExplainBackGradingWithObservation\(this\.grading, pending, context\);\s*if \(result !== null && result\.status === 'accepted'\) \{\s*await this\.persistMisconceptionObservations\(\s*context\.attemptId\s*\?\?\s*context\.originInstrumentId,\s*result\.observations,\s*result\.resolutionEvidence,\s*\);\s*\}\s*return result;/,
     );
   });
 
-  it('persistMisconceptionObservations is idempotent on originInstrumentId, memoizing the in-flight Promise itself', () => {
+  it('persistMisconceptionObservations is idempotent per attempt (attemptId, falling back to originInstrumentId), memoizing the in-flight Promise itself', () => {
     expect(main).toMatch(
-      /private persistMisconceptionObservations\(\s*originInstrumentId:\s*string,\s*outcomes:\s*readonly AcceptedGradingObservationOutcome\[\],\s*resolutionEvidence:\s*MisconceptionResolutionEvidenceEvent \| null = null,\s*\):\s*Promise<void> \{\s*const existing = this\.persistedMisconceptionObservationsByAttempt\.get\(originInstrumentId\);\s*if \(existing !== undefined\) return existing;/,
+      /private persistMisconceptionObservations\(\s*attemptKey:\s*string,\s*outcomes:\s*readonly AcceptedGradingObservationOutcome\[\],\s*resolutionEvidence:\s*MisconceptionResolutionEvidenceEvent \| null = null,\s*\):\s*Promise<void> \{\s*const existing = this\.persistedMisconceptionObservationsByAttempt\.get\(attemptKey\);\s*if \(existing !== undefined\) return existing;/,
     );
     expect(main).toMatch(
-      /this\.persistedMisconceptionObservationsByAttempt\.set\(originInstrumentId, promise\);\s*return promise;/,
+      /this\.persistedMisconceptionObservationsByAttempt\.set\(attemptKey, promise\);\s*return promise;/,
     );
     expect(main).toMatch(
       /private readonly persistedMisconceptionObservationsByAttempt = new Map<string, Promise<void>>\(\);/,
