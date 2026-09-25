@@ -303,26 +303,40 @@ function groupInstrumentRecordsByConcept(
 }
 
 /**
- * Every Zettelkasten note title this walk already knows exists, gathered
- * from `input.concepts` alone — no second vault read. `boundNotePath` is set
- * for both tier 1 and tier 3 (`../concept/extract.js`'s own doc: both bind
- * by the same exact-title match), and `ambiguousNotePaths` (`[D-203]`) names
- * every path behind a duplicated title the binder refused to pick between —
- * both are real notes she has, so both feed the set `noteOfferFor` below
- * checks a concept's `displayName`/`aliases` against
- * (`../concept/note-offer.js`'s `existingNoteTitles`).
+ * The PARTIAL half of the existing-note listing: every note title THIS
+ * RUN'S EXTRACTION already bound, gathered from `input.concepts` alone — no
+ * vault read here. `boundNotePath` is set for both tier 1 and tier 3
+ * (`../concept/extract.js`'s own doc: both bind by the same exact-title
+ * match, and both require the note to be REACHABLE — one wikilink hop from
+ * a course-folder document, that module's reading-set closure — never
+ * merely present in the vault under a matching title), and
+ * `ambiguousNotePaths` (`[D-203]`) names every path behind a duplicated
+ * title the binder refused to pick between — both are real notes she has,
+ * so both feed the set `noteOfferFor` below checks a concept's
+ * `displayName`/`aliases` against (`../concept/note-offer.js`'s
+ * `existingNoteTitles`).
  *
- * **This is "the note listing the registry build already has," not a full
- * Zettelkasten walk**: a note that was never bound to any concept this run
- * extracted (never matched a `topic:`/wikilink name, never cited by tier-3
- * evidence, and shares no title with a bound/ambiguous note) is invisible
- * here, the same honest-absence posture `note-offer.ts`'s own doc states for
- * a caller with no listing at all — never a fabricated "no note exists."
- * Closing that gap needs a real vault listing threaded in from the plugin's
- * walk (`packages/plugin/src/registry/provider.ts`'s `load()`, which already
- * reads `VaultSource` for `uniqueNotePath`'s collision check one layer up —
- * see this bead's Follow-ups); this module does no I/O (module doc) and so
- * cannot fetch that listing itself.
+ * **This is "the note listing this run's extraction bound," not the full
+ * vault**: a note that was never bound to any concept this run extracted
+ * (never matched a `topic:`/wikilink name, never cited by tier-3 evidence,
+ * and shares no title with a bound/ambiguous note — including a note
+ * sitting right there in the vault under the exact concept name, but
+ * unreachable from any course document, and note-offer.ts's own doc: "the
+ * existing-note check") is invisible to THIS function alone, the same
+ * honest-absence posture `note-offer.ts`'s own doc states for a caller with
+ * no listing at all — never a fabricated "no note exists." The caller below
+ * (`buildRegistryModel`) closes that gap by UNIONING this partial set with
+ * `input.vaultNoteTitles` (`ol-egov.141.89.10.48`) — the plugin's own full,
+ * unfiltered vault-wide listing (`packages/plugin/src/registry/
+ * provider.ts`'s `vaultNoteTitlesFrom`, every markdown path in the vault, no
+ * folder restriction: there is no ratified "Zettelkasten folder" anywhere in
+ * this codebase — `packages/plugin/src/registry/ports.ts`'s
+ * `createObsidianAcceptNoteOfferPort` writes a newly-accepted note at her
+ * vault ROOT precisely because inventing a folder name would be the
+ * fabricated-location mistake `[D-171]` forbids). So "existing" for the
+ * gate's purposes means any markdown note anywhere in her vault carrying a
+ * matching title, bound or not — never only a note this run's extraction
+ * happened to reach.
  */
 function existingNoteTitlesFrom(concepts: BuildRegistryModelInput['concepts']): readonly string[] {
   const titles = new Set<string>();
@@ -536,7 +550,17 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const courseRankingsByCourse = new Map(
     (input.courseRankings ?? []).map((ranking) => [ranking.course, ranking] as const),
   );
-  const existingNoteTitles = existingNoteTitlesFrom(concepts);
+  // `ol-egov.141.89.10.58`: unions the partial, extraction-bound listing
+  // above with the plugin's full vault-wide listing (see
+  // `existingNoteTitlesFrom`'s own doc for the rule this reads: any
+  // markdown note anywhere in the vault counts, bound or not — there is no
+  // ratified Zettelkasten-folder restriction). `vaultNoteTitles` is
+  // optional and absent is a real, non-error state (`./types.ts`'s own
+  // doc): a caller not yet passing it (or a listing read that failed)
+  // simply falls back to the partial set alone, never a crash.
+  const existingNoteTitles = [
+    ...new Set([...existingNoteTitlesFrom(concepts), ...(input.vaultNoteTitles ?? [])]),
+  ];
 
   // Every concept id the review log itself names, unioned with the concepts
   // this walk found — a concept whose note has since been renamed away can

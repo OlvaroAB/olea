@@ -90,6 +90,7 @@ function buildFor(
     suspended: ReadonlySet<string>;
     disputes: readonly DisputeLogRecord[];
     courseRankings: readonly CourseOracleRanking[];
+    vaultNoteTitles: readonly string[];
   }> = {},
 ) {
   return buildRegistryModel({
@@ -101,12 +102,15 @@ function buildFor(
     holdingCut: HOLDING_CUT,
     overrides: overrides.overridesState ?? EMPTY_REGISTRY_OVERRIDES,
     suspendedInstrumentIds: overrides.suspended ?? new Set(),
-    // `exactOptionalPropertyTypes`: an explicit `disputes`/`courseRankings:
-    // undefined` is a type error on an optional field, so the key is
-    // omitted entirely rather than set to `undefined` when a test does not
-    // supply one.
+    // `exactOptionalPropertyTypes`: an explicit `disputes`/`courseRankings`/
+    // `vaultNoteTitles: undefined` is a type error on an optional field, so
+    // the key is omitted entirely rather than set to `undefined` when a
+    // test does not supply one.
     ...(overrides.disputes === undefined ? {} : { disputes: overrides.disputes }),
     ...(overrides.courseRankings === undefined ? {} : { courseRankings: overrides.courseRankings }),
+    ...(overrides.vaultNoteTitles === undefined
+      ? {}
+      : { vaultNoteTitles: overrides.vaultNoteTitles }),
   });
 }
 
@@ -811,5 +815,40 @@ describe('buildRegistryModel — the note-offer gate (F8.4a, [D-176])', () => {
     expect(row?.displayName).toBe('Renamed A');
     expect(row?.aliases).toEqual(['Concept A']);
     expect(row?.noteOffer).toEqual({ eligible: false });
+  });
+
+  it('unions input.vaultNoteTitles with the extraction-bound set: a note this run never bound (never matched, never cited) still suppresses the offer when its title matches (ol-egov.141.89.10.58)', () => {
+    // "Concept A" is a real note the caller's own full vault listing sees
+    // (`vaultNoteTitles`), but this run's extraction never bound ANY
+    // concept to it — no `boundNotePath`, no `ambiguousNotePaths` entry
+    // anywhere in `concepts` below names it. `existingNoteTitlesFrom`
+    // (concepts-only) is blind to it; only the union with
+    // `input.vaultNoteTitles` catches the collision.
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+      vaultNoteTitles: ['Concept A'],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: false });
+  });
+
+  it('a vaultNoteTitles entry that matches no concept name or alias changes nothing — the union only suppresses on a real title match', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+      vaultNoteTitles: ['Some Unrelated Note'],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
+  });
+
+  it('omitting vaultNoteTitles falls back to the partial, extraction-bound listing alone — never a crash, never a fabricated absence', () => {
+    const model = buildFor({
+      concepts: [concept({ tier: 2 })],
+      entries: [review()],
+      courseRankings: [threeWayRanking()],
+    });
+    expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
   });
 });

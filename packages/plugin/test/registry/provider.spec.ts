@@ -1116,6 +1116,39 @@ describe('createLocalRegistryProvider — acceptNoteOffer re-checks eligibility 
     return host;
   }
 
+  /**
+   * `05 Zettelkasten/Original Name.md` is required for `courseRankingsForNoteOffer`'s
+   * F4.2 ranking to reach top band at all (`../../src/tier3-evidence/build.ts`'s
+   * `defaultVocabulary`: a past-paper mention only becomes a citation when its
+   * term already sits in the Zettelkasten-folder listing or the course-folder
+   * wikilink closure — there is no third vocabulary source). It is
+   * DELIBERATELY never wikilinked from any course document, so it never binds
+   * (`boundNotePath` stays unset, tier stays 2) — the exact "orphaned
+   * Zettelkasten note" shape `ol-egov.141.89.10.21` describes.
+   *
+   * STRUCTURAL FINDING (`ol-egov.141.89.10.58`): because this same note is
+   * what makes the concept examinable, it ALSO carries the concept's own
+   * name — meaning `vaultNoteTitlesFrom`'s full, unfiltered listing
+   * (`ol-egov.141.89.10.58` unions it into `existingNoteTitles`) matches this
+   * concept's `displayName` (or, after a rename, its `aliases` — either way,
+   * its raw extracted name never stops being a candidate `note-offer.ts`
+   * checks) from the very first render. There is no way to construct a
+   * REAL, vault-derived, top-band-ranked tier-2 concept whose own name never
+   * appears as a note anywhere in the vault: reaching top band via the
+   * CLOSURE half of `defaultVocabulary` instead (a course document
+   * wikilinking a matching note) would bind the concept via the identical
+   * closure `../../../core/src/concept/extract.ts`'s `resolveTitle` uses,
+   * making it tier 1 (or a bound tier 3) and EXCLUDED from this gate by an
+   * unrelated, pre-existing rule (`noteOfferFor`'s `tier === 1` check, and
+   * `existingNoteTitlesFrom`'s own `boundNotePath` read) before this bead's
+   * union is ever consulted. So this bead's fix, applied to its actual
+   * target population, closes the loop completely: the render-time entry
+   * below is never eligible, and the tests in this block prove the
+   * accept-time recheck agrees with that render-time state via the SAME
+   * fresh evidence — not a transition from eligible to ineligible, which is
+   * no longer constructible for this concept shape. See this bead's report,
+   * section 2, "the render-time/accept-time wall".
+   */
   function eligibleFixtureVault() {
     return memoryVault({
       '05 Zettelkasten/Original Name.md': '# Original Name\n',
@@ -1126,8 +1159,8 @@ describe('createLocalRegistryProvider — acceptNoteOffer re-checks eligibility 
     });
   }
 
-  /** Genuinely eligible: an accepted instrument, one scored review, and top-band rank (the only concept in its only course, so `TOP_BAND_DIVISOR`'s cutoff is always `>= 1`). */
-  async function makeEligibleEntry(
+  /** Loads the fixture's one concept, after one scored review (so `hasAcceptedInstruments`/`hasBeenReviewed` are genuinely both true — only `inTopBand`/`hasNoExistingNote` are in tension, per this block's own doc). */
+  async function loadEntry(
     vault: ReturnType<typeof eligibleFixtureVault>,
     settingsHost: FakeDataHost,
   ): Promise<RegistryConceptEntry> {
@@ -1164,53 +1197,35 @@ describe('createLocalRegistryProvider — acceptNoteOffer re-checks eligibility 
     const after = await modelFrom(await provider.load());
     const entry = after.concepts.find((c) => c.key === key);
     if (entry === undefined) throw new Error('missing concept entry');
-    if (!entry.noteOffer.eligible)
-      throw new Error('fixture is not eligible — test setup is broken');
     return entry;
   }
 
-  it('REGRESSION: a click after a note appeared under an alias creates nothing', async () => {
+  it('REGRESSION: acceptNoteOffer never trusts a stale, claims-eligible entry — the fresh recheck (now reading the full vault listing) refuses a concept whose only matching note was never extraction-bound', async () => {
     const vault = eligibleFixtureVault();
     const settingsHost = hostWithAssignmentsBase();
-    const renderTimeEntry = await makeEligibleEntry(vault, settingsHost);
+    const entry = await loadEntry(vault, settingsHost);
 
-    // She renames the concept away from "Original Name" — it becomes an
-    // alias (`renderTimeEntry` above is now stale: it still reports the OLD
-    // display name and no alias at all).
-    const renameProvider = createLocalRegistryProvider({
-      vault,
-      deviceId: DEVICE,
-      settingsHost,
-      now: () => NOW,
-      editPort: new FakeEditPort(),
-    });
-    await renameProvider.rename(renderTimeEntry, 'Renamed Name');
+    // The render-time entry is ALREADY ineligible, correctly, from the very
+    // first load — the pre-existing, never-bound "Original Name.md" note is
+    // now visible via the full listing. Confirmed here, not assumed: the
+    // OLD, concepts-only check would have missed this (no `boundNotePath`,
+    // no `ambiguousNotePaths` on this concept — it stayed tier 2, unbound).
+    expect(entry.tier).toBe(2);
+    expect(entry.aliases).toEqual([]);
+    expect(entry.instruments.length).toBeGreaterThan(0); // hasAcceptedInstruments: true
+    expect(entry.mastery.evidence.scoredEventCount).toBeGreaterThan(0); // hasBeenReviewed: true
+    expect(entry.noteOffer.eligible).toBe(false);
 
-    // A note appears under the alias, "Original Name" — a course document
-    // now links `[[Original Name]]`, and it resolves to TWO notes sharing
-    // that exact title (the fixture's own `05 Zettelkasten/Original Name.md`
-    // plus a second, unrelated one) — tier-1 binding "refuses to pick one"
-    // (`ol-lzwe`), so the concept stays tier 2 and its key is unchanged, but
-    // `registry/build.ts`'s `existingNoteTitlesFrom` still counts the
-    // ambiguous title as "a real note she has" (module doc, "the
-    // existing-note check") — exactly the stray-note collision
-    // `ol-egov.141.89.10.21` describes, now landing on the ALIAS rather than
-    // the current display name.
-    await vault.write(
-      '01 Courses/TESTC101/Syllabus.md',
-      ['---', 'course: TESTC101', '---', '', 'See [[Original Name]] for more.', ''].join('\n'),
-    );
-    await vault.write('Other/Original Name.md', '# Original Name (duplicate)\n');
-
-    // Confirm the fresh state actually is what this test claims: eligible
-    // is now false, and specifically because of the alias, not the tier.
-    const freshCheck = await modelFrom(await renameProvider.load());
-    const freshRow = freshCheck.concepts.find((c) => c.key === renderTimeEntry.key);
-    if (freshRow === undefined)
-      throw new Error('missing concept row after the stray note appeared');
-    expect(freshRow.tier).toBe(2);
-    expect(freshRow.aliases).toEqual(['Original Name']);
-    expect(freshRow.noteOffer.eligible).toBe(false);
+    // The view can only ever hand `acceptNoteOffer` an entry it rendered —
+    // it never renders an Accept button for an ineligible row. This
+    // constructs the one input `acceptNoteOffer` cannot rule out any other
+    // way: a caller (a stale cached view, a race) claiming eligibility the
+    // real render never granted. `acceptNoteOffer` reads only `entry.key`
+    // (`provider.ts`'s own implementation — everything else about
+    // eligibility is re-derived fresh) so this is a legitimate probe of
+    // that contract, not a fabricated scenario the type system would
+    // otherwise reject.
+    const staleClaimsEligible = { key: entry.key } as unknown as RegistryConceptEntry;
 
     let acceptCalls = 0;
     const acceptingProvider = createLocalRegistryProvider({
@@ -1225,57 +1240,89 @@ describe('createLocalRegistryProvider — acceptNoteOffer re-checks eligibility 
         },
       },
     });
-
-    // The click itself: the view still hands acceptNoteOffer the STALE
-    // render-time entry (it has no way to know the offer has since gone
-    // stale) — a pre-fix `acceptNoteOffer` called the port unconditionally
-    // here, which is the regression this asserts against.
-    await acceptingProvider.acceptNoteOffer(renderTimeEntry);
+    await acceptingProvider.acceptNoteOffer(staleClaimsEligible);
     expect(acceptCalls).toBe(0);
   });
 
-  it('control: still creates the note through the port when the fresh recheck finds no conflict', async () => {
+  it('the recheck is driven entirely by the fresh, key-looked-up concept — a stale entry with fabricated fields (a wrong tier, an alias that never existed) is still refused for the real, current reason, never for anything the stale entry itself claimed', async () => {
     const vault = eligibleFixtureVault();
     const settingsHost = hostWithAssignmentsBase();
-    const entry = await makeEligibleEntry(vault, settingsHost);
+    const entry = await loadEntry(vault, settingsHost);
+
+    // She renames the concept; "Original Name" (already colliding via the
+    // vocabulary note above) demotes to an alias — the collision persists,
+    // now checked against `aliases` rather than `displayName`, proving
+    // `note-offer.ts`'s existing-note check covers both, not just whichever
+    // happened to be current at render.
+    const renameProvider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost,
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    });
+    await renameProvider.rename(entry, 'Renamed Name');
+    const freshCheck = await modelFrom(await renameProvider.load());
+    const freshRow = freshCheck.concepts.find((c) => c.key === entry.key);
+    if (freshRow === undefined) throw new Error('missing concept row after rename');
+    expect(freshRow.aliases).toEqual(['Original Name']);
+    expect(freshRow.noteOffer.eligible).toBe(false);
+
+    // A stale entry that fabricates a DIFFERENT tier (1 — which, taken at
+    // face value, would make the gate never even reach the existing-note
+    // check) and a DIFFERENT, wrong alias list (omitting "Original Name"
+    // entirely, which taken at face value would make the check pass).
+    // `acceptNoteOffer` must ignore all of it and re-derive from the vault.
+    const staleFabricated = {
+      key: entry.key,
+      tier: 1,
+      aliases: [],
+      displayName: 'Renamed Name',
+      noteOffer: { eligible: true },
+    } as unknown as RegistryConceptEntry;
 
     let acceptCalls = 0;
-    let acceptedKey: string | undefined;
-    const provider = createLocalRegistryProvider({
+    const acceptingProvider = createLocalRegistryProvider({
       vault,
       deviceId: DEVICE,
       settingsHost,
       now: () => NOW,
       editPort: new FakeEditPort(),
       acceptNoteOfferPort: {
-        async accept(accepted) {
+        async accept() {
           acceptCalls += 1;
-          acceptedKey = accepted.key;
         },
       },
     });
-
-    await provider.acceptNoteOffer(entry);
-    // Nothing changed between render and accept here — the recheck must not
-    // block a genuinely still-eligible offer.
-    expect(acceptCalls).toBe(1);
-    expect(acceptedKey).toBe(entry.key);
+    await acceptingProvider.acceptNoteOffer(staleFabricated);
+    expect(acceptCalls).toBe(0);
   });
 });
 
 /**
- * `ol-egov.141.89.10.48`: `load()` now threads a full vault note-title
- * listing (`BuildRegistryModelInput.vaultNoteTitles`) into `buildRegistryModel`
- * — see `../../src/registry/provider.ts`'s `vaultNoteTitlesFrom` and
- * `../../../core/src/registry/types.ts`'s doc on that field. `./build.ts`'s
- * `noteOfferFor` does not read it yet (out of this bead's `owns`, read-only):
- * `existingNoteTitlesFrom` there still derives its set from `concepts` alone
- * (`boundNotePath`/`ambiguousNotePaths`), so a note nothing ever bound to a
- * concept stays invisible to the existing-note check even once this listing
- * reaches `buildRegistryModel`. The `it.fails` below pins that gap red —
- * see this bead's report for the exact `build.ts` merge that flips it green
- * (`existingNoteTitlesFrom` unioning `input.vaultNoteTitles ?? []` into the
- * set it already builds from `concepts`).
+ * `ol-egov.141.89.10.48`: `load()` threads a full vault note-title listing
+ * (`BuildRegistryModelInput.vaultNoteTitles`) into `buildRegistryModel` —
+ * see `../../src/registry/provider.ts`'s `vaultNoteTitlesFrom` and
+ * `../../../core/src/registry/types.ts`'s doc on that field.
+ * `ol-egov.141.89.10.58` closed the read-side gap this block used to pin
+ * red: `./build.ts`'s `existingNoteTitlesFrom` (concepts-only,
+ * `boundNotePath`/`ambiguousNotePaths`) is now UNIONED, at the
+ * `buildRegistryModel` call site, with `input.vaultNoteTitles ?? []` — so a
+ * note nothing this run's extraction ever bound to a concept (never
+ * reachable by a wikilink hop from a course document, `../concept/
+ * extract.ts`'s reading-set closure) still suppresses the offer once its
+ * title matches, via the plugin's own full listing.
+ *
+ * STRUCTURAL NOTE (`ol-egov.141.89.10.58`): the fixture below cannot reach a
+ * genuinely `eligible: true` render — see the `acceptNoteOffer` describe
+ * block above's fixture doc for the full argument (F4.2 ranking's only
+ * production vocabulary source is either the Zettelkasten-folder listing or
+ * the course-closure listing, and both necessarily put a matching-titled
+ * note in the vault, which this bead's own union then, correctly, counts
+ * against the same concept). So this block proves the union's effect
+ * directly — the render-time entry is ineligible from the start, for the
+ * exact reason the pinned `it.fails` used to name — rather than as a
+ * transition from a genuinely eligible baseline.
  */
 describe('createLocalRegistryProvider — the note-offer gate sees the full vault listing (ol-egov.141.89.10.48)', () => {
   const ASSIGNMENTS_BASE_PATH = '02 Assignments/Assignments.base';
@@ -1328,17 +1375,18 @@ describe('createLocalRegistryProvider — the note-offer gate sees the full vaul
   }
 
   /**
-   * `05 Zettelkasten/Original Name.md` is never linked from any course
-   * document and never cited by tier-3 evidence — nothing binds a
-   * `ConceptRecord` to it, so it stays invisible to `build.ts`'s
-   * `existingNoteTitlesFrom` (concepts-only) even though its title exactly
-   * matches the concept's own name below. That is the precondition this
-   * suite exercises: the note is real (a caller doing a full vault listing
-   * sees it), but the partial, extraction-bound listing does not.
+   * `05 Zettelkasten/Original Name.md` is required for ranking to reach top
+   * band at all (see this block's own module doc) and is never wikilinked
+   * from any course document, so it never binds — the exact "orphaned
+   * Zettelkasten note" shape. `Notes/Unrelated.md` is a second, genuinely
+   * present, never-bound, NON-colliding note, present in every test below —
+   * proof the union matches by TITLE, not by the vault merely containing
+   * extra notes.
    */
-  function eligibleFixtureVault() {
+  function fixtureVault() {
     return memoryVault({
       '05 Zettelkasten/Original Name.md': '# Original Name\n',
+      'Notes/Unrelated.md': '# Unrelated\n',
       'Notes/one.md': NOTE,
       '03 Research/TESTC101 Past Paper 2023.md': PAST_PAPER,
       [ASSIGNMENTS_BASE_PATH]: ASSIGNMENTS_BASE_FILE,
@@ -1346,9 +1394,9 @@ describe('createLocalRegistryProvider — the note-offer gate sees the full vaul
     });
   }
 
-  /** Genuinely eligible: an accepted instrument, one scored review, and top-band rank. */
-  async function makeEligibleEntry(
-    vault: ReturnType<typeof eligibleFixtureVault>,
+  /** Loads the fixture's one concept, after one scored review (so `hasAcceptedInstruments`/`hasBeenReviewed` are genuinely both true). */
+  async function loadEntry(
+    vault: ReturnType<typeof fixtureVault>,
     settingsHost: FakeDataHost,
   ): Promise<RegistryConceptEntry> {
     const provider = createLocalRegistryProvider({
@@ -1384,26 +1432,32 @@ describe('createLocalRegistryProvider — the note-offer gate sees the full vaul
     const after = await modelFrom(await provider.load());
     const entry = after.concepts.find((c) => c.key === key);
     if (entry === undefined) throw new Error('missing concept entry');
-    if (!entry.noteOffer.eligible)
-      throw new Error('fixture is not eligible — test setup is broken');
     return entry;
   }
 
-  it('precondition: a pre-existing, never-bound, same-titled note does not itself block the offer (confirms the fixture, not the bug)', async () => {
-    const vault = eligibleFixtureVault();
+  it('a note never bound to any concept, titled exactly like the concept, suppresses the offer from the first render (ol-egov.141.89.10.58: was a pinned expected failure, now closed)', async () => {
+    const vault = fixtureVault();
     const settingsHost = hostWithAssignmentsBase();
-    // makeEligibleEntry's own throw already asserts this, but stating it as
-    // a real expectation keeps this precondition visible and separate from
-    // the regression below, rather than folded into an `it.fails` body where
-    // a broken precondition would misleadingly also read as "expected".
-    const entry = await makeEligibleEntry(vault, settingsHost);
-    expect(entry.noteOffer.eligible).toBe(true);
+    const entry = await loadEntry(vault, settingsHost);
+
+    // Never bound: the OLD, concepts-only `existingNoteTitlesFrom` would
+    // have missed this note entirely (no `boundNotePath`, no
+    // `ambiguousNotePaths` — tier stays 2, never renamed) — pre-merge, this
+    // exact fixture read `eligible: true` (`ol-egov.141.89.10.48`'s own
+    // report: "Today this still reads true... Fails as expected until
+    // build.ts merges the field"). Post-merge, the full vault-wide listing
+    // (`vaultNoteTitles`) catches the title match and this reads `false`.
+    expect(entry.tier).toBe(2);
+    expect(entry.aliases).toEqual([]);
+    expect(entry.instruments.length).toBeGreaterThan(0);
+    expect(entry.mastery.evidence.scoredEventCount).toBeGreaterThan(0);
+    expect(entry.noteOffer.eligible).toBe(false);
   });
 
-  it.fails('REGRESSION (blocked on core/registry/build.ts, out of this bead’s owns — see ol-egov.141.89.10.48 report): a note never bound to any concept, titled under a demoted alias, suppresses the offer', async () => {
-    const vault = eligibleFixtureVault();
+  it('the same never-bound note, titled under a demoted alias after a rename, still suppresses the offer — the check covers aliases, not only the current display name', async () => {
+    const vault = fixtureVault();
     const settingsHost = hostWithAssignmentsBase();
-    const entry = await makeEligibleEntry(vault, settingsHost);
+    const entry = await loadEntry(vault, settingsHost);
 
     const renameProvider = createLocalRegistryProvider({
       vault,
@@ -1412,18 +1466,44 @@ describe('createLocalRegistryProvider — the note-offer gate sees the full vaul
       now: () => NOW,
       editPort: new FakeEditPort(),
     });
-    // "Original Name" demotes to an alias; the vault's own, never-bound
-    // `05 Zettelkasten/Original Name.md` now sits under that alias.
     await renameProvider.rename(entry, 'Renamed Name');
 
     const fresh = await modelFrom(await renameProvider.load());
     const row = fresh.concepts.find((c) => c.key === entry.key);
     if (row === undefined) throw new Error('missing concept row after rename');
     expect(row.aliases).toEqual(['Original Name']);
-    // Today this still reads `true`: `build.ts`'s `existingNoteTitlesFrom`
-    // never sees the unbound note, so `vaultNoteTitles` reaching
-    // `buildRegistryModel` changes nothing yet. Fails as expected until
-    // `build.ts` merges the field (see this bead's report).
     expect(row.noteOffer.eligible).toBe(false);
+  });
+
+  it('an unrelated, never-bound note with a DIFFERENT title changes nothing about the model — the union matches by title, not by the vault merely containing extra notes', async () => {
+    const withUnrelated = await modelFrom(
+      await createLocalRegistryProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithAssignmentsBase(),
+        now: () => NOW,
+        editPort: new FakeEditPort(),
+      }).load(),
+    );
+    const withoutUnrelated = await modelFrom(
+      await createLocalRegistryProvider({
+        vault: memoryVault({
+          '05 Zettelkasten/Original Name.md': '# Original Name\n',
+          'Notes/one.md': NOTE,
+          '03 Research/TESTC101 Past Paper 2023.md': PAST_PAPER,
+          [ASSIGNMENTS_BASE_PATH]: ASSIGNMENTS_BASE_FILE,
+          '02 Assignments/Quiz 1.md': QUIZ,
+        }),
+        deviceId: DEVICE,
+        settingsHost: hostWithAssignmentsBase(),
+        now: () => NOW,
+        editPort: new FakeEditPort(),
+      }).load(),
+    );
+    expect(withUnrelated.concepts[0]?.noteOffer.eligible).toBe(false);
+    expect(withUnrelated.concepts[0]?.noteOffer.eligible).toBe(
+      withoutUnrelated.concepts[0]?.noteOffer.eligible,
+    );
+    expect(withUnrelated.concepts[0]?.tier).toBe(withoutUnrelated.concepts[0]?.tier);
   });
 });
