@@ -1367,6 +1367,16 @@ export default class OleaPlugin extends Plugin {
         // to the session-builder provider Home wraps — see that call
         // site's own comment above, and `home/provider.ts`'s `plan` doc.
         plan: () => this.review?.plan ?? null,
+        // `[D-243]` (`ol-egov.141.89.10.20` / `ol-egov.141.89.10.40`): the
+        // same two inputs the `VIEW_TYPE_OLEA_SESSION` registration above
+        // supplies, passed straight through to the session-builder provider
+        // Home wraps (`home/provider.ts`'s `windowDeficit`/`readRankWeights`
+        // doc) — without them Home's headline session could disagree with
+        // what Start composes (F6.4).
+        ...(this.rankWeights?.readRankWeights
+          ? { readRankWeights: this.rankWeights.readRankWeights }
+          : {}),
+        windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
         // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
         // ingestion tick's fresh queue state and a later course-setup
         // confirmation both reach a Home leaf built before either happened —

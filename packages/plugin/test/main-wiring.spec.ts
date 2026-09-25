@@ -1428,6 +1428,22 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     );
   });
 
+  it('main.ts:1359 — the Home view’s createLocalHomeProvider receives it, the same as the session builder above (ol-egov.141.89.10.40, [D-243], F6.4)', () => {
+    // `ol-egov.141.89.10.20` (this describe block's own bead) taught
+    // `createLocalHomeProvider` to accept and forward `windowDeficit` and
+    // `readRankWeights` to the session-builder provider Home wraps
+    // internally, but left the `VIEW_TYPE_OLEA_HOME` construction site
+    // itself passing neither — so Home's composed session could disagree
+    // with what `VIEW_TYPE_OLEA_SESSION` (Start) composes for the same
+    // underlying state. This asserts the same two inputs, wired the same
+    // way, reach the Home construction site too.
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalHomeProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*scheduler,\\s*relations:\\s*\\(\\) => this\\.servedRelationEdges\\(\\),[\\s\\S]{0,300}?plan:\\s*\\(\\) => this\\.review\\?\\.plan \\?\\? null,[\\s\\S]{0,300}?${spread},\\s*windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),[\\s\\S]{0,200}?firstRead:`,
+      ),
+    );
+  });
+
   it('main.ts:1225 — the registry view’s createLocalRegistryProvider receives it', () => {
     expect(main).toMatch(
       new RegExp(
@@ -1452,10 +1468,11 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     );
   });
 
-  it('all four production callers of composeOracleRanking now receive it — five construction sites, four callers (the session-builder view and both composeStudySessionForRequest calls share one provider)', () => {
+  it('all production callers of composeOracleRanking now receive it — six construction sites (the session-builder view and both composeStudySessionForRequest calls share one provider; Home wraps the session-builder provider too, ol-egov.141.89.10.40)', () => {
     const occurrences = main.match(new RegExp(spread, 'g')) ?? [];
     // The study-plan provider (component 3.3, `[D-110]`, asserted above) plus
-    // the five sites this bead adds: 1 + 5 = 6.
-    expect(occurrences.length).toBe(6);
+    // the five sites `ol-v7r5.61` added, plus the Home construction site
+    // `ol-egov.141.89.10.40` adds: 1 + 5 + 1 = 7.
+    expect(occurrences.length).toBe(7);
   });
 });
