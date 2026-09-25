@@ -14,20 +14,18 @@
  * the byte-safety logic they share would cost an abstraction for a
  * coincidence, not a real one."
  *
- * **Listing a dot folder** (`ol-egov.141.89.10.52`): `ObsidianSource.list()`
- * never surfaces a dot-prefixed folder (it is built on Obsidian's
- * `getFiles()`), so the folder is listed with `listUnder` where the host has
- * it — the adapter walk on `ObsidianSource` — and with plain `list` otherwise,
- * the same routing `olea-core`'s `vault/list-folder.ts` gives every core
- * store and `today/data-source.ts` gives `.olea/reviews/`. It is restated
- * here rather than imported only because `olea-core`'s barrel does not
- * export that helper yet (a one-line follow-up). A host with neither route
- * still finds this device's own files, because they are probed by exact,
- * constructed path rather than listed.
+ * **Listing a dot folder** (`ol-egov.141.89.10.52`, `ol-egov.141.89.10.56`):
+ * `ObsidianSource.list()` never surfaces a dot-prefixed folder (it is built
+ * on Obsidian's `getFiles()`), so the folder is listed through `olea-core`'s
+ * `listFolder` — `listUnder` where the host has it (the adapter walk on
+ * `ObsidianSource`), plain `list` otherwise — the same routing every core
+ * store and `today/data-source.ts` use for `.olea/reviews/`. A host with
+ * neither route still finds this device's own files, because they are
+ * probed by exact, constructed path rather than listed.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
-import { type CalendarDay, calendarDaysEndingOn, isValidDeviceId } from 'olea-core';
+import { type CalendarDay, calendarDaysEndingOn, isValidDeviceId, listFolder } from 'olea-core';
 
 /** Matches `<YYYY-MM-DD>.<deviceId>.jsonl` — the C5.2 file name, whoever wrote it. */
 const LOG_FILE_RE = /^\d{4}-\d{2}-\d{2}\.[^/]+\.jsonl$/;
@@ -39,21 +37,6 @@ const LOG_FILE_RE = /^\d{4}-\d{2}-\d{2}\.[^/]+\.jsonl$/;
  * Class B: a reversible default, easy to widen if it ever proves short.
  */
 export const DEFAULT_LOG_PROBE_DAYS = 3650;
-
-/** `listUnder` sits outside the `VaultSource` contract, so it is feature-detected (see the module doc). */
-interface ListUnderCapableVault {
-  listUnder(
-    dotPath: VaultPath,
-    options?: { readonly extensions?: readonly string[] },
-  ): Promise<readonly VaultPath[]>;
-}
-
-function listLogFolder(vault: VaultSource, folder: VaultPath): Promise<readonly VaultPath[]> {
-  const dotFolder = folder.split('/')[0]?.startsWith('.') ?? false;
-  const listUnder = (vault as Partial<ListUnderCapableVault>).listUnder;
-  if (dotFolder && typeof listUnder === 'function') return listUnder.call(vault, folder);
-  return vault.list({ under: folder });
-}
 
 /**
  * Every path under `folder` this call can find: whatever the folder listing
@@ -73,7 +56,7 @@ export async function discoverLogPaths(
   const candidates = new Set<VaultPath>();
 
   try {
-    const listed = await listLogFolder(vault, folder);
+    const listed = await listFolder(vault, folder);
     for (const path of listed) {
       const name = path.slice(path.lastIndexOf('/') + 1);
       if (LOG_FILE_RE.test(name)) candidates.add(path);

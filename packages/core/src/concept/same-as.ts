@@ -42,6 +42,7 @@
  * decides what a migration candidate does next.
  */
 
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import {
   type KeyedConceptRelation,
@@ -162,7 +163,9 @@ function serialize(record: SameAsLinkRecord): string {
 export async function listSameAsLinkRecords(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: SameAsLinkRecord }[]> {
-  const paths = await vault.list({ under: SAME_AS_LINK_FOLDER, extensions: ['json'] });
+  // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder, so this scan
+  // must walk the raw adapter instead (`ol-egov.141.89.10.52`, `ol-egov.141.89.10.56`).
+  const paths = await listFolder(vault, SAME_AS_LINK_FOLDER, { extensions: ['json'] });
   const out: { readonly path: VaultPath; readonly record: SameAsLinkRecord }[] = [];
   for (const path of paths) {
     try {

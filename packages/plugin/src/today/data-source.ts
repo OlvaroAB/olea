@@ -118,6 +118,7 @@ import {
   type GroveCourseModel,
   HOLDING_CUT,
   latestVerdictByInstrument,
+  listFolder,
   loadCachedStudyPlan,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
@@ -229,24 +230,6 @@ export interface ReadReviewHistoryOptions {
 /** Matches `<YYYY-MM-DD>.<deviceId>.jsonl` — the C5.2 file name, whoever wrote it. */
 const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.[^/]+\.jsonl$/;
 
-/**
- * `listUnder` (`ObsidianSource`/`FolderSource`) is not part of the
- * `VaultSource` contract — see `obsidian-source.ts`'s own note — so a caller
- * holding only the interface type has to feature-detect it rather than call
- * it unconditionally. Same duck-typed-optional-method posture `VaultSource`
- * already uses for `delete`/`firstSeen`.
- */
-interface ListUnderCapableVault {
-  listUnder(
-    dotPath: VaultPath,
-    options?: { readonly extensions?: readonly string[] },
-  ): Promise<readonly VaultPath[]>;
-}
-
-function hasListUnder(vault: VaultSource): vault is VaultSource & ListUnderCapableVault {
-  return typeof (vault as Partial<ListUnderCapableVault>).listUnder === 'function';
-}
-
 function dayOfLogPath(path: VaultPath): CalendarDay | null {
   const slash = path.lastIndexOf('/');
   const name = slash === -1 ? path : path.slice(slash + 1);
@@ -289,12 +272,12 @@ export async function readReviewHistory(
   // (`ol-yk1c`'s own finding). `FolderSource` needs no such primary path —
   // this module's own doc already established `list({ under })` walks a
   // dot-prefixed root correctly there — so a host without `listUnder` falls
-  // back to plain `list`, unchanged from before this bead.
+  // back to plain `list`, unchanged from before this bead. `olea-core`'s
+  // `listFolder` (`ol-egov.141.89.10.52`, `ol-egov.141.89.10.56`) is exactly
+  // this routing, shared with every core `.olea/` reader.
   let listed: readonly VaultPath[] = [];
   try {
-    listed = hasListUnder(vault)
-      ? await vault.listUnder(REVIEW_LOG_FOLDER)
-      : await vault.list({ under: REVIEW_LOG_FOLDER });
+    listed = await listFolder(vault, REVIEW_LOG_FOLDER);
   } catch {
     // A host whose walk throws (a real adapter failure, or a plain host that
     // refuses to list a dot-prefixed folder) is the expected degraded case,

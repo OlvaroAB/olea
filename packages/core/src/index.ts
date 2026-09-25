@@ -2363,6 +2363,19 @@ export { appendEmptyEntry, OLEA_UID_KEY, stampUid } from './uid/stamp.js';
 export type { BuildUidTableResult, UidTableEntry, UidTableOptions } from './uid/table.js';
 export { buildUidTable } from './uid/table.js';
 export { FolderSource } from './vault/folder-source.js';
+// The shared dot-folder listing helper (`ol-egov.141.89.10.52`, `ol-egov.141.89.10.56`): every
+// `.olea/`-prefixed store reader routes its folder listing through `listFolder` rather than
+// calling `VaultSource.list` directly, because `ObsidianSource.list()` (built on Obsidian's
+// `vault.getFiles()`) never returns a dot-prefixed path. Exported so plugin-side readers
+// (`privacy/log-discovery.ts`, `today/data-source.ts`) can drop their own local copies of this
+// routing in favour of this one.
+export {
+  hasListUnder,
+  isDotFolder,
+  type ListFolderOptions,
+  type ListUnderCapableVault,
+  listFolder,
+} from './vault/list-folder.js';
 export {
   isVaultPath,
   type ListOptions,
