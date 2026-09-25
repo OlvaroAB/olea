@@ -88,6 +88,7 @@ import {
   formatSourceCitation,
   type GradeExplainBackInput,
   type GradingRelationContext,
+  type GradingSourceMaterial,
   type GroundedGrading,
   type PendingExplainBackGrading,
   type Provenance,
@@ -306,6 +307,24 @@ export interface ExplainBackModalDeps {
       /** See `this.editBursts`'s own doc for exactly what is counted. */
       readonly editBursts: number;
     };
+    /**
+     * `ol-egov.141.89.6.50`: `prompt.sourceMaterial` — `resolveGradingSourceBlocks`'s
+     * own `GradingSourceMaterial` for this prompt, forwarded to
+     * `solo-review.ts`'s `RecordSoloGradeAndReviewParams.sourceMaterial`,
+     * which threads it into `buildGradeSoloInputFromTypedAnswer`'s
+     * `resolved.sourceMaterial` (F5.3's omission denominator, never the
+     * flattened, role-blind default). Optional, same structural-typing
+     * accommodation `attemptId`/`durationMs` above take; `undefined` exactly
+     * when `prompt.subjectConceptId` was `null`.
+     */
+    readonly sourceMaterial?: GradingSourceMaterial;
+    /**
+     * `ol-egov.141.89.6.50`: `prompt.relationExpected` — always sent, never
+     * conditionally spread (same posture `answerEdits` above takes): this
+     * view always knows the answer from `resolveGradingSourceBlocks`, `false`
+     * when no causes partner resolved or the prompt has no subject concept.
+     */
+    readonly relationExpected?: boolean;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -489,6 +508,39 @@ async function resolveEdgeIntroducingPassages(
   return resolved;
 }
 
+/**
+ * `ol-egov.141.89.6.50`: what `resolveGradingSourceBlocks` hands back — the
+ * flattened blocks every existing caller already reads, PLUS the
+ * `GradingSourceMaterial` that produced them and whether a relation context
+ * was actually resolved, both previously computed here and then discarded
+ * (`ol-egov.141.89.6.48`'s report named this exact loss: "modal.ts already
+ * calls `buildGradingSourceMaterial`, gets a correct `GradingSourceMaterial`,
+ * then flattens `.sourceBlocks` and DISCARDS `.omissionDenominator`"). A
+ * caller that only reads `sourceBlocks` gets the pre-existing behaviour,
+ * byte-identical.
+ */
+export interface ResolvedGradingSourceBlocks {
+  readonly sourceBlocks: readonly ExplainBackSourceBlock[];
+  /**
+   * The material `buildGradingSourceMaterial` assembled for this call, kept
+   * rather than flattened away — F5.3's omission denominator (subject
+   * material plus the edge's own provenance, never the neighbour's own
+   * defining passages) only survives the round trip if this is carried
+   * forward to `recordSoloGradeAndReview`'s `resolved.sourceMaterial`
+   * (`./request.ts`'s `buildGradeSoloInputFromTypedAnswer`). `undefined`
+   * exactly when `subjectConceptId` is `null` — the free-form topic entry
+   * point never builds one (see this function's own doc below).
+   */
+  readonly sourceMaterial: GradingSourceMaterial | undefined;
+  /**
+   * True exactly when `sourceMaterial` was built from a relation context
+   * (`GradingRelationContext.kind === 'relation'`) — i.e. a live causes
+   * partner actually resolved for this subject (F5.2a, `[D-083]`). Always
+   * `false` when `sourceMaterial` is `undefined`.
+   */
+  readonly relationExpected: boolean;
+}
+
 export async function resolveGradingSourceBlocks(
   deps: Pick<
     ExplainBackModalDeps,
@@ -496,7 +548,7 @@ export async function resolveGradingSourceBlocks(
   >,
   subjectConceptId: string | null,
   sourceBlocks: readonly ExplainBackSourceBlock[],
-): Promise<readonly ExplainBackSourceBlock[]> {
+): Promise<ResolvedGradingSourceBlocks> {
   const edge =
     subjectConceptId !== null ? deps.resolveCausesPartner?.(subjectConceptId) : undefined;
 
@@ -523,7 +575,9 @@ export async function resolveGradingSourceBlocks(
   }
 
   const relation: GradingRelationContext = resolveGradingRelationContext(named);
-  if (subjectConceptId === null) return sourceBlocks;
+  if (subjectConceptId === null) {
+    return { sourceBlocks, sourceMaterial: undefined, relationExpected: false };
+  }
 
   const subjectDefiningPassages: ConceptDefiningPassages = {
     conceptId: subjectConceptId,
@@ -547,10 +601,15 @@ export async function resolveGradingSourceBlocks(
   for (const entry of [...sourceBlocks, ...neighbourBlocks, ...introducingBlocks]) {
     lookup.set(entry.block.blockId, entry);
   }
-  return material.sourceBlocks.flatMap((block) => {
+  const flattenedSourceBlocks = material.sourceBlocks.flatMap((block) => {
     const entry = lookup.get(block.blockId);
     return entry ? [entry] : [];
   });
+  return {
+    sourceBlocks: flattenedSourceBlocks,
+    sourceMaterial: material,
+    relationExpected: relation.kind === 'relation',
+  };
 }
 
 interface ResolvedPrompt {
@@ -581,6 +640,20 @@ interface ResolvedPrompt {
    * display.
    */
   readonly conceptIds: readonly string[];
+  /**
+   * `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s own `sourceMaterial`
+   * for this prompt, carried to accept time (never re-derived there) so
+   * `computeAcceptGrading` can forward it to `deps.recordSoloGradeAndReview` —
+   * see that function's own doc and `./solo-review.ts`'s `RecordSoloGradeAndReviewParams
+   * .sourceMaterial`. `undefined` for the free-form topic entry point, which
+   * never builds one.
+   */
+  readonly sourceMaterial: GradingSourceMaterial | undefined;
+  /**
+   * `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s own `relationExpected`
+   * for this prompt, carried the same way as `sourceMaterial` above.
+   */
+  readonly relationExpected: boolean;
 }
 
 /**
@@ -798,11 +871,12 @@ export class ExplainBackModal extends Modal {
     // `resolveGradingSourceBlocks`'s own doc for why concept-only (today,
     // always, until a `causes` reader ships) leaves this identical to
     // `sourceBlocks` regardless.
-    const gradingSourceBlocks = await resolveGradingSourceBlocks(
+    const resolvedGrading = await resolveGradingSourceBlocks(
       this.deps,
       subjectConceptId,
       sourceBlocks,
     );
+    const gradingSourceBlocks = resolvedGrading.sourceBlocks;
     // `ol-2zfj.75` (C7.9/F5.6): a real digest when the concept(s) this
     // instrument targets have prior misconception history, `[]` otherwise —
     // never thrown into the prompt-resolution path (see the dep's own doc).
@@ -822,6 +896,10 @@ export class ExplainBackModal extends Modal {
       sourceBlocks,
       conceptIds: instrument.conceptIds,
       query,
+      // `ol-egov.141.89.6.50`: carried to accept time — see `ResolvedPrompt
+      // .sourceMaterial`'s own doc.
+      sourceMaterial: resolvedGrading.sourceMaterial,
+      relationExpected: resolvedGrading.relationExpected,
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
@@ -839,7 +917,8 @@ export class ExplainBackModal extends Modal {
     // unchanged here (see that function's own doc); called anyway so both
     // entry points share the one code path through
     // `resolveGradingRelationContext`, never a second, divergent one.
-    const gradingSourceBlocks = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
+    const resolvedGrading = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
+    const gradingSourceBlocks = resolvedGrading.sourceBlocks;
     const context = buildExplainBackPromptContextFromTopic(topic, gradingSourceBlocks);
     if (context.referenceAnswer.trim() === '') {
       const prompt: ResolvedPrompt = {
@@ -849,6 +928,8 @@ export class ExplainBackModal extends Modal {
         sourceBlocks,
         query: topic,
         conceptIds: [],
+        sourceMaterial: resolvedGrading.sourceMaterial,
+        relationExpected: resolvedGrading.relationExpected,
       };
       // Never shown an answer box — insufficient-notes is a refusal before
       // any prompt existed to present, so no `presentedAtMs` is set here,
@@ -873,6 +954,8 @@ export class ExplainBackModal extends Modal {
       sourceBlocks,
       query: topic,
       conceptIds: [],
+      sourceMaterial: resolvedGrading.sourceMaterial,
+      relationExpected: resolvedGrading.relationExpected,
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
@@ -1080,6 +1163,16 @@ export class ExplainBackModal extends Modal {
           // always computable for a genuine submit through this view (see
           // `ModalAnswerEdits`'s own doc).
           answerEdits,
+          // `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks`'s material,
+          // carried on `prompt` since prompt-resolution time — spread
+          // conditionally (same posture `supportLevelShown` above takes)
+          // because it is genuinely absent for the free-form topic entry
+          // point (`prompt.subjectConceptId === null`), never a fabricated
+          // `undefined` key under `exactOptionalPropertyTypes`.
+          ...(prompt.sourceMaterial !== undefined ? { sourceMaterial: prompt.sourceMaterial } : {}),
+          // Always a real boolean on `prompt` (never itself `undefined`) —
+          // always sent, same posture `answerEdits` takes.
+          relationExpected: prompt.relationExpected,
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {

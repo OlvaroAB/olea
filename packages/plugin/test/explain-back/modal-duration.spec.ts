@@ -61,11 +61,12 @@ describe('ExplainBackModal times an attempt through its own injected clock, neve
 
   it('carries the computed durationMs through to the recordSoloGradeAndReview call, never re-deriving or dropping it', () => {
     expect(modal).toMatch(
-      // The tail window widened from 50 to 300 characters when `ol-l7ew`
-      // [DOS-C5a] added the support level to this same call: the assertion
-      // is still "durationMs is inside the call object", not "durationMs is
-      // the last field in it".
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,300}?durationMs,[\s\S]{0,300}?\}\);/,
+      // The tail window widened from 50 to 300 (`ol-l7ew` [DOS-C5a]'s support
+      // level) and then to 800 (`ol-egov.141.89.6.50`'s sourceMaterial/
+      // relationExpected, appended after answerEdits) characters across this
+      // call's growth: the assertion is still "durationMs is inside the call
+      // object", not "durationMs is the last field in it".
+      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,300}?durationMs,[\s\S]{0,800}?\}\);/,
     );
   });
 });

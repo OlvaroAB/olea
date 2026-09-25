@@ -135,9 +135,15 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     const start = modal.indexOf('export async function resolveGradingSourceBlocks(');
     const end = modal.indexOf('interface ResolvedPrompt', start);
     const body = modal.slice(start, end);
-    expect(body).toMatch(/if \(subjectConceptId === null\) return sourceBlocks;/);
+    // `ol-egov.141.89.6.50`: widened from a bare `return sourceBlocks;` to a
+    // full `ResolvedGradingSourceBlocks` object literal — `sourceMaterial`
+    // and `relationExpected` must be threaded here too, not just the blocks.
+    const earlyReturnMarker = 'if (subjectConceptId === null) {';
+    expect(body).toMatch(
+      /if \(subjectConceptId === null\) \{\s*return \{ sourceBlocks, sourceMaterial: undefined, relationExpected: false \};\s*\}/,
+    );
     // The early return textually precedes the buildGradingSourceMaterial call.
-    expect(body.indexOf('if (subjectConceptId === null) return sourceBlocks;')).toBeLessThan(
+    expect(body.indexOf(earlyReturnMarker)).toBeLessThan(
       body.indexOf('const material = buildGradingSourceMaterial('),
     );
   });
@@ -148,19 +154,23 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
+    // `ol-egov.141.89.6.50`: `resolveGradingSourceBlocks` now returns a
+    // `ResolvedGradingSourceBlocks` object — `gradingSourceBlocks` is
+    // derived from its `.sourceBlocks` field, one line down.
     expect(body).toMatch(
-      /const gradingSourceBlocks = await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,\s*sourceBlocks,\s*\);/,
+      /const resolvedGrading = await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,\s*sourceBlocks,\s*\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
     );
     expect(body).toMatch(
       /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
     );
     // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
-    // non-attempt record's own field, D7.1) — matched by name here rather
-    // than wildcarded, so an unrelated future field slipping in unnoticed
-    // still fails this assertion instead of silently passing through a
-    // loose wildcard.
+    // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
+    // `sourceMaterial`/`relationExpected`, carried to accept time — matched
+    // by name here rather than wildcarded, so an unrelated future field
+    // slipping in unnoticed still fails this assertion instead of silently
+    // passing through a loose wildcard.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*\};/,
     );
   });
 
@@ -171,7 +181,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
     expect(body).toMatch(
-      /const gradingSourceBlocks = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);/,
+      /const resolvedGrading = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
     );
     expect(body).toMatch(/buildExplainBackPromptContextFromTopic\(topic, gradingSourceBlocks\);/);
   });

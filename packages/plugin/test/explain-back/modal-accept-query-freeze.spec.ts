@@ -90,15 +90,19 @@ describe('ol-egov.141.89.6.16: the accept-time recheck reuses the frozen build-t
     expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(query\);/);
     // The fix: `query` must be threaded onto the constructed ResolvedPrompt,
     // not silently dropped in favour of re-deriving it from
-    // `context.question` at accept time.
-    expect(body).toMatch(/const prompt: ResolvedPrompt = \{[\s\S]{0,200}?\n\s*query,\n\s*\};/);
+    // `context.question` at accept time. Not required to be the LAST field
+    // (`ol-egov.141.89.6.50` appended `sourceMaterial`/`relationExpected`
+    // after it).
+    expect(body).toMatch(/const prompt: ResolvedPrompt = \{[\s\S]{0,200}?\n\s*query,\n/);
   });
 
   it('resolveTopicPrompt freezes the exact topic string it retrieved with onto BOTH prompts it constructs (the insufficient-notes refusal and the answering phase)', () => {
     const body = bodyBetween('private async resolveTopicPrompt(', 'private async submitAnswer(');
     expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(topic\);/);
+    // Widened from 200 to 400 chars when `ol-egov.141.89.6.50` appended
+    // `sourceMaterial`/`relationExpected` onto both constructed prompts.
     const promptConstructions =
-      body.match(/const prompt: ResolvedPrompt = \{[\s\S]{0,200}?\n\s*\};/g) ?? [];
+      body.match(/const prompt: ResolvedPrompt = \{[\s\S]{0,400}?\n\s*\};/g) ?? [];
     expect(promptConstructions).toHaveLength(2);
     for (const construction of promptConstructions) {
       expect(construction).toMatch(/query: topic,/);

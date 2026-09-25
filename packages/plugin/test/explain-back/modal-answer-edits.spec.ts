@@ -109,9 +109,12 @@ describe('ExplainBackModal counter 6: editBursts lives on the modal instance and
   it('answerEdits is sealed once, at submitAnswer, and carried through to recordSoloGradeAndReview unconditionally', () => {
     expect(modal).toMatch(/const answerEdits: ModalAnswerEdits = \{/);
     // Never conditionally spread (unlike `supportLevelShown`) — this field
-    // is always computable for a genuine submit through this view.
+    // is always computable for a genuine submit through this view. Bare
+    // `answerEdits,` (not `answerEdits,\n\s*});`): `ol-egov.141.89.6.50`
+    // appended `sourceMaterial`/`relationExpected` after it, so this no
+    // longer has to be the LAST field, only present unconditionally.
     expect(modal).toMatch(
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,900}?\n\s*answerEdits,\n\s*\}\);/,
+      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,900}?\n\s*answerEdits,\n/,
     );
   });
 

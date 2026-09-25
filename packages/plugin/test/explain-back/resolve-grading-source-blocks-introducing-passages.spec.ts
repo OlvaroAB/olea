@@ -81,7 +81,12 @@ type ResolveEdgeIntroducingPassages = (
  */
 function extractResolveEdgeIntroducingPassages(): ResolveEdgeIntroducingPassages {
   const start = modal.indexOf('async function resolveEdgeIntroducingPassages(');
-  const end = modal.indexOf('export async function resolveGradingSourceBlocks(');
+  // `ol-egov.141.89.6.50` inserted `export interface ResolvedGradingSourceBlocks`
+  // between this function and `resolveGradingSourceBlocks` itself — that
+  // marker (rather than the function below it) is now the tight end bound,
+  // so the extracted, `new Function`-evaluated source never picks up a
+  // second `export` keyword it cannot parse as a standalone statement.
+  const end = modal.indexOf('export interface ResolvedGradingSourceBlocks');
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
   const raw = modal.slice(start, end);

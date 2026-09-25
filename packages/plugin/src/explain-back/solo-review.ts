@@ -51,7 +51,12 @@
  * ===========================================================================
  * 1. `buildGradeSoloInputFromTypedAnswer` (`./request.ts`) builds the SOLO
  *    request from the SAME `ExplainBackPromptContext` already resolved for
- *    the correctness pipeline — no second retrieval.
+ *    the correctness pipeline — no second retrieval. `ol-egov.141.89.6.50`:
+ *    when `params.sourceMaterial`/`params.relationExpected` are supplied
+ *    (`modal.ts`'s `resolveGradingSourceBlocks` result, carried on
+ *    `ResolvedPrompt`), they are forwarded as that function's `resolved`
+ *    argument — F5.3's narrower omission denominator, instead of the
+ *    role-blind `context.sourceBlocks` default.
  * 2. `gradeSoloAttempt` (`../grading/wiring.ts`) runs it through the
  *    composed `SoloJudgeCaller`, coming back with a real `[D-117]`
  *    `artifactProvenance` alongside the grading (`null` under F7.8's
@@ -191,6 +196,7 @@ import {
   acceptSoloGrading,
   type ExplainBackPromptContext,
   type GradedExplainBackReviewSubject,
+  type GradingSourceMaterial,
   recordGradedExplainBackReview,
   type VaultSource,
   type WriteContentOptions,
@@ -301,6 +307,38 @@ export interface RecordSoloGradeAndReviewParams {
    * the caller omits it.
    */
   readonly answerEdits?: AnswerEdits;
+  /**
+   * **`ol-egov.141.89.6.50`: the `GradingSourceMaterial` `modal.ts`'s
+   * `resolveGradingSourceBlocks` built for this prompt** — carried on
+   * `ResolvedPrompt.sourceMaterial` since prompt-resolution time, never
+   * re-derived here, and threaded verbatim into `buildGradeSoloInputFromTypedAnswer`'s
+   * (`./request.ts`) `resolved.sourceMaterial`. This is the fix for the gap
+   * that function's own doc names: "resolveGradingSourceBlocks flattens
+   * GradingSourceMaterial.sourceBlocks into one undifferentiated
+   * ExplainBackSourceBlock[] and discards .omissionDenominator entirely" —
+   * F5.3's narrower denominator (subject material plus the edge's own
+   * provenance, never the neighbour's own defining passages) only reaches
+   * SOLO if this field is forwarded.
+   *
+   * Optional, same structural-typing accommodation `durationMs` above
+   * documents: absent — every call before this bead, and every call whose
+   * prompt has no live causes partner or no subject concept at all — falls
+   * back to `buildGradeSoloInputFromTypedAnswer`'s pre-existing
+   * concept-only default, byte-identical to today.
+   */
+  readonly sourceMaterial?: GradingSourceMaterial;
+  /**
+   * **`ol-egov.141.89.6.50`: true exactly when `sourceMaterial` was built
+   * from a relation context** (`GradingRelationContext.kind === 'relation'`)
+   * — `modal.ts`'s `resolveGradingSourceBlocks`'s own `relationExpected`,
+   * carried on `ResolvedPrompt` the same way `sourceMaterial` is and
+   * forwarded verbatim into `buildGradeSoloInputFromTypedAnswer`'s
+   * `resolved.relationExpected`. Absent falls back to `false`, the
+   * pre-existing default — `groundSoloResponse` (`olea-core`) then drops
+   * `neighbourUseDemonstrated` entirely, exactly as it did before this field
+   * existed.
+   */
+  readonly relationExpected?: boolean;
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
@@ -367,7 +405,16 @@ export async function recordSoloGradeAndReview(
 ): Promise<RecordSoloGradeAndReviewOutcome | undefined> {
   if (params.subjectConceptId === null) return undefined;
 
-  const soloInput = buildGradeSoloInputFromTypedAnswer(params.answer, params.context);
+  // `ol-egov.141.89.6.50`: `resolved` is genuinely absent-field-vs-undefined
+  // sensitive under `exactOptionalPropertyTypes` (`request.ts`'s own
+  // `resolved?` param doc) — each key spread only when the caller actually
+  // supplied it, so an older or partner-less call still resolves
+  // `buildGradeSoloInputFromTypedAnswer`'s pre-existing concept-only
+  // default exactly as before this bead.
+  const soloInput = buildGradeSoloInputFromTypedAnswer(params.answer, params.context, {
+    ...(params.sourceMaterial !== undefined ? { sourceMaterial: params.sourceMaterial } : {}),
+    ...(params.relationExpected !== undefined ? { relationExpected: params.relationExpected } : {}),
+  });
   const outcome = await gradeSoloAttempt(deps.grading, soloInput);
   if (outcome === null) return undefined;
 
